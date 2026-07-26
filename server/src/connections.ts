@@ -12,11 +12,11 @@
 // state file — the sync state (SDK session + sync prefs) rides one settings row,
 // serialized as JSON, alongside every other ccmanagerui setting.
 //
-// The OAuth/refresh/identity machinery is the official SDK — @cnct/connect (+
-// @cnct/locker for the store): single-flight rotation-safe refresh, per-attempt
-// redirect_uri, server-side revoke on forget, and id_token identity all come from the
-// shared package. This module keeps only the ccmanagerui-specific parts: the settings-row
-// persistence seam, the settings allowlist, and the sync orchestration.
+// The OAuth/refresh/identity machinery is the official SDK — @cnct/connect (the data
+// locker store ships from the same package now): single-flight rotation-safe refresh,
+// per-attempt redirect_uri, server-side revoke on forget, and id_token identity all come
+// from the shared package. This module keeps only the ccmanagerui-specific parts: the
+// settings-row persistence seam, the settings allowlist, and the sync orchestration.
 //
 // Because ccmanagerui is loopback-only (no tunnel / remote mode), there is NO auth gate
 // and NO session cookie: "signed in" simply means the daemon holds a refresh token.
@@ -25,11 +25,10 @@
 // small ALLOWLIST of portable scheduler prefs (PREF_KEYS) + the web's appearance blob
 // (theme). Never machine-specific settings (portable_mode, hide_tray_icon) and never secrets.
 //
-// @cnct/connect + @cnct/locker are regular dependencies here (server/package.json) — dynamically
-// imported below anyway, so a boot with sync untouched never pays for the SDK.
+// @cnct/connect is a regular dependency here (server/package.json) — dynamically imported
+// below anyway, so a boot with sync untouched never pays for the SDK.
 // ---------------------------------------------------------------------------
-import type { ConnectClient, ConnectStore, TokenSet } from '@cnct/connect'
-import type { LockerClient } from '@cnct/locker'
+import type { ConnectClient, ConnectStore, LockerClient, TokenSet } from '@cnct/connect'
 import { getSetting, setSetting } from './db'
 import { unseal, wrapTokenStore } from './dpapi-seal.mjs'
 import type { SyncStatus } from './types'
@@ -90,8 +89,8 @@ const stateStore: ConnectStore = {
   },
 }
 
-/** Thrown when a sync/sign-in op is attempted but @cnct/connect or @cnct/locker never
- *  resolved. Surfaces as a normal guardSync error, not a boot crash. */
+/** Thrown when a sync/sign-in op is attempted but @cnct/connect never resolved. Surfaces
+ *  as a normal guardSync error, not a boot crash. */
 class SdkUnavailableError extends Error {
   code = 'sdk_unavailable'
   constructor(pkg: string, cause: unknown) {
@@ -208,13 +207,13 @@ async function backfillIdentity(): Promise<void> {
   }
 }
 
-/** Dynamically imports @cnct/locker — never pulled in on a boot where sync is untouched. */
+/** Dynamically imports @cnct/connect — never pulled in on a boot where sync is untouched. */
 async function locker(): Promise<LockerClient> {
-  let createLocker: typeof import('@cnct/locker').createLocker
+  let createLocker: typeof import('@cnct/connect').createLocker
   try {
-    ;({ createLocker } = await import('@cnct/locker'))
+    ;({ createLocker } = await import('@cnct/connect'))
   } catch (e) {
-    throw new SdkUnavailableError('@cnct/locker', e)
+    throw new SdkUnavailableError('@cnct/connect', e)
   }
   return createLocker({
     appId: OAUTH.clientId,

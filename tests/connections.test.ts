@@ -1,6 +1,6 @@
 // "Sync my settings with Connections" for server/src/connections.ts. Pure logic plus the SQLite
 // settings-row persistence seam only: NEVER hits connections.icu, GitHub, or any OAuth/OIDC
-// endpoint, and never exercises the @cnct/connect / @cnct/locker dynamic imports (those need a
+// endpoint, and never exercises the @cnct/connect dynamic imports (those need a
 // live IdP). Every case below stays on paths that are reachable with hasConnection() === false
 // (no credential ever stored here), which is exactly what enable()/disable() gate their only
 // network calls behind. So pushNow/pullNow/buildAuthorizeUrl/handleCallback are intentionally
