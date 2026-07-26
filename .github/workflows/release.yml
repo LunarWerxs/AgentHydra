@@ -92,15 +92,15 @@ jobs:
             # resource flags DO work on a Windows host (they're only unavailable when cross-compiling
             # from Linux), so the icon + title are applied at compile time — no rcedit post-step.
             # Unminified costs a few MB.
-            bun run scripts/build.ts --skip-web --target="$target" \
-              --outfile="${stage}/${name}/CCManagerUI.exe"
+            bun run scripts/build.ts --skip-web --target "$target" \
+              --outfile "${stage}/${name}/CCManagerUI.exe"
             "${stage}/${name}/CCManagerUI.exe" --version   # canary: the compiled exe runs
             cp "${stage}/${name}/CCManagerUI.exe" "out/${name}.exe"
             # windows-latest has 7z on PATH; git-bash there has no `zip`
             (cd "$stage" && 7z a -tzip "$GITHUB_WORKSPACE/out/${name}.zip" "$name" > /dev/null)
           else
-            bun run scripts/build.ts --skip-web --target="$target" \
-              --outfile="${stage}/${name}/ccmanagerui"
+            bun run scripts/build.ts --skip-web --target "$target" \
+              --outfile "${stage}/${name}/ccmanagerui"
             tar -C "$stage" -czf "out/${name}.tar.gz" "$name"
           fi
           rm -rf "$stage"

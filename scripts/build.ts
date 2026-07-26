@@ -37,7 +37,9 @@ function setWindowsGuiSubsystem(path: string): void {
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name)
-  return index >= 0 ? process.argv[index + 1] : undefined
+  if (index >= 0) return process.argv[index + 1]
+  const prefix = `${name}=`
+  return process.argv.find((argument) => argument.startsWith(prefix))?.slice(prefix.length)
 }
 
 function filesUnder(dir: string): string[] {
