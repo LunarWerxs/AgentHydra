@@ -26,8 +26,9 @@ All notable changes to CC Manager UI are documented here. The format is based on
 - Windows releases now expose an icon-bearing, single-file GUI executable while retaining a
   compact ZIP for automatic updates. The web UI is embedded, so no loose `web` or `node_modules`
   folders are needed beside the executable.
-- Connections settings sync now uses the multi-device-safe 1.1 engine, with atomic first-account
-  seeding, conflict-safe nested patches, token-isolated caching, and a final flush on shutdown.
+- Connections settings sync now uses the multi-device-safe 1.2 engine, with atomic first-account
+  seeding, conflict-safe nested patches, token-isolated caching, and a five-second final flush that
+  cancels a stuck token or network request instead of delaying shutdown indefinitely.
 
 ## [0.11.1] - 2026-07-23
 
