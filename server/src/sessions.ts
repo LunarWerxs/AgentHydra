@@ -158,7 +158,7 @@ async function scanMeta(tf: TranscriptFile): Promise<ScannedMeta> {
   // unwrapTaggedText only touches the two derived-from-a-turn sources: an explicit custom/AI title
   // is already a label and must never be second-guessed.
   const derived = unwrapTaggedText(lastPrompt || firstUser || '')
-  const title = oneLine(customTitle || aiTitle || derived || tf.session_id, 120)
+  const title = oneLine(customTitle || aiTitle || tf.title || derived || tf.session_id, 120)
   const meta: ScannedMeta = {
     title,
     cwd: cwd || decodeProjectKey(tf.project),

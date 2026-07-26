@@ -1,13 +1,54 @@
 import { expect, test } from 'bun:test'
 import { openCodePartsToTailEvents } from '../server/src/opencode-sessions'
 import { sessionMarkKey } from '../server/src/sessions'
-import { codexEventToTailEvents, isCodexInjectedUserText } from '../server/src/transcript'
+import {
+  codexEventToTailEvents,
+  codexRolloutIdentity,
+  isCodexInjectedUserText,
+  parseCodexSessionIndex,
+} from '../server/src/transcript'
+
+test('Codex rollout identity groups by the user chat and identifies subagent forks', () => {
+  expect(
+    codexRolloutIdentity(
+      {
+        type: 'session_meta',
+        payload: {
+          id: 'child-rollout',
+          session_id: 'parent-chat',
+          thread_source: 'subagent',
+          source: {
+            subagent: { thread_spawn: { parent_thread_id: 'parent-chat', depth: 1 } },
+          },
+        },
+      },
+      'filename-rollout',
+    ),
+  ).toEqual({ sessionId: 'parent-chat', isSubagent: true })
+
+  expect(
+    codexRolloutIdentity(
+      {
+        type: 'session_meta',
+        payload: { id: 'top-level-chat', session_id: 'top-level-chat', thread_source: 'user' },
+      },
+      'filename-rollout',
+    ),
+  ).toEqual({ sessionId: 'top-level-chat', isSubagent: false })
+  expect(codexRolloutIdentity(null, 'legacy-filename-id')).toEqual({
+    sessionId: 'legacy-filename-id',
+    isSubagent: false,
+  })
+})
 
 test('Codex injected runtime blocks are not rendered as human messages', () => {
   expect(
     isCodexInjectedUserText('<environment_context>machine details</environment_context>'),
   ).toBe(true)
   expect(isCodexInjectedUserText('# AGENTS.md instructions for D:\\work')).toBe(true)
+  expect(
+    isCodexInjectedUserText('# AGENTS.md instructions\n\n<INSTRUCTIONS>...</INSTRUCTIONS>'),
+  ).toBe(true)
   expect(
     codexEventToTailEvents({
       timestamp: '2026-07-23T12:00:00Z',
@@ -19,6 +60,28 @@ test('Codex injected runtime blocks are not rendered as human messages', () => {
       },
     }),
   ).toEqual([])
+})
+
+test('Codex sidebar index supplies authoritative chat titles and tolerates malformed rows', () => {
+  const entries = parseCodexSessionIndex(
+    [
+      '{"id":"chat-1","thread_name":"Old generated title","updated_at":"2026-07-25T01:00:00Z"}',
+      'not json',
+      '{"id":"chat-1","thread_name":"Investigate chat splitting behavior","updated_at":"2026-07-26T01:00:00Z"}',
+      '{"id":"chat-2","thread_name":"Audit analytics and Heimdall","updated_at":"invalid"}',
+      '{"id":"missing-title"}',
+    ].join('\n'),
+  )
+
+  expect(entries.get('chat-1')).toEqual({
+    title: 'Investigate chat splitting behavior',
+    updatedAt: Date.parse('2026-07-26T01:00:00Z'),
+  })
+  expect(entries.get('chat-2')).toEqual({
+    title: 'Audit analytics and Heimdall',
+    updatedAt: null,
+  })
+  expect(entries.has('missing-title')).toBe(false)
 })
 
 test('Codex rollout messages and tools map to the shared tail model', () => {

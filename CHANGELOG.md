@@ -4,7 +4,7 @@ All notable changes to CC Manager UI are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-07-26
 
 ### Added
 
@@ -29,6 +29,13 @@ All notable changes to CC Manager UI are documented here. The format is based on
 - Connections settings sync now uses the multi-device-safe 1.2 engine, with atomic first-account
   seeding, conflict-safe nested patches, token-isolated caching, and a five-second final flush that
   cancels a stuck token or network request instead of delaying shutdown indefinitely.
+
+### Fixed
+
+- Codex sessions now match the chats shown by Codex Desktop: canonical sidebar titles come from
+  `session_index.jsonl`, while subagent rollout files no longer appear as separate sessions with
+  duplicated titles and forked chat history. Child-agent rollouts remain implementation details of
+  their parent chat.
 
 ## [0.11.1] - 2026-07-23
 

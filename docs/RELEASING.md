@@ -14,8 +14,9 @@ every instance with auto-update enabled will fast-forward to it on its next chec
    `## [X.Y.Z] - YYYY-MM-DD` heading, following the existing Keep a Changelog format already used
    in that file.
 3. **Run local CI before pushing**, mirroring what CI runs: `bun install --frozen-lockfile`,
-   `bun run lint`, `bun run --cwd web check:i18n`, `bun run build`, `bun test`. Don't rely on
-   pushing to find out one of these fails.
+   `bun run typecheck`, `bun run check`, `bun run build`, `bun test`, `bun run dist`, and
+   `bun run scripts/smoke-release.ts dist/CCManagerUI.exe`. Don't rely on pushing to find
+   out one of these fails.
 
    A local pass is one leg of a two-leg matrix. CI runs `[ubuntu-latest, windows-latest]`, so a
    green run on Windows says nothing about Linux. Anything OS-shaped (path handling, filesystem
@@ -36,17 +37,15 @@ every instance with auto-update enabled will fast-forward to it on its next chec
    auto-update instances before anyone had looked at CI; it then failed the ubuntu leg on a
    win32-only path assertion. Prefer the two steps.
 
-   **If a tag does end up on a red commit,** moving it is cheap while the GitHub Release is still an
-   unpublished draft: `gh release delete vX.Y.Z --yes --cleanup-tag`, re-tag the green commit, push
-   the tag, let the workflow rebuild. Note that deleting the draft also deletes its release notes,
-   so keep a copy and reapply them with `gh release edit vX.Y.Z --notes-file`.
+   **If a tag does end up on a red commit,** do not move a published tag. Fix the failure, bump to
+   the next patch version, and release that immutable version instead.
 
 ## What the tag push triggers
 
-Pushing a tag matching `v*.*.*` triggers `.github/workflows/release.yml`, which cross-compiles
-real executables for every supported OS (Windows x64, Linux x64/arm64, macOS x64/arm64) and
-attaches them to a **draft** GitHub Release. The web UI ships as a sidecar `web/dist` folder next
-to each binary, not embedded, since Vite's hashed filenames aren't known at compile time. A
-maintainer then edits the draft's release notes and publishes it manually; the workflow does not
-publish automatically. `workflow_dispatch` on that same workflow runs the build and a boot smoke
-test only, with no tag and no release, for validating the pipeline without cutting a version.
+Pushing a tag matching `v*.*.*` triggers `.github/workflows/release.yml`. It builds one
+self-contained executable for every supported OS (Windows x64, Linux x64/arm64, macOS x64/arm64),
+boots every platform bundle, verifies the health endpoint and an embedded frontend asset, then
+publishes the GitHub Release automatically from the matching changelog section. Windows exposes a
+direct icon-bearing GUI executable for people plus a one-executable ZIP for the updater; Unix
+targets expose one-executable archives. `SHA256SUMS.txt` covers every asset. `workflow_dispatch`
+runs the same build and smoke matrix without publishing a release.

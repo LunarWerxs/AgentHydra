@@ -1,8 +1,9 @@
-import { statSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
   CLAUDE_PROJECTS_ROOT,
   CODEX_ARCHIVED_SESSIONS_ROOT,
+  CODEX_SESSION_INDEX_PATH,
   CODEX_SESSIONS_ROOT,
   OPENCODE_DB_PATH,
 } from './config'
@@ -43,6 +44,136 @@ export interface TranscriptFile {
 let cache: { at: number; files: TranscriptFile[] } | null = null
 const TTL_MS = 2000
 
+export interface CodexRolloutIdentity {
+  sessionId: string
+  isSubagent: boolean
+}
+
+/**
+ * Codex writes one rollout per execution thread, including every spawned subagent. The filename
+ * suffix and payload.id identify that rollout, while payload.session_id identifies the user-owned
+ * chat all of those threads belong to. Only the top-level rollout is the conversation shown by
+ * Codex itself; indexing child rollouts produces dozens of overlapping rows with the same title.
+ */
+export function codexRolloutIdentity(event: unknown, fallbackId: string): CodexRolloutIdentity {
+  const payload =
+    event &&
+    typeof event === 'object' &&
+    (event as any).type === 'session_meta' &&
+    (event as any).payload &&
+    typeof (event as any).payload === 'object'
+      ? (event as any).payload
+      : null
+  const sessionId =
+    typeof payload?.session_id === 'string' && payload.session_id.trim()
+      ? payload.session_id.trim()
+      : fallbackId
+  const isSubagent =
+    payload?.thread_source === 'subagent' ||
+    !!(payload?.source && typeof payload.source === 'object' && payload.source.subagent)
+  return { sessionId, isSubagent }
+}
+
+const codexIdentityCache = new Map<string, CodexRolloutIdentity>()
+
+export interface CodexSessionIndexEntry {
+  title: string
+  updatedAt: number | null
+}
+
+/** Parse Codex Desktop's append-style sidebar index. Later rows win when a title is regenerated or
+ * renamed, while malformed/incomplete rows are ignored so an active write cannot break browsing. */
+export function parseCodexSessionIndex(text: string): Map<string, CodexSessionIndexEntry> {
+  const entries = new Map<string, CodexSessionIndexEntry>()
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    let row: any
+    try {
+      row = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (typeof row?.id !== 'string' || typeof row?.thread_name !== 'string') continue
+    const id = row.id.trim()
+    const title = row.thread_name.trim()
+    if (!id || !title) continue
+    const timestamp = typeof row.updated_at === 'string' ? Date.parse(row.updated_at) : Number.NaN
+    entries.set(id, {
+      title,
+      updatedAt: Number.isNaN(timestamp) ? null : timestamp,
+    })
+  }
+  return entries
+}
+
+let codexSessionIndexCache:
+  | {
+      mtimeMs: number
+      size: number
+      entries: Map<string, CodexSessionIndexEntry>
+    }
+  | undefined
+
+function readCodexSessionIndex(): Map<string, CodexSessionIndexEntry> {
+  try {
+    const stat = statSync(CODEX_SESSION_INDEX_PATH)
+    if (
+      codexSessionIndexCache?.mtimeMs === stat.mtimeMs &&
+      codexSessionIndexCache.size === stat.size
+    )
+      return codexSessionIndexCache.entries
+    const entries = parseCodexSessionIndex(readFileSync(CODEX_SESSION_INDEX_PATH, 'utf8'))
+    codexSessionIndexCache = { mtimeMs: stat.mtimeMs, size: stat.size, entries }
+    return entries
+  } catch {
+    return new Map()
+  }
+}
+
+/** Read only the first JSONL record. Session metadata can be tens of KB because it includes base
+ * instructions, while the rollout itself can be many MB; loading the whole file here would make
+ * every session-list refresh unnecessarily expensive. */
+function readCodexRolloutIdentity(path: string, fallbackId: string): CodexRolloutIdentity {
+  const cached = codexIdentityCache.get(path)
+  if (cached) return cached
+
+  const chunks: Buffer[] = []
+  const chunk = Buffer.allocUnsafe(64 * 1024)
+  let total = 0
+  let fd: number | null = null
+  try {
+    fd = openSync(path, 'r')
+    while (total < 1024 * 1024) {
+      const read = readSync(fd, chunk, 0, chunk.length, null)
+      if (read === 0) break
+      const newline = chunk.subarray(0, read).indexOf(0x0a)
+      if (newline >= 0) {
+        chunks.push(Buffer.from(chunk.subarray(0, newline)))
+        break
+      }
+      chunks.push(Buffer.from(chunk.subarray(0, read)))
+      total += read
+    }
+  } catch {
+    // Active rollouts can move to the archive between discovery and this read.
+    return { sessionId: fallbackId, isSubagent: false }
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+
+  let event: unknown = null
+  try {
+    event = JSON.parse(Buffer.concat(chunks).toString('utf8').trim())
+  } catch {
+    // A just-created or legacy malformed rollout still remains discoverable by its filename.
+  }
+  const identity = codexRolloutIdentity(event, fallbackId)
+  // Do not pin a failed/incomplete first-line read forever; the next index refresh may see it after
+  // Codex has finished writing the session_meta record.
+  if (event) codexIdentityCache.set(path, identity)
+  return identity
+}
+
 export function listTranscriptFiles(force = false): TranscriptFile[] {
   const now = performance.now()
   if (!force && cache && now - cache.at < TTL_MS) return cache.files
@@ -69,6 +200,7 @@ export function listTranscriptFiles(force = false): TranscriptFile[] {
     })
   }
 
+  const codexSessionIndex = readCodexSessionIndex()
   const addCodexRoot = (root: string, archived: boolean) => {
     const glob = new Bun.Glob('**/rollout-*.jsonl')
     for (const rel of glob.scanSync({ cwd: root, onlyFiles: true })) {
@@ -80,15 +212,23 @@ export function listTranscriptFiles(force = false): TranscriptFile[] {
         continue
       }
       const name = basename(rel).replace(/\.jsonl$/, '')
-      const id = name.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)?.[1]
+      const rolloutId =
+        name.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)?.[1] ?? name
+      const identity = readCodexRolloutIdentity(path, rolloutId)
+      // Subagents are implementation detail of their parent chat. Their visible user history is a
+      // forked copy of that chat, so merging them would duplicate turns; the top-level rollout is
+      // the complete user-facing conversation and is the only row Codex itself exposes.
+      if (identity.isSubagent) continue
+      const indexed = codexSessionIndex.get(identity.sessionId)
       files.push({
-        session_id: id ?? name,
+        session_id: identity.sessionId,
         source: 'codex',
         path,
         project: 'codex',
-        mtime_ms: st.mtimeMs,
+        mtime_ms: Math.max(st.mtimeMs, indexed?.updatedAt ?? 0),
         size_bytes: st.size,
         archived,
+        title: indexed?.title,
       })
     }
   }
@@ -180,7 +320,7 @@ export function isCodexInjectedUserText(text: string): boolean {
     CODEX_INJECTED_USER_BLOCK.test(text) ||
     // Codex may deliver a repository's AGENTS.md preamble as a user-role transport message even
     // though it came from the runtime, not the human. Without this guard it becomes the title.
-    /^\s*#\s*AGENTS\.md instructions for\b/i.test(text)
+    /^\s*#\s*AGENTS\.md instructions\b/i.test(text)
   )
 }
 

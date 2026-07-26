@@ -26,6 +26,7 @@ export const CLAUDE_PROJECTS_ROOT = join(HOME, '.claude', 'projects')
 export const CODEX_HOME = process.env.CCMANAGERUI_CODEX_HOME?.trim() || join(HOME, '.codex')
 export const CODEX_SESSIONS_ROOT = join(CODEX_HOME, 'sessions')
 export const CODEX_ARCHIVED_SESSIONS_ROOT = join(CODEX_HOME, 'archived_sessions')
+export const CODEX_SESSION_INDEX_PATH = join(CODEX_HOME, 'session_index.jsonl')
 
 /** OpenCode CLI and Desktop share this SQLite session store. */
 export const OPENCODE_DB_PATH =

@@ -84,9 +84,11 @@ focus and quit the desktop from its row; CLI Launch and Log in actions use that 
 
 ## Install
 
-**Download** the bundle for your OS from [Releases](https://github.com/LunarWerxs/CCManagerUI/releases),
-unzip, and run `CCManagerUI.exe` (or `./ccmanagerui`). Self-contained, no Bun needed. On Windows,
-`misc\Tray-Launch.vbs` gives you a tray icon instead of a console window.
+**Download** your OS build from [Releases](https://github.com/LunarWerxs/CCManagerUI/releases).
+On Windows, run the versioned `CCManagerUI-…-windows-x64.exe` directly; it is an icon-bearing GUI
+executable with the web app embedded and no console window. The ZIP is the smaller automatic-update
+transport. Linux and macOS builds remain one-executable archives. No Bun or sidecar folders are
+needed.
 
 **Or from source**, with [Bun](https://bun.sh):
 
