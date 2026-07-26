@@ -1,7 +1,7 @@
 {
   "name": "ccmanagerui",
   "private": true,
-  "version": "0.11.1",
+  "version": "0.11.2",
   "license": "MIT",
   "workspaces": [
     "server",
@@ -14,6 +14,7 @@
     "dev:web": "bun run --cwd web dev",
     "build": "bun run --cwd web build",
     "compile": "bun build --compile --outfile=tmp/ccmanagerui server/src/main.ts",
+    "dist": "bun run scripts/build.ts",
     "start": "bun run --cwd server start",
     "mcp": "bun server/src/mcp.ts",
     "screenshots": "bun scripts/screenshots/capture.mjs",

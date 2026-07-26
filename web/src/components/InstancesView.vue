@@ -197,7 +197,13 @@ async function onCheckUsage(inst: CMInstance) {
 }
 
 // Which tables to show, and the CLI instances (so "refresh all" covers them too, not just desktop).
-const { showDesktopInstances, showCliInstances, load: loadAppSettings } = useAppSettings()
+const {
+  showDesktopInstances,
+  showCliInstances,
+  codexDesktopEnabled,
+  codexCliEnabled,
+  load: loadAppSettings,
+} = useAppSettings()
 const {
   cliInstances,
   checkUsage: checkCliUsage,
@@ -521,7 +527,7 @@ onUnmounted(() => {
     <div class="flex flex-wrap items-center justify-between gap-2 p-3">
       <!-- The heading doubles as the collapse trigger: someone who lives in the CLI wants this
            table out of the way, and vice versa. Disabled as a trigger when the table is hidden
-           outright (Settings → Appearance), where there is nothing to collapse. -->
+           outright (Settings → Providers), where there is nothing to collapse. -->
       <button
         type="button"
         class="flex items-center gap-2 rounded-md text-sm font-semibold transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
@@ -615,7 +621,7 @@ onUnmounted(() => {
          as one continuous table whose last rows happened to have different columns. A flex gap only
          applies BETWEEN children, so hiding either table leaves no orphan space behind it. -->
     <div class="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto scroll-slim">
-      <!-- Both tables are hideable (Settings → General): plenty of people use only the desktop app,
+      <!-- Both tables are hideable (Settings → Providers): plenty of people use only the desktop app,
            or only the CLI, and shouldn't have to look at an empty table for the other. -->
       <!-- v-show, not a height animation: the table header is `sticky top-0`, and any wrapper with
            `overflow: hidden` (which is how the kit's ExpandTransition animates) becomes the
@@ -907,7 +913,11 @@ onUnmounted(() => {
       </Table>
 
       <CliInstancesSection v-if="showCliInstances" />
-      <CodexInstancesSection />
+      <CodexInstancesSection
+        v-if="codexDesktopEnabled || codexCliEnabled"
+        :desktop-enabled="codexDesktopEnabled"
+        :cli-enabled="codexCliEnabled"
+      />
     </div>
 
     <CreateInstanceDialog

@@ -17,6 +17,9 @@ const autoRefresh = ref(true)
 const autoRefreshIntervalMin = ref(15)
 const showDesktopInstances = ref(true)
 const showCliInstances = ref(true)
+const codexDesktopEnabled = ref(true)
+const codexCliEnabled = ref(true)
+const chatGptHandoffEnabled = ref(false)
 // '' = auto-detect (server/src/transcript-open.ts picks the first installed editor it knows).
 const transcriptEditor = ref('')
 // Server-derived echo: what will ACTUALLY open a transcript once auto-detect has run and an
@@ -29,6 +32,9 @@ function absorb(s: api.AppSettings): void {
   autoRefreshIntervalMin.value = s.autoRefreshIntervalMin
   showDesktopInstances.value = s.showDesktopInstances
   showCliInstances.value = s.showCliInstances
+  codexDesktopEnabled.value = s.codexDesktopEnabled
+  codexCliEnabled.value = s.codexCliEnabled
+  chatGptHandoffEnabled.value = s.chatGptHandoffEnabled
   transcriptEditor.value = s.transcriptEditor
   transcriptEditorResolved.value = s.transcriptEditorResolved
   loaded.value = true
@@ -61,6 +67,9 @@ export function useAppSettings() {
     autoRefreshIntervalMin,
     showDesktopInstances,
     showCliInstances,
+    codexDesktopEnabled,
+    codexCliEnabled,
+    chatGptHandoffEnabled,
     transcriptEditor,
     transcriptEditorResolved,
     loaded,

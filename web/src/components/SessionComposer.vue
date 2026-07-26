@@ -2,18 +2,18 @@
 import {
   CalendarClock,
   Cpu,
+  ExternalLink,
   FolderGit2,
   Gauge,
   ListPlus,
   Minus,
   Plus,
   SendHorizonal,
-  Settings2,
   ShieldCheck,
   UserCircle2,
   UsersRound,
 } from '@lucide/vue'
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -27,6 +27,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
+import { useAppSettings } from '@/composables/useAppSettings'
 import { useData } from '@/composables/useData'
 import { usePanels } from '@/composables/usePanels'
 import * as api from '@/lib/api'
@@ -43,7 +44,9 @@ const emit = defineEmits<{ sent: [mode: 'now' | 'queued'] }>()
 
 const { t } = useI18n()
 const { queue, accounts, scheduler, refreshQueue } = useData()
-const { queueOpen, openSettingsTab } = usePanels()
+const { queueOpen } = usePanels()
+const { chatGptHandoffEnabled, load: loadAppSettings } = useAppSettings()
+onMounted(loadAppSettings)
 
 const text = ref('')
 const model = ref('')
@@ -92,6 +95,8 @@ const accountOptions = computed(() => [
 ])
 
 const canSend = computed(() => !!text.value.trim() && props.targets.length > 0 && !sending.value)
+const handingOff = ref(false)
+const canHandoff = computed(() => !!text.value.trim() && !!single.value && !handingOff.value)
 
 // chips: label falls back to the dimension name while the value is "default"
 const chipLabel = (value: string, options: { value: string; label: string }[], fallback: string) =>
@@ -178,6 +183,53 @@ function onKeydown(e: KeyboardEvent) {
   e.preventDefault()
   // Ctrl/Cmd+Enter always queues; plain Enter sends (busy targets self-queue in submit)
   submit(e.ctrlKey || e.metaKey ? 'queue' : 'now')
+}
+
+function downloadContextPack(filename: string, content: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+async function handoffToChatGpt() {
+  const target = single.value
+  if (!target || !canHandoff.value) return
+
+  // Open synchronously from the user's click so popup blockers do not mistake the new tab for an
+  // unsolicited async popup. The pack generation remains local; nothing is submitted for them.
+  window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer')
+  handingOff.value = true
+  try {
+    const cwd = cwdOverride.value.trim() || target.cwd
+    const pack = await api.createChatGptContextPack(cwd, text.value)
+    downloadContextPack(pack.filename, pack.content)
+
+    let copied = false
+    try {
+      await navigator.clipboard.writeText(pack.prompt)
+      copied = true
+    } catch {
+      // The attachment carries the task too, so a denied clipboard does not lose the handoff.
+    }
+    toast.success(
+      copied ? t('composer.chatGptReady') : t('composer.chatGptReadyWithoutClipboard'),
+      {
+        description:
+          pack.warnings.length > 0
+            ? pack.warnings.join(' ')
+            : t('composer.chatGptAttachHint', { files: pack.includedFiles.length }),
+      },
+    )
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : t('composer.chatGptHandoffFailed'))
+  } finally {
+    handingOff.value = false
+  }
 }
 </script>
 
@@ -292,6 +344,17 @@ function onKeydown(e: KeyboardEvent) {
           </Popover>
 
           <div class="ml-auto flex items-center gap-1">
+            <Button
+              v-if="chatGptHandoffEnabled && single"
+              variant="outline"
+              size="sm"
+              :disabled="!canHandoff"
+              :title="$t('composer.chatGptHandoffHint')"
+              @click="handoffToChatGpt"
+            >
+              <ExternalLink /> {{ $t('composer.chatGptHandoff') }}
+            </Button>
+
             <Button
               variant="outline"
               size="sm"

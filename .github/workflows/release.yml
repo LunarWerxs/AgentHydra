@@ -13,11 +13,11 @@
 #   NOT prove is that the binary RUNS — the smoke job boots each bundle on real hardware for its OS
 #   and asserts /api/health, because the failure modes here (virtual import.meta.dir paths, the
 #   implicit-serve entrypoint trap) all pass the build and only explode at runtime.
-# - The SPA is a SIDECAR web/dist folder next to the binary, not embedded: Vite emits hashed
-#   filenames unknown at compile time, and config.ts's APP_ROOT already resolves web/dist beside
-#   the exe in compiled mode.
-# - The Windows zip ships the misc/ tray toolkit; CCManagerUI-Tray.ps1 detects the compiled layout
-#   (CCManagerUI.exe at the app root) and starts the exe instead of `bun server/src/index.ts`.
+# - The SPA is embedded into the executable by scripts/build.ts. Windows publishes both a direct
+#   exe and a smaller updater zip; Unix targets publish updater tarballs. Each archive has one
+#   versioned wrapper directory containing only the executable. That wrapper preserves the update
+#   path from older CC Manager releases, whose updater expects it. There are no web/, node_modules/,
+#   source-map, or tray-script sidecars.
 name: Release
 
 on:
@@ -81,11 +81,9 @@ jobs:
           VERSION=$(bun -e 'console.log(require("./package.json").version)')
           target="${{ matrix.target }}"
           name="CCManagerUI-${VERSION}-${target}"
-          stage="out/${name}"
-          mkdir -p "${stage}/web"
-          cp -R web/dist "${stage}/web/dist"
-          cp LICENSE CHANGELOG.md "${stage}/"
-          cp .github/RELEASE-README.md "${stage}/README.md"
+          stage="tmp/release-stage"
+          rm -rf "$stage"
+          mkdir -p "$stage/$name" out
           if [ "$target" = "windows-x64" ]; then
             # NO --minify: on a WINDOWS compile host --minify alone panics Bun 1.3.14 outright
             # ("Crashed while printing main.ts" — isolated locally 2026-07-16 to --minify specifically;
@@ -94,21 +92,18 @@ jobs:
             # resource flags DO work on a Windows host (they're only unavailable when cross-compiling
             # from Linux), so the icon + title are applied at compile time — no rcedit post-step.
             # Unminified costs a few MB.
-            bun build --compile --sourcemap=none --target="bun-${target}" \
-              --windows-icon=misc/CCManagerUI.ico --windows-title="CC Manager UI" \
-              --outfile="${stage}/CCManagerUI.exe" server/src/main.ts
-            "${stage}/CCManagerUI.exe" --version   # canary: the compiled exe runs
-            mkdir -p "${stage}/misc"
-            cp misc/CCManagerUI-Tray.ps1 misc/Tray-Host.ps1 misc/Tray-Launch.vbs \
-               misc/New-TrayShortcut.ps1 misc/CCManagerUI.ico "${stage}/misc/"
+            bun run scripts/build.ts --skip-web --target="$target" \
+              --outfile="${stage}/${name}/CCManagerUI.exe"
+            "${stage}/${name}/CCManagerUI.exe" --version   # canary: the compiled exe runs
+            cp "${stage}/${name}/CCManagerUI.exe" "out/${name}.exe"
             # windows-latest has 7z on PATH; git-bash there has no `zip`
-            (cd out && 7z a -tzip "${name}.zip" "${name}" > /dev/null)
+            (cd "$stage" && 7z a -tzip "$GITHUB_WORKSPACE/out/${name}.zip" "$name" > /dev/null)
           else
-            bun build --compile --minify --sourcemap=none --target="bun-${target}" \
-              --outfile="${stage}/ccmanagerui" server/src/main.ts
-            tar -C out -czf "out/${name}.tar.gz" "${name}"
+            bun run scripts/build.ts --skip-web --target="$target" \
+              --outfile="${stage}/${name}/ccmanagerui"
+            tar -C "$stage" -czf "out/${name}.tar.gz" "$name"
           fi
-          rm -rf "${stage}"
+          rm -rf "$stage"
           ls -la out
 
       - uses: actions/upload-artifact@v7
@@ -117,6 +112,7 @@ jobs:
           path: |
             out/*.zip
             out/*.tar.gz
+            out/*.exe
           if-no-files-found: error
           # These are large binaries only consumed by the smoke + release jobs in THIS run
           # (or nobody, on a workflow_dispatch validation run). No reason to keep them 90 days.
@@ -166,14 +162,20 @@ jobs:
         shell: bash
         run: |
           cd out
-          bundle=$(ls CCManagerUI-*-${{ matrix.target }}.* | head -1)
-          echo "smoking $bundle"
-          case "$bundle" in
-            *.zip) unzip -q "$bundle" ;;
-            *) tar -xzf "$bundle" ;;
+          case "${{ matrix.target }}" in
+            windows-*) bundle=$(ls CCManagerUI-*-${{ matrix.target }}.zip | head -1) ;;
+            *) bundle=$(ls CCManagerUI-*-${{ matrix.target }}.tar.gz | head -1) ;;
           esac
-          dir="${bundle%.zip}"; dir="${dir%.tar.gz}"
-          echo "BUNDLE_DIR=out/$dir" >> "$GITHUB_ENV"
+          echo "smoking $bundle"
+          mkdir smoke
+          case "$bundle" in
+            *.zip) unzip -q "$bundle" -d smoke ;;
+            *) tar -xzf "$bundle" -C smoke ;;
+          esac
+          test "$(find smoke -mindepth 1 -maxdepth 1 | wc -l)" -eq 1
+          bundle_dir=$(find smoke -mindepth 1 -maxdepth 1 -type d | head -1)
+          test -n "$bundle_dir"
+          echo "BUNDLE_DIR=out/$bundle_dir" >> "$GITHUB_ENV"
 
       # The actual boot+assert, factored so native and QEMU paths run identical checks.
       - name: Boot + assert (native)
@@ -186,6 +188,7 @@ jobs:
           chmod +x "$BIN" 2>/dev/null || true
           "./$BIN" --version
           export CCMANAGERUI_HOME="$RUNNER_TEMP/ccm-smoke-home"
+          export CCMANAGERUI_NO_OPEN=1
           PORT=7797 "./$BIN" > daemon.out 2>&1 &
           ok=""
           for _ in $(seq 1 40); do
@@ -196,7 +199,12 @@ jobs:
           cat health.json; echo
           grep -q '"service":"ccmanagerui"' health.json
           grep -q '"distribution":"compiled"' health.json
-          curl -sf http://127.0.0.1:7797/ | grep -qi '<!doctype html'
+          curl -sf http://127.0.0.1:7797/ > index.html
+          grep -qi '<!doctype html' index.html
+          asset=$(grep -Eo "/assets/[^\"']+\.(js|css)" index.html | head -1)
+          test -n "$asset"
+          curl -sf "http://127.0.0.1:7797${asset}" > frontend-asset
+          test -s frontend-asset
 
       - name: Boot + assert (arm64 under QEMU)
         if: matrix.qemu
@@ -238,6 +246,9 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: out
+      - name: Build checksums
+        shell: bash
+        run: sha256sum out/* > out/SHA256SUMS.txt
 
       # Idempotent: a retry updates the existing release in place and replaces its platform assets
       # instead of deleting the release or creating an orphaned draft.
@@ -246,7 +257,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" out/*.zip out/*.tar.gz \
+            # Archives go first so pre-transition updaters, which selected the first matching
+            # target asset, receive a bundle rather than the new human-facing direct executable.
+            gh release upload "$GITHUB_REF_NAME" out/*.zip out/*.tar.gz out/*.exe out/SHA256SUMS.txt \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
             gh release edit "$GITHUB_REF_NAME" \
@@ -255,7 +268,7 @@ jobs:
               --notes-file RELEASE_NOTES.md \
               --draft=false
           else
-            gh release create "$GITHUB_REF_NAME" out/*.zip out/*.tar.gz \
+            gh release create "$GITHUB_REF_NAME" out/*.zip out/*.tar.gz out/*.exe out/SHA256SUMS.txt \
               --repo "$GITHUB_REPOSITORY" \
               --title "CC Manager UI ${GITHUB_REF_NAME#v}" \
               --notes-file RELEASE_NOTES.md

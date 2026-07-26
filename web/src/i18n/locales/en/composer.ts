@@ -23,4 +23,12 @@ export default {
   toastFailed: 'Failed for {n} session(s)',
   schedulerOffHint: 'Scheduler is off; queued messages only run when you press Run.',
   viewQueue: 'View queue',
+  chatGptHandoff: 'ChatGPT',
+  chatGptHandoffHint:
+    'Download a scoped repository context file, copy this task, and open ChatGPT. You review and submit it manually.',
+  chatGptReady: 'ChatGPT opened. Prompt copied and context downloaded.',
+  chatGptReadyWithoutClipboard:
+    'ChatGPT opened and context downloaded. The task is included in the file.',
+  chatGptAttachHint: 'Attach the downloaded context file. It contains {files} source files.',
+  chatGptHandoffFailed: 'Failed to prepare the ChatGPT handoff.',
 }

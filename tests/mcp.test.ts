@@ -88,6 +88,9 @@ describe('tools/list', () => {
       'list_instances',
       'launch_instance',
       'quit_instance',
+      'open_codex_desktop_instance',
+      'focus_codex_desktop_instance',
+      'quit_codex_desktop_instance',
       'check_update',
     ]) {
       expect(names).toContain(expected)

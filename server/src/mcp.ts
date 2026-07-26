@@ -465,10 +465,11 @@ export const TOOLS: McpEngineTool[] = [
       }),
   },
 
-  // --- Codex CLI instances ------------------------------------------------------
+  // --- Codex CLI + Desktop instances --------------------------------------------
   {
     name: 'list_codex_instances',
-    description: 'List isolated Codex CLI instances (one CODEX_HOME per OpenAI login).',
+    description:
+      'List isolated Codex instances (one CODEX_HOME and desktop profile per OpenAI login).',
     inputSchema: S(),
     run: () => api('/api/codex-instances'),
   },
@@ -501,6 +502,34 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S({ id: { type: 'string' } }, ['id']),
     run: (a) =>
       api(`/api/codex-instances/${encodeURIComponent(str(a.id))}/login`, { method: 'POST' }),
+  },
+  {
+    name: 'open_codex_desktop_instance',
+    description:
+      'MUTATES: launch this isolated Codex Desktop instance, independently from other Codex windows.',
+    inputSchema: S({ id: { type: 'string' } }, ['id']),
+    run: (a) =>
+      api(`/api/codex-instances/${encodeURIComponent(str(a.id))}/desktop/open`, {
+        method: 'POST',
+      }),
+  },
+  {
+    name: 'focus_codex_desktop_instance',
+    description: "MUTATES: bring this running Codex Desktop instance's window to the foreground.",
+    inputSchema: S({ id: { type: 'string' } }, ['id']),
+    run: (a) =>
+      api(`/api/codex-instances/${encodeURIComponent(str(a.id))}/desktop/focus`, {
+        method: 'POST',
+      }),
+  },
+  {
+    name: 'quit_codex_desktop_instance',
+    description: 'MUTATES: stop this isolated Codex Desktop instance.',
+    inputSchema: S({ id: { type: 'string' } }, ['id']),
+    run: (a) =>
+      api(`/api/codex-instances/${encodeURIComponent(str(a.id))}/desktop/quit`, {
+        method: 'POST',
+      }),
   },
 
   // --- auto-resume monitor (Feature E) ------------------------------------------

@@ -239,6 +239,9 @@ const {
   autoRefreshIntervalMin: usageIntervalMin,
   showDesktopInstances,
   showCliInstances,
+  codexDesktopEnabled,
+  codexCliEnabled,
+  chatGptHandoffEnabled,
   transcriptEditor,
   transcriptEditorResolved,
   load: loadUsageSettings,
@@ -248,6 +251,10 @@ onMounted(loadUsageSettings)
 
 async function patchUsageSettings(patch: Partial<api.UsageSettings>) {
   if (!(await updateAppSettings(patch))) toast.error(t('settings.usageToastFailed'))
+}
+
+async function patchProviderSettings(patch: Partial<api.ProviderSettings>) {
+  if (!(await updateAppSettings(patch))) toast.error(t('settings.providerToastFailed'))
 }
 
 // --- transcript editor (server/src/transcript-open.ts): which editor "Open the session file"
@@ -599,30 +606,6 @@ defineExpose({ save })
           <Switch :model-value="hideTrayIcon" @update:model-value="toggleHideTrayIcon" />
         </template>
       </SettingsRow>
-      <!-- which instance tables to show is an appearance choice (moved here from Usage) -->
-      <SettingsRow :icon="Monitor" :label="$t('settings.showDesktopInstancesLabel')">
-        <template #info>
-          <InfoHint :text="$t('settings.showDesktopInstancesHint')" />
-        </template>
-        <template #control>
-          <Switch
-            :model-value="showDesktopInstances"
-            @update:model-value="(v: boolean) => patchUsageSettings({ showDesktopInstances: v })"
-          />
-        </template>
-      </SettingsRow>
-      <SettingsRow :icon="Terminal" :label="$t('settings.showCliInstancesLabel')">
-        <template #info>
-          <InfoHint :text="$t('settings.showCliInstancesHint')" />
-        </template>
-        <template #control>
-          <Switch
-            :model-value="showCliInstances"
-            @update:model-value="(v: boolean) => patchUsageSettings({ showCliInstances: v })"
-          />
-        </template>
-      </SettingsRow>
-
       <!-- Advanced disclosure (mirrors the Scheduler group): tooltips toggle + transcript-editor
            override live here so the section leads with the everyday choices. -->
       <SettingsRow
@@ -715,6 +698,74 @@ defineExpose({ save })
           </ExpandTransition>
         </div>
       </ExpandTransition>
+    </SettingsGroup>
+
+    <!-- provider surfaces: decide which installed tools and optional handoffs CC Manager exposes -->
+    <SettingsGroup
+      :ref="(el: unknown) => setSectionEl('providers', el)"
+      :class="flashSection === 'providers' ? 'settings-flash' : ''"
+      :label="$t('settings.providersTitle')"
+      :description="$t('settings.providersHint')"
+    >
+      <SettingsRow :icon="Monitor" :label="$t('settings.claudeDesktopProviderLabel')">
+        <template #info>
+          <InfoHint :text="$t('settings.claudeDesktopProviderHint')" />
+        </template>
+        <template #control>
+          <Switch
+            :model-value="showDesktopInstances"
+            @update:model-value="(v: boolean) => patchUsageSettings({ showDesktopInstances: v })"
+          />
+        </template>
+      </SettingsRow>
+      <SettingsRow :icon="Terminal" :label="$t('settings.claudeCliProviderLabel')">
+        <template #info>
+          <InfoHint :text="$t('settings.claudeCliProviderHint')" />
+        </template>
+        <template #control>
+          <Switch
+            :model-value="showCliInstances"
+            @update:model-value="(v: boolean) => patchUsageSettings({ showCliInstances: v })"
+          />
+        </template>
+      </SettingsRow>
+      <SettingsRow :icon="AppWindow" :label="$t('settings.codexDesktopProviderLabel')">
+        <template #info>
+          <InfoHint :text="$t('settings.codexDesktopProviderHint')" />
+        </template>
+        <template #control>
+          <Switch
+            :model-value="codexDesktopEnabled"
+            @update:model-value="
+              (v: boolean) => patchProviderSettings({ codexDesktopEnabled: v })
+            "
+          />
+        </template>
+      </SettingsRow>
+      <SettingsRow :icon="Terminal" :label="$t('settings.codexCliProviderLabel')">
+        <template #info>
+          <InfoHint :text="$t('settings.codexCliProviderHint')" />
+        </template>
+        <template #control>
+          <Switch
+            :model-value="codexCliEnabled"
+            @update:model-value="(v: boolean) => patchProviderSettings({ codexCliEnabled: v })"
+          />
+        </template>
+      </SettingsRow>
+      <SettingsRow :icon="MessageCircleQuestion" :label="$t('settings.chatGptHandoffLabel')">
+        <template #info>
+          <InfoHint :text="$t('settings.chatGptHandoffHint')" />
+        </template>
+        <template #control>
+          <Switch
+            :model-value="chatGptHandoffEnabled"
+            @update:model-value="
+              (v: boolean) => patchProviderSettings({ chatGptHandoffEnabled: v })
+            "
+          />
+        </template>
+      </SettingsRow>
     </SettingsGroup>
 
     <!-- usage: keep the quota numbers warm -->

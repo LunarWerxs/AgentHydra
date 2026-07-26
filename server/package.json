@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cnct/connect": "^1.0.0",
+    "@cnct/connect": "^1.1.0",
     "hono": "^4.12.31",
     "safe-regex2": "^5.1.1"
   },

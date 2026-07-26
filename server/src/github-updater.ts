@@ -3,7 +3,7 @@
 // The git-based engine (updater-engine.mjs) can't work in a packaged build (no .git, no server/src).
 // This is its compiled-mode counterpart: it asks the GitHub Releases API for the latest tag, and —
 // when newer — downloads that release's bundle for THIS platform, extracts it beside the running
-// binary, and swaps the exe + web/dist in place. It exposes the SAME UpdateStatus / UpdateApplyResult
+// binary, and swaps the self-contained executable in place. It exposes the SAME UpdateStatus / UpdateApplyResult
 // shape the engine does, so updater.ts, the /api/update routes, the auto-update loop, and the web UI
 // all drive it unchanged.
 //
@@ -13,7 +13,7 @@
 //   2. PROVE the new exe runs (`<new> --version` prints the expected version) BEFORE touching the
 //      live install — never swap in a binary that doesn't launch.
 //   3. Rename the running exe aside (allowed on Windows even while running; fine on POSIX) so it can
-//      be rolled back, then move the new exe into its place; same rename-aside for web/dist.
+//      be rolled back, then move the new exe into its place.
 //   4. On any failure mid-swap, restore from the renamed-aside originals.
 // Leftover `*.old-*` artifacts are swept on the next boot (cleanupStaleUpdateArtifacts).
 
@@ -64,10 +64,12 @@ interface GhRelease {
   assets: GhAsset[]
 }
 
-/** The asset for THIS platform in a release (matched by the `-<target>.` infix, version-agnostic). */
-function assetForThisPlatform(assets: GhAsset[]): GhAsset | null {
+/** The compressed updater asset for THIS platform. A release may also expose a direct Windows
+ *  `.exe` for humans; extension matching makes updater selection independent of upload order. */
+export function assetForThisPlatform(assets: GhAsset[]): GhAsset | null {
   const target = currentTarget()
-  return assets.find((a) => a.name.includes(`-${target}.`)) ?? null
+  const extension = process.platform === 'win32' ? '.zip' : '.tar.gz'
+  return assets.find((a) => a.name.endsWith(`-${target}${extension}`)) ?? null
 }
 
 let cached: { value: UpdateStatus; at: number } | null = null
@@ -242,14 +244,14 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
 
   const exePath = process.execPath
   const exeName = basename(exePath)
-  const installDir = APP_ROOT // where the exe + web/dist live (dirname(execPath) in compiled mode)
+  const bundledExeName = process.platform === 'win32' ? 'CCManagerUI.exe' : 'ccmanagerui'
+  const installDir = APP_ROOT
   const staging = join(installDir, '.update-staging')
   const stamp = String(status.checkedAt) // Date.now() is unavailable here; reuse the check time
   const output: string[] = []
 
   // Staged renames-aside, tracked so a mid-swap failure can roll them back.
   let exeMovedAside: string | null = null
-  let distMovedAside: string | null = null
 
   try {
     rmSync(staging, { recursive: true, force: true })
@@ -266,29 +268,18 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
     output.push('extracting')
     await extract(archivePath, staging)
 
-    // The bundle extracts to a single CCManagerUI-<version>-<target>/ dir.
+    // Updater bundles retain the versioned wrapper directory expected by older releases, while
+    // containing only the executable now. Also accept a flat archive if one is ever published.
     const entries = readdirSync(staging, { withFileTypes: true })
     const bundleDir = entries.find((e) => e.isDirectory() && e.name.startsWith('CCManagerUI-'))
-    if (!bundleDir) return fail('extracted bundle has an unexpected layout')
-    const bundlePath = join(staging, bundleDir.name)
-    const newExe = join(bundlePath, exeName)
-    const newDist = join(bundlePath, 'web', 'dist')
+    const newExe = bundleDir
+      ? join(staging, bundleDir.name, bundledExeName)
+      : join(staging, bundledExeName)
     if (!existsSync(newExe)) return fail(`the update bundle has no ${exeName}`)
 
     output.push('verifying the new binary runs')
     if (!(await verifyExeVersion(newExe, remoteVersion))) {
       return fail('the downloaded binary failed its version self-check — not swapping it in')
-    }
-
-    // --- swap web/dist (not locked) ---
-    const liveDist = join(installDir, 'web', 'dist')
-    if (existsSync(newDist)) {
-      if (existsSync(liveDist)) {
-        distMovedAside = `${liveDist}.old-${stamp}`
-        renameSync(liveDist, distMovedAside)
-      }
-      moveInto(newDist, liveDist)
-      output.push('web assets updated')
     }
 
     // --- swap the exe (rename-aside is allowed on a running Windows image) ---
@@ -317,11 +308,9 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
   } catch (e) {
     // Roll back anything we moved aside so the install is never left half-swapped.
     try {
-      if (exeMovedAside && existsSync(exeMovedAside) && !existsSync(exePath))
+      if (exeMovedAside && existsSync(exeMovedAside)) {
+        rmSync(exePath, { force: true })
         renameSync(exeMovedAside, exePath)
-      if (distMovedAside && existsSync(distMovedAside)) {
-        const liveDist = join(installDir, 'web', 'dist')
-        if (!existsSync(liveDist)) renameSync(distMovedAside, liveDist)
       }
     } catch {
       /* rollback is best-effort */

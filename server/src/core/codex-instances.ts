@@ -2,16 +2,30 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { CONFIG_DIR, resolveCodexExe } from '../config'
 import type { CodexInstance } from '../types'
+import {
+  type CodexDesktopRuntime,
+  codexDesktopUserDataDir,
+  focusCodexDesktop,
+  isCodexDesktopRunning,
+  listCodexDesktopProcesses,
+  openCodexDesktop,
+  quitCodexDesktop,
+} from './codex-desktop'
 import { CODEX_LAUNCH_EFFORTS, type LaunchOptionsInput, launchOptionError } from './launch-options'
-import { isPathInside } from './paths'
+import { isPathInside, normalizePath } from './paths'
 import type { CMActionResult } from './shared'
 
 const CODEX_INSTANCES_ROOT = join(CONFIG_DIR, 'codex-instances')
 const STORE_PATH = join(CONFIG_DIR, 'codex-instances.json')
 const NAME_MAX = 60
 
+type StoredCodexInstance = Omit<
+  CodexInstance,
+  'loggedIn' | 'desktopUserDataDir' | 'isDesktopRunning' | 'desktopPid'
+>
+
 interface Store {
-  instances: CodexInstance[]
+  instances: StoredCodexInstance[]
 }
 
 function readStore(): Store {
@@ -37,12 +51,36 @@ export function isCodexLoggedIn(codexHome: string): boolean {
   }
 }
 
-function hydrate(instance: CodexInstance): CodexInstance {
-  return { ...instance, loggedIn: isCodexLoggedIn(instance.codexHome) }
+function hydrate(
+  instance: StoredCodexInstance,
+  runtime: CodexDesktopRuntime | null = null,
+): CodexInstance {
+  return {
+    ...instance,
+    loggedIn: isCodexLoggedIn(instance.codexHome),
+    desktopUserDataDir: codexDesktopUserDataDir(instance.codexHome),
+    isDesktopRunning: runtime !== null,
+    desktopPid: runtime?.pid ?? null,
+  }
 }
 
-export function listCodexInstances(): CodexInstance[] {
-  return readStore().instances.map(hydrate)
+export interface ListCodexInstancesOptions {
+  listDesktopProcesses?: () => Promise<CodexDesktopRuntime[]>
+}
+
+export async function listCodexInstances(
+  options: ListCodexInstancesOptions = {},
+): Promise<CodexInstance[]> {
+  const runtimes = await (options.listDesktopProcesses ?? listCodexDesktopProcesses)()
+  const runtimeByDir = new Map(
+    runtimes.map((runtime) => [normalizePath(runtime.desktopUserDataDir), runtime]),
+  )
+  return readStore().instances.map((instance) =>
+    hydrate(
+      instance,
+      runtimeByDir.get(normalizePath(codexDesktopUserDataDir(instance.codexHome))) ?? null,
+    ),
+  )
 }
 
 export function getCodexInstance(id: string): CodexInstance | null {
@@ -82,11 +120,10 @@ export function createCodexInstance(name: string): CMActionResult {
     }
   }
 
-  const instance: CodexInstance = {
+  const instance: StoredCodexInstance = {
     id,
     name: name.trim(),
     codexHome,
-    loggedIn: false,
     createdAt: Date.now(),
   }
   const store = readStore()
@@ -132,7 +169,11 @@ export function renameCodexInstance(id: string, name: string): CMActionResult {
   }
 }
 
-export function deleteCodexInstance(id: string, confirmName?: string): CMActionResult {
+export async function deleteCodexInstance(
+  id: string,
+  confirmName?: string,
+  options: { listDesktopProcesses?: () => Promise<CodexDesktopRuntime[]> } = {},
+): Promise<CMActionResult> {
   const store = readStore()
   const index = store.instances.findIndex((candidate) => candidate.id === id)
   if (index < 0)
@@ -153,6 +194,18 @@ export function deleteCodexInstance(id: string, confirmName?: string): CMActionR
       data: { id },
     }
 
+  if (
+    await isCodexDesktopRunning(instance, options.listDesktopProcesses ?? listCodexDesktopProcesses)
+  ) {
+    return {
+      ok: false,
+      action: 'codex-delete',
+      dir: instance.codexHome,
+      message: 'Quit this Codex Desktop instance before deleting it.',
+      data: { id },
+    }
+  }
+
   if (isPathInside(CODEX_INSTANCES_ROOT, instance.codexHome)) {
     try {
       rmSync(instance.codexHome, { recursive: true, force: true })
@@ -169,6 +222,31 @@ export function deleteCodexInstance(id: string, confirmName?: string): CMActionR
     message: `Codex instance '${instance.name}' deleted.`,
     data: { id },
   }
+}
+
+function missingCodexInstance(action: string, id: string): CMActionResult {
+  return {
+    ok: false,
+    action,
+    dir: null,
+    message: 'Codex instance not found.',
+    data: { id },
+  }
+}
+
+export async function openCodexDesktopInstance(id: string): Promise<CMActionResult> {
+  const instance = getCodexInstance(id)
+  return instance ? openCodexDesktop(instance) : missingCodexInstance('codex-desktop-open', id)
+}
+
+export async function focusCodexDesktopInstance(id: string): Promise<CMActionResult> {
+  const instance = getCodexInstance(id)
+  return instance ? focusCodexDesktop(instance) : missingCodexInstance('codex-desktop-focus', id)
+}
+
+export async function quitCodexDesktopInstance(id: string): Promise<CMActionResult> {
+  const instance = getCodexInstance(id)
+  return instance ? quitCodexDesktop(instance) : missingCodexInstance('codex-desktop-quit', id)
 }
 
 export interface CodexLaunchOptions extends LaunchOptionsInput {

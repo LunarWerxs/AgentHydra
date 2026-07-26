@@ -6,6 +6,7 @@ this file is for running, configuring and hacking on it.
 - [MCP server](#mcp-server)
 - [Claude Desktop session mapping](#claude-desktop-session-mapping)
 - [Config (env)](#config-env)
+- [ChatGPT handoff](#chatgpt-handoff)
 - [Auto-update](#auto-update)
 - [Instance appearance](#instance-appearance)
 - [Stack](#stack)
@@ -35,10 +36,10 @@ URL) or `CCMANAGERUI_PORT`.
 
 Tools cover sessions (list / get / tail across Claude, Codex, and OpenCode), the queue (list / add /
 update / run / cancel / events), accounts (secrets always masked), the scheduler (get / set),
-Claude Desktop instances (list / launch / quit), Claude CLI instances and Codex CLI instances
-(list / create / launch / login helper), usage-check (`check_usage`, `check_my_usage`), and the
-auto-resume monitor (get / set), plus an update check. Mutating tools say `MUTATES:` in their
-description; there is deliberately no shutdown tool.
+Claude Desktop instances (list / launch / quit), Claude CLI instances, and Codex CLI/Desktop
+instances (list / create / CLI launch / login helper / desktop open / focus / quit), usage-check
+(`check_usage`, `check_my_usage`), and the auto-resume monitor (get / set), plus an update check.
+Mutating tools say `MUTATES:` in their description; there is deliberately no shutdown tool.
 
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`, or
 `opencode`; every returned session is source-tagged. Session viewing/search is unified, but queue
@@ -90,6 +91,7 @@ stable interface and must not be assumed by product logic.
 | `CCMANAGERUI_RUN_LOG_DIR` | `server/data/run-logs` | detached-run log and sidecar directory |
 | `CCMANAGERUI_CODEX_HOME` | `~/.codex` | default Codex rollout store to scan |
 | `CCMANAGERUI_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
+| `CCMANAGERUI_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
 | `CCMANAGERUI_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
 
 `/api/health` returns `service: "ccmanagerui"`, which is load-bearing for the single-instance
@@ -100,6 +102,23 @@ database so the database remains portable. The state directories and database re
 POSIX modes where supported, and the daemon cannot bind beyond loopback. This protects the local
 service boundary but is not a password vault: anyone who can read files as the same OS user can
 read those manually supplied credentials.
+
+## ChatGPT handoff
+
+Enable **Settings → Providers → ChatGPT handoff** to add a ChatGPT action to the single-session
+composer. It uses the composer task and effective working directory to create a Markdown
+attachment, downloads it in the browser, copies a matching prompt, and opens
+<https://chatgpt.com/>. CC Manager never signs in, submits the prompt, uploads the attachment, or
+reads the response.
+
+The pack is capped at roughly 100,000 estimated tokens and 256 KiB per file. Git checkouts respect
+standard Git ignore rules; non-Git directories use a bounded walk with common dependency/build and
+credential directories excluded. Common secret filenames, private keys, and high-confidence token
+patterns are omitted and reported as warnings. This is a guardrail, not a guarantee: review the
+download before attaching private source code.
+
+The endpoint is `POST /api/chatgpt/context-pack` with `{ "cwd": "...", "task": "..." }`; it is
+available only while the provider toggle is enabled.
 
 ## Auto-update
 
@@ -138,14 +157,14 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 | Frontend | Vue 3 + Vite, a shared LunarWerx UI kit (shadcn-vue `reka-mira` on Reka UI), Tailwind v4, `@lucide/vue`, TypeScript |
 | Backend | **Bun + Hono**, `bun:sqlite` (queue / dispatch / scheduler / accounts and read-only OpenCode access) + JSON under `CONFIG_DIR`, SSE (`hono/streaming`) for live run output |
 | Dispatch | `Bun.spawn` of the real `claude` CLI (no Agent SDK) |
-| Multi-instance | per-OS instance discovery / launch / quit / create (`server/src/core/*`): Windows DPAPI / macOS Keychain / Linux libsecret for reading each isolated instance's stored credentials |
+| Multi-instance | per-OS Claude and Codex Desktop discovery / launch / focus / quit plus isolated Claude/Codex CLI homes (`server/src/core/*`); Windows DPAPI / macOS Keychain / Linux libsecret read Claude Desktop credentials |
 | Launcher | Windows browser + system-tray (`misc/`) |
 
 ## Layout
 
 ```
 server/    Bun + Hono daemon: sqlite, Claude/Codex/OpenCode session readers, transcript tail,
-           dispatch, scheduler, instance pointer, core/ (Claude Desktop/CLI + Codex CLI instances)
+           dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances)
 web/       Vue 3 SPA (Sessions / Queue / Instances views)
 tests/     launcher.test.ts (the tray guard, Windows-gated) + server/instance unit tests
 misc/      the Windows launcher toolkit (tray .ps1 / .vbs / .ico / Create-Shortcut / Make-Icon / Rebuild.bat)

@@ -524,6 +524,8 @@ describe('updateAppearance while enabled + connected', () => {
     server.docPostCalls = 0
 
     await updateAppearance({ theme: 'system' })
+    expect(server.docPostCalls).toBe(0)
+    await pushNow()
 
     expect(syncStatus().appearance).toEqual({ theme: 'system' })
     expect(server.docPostCalls).toBe(1)

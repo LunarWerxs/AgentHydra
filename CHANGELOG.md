@@ -6,11 +6,28 @@ All notable changes to CC Manager UI are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Codex Desktop instances can now run side by side.** Each managed Codex instance launches the
+  desktop app with its own `CODEX_HOME` and `CODEX_ELECTRON_USER_DATA_PATH`, so work, personal, and
+  client OpenAI logins have independent windows and local state. The Instances view reports which
+  desktops are running and can open, focus, or quit each one; CLI launch/login remains available on
+  the same row.
+- **Provider settings and manual ChatGPT handoff.** Claude Desktop, Claude CLI, Codex Desktop, and
+  Codex CLI surfaces can be shown independently. An opt-in composer action creates a bounded,
+  secret-screened repository context attachment, copies the task prompt, and opens ChatGPT without
+  automating the user's account or submission.
+
 ### Changed
 
 - Version tags now publish their tested platform bundles automatically using the matching
   versioned changelog section. Release retries update the existing release in place instead of
   deleting it or leaving another unpublished draft.
+- Windows releases now expose an icon-bearing, single-file GUI executable while retaining a
+  compact ZIP for automatic updates. The web UI is embedded, so no loose `web` or `node_modules`
+  folders are needed beside the executable.
+- Connections settings sync now uses the multi-device-safe 1.1 engine, with atomic first-account
+  seeding, conflict-safe nested patches, token-isolated caching, and a final flush on shutdown.
 
 ## [0.11.1] - 2026-07-23
 

@@ -2,7 +2,7 @@
 //   · SOURCE checkout  → the shared git engine (createUpdater / updater-engine.mjs): git pull +
 //     reinstall + rebuild.
 //   · COMPILED release → the GitHub-Releases updater (./github-updater): download the latest
-//     release's platform bundle and swap the exe + web/dist in place.
+//     release's platform bundle and swap the self-contained executable in place.
 // Both expose the identical UpdateStatus / UpdateApplyResult shape, so the /api/update routes, the
 // auto-update loop, and the web UI drive whichever is active without knowing which it is.
 import { APP_ROOT, IS_COMPILED, SERVICE_NAME } from './config'

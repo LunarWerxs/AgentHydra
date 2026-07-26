@@ -13,7 +13,7 @@
 // so a fleet of ten does not fire ten simultaneous requests every interval. A sweep never overlaps
 // itself (`sweeping` guard), and a failure in one instance never aborts the rest.
 //
-// Turn it off in Settings → General. The manual "Refresh usage" buttons work exactly the same either
+// Turn it off in Settings → Usage. The manual "Refresh usage" buttons work exactly the same either
 // way; this only decides whether the numbers go stale between visits.
 
 import { listCliInstances } from './core/cli-instances'

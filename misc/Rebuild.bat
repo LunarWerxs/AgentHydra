@@ -5,6 +5,13 @@ rem "Rebuild & Restart" does this plus restarts the daemon; this is the manual p
 cd /d "%~dp0.."
 echo Rebuilding CC Manager UI GUI...
 call bun run build
+if errorlevel 1 (
+  echo.
+  echo Build FAILED - see the output above.
+  pause
+  exit /b 1
+)
+
 echo.
 echo Done.
-pause
+exit /b 0

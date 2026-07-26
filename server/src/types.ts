@@ -429,13 +429,36 @@ export interface CliInstance {
   createdAt: number
 }
 
-/** An isolated Codex CLI login rooted at its own CODEX_HOME. */
+/** An isolated Codex CLI + Desktop login rooted at its own CODEX_HOME. */
 export interface CodexInstance {
   id: string
   name: string
   codexHome: string
   loggedIn: boolean
+  /** Electron/Chromium profile isolated from both the regular app and the other instances. */
+  desktopUserDataDir: string
+  isDesktopRunning: boolean
+  desktopPid: number | null
   createdAt: number
+}
+
+/** Provider/surface visibility plus opt-in integrations. */
+export interface ProviderSettings {
+  codexDesktopEnabled: boolean
+  codexCliEnabled: boolean
+  chatGptHandoffEnabled: boolean
+}
+
+/** Bounded, secret-screened repository context returned for a manual ChatGPT handoff. */
+export interface ChatGptContextPack {
+  filename: string
+  content: string
+  prompt: string
+  includedFiles: string[]
+  omittedFiles: number
+  estimatedTokens: number
+  truncated: boolean
+  warnings: string[]
 }
 
 // --- usage settings ----------------------------------------------------------

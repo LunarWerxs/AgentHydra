@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  AppWindow,
   ArrowDown,
   ArrowUp,
   ChevronDown,
@@ -9,6 +10,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Square,
   Terminal,
   Trash2,
 } from '@lucide/vue'
@@ -40,6 +42,11 @@ import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useSortable } from '@/composables/useSortable'
 import type { CodexInstance } from '@/lib/api'
 
+const props = defineProps<{
+  desktopEnabled: boolean
+  cliEnabled: boolean
+}>()
+
 const {
   instances,
   loading,
@@ -48,8 +55,11 @@ const {
   startPolling,
   stopPolling,
   create,
-  launch,
+  launchCli,
   login,
+  openDesktop,
+  focusDesktop,
+  quitDesktop,
   rename,
   remove,
 } = useCodexInstances()
@@ -60,7 +70,11 @@ const isBusy = (instance: CodexInstance) => busyIds.value.has(instance.id)
 const { sortedRows, toggleSort, indicatorFor } = useSortable(
   () => instances.value,
   [
-    { key: 'loggedIn', accessor: (instance: CodexInstance) => instance.loggedIn },
+    {
+      key: 'status',
+      accessor: (instance: CodexInstance) =>
+        `${props.desktopEnabled && instance.isDesktopRunning ? '0' : '1'}:${props.cliEnabled && instance.loggedIn ? '0' : '1'}`,
+    },
     { key: 'name', accessor: (instance: CodexInstance) => instance.name },
     { key: 'codexHome', accessor: (instance: CodexInstance) => instance.codexHome },
   ],
@@ -131,16 +145,34 @@ async function onDelete(name: string) {
   }
 }
 
-async function onLaunch(instance: CodexInstance) {
-  const result = await launch(instance.id)
-  if (result?.ok) toast.success(t('codexInstances.toastLaunched'))
-  else toast.error(result?.message ?? t('codexInstances.toastLaunchFailed'))
+async function onLaunchCli(instance: CodexInstance) {
+  const result = await launchCli(instance.id)
+  if (result?.ok) toast.success(t('codexInstances.toastCliLaunched'))
+  else toast.error(result?.message ?? t('codexInstances.toastCliLaunchFailed'))
 }
 
 async function onLogin(instance: CodexInstance) {
   const result = await login(instance.id)
   if (result?.ok) toast.success(t('codexInstances.toastLoginOpened'))
   else toast.error(result?.message ?? t('codexInstances.toastLoginFailed'))
+}
+
+async function onOpenDesktop(instance: CodexInstance) {
+  const result = await openDesktop(instance.id)
+  if (result?.ok) toast.success(t('codexInstances.toastDesktopOpened'))
+  else toast.error(result?.message ?? t('codexInstances.toastDesktopOpenFailed'))
+}
+
+async function onFocusDesktop(instance: CodexInstance) {
+  const result = await focusDesktop(instance.id)
+  if (result?.ok) toast.success(t('codexInstances.toastDesktopFocused'))
+  else toast.error(result?.message ?? t('codexInstances.toastDesktopFocusFailed'))
+}
+
+async function onQuitDesktop(instance: CodexInstance) {
+  const result = await quitDesktop(instance.id)
+  if (result?.ok) toast.success(t('codexInstances.toastDesktopQuit'))
+  else toast.error(result?.message ?? t('codexInstances.toastDesktopQuitFailed'))
 }
 
 onMounted(startPolling)
@@ -156,7 +188,7 @@ onUnmounted(stopPolling)
         :aria-expanded="open"
         @click="open = !open"
       >
-        <Terminal class="size-4" />
+        <AppWindow class="size-4" />
         {{ $t('codexInstances.title') }}
         <span class="text-muted-foreground">({{ instances.length }})</span>
         <ChevronDown
@@ -183,10 +215,11 @@ onUnmounted(stopPolling)
     <Table v-show="open">
       <TableHeader class="sticky top-0 z-10 bg-card">
         <TableRow>
-          <TableHead class="w-10 cursor-pointer select-none" @click="toggleSort('loggedIn')">
+          <TableHead class="cursor-pointer select-none" @click="toggleSort('status')">
             <span class="inline-flex items-center gap-0.5">
-              ● <ArrowUp v-if="indicatorFor('loggedIn') === 'asc'" class="size-3" />
-              <ArrowDown v-else-if="indicatorFor('loggedIn') === 'desc'" class="size-3" />
+              {{ $t('codexInstances.colStatus') }}
+              <ArrowUp v-if="indicatorFor('status') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('status') === 'desc'" class="size-3" />
             </span>
           </TableHead>
           <TableHead class="cursor-pointer select-none" @click="toggleSort('name')">
@@ -209,7 +242,7 @@ onUnmounted(stopPolling)
       <TableBody v-if="instances.length === 0">
         <TableEmpty v-if="!loading" :colspan="4">
           <div class="flex flex-col items-center gap-1 text-center">
-            <Terminal class="mb-1 size-6 opacity-40" />
+            <AppWindow class="mb-1 size-6 opacity-40" />
             <p class="font-medium text-foreground">{{ $t('codexInstances.empty') }}</p>
             <p class="text-xs text-muted-foreground">{{ $t('codexInstances.emptyHint') }}</p>
           </div>
@@ -224,11 +257,35 @@ onUnmounted(stopPolling)
       <TableBody v-else>
         <TableRow v-for="instance in sortedRows" :key="instance.id">
           <TableCell>
-            <span
-              class="inline-block size-2 rounded-full"
-              :class="instance.loggedIn ? 'bg-success' : 'bg-muted-foreground/40'"
-              :title="instance.loggedIn ? $t('codexInstances.loggedIn') : $t('codexInstances.loggedOut')"
-            />
+            <div class="flex items-center gap-2 text-xs">
+              <span
+                v-if="desktopEnabled"
+                class="inline-block size-2 rounded-full"
+                :class="instance.isDesktopRunning ? 'bg-success' : 'bg-muted-foreground/40'"
+              />
+              <span
+                v-if="desktopEnabled"
+                :class="instance.isDesktopRunning ? 'text-foreground' : 'text-muted-foreground'"
+              >
+                {{
+                  instance.isDesktopRunning
+                    ? $t('codexInstances.desktopRunning')
+                    : $t('codexInstances.desktopStopped')
+                }}
+              </span>
+              <span
+                v-if="cliEnabled"
+                class="text-muted-foreground"
+                :title="instance.loggedIn ? $t('codexInstances.loggedIn') : $t('codexInstances.loggedOut')"
+              >
+                <template v-if="desktopEnabled">·</template>
+                {{
+                  instance.loggedIn
+                    ? $t('codexInstances.loggedInShort')
+                    : $t('codexInstances.loggedOutShort')
+                }}
+              </span>
+            </div>
           </TableCell>
           <TableCell class="font-medium">{{ instance.name }}</TableCell>
           <TableCell class="mono max-w-[28rem] truncate text-[0.625rem] text-muted-foreground">
@@ -236,8 +293,32 @@ onUnmounted(stopPolling)
           </TableCell>
           <TableCell>
             <div class="flex items-center justify-end gap-1">
-              <Button variant="outline" size="sm" :disabled="isBusy(instance)" @click="onLaunch(instance)">
-                <Play /> {{ $t('codexInstances.launch') }}
+              <Button
+                v-if="desktopEnabled && !instance.isDesktopRunning"
+                variant="outline"
+                size="sm"
+                :disabled="isBusy(instance)"
+                @click="onOpenDesktop(instance)"
+              >
+                <Play /> {{ $t('codexInstances.openDesktop') }}
+              </Button>
+              <Button
+                v-else-if="desktopEnabled"
+                variant="outline"
+                size="sm"
+                :disabled="isBusy(instance)"
+                @click="onFocusDesktop(instance)"
+              >
+                <AppWindow /> {{ $t('codexInstances.focusDesktop') }}
+              </Button>
+              <Button
+                v-else-if="cliEnabled"
+                variant="outline"
+                size="sm"
+                :disabled="isBusy(instance)"
+                @click="onLaunchCli(instance)"
+              >
+                <Terminal /> {{ $t('codexInstances.launchCli') }}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
@@ -246,7 +327,26 @@ onUnmounted(stopPolling)
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" class="w-52">
-                  <DropdownMenuItem :disabled="isBusy(instance)" @click="onLogin(instance)">
+                  <DropdownMenuItem
+                    v-if="desktopEnabled"
+                    :disabled="!instance.isDesktopRunning || isBusy(instance)"
+                    @click="onQuitDesktop(instance)"
+                  >
+                    <Square /> {{ $t('codexInstances.quitDesktop') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator v-if="desktopEnabled && cliEnabled" />
+                  <DropdownMenuItem
+                    v-if="cliEnabled"
+                    :disabled="isBusy(instance)"
+                    @click="onLaunchCli(instance)"
+                  >
+                    <Terminal /> {{ $t('codexInstances.launchCli') }}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    v-if="cliEnabled"
+                    :disabled="isBusy(instance)"
+                    @click="onLogin(instance)"
+                  >
                     <LogIn /> {{ $t('codexInstances.login') }}
                   </DropdownMenuItem>
                   <DropdownMenuItem :disabled="isBusy(instance)" @click="openRename(instance)">
@@ -255,7 +355,7 @@ onUnmounted(stopPolling)
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     variant="destructive"
-                    :disabled="isBusy(instance)"
+                    :disabled="instance.isDesktopRunning || isBusy(instance)"
                     @click="openDelete(instance)"
                   >
                     <Trash2 /> {{ $t('codexInstances.delete') }}

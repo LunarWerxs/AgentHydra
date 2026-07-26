@@ -2,6 +2,7 @@ import type {
   Account,
   ArchivedScope,
   AuthType,
+  ChatGptContextPack,
   CliInstance,
   CMAccount,
   CMActionResult,
@@ -16,6 +17,7 @@ import type {
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
+  ProviderSettings,
   QueueItem,
   RunEvent,
   SchedulerState,
@@ -38,6 +40,7 @@ export type {
   Account,
   ArchivedScope,
   AuthType,
+  ChatGptContextPack,
   CliInstance,
   CMAccount,
   CMAccountStatus,
@@ -55,6 +58,7 @@ export type {
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
+  ProviderSettings,
   QueueItem,
   QueueStatus,
   RunEvent,
@@ -322,13 +326,21 @@ export const shutdownApp = () =>
   })
 
 // --- app settings (portable mode, hide tray icon, usage auto-refresh + section visibility) -------
-/** Everything /api/settings returns: the window/tray settings plus the usage settings. */
-export type AppSettings = PortableModeSettings & UsageSettings & TranscriptSettings
+/** Everything /api/settings returns: window/tray, usage, provider, and editor settings. */
+export type AppSettings = PortableModeSettings &
+  UsageSettings &
+  ProviderSettings &
+  TranscriptSettings
 export const getSettings = () => j<AppSettings>('/api/settings')
 export const updateSettings = (b: Partial<AppSettings>) =>
   j<AppSettings>('/api/settings', { method: 'POST', body: JSON.stringify(b) })
 export const openPortableWindow = () =>
   j<PortableWindowResult>('/api/portable-window', { method: 'POST' })
+export const createChatGptContextPack = (cwd: string, task: string) =>
+  j<ChatGptContextPack>('/api/chatgpt/context-pack', {
+    method: 'POST',
+    body: JSON.stringify({ cwd, task }),
+  })
 
 // --- "Sync my settings with Connections" (see server/src/connections.ts) -----------------------
 /** A handled sync failure — returned at HTTP 200 so it's non-blocking. */
@@ -427,7 +439,7 @@ export const checkCliInstanceUsage = (id: string, refresh = false) =>
     `/api/cli-instances/${encodeURIComponent(id)}/usage${refresh ? '?refresh=1' : ''}`,
   )
 
-// --- Codex CLI instances -----------------------------------------------------
+// --- Codex CLI + Desktop instances -------------------------------------------
 export const listCodexInstances = () => j<CodexInstance[]>('/api/codex-instances')
 export const createCodexInstance = (name: string) =>
   j<CMActionResult>('/api/codex-instances', {
@@ -441,6 +453,18 @@ export const launchCodexInstance = (id: string, opts: { model?: string; effort?:
   })
 export const codexInstanceLogin = (id: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/login`, {
+    method: 'POST',
+  })
+export const openCodexDesktopInstance = (id: string) =>
+  j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/desktop/open`, {
+    method: 'POST',
+  })
+export const focusCodexDesktopInstance = (id: string) =>
+  j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/desktop/focus`, {
+    method: 'POST',
+  })
+export const quitCodexDesktopInstance = (id: string) =>
+  j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/desktop/quit`, {
     method: 'POST',
   })
 export const renameCodexInstance = (id: string, name: string) =>

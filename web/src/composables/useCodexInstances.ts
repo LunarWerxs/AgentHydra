@@ -63,8 +63,11 @@ async function withBusy(
   }
 }
 
-const launch = (id: string) => withBusy(id, () => api.launchCodexInstance(id))
+const launchCli = (id: string) => withBusy(id, () => api.launchCodexInstance(id))
 const login = (id: string) => withBusy(id, () => api.codexInstanceLogin(id), true)
+const openDesktop = (id: string) => withBusy(id, () => api.openCodexDesktopInstance(id), true)
+const focusDesktop = (id: string) => withBusy(id, () => api.focusCodexDesktopInstance(id))
+const quitDesktop = (id: string) => withBusy(id, () => api.quitCodexDesktopInstance(id), true)
 const rename = (id: string, name: string) =>
   withBusy(id, () => api.renameCodexInstance(id, name), true)
 const remove = (id: string, confirmName: string) =>
@@ -80,8 +83,11 @@ export function useCodexInstances() {
     startPolling,
     stopPolling,
     create,
-    launch,
+    launchCli,
     login,
+    openDesktop,
+    focusDesktop,
+    quitDesktop,
     rename,
     remove,
   }

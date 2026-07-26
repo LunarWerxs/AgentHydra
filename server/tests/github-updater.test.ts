@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { currentTarget, isNewer } from '../src/github-updater'
+import { assetForThisPlatform, currentTarget, isNewer } from '../src/github-updater'
 
 describe('github-updater version logic', () => {
   test('isNewer: strictly-greater semver only', () => {
@@ -24,5 +24,24 @@ describe('github-updater version logic', () => {
     expect(t).toMatch(/^(windows|darwin|linux)-(x64|arm64)$/)
     // never leaks node's raw 'win32'
     expect(t.startsWith('win32')).toBe(false)
+  })
+
+  test('asset selection prefers the compressed updater bundle when a direct exe is also present', () => {
+    const target = currentTarget()
+    const extension = process.platform === 'win32' ? '.zip' : '.tar.gz'
+    const directExtension = process.platform === 'win32' ? '.exe' : ''
+    const direct = {
+      name: `CCManagerUI-9.9.9-${target}${directExtension}`,
+      browser_download_url: 'https://example.test/direct',
+      size: 100,
+    }
+    const compressed = {
+      name: `CCManagerUI-9.9.9-${target}${extension}`,
+      browser_download_url: 'https://example.test/compressed',
+      size: 40,
+    }
+
+    expect(assetForThisPlatform([direct, compressed])).toEqual(compressed)
+    expect(assetForThisPlatform([compressed, direct])).toEqual(compressed)
   })
 })

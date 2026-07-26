@@ -28,7 +28,13 @@
 // @cnct/connect is a regular dependency here (server/package.json) — dynamically imported
 // below anyway, so a boot with sync untouched never pays for the SDK.
 // ---------------------------------------------------------------------------
-import type { ConnectClient, ConnectStore, LockerClient, TokenSet } from '@cnct/connect'
+import type {
+  ConnectClient,
+  ConnectStore,
+  SettingsSync,
+  SettingsSyncStatus,
+  TokenSet,
+} from '@cnct/connect'
 import { getSetting, setSetting } from './db'
 import { unseal, wrapTokenStore } from './dpapi-seal.mjs'
 import type { SyncStatus } from './types'
@@ -207,26 +213,7 @@ async function backfillIdentity(): Promise<void> {
   }
 }
 
-/** Dynamically imports @cnct/connect — never pulled in on a boot where sync is untouched. */
-async function locker(): Promise<LockerClient> {
-  let createLocker: typeof import('@cnct/connect').createLocker
-  try {
-    ;({ createLocker } = await import('@cnct/connect'))
-  } catch (e) {
-    throw new SdkUnavailableError('@cnct/connect', e)
-  }
-  return createLocker({
-    appId: OAUTH.clientId,
-    getToken: async () => (await connect()).getAccessToken(),
-  })
-}
-
 // ── settings mapping (the allowlist) ─────────────────────────────────────────────
-interface SyncDoc {
-  prefs?: Record<string, unknown>
-  appearance?: Record<string, unknown>
-}
-
 function collectPrefs(): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const k of PREF_KEYS) out[k] = getSetting(k)
@@ -265,33 +252,71 @@ export function syncStatus(): SyncStatus {
   }
 }
 
-/** Push the current allowlisted settings to the store (deep-merge — race-free per key). */
+let settingsSync: SettingsSync | null = null
+let lastApplied = false
+
+function recordEngineStatus(status: SettingsSyncStatus): void {
+  if (status.version !== null) state.version = status.version
+  if (status.lastSyncedAt !== null) {
+    state.lastSyncedAt = new Date(status.lastSyncedAt).toISOString()
+  }
+  if (status.version !== null || status.lastSyncedAt !== null) persist()
+}
+
+async function syncEngine(): Promise<SettingsSync> {
+  if (settingsSync) return settingsSync
+  let createSettingsSync: typeof import('@cnct/connect').createSettingsSync
+  try {
+    ;({ createSettingsSync } = await import('@cnct/connect'))
+  } catch (e) {
+    throw new SdkUnavailableError('@cnct/connect', e)
+  }
+  const client = await connect()
+  settingsSync = createSettingsSync(client.locker(), {
+    // Preserve the established document shape for existing users.
+    keys: ['prefs', 'appearance'],
+    read: () => ({
+      prefs: collectPrefs(),
+      ...(state.appearance ? { appearance: state.appearance } : {}),
+    }),
+    write: (patch) => {
+      lastApplied = applyPrefs(
+        patch.prefs && typeof patch.prefs === 'object'
+          ? (patch.prefs as Record<string, unknown>)
+          : undefined,
+      )
+      if (patch.appearance && typeof patch.appearance === 'object') {
+        state.appearance = patch.appearance as Record<string, unknown>
+      }
+      persist()
+    },
+    onStatus: recordEngineStatus,
+  })
+  return settingsSync
+}
+
+function requireSuccess(status: SettingsSyncStatus): SettingsSyncStatus {
+  if (status.state === 'synced') return status
+  if (status.state === 'signed-out') {
+    const error = new Error('not_signed_in') as Error & { code?: string }
+    error.code = 'not_signed_in'
+    throw error
+  }
+  throw status.error ?? new Error(`settings sync ended in ${status.state}`)
+}
+
+/** Flush the current allowlisted settings immediately. */
 export async function pushNow(): Promise<void> {
-  const doc: SyncDoc = { prefs: collectPrefs() }
-  if (state.appearance) doc.appearance = state.appearance
-  const store = await locker()
-  const res = await store.merge(doc as Record<string, unknown>)
-  state.version = res.version
-  state.lastSyncedAt = new Date().toISOString()
-  persist()
+  requireSuccess(await (await syncEngine()).flush())
   await backfillIdentity()
 }
 
 /** Pull remote settings and apply the allowlisted subset. Returns whether anything was applied. */
 export async function pullNow(): Promise<{ applied: boolean; version: number }> {
-  const store = await locker()
-  const remote = await store.get()
-  state.version = remote.version
-  let applied = false
-  if (remote.version > 0) {
-    const data = (remote.settings ?? {}) as SyncDoc
-    applied = applyPrefs(data.prefs)
-    if (data.appearance && typeof data.appearance === 'object') state.appearance = data.appearance
-    state.lastSyncedAt = new Date().toISOString()
-  }
-  persist()
+  lastApplied = false
+  const status = requireSuccess(await (await syncEngine()).pull())
   await backfillIdentity()
-  return { applied, version: remote.version }
+  return { applied: lastApplied, version: status.version ?? 0 }
 }
 
 /** Turn sync on: pull the remote doc (applying it) or seed the store from local if it's empty. */
@@ -303,9 +328,10 @@ export async function enable(
   persist()
   let applied = false
   if (hasConnection()) {
-    const pulled = await pullNow()
-    applied = pulled.applied
-    if (pulled.version === 0) await pushNow() // remote empty → seed with our current settings
+    lastApplied = false
+    requireSuccess(await (await syncEngine()).hydrate({ seedIfEmpty: true }))
+    applied = lastApplied
+    await backfillIdentity()
   }
   return { status: syncStatus(), applied }
 }
@@ -314,11 +340,11 @@ export async function enable(
  *  server-side (RFC 7009, so the refresh-token family is dead everywhere), and clears the session. */
 export async function disable(forget = false): Promise<SyncStatus> {
   state.enabled = false
+  settingsSync?.stop()
   if (forget) {
     if (hasConnection()) {
       try {
-        const store = await locker()
-        await store.delete()
+        await (settingsSync ?? (await syncEngine())).locker.delete()
       } catch {
         /* best-effort remote wipe */
       }
@@ -335,15 +361,24 @@ export async function disable(forget = false): Promise<SyncStatus> {
     state.lastSyncedAt = undefined
     state.sdk = undefined
   }
+  settingsSync = null
   persist()
   return syncStatus()
 }
 
-/** The web changed appearance (theme) while synced — record it and push (if enabled). */
+/** The web changed appearance; the SDK engine owns debounce/coalescing. */
 export async function updateAppearance(appearance: Record<string, unknown>): Promise<void> {
   state.appearance = appearance
   persist()
-  if (state.enabled && hasConnection()) await pushNow()
+  if (state.enabled && hasConnection()) (await syncEngine()).push()
+}
+
+/** Flush a pending debounce before daemon exit/relaunch. */
+export async function flushPending(): Promise<void> {
+  if (state.enabled && hasConnection()) {
+    requireSuccess(await (await syncEngine()).flushAndStop())
+    await backfillIdentity()
+  }
 }
 
 /** Sign out / disconnect fully (used by the logout route). */

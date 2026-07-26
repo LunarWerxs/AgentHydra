@@ -43,13 +43,24 @@ export default {
   usageIntervalHint:
     'How often to re-check. Quota moves over hours, not seconds, so there is little reason to go below 15 minutes.',
   usageIntervalMinutes: '{minutes} min',
-  showDesktopInstancesLabel: 'Show desktop instances',
-  showDesktopInstancesHint:
-    'Show the Claude Desktop instances table. Turn this off if you only use the CLI.',
-  showCliInstancesLabel: 'Show CLI instances',
-  showCliInstancesHint:
-    'Show the CLI instances table. Turn this off if you only use the desktop app.',
   usageToastFailed: 'Failed to save usage setting.',
+
+  // provider surfaces
+  providersTitle: 'Providers',
+  providersHint:
+    'Choose which desktop, CLI, and external AI surfaces CC Manager shows. Disabling a surface hides its controls; it does not uninstall the provider or delete an account.',
+  claudeDesktopProviderLabel: 'Claude Desktop',
+  claudeDesktopProviderHint: 'Show and manage isolated Claude Desktop instances.',
+  claudeCliProviderLabel: 'Claude CLI',
+  claudeCliProviderHint: 'Show and manage isolated Claude CLI logins.',
+  codexDesktopProviderLabel: 'Codex Desktop',
+  codexDesktopProviderHint: 'Show desktop launch, focus, quit, and running status for Codex.',
+  codexCliProviderLabel: 'Codex CLI',
+  codexCliProviderHint: 'Show Codex CLI launch and login actions.',
+  chatGptHandoffLabel: 'ChatGPT handoff',
+  chatGptHandoffHint:
+    'Adds a composer action that downloads a bounded, secret-screened repository context file, copies the task prompt, and opens ChatGPT. You still review and submit everything manually.',
+  providerToastFailed: 'Failed to save provider setting.',
 
   // updates section — the version number itself is the status + control now (see the tips below),
   // so the old standalone "Check for updates" / "Update available" / "Update blocked" / "Up to

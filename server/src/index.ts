@@ -33,6 +33,7 @@ import {
   buildAuthorizeUrl,
   disable,
   enable,
+  flushPending,
   handleCallback,
   initConnections,
   logout,
@@ -41,6 +42,7 @@ import {
   syncStatus,
   updateAppearance,
 } from './connections'
+import { createChatGptContextPack } from './context-pack'
 import { resolveAccount } from './core/accounts'
 import {
   associateCliInstance,
@@ -56,8 +58,11 @@ import {
 import {
   createCodexInstance,
   deleteCodexInstance,
+  focusCodexDesktopInstance,
   launchCodexInstance,
   listCodexInstances,
+  openCodexDesktopInstance,
+  quitCodexDesktopInstance,
   renameCodexInstance,
 } from './core/codex-instances'
 import { detectDesktopInstall } from './core/desktop-install'
@@ -111,7 +116,9 @@ import {
   setMonitorSettings,
   startMonitor,
 } from './monitor'
+import { openUi } from './open-ui'
 import { openPortableWindow } from './portable-window.mjs'
+import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { schedulerState, setSchedulerSettings } from './scheduler'
 import { searchSessionBodies } from './session-search'
 import { getSession, listSessions, sessionMarkKey } from './sessions'
@@ -331,6 +338,7 @@ const appSettings = () => ({
     existsSync,
   ),
   ...getUsageSettings(),
+  ...getProviderSettings(),
 })
 app.get('/api/settings', (c) => c.json(appSettings()))
 app.post('/api/settings', async (c) => {
@@ -350,7 +358,32 @@ app.post('/api/settings', async (c) => {
     showCliInstances:
       typeof body.showCliInstances === 'boolean' ? body.showCliInstances : undefined,
   })
+  setProviderSettings({
+    codexDesktopEnabled:
+      typeof body.codexDesktopEnabled === 'boolean' ? body.codexDesktopEnabled : undefined,
+    codexCliEnabled: typeof body.codexCliEnabled === 'boolean' ? body.codexCliEnabled : undefined,
+    chatGptHandoffEnabled:
+      typeof body.chatGptHandoffEnabled === 'boolean' ? body.chatGptHandoffEnabled : undefined,
+  })
   return c.json(appSettings())
+})
+
+// Manual handoff only: create a bounded local context attachment, then the browser opens ChatGPT
+// and the user chooses what to send. No ChatGPT credentials, cookies, prompts, or responses cross
+// this API.
+app.post('/api/chatgpt/context-pack', async (c) => {
+  if (!getProviderSettings().chatGptHandoffEnabled)
+    return c.json({ error: 'ChatGPT handoff is disabled in Settings → Providers.' }, 403)
+  const body = await jsonBody(c)
+  if (typeof body.cwd !== 'string' || !body.cwd.trim())
+    return c.json({ error: 'cwd is required' }, 400)
+  if (typeof body.task !== 'string' || !body.task.trim())
+    return c.json({ error: 'task is required' }, 400)
+  try {
+    return c.json(createChatGptContextPack(body.cwd, body.task))
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400)
+  }
 })
 
 // --- "Sign in with Connections" + settings-sync (see server/src/connections.ts) ----------------
@@ -1247,7 +1280,7 @@ app.get('/api/cli-instances/:id/usage', async (c) => {
 })
 
 // --- Codex CLI instances ----------------------------------------------------
-app.get('/api/codex-instances', (c) => c.json(listCodexInstances()))
+app.get('/api/codex-instances', async (c) => c.json(await listCodexInstances()))
 app.post('/api/codex-instances', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.name !== 'string' || !body.name.trim())
@@ -1268,6 +1301,15 @@ app.post('/api/codex-instances/:id/launch', async (c) => {
 app.post('/api/codex-instances/:id/login', (c) =>
   c.json(launchCodexInstance(c.req.param('id'), { login: true })),
 )
+app.post('/api/codex-instances/:id/desktop/open', async (c) =>
+  c.json(await openCodexDesktopInstance(c.req.param('id'))),
+)
+app.post('/api/codex-instances/:id/desktop/focus', async (c) =>
+  c.json(await focusCodexDesktopInstance(c.req.param('id'))),
+)
+app.post('/api/codex-instances/:id/desktop/quit', async (c) =>
+  c.json(await quitCodexDesktopInstance(c.req.param('id'))),
+)
 app.post('/api/codex-instances/:id/rename', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.name !== 'string') return c.json({ error: 'name is required' }, 400)
@@ -1276,7 +1318,7 @@ app.post('/api/codex-instances/:id/rename', async (c) => {
 app.delete('/api/codex-instances/:id', async (c) => {
   const body = await jsonBody(c)
   const confirmName = typeof body.confirmName === 'string' ? body.confirmName : undefined
-  return c.json(deleteCodexInstance(c.req.param('id'), confirmName))
+  return c.json(await deleteCodexInstance(c.req.param('id'), confirmName))
 })
 
 // --- auto-resume monitor (Feature E) ----------------------------------------
@@ -1361,6 +1403,19 @@ function clearShutdownRequest(): void {
 
 // --- graceful shutdown (tray Quit calls this before falling back to taskkill) ---
 const SHUTDOWN_TOKEN = process.env.CCMANAGERUI_SHUTDOWN_TOKEN
+async function flushConnectionsBeforeExit(): Promise<void> {
+  await Promise.race([
+    flushPending().catch((error) => {
+      console.error(
+        `[ccmanagerui] final settings sync failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }),
+    new Promise<void>((resolve) => setTimeout(resolve, 6_000)),
+  ])
+}
+
 app.post('/api/shutdown', (c) => {
   const trayHeader = c.req.header('x-ccmanagerui-shutdown-token') ?? ''
   const uiSource = c.req.header('x-ccmanagerui-shutdown-source') === 'ui'
@@ -1372,7 +1427,8 @@ app.post('/api/shutdown', (c) => {
   const tokenOk = !!SHUTDOWN_TOKEN && trayHeader === SHUTDOWN_TOKEN
   if (!uiSource && !tokenOk) return c.json({ error: 'forbidden' }, 403)
   if (uiSource && !tokenOk) writeShutdownRequest()
-  setTimeout(() => {
+  setTimeout(async () => {
+    await flushConnectionsBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
     process.exit(0)
@@ -1381,8 +1437,34 @@ app.post('/api/shutdown', (c) => {
 })
 
 // --- serve the built SPA (single-process / production) ----------------------
+const embeddedWeb = (
+  globalThis as {
+    __CCMANAGERUI_EMBEDDED_WEB__?: Readonly<Record<string, string>>
+  }
+).__CCMANAGERUI_EMBEDDED_WEB__
 const dist = WEB_DIST_CANDIDATES.find((p) => existsSync(p))
-if (dist) {
+if (embeddedWeb) {
+  app.get('/*', async (c) => {
+    let pathname = decodeURIComponent(new URL(c.req.url).pathname)
+    if (pathname === '/' || pathname === '') pathname = '/index.html'
+    const lastSeg = pathname.slice(pathname.lastIndexOf('/') + 1)
+    const isAsset = pathname.startsWith('/assets/') || /\.[a-z0-9]+$/i.test(lastSeg)
+    const embeddedPath = embeddedWeb[pathname]
+    if (embeddedPath) {
+      return new Response(Bun.file(embeddedPath), {
+        headers: {
+          'cache-control': pathname.startsWith('/assets/')
+            ? 'public, max-age=31536000, immutable'
+            : 'no-cache',
+        },
+      })
+    }
+    if (isAsset) return c.text('not found', 404, { 'cache-control': 'no-store' })
+    return new Response(Bun.file(embeddedWeb['/index.html']!), {
+      headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
+    })
+  })
+} else if (dist) {
   const root = relative(process.cwd(), dist).replaceAll('\\', '/') || '.'
   app.use('/assets/*', serveStatic({ root }))
   // a stale hashed chunk must 404, not fall through to index.html (wrong MIME → module load error)
@@ -1431,6 +1513,12 @@ async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
 // The dev launcher (CCMANAGERUI_PORT_FIXED) and the auto-update successor
 // (CCMANAGERUI_RELAUNCH) are exempt; see skipSingleInstanceGuard for why, and
 // single-instance.test.ts for the regression guard on the relaunch exemption.
+const releaseDoubleClick =
+  (globalThis as { __CCMANAGERUI_RELEASE_BUILD__?: boolean }).__CCMANAGERUI_RELEASE_BUILD__ ===
+    true &&
+  process.env.CCMANAGERUI_RELAUNCH !== '1' &&
+  !process.env.CCMANAGERUI_SHUTDOWN_TOKEN
+
 if (!skipSingleInstanceGuard()) {
   // Re-probe (3 attempts, 2s each) rather than trusting ONE 1s probe. This decides whether to
   // become a second daemon, so a false "nothing running" is expensive and self-concealing: we
@@ -1444,6 +1532,7 @@ if (!skipSingleInstanceGuard()) {
     console.log(
       `\n  CC Manager UI is already running  →  ${live.url}\n  Not starting a second instance.\n`,
     )
+    if (releaseDoubleClick && process.env.CCMANAGERUI_NO_OPEN !== '1') openUi(live.url)
     process.exit(0)
   }
 }
@@ -1474,7 +1563,8 @@ writeInstanceInfo(boundPort, {
 clearShutdownRequest()
 process.on('exit', () => clearInstanceInfo())
 for (const sig of ['SIGINT', 'SIGTERM'] as const)
-  process.on(sig, () => {
+  process.on(sig, async () => {
+    await flushConnectionsBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
     process.exit(0)
@@ -1515,7 +1605,8 @@ function relaunchDaemon(): boolean {
     return false
   }
   console.log('[ccmanagerui] update applied, relaunching the daemon…')
-  setTimeout(() => {
+  setTimeout(async () => {
+    await flushConnectionsBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
     process.exit(0)
@@ -1564,18 +1655,24 @@ startMonitor()
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading
 // your quota does not consume it — so keeping the numbers warm costs essentially nothing. Toggle in
-// Settings → General.
+// Settings → Usage.
 startUsageRefresh()
 
 // Explicit serve, NOT Bun's implicit `export default { fetch }` sugar: the implicit form only
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon
 // via main.ts's dynamic import (where the default export would be silently inert — verified: the
 // daemon "booted", logged its URL, and listened on nothing).
-Bun.serve({
+const server = Bun.serve({
   port: boundPort,
   hostname: HOST,
   fetch: app.fetch,
   idleTimeout: 255,
 })
+
+if (releaseDoubleClick && process.env.CCMANAGERUI_NO_OPEN !== '1') {
+  const url = `http://127.0.0.1:${server.port}/`
+  if (!openUi(url))
+    console.error(`[ccmanagerui] Could not open a browser automatically. Open ${url} manually.`)
+}
 
 export type App = typeof app

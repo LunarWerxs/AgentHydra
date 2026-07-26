@@ -39,6 +39,10 @@ For Claude sessions, the box at the bottom lets you type straight back into a se
 finding its terminal. Pick several Claude sessions and you can send the same message to all of
 them. Codex and OpenCode support is read-only.
 
+An optional **ChatGPT handoff** in that composer turns the task and repository into a bounded
+Markdown context file, copies a ready-to-paste prompt, and opens ChatGPT. CC Manager omits common
+secret files and likely credentials; you still review the attachment and submit it yourself.
+
 When you want a raw Claude or Codex file, there is a button for opening the `.jsonl` in your editor,
 downloading it under its real title, or copying it out. OpenCode conversations are rendered from its
 database rather than exposed as a raw file.
@@ -74,8 +78,9 @@ You can open, focus, quit, create and delete them from here, give each one a nam
 colour so they stop looking identical, and see your isolated CLI logins alongside the desktop
 instance that shares their account.
 
-The same view can create isolated Codex CLI homes too. Each Codex instance gets its own
-`CODEX_HOME`, with Launch and Log in actions, so work and personal OpenAI logins remain separate.
+The same view manages Codex Desktop and CLI together. Each Codex instance gets its own `CODEX_HOME`
+and desktop profile, so work and personal OpenAI logins can run in separate Codex windows. Open,
+focus and quit the desktop from its row; CLI Launch and Log in actions use that same isolated login.
 
 ## Install
 
@@ -98,16 +103,17 @@ Either way the UI is at <http://localhost:7787>.
 > instance actions (open / quit / create / delete) act on **real** Claude Desktop instances; delete
 > asks you to type the name.
 
-Nothing leaves your machine. There is no cloud service behind this, no account to sign up for, and
-no telemetry. It reads the local stores your tools already write and talks to `localhost`.
+Nothing leaves your machine automatically. There is no cloud service behind this, no account to
+sign up for, and no telemetry. It reads the local stores your tools already write and talks to
+`localhost`; optional external handoffs open the provider and leave the final upload to you.
 
 ## Requirements
 
 - **[Bun](https://bun.sh)** if running from source.
 - The **`claude` CLI** for dispatch, and/or **Claude Desktop** for Claude instance management.
-- Optional: **Codex** for Codex instance launch/login and local rollout history; **OpenCode** for
-  local OpenCode history. Their sessions appear automatically when their standard local stores
-  exist.
+- Optional: **Codex Desktop/CLI** for isolated Codex windows, CLI launch/login, and local rollout
+  history; **OpenCode** for local OpenCode history. Their sessions appear automatically when their
+  standard local stores exist.
 - **Windows** for the tray launcher. macOS and Linux builds exist and the instance-account code is
   written for them, but they are not verified there yet.
 - **Windows instance management needs the classic Claude Desktop build** (the ~217 MB Squirrel
