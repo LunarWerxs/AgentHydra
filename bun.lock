@@ -12,8 +12,7 @@
       "name": "@ccmanagerui/server",
       "version": "0.1.0",
       "dependencies": {
-        "@cnct/connect": "0.3.0",
-        "@cnct/locker": "0.1.1",
+        "@cnct/connect": "^1.0.0",
         "hono": "^4.12.31",
         "safe-regex2": "^5.1.1",
       },
@@ -81,9 +80,7 @@
 
     "@ccmanagerui/web": ["@ccmanagerui/web@workspace:web"],
 
-    "@cnct/connect": ["@cnct/connect@0.3.0", "", { "peerDependencies": { "@cnct/locker": "*" }, "optionalPeers": ["@cnct/locker"] }, "sha512-g6yk6W8wCl40t2ril+Dds4o4A0p9RIZUpBkNihe2zZrQE7bU/zyvuqbN9pG9AlB1yFY17aWZVnCtGVyTsPZOrQ=="],
-
-    "@cnct/locker": ["@cnct/locker@0.1.1", "", { "peerDependencies": { "react": ">=17" }, "optionalPeers": ["react"] }, "sha512-nR4Djhf4e9Lug5YyW8O1SCwumZdh78IQ000WRceTN1dwDi0GMtn2E0gXT3lGQqeemn/SI0DEwkDEHq2ebW9jJA=="],
+    "@cnct/connect": ["@cnct/connect@1.0.0", "", { "peerDependencies": { "react": ">=17", "vue": ">=3" }, "optionalPeers": ["react", "vue"], "bin": { "cnct-connect": "./dist/cli.js", "@cnct/connect": "./dist/cli.js" } }, "sha512-H8iEmBxeMXtG4drPCkRUM0XBBhKTyWhwqirQiAenrc5LDr/RBNvYiBHIAZ2z8PyybFguitm+/zS/ofcm/47rMA=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.25.12", "", { "os": "aix", "cpu": "ppc64" }, "sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA=="],
 
