@@ -1,13 +1,12 @@
-// tests/guardrails.test.ts: proves the .arkitect custom checks themselves work, not just that the
+// tests/guardrails.test.ts: proves the repo's custom checks themselves work, not just that the
 // repo currently passes them. Two real failures motivate this file:
 //   · reka-trigger-tooltip-button.mjs (2026-07-16) encoded a wrong diagnosis AND crashed on import
 //     (`Cannot find package 'connections-arkitect'`), so it never ran at all. A check that throws
-//     and a check that passes look the same from a distance. See .arkitect/reports/2026-07-16T07-13-00-383Z/
-//     FIX_QUEUE.md is the evidence trail.
+//     and a check that passes look the same from a distance.
 //   · spawn-console-window.mjs's first cut had a blind spot shaped exactly like the bug it exists to
 //     catch: it only saw literal argv, so a resolveClaudeExe() spawn slipped through unnoticed.
 // "The check passes" is not evidence the check works; it might not even be running. So for every
-// check under .arkitect/your-checks/code, discovered by reading the directory (never hardcoded, so
+// check under scripts/checks, discovered by reading the directory (never hardcoded, so
 // a new check cannot silently dodge this file), we: import it for real, assert it exports a
 // well-formed gating audit, run it against the live repo root, and, for every check that exposes
 // findViolations, prove it actually fires on the broken shape it claims to catch and stays quiet on
@@ -19,7 +18,11 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const REPO_ROOT = join(import.meta.dir, '..')
-const CHECKS_DIR = join(REPO_ROOT, '.arkitect', 'your-checks', 'code')
+// The checks used to live under .arkitect/your-checks/code. That directory was deleted wholesale
+// on 2026-07-27 while both this file and ci.yml still pointed at it, which is exactly the
+// can-a-guardrail-silently-stop-running failure this file exists to catch. They now live in
+// scripts/checks and depend on nothing but bun.
+const CHECKS_DIR = join(REPO_ROOT, 'scripts', 'checks')
 
 // Discovered, not hardcoded: a check dropped into this directory is automatically subject to every
 // assertion below, including the fire / stay-quiet fixtures wired through FIXTURES_BY_FILE.
