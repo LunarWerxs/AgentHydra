@@ -56,20 +56,20 @@ jobs:
       # component tree, so the tooltip steals the anchor and the real content opens off-screen (and
       # freezes pointer events for modal poppers). See the check file's header.
       - name: Guardrail (reka popper root inside tooltip)
-        run: bun .arkitect/your-checks/code/reka-popper-root-inside-tooltip.mjs
+        run: bun scripts/checks/reka-popper-root-inside-tooltip.mjs
 
       # Fails if a WMI `CommandLine LIKE` query forgets to exclude the shell running it — that query
       # carries the needle in its own command line, so it matches itself and answers "found"
       # forever. isRunnerAlive() did exactly that for months, silently disabling the stale-pid guard.
       - name: Guardrail (self-matching WMI query)
-        run: bun .arkitect/your-checks/code/wmi-commandline-query-self-match.mjs
+        run: bun scripts/checks/wmi-commandline-query-self-match.mjs
 
       # Fails if a vendored server lib's runtime .mjs and its hand-maintained .d.mts disagree on
       # value exports either way: a .mjs export the .d.mts omits (TS2305 on import — exactly the
       # kit-sync that shipped RepoYeti v0.6.0 with red CI), or a .d.mts declaration the .mjs lacks
       # (tsc trusts it, so it typechecks and is `undefined` at runtime). See the check's header.
       - name: Guardrail (kit lib .mjs/.d.mts export drift)
-        run: bun .arkitect/your-checks/code/kit-lib-type-drift.mjs
+        run: bun scripts/checks/kit-lib-type-drift.mjs
 
       # Enforces BOTH directions of the windowsHide rule in server/src.
       # Missing on a console program (powershell/cmd/taskkill/bun/node/claude/npm/wmic/reg): that
@@ -81,7 +81,7 @@ jobs:
       # appears while the call still succeeds. That silently broke reveal-instance-folder once.
       # See the check's header.
       - name: Guardrail (windowsHide on console spawns, never on GUI spawns)
-        run: bun .arkitect/your-checks/code/spawn-console-window.mjs
+        run: bun scripts/checks/spawn-console-window.mjs
 
       - name: Build (web SPA)
         run: bun run build
