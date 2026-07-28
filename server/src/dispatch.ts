@@ -210,6 +210,26 @@ function handleLine(id: string, line: string) {
       if (rt && !trusted) rt.sawOutput = true
       recordEvent(id, te.role, te.kind, te.text, te.tool_name)
     }
+  } else if (t === 'rate_limit_event') {
+    // The CLI's FIRST-CLASS wall signal, and the only one that needs no regex:
+    //   {"type":"rate_limit_event","rate_limit_info":{"status":"rejected",
+    //     "rateLimitType":"seven_day","resetsAt":1785225600, …}}
+    // `status` is one of allowed | allowed_warning | rejected — only 'rejected' is a wall, the other
+    // two ride along on perfectly healthy runs. Structured, so it holds even when the wording of the
+    // human notice changes; both window types (five_hour, seven_day) are the same quota answer.
+    const info = ev.rate_limit_info
+    if (rt && info?.status === 'rejected') {
+      rt.limitKind = 'quota'
+      const resetsAt = typeof info.resetsAt === 'number' ? new Date(info.resetsAt * 1000) : null
+      const window = info.rateLimitType === 'seven_day' ? 'weekly' : 'session'
+      recordEvent(
+        id,
+        'system',
+        'meta',
+        `${window} limit reached on this run's account${resetsAt ? ` — resets ${resetsAt.toLocaleString()}` : ''}.`,
+        null,
+      )
+    }
   } else if (t === 'result') {
     const text = typeof ev.result === 'string' ? ev.result : JSON.stringify(ev)
     // A `result` mirrors the model's final summary, so its text is only evidence when the CLI also

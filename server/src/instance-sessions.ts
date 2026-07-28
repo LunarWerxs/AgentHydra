@@ -20,6 +20,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { defaultClaudeUserDataDir, instancesRoot } from './core/paths'
+import { AMBIENT_RUN_AS } from './types'
 
 /** Per-session metadata read out of Claude Desktop's own local_*.json files. */
 export interface SessionMeta {
@@ -73,4 +74,50 @@ export function instanceSessionMap(): Map<string, string> {
   const map = new Map<string, string>()
   for (const [id, meta] of sessionMetaMap()) map.set(id, meta.instance)
   return map
+}
+
+/**
+ * The dispatch `instance_ref` ('desktop:<user-data-dir>') for the desktop instance a session
+ * belongs to, or null when it belongs to none (a plain CLI transcript, or an instance dir that has
+ * since been deleted).
+ *
+ * This is the missing half of the pinning design. Every instance runs a DIFFERENT Anthropic
+ * account, but all of them write transcripts to the SHARED `~/.claude/projects` store, so a resume
+ * dispatched with no `instance_ref` runs on whatever the ambient CLI login happens to be — a
+ * different account than the chat was having its conversation with. Observed 2026-07-27: two
+ * resumes of a `temp1` chat (account at 22% weekly) died on "You've hit your weekly limit" because
+ * they went out as the ambient `~/.claude` login, which was genuinely maxed. Nothing was wrong with
+ * the chat's own account; it was never asked.
+ */
+export function instanceRefForSession(sessionId: string): string | null {
+  const label = sessionMetaMap().get(sessionId)?.instance
+  if (!label) return null
+  const dir = label === 'default' ? defaultClaudeUserDataDir() : join(instancesRoot(), label)
+  // dispatch.ts fails a run pre-launch when a pinned dir is gone; resolving to a dead dir here
+  // would turn "we picked this for you" into that failure, so an unusable label stays unpinned.
+  return existsSync(dir) ? `desktop:${dir}` : null
+}
+
+/**
+ * What `instance_ref` should a NEW queue item be stored with, given what its creator asked for?
+ *
+ * Four cases, in order — the ordering is the whole contract:
+ *   · AMBIENT_RUN_AS      → null. The one way to say "ambient" and MEAN it.
+ *   · an explicit ref     → itself. A named instance always wins; nothing is inferred over it.
+ *   · an account_id, or a NEW chat → null. A pasted-credential account is an explicit choice too,
+ *     and a new chat has no transcript yet, so there is no instance to inherit from.
+ *   · anything else (a resume that said nothing) → the session's own desktop instance.
+ *
+ * Separated from the route handler so all four are testable without an HTTP round trip, and
+ * injectable so the test doesn't need a real instance store on disk.
+ */
+export function resolveRunAsRef(
+  body: { instance_ref?: unknown; account_id?: unknown; new_chat?: unknown },
+  sessionId: string,
+  lookup: (id: string) => string | null = instanceRefForSession,
+): string | null {
+  if (body.instance_ref === AMBIENT_RUN_AS) return null
+  if (typeof body.instance_ref === 'string' && body.instance_ref) return body.instance_ref
+  if (body.account_id || body.new_chat) return null
+  return lookup(sessionId)
 }

@@ -48,6 +48,11 @@ export type { UpdateApplyResult, UpdateStatus } from './updater-engine.mjs'
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type AuthType = 'oauth_token' | 'api_key'
+/** `instance_ref` value meaning "deliberately unpinned — run on the ambient CLI login". A stored
+ *  null is ambiguous (it also means "nobody said"), and that ambiguity is what a resume must not
+ *  inherit, so the explicit choice needs a value of its own. Never stored: the API turns it into
+ *  null and skips the auto-resolve. */
+export const AMBIENT_RUN_AS = 'ambient'
 export type QueueStatus =
   | 'queued'
   | 'running'
@@ -173,7 +178,11 @@ export interface QueueItem {
   /** Run under an already-signed-in instance's login: 'desktop:<dir>' or 'cli:<id>'. The runner
    *  extracts that instance's OAuth token value-blind at spawn time (core/accounts.ts) — no
    *  pasted credential involved. Mutually exclusive with account_id in practice; when both are
-   *  set the instance ref wins (dispatch-runner checks it first). */
+   *  set the instance ref wins (dispatch-runner checks it first).
+   *
+   *  Null on a STORED row means "ambient CLI login". On a CREATE/PATCH body it means "not
+   *  specified", which for a resume auto-resolves to the session's own desktop instance
+   *  (instance-sessions.ts instanceRefForSession) — send AMBIENT_RUN_AS to opt out. */
   instance_ref: string | null
   new_chat: boolean
   fork: boolean

@@ -124,7 +124,7 @@ watch(sessionSourceFilter, (source) => {
 const filtersActive = computed(
   () =>
     !!sessionInstanceFilter.value ||
-    sessionArchivedScope.value !== 'hide' ||
+    sessionArchivedScope.value !== 'include' ||
     sessionSourceFilter.value !== 'all' ||
     // Only a WIDENED window counts. 24h is the default, so flagging it would light the trigger up
     // permanently and the signal would stop meaning anything.
@@ -138,6 +138,12 @@ const SOURCE_LABEL: Record<SessionSourceScope, string> = {
 }
 const sourceFilterLabel = computed(() => t(SOURCE_LABEL[sessionSourceFilter.value]))
 const sourceLabel = (source: SessionSource) => t(SOURCE_LABEL[source])
+const SOURCE_BADGE_CLASS: Record<SessionSource, string> = {
+  claude: 'border-[#D97757]/40 bg-[#D97757]/10 text-[#B85D3D] dark:text-[#E9A287]',
+  codex: 'border-[#10A37F]/40 bg-[#10A37F]/10 text-[#087D62] dark:text-[#65D4B3]',
+  opencode: 'border-[#5B6EF5]/40 bg-[#5B6EF5]/10 text-[#4053D6] dark:text-[#9AA6FF]',
+}
+const sourceBadgeClass = (source: SessionSource) => SOURCE_BADGE_CLASS[source]
 const instanceFilterLabel = computed(() => {
   const v = sessionInstanceFilter.value
   if (!v) return t('sessions.instanceAll')
@@ -493,9 +499,16 @@ const composerTargets = computed<ComposerTarget[]>(() => {
   if (selectMode.value)
     return sessions.value
       .filter((s) => s.source === 'claude' && checkedIds.value.has(sessionKey(s)))
-      .map((s) => ({ session_id: s.session_id, title: s.title, cwd: s.cwd }))
+      .map((s) => ({
+        session_id: s.session_id,
+        title: s.title,
+        cwd: s.cwd,
+        instance: s.instance,
+      }))
   const s = selected.value
-  return s?.source === 'claude' ? [{ session_id: s.session_id, title: s.title, cwd: s.cwd }] : []
+  return s?.source === 'claude'
+    ? [{ session_id: s.session_id, title: s.title, cwd: s.cwd, instance: s.instance }]
+    : []
 })
 
 function onComposerSent(mode: 'now' | 'queued') {
@@ -675,7 +688,7 @@ function copy(text: string) {
                         {{ instanceFilterLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="w-52">
+                    <DropdownMenuSubContent class="w-80">
                       <DropdownMenuRadioGroup v-model="sessionInstanceFilter">
                         <DropdownMenuRadioItem value="">{{ $t('sessions.instanceAll') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="default">{{ $t('sessions.instanceDefault') }}</DropdownMenuRadioItem>
@@ -799,7 +812,10 @@ function copy(text: string) {
                 <span class="line-clamp-1 min-w-0 flex-1 font-mono text-xs text-muted-foreground">
                   {{ baseName(r.cwd) }} · {{ shortId(r.session_id) }}
                 </span>
-                <Badge variant="outline" class="shrink-0 text-[10px]">
+                <Badge
+                  variant="outline"
+                  :class="['shrink-0 text-[10px]', sourceBadgeClass(r.source)]"
+                >
                   {{ sourceLabel(r.source) }}
                 </Badge>
                 <span class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
@@ -879,7 +895,10 @@ function copy(text: string) {
                       :class="s.done ? 'line-through decoration-muted-foreground/40' : ''"
                     >{{ s.title }}</span>
                     <StatusBadge v-if="s.queue_status" :status="s.queue_status" />
-                    <Badge variant="outline" class="shrink-0 text-[10px]">
+                    <Badge
+                      variant="outline"
+                      :class="['shrink-0 text-[10px]', sourceBadgeClass(s.source)]"
+                    >
                       {{ sourceLabel(s.source) }}
                     </Badge>
                   </div>
@@ -892,7 +911,12 @@ function copy(text: string) {
                       <Boxes class="size-3" />{{ s.instance === 'default' ? $t('sessions.instanceDefault') : instanceLabelFor(s.instance) }}
                     </span>
                     <!-- only meaningful while archived rows are being shown at all -->
-                    <span v-if="s.archived" class="inline-flex items-center gap-1"><Archive class="size-3" />{{ $t('sessions.archived') }}</span>
+                    <span
+                      v-if="s.archived"
+                      class="inline-flex items-center gap-1 text-muted-foreground"
+                    >
+                      <Archive class="size-3" />{{ $t('sessions.archived') }}
+                    </span>
                   </div>
                 </button>
               </ContextMenuTrigger>
@@ -974,7 +998,10 @@ function copy(text: string) {
               <h2 class="truncate text-base font-semibold">{{ selected.title }}</h2>
               <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <span class="font-mono">{{ shortId(selected.session_id) }}</span>
-                <Badge variant="outline" class="text-[10px]">
+                <Badge
+                  variant="outline"
+                  :class="['text-[10px]', sourceBadgeClass(selected.source)]"
+                >
                   {{ sourceLabel(selected.source) }}
                 </Badge>
                 <span class="inline-flex items-center gap-1"><FolderGit2 class="size-3" />{{ selected.cwd }}</span>

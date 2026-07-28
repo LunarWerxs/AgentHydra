@@ -29,8 +29,14 @@
  * asymmetry says: only promote to TRANSIENT on an unmistakable signature.
  */
 const QUOTA_PATTERNS: RegExp[] = [
-  /\byou['’]?ve hit your session limit\b/i,
+  // The CLI's own wall notice, whichever window it names: "You've hit your session limit · resets
+  // 9:10am", "You've hit your weekly limit · resets 3am (America/Chicago)", and any future window
+  // wearing the same sentence. This used to name only the SESSION wording, so a genuine weekly wall
+  // matched nothing at all and finalized as a bare 'failed' — no rate-limited badge, and invisible
+  // to monitor.ts's resume-after-reset, which selects on that status (observed 2026-07-27).
+  /\byou['’]?ve hit your\b[^.]{0,40}\blimit\b/i,
   /\bsession limit\b/i,
+  /\bweekly limit\b/i,
   /\busage limit\b/i,
   /\bquota\b/i,
   /\brate[- ]?limit(?:ed|ing)?\b/i,

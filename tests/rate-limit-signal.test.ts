@@ -22,6 +22,7 @@ import { classifyLimit, isApiErrorEvent } from '../server/src/rate-limit-signal'
 const REAL_529 =
   'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.'
 const REAL_SESSION_LIMIT = "You've hit your session limit · resets 9:10am (America/Chicago)"
+const REAL_WEEKLY_LIMIT = "You've hit your weekly limit · resets 3am (America/Chicago)"
 
 test('the real 529 notice is transient, not the user hitting a limit', () => {
   expect(classifyLimit(REAL_529)).toBe('transient')
@@ -29,6 +30,14 @@ test('the real 529 notice is transient, not the user hitting a limit', () => {
 
 test('the real session-limit notice is a quota wall', () => {
   expect(classifyLimit(REAL_SESSION_LIMIT)).toBe('quota')
+})
+
+// Regression (2026-07-27): the quota list named only the SESSION wording, so this — the OTHER
+// window, same sentence — matched nothing at all. The run finalized as a bare 'failed' with no
+// rate-limited badge, and monitor.ts's resume-after-reset never saw it, because it selects on
+// status='rate_limited'.
+test('the real WEEKLY-limit notice is a quota wall too', () => {
+  expect(classifyLimit(REAL_WEEKLY_LIMIT)).toBe('quota')
 })
 
 test('ordinary text is neither', () => {

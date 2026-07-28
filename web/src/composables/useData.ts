@@ -19,12 +19,14 @@ const sessionsLoading = ref(false)
 // Server-side instance scope for the sessions list ('' = all). Lives here so the
 // polling refresh keeps honoring whatever the sidebar filter picked.
 const sessionInstanceFilter = ref('')
-// Archived sessions (Claude's own `isArchived` flag) are hidden by default: they're the
-// large majority here, so showing them buries the live work. That same ratio is why 'only'
-// exists rather than a plain on/off, since hunting one archived session in a mixed list is
-// hopeless. Both scopes are applied server-side BEFORE the newest-N cap, so a quiet corner
-// of the list can't be starved out of the window by rows it was never going to show.
-const sessionArchivedScope = useStorage<ArchivedScope>('ccmanagerui.sessions.archivedScope', 'hide')
+// Archived sessions (Claude's own `isArchived` flag) are shown alongside live sessions by
+// default. The three-way scope remains useful for narrowing to only live or only archived chats.
+// All scopes are applied server-side BEFORE the newest-N cap, so a quiet corner of the list can't
+// be starved out of the window by rows it was never going to show.
+const sessionArchivedScope = useStorage<ArchivedScope>(
+  'ccmanagerui.sessions.archivedScope',
+  'include',
+)
 // How far back the list reaches, by last activity. Defaults to the last 24 hours: this list
 // answers "what am I working on", and a store that has been accumulating transcripts for months
 // answers it worse the further back it goes. Applied server-side before the cap, like the scopes

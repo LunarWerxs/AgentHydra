@@ -4,6 +4,26 @@ All notable changes to CC Manager UI are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.2] - 2026-07-28
+
+### Changed
+
+- Resuming a Claude Desktop chat now automatically uses the desktop instance that owns that chat,
+  rather than an unrelated ambient CLI login. The composer makes that default visible and lets you
+  deliberately choose the ambient login, another signed-in desktop or CLI instance, or a saved
+  credential account.
+- Archived conversations are shown by default, session source badges are easier to distinguish,
+  and the composer makes scheduling the primary Queue action while keeping immediate queueing one
+  click away.
+
+### Fixed
+
+- Weekly Claude quota walls are now recognized from the CLI's structured rate-limit event and
+  human notice, so affected runs are parked as rate-limited and can be resumed after reset instead
+  of being reported as ordinary failures.
+- Composer and queue-builder option menus no longer render empty model, effort, or permission
+  entries.
+
 ## [0.12.1] - 2026-07-26
 
 ### Added

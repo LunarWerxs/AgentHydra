@@ -466,7 +466,7 @@ async function submit() {
                   <SelectTrigger class="w-full"><SelectValue :placeholder="$t('builder.defaultPlaceholder')" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem :value="DEFAULT_OPT">{{ $t('builder.defaultPlaceholder') }}</SelectItem>
-                    <SelectItem v-for="o in MODELS" :key="o.value" :value="o.value">{{ o.label }}</SelectItem>
+                    <SelectItem v-for="o in MODELS.filter((o) => o.value)" :key="o.value" :value="o.value">{{ o.label }}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -476,7 +476,7 @@ async function submit() {
                   <SelectTrigger class="w-full"><SelectValue :placeholder="$t('builder.defaultPlaceholder')" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem :value="DEFAULT_OPT">{{ $t('builder.defaultPlaceholder') }}</SelectItem>
-                    <SelectItem v-for="o in EFFORTS" :key="o.value" :value="o.value">{{ o.label }}</SelectItem>
+                    <SelectItem v-for="o in EFFORTS.filter((o) => o.value)" :key="o.value" :value="o.value">{{ o.label }}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -486,7 +486,7 @@ async function submit() {
                   <SelectTrigger class="w-full"><SelectValue :placeholder="$t('builder.defaultPlaceholder')" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem :value="DEFAULT_OPT">{{ $t('builder.defaultPlaceholder') }}</SelectItem>
-                    <SelectItem v-for="o in PERMISSION_MODES" :key="o.value" :value="o.value">{{ o.label }}</SelectItem>
+                    <SelectItem v-for="o in PERMISSION_MODES.filter((o) => o.value)" :key="o.value" :value="o.value">{{ o.label }}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

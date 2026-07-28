@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import {
   CalendarClock,
+  ChevronDown,
   Cpu,
   ExternalLink,
   FolderGit2,
   Gauge,
   ListPlus,
-  Minus,
-  Plus,
   SendHorizonal,
   ShieldCheck,
   UserCircle2,
@@ -16,10 +15,12 @@ import {
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import SchedulePanel from '@/components/SchedulePanel.vue'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -28,15 +29,21 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { useAppSettings } from '@/composables/useAppSettings'
+import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
+import { useInstances } from '@/composables/useInstances'
 import { usePanels } from '@/composables/usePanels'
 import * as api from '@/lib/api'
 import { baseName, EFFORTS, MODELS, PERMISSION_MODES } from '@/lib/format'
+import { displayName } from '@/lib/instance-appearance'
 
 export interface ComposerTarget {
   session_id: string
   title: string
   cwd: string
+  /** Desktop instance the session belongs to ("default" | instance dir name), when known. Display
+   *  only — the server resolves the run's actual credentials from the session id itself. */
+  instance?: string | null
 }
 
 const props = defineProps<{ targets: ComposerTarget[] }>()
@@ -44,15 +51,22 @@ const emit = defineEmits<{ sent: [mode: 'now' | 'queued'] }>()
 
 const { t } = useI18n()
 const { queue, accounts, scheduler, refreshQueue } = useData()
+const { instances, refreshInstances } = useInstances()
+const { cliInstances, refreshCliInstances } = useCliInstances()
 const { queueOpen } = usePanels()
 const { chatGptHandoffEnabled, load: loadAppSettings } = useAppSettings()
-onMounted(loadAppSettings)
+onMounted(() => {
+  void loadAppSettings()
+  // Both lists are shared singletons that otherwise only populate on the Instances tab; the run-as
+  // chip has to be able to name an account without that tab ever being opened.
+  void refreshInstances({ silent: true })
+  void refreshCliInstances({ silent: true })
+})
 
 const text = ref('')
 const model = ref('')
 const effort = ref('')
 const permission = ref('')
-const accountId = ref('')
 const cwdOverride = ref('')
 const sending = ref(false)
 
@@ -89,10 +103,66 @@ const anyBusy = computed(() => props.targets.some((tg) => runningIds.value.has(t
  */
 const showBusyHint = computed(() => anyBusy.value && !!text.value.trim())
 
+// --- run-as -------------------------------------------------------------------
+//
+// Which login does this message go out under? It matters more here than anywhere else in the app:
+// every desktop instance is a DIFFERENT Anthropic account, but all of them write transcripts to the
+// same `~/.claude/projects` store, so a resume that doesn't say runs on whatever the ambient CLI
+// login happens to be — a different account than the chat itself was talking to. That is how a
+// weekly-limit wall shows up for an account sitting at 22%.
+//
+// AUTO ('' — the default) sends no run-as at all, which the server reads as "resolve it from the
+// session" and pins the desktop instance the chat belongs to. The picker exists for the cases the
+// session can't answer: a plain CLI transcript, or deliberately running someone else's login.
+const AUTO = ''
+/** Explicitly unpinned. Distinct from AUTO: null-on-the-wire already means "nobody said", so
+ *  choosing the ambient CLI login on purpose needs a value the server can tell apart. */
+const AMBIENT = api.AMBIENT_RUN_AS
+const runAs = ref(AUTO)
+
+/** The instance the AUTO option will resolve to, named the way the Sessions list names it. Only
+ *  meaningful for a single target — a multi-send can span instances, and each one resolves on its
+ *  own server-side. */
+const autoInstanceLabel = computed(() => {
+  const label = single.value?.instance
+  if (!label) return null
+  if (label === 'default') return t('sessions.instanceDefault')
+  const inst = instances.value.find((i) => i.name === label)
+  return inst ? displayName(inst) : label
+})
+
 const accountOptions = computed(() => [
-  { value: '', label: t('builder.accountAmbient') },
+  {
+    value: AUTO,
+    label: autoInstanceLabel.value
+      ? t('composer.accountAutoNamed', { instance: autoInstanceLabel.value })
+      : t('composer.accountAuto'),
+  },
+  { value: AMBIENT, label: t('builder.accountAmbient') },
+  ...instances.value
+    .filter((i) => i.account?.email)
+    .map((i) => ({
+      value: `desktop:${i.dir}`,
+      label: `${displayName(i)} · ${t('builder.accountDesktopInstance')}`,
+    })),
+  ...cliInstances.value
+    .filter((c) => c.loggedIn && !c.associatedDesktopDir)
+    .map((c) => ({
+      value: `cli:${c.id}`,
+      label: `${c.name} · ${t('builder.accountCliInstance')}`,
+    })),
   ...accounts.value.map((a) => ({ value: a.id, label: a.label })),
 ])
+
+/** Split the one picker value into the two fields the API stores. AUTO sends NEITHER, which is what
+ *  triggers the server-side resolve; anything else is an explicit choice and is sent as-is. */
+const runAsFields = computed<{ account_id: string | null; instance_ref: string | null }>(() => {
+  const v = runAs.value
+  if (v === AUTO) return { account_id: null, instance_ref: null }
+  if (v === AMBIENT || v.startsWith('desktop:') || v.startsWith('cli:'))
+    return { account_id: null, instance_ref: v }
+  return { account_id: v, instance_ref: null }
+})
 
 const canSend = computed(() => !!text.value.trim() && props.targets.length > 0 && !sending.value)
 const handingOff = ref(false)
@@ -115,7 +185,7 @@ function createFor(target: ComposerTarget, notBefore: string | null) {
     model: model.value || null,
     effort: (effort.value || null) as api.EffortLevel | null,
     permission_mode: (permission.value || null) as api.PermissionMode | null,
-    account_id: accountId.value || null,
+    ...runAsFields.value,
     new_chat: false,
     fork: false,
     not_before: notBefore,
@@ -275,7 +345,7 @@ async function handoffToChatGpt() {
             <DropdownMenuContent align="start">
               <DropdownMenuRadioGroup v-model="model">
                 <DropdownMenuRadioItem value="">{{ $t('composer.clearOption') }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem v-for="o in MODELS" :key="o.value" :value="o.value">
+                <DropdownMenuRadioItem v-for="o in MODELS.filter((o) => o.value)" :key="o.value" :value="o.value">
                   {{ o.label }}
                 </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
@@ -291,7 +361,7 @@ async function handoffToChatGpt() {
             <DropdownMenuContent align="start">
               <DropdownMenuRadioGroup v-model="effort">
                 <DropdownMenuRadioItem value="">{{ $t('composer.clearOption') }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem v-for="o in EFFORTS" :key="o.value" :value="o.value">
+                <DropdownMenuRadioItem v-for="o in EFFORTS.filter((o) => o.value)" :key="o.value" :value="o.value">
                   {{ o.label }}
                 </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
@@ -307,21 +377,25 @@ async function handoffToChatGpt() {
             <DropdownMenuContent align="start">
               <DropdownMenuRadioGroup v-model="permission">
                 <DropdownMenuRadioItem value="">{{ $t('composer.clearOption') }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem v-for="o in PERMISSION_MODES" :key="o.value" :value="o.value">
+                <DropdownMenuRadioItem v-for="o in PERMISSION_MODES.filter((o) => o.value)" :key="o.value" :value="o.value">
                   {{ o.label }}
                 </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <DropdownMenu v-if="accounts.length">
+          <!-- Run-as. Always shown (not gated on legacy accounts existing): which account a resume
+               goes out under is the difference between it working and hitting someone else's wall,
+               so it has to be visible and changeable even when every login is an instance. -->
+          <DropdownMenu>
             <DropdownMenuTrigger as-child>
-              <Button variant="ghost" size="xs" :class="accountId ? 'text-foreground' : 'text-muted-foreground'">
-                <UserCircle2 /> {{ chipLabel(accountId, accountOptions, $t('composer.chipAccount')) }}
+              <Button variant="ghost" size="xs" :class="runAs ? 'text-foreground' : 'text-muted-foreground'" :title="$t('composer.chipAccountHint')">
+                <UserCircle2 />
+                {{ runAs ? chipLabel(runAs, accountOptions, $t('composer.chipAccount')) : (autoInstanceLabel ?? $t('composer.chipAccount')) }}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuRadioGroup v-model="accountId">
+            <DropdownMenuContent align="start" class="max-h-80 overflow-y-auto">
+              <DropdownMenuRadioGroup v-model="runAs">
                 <DropdownMenuRadioItem v-for="o in accountOptions" :key="o.value" :value="o.value">
                   {{ o.label }}
                 </DropdownMenuRadioItem>
@@ -355,29 +429,52 @@ async function handoffToChatGpt() {
               <ExternalLink /> {{ $t('composer.chatGptHandoff') }}
             </Button>
 
-            <Button
-              variant="outline"
-              size="sm"
-              :disabled="!canSend"
-              :title="$t('composer.queue')"
-              @click="submit('queue')"
-            >
-              <ListPlus /> {{ $t('composer.queue') }}
-            </Button>
+            <!-- Queue: a SPLIT button, and which half is which is the point. "Queue" used to fire
+                 immediately while the schedule popover hid behind a separate calendar icon, so
+                 reaching for "queue this for 3am" landed on "queue it right now" — the two actions
+                 looked equally primary and read the same. Now the labelled half opens the time
+                 picker (the deliberate act), and the instant one is a menu item behind the chevron
+                 (the shortcut). Same two actions, ranked. -->
+            <div class="flex items-center">
+              <Popover v-model:open="scheduleOpen">
+                <PopoverTrigger as-child>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="rounded-r-none border-r-0"
+                    :disabled="!canSend"
+                    :title="$t('composer.queueForLater')"
+                  >
+                    <CalendarClock /> {{ $t('composer.queue') }}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" class="w-64 p-3">
+                  <!-- The panel itself is shared with the queue builder (SchedulePanel.vue); this
+                       surface's job is only to say what a picked time MEANS here: queue the message
+                       currently in the box for then. -->
+                  <SchedulePanel @pick="submit('queue', $event)" @close="scheduleOpen = false" />
+                </PopoverContent>
+              </Popover>
 
-            <Popover v-model:open="scheduleOpen">
-              <PopoverTrigger as-child>
-                <Button variant="outline" size="icon-sm" :disabled="!canSend" :title="$t('composer.queueForLater')">
-                  <CalendarClock />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="end" class="w-64 p-3">
-                <!-- The panel itself is shared with the queue builder (SchedulePanel.vue); this
-                     surface's job is only to say what a picked time MEANS here: queue the message
-                     currently in the box for then. -->
-                <SchedulePanel @pick="submit('queue', $event)" @close="scheduleOpen = false" />
-              </PopoverContent>
-            </Popover>
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    class="rounded-l-none border-l"
+                    :disabled="!canSend"
+                    :title="$t('composer.queueMoreHint')"
+                  >
+                    <ChevronDown />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem :disabled="!canSend" @select="submit('queue')">
+                    <ListPlus /> {{ $t('composer.queueNow') }}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
 
             <Button size="sm" :disabled="!canSend" :title="$t('composer.send')" @click="submit('now')">
               <SendHorizonal /> {{ $t('composer.send') }}

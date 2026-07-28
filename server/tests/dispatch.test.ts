@@ -314,6 +314,27 @@ test('an overload that outlasts the backoff gives up as its own status, never as
   }
 })
 
+test('a WEEKLY wall parks as rate_limited, driven by the CLI structured signal', async () => {
+  // The 2026-07-27 miss. The weekly wall arrives as a typed line the daemon ignored outright —
+  //   {"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day",…}}
+  // — followed by prose ("You've hit your WEEKLY limit") that the quota patterns didn't match
+  // either, since they named only the session wording. Both gaps landed the run on a bare 'failed':
+  // no rate-limited badge, and invisible to monitor.ts, which resumes off that status. The fake CLI
+  // replays the real line-for-line shape (fake-claude.ts weekly_limit).
+  process.env.FAKE_ERROR_MODE = 'weekly_limit'
+  try {
+    const item = makeItem()
+    await dispatch.dispatchItem(item)
+    expect(statusOf(item.id)?.status).toBe('rate_limited')
+    expect(retryStateOf(item.id)?.retry_attempts).toBe(0) // a quota wall is never retried
+    // and it says which window, so the card doesn't read as a mystery failure
+    const events = dispatch.getRunEvents(item.id)
+    expect(events.some((e) => /weekly limit reached/i.test(e.text))).toBe(true)
+  } finally {
+    delete process.env.FAKE_ERROR_MODE
+  }
+})
+
 // ORDER MATTERS: this must stay ABOVE the test that calls markDispatchReady() — the flag is a
 // one-way latch with no un-set, so once any test flips it, "not ready yet" is unobservable.
 test('the retry sweep stays parked until reattach settles (it must not double-dispatch)', async () => {

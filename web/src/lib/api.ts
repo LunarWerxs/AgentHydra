@@ -199,6 +199,10 @@ export const deleteAccount = (id: string) =>
   j<{ ok: boolean }>(`/api/accounts/${id}`, { method: 'DELETE' })
 
 // --- queue ------------------------------------------------------------------
+/** `instance_ref` value meaning "deliberately unpinned — run on the ambient CLI login", as opposed
+ *  to an absent/null ref, which means "nobody said" and auto-resolves to the session's own desktop
+ *  instance. Mirrors AMBIENT_RUN_AS in server/src/types.ts. */
+export const AMBIENT_RUN_AS = 'ambient'
 export interface NewQueueItem {
   session_id?: string
   title: string
@@ -208,7 +212,9 @@ export interface NewQueueItem {
   effort?: EffortLevel | null
   permission_mode?: PermissionMode | null
   account_id?: string | null
-  /** Run under a signed-in instance's login: 'desktop:<dir>' or 'cli:<id>' (see server types.ts). */
+  /** Run under a signed-in instance's login: 'desktop:<dir>' or 'cli:<id>' (see server types.ts).
+   *  OMIT (or null) on a resume to let the server pin the session's OWN desktop instance;
+   *  AMBIENT_RUN_AS opts out of that and runs on the ambient CLI login. */
   instance_ref?: string | null
   new_chat: boolean
   fork: boolean

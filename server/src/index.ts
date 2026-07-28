@@ -105,6 +105,7 @@ import {
   updateInstanceInfo,
   writeInstanceInfo,
 } from './instance'
+import { resolveRunAsRef } from './instance-sessions'
 import { initFileLogging } from './log-file.mjs'
 import { isLoopbackOrigin, loopbackGuard } from './loopback-guard.mjs'
 import {
@@ -127,6 +128,7 @@ import { findTranscript, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
 import {
   type Account,
+  AMBIENT_RUN_AS,
   type ArchivedScope,
   isSessionPeriod,
   isSessionSource,
@@ -759,6 +761,14 @@ app.post('/api/queue', async (c) => {
   if (enumError) return c.json({ error: enumError }, 400)
   // normalize to UTC ISO so the scheduler's lexicographic compare is always sound
   const notBefore = body.not_before ? new Date(Date.parse(body.not_before)).toISOString() : null
+  // Run-as resolution (resolveRunAsRef documents the precedence). A caller that names NEITHER an
+  // instance nor an account is not asking for the ambient CLI login — it simply hasn't said, and for
+  // a resume the right answer is knowable: the desktop instance this chat actually belongs to.
+  // Without this, a resume of an instance's chat goes out on a DIFFERENT account's credentials,
+  // which is how "You've hit your weekly limit" shows up for an account nowhere near its limit.
+  // Resolved once, HERE, so the choice is STORED on the row: visible on the card, editable, and
+  // carried forward into an auto-resume (monitor.ts copies instance_ref).
+  const instanceRef = resolveRunAsRef(body, sessionId)
   const posRow = db
     .query<{ m: number | null }, []>('select max(position) as m from queue_items')
     .get()
@@ -777,7 +787,7 @@ app.post('/api/queue', async (c) => {
     body.effort ?? null,
     body.permission_mode ?? null,
     body.account_id ?? null,
-    body.instance_ref ?? null,
+    instanceRef,
     body.new_chat ? 1 : 0,
     body.fork ? 1 : 0,
     position,
@@ -843,7 +853,10 @@ app.patch('/api/queue/:id', async (c) => {
     effort: (v) => (v == null ? null : String(v)),
     permission_mode: (v) => (v == null ? null : String(v)),
     account_id: (v) => (v == null ? null : String(v)),
-    instance_ref: (v) => (v == null ? null : String(v)),
+    // An edit is always an explicit choice, so there is nothing to auto-resolve here — but the
+    // picker still speaks the sentinel, and storing it verbatim would fail the run at launch
+    // ("run-as instance reference is malformed"). Unpin instead.
+    instance_ref: (v) => (v == null || v === AMBIENT_RUN_AS ? null : String(v)),
     status: String,
     position: (v) => Math.trunc(Number(v)),
     // normalized to UTC ISO (unparseable → null); scheduler compares these as text

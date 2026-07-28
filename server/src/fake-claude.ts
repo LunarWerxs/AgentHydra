@@ -22,6 +22,22 @@ const ERROR_NOTICES: Record<string, string> = {
   overloaded:
     'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.',
   session_limit: "You've hit your session limit · resets 9:10am (America/Chicago)",
+  weekly_limit: "You've hit your weekly limit · resets 3am (America/Chicago)",
+}
+
+/** The structured wall signal the real CLI emits BEFORE the human-readable notice. Copied verbatim
+ *  from a live 2026-07-27 run (only the reset time is synthetic). `weekly_limit` replays it so the
+ *  daemon's handling of the typed event is driven end to end, not just the prose. */
+const WEEKLY_RATE_LIMIT_EVENT = {
+  type: 'rate_limit_event',
+  rate_limit_info: {
+    status: 'rejected',
+    resetsAt: 1785225600,
+    rateLimitType: 'seven_day',
+    overageStatus: 'rejected',
+    overageDisabledReason: 'org_level_disabled',
+    isUsingOverage: false,
+  },
 }
 
 export async function runFakeClaude(promptArg: string | undefined): Promise<void> {
@@ -34,8 +50,10 @@ export async function runFakeClaude(promptArg: string | undefined): Promise<void
   emit({ type: 'system', subtype: 'init', session_id: sessionId, model: 'claude-fake' })
   await Bun.sleep(SLEEP)
 
-  const notice = ERROR_NOTICES[process.env.FAKE_ERROR_MODE ?? '']
+  const mode = process.env.FAKE_ERROR_MODE ?? ''
+  const notice = ERROR_NOTICES[mode]
   if (notice) {
+    if (mode === 'weekly_limit') emit(WEEKLY_RATE_LIMIT_EVENT)
     // The CLI reports a limit as a SYNTHETIC assistant message flagged isApiErrorMessage — that
     // pair is precisely what the detector trusts (see rate-limit-signal.ts isApiErrorEvent).
     emit({
