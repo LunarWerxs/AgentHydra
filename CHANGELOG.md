@@ -4,6 +4,30 @@ All notable changes to CC Manager UI are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Quick instance mode** opens a compact Claude/Codex instance launcher without starting the
+  session scanner, database, queue, scheduler, monitor, usage refresh, settings sync, or updater.
+  Launch it with `CCManagerUI.exe --instances`, `bun run instances`, the generated
+  **CCManagerUI Instances** shortcut, or the shortcut action in Settings.
+
+### Fixed
+
+- The Sessions list no longer stalls the app on first load. Every transcript it showed was being
+  read and parsed from scratch on each daemon start, all of them at once. On a store of ~1,100
+  transcripts that meant a 4.6-second wait for the first list and a jump from 101 MB to 3.1 GB of
+  memory. Parsed transcript metadata is now cached on disk, so a restart is warm; the list reads at
+  most a dozen transcripts at a time instead of two hundred; and the daemon warms the newest ones in
+  the background at startup. Same store, same list: 0.35 seconds and a bounded footprint.
+- Sessions list latency no longer grows with the size of your transcript folder. Building the file
+  index globs the whole store and stats every file, and that ran inside requests, so each refresh
+  paid a folder-sized tax (145 ms for 1,255 transcripts, and rising). The index is now served from
+  the last snapshot and re-swept in the background, which takes routine refreshes from ~150 ms to
+  ~3 ms. Looking up a session that is genuinely missing still re-sweeps, at most once every two
+  seconds, so a newly created transcript is still found straight away.
+
 ## [0.12.2] - 2026-07-28
 
 ### Changed

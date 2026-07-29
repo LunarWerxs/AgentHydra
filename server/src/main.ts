@@ -10,6 +10,7 @@
 // Modes:
 //   (none)                        → the daemon (./index.ts — serves the UI + API)
 //   --version | -v                → print the app version and exit
+//   --instances | --instance-mode → the lightweight instance launcher (./instance-mode.ts)
 //   --mcp                         → the MCP stdio server (./mcp.ts)
 //   __dispatch_runner <specPath>  → the detached per-run supervisor (./dispatch-runner.ts)
 //   __fake_claude <prompt>        → the CCMANAGERUI_FAKE stand-in for `claude` (./fake-claude.ts)
@@ -23,6 +24,8 @@ if (mode === '--version' || mode === '-v') {
   const { VERSION } = await import('./config')
   console.log(VERSION)
   process.exit(0)
+} else if (mode === '--instances' || mode === '--instance-mode') {
+  await import('./instance-mode')
 } else if (mode === '--mcp') {
   const { runMcp } = await import('./mcp')
   await runMcp()

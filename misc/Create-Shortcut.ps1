@@ -13,3 +13,11 @@ New-TrayShortcut -Root $root -ScriptDir $scriptDir `
   -LnkName "CCManagerUI" `
   -IconFile "CCManagerUI.ico" `
   -Description "Launch CC Manager UI (system tray)"
+
+# The quick launcher deliberately bypasses the tray/full daemon. Instance-Launch.vbs picks the
+# compiled release executable or the source entrypoint and passes --instances with no console.
+New-TrayShortcut -Root $root -ScriptDir $scriptDir `
+  -LnkName "CCManagerUI Instances" `
+  -IconFile "CCManagerUI.ico" `
+  -Description "Quick launch CC Manager UI instances" `
+  -VbsFile "Instance-Launch.vbs"

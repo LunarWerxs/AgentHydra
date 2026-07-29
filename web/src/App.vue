@@ -213,7 +213,10 @@ onMounted(handleConnectRedirect)
 
     <!-- main (pushes left when a right-docked panel overlaps the shell) -->
     <div class="min-h-0 flex-1 transition-[padding] duration-300 ease-in-out" :style="containerStyle">
-      <main class="h-full min-h-0">
+      <main
+        class="h-full min-h-0"
+        :class="view === 'instances' ? 'overflow-y-auto scroll-slim' : ''"
+      >
         <Transition name="view-fade" mode="out-in">
           <SessionsView v-if="view === 'sessions'" />
           <InstancesView v-else />

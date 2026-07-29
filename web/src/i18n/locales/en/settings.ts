@@ -20,6 +20,13 @@ export default {
   portableModeToastOpened: 'Opened in portable window - you can close this tab.',
   portableModeToastNoBrowser: 'No Edge or Chrome install found to open a portable window.',
   portableModeToastFailed: 'Failed to save portable window setting.',
+  instanceModeShortcutLabel: 'Quick Instances shortcut',
+  instanceModeShortcutHint:
+    'Adds a lightweight launcher to your Desktop that only loads the instance chooser.',
+  instanceModeShortcutCreate: 'Add to Desktop',
+  instanceModeShortcutCreating: 'Adding…',
+  instanceModeShortcutCreated: 'Quick Instances shortcut added to your Desktop.',
+  instanceModeShortcutFailed: 'Failed to create the Quick Instances shortcut.',
   hideTrayIconLabel: 'Hide tray icon',
   hideTrayIconHint:
     'Removes the CC Manager UI icon from the notification area. CC Manager UI keeps running in the background - launch the shortcut again to reopen the UI, or come back here to turn the icon back on.',

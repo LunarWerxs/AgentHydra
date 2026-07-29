@@ -15,6 +15,7 @@ import {
   LogOut,
   MessageCircleQuestion,
   Monitor,
+  MonitorDown,
   Power,
   RefreshCw,
   RotateCcw,
@@ -186,6 +187,7 @@ async function onVersionClick() {
 
 // --- portable mode ---
 const portableMode = ref(false)
+const creatingInstanceShortcut = ref(false)
 // --- hide tray icon ---
 const hideTrayIcon = ref(false)
 
@@ -218,6 +220,23 @@ async function togglePortableMode(enabled: boolean) {
     }
   } catch {
     toast.error(t('settings.portableModeToastNoBrowser'))
+  }
+}
+
+async function createQuickInstancesShortcut() {
+  if (creatingInstanceShortcut.value) return
+  creatingInstanceShortcut.value = true
+  try {
+    const result = await api.createInstanceModeShortcut()
+    if (result.ok) {
+      toast.success(t('settings.instanceModeShortcutCreated'))
+    } else {
+      toast.error(result.message ?? t('settings.instanceModeShortcutFailed'))
+    }
+  } catch {
+    toast.error(t('settings.instanceModeShortcutFailed'))
+  } finally {
+    creatingInstanceShortcut.value = false
   }
 }
 
@@ -596,6 +615,28 @@ defineExpose({ save })
         </template>
         <template #control>
           <Switch :model-value="portableMode" @update:model-value="togglePortableMode" />
+        </template>
+      </SettingsRow>
+      <SettingsRow :icon="MonitorDown" :label="$t('settings.instanceModeShortcutLabel')">
+        <template #info>
+          <InfoHint :text="$t('settings.instanceModeShortcutHint')" />
+        </template>
+        <template #control>
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="creatingInstanceShortcut"
+            @click="createQuickInstancesShortcut"
+          >
+            <MonitorDown :class="creatingInstanceShortcut ? 'animate-pulse' : ''" />
+            {{
+              $t(
+                creatingInstanceShortcut
+                  ? 'settings.instanceModeShortcutCreating'
+                  : 'settings.instanceModeShortcutCreate',
+              )
+            }}
+          </Button>
         </template>
       </SettingsRow>
       <SettingsRow :icon="EyeOff" :label="$t('settings.hideTrayIconLabel')">

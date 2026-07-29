@@ -82,6 +82,7 @@ stable interface and must not be assumed by product logic.
 | Var | Default | Meaning |
 |---|---|---|
 | `PORT` | `7787` | preferred API/UI port (hops if busy) |
+| `CCMANAGERUI_INSTANCE_PORT` | `PORT + 1` | preferred port for `--instances` quick mode (hops if busy; separate from the full daemon) |
 | `HOST` | `127.0.0.1` | loopback bind host; only `127.0.0.1`, `localhost`, and `::1` are accepted because the local API is intentionally passwordless |
 | `CCMANAGERUI_PORT_FIXED` | unset | `1` = bind `PORT` exactly, skip the single-instance/port-hop |
 | `CCMANAGERUI_HOME` | `~/.ccmanagerui` | config dir (`runtime.json`, instance-identity cache) |

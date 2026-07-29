@@ -1,0 +1,281 @@
+// Lightweight instance-only daemon.
+//
+// This entry intentionally does NOT import index.ts. That keeps sessions/transcripts, sqlite,
+// queue dispatch/recovery, scheduler, monitor, usage refresh, Connections, and auto-update out of
+// the process entirely. It serves only the small API needed to list/start/focus/stop managed
+// Claude/Codex instances plus the same built web assets at the dedicated `/instances` path.
+import { existsSync } from 'node:fs'
+import { relative } from 'node:path'
+import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
+import { serveStatic } from 'hono/bun'
+import { cors } from 'hono/cors'
+import { streamSSE } from 'hono/streaming'
+import { HOST, INSTANCE_MODE_PORT, IS_COMPILED, VERSION, WEB_DIST_CANDIDATES } from './config'
+import { launchCliInstance, listCliInstances } from './core/cli-instances'
+import {
+  focusCodexDesktopInstance,
+  launchCodexInstance,
+  listCodexInstances,
+  openCodexDesktopInstance,
+  quitCodexDesktopInstance,
+} from './core/codex-instances'
+import { focusInstance, listInstances, openInstance, quitInstance } from './core/instances'
+import { findFreePort } from './find-free-port.mjs'
+import { findLiveInstance } from './instance'
+import {
+  clearInstanceModeInfo,
+  findLiveInstanceMode,
+  INSTANCE_MODE_CONFIG_DIR,
+  INSTANCE_MODE_SERVICE_NAME,
+  writeInstanceModeInfo,
+} from './instance-mode-instance'
+import { tryAcquireInstanceModeStartupLock } from './instance-mode-lock'
+import { instanceModeUrl, openInstanceModeWindow } from './instance-mode-window'
+import { initFileLogging } from './log-file.mjs'
+import { isLoopbackOrigin, loopbackGuard } from './loopback-guard.mjs'
+import { openUi } from './open-ui'
+
+// Prefer an already-running full daemon: it exposes the same instance routes, so opening its
+// `/instances` surface is even cheaper than keeping a second (albeit tiny) server process.
+const full = await findLiveInstance(750, 2)
+if (full) {
+  if (process.env.CCMANAGERUI_NO_OPEN !== '1') await openInstanceModeWindow(full.url)
+  process.exit(0)
+}
+
+// Re-running the quick launcher raises the existing compact window rather than duplicating its
+// daemon. Its separate pointer means this never mistakes the full manager for quick mode.
+const existing = await findLiveInstanceMode(750, 2)
+if (existing) {
+  if (process.env.CCMANAGERUI_NO_OPEN !== '1') {
+    await openInstanceModeWindow(existing.url)
+    // A detached Chromium hand-off can report a successful spawn even when an existing background
+    // profile process swallows the app-window request. Give the quick UI time to attach, then fall
+    // back to a normal tab when the existing daemon still reports no connected window.
+    await new Promise((resolve) => setTimeout(resolve, 4_000))
+    try {
+      const response = await fetch(`${existing.url}/api/instance-mode/status`, {
+        signal: AbortSignal.timeout(1_000),
+      })
+      const status = (await response.json()) as { connectedWindows?: number }
+      if (!status.connectedWindows) openUi(instanceModeUrl(existing.url))
+    } catch {
+      openUi(instanceModeUrl(existing.url))
+    }
+  }
+  process.exit(0)
+}
+
+initFileLogging(INSTANCE_MODE_CONFIG_DIR)
+
+// Claim the cold start after both live-pointer checks. A simultaneous launcher waits for the
+// winner's pointer and exits; it never races the bind or opens a duplicate window.
+let startupLock = tryAcquireInstanceModeStartupLock()
+if (!startupLock) {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const winner = await findLiveInstanceMode(250, 1)
+    if (winner) process.exit(0)
+    startupLock = tryAcquireInstanceModeStartupLock()
+    if (startupLock) break
+  }
+}
+if (!startupLock) throw new Error('timed out waiting for another instance-mode launcher')
+process.on('exit', () => startupLock?.release())
+
+process.on('uncaughtException', (error) => {
+  console.error('[ccmanagerui:instances] uncaught exception:', error)
+  process.exit(1)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[ccmanagerui:instances] unhandled rejection:', reason)
+  process.exit(1)
+})
+
+const app = new Hono()
+app.use('/api/*', cors({ origin: (origin) => (origin && isLoopbackOrigin(origin) ? origin : '') }))
+app.use('/api/*', loopbackGuard)
+app.use(
+  '/api/*',
+  bodyLimit({
+    maxSize: 64 * 1024,
+    onError: (c) => c.json({ error: 'request body exceeds 64 KiB' }, 413),
+  }),
+)
+
+let connectedWindows = 0
+let idleExitTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelIdleExit(): void {
+  if (idleExitTimer) clearTimeout(idleExitTimer)
+  idleExitTimer = null
+}
+
+function exitCleanly(): void {
+  console.log('[ccmanagerui:instances] exiting')
+  clearInstanceModeInfo()
+  startupLock?.release()
+  process.exit(0)
+}
+
+function scheduleIdleExit(delayMs: number): void {
+  cancelIdleExit()
+  idleExitTimer = setTimeout(() => {
+    if (connectedWindows === 0) exitCleanly()
+  }, delayMs)
+}
+
+app.get('/api/health', (c) => {
+  // A re-launch probes health before its browser hand-off. Extend the no-client lease so the daemon
+  // cannot expire in the narrow gap between that successful probe and the new SSE connection.
+  if (connectedWindows === 0) scheduleIdleExit(120_000)
+  return c.json({
+    ok: true,
+    service: INSTANCE_MODE_SERVICE_NAME,
+    mode: 'instances',
+    version: VERSION,
+    distribution: IS_COMPILED ? 'compiled' : 'source',
+    ts: Date.now(),
+  })
+})
+
+app.get('/api/instances', async (c) => c.json(await listInstances()))
+app.get('/api/instances/:dir/account', async (c) => {
+  // Dynamic on purpose: account resolution is requested after the bare rows render, so safeStorage
+  // and profile/cache machinery do not join the cold-start import graph.
+  const { resolveAccount } = await import('./core/accounts')
+  const dir = decodeURIComponent(c.req.param('dir'))
+  return c.json(await resolveAccount(dir, { noNetwork: true }))
+})
+app.get('/api/usage/cache', async (c) => {
+  // Cached readings only: the quick daemon never starts a live quota sweep. Keeping cache access
+  // dynamically imported also keeps it off the first-render path until the browser asks for it.
+  const { allCachedUsage } = await import('./usage-cache')
+  return c.json({ cache: allCachedUsage(), lastAutoRefreshAt: null })
+})
+app.post('/api/instances/:dir/open', async (c) =>
+  c.json(await openInstance(decodeURIComponent(c.req.param('dir')))),
+)
+app.post('/api/instances/:dir/focus', async (c) =>
+  c.json(await focusInstance(decodeURIComponent(c.req.param('dir')))),
+)
+app.post('/api/instances/:dir/quit', async (c) => {
+  const dir = decodeURIComponent(c.req.param('dir'))
+  const body = await c.req.json().catch(() => ({}))
+  return c.json(await quitInstance(dir, { confirmExternal: body.confirmExternal === true }))
+})
+
+app.get('/api/cli-instances', (c) => c.json(listCliInstances()))
+app.post('/api/cli-instances/:id/launch', (c) => c.json(launchCliInstance(c.req.param('id'))))
+
+app.get('/api/codex-instances', async (c) => c.json(await listCodexInstances()))
+app.post('/api/codex-instances/:id/launch', (c) => c.json(launchCodexInstance(c.req.param('id'))))
+app.post('/api/codex-instances/:id/desktop/open', async (c) =>
+  c.json(await openCodexDesktopInstance(c.req.param('id'))),
+)
+app.post('/api/codex-instances/:id/desktop/focus', async (c) =>
+  c.json(await focusCodexDesktopInstance(c.req.param('id'))),
+)
+app.post('/api/codex-instances/:id/desktop/quit', async (c) =>
+  c.json(await quitCodexDesktopInstance(c.req.param('id'))),
+)
+
+// The compact window holds one SSE connection for its lifetime. When the last window closes, give
+// reloads/reconnects 30 seconds to come back, then retire the quick daemon automatically. A launch
+// whose browser never opens also self-cleans after two minutes.
+scheduleIdleExit(120_000)
+app.get('/api/instance-mode/lifetime', (c) =>
+  streamSSE(c, async (stream) => {
+    let closed = false
+    connectedWindows += 1
+    console.log(`[ccmanagerui:instances] window connected (${connectedWindows})`)
+    cancelIdleExit()
+    stream.onAbort(() => {
+      if (closed) return
+      closed = true
+      connectedWindows = Math.max(0, connectedWindows - 1)
+      console.log(`[ccmanagerui:instances] window disconnected (${connectedWindows})`)
+      if (connectedWindows === 0) scheduleIdleExit(30_000)
+    })
+    await stream.writeSSE({ event: 'ready', data: String(process.pid) })
+    while (!closed) {
+      await stream.sleep(15_000)
+      if (!closed) await stream.writeSSE({ event: 'ping', data: String(Date.now()) })
+    }
+  }),
+)
+
+app.get('/api/instance-mode/status', (c) => c.json({ connectedWindows }))
+
+app.post('/api/instance-mode/shutdown', (c) => {
+  setTimeout(exitCleanly, 100)
+  return c.json({ ok: true })
+})
+
+// Serve the same build, whose tiny entrypoint dynamically selects QuickInstancesApp for this path.
+const embeddedWeb = (
+  globalThis as {
+    __CCMANAGERUI_EMBEDDED_WEB__?: Readonly<Record<string, string>>
+  }
+).__CCMANAGERUI_EMBEDDED_WEB__
+const dist = WEB_DIST_CANDIDATES.find((path) => existsSync(path))
+if (embeddedWeb) {
+  app.get('/*', async (c) => {
+    let pathname = decodeURIComponent(new URL(c.req.url).pathname)
+    if (pathname === '/' || pathname === '') pathname = '/index.html'
+    const lastSegment = pathname.slice(pathname.lastIndexOf('/') + 1)
+    const isAsset = pathname.startsWith('/assets/') || /\.[a-z0-9]+$/i.test(lastSegment)
+    const embeddedPath = embeddedWeb[pathname]
+    if (embeddedPath) {
+      return new Response(Bun.file(embeddedPath), {
+        headers: {
+          'cache-control': pathname.startsWith('/assets/')
+            ? 'public, max-age=31536000, immutable'
+            : 'no-cache',
+        },
+      })
+    }
+    if (isAsset) return c.text('not found', 404, { 'cache-control': 'no-store' })
+    return new Response(Bun.file(embeddedWeb['/index.html']!), {
+      headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
+    })
+  })
+} else if (dist) {
+  const root = relative(process.cwd(), dist).replaceAll('\\', '/') || '.'
+  app.use('/assets/*', serveStatic({ root }))
+  app.get('/assets/*', (c) => c.text('not found', 404, { 'cache-control': 'no-store' }))
+  app.use('/*', serveStatic({ root }))
+  app.get('/*', serveStatic({ path: `${root}/index.html` }))
+} else {
+  app.get('/*', (c) =>
+    c.html(
+      '<main style="font:16px system-ui;padding:2rem"><h1>Quick Instances is not built yet</h1><p>Run <code>bun run build</code>, then launch instance mode again.</p></main>',
+      503,
+    ),
+  )
+}
+
+const boundPort = await findFreePort(INSTANCE_MODE_PORT, 50, HOST)
+Bun.serve({ hostname: HOST, port: boundPort, fetch: app.fetch })
+writeInstanceModeInfo(boundPort, { mode: 'instances' })
+startupLock.release()
+startupLock = null
+process.on('exit', clearInstanceModeInfo)
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, exitCleanly)
+
+const url = `http://${HOST}:${boundPort}`
+console.log(`[ccmanagerui:instances] ${url}/instances`)
+if (process.env.CCMANAGERUI_NO_OPEN !== '1') {
+  const result = await openInstanceModeWindow(url)
+  console.log(
+    `[ccmanagerui:instances] portable window: ${result.ok ? `opened with ${result.browser}` : result.reason}`,
+  )
+  setTimeout(() => {
+    if (connectedWindows > 0) return
+    console.warn(
+      '[ccmanagerui:instances] portable window did not connect; opening a normal browser tab',
+    )
+    openUi(instanceModeUrl(url))
+  }, 4_000)
+}

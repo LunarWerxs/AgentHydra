@@ -44,8 +44,10 @@ const ENGINE = join(MISC, 'Tray-Host.ps1') // the kit-synced shared tray engine
 const VBS = join(MISC, 'Tray-Launch.vbs') // the kit-synced shared launcher (replaces CCManagerUI.vbs)
 const SHORTCUT_ENGINE = join(MISC, 'New-TrayShortcut.ps1') // the kit-synced shared shortcut engine
 const CREATE_SHORTCUT = join(MISC, 'Create-Shortcut.ps1') // the app's thin adapter over it
+const INSTANCE_VBS = join(MISC, 'Instance-Launch.vbs')
 const ICO = join(MISC, 'CCManagerUI.ico')
 const LNK = join(REPO_ROOT, 'CCManagerUI.lnk')
+const INSTANCE_LNK = join(REPO_ROOT, 'CCManagerUI Instances.lnk')
 
 const win = process.platform === 'win32'
 
@@ -71,6 +73,7 @@ describe.skipIf(!win)('tray launcher', () => {
     expect(existsSync(VBS)).toBe(true)
     expect(existsSync(SHORTCUT_ENGINE)).toBe(true)
     expect(existsSync(CREATE_SHORTCUT)).toBe(true)
+    expect(existsSync(INSTANCE_VBS)).toBe(true)
     expect(existsSync(ICO)).toBe(true)
     expect(existsSync(join(APP, 'server', 'src', 'index.ts'))).toBe(true)
   })
@@ -160,6 +163,19 @@ describe.skipIf(!win)('tray launcher', () => {
     expect(ps).toMatch(/-LnkName\s+["']CCManagerUI["']/)
     expect(ps).toMatch(/-IconFile\s+["']CCManagerUI\.ico["']/)
     expect(ps).toMatch(/-Description\s+["']Launch CC Manager UI \(system tray\)["']/)
+    expect(ps).toMatch(/-LnkName\s+["']CCManagerUI Instances["']/)
+    expect(ps).toMatch(/-VbsFile\s+["']Instance-Launch\.vbs["']/)
+  })
+
+  test('the quick launcher selects the compiled or source instance-mode entry without a tray', () => {
+    const vbs = readFileSync(INSTANCE_VBS, 'utf8')
+    expect(vbs).toContain('CCManagerUI.exe')
+    expect(vbs).toContain('server\\src\\main.ts')
+    expect(vbs.match(/--instances/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(vbs).toContain('%APPDATA%\\npm\\bun.cmd')
+    expect(vbs).toContain('%USERPROFILE%\\.bun\\bin\\bun.exe')
+    expect(vbs).toContain('%ComSpec%')
+    expect(vbs).not.toContain('CCManagerUI-Tray.ps1')
   })
 
   test('the adapter dot-sources the shared engine and hands off with its $TrayConfig', () => {
@@ -249,6 +265,20 @@ describe.skipIf(!win)('tray launcher', () => {
     expect(out).toContain('CCManagerUI.ico')
     expect(out).toContain(REPO_ROOT)
     expect(out).toContain('Launch CC Manager UI (system tray)')
+
+    expect(existsSync(INSTANCE_LNK)).toBe(true)
+    const quick = execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        `$s=(New-Object -ComObject WScript.Shell).CreateShortcut('${INSTANCE_LNK.replace(/\\/g, '\\\\')}'); "$($s.TargetPath)|$($s.Arguments)|$($s.IconLocation)|$($s.WorkingDirectory)|$($s.Description)"`,
+      ],
+      { encoding: 'utf8' },
+    )
+    expect(quick.toLowerCase()).toContain('wscript.exe')
+    expect(quick).toContain('Instance-Launch.vbs')
+    expect(quick).toContain('Quick launch CC Manager UI instances')
   }, 20_000)
 
   test('the headless tray self-test passes against the rewritten adapter (icon loads, bun on PATH, entry present)', () => {

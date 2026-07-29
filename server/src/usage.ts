@@ -12,7 +12,7 @@
 // dispatch-runner.ts uses (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY), so any account already
 // registered for queue dispatch is pollable with no extra login; CLAUDE_CONFIG_DIR is the fallback.
 
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { CLAUDE_PROJECTS_ROOT, DATA_DIR, resolveClaudeExe } from './config'
 import { resolveCliConfigDirToken } from './core/accounts'
@@ -395,42 +395,6 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
   return parseUsageOutput(out, label)
 }
 
-// --- on-disk snapshot cache ---------------------------------------------------
-// One `/usage` probe spawns a real `claude` process, so the UI must not poll it. Each check's
-// result is cached here (keyed by the caller's stable key — `acct:<id>`, `dir:<configDir>`, or a
-// desktop instance dir), letting the Instances table render the last snapshot + its age and
-// re-check only on demand. Persisted so a daemon restart doesn't lose the last-known numbers.
-
-const USAGE_CACHE_PATH = join(DATA_DIR, 'usage-cache.json')
-type UsageCache = Record<string, UsageSnapshot>
-
-function readUsageCache(): UsageCache {
-  try {
-    const parsed = JSON.parse(readFileSync(USAGE_CACHE_PATH, 'utf8'))
-    return parsed && typeof parsed === 'object' ? (parsed as UsageCache) : {}
-  } catch {
-    return {}
-  }
-}
-
-/** The whole cache, keyed by caller key — used to bulk-hydrate the Instances table on load. */
-export function allCachedUsage(): UsageCache {
-  return readUsageCache()
-}
-
-/** The last cached snapshot for `key`, or null if never checked. */
-export function getCachedUsage(key: string): UsageSnapshot | null {
-  return readUsageCache()[key] ?? null
-}
-
-/** Store the latest snapshot for `key` (best-effort; a cache write must never fail a live check). */
-export function setCachedUsage(key: string, snap: UsageSnapshot): void {
-  try {
-    mkdirSync(DATA_DIR, { recursive: true })
-    const cache = readUsageCache()
-    cache[key] = snap
-    writeFileSync(USAGE_CACHE_PATH, JSON.stringify(cache, null, 2))
-  } catch {
-    // best-effort: losing a cache write only means the next UI load lacks this snapshot's age
-  }
-}
+// Re-export the small cache API so existing imports keep working. Its implementation lives in a
+// dependency-light module that the instance-only daemon can load without the live probe graph.
+export { allCachedUsage, getCachedUsage, setCachedUsage } from './usage-cache'

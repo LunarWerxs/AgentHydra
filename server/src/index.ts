@@ -67,6 +67,7 @@ import {
 } from './core/codex-instances'
 import { detectDesktopInstall } from './core/desktop-install'
 import { setInstanceMeta } from './core/instance-meta'
+import { createInstanceModeShortcut } from './core/instance-mode-shortcut'
 import {
   focusInstance,
   listInstances,
@@ -122,7 +123,7 @@ import { openPortableWindow } from './portable-window.mjs'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { schedulerState, setSchedulerSettings } from './scheduler'
 import { searchSessionBodies } from './session-search'
-import { getSession, listSessions, sessionMarkKey } from './sessions'
+import { getSession, listSessions, sessionMarkKey, warmSessionScanCache } from './sessions'
 import { skipSingleInstanceGuard } from './single-instance'
 import { findTranscript, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
@@ -1023,6 +1024,11 @@ app.post('/api/instances/:dir/shortcut', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))
   return c.json(await createInstanceShortcut(dir))
 })
+// One-click shortcut for the lightweight instance-only launcher. Unlike the per-instance shortcut
+// above, this opens the chooser and does not launch Claude until the user selects an account.
+app.post('/api/instance-mode/shortcut', async (c) => {
+  return c.json(await createInstanceModeShortcut())
+})
 app.delete('/api/instances/:dir', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))
   const body = await jsonBody(c)
@@ -1681,6 +1687,11 @@ const server = Bun.serve({
   fetch: app.fetch,
   idleTimeout: 255,
 })
+
+// --- warm the sessions list (see server/src/sessions.ts warmSessionScanCache) ------------------
+// Deliberately AFTER Bun.serve: parsing transcripts is the slowest thing this daemon does, and the
+// point is to overlap it with the browser starting up rather than to delay listening on the port.
+void warmSessionScanCache()
 
 if (releaseDoubleClick && process.env.CCMANAGERUI_NO_OPEN !== '1') {
   const url = `http://127.0.0.1:${server.port}/`

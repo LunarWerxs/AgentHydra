@@ -6,6 +6,7 @@ import {
   eventToTailEventsForSource,
   isCommandWrapperText,
   listTranscriptFiles,
+  listTranscriptFilesAfterMiss,
   type TranscriptFile,
   unwrapTaggedText,
 } from './transcript'
@@ -46,13 +47,106 @@ interface ScannedMeta {
 // transcript replace its old parse rather than leaking one cache entry on every appended turn.
 const metaCache = new Map<string, { mtimeMs: number; meta: ScannedMeta }>()
 
-async function scanMeta(tf: TranscriptFile): Promise<ScannedMeta> {
+// L2 behind that map: the same parse, persisted (see the session_scan_cache comment in db.ts). The
+// in-memory map alone meant every daemon restart re-parsed the whole visible list before answering.
+interface ScanCacheRow extends ScannedMeta {
+  mtime_ms: number
+  size_bytes: number
+}
+const selectScan = db.query<ScanCacheRow, [string]>(
+  'select mtime_ms, size_bytes, title, cwd, git_branch, message_count, created_at, ' +
+    'last_activity_at, last_role, last_text_preview, substantive_turns ' +
+    'from session_scan_cache where cache_key = ?',
+)
+const upsertScan = db.query(
+  'insert into session_scan_cache (cache_key, path, mtime_ms, size_bytes, title, cwd, git_branch, ' +
+    'message_count, created_at, last_activity_at, last_role, last_text_preview, ' +
+    'substantive_turns, scanned_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'on conflict(cache_key) do update set path = excluded.path, mtime_ms = excluded.mtime_ms, ' +
+    'size_bytes = excluded.size_bytes, title = excluded.title, cwd = excluded.cwd, ' +
+    'git_branch = excluded.git_branch, message_count = excluded.message_count, ' +
+    'created_at = excluded.created_at, last_activity_at = excluded.last_activity_at, ' +
+    'last_role = excluded.last_role, last_text_preview = excluded.last_text_preview, ' +
+    'substantive_turns = excluded.substantive_turns, scanned_at = excluded.scanned_at',
+)
+
+function cacheKey(tf: TranscriptFile): string {
   // OpenCode sessions all point at one database path, and two rows can share a millisecond update
   // timestamp. Provider + id are therefore part of the cache identity, not just path + mtime.
-  const key = `${tf.source}:${tf.session_id}:${tf.path}`
-  const cached = metaCache.get(key)
-  if (cached?.mtimeMs === tf.mtime_ms) return cached.meta
+  return `${tf.source}:${tf.session_id}:${tf.path}`
+}
 
+/** Persisted parse for this exact file revision, or null. Size joins mtime in the check because a
+ *  rewrite that preserves mtime still changes length, and reading a stale title is worse than a
+ *  re-parse. */
+function readScanCache(tf: TranscriptFile, key: string): ScannedMeta | null {
+  const row = selectScan.get(key)
+  if (!row || row.mtime_ms !== tf.mtime_ms || row.size_bytes !== tf.size_bytes) return null
+  return {
+    title: row.title,
+    cwd: row.cwd,
+    git_branch: row.git_branch,
+    message_count: row.message_count,
+    created_at: row.created_at,
+    last_activity_at: row.last_activity_at,
+    last_role: row.last_role,
+    last_text_preview: row.last_text_preview,
+    substantive_turns: row.substantive_turns,
+  }
+}
+
+function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): ScannedMeta {
+  metaCache.set(key, { mtimeMs: tf.mtime_ms, meta })
+  try {
+    upsertScan.run(
+      key,
+      tf.path,
+      tf.mtime_ms,
+      tf.size_bytes,
+      meta.title,
+      meta.cwd,
+      meta.git_branch,
+      meta.message_count,
+      meta.created_at,
+      meta.last_activity_at,
+      meta.last_role,
+      meta.last_text_preview,
+      meta.substantive_turns,
+      Date.now(),
+    )
+  } catch {
+    // A cache write must never fail a list. Worst case this row is re-parsed next time.
+  }
+  return meta
+}
+
+// Scans currently running, so the same file revision is never parsed twice at once. Three things
+// overlap in practice — the boot warm-up, the UI's 12-second poll, and whatever the user just
+// clicked — and without this they each opened their own copy of the same 12 MB transcript.
+// Measured: the first request after a restart took 9.3 s racing the warm-up, and 0.4 s once the two
+// shared their work.
+const inFlight = new Map<string, Promise<ScannedMeta>>()
+
+function scanMeta(tf: TranscriptFile): Promise<ScannedMeta> {
+  const key = cacheKey(tf)
+  const cached = metaCache.get(key)
+  if (cached?.mtimeMs === tf.mtime_ms) return Promise.resolve(cached.meta)
+  const persisted = readScanCache(tf, key)
+  if (persisted) {
+    metaCache.set(key, { mtimeMs: tf.mtime_ms, meta: persisted })
+    return Promise.resolve(persisted)
+  }
+  // Keyed by file revision, so a transcript that gains a turn mid-flight starts a fresh scan rather
+  // than joining the one that is already reading the previous revision.
+  const revision = `${key}@${tf.mtime_ms}:${tf.size_bytes}`
+  const running = inFlight.get(revision)
+  if (running) return running
+  const started = parseMeta(tf, key).finally(() => inFlight.delete(revision))
+  inFlight.set(revision, started)
+  return started
+}
+
+async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> {
   if (tf.source === 'opencode') {
     const content = readOpenCodeSession(tf.session_id)
     const textEvents = (content?.events ?? []).filter((event) => event.kind === 'text')
@@ -69,8 +163,7 @@ async function scanMeta(tf: TranscriptFile): Promise<ScannedMeta> {
       last_text_preview: last ? oneLine(last.text) : null,
       substantive_turns: textEvents.length,
     }
-    metaCache.set(key, { mtimeMs: tf.mtime_ms, meta })
-    return meta
+    return rememberScan(tf, key, meta)
   }
 
   // read up to the last 12 MB — covers effectively every real transcript
@@ -91,7 +184,14 @@ async function scanMeta(tf: TranscriptFile): Promise<ScannedMeta> {
   let lastPreview: string | null = null
   let substantive = 0
 
-  for (const line of text.split('\n')) {
+  // Walked by index rather than `text.split('\n')`: on a 12 MB transcript that split materialises
+  // ~100k line strings and holds every one of them alive for the whole loop, roughly doubling the
+  // peak for a file we only ever look at one line at a time.
+  for (let pos = 0; pos < text.length; ) {
+    let nl = text.indexOf('\n', pos)
+    if (nl === -1) nl = text.length
+    const line = text.slice(pos, nl)
+    pos = nl + 1
     const l = line.trim()
     if (!l) continue
     let ev: any
@@ -170,8 +270,38 @@ async function scanMeta(tf: TranscriptFile): Promise<ScannedMeta> {
     last_text_preview: lastPreview,
     substantive_turns: substantive,
   }
-  metaCache.set(key, { mtimeMs: tf.mtime_ms, meta })
-  return meta
+  return rememberScan(tf, key, meta)
+}
+
+/**
+ * How many transcripts may be in flight at once inside one list.
+ *
+ * This used to be `Promise.all(batch.map(...))` over the whole batch, i.e. up to 200 files opened
+ * together — and since each one holds up to a 12 MB tail plus its parsed lines, the peak was the
+ * SUM of all 200. Measured on a real store: one cold /api/sessions call took the daemon from 101 MB
+ * to 3.1 GB resident. The reads are disk-bound, so a dozen at a time is no slower in wall clock; it
+ * just stops the list from being a memory bomb.
+ */
+export const SCAN_CONCURRENCY = 12
+
+/** Promise.all with a ceiling on how many run at once. Results stay in input order.
+ *  Exported only so the regression test can prove the ceiling is real — nothing else imports it. */
+export async function mapPooled<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const worker = async () => {
+    for (;;) {
+      const i = next++
+      if (i >= items.length) return
+      out[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
+  return out
 }
 
 /** Map of session_id -> most-relevant queue status (running/queued win over terminal). */
@@ -293,7 +423,7 @@ export async function listSessions(
   for (let cursor = 0; cursor < files.length && out.length < limit; ) {
     const batch = files.slice(cursor, cursor + (limit - out.length))
     cursor += batch.length
-    const scanned = await Promise.all(batch.map(toSummary))
+    const scanned = await mapPooled(batch, SCAN_CONCURRENCY, toSummary)
     for (const s of scanned) if (s) out.push(s)
   }
   out.sort((a, b) => b.last_activity_at - a.last_activity_at)
@@ -304,13 +434,62 @@ export function sessionMarkKey(source: SessionSource, sessionId: string): string
   return source === 'claude' ? sessionId : `${source}:${sessionId}`
 }
 
+/**
+ * Fill session_scan_cache for the newest transcripts in the background, and drop rows for files
+ * that no longer exist.
+ *
+ * The cache makes a restart warm, but only for transcripts it already saw — the very first list
+ * after an install (or after a heavy day of new sessions) is still the expensive one, and it is
+ * expensive at exactly the moment the user is staring at an empty list. Doing it here moves that
+ * cost off the request: the daemon starts serving immediately, and this runs alongside so the list
+ * is usually already warm by the time anyone opens the UI. Nothing awaits it and nothing fails if
+ * it doesn't finish.
+ */
+export async function warmSessionScanCache(newest = 400): Promise<void> {
+  const files = listTranscriptFiles()
+
+  // Prune first, so a store that churns transcripts doesn't accumulate rows forever. Cheaper than it
+  // looks: one indexed read of the key column against an in-memory set of the paths we just globbed.
+  try {
+    const live = new Set(files.map((f) => f.path))
+    const dead = db
+      .query<{ cache_key: string; path: string }, []>(
+        'select cache_key, path from session_scan_cache',
+      )
+      .all()
+      .filter((r) => !live.has(r.path))
+    if (dead.length) {
+      const del = db.query('delete from session_scan_cache where cache_key = ?')
+      db.transaction(() => {
+        for (const r of dead) del.run(r.cache_key)
+      })()
+    }
+  } catch {
+    // Best-effort housekeeping; a failed prune must never stop the warm-up below.
+  }
+
+  const batch = [...files].sort((a, b) => b.mtime_ms - a.mtime_ms).slice(0, newest)
+  // Half the request-path width: this is speculative work, and a request that arrives mid-warm-up
+  // should be able to overtake it. It never duplicates that request's work — scanMeta's in-flight
+  // map means the two share whichever file they both want.
+  await mapPooled(batch, Math.max(1, Math.floor(SCAN_CONCURRENCY / 2)), async (tf) => {
+    try {
+      await scanMeta(tf)
+    } catch {
+      // An unreadable transcript just stays uncached; the list handles it the same way it always did.
+    }
+  })
+}
+
 export async function getSession(
   sessionId: string,
   source?: SessionSource,
 ): Promise<SessionSummary | null> {
-  const tf = listTranscriptFiles().find(
-    (f) => f.session_id === sessionId && (!source || f.source === source),
-  )
+  // Same stale-snapshot caveat as findTranscript: only a MISS can be wrong, so re-sweep before
+  // reporting one.
+  const match = (files: ReturnType<typeof listTranscriptFiles>) =>
+    files.find((f) => f.session_id === sessionId && (!source || f.source === source))
+  const tf = match(listTranscriptFiles()) ?? match(listTranscriptFilesAfterMiss())
   if (!tf) return null
   const m = await scanMeta(tf)
   const qmap = queueStatusMap()

@@ -269,6 +269,9 @@ export const revealInstanceFolder = (dir: string) =>
  *  `data.path` holds where it landed; a failure carries the MSIX-aware message (same as open). */
 export const createInstanceShortcut = (dir: string) =>
   j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}/shortcut`, { method: 'POST' })
+/** Add the lightweight Instances chooser to the user's Desktop. */
+export const createInstanceModeShortcut = () =>
+  j<CMActionResult>('/api/instance-mode/shortcut', { method: 'POST' })
 export const deleteInstance = (dir: string, confirmName: string) =>
   j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}`, {
     method: 'DELETE',

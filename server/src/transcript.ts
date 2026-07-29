@@ -174,10 +174,60 @@ function readCodexRolloutIdentity(path: string, fallbackId: string): CodexRollou
   return identity
 }
 
+let refreshing = false
+
+/**
+ * The store's file index: every transcript's id, mtime and size.
+ *
+ * Served stale-while-revalidate, because building it is the one cost in this app that scales with
+ * how much history you have KEPT rather than with what you asked to see: it globs the whole store
+ * and stats every file (measured: 145 ms warm / 414 ms cold for 1,255 transcripts, and it grows
+ * linearly from there). Paying that inside a request put a folder-sized tax on every poll. Callers
+ * now get the last snapshot immediately and a fresh sweep runs just after, so request latency
+ * tracks the number of rows asked for, not the size of ~/.claude.
+ *
+ * `force` is for the two callers that cannot tolerate a stale answer — looking up a session that
+ * ISN'T in the snapshot, which is exactly what a just-created transcript looks like.
+ */
 export function listTranscriptFiles(force = false): TranscriptFile[] {
   const now = performance.now()
-  if (!force && cache && now - cache.at < TTL_MS) return cache.files
+  if (!force && cache) {
+    if (now - cache.at >= TTL_MS && !refreshing) {
+      refreshing = true
+      // setTimeout, not an inline call: this must land on its own turn of the loop rather than
+      // inside whichever request happened to notice the snapshot was stale.
+      setTimeout(() => {
+        try {
+          buildTranscriptIndex()
+        } catch {
+          // Keep serving the previous snapshot; the next tick tries again.
+        } finally {
+          refreshing = false
+        }
+      }, 0)
+    }
+    return cache.files
+  }
+  return buildTranscriptIndex()
+}
 
+let lastMissSweepAt = Number.NEGATIVE_INFINITY
+
+/**
+ * The index as seen after a fresh sweep, for a caller that just failed to find a session in the
+ * snapshot. Throttled to one sweep per TTL: a transcript created moments ago is worth re-globbing
+ * the store for, but a session id that simply does not exist (a deleted transcript the UI is still
+ * polling) must not buy a full folder scan on every single request.
+ */
+export function listTranscriptFilesAfterMiss(): TranscriptFile[] {
+  const now = performance.now()
+  if (cache && now - lastMissSweepAt < TTL_MS) return cache.files
+  lastMissSweepAt = now
+  return listTranscriptFiles(true)
+}
+
+function buildTranscriptIndex(): TranscriptFile[] {
+  const now = performance.now()
   const files: TranscriptFile[] = []
   const claudeGlob = new Bun.Glob('*/*.jsonl')
   for (const rel of claudeGlob.scanSync({ cwd: CLAUDE_PROJECTS_ROOT, onlyFiles: true })) {
@@ -264,9 +314,12 @@ export function listTranscriptFiles(force = false): TranscriptFile[] {
 }
 
 export function findTranscript(sessionId: string, source?: SessionSource): TranscriptFile | null {
-  const matches = listTranscriptFiles().filter(
-    (f) => f.session_id === sessionId && (!source || f.source === source),
-  )
+  const pick = (files: TranscriptFile[]) =>
+    files.filter((f) => f.session_id === sessionId && (!source || f.source === source))
+  // A miss is the one answer the snapshot can get wrong — a transcript created seconds ago is
+  // absent from it — and it is also the cheap case, so re-sweep before believing it.
+  let matches = pick(listTranscriptFiles())
+  if (matches.length === 0) matches = pick(listTranscriptFilesAfterMiss())
   if (matches.length === 0) return null
   // newest wins if a session id appears under multiple project folders
   return matches.reduce((a, b) => (b.mtime_ms > a.mtime_ms ? b : a))

@@ -520,7 +520,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
+  <div class="flex min-h-full flex-col">
     <!-- Borderless toolbar, matching Sessions/Queue and the app header (App.vue): the sticky table
          header right below already draws a line there, and two rules a row apart was one of them
          doing nothing but adding weight. -->
@@ -620,7 +620,7 @@ onUnmounted(() => {
     <!-- gap-10, not a divider: the two tables used to abut with a hairline between them, which read
          as one continuous table whose last rows happened to have different columns. A flex gap only
          applies BETWEEN children, so hiding either table leaves no orphan space behind it. -->
-    <div class="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto scroll-slim">
+    <div class="flex flex-col gap-10">
       <!-- Both tables are hideable (Settings → Providers): plenty of people use only the desktop app,
            or only the CLI, and shouldn't have to look at an empty table for the other. -->
       <!-- v-show, not a height animation: the table header is `sticky top-0`, and any wrapper with

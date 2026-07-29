@@ -102,6 +102,35 @@ create table if not exists session_marks (
   done       integer not null default 0,
   updated_at integer not null
 );
+
+-- Parsed transcript metadata (title / preview / counts), keyed by the file it was derived from.
+-- Producing one row means reading up to 12 MB of transcript tail and JSON.parsing every line of it,
+-- so an in-memory-only cache made the FIRST sessions list of every daemon re-pay that for all 200
+-- rows at once: measured 4.6 s wall clock and a 101 MB -> 3.1 GB RSS spike on this machine, before a
+-- single row reached the UI. Persisting it means a restart is warm, and only genuinely-changed
+-- transcripts are ever re-read.
+--
+-- Validity is (mtime_ms, size_bytes) against the file on disk — appending a turn moves both, so a
+-- stale row can never be served. The key matches sessions.ts's in-memory key exactly
+-- ("<source>:<session_id>:<path>"): OpenCode sessions all report ONE database path and two rows can
+-- share an update millisecond, so neither path nor mtime alone identifies them.
+create table if not exists session_scan_cache (
+  cache_key         text primary key,
+  path              text not null,
+  mtime_ms          real not null,
+  size_bytes        integer not null,
+  title             text not null,
+  cwd               text not null,
+  git_branch        text,
+  message_count     integer not null,
+  created_at        integer,
+  last_activity_at  real not null,
+  last_role         text,
+  last_text_preview text,
+  substantive_turns integer not null,
+  scanned_at        integer not null
+);
+create index if not exists idx_session_scan_cache_path on session_scan_cache(path);
 `)
 
 // A short-lived pre-0.11 hardening change stored manually added account credentials as DPAPI

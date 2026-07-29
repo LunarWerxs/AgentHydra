@@ -70,6 +70,11 @@ export const CLIPBOARD_DIR = join(DATA_DIR, 'clipboard')
 
 export const PORT = Number(process.env.PORT ?? 7787)
 
+/** Preferred port for the disposable instance-only daemon. It intentionally differs from the
+ * full manager's port so opening the full app later never has to evict or upgrade quick mode.
+ * Like the full daemon, quick mode hops upward if the preferred port is occupied. */
+export const INSTANCE_MODE_PORT = Number(process.env.CCMANAGERUI_INSTANCE_PORT ?? PORT + 1)
+
 const LOOPBACK_BIND_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 
 /**
@@ -113,6 +118,10 @@ export const WEB_DIST_CANDIDATES = [join(APP_ROOT, 'web', 'dist')]
  * same numbers (misc/CCManagerUI-Tray.ps1 PortableWindowSize) — keep them in step.
  */
 export const PORTABLE_WINDOW_SIZE = { width: 1060, height: 800 }
+
+/** Compact first-run size for `/instances`. The pathname gives Chromium independent remembered
+ * geometry from the full manager window, so resizing either surface never disturbs the other. */
+export const INSTANCE_MODE_WINDOW_SIZE = { width: 700, height: 760 }
 
 /**
  * Resolve the `claude` executable, mirroring the Python `claude_command()`:

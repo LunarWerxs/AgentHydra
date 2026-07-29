@@ -82,6 +82,22 @@ The same view manages Codex Desktop and CLI together. Each Codex instance gets i
 and desktop profile, so work and personal OpenAI logins can run in separate Codex windows. Open,
 focus and quit the desktop from its row; CLI Launch and Log in actions use that same isolated login.
 
+### Quick instance mode
+
+When you only need to pick an instance and start it, instance mode skips the session scanner,
+database, queue recovery, scheduler, monitor, usage refresh, settings sync and updater. It opens a
+compact portable window with Claude Desktop, Claude CLI and Codex start/focus/stop controls.
+
+- Packaged build: run `CCManagerUI.exe --instances`.
+- Source checkout: run `bun run instances` (after the normal one-time `bun run build`).
+- Windows shortcut: run `misc\Create-Shortcut.ps1` once, then open
+  **CCManagerUI Instances** from the repository root.
+- Or add the same one-click launcher from **Settings → Appearance → Quick Instances shortcut**.
+
+The quick daemon uses its own port and runtime pointer, so the full manager can open later without
+conflict. If the full manager is already running, the launcher reuses it. Closing the quick window
+retires its lightweight daemon automatically after a short reconnect grace period.
+
 ## Install
 
 **Download** your OS build from [Releases](https://github.com/LunarWerxs/CCManagerUI/releases).
