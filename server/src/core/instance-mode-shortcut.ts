@@ -7,7 +7,7 @@
 // other shell-significant characters never get interpolated into the script.
 
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { win32 } from 'node:path'
 import { APP_ROOT, IS_COMPILED } from '../config'
 import type { CMActionResult } from './shared'
 
@@ -48,10 +48,15 @@ export function instanceModeShortcutSpec(
     }
   }
 
+  // `win32.join`, not the ambient `join`: these are Windows paths whatever host is running the
+  // function, and the ambient one follows the HOST. On a POSIX box (CI's ubuntu leg) it splices
+  // `C:\Windows` and `System32` with a forward slash and hands back a path that is neither valid
+  // Windows nor matched by anything. Pinning the separator keeps the unit tests meaningful
+  // off-Windows; on Windows `win32.join` IS `join`, so this changes no shipped behavior.
   const systemRoot = options.systemRoot ?? process.env.SystemRoot ?? 'C:\\Windows'
-  const target = join(systemRoot, 'System32', 'wscript.exe')
-  const launcher = join(appRoot, 'misc', 'Instance-Launch.vbs')
-  const appIcon = join(appRoot, 'misc', 'CCManagerUI.ico')
+  const target = win32.join(systemRoot, 'System32', 'wscript.exe')
+  const launcher = win32.join(appRoot, 'misc', 'Instance-Launch.vbs')
+  const appIcon = win32.join(appRoot, 'misc', 'CCManagerUI.ico')
   return {
     target,
     args: `"${launcher}"`,
@@ -103,7 +108,7 @@ export async function createInstanceModeShortcut(
     }
   }
   if (!(options.compiled ?? IS_COMPILED)) {
-    const launcher = join(options.appRoot ?? APP_ROOT, 'misc', 'Instance-Launch.vbs')
+    const launcher = win32.join(options.appRoot ?? APP_ROOT, 'misc', 'Instance-Launch.vbs')
     if (!existsSync(launcher)) {
       return {
         ok: false,
