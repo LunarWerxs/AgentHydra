@@ -1691,7 +1691,13 @@ const server = Bun.serve({
 // --- warm the sessions list (see server/src/sessions.ts warmSessionScanCache) ------------------
 // Deliberately AFTER Bun.serve: parsing transcripts is the slowest thing this daemon does, and the
 // point is to overlap it with the browser starting up rather than to delay listening on the port.
-void warmSessionScanCache()
+// .catch, not `void`: this is unawaited and runs AFTER the port is bound, so an unhandled rejection
+// here takes the daemon down in the worst possible shape — the port reads as claimed, then nothing
+// ever serves it. Warming is purely an optimization (the list still builds on demand), so any
+// failure must degrade to a cold first request, never to a dead process.
+warmSessionScanCache().catch((error) => {
+  console.error('[ccmanagerui] session-scan warm failed; the list will build on demand:', error)
+})
 
 if (releaseDoubleClick && process.env.CCMANAGERUI_NO_OPEN !== '1') {
   const url = `http://127.0.0.1:${server.port}/`

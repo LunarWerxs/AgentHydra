@@ -226,11 +226,34 @@ export function listTranscriptFilesAfterMiss(): TranscriptFile[] {
   return listTranscriptFiles(true)
 }
 
+/**
+ * Every transcript root is created lazily by the CLI that owns it, so on a machine that has never
+ * run Claude (or Codex, or archived a rollout) the folder simply is not there — and `scanSync`
+ * answers a missing root by THROWING ENOENT rather than yielding nothing. An absent store is not an
+ * error, it is an empty one.
+ *
+ * This is load-bearing, not defensive dressing: the index is warmed at startup from an unawaited
+ * call, so the throw surfaced as an unhandled rejection and killed the daemon before it could serve
+ * /api/health. A fresh install saw a process that exited instead of an empty Sessions list. The
+ * release smoke job caught it on all three OSes; nothing on a developer machine can, because every
+ * developer machine has the folders.
+ *
+ * Materialized inside the try because the iterator throws lazily: the ENOENT arrives on first
+ * advance, not at the scanSync call, so wrapping only the call would catch nothing.
+ */
+function scanRootSync(glob: Bun.Glob, cwd: string): string[] {
+  try {
+    return [...glob.scanSync({ cwd, onlyFiles: true })]
+  } catch {
+    return []
+  }
+}
+
 function buildTranscriptIndex(): TranscriptFile[] {
   const now = performance.now()
   const files: TranscriptFile[] = []
   const claudeGlob = new Bun.Glob('*/*.jsonl')
-  for (const rel of claudeGlob.scanSync({ cwd: CLAUDE_PROJECTS_ROOT, onlyFiles: true })) {
+  for (const rel of scanRootSync(claudeGlob, CLAUDE_PROJECTS_ROOT)) {
     const path = join(CLAUDE_PROJECTS_ROOT, rel)
     let st: ReturnType<typeof statSync>
     try {
@@ -253,7 +276,7 @@ function buildTranscriptIndex(): TranscriptFile[] {
   const codexSessionIndex = readCodexSessionIndex()
   const addCodexRoot = (root: string, archived: boolean) => {
     const glob = new Bun.Glob('**/rollout-*.jsonl')
-    for (const rel of glob.scanSync({ cwd: root, onlyFiles: true })) {
+    for (const rel of scanRootSync(glob, root)) {
       const path = join(root, rel)
       let st: ReturnType<typeof statSync>
       try {
