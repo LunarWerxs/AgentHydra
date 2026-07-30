@@ -1,6 +1,7 @@
-// Hardened drag-to-resize pointer handling — the ONLY sanctioned way to implement a resize
-// grip in a family app (first consumers: RepoYeti's changed-files tree grip and its
-// file-viewer edge grip).
+// Everything a resize grip needs: hardened drag-to-resize pointer handling (useGripDrag) and the
+// double-click reset's glide back to the natural size (useGripGlide). The ONLY sanctioned way to
+// implement a resize grip in a family app — consumers are RepoYeti's changed-files tree grip, its
+// History viewport grip, and its file-viewer edge grip.
 //
 // History: naive per-grip window-listener drags repeatedly "stuck" — the resize kept
 // tracking the cursor after the mouse button was released, until the next stray click
@@ -21,7 +22,7 @@
 //   · window blur (alt-tab / focus steal mid-drag) and component unmount
 // onEnd runs exactly once per started drag, no matter which signal ends it.
 
-import { onBeforeUnmount } from "vue";
+import { onBeforeUnmount, ref, type Ref } from "vue";
 
 export interface GripDragHandlers {
   /** Capture the drag's starting state. Return false to reject the drag (missing refs etc.);
@@ -115,4 +116,88 @@ export function useGripDrag(handlers: GripDragHandlers): (e: PointerEvent) => vo
 
   onBeforeUnmount(end);
   return onDown;
+}
+
+// ── the reset glide ───────────────────────────────────────────────────────────
+// Double-clicking a grip drops the pinned px height and hands the element back to the stylesheet,
+// which in practice means `height: auto` under a max-height cap. CSS cannot transition px → auto,
+// so an unassisted reset lands as an instant jump however emphatic the `transition: height` rule
+// is. This holds ONE more explicit px height — where the element is about to settle — for the
+// length of that transition, so the same rule that smooths a drag also smooths the reset.
+//
+// The persisted override is released up front rather than when the glide finishes: a reload, an
+// unmount or a second reset mid-animation then still leaves the stored state correct, and the held
+// height keeps the picture steady until the element's own style arrives at the same number.
+
+/** Glide duration. Keep in step with the `transition: height` rule on the resized viewports. */
+export const GRIP_GLIDE_MS = 180;
+
+/** Under this there is nothing to watch, so the reset just lands. */
+const GLIDE_MIN_DELTA_PX = 2;
+
+export interface GripGlide {
+  /** Height held during the glide, in px. null = the element's own style applies again. */
+  height: Ref<number | null>;
+  /**
+   * Release the override and glide to `to`. `from` is what the element measures right now
+   * (`clientHeight`); pass null when that is unavailable and the reset lands immediately.
+   */
+  glideTo: (from: number | null | undefined, to: number, release: () => void) => void;
+  /**
+   * Abandon a glide in flight. Call it from a fresh drag's onStart AFTER pinning that drag's own
+   * starting height, so the element never renders a frame of its untouched style in between.
+   */
+  cancel: () => void;
+}
+
+export function useGripGlide(): GripGlide {
+  const height = ref<number | null>(null);
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancel(): void {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    height.value = null;
+  }
+
+  function glideTo(from: number | null | undefined, to: number, release: () => void): void {
+    cancel();
+    release();
+    if (from == null || Math.abs(to - from) < GLIDE_MIN_DELTA_PX || reducedMotion()) return;
+    // The element is ALREADY rendered at `from`, so this single assignment is a complete
+    // transition pair — no pin-then-retarget frame dance, nothing to wait a tick for.
+    height.value = to;
+    // `transitionend` is not dependable here (a live refresh or a second reset can interrupt the
+    // property mid-flight and the event never arrives), so the hold expires on a timer with slack.
+    timer = setTimeout(cancel, GRIP_GLIDE_MS + 60);
+  }
+
+  onBeforeUnmount(cancel);
+  return { height, glideTo, cancel };
+}
+
+/** Respect the OS setting — with motion reduced, a reset simply lands. */
+function reducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+}
+
+/**
+ * The height a scroll viewport will settle at once its explicit height is released: the content
+ * extent, clamped to `cap` (the stylesheet's max-height). The glide needs this to be exact —
+ * overshoot it and the reset still ends in the snap it exists to avoid.
+ *
+ * `scrollHeight` CANNOT answer this: it never reports less than the element's own clientHeight, so
+ * a viewport dragged TALLER than its content just hands the drag height back. Measuring first
+ * child's top to last child's bottom is independent of the viewport's current size, and the gaps
+ * and margins between children fall inside the span for free.
+ */
+export function releasedHeight(el: HTMLElement | null | undefined, cap: number): number {
+  if (!el) return cap;
+  const kids = el.children;
+  const first = kids[0]?.getBoundingClientRect();
+  const last = kids[kids.length - 1]?.getBoundingClientRect();
+  if (!first || !last) return Math.min(el.scrollHeight, cap);
+  const style = getComputedStyle(el);
+  const padding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+  return Math.min(Math.ceil(last.bottom - first.top + padding), cap);
 }
