@@ -4,7 +4,7 @@ All notable changes to CC Manager UI are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] - 2026-07-30
 
 ### Added
 
@@ -207,7 +207,7 @@ All notable changes to CC Manager UI are documented here. The format is based on
 
 - **The interface follows Claude's own surfaces.** The window used to be a single near-black sheet:
   every region painted the same token and leaned on hairline borders for structure, so there was
-  effectively one shade on screen. There are now three grounds, using Claude's values directly — the
+  effectively one shade on screen. There are now three grounds, using Claude's values directly: the
   top bar and session list as the darkest chrome, the working area a step above it, and cards,
   popovers and table headers raised above that. The accent moves from magenta to Claude's dusty rose.
   The greys are deliberately neutral; an earlier revision of this work derived them and landed a
