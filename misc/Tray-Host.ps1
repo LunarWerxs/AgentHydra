@@ -1,7 +1,7 @@
 # =====================================================================================
 # Shared tray-host engine (Windows). A parameterized WinForms tray host that runs a
 # Bun (or any) daemon with no console window, showing a tray icon menu:
-# Open / Rebuild & Restart / Restart / Quit.
+# Open / Rebuild & Restart / Restart / [app action] / Quit.
 #
 # Reusable engine: a small per-app launcher builds a $TrayConfig hashtable (app name,
 # port, start/build commands, icon, health check, etc.), dot-sources this file, then
@@ -595,6 +595,22 @@ function Start-TrayHost($Config) {
   $rebuildLogName = Get-TrayConfigValue $Config 'RebuildLogName' 'Rebuild.log'
   $isDevTree = [bool]$Config.IsDevTree
 
+  # --- Optional app action: one extra menu item that POSTs to the live daemon ----------
+  # For apps that supervise WORK the daemon owns (DevWebUI's managed dev servers), not just the
+  # daemon itself: Restart/Quit act on the daemon, this acts on what the daemon is running. Opt-in
+  # — no ActionPath, no menu item, and the menu is byte-identical to what it always was.
+  #   · ActionPath    — the POST path on the live daemon, e.g. '/api/processes/stop-all'.
+  #   · ActionLabel   — menu text.
+  #   · ActionOkText / ActionFailText — balloon copy ('{APP}' → DisplayName).
+  # Fired on a background runspace (the request can legitimately take seconds — DevWebUI's stop-all
+  # waits out each child's SIGTERM grace) so the tray menu never blocks on it, with the result
+  # marshalled back to the UI thread by $actionTimer exactly like the rebuild worker's pollTimer.
+  $actionPath     = Get-TrayConfigValue $Config 'ActionPath' $null
+  $actionLabel    = Get-TrayConfigValue $Config 'ActionLabel' 'Run action'
+  $actionOkText   = Get-TrayConfigValue $Config 'ActionOkText' 'Done.'
+  $actionFailText = Get-TrayConfigValue $Config 'ActionFailText' "{APP} didn't accept that. Open it to check."
+  $actionTimeoutSec = Get-TrayConfigValue $Config 'ActionTimeoutSec' 60
+
   # --- Mutex: one tray host per (app / checkout). Acquired BEFORE NotifyIcon creation. ---
   # A listening port WITHOUT this mutex means the daemon is running headless. 'attach' hosts a
   # tray for it; 'warn' refuses (ReDesign — a headless orphan the user must stop). Either way the
@@ -821,6 +837,9 @@ function Start-TrayHost($Config) {
   # '&' as a mnemonic-underline escape, so '&&' renders one visible '&'. Only shown in a dev tree.
   $rebuildItem = New-Object System.Windows.Forms.ToolStripMenuItem("Rebuild && Restart")
   $restartItem = New-Object System.Windows.Forms.ToolStripMenuItem("Restart")
+  # Optional app action (see ActionPath above). Created only when configured, so the object can't
+  # be referenced by a handler that shouldn't exist.
+  $actionItem = if ($actionPath) { New-Object System.Windows.Forms.ToolStripMenuItem($actionLabel) } else { $null }
   $quitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Quit")
 
   # --- pollTimer: marshals the async worker result back to the UI thread ---------------
@@ -910,6 +929,70 @@ function Start-TrayHost($Config) {
     }
   }
 
+  # --- Optional app action: fire the POST off-thread, report on the UI thread ----------
+  # Deliberately independent of the rebuild worker's $script:busy/$script:ps: this touches only the
+  # daemon's own state, never the daemon PROCESS, so it must not stand down for (or block) a
+  # Rebuild/Restart, and the watchdog has no reason to care about it. Its own in-flight flag just
+  # stops a double-click firing it twice.
+  $script:actionPs = $null
+  $script:actionAsync = $null
+  $actionTimer = New-Object System.Windows.Forms.Timer
+  $actionTimer.Interval = 350
+  $actionTimer.Add_Tick({
+    if (-not $script:actionPs -or -not $script:actionAsync) { $actionTimer.Stop(); return }
+    if (-not $script:actionAsync.IsCompleted) { return }
+    $actionTimer.Stop()
+    $ok = $false
+    try {
+      $res = $script:actionPs.EndInvoke($script:actionAsync)
+      if ($res -and $res.Count -gt 0) { $ok = [bool]$res[$res.Count - 1] }
+    } catch {}
+    try { $script:actionPs.Dispose() } catch {}
+    $script:actionPs = $null; $script:actionAsync = $null
+    if ($actionItem) { $actionItem.Enabled = $true }
+    if ($ok) {
+      $tray.ShowBalloonTip(3000, $displayName, ($actionOkText -replace '\{APP\}', $displayName), [System.Windows.Forms.ToolTipIcon]::Info)
+    } else {
+      $tray.ShowBalloonTip(4000, $displayName, ($actionFailText -replace '\{APP\}', $displayName), [System.Windows.Forms.ToolTipIcon]::Warning)
+    }
+  })
+
+  function Invoke-AppAction {
+    if (-not $actionPath) { return }
+    if ($script:actionPs) { return }   # one in flight
+    # Resolve the LIVE url (the daemon may have hopped ports, or be down entirely) rather than
+    # posting blind at $script:url — a dead daemon has nothing to act on, and saying so beats a
+    # silent no-op the user reads as "the menu item is broken".
+    $u = Get-LiveUrl
+    if (-not $u) {
+      $tray.ShowBalloonTip(3500, $displayName, "$displayName isn't running.", [System.Windows.Forms.ToolTipIcon]::Warning)
+      return
+    }
+    $script:url = $u
+    if ($actionItem) { $actionItem.Enabled = $false }
+    try {
+      $script:actionPs = [System.Management.Automation.PowerShell]::Create()
+      [void]$script:actionPs.AddScript({
+        param($url, $path, $timeoutSec)
+        $ErrorActionPreference = 'SilentlyContinue'
+        try {
+          Invoke-RestMethod -Uri "$url$path" -Method Post -TimeoutSec $timeoutSec -ErrorAction Stop | Out-Null
+          return $true
+        } catch { return $false }
+      }.ToString())
+      [void]$script:actionPs.AddArgument($u)
+      [void]$script:actionPs.AddArgument($actionPath)
+      [void]$script:actionPs.AddArgument($actionTimeoutSec)
+      $script:actionAsync = $script:actionPs.BeginInvoke()
+      $actionTimer.Start()
+    } catch {
+      if ($script:actionPs) { try { $script:actionPs.Dispose() } catch {} }
+      $script:actionPs = $null; $script:actionAsync = $null
+      if ($actionItem) { $actionItem.Enabled = $true }
+      $tray.ShowBalloonTip(3500, $displayName, "Couldn't start the background worker. Try again.", [System.Windows.Forms.ToolTipIcon]::Error)
+    }
+  }
+
   # --- Quit teardown -------------------------------------------------------------------
   # Called by BOTH the Quit menu item AND the watch timer that fires on a web-UI "Shut Down"
   # (which drops the sentinel). Sets intentionalStop BEFORE any teardown so the watchdog doesn't
@@ -940,6 +1023,10 @@ function Start-TrayHost($Config) {
       }
     }
     if ($script:ps) { try { $script:ps.Stop(); $script:ps.Dispose() } catch {} }
+    # An in-flight app-action POST is just an HTTP call — drop it (we're about to stop the daemon
+    # it was talking to) rather than let its poll timer fire a balloon at a disposed tray icon.
+    if ($actionTimer) { try { $actionTimer.Stop() } catch {} }
+    if ($script:actionPs) { try { $script:actionPs.Stop(); $script:actionPs.Dispose() } catch {}; $script:actionPs = $null; $script:actionAsync = $null }
     # Stop the live daemon. Force-kill apps (ReDesign/RepoYeti) ALWAYS sweep the port at Quit —
     # matching their originals' unconditional Stop-Server/Stop-RepoYeti call (they own the daemon
     # on the winner path). Token apps (DevWebUI/a sibling app) only stop a daemon THEY started, so an
@@ -962,6 +1049,7 @@ function Start-TrayHost($Config) {
   $openItem.Add_Click({ Open-AppUi $script:url })
   $rebuildItem.Add_Click({ Start-Job-Async $true })
   $restartItem.Add_Click({ Start-Job-Async $false })
+  if ($actionItem) { $actionItem.Add_Click({ Invoke-AppAction }) }
   $quitItem.Add_Click({ Invoke-QuitApp })
 
   $menu.Items.Add($openItem) | Out-Null
@@ -969,6 +1057,13 @@ function Start-TrayHost($Config) {
   # disabled one). Gated here at menu-ADD time; re-checked in Start-Job-Async and the worker.
   if ($isDevTree -and $rebuildSpec) { $menu.Items.Add($rebuildItem) | Out-Null }
   $menu.Items.Add($restartItem) | Out-Null
+  # App action sits in its own group between the daemon-lifecycle items and Quit: it acts on what
+  # the daemon is RUNNING, not on the daemon, and next to Restart/Quit without a divider it reads
+  # as another way to stop the app itself.
+  if ($actionItem) {
+    $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+    $menu.Items.Add($actionItem) | Out-Null
+  }
   $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
   $menu.Items.Add($quitItem) | Out-Null
   $tray.ContextMenuStrip = $menu
