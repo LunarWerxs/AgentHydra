@@ -84,6 +84,16 @@ export function recordUsageSample(key: string, snap: UsageSnapshot): void {
   writeHistory(h)
 }
 
+/** Drop a key's whole series — for when its subject is gone (a deleted dispatch account). Nothing
+ *  can ever ask for that key again, and the file is capped per key but not per KEY COUNT, so
+ *  without this every deleted account leaves up to 500 samples behind forever. */
+export function dropUsageHistory(key: string): void {
+  const h = readHistory()
+  if (!(key in h)) return
+  delete h[key]
+  writeHistory(h)
+}
+
 /** Every stored sample for a key, oldest first. */
 export function usageSamples(key: string): UsageSample[] {
   return readHistory()[key] ?? []

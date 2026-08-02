@@ -195,6 +195,48 @@ export function associateCliInstance(
   }
 }
 
+/** Clear the account association on every record matching `match`, in ONE store write.
+ *  Returns the ids that were cleared (empty = nothing referenced it, and nothing was written). */
+function clearAccountAssociationsWhere(match: (accountId: string) => boolean): string[] {
+  const store = readStore()
+  const cleared: string[] = []
+  for (const rec of store.instances) {
+    if (!rec.associatedAccountId || !match(rec.associatedAccountId)) continue
+    rec.associatedAccountId = null
+    rec.associatedAccountLabel = null
+    cleared.push(rec.id)
+  }
+  if (cleared.length) writeStore(store)
+  return cleared
+}
+
+/**
+ * Detach a deleted dispatch account from every CLI instance that referenced it.
+ *
+ * The association is a plain id + label copied into the JSON store, NOT a foreign key — sqlite can't
+ * cascade into a file it doesn't own, so deleting the account row leaves the reference behind. What
+ * the user then sees is a badge naming an account that no longer exists, on an instance whose usage
+ * check silently falls through to "check failed" because the id resolves to nothing. Clearing it
+ * turns a wrong answer into an honest one: the instance is simply unassociated again.
+ */
+export function clearCliInstanceAccountAssociations(accountId: string): string[] {
+  if (!accountId) return []
+  return clearAccountAssociationsWhere((id) => id === accountId)
+}
+
+/**
+ * Self-heal: drop any association whose account is not in `knownAccountIds`.
+ *
+ * The eager clear above only covers deletions that happen from now on. Records already dangling
+ * (deleted before that existed, or by a hand-edited db) would keep their stale badge forever, so the
+ * read path reconciles against the live account list as well. Pass EVERY known account id — an empty
+ * set means "no accounts exist", which correctly clears everything.
+ */
+export function pruneCliInstanceAccountAssociations(knownAccountIds: Iterable<string>): string[] {
+  const known = knownAccountIds instanceof Set ? knownAccountIds : new Set(knownAccountIds)
+  return clearAccountAssociationsWhere((id) => !known.has(id))
+}
+
 /**
  * Link (or unlink, with desktopDir=null) this CLI instance to a DESKTOP instance.
  *

@@ -30,6 +30,21 @@ export function getCachedUsage(key: string): UsageSnapshot | null {
   return readUsageCache()[key] ?? null
 }
 
+/** Forget `key` entirely — for when the thing it describes is gone (a deleted dispatch account),
+ *  so the cache can't serve a reading for something that no longer exists. Best-effort, like the
+ *  write: an unremovable entry is stale data, never a wrong live check. */
+export function dropCachedUsage(key: string): void {
+  try {
+    const cache = readUsageCache()
+    if (!(key in cache)) return
+    delete cache[key]
+    mkdirSync(DATA_DIR, { recursive: true })
+    writeFileSync(USAGE_CACHE_PATH, JSON.stringify(cache, null, 2))
+  } catch {
+    // Best-effort: a surviving entry is only ever read for a key nothing asks about anymore.
+  }
+}
+
 /** Store the latest snapshot for `key` (best-effort; a cache write must never fail a live check). */
 export function setCachedUsage(key: string, snap: UsageSnapshot): void {
   try {

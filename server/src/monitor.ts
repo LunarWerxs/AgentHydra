@@ -125,6 +125,13 @@ export function setMonitorForAccount(accountId: string, enabled: boolean): void 
   ).run(accountId, enabled ? 1 : 0, enabled ? 1 : 0)
 }
 
+/** Forget an account's override — for when the account itself is deleted. The table has no foreign
+ *  key, so the row would otherwise outlive it and quietly re-apply an old opt-out to any future
+ *  account that happened to reuse the id. */
+export function clearMonitorForAccount(accountId: string): void {
+  db.query('delete from monitor_accounts where account_id = ?').run(accountId)
+}
+
 export function listMonitorAccounts(): Record<string, boolean> {
   const rows = db
     .query<{ account_id: string; enabled: number }, []>(

@@ -397,4 +397,4 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
 
 // Re-export the small cache API so existing imports keep working. Its implementation lives in a
 // dependency-light module that the instance-only daemon can load without the live probe graph.
-export { allCachedUsage, getCachedUsage, setCachedUsage } from './usage-cache'
+export { allCachedUsage, dropCachedUsage, getCachedUsage, setCachedUsage } from './usage-cache'

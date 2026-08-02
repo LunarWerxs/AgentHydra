@@ -46,12 +46,14 @@ import { createChatGptContextPack } from './context-pack'
 import { resolveAccount } from './core/accounts'
 import {
   associateCliInstance,
+  clearCliInstanceAccountAssociations,
   createCliInstance,
   deleteCliInstance,
   getCliInstance,
   launchCliInstance,
   linkCliInstanceToDesktop,
   listCliInstances,
+  pruneCliInstanceAccountAssociations,
   renameCliInstance,
   setCliInstanceUsage,
 } from './core/cli-instances'
@@ -110,6 +112,7 @@ import { resolveRunAsRef } from './instance-sessions'
 import { initFileLogging } from './log-file.mjs'
 import { isLoopbackOrigin, loopbackGuard } from './loopback-guard.mjs'
 import {
+  clearMonitorForAccount,
   getMonitorSettings,
   listMonitorAccounts,
   monitorStatus,
@@ -144,12 +147,14 @@ import { applyUpdate, checkForUpdate } from './updater'
 import {
   allCachedUsage,
   checkUsage,
+  dropCachedUsage,
   getCachedUsage,
   isNoData,
   setCachedUsage,
   usageAdvice,
 } from './usage'
 import { budgetSummary, buildUsageBudget } from './usage-budget'
+import { dropUsageHistory } from './usage-history'
 import {
   getUsageSettings,
   lastAutoRefreshAt,
@@ -704,8 +709,17 @@ app.post('/api/accounts', async (c) => {
   ).run(id, body.label, body.auth_type, body.secret, Date.now())
   return c.json(listAccounts().find((a) => a.id === id))
 })
+// Deleting an account means deleting everything keyed to it. Only queue_items.account_id is a real
+// foreign key (on delete set null); the rest live in files or in tables sqlite won't cascade into,
+// so each has to be swept by hand or it outlives the account — a CLI instance badge naming an
+// account that's gone, a usage reading served for it, a monitor opt-out waiting to be re-applied.
 app.delete('/api/accounts/:id', (c) => {
-  db.query('delete from accounts where id = ?').run(c.req.param('id'))
+  const id = c.req.param('id')
+  db.query('delete from accounts where id = ?').run(id)
+  clearCliInstanceAccountAssociations(id) // cli-instances.json (no FK reaches a file)
+  clearMonitorForAccount(id) // monitor_accounts (a table, but no FK)
+  dropCachedUsage(`acct:${id}`) // usage-cache.json — same key usage-service.ts writes
+  dropUsageHistory(`acct:${id}`) // usage-history.json, capped per key but not per key COUNT
   return c.json({ ok: true })
 })
 
@@ -1223,7 +1237,19 @@ app.get('/api/instances/:dir/usage', async (c) => {
 })
 
 // --- CLI instances (Feature A) ----------------------------------------------
-app.get('/api/cli-instances', (c) => c.json(listCliInstances()))
+// Reconcile associations against the live account table before listing: this is where a record that
+// went dangling before the delete route learned to clean up (or via a hand-edited db) heals itself,
+// rather than showing a badge for an account that isn't there. One id-only read of a tiny table,
+// and the prune writes nothing when nothing dangles — so the UI's polling stays free.
+app.get('/api/cli-instances', (c) => {
+  pruneCliInstanceAccountAssociations(
+    db
+      .query<{ id: string }, []>('select id from accounts')
+      .all()
+      .map((r) => r.id),
+  )
+  return c.json(listCliInstances())
+})
 app.post('/api/cli-instances', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.name !== 'string' || !body.name.trim())

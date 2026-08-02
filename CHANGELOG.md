@@ -4,6 +4,21 @@ All notable changes to CC Manager UI are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Deleting a dispatch account no longer leaves CLI instances pointing at it. The association is a
+  copy of the account's id and label kept in the CLI instances file rather than a database link, so
+  removing the account left both behind: the instance kept showing a badge naming an account that
+  was gone, and its usage check quietly failed because the id no longer resolved to anything. The
+  account is now detached from every CLI instance that used it when it is deleted, and any instance
+  already pointing at a missing account is shown as unassociated the next time the list loads.
+- Deleting a dispatch account now also clears the rest of what was kept under its name: its last
+  usage reading, its stored usage history, and its per-account auto-resume setting. Only the queue's
+  reference to an account was ever cleaned up automatically, so the others accumulated with every
+  account removed and could be re-applied to a new account that happened to reuse the same id.
+
 ## [0.13.0] - 2026-07-30
 
 ### Added

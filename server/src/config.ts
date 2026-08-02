@@ -48,8 +48,14 @@ export const APP_ROOT = IS_COMPILED ? dirname(process.execPath) : join(import.me
 /** Where our own state lives (sqlite db + per-run logs). Source checkouts keep the historical
  *  server/data location (existing installs' databases live there); a compiled binary has no real
  *  server/ dir (import.meta.dir is virtual and unwritable — db.ts's eager mkdir there would crash
- *  the daemon before logging even starts), so it keeps state under the per-user CONFIG_DIR. */
-export const DATA_DIR = IS_COMPILED ? join(CONFIG_DIR, 'data') : join(import.meta.dir, '..', 'data')
+ *  the daemon before logging even starts), so it keeps state under the per-user CONFIG_DIR.
+ *
+ *  Overridable for the same reason RUN_LOG_DIR is: in a source checkout this points at the
+ *  developer's REAL server/data, so a test touching usage-cache.json or usage-history.json would
+ *  otherwise write into their live state (see tests/setup.ts). */
+export const DATA_DIR =
+  process.env.CCMANAGERUI_DATA_DIR?.trim() ||
+  (IS_COMPILED ? join(CONFIG_DIR, 'data') : join(import.meta.dir, '..', 'data'))
 export const DB_PATH = process.env.CCMANAGERUI_DB ?? join(DATA_DIR, 'ccmanagerui.db')
 /** Per-run logs (+ the detached runner's spec/status sidecars). Overridable so tests (and a
  *  portable install) can isolate them from the default data dir. */
