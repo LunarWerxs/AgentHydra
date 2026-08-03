@@ -3,17 +3,22 @@
 Written 2026-08-02, updated the same day after the logo was replaced and the external surfaces
 were done.
 
-Everything in **this** repo is still uncommitted in the working tree, and no release has been cut.
+The rename is committed, pushed and live. No release has been cut.
 
-Outside it, the rename is already public and live:
+- `LunarWerxs/AgentHydra` @ `366e292`, CI green on both windows-latest and ubuntu-latest.
+- The shared kit, RepoYeti, ReDesign, DevWebUI and the LunarWerx catalog site are all committed
+  and pushed too. The kit went first, and its own pre-commit hook re-verified all four apps in
+  sync before it landed.
+
+Still live:
 - `LunarWerxs/CCManagerUI` is renamed to `LunarWerxs/AgentHydra`, with new description, homepage
   and topics.
 - <https://agenthydra.lunarwerx.com/> serves the rebranded landing page, and
   <https://ccmanagerui.lunarwerx.com/> 301s to it with the path preserved.
-- Uncommitted but done locally: the LunarWerx catalog site, the `edge-aliases` Worker source, the
-  shared brand art in `_org-avatars`, and the kit and sibling-repo docs.
+- `edge-aliases` and `_org-avatars` are NOT git repositories, so their changes exist only on this
+  machine. The Worker is deployed from that source; the brand art is hand-uploaded by design.
 
-One web-UI step remains, in open item 2.
+One web-UI step remains, in open item 2, plus the two image uploads in item 6.
 
 Read this top to bottom before touching anything. The ordering constraints in "How to commit this"
 and in open item 2 are real: the wrong order silently reverts other repos, or takes the live site
@@ -269,31 +274,50 @@ alone here rather than quietly widened into a five-project change.
 
 ---
 
-## How to commit this
+## How this was committed, and what is still dirty
 
-Order matters.
+The order was load-bearing and was followed: **`lunarwerx-ui` first**, then **RepoYeti, ReDesign and
+DevWebUI**, then **this repo**. The kit goes first because its check refuses a dirty kit on purpose:
+apps are synced from source that exists only on this machine, so a fresh clone plus a sync would
+revert every app to older copies. That guardrail is not theoretical, it is how ccmanagerui v0.6.0
+shipped. The kit's own pre-commit hook re-ran the drift check across all four apps and reported
+every one in sync before it landed.
 
-1. **`lunarwerx-ui` first.** The kit check refuses a dirty kit on purpose: apps are synced from
-   source that exists only on this machine, so a fresh clone plus a sync would revert every app to
-   older copies. That guardrail exists because it already happened once, at ccmanagerui v0.6.0.
-2. **Then RepoYeti and ReDesign.** Each has 6 comment-only vendored files waiting. They are
-   harmless but will show as kit drift in their own CI until committed.
-3. **Then this repo.**
+### Seven files are still dirty here, on purpose
 
-Both trees also contain **unrelated in-flight work from other sessions** that predates this rebrand
-(`server/src/core/accounts.ts`, `instances.ts`, `shared.ts`, `web/src/QuickInstancesApp.vue`,
-`useInstances.ts`, `instance-appearance.ts`, and a new `server/tests/accounts-stale-login.test.ts`).
-**Do not `git stash` or `git checkout --` anything here** to tidy up: several sessions share this
-tree and that discards their work irreversibly. Stage by path.
+`server/src/core/accounts.ts`, `core/instances.ts`, `core/shared.ts`, `web/src/QuickInstancesApp.vue`,
+`web/src/composables/useInstances.ts`, `web/src/lib/instance-appearance.ts`,
+`web/tests/instance-appearance.test.ts`, plus an untracked
+`server/tests/accounts-stale-login.test.ts`.
 
-To re-verify from scratch:
+These are **unrelated in-flight work from other sessions**, and several of them ALSO carry rebrand
+edits. Those edits are comments and one self-contained PowerShell namespace string, so they are
+harmless to leave behind, and they should land with their owner's work rather than be torn out of
+it. **Do not `git stash` or `git checkout --` anything here** to tidy up: several sessions share
+this tree and that discards their work irreversibly. Stage by path.
+
+### Verify a partial commit in a worktree, not in this tree
+
+Splitting a shared tree produces a combination nobody has ever run. That is not a hypothetical: the
+first attempt at this commit was green in the working tree and **broken as committed**, because
+`web/tests/instance-appearance.test.ts` imports `loginChanged`, a symbol that exists only in the
+uncommitted half of `instance-appearance.ts`. `bun test` in the working tree cannot see that, since
+the working tree has both halves.
+
+What catches it is checking out the commit itself:
 
 ```bash
-cd D:/PublicProjects/ccmanagerui && bun install && bun run check && bun run typecheck && bun test
+git worktree add --detach <scratch>/verify <sha>
+# junction node_modules, web/node_modules and server/node_modules in from the real repo
+cd <scratch>/verify && bun test && bun run typecheck && bun run build
 ```
 
-## If you want to undo the whole thing
+Remove the junctions with `rmdir` **before** `git worktree remove`: a recursive delete that walks a
+Windows junction deletes the real target behind it.
 
-Nothing is committed, so `git -C D:/PublicProjects/ccmanagerui checkout -- .` would revert it, but
-that would **also destroy the other sessions' in-flight work listed above**. Revert by path, or
-branch and cherry-pick instead.
+## If you want to undo the rebrand
+
+It is committed and pushed now, so reverting means `git revert 366e292`, not a checkout. A checkout
+would also destroy the other sessions' in-flight work listed above. Note that a revert only touches
+this repo: the GitHub rename, the live site and the DNS are separate and would each need undoing,
+and open item 2 has the original values for the DNS records.
