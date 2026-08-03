@@ -12,17 +12,16 @@ The rename is committed, pushed and live. No release has been cut.
 
 Still live:
 - `LunarWerxs/CCManagerUI` is renamed to `LunarWerxs/AgentHydra`, with new description, homepage
-  and topics.
+  and topics. The site's org and repo are renamed too: `AgentHydra/agenthydra.github.io`.
 - <https://agenthydra.lunarwerx.com/> serves the rebranded landing page, and
   <https://ccmanagerui.lunarwerx.com/> 301s to it with the path preserved.
 - `edge-aliases` and `_org-avatars` are NOT git repositories, so their changes exist only on this
   machine. The Worker is deployed from that source; the brand art is hand-uploaded by design.
 
-One web-UI step remains, in open item 2, plus the two image uploads in item 6.
+The only thing left is the two hand-uploaded images in open item 6.
 
-Read this top to bottom before touching anything. The ordering constraints in "How to commit this"
-and in open item 2 are real: the wrong order silently reverts other repos, or takes the live site
-down.
+Read this top to bottom before touching anything. The ordering constraint in "How this was
+committed" is real: the wrong order silently reverts other repos.
 
 ---
 
@@ -177,7 +176,7 @@ invalid and I am not claiming it clears the rebrand.
 pre-rebrand worktree build with `CCMANAGERUI_DB` pointed at the copy, and compare consoles. If the
 error appears there too, it predates the rename and is a separate bug.
 
-### 2. The rename is LIVE. One web-UI step is left.
+### 2. The rename is LIVE and complete
 `LunarWerxs/CCManagerUI` is now **`LunarWerxs/AgentHydra`**, with its description, homepage
 (`https://agenthydra.lunarwerx.com/`) and topics updated. GitHub redirects the old URL for both web
 and git, so existing clones and the built-in updater keep working.
@@ -209,19 +208,14 @@ How it got there, because two of these are worth knowing:
   `CNAME ccmanagerui.lunarwerx.com -> ccmanagerui.github.io`, DNS-only, TTL auto, if it ever needs
   restoring.
 
-**The one step left, which needs your account:** rename the org `ccmanagerui` to `agenthydra` at
-<https://github.com/organizations/ccmanagerui/settings/profile>. It is web-UI only: GitHub's REST
-API silently ignores a `login` field on `PATCH /orgs/{org}`, and no browser here is signed in to
-GitHub. `agenthydra` was free on GitHub when checked.
+**Done.** The org is now `AgentHydra` and its site repo is `AgentHydra/agenthydra.github.io`.
+Michael did both by hand, because a GitHub org rename is genuinely web-UI only: `PATCH /orgs/{org}`
+silently ignores a `login` field, and the GraphQL schema has no rename mutation either (checked, not
+assumed). The DNS record was repointed to `agenthydra.github.io` and the local site repo's remote was
+updated; Pages kept its custom domain and HTTPS enforcement across both renames.
 
-Nothing is broken until you do it, because the site is deliberately wired to the **pre-rename** host.
-Two things follow it, in this order:
-
-1. Rename the repo `agenthydra/ccmanagerui.github.io` to `agenthydra.github.io`.
-2. Repoint the DNS record: `agenthydra.lunarwerx.com` currently CNAMEs to `ccmanagerui.github.io`,
-   which is correct only while the org still has that name. Change its content to
-   `agenthydra.github.io`. Its Cloudflare record id is `1c5c3388e0acf5b1d751473d2c7cf5f5` and its
-   comment already says so.
+The record to know if this is ever unwound: `agenthydra.lunarwerx.com`, Cloudflare id
+`1c5c3388e0acf5b1d751473d2c7cf5f5`, CNAME to `agenthydra.github.io`, DNS-only.
 
 ### 2b. Everything outside this repo that is already done
 - **`D:\PublicProjects\ccmanagerui.github.io`**: full rebrand. Head/OG/Twitter copy, hero, footer,
@@ -245,8 +239,17 @@ Deliberate. Renaming it would break `kit.config.json` paths, desktop shortcuts, 
 session with that working directory. Do it when nothing else is open, then update the four paths in
 `lunarwerx-ui/kit.config.json`.
 
-### 4. Version number
-Still `0.13.0`. A rename with a data migration probably deserves a minor bump before release.
+### 4. Version number: bumped to 0.14.0, not yet tagged
+A minor rather than a patch, because the release migrates the config directory, the database file,
+the env vars and the localStorage namespace, even though every one of those has a fallback.
+
+`package.json` is at `0.14.0` and the changelog entry moved under a `## [0.14.0] - 2026-08-02`
+heading. The full local CI from `docs/RELEASING.md` ran green before it was pushed: typecheck,
+check, build, 567 tests, `bun run dist`, and the smoke test against `dist/AgentHydra.exe`. CI is
+green on both runners.
+
+What is deliberately NOT done is step 6, the tag. Pushing `v0.14.0` triggers `release.yml` and
+publishes binaries, which is a decision to ship rather than a step in the rename.
 
 ### 5. Screenshots in the README: done
 Regenerated with `bun run screenshots`. All three now show the new mark and the AgentHydra
