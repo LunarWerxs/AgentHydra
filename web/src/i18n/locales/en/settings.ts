@@ -8,7 +8,7 @@ export default {
   themeSystem: 'System',
   // header controls (theme + shut down now live as icons in the settings panel header; the theme
   // trigger reuses `themeLabel` above)
-  shutdownTooltip: 'Shut down CC Manager UI (closes the app and its tray icon)',
+  shutdownTooltip: 'Shut down AgentHydra (closes the app and its tray icon)',
   shutdownConfirmTooltip: 'Click again to shut down',
   shutdownToast: 'Shutting down…',
   shutdownToastFailed: 'Failed to shut down.',
@@ -16,7 +16,7 @@ export default {
   showTooltipsHint: 'Hover help on buttons and controls. Info icons stay on.',
   portableModeLabel: 'Portable window',
   portableModeHint:
-    'Opens CC Manager UI in its own window (no tabs or address bar) instead of a browser tab. The desktop launcher and tray icon follow this setting too.',
+    'Opens AgentHydra in its own window (no tabs or address bar) instead of a browser tab. The desktop launcher and tray icon follow this setting too.',
   portableModeToastOpened: 'Opened in portable window - you can close this tab.',
   portableModeToastNoBrowser: 'No Edge or Chrome install found to open a portable window.',
   portableModeToastFailed: 'Failed to save portable window setting.',
@@ -29,7 +29,7 @@ export default {
   instanceModeShortcutFailed: 'Failed to create the Quick Instances shortcut.',
   hideTrayIconLabel: 'Hide tray icon',
   hideTrayIconHint:
-    'Removes the CC Manager UI icon from the notification area. CC Manager UI keeps running in the background - launch the shortcut again to reopen the UI, or come back here to turn the icon back on.',
+    'Removes the AgentHydra icon from the notification area. AgentHydra keeps running in the background - launch the shortcut again to reopen the UI, or come back here to turn the icon back on.',
   hideTrayIconToastFailed: 'Failed to save hide tray icon setting.',
   transcriptEditorLabel: 'Transcript editor',
   transcriptEditorHint:
@@ -55,7 +55,7 @@ export default {
   // provider surfaces
   providersTitle: 'Providers',
   providersHint:
-    'Choose which desktop, CLI, and external AI surfaces CC Manager shows. Disabling a surface hides its controls; it does not uninstall the provider or delete an account.',
+    'Choose which desktop, CLI, and external AI surfaces AgentHydra shows. Disabling a surface hides its controls; it does not uninstall the provider or delete an account.',
   claudeDesktopProviderLabel: 'Claude Desktop',
   claudeDesktopProviderHint: 'Show and manage isolated Claude Desktop instances.',
   claudeCliProviderLabel: 'Claude CLI',
@@ -76,9 +76,9 @@ export default {
   currentVersion: 'Current version',
   noUpdateSourceHint:
     'This install is not linked to a Git remote, so there is nowhere to pull new versions ' +
-    'from. Link one (git remote add origin <url>) or set CCMANAGERUI_UPDATE_REPO, and the ' +
+    'from. Link one (git remote add origin <url>) or set AGENTHYDRA_UPDATE_REPO, and the ' +
     'update check and auto-update come to life.',
-  restartGuidance: ' Restart CC Manager UI from the tray icon to run the new code.',
+  restartGuidance: ' Restart AgentHydra from the tray icon to run the new code.',
   // the version number itself is the status indicator now: green = up to date, amber = update
   // available (click to apply), red = blocked / no source. Tooltip spells out the state + action.
   versionUpToDateTip: 'Up to date. Click to check again.',
@@ -90,7 +90,7 @@ export default {
   // auto-update section
   autoUpdate: 'Auto-update',
   autoUpdateDescription:
-    'Off by default. When on, CC Manager UI periodically checks for a newer version and, if there are no uncommitted local changes, pulls it, reinstalls, rebuilds, and restarts the daemon on its own - no prompt. A dirty working tree is never touched; updates only apply on a clean checkout.',
+    'Off by default. When on, AgentHydra periodically checks for a newer version and, if there are no uncommitted local changes, pulls it, reinstalls, rebuilds, and restarts the daemon on its own - no prompt. A dirty working tree is never touched; updates only apply on a clean checkout.',
   autoUpdateToastEnabled: 'Auto-update enabled.',
   autoUpdateToastDisabled: 'Auto-update disabled.',
   autoUpdateToastFailed: 'Failed to save auto-update settings.',
@@ -101,7 +101,7 @@ export default {
   cloudSyncConnectButton: 'Sync settings with Connections',
   cloudSyncEnableToggle: 'Sync settings',
   cloudSyncHint:
-    'Syncs scheduler preferences and appearance (theme) to your Connections account, so they follow you to CC Manager UI on another machine. Optional; never syncs accounts, secrets, or queue data.',
+    'Syncs scheduler preferences and appearance (theme) to your Connections account, so they follow you to AgentHydra on another machine. Optional; never syncs accounts, secrets, or queue data.',
   cloudSyncSyncNow: 'Sync now',
   cloudSyncSyncing: 'Syncing…',
   cloudSyncSyncedToast: 'Settings synced.',

@@ -17,6 +17,9 @@ PLAN.md
 
 # tray launcher: the .lnk stores absolute paths - regenerate it per machine with
 # misc/New-TrayShortcut.ps1 (the tray host refreshes it on launch)
+/AgentHydra.lnk
+/AgentHydra Instances.lnk
+# The pre-rename shortcuts survive on machines that upgraded, until they are re-created.
 /CCManagerUI.lnk
 /CCManagerUI Instances.lnk
 

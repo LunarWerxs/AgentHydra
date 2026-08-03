@@ -23,7 +23,7 @@ import { basename, join } from 'node:path'
 import { APP_ROOT, SERVICE_NAME, VERSION } from './config'
 import type { UpdateApplyResult, UpdateStatus } from './updater-engine.mjs'
 
-const REPO = 'LunarWerxs/ccmanagerui'
+const REPO = 'LunarWerxs/agenthydra'
 const RELEASES_PAGE = `https://github.com/${REPO}/releases`
 const LATEST_API = `https://api.github.com/repos/${REPO}/releases/latest`
 
@@ -244,7 +244,7 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
 
   const exePath = process.execPath
   const exeName = basename(exePath)
-  const bundledExeName = process.platform === 'win32' ? 'CCManagerUI.exe' : 'ccmanagerui'
+  const bundledExeName = process.platform === 'win32' ? 'AgentHydra.exe' : 'agenthydra'
   const installDir = APP_ROOT
   const staging = join(installDir, '.update-staging')
   const stamp = String(status.checkedAt) // Date.now() is unavailable here; reuse the check time
@@ -271,7 +271,7 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
     // Updater bundles retain the versioned wrapper directory expected by older releases, while
     // containing only the executable now. Also accept a flat archive if one is ever published.
     const entries = readdirSync(staging, { withFileTypes: true })
-    const bundleDir = entries.find((e) => e.isDirectory() && e.name.startsWith('CCManagerUI-'))
+    const bundleDir = entries.find((e) => e.isDirectory() && e.name.startsWith('AgentHydra-'))
     const newExe = bundleDir
       ? join(staging, bundleDir.name, bundledExeName)
       : join(staging, bundledExeName)

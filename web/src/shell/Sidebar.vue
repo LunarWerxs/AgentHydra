@@ -77,7 +77,7 @@ function guardOutside(e: Event) {
 
 // DEV guard: a right-docked push panel must be matched by a usePushPanel configured
 // with (at least) THIS panel's width, or the content shift and modal centering
-// disagree with the rendered panel (bug class caught in ccmanagerui 2026-07-10:
+// disagree with the rendered panel (bug class caught in agenthydra 2026-07-10:
 // width-px=480 panel over a bare usePushPanel() = 420). Compared against the
 // CONFIGURED width, not the --content-inset-right var: with shellMaxWidth the
 // correct shift is the panel↔shell overlap, legitimately smaller than the panel.

@@ -2,19 +2,19 @@
 // when run, boots the daemon and raises the system-tray icon (Open / Rebuild & Restart /
 // Restart / Quit). Windows-gated. Mirrors the sibling apps' launcher tests.
 //
-// CCManagerUI-Tray.ps1 is now a THIN ADAPTER over the shared kit engine (misc/Tray-Host.ps1,
+// AgentHydra-Tray.ps1 is now a THIN ADAPTER over the shared kit engine (misc/Tray-Host.ps1,
 // kit-synced — never edited here). Assertions are split accordingly:
 //   - engine-invariant behavior (NotifyIcon-before-daemon ordering, mutex loser branch,
 //     hideTrayIcon gating/live-sync, Open-AppUi/portable-window plumbing) is asserted against
 //     Tray-Host.ps1, since that's what actually implements it now.
 //   - app-specific config (mutex literal, daemon start command, icon filename, menu label,
-//     self-test marker, .vbs wiring) is asserted against the adapter, CCManagerUI-Tray.ps1.
+//     self-test marker, .vbs wiring) is asserted against the adapter, AgentHydra-Tray.ps1.
 //   - end-to-end behavior (-SelfTest actually running, Create-Shortcut.ps1 actually producing
 //     a working .lnk) keeps exercising the adapter as a real subprocess.
 // No assertion's INTENT was dropped in the split — see the per-test comments below for where
 // each pre-adapter assertion now lives.
 //
-// The launch chain itself is ALSO now kit-shared: the old per-app CCManagerUI.vbs is DELETED
+// The launch chain itself is ALSO now kit-shared: the old per-app AgentHydra.vbs is DELETED
 // in favor of the shared, zero-config Tray-Launch.vbs (auto-discovers the sibling *-Tray.ps1
 // adapter), and Create-Shortcut.ps1 is now a THIN ADAPTER that dot-sources the shared
 // New-TrayShortcut.ps1 engine. Both kit files are kit-synced — never edited here. Assertions
@@ -28,7 +28,7 @@
 //     re-inlining the shortcut-creation logic.
 //   - "the desktop shortcut points at wscript + the .vbs + the icon" still runs
 //     Create-Shortcut.ps1 as a real subprocess and resolves the regenerated .lnk via COM, now
-//     asserting Tray-Launch.vbs (not CCManagerUI.vbs) as the target.
+//     asserting Tray-Launch.vbs (not AgentHydra.vbs) as the target.
 
 import { describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
@@ -39,15 +39,15 @@ const REPO_ROOT = resolve(import.meta.dir, '..') // tests -> repo root (flat lay
 const MISC = join(REPO_ROOT, 'misc')
 const APP = REPO_ROOT
 
-const TRAY = join(MISC, 'CCManagerUI-Tray.ps1') // the adapter
+const TRAY = join(MISC, 'AgentHydra-Tray.ps1') // the adapter
 const ENGINE = join(MISC, 'Tray-Host.ps1') // the kit-synced shared tray engine
-const VBS = join(MISC, 'Tray-Launch.vbs') // the kit-synced shared launcher (replaces CCManagerUI.vbs)
+const VBS = join(MISC, 'Tray-Launch.vbs') // the kit-synced shared launcher (replaces AgentHydra.vbs)
 const SHORTCUT_ENGINE = join(MISC, 'New-TrayShortcut.ps1') // the kit-synced shared shortcut engine
 const CREATE_SHORTCUT = join(MISC, 'Create-Shortcut.ps1') // the app's thin adapter over it
 const INSTANCE_VBS = join(MISC, 'Instance-Launch.vbs')
-const ICO = join(MISC, 'CCManagerUI.ico')
-const LNK = join(REPO_ROOT, 'CCManagerUI.lnk')
-const INSTANCE_LNK = join(REPO_ROOT, 'CCManagerUI Instances.lnk')
+const ICO = join(MISC, 'AgentHydra.ico')
+const LNK = join(REPO_ROOT, 'AgentHydra.lnk')
+const INSTANCE_LNK = join(REPO_ROOT, 'AgentHydra Instances.lnk')
 
 const win = process.platform === 'win32'
 
@@ -84,19 +84,19 @@ describe.skipIf(!win)('tray launcher', () => {
   })
 
   test('Tray-Launch.vbs auto-discovers the app tray adapter (*-Tray.ps1, exactly one match)', () => {
-    // was: "the .vbs launches the tray script" — a literal 'CCManagerUI-Tray.ps1' filename check
-    // against the now-deleted per-app CCManagerUI.vbs. The shared Tray-Launch.vbs has NO
+    // was: "the .vbs launches the tray script" — a literal 'AgentHydra-Tray.ps1' filename check
+    // against the now-deleted per-app AgentHydra.vbs. The shared Tray-Launch.vbs has NO
     // per-app filename in it by design (it auto-discovers the sibling adapter at runtime), so
     // the intent — "the vbs launches this app's tray script" — is now proven by (a) the
     // discovery rule in the shared launcher, and (b) a live cscript probe (below) that resolves
-    // to this app's actual CCManagerUI-Tray.ps1 with exactly one match.
+    // to this app's actual AgentHydra-Tray.ps1 with exactly one match.
     const vbs = readFileSync(VBS, 'utf8')
     expect(vbs).toMatch(/Right\(lname,\s*9\)\s*=\s*"-tray\.ps1"/)
     expect(vbs).toContain('matchCount = 0')
     expect(vbs).toContain('matchCount > 1')
   })
 
-  test('a live cscript probe resolves the shared Tray-Launch.vbs discovery to CCManagerUI-Tray.ps1', () => {
+  test('a live cscript probe resolves the shared Tray-Launch.vbs discovery to AgentHydra-Tray.ps1', () => {
     // end-to-end proof (no real launch): monkey-patch WScript.Shell.Run via a stub COM-less
     // echo probe is not available in classic VBS, so instead we run Tray-Launch.vbs's own
     // discovery logic against the real misc/ dir through cscript and have it print the
@@ -125,7 +125,7 @@ describe.skipIf(!win)('tray launcher', () => {
     writeFileSync(probePath, probe, 'utf8')
     try {
       const out = execFileSync('cscript', ['//NoLogo', probePath], { encoding: 'utf8' }).trim()
-      expect(out).toBe('CCManagerUI-Tray.ps1|1')
+      expect(out).toBe('AgentHydra-Tray.ps1|1')
     } finally {
       try {
         unlinkSync(probePath)
@@ -156,26 +156,26 @@ describe.skipIf(!win)('tray launcher', () => {
 
   test('Create-Shortcut.ps1 is a thin adapter that dot-sources the shared shortcut engine', () => {
     // new: proves this is actually a thin adapter, not a re-inlined copy of the shortcut
-    // creation logic (mirrors the equivalent CCManagerUI-Tray.ps1 <-> Tray-Host.ps1 check).
+    // creation logic (mirrors the equivalent AgentHydra-Tray.ps1 <-> Tray-Host.ps1 check).
     const ps = readFileSync(CREATE_SHORTCUT, 'utf8')
     expect(ps).toMatch(/\.\s*\(Join-Path \$scriptDir ["']New-TrayShortcut\.ps1["']\)/)
     expect(ps).toMatch(/New-TrayShortcut\s+-Root\s+\$root\s+-ScriptDir\s+\$scriptDir/)
-    expect(ps).toMatch(/-LnkName\s+["']CCManagerUI["']/)
-    expect(ps).toMatch(/-IconFile\s+["']CCManagerUI\.ico["']/)
-    expect(ps).toMatch(/-Description\s+["']Launch CC Manager UI \(system tray\)["']/)
-    expect(ps).toMatch(/-LnkName\s+["']CCManagerUI Instances["']/)
+    expect(ps).toMatch(/-LnkName\s+["']AgentHydra["']/)
+    expect(ps).toMatch(/-IconFile\s+["']AgentHydra\.ico["']/)
+    expect(ps).toMatch(/-Description\s+["']Launch AgentHydra \(system tray\)["']/)
+    expect(ps).toMatch(/-LnkName\s+["']AgentHydra Instances["']/)
     expect(ps).toMatch(/-VbsFile\s+["']Instance-Launch\.vbs["']/)
   })
 
   test('the quick launcher selects the compiled or source instance-mode entry without a tray', () => {
     const vbs = readFileSync(INSTANCE_VBS, 'utf8')
-    expect(vbs).toContain('CCManagerUI.exe')
+    expect(vbs).toContain('AgentHydra.exe')
     expect(vbs).toContain('server\\src\\main.ts')
     expect(vbs.match(/--instances/g)?.length).toBeGreaterThanOrEqual(2)
     expect(vbs).toContain('%APPDATA%\\npm\\bun.cmd')
     expect(vbs).toContain('%USERPROFILE%\\.bun\\bin\\bun.exe')
     expect(vbs).toContain('%ComSpec%')
-    expect(vbs).not.toContain('CCManagerUI-Tray.ps1')
+    expect(vbs).not.toContain('AgentHydra-Tray.ps1')
   })
 
   test('the adapter dot-sources the shared engine and hands off with its $TrayConfig', () => {
@@ -188,13 +188,13 @@ describe.skipIf(!win)('tray launcher', () => {
   })
 
   test('the adapter declares the app-specific daemon command, service id, and menu label', () => {
-    // was (part of): "tray script boots the Bun daemon ... 'Open CC Manager UI'" content checks.
+    // was (part of): "tray script boots the Bun daemon ... 'Open AgentHydra'" content checks.
     // The literal command/label strings are app config now, so they live in the adapter.
     const ps = readFileSync(TRAY, 'utf8')
     expect(ps).toContain('bun server/src/index.ts')
-    expect(ps).toContain('"Open CC Manager UI"')
-    expect(ps).toMatch(/ServiceName\s*=\s*["']ccmanagerui["']/)
-    expect(ps).toMatch(/IconFile\s*=\s*["']CCManagerUI\.ico["']/)
+    expect(ps).toContain('"Open AgentHydra"')
+    expect(ps).toMatch(/ServiceName\s*=\s*["']agenthydra["']/)
+    expect(ps).toMatch(/IconFile\s*=\s*["']AgentHydra\.ico["']/)
   })
 
   test('the shared engine raises a NotifyIcon with the full menu, icon-first before the daemon starts', () => {
@@ -240,7 +240,7 @@ describe.skipIf(!win)('tray launcher', () => {
   // 20s timeout: two real PowerShell spawns + COM. A cold CI runner has taken 6.8s against the
   // 5s default (flaked the 2026-07-16 run); the assertions are unchanged, only the allowance.
   test('the desktop shortcut points at wscript + Tray-Launch.vbs + the icon', () => {
-    // was: asserted CCManagerUI.vbs as the target. Create-Shortcut.ps1 is now a thin adapter
+    // was: asserted AgentHydra.vbs as the target. Create-Shortcut.ps1 is now a thin adapter
     // over the shared New-TrayShortcut.ps1 engine, and the regenerated .lnk must resolve to the
     // shared Tray-Launch.vbs instead — still a real subprocess run + COM resolution end-to-end.
     execFileSync(
@@ -262,9 +262,9 @@ describe.skipIf(!win)('tray launcher', () => {
     )
     expect(out.toLowerCase()).toContain('wscript.exe')
     expect(out).toContain('Tray-Launch.vbs')
-    expect(out).toContain('CCManagerUI.ico')
+    expect(out).toContain('AgentHydra.ico')
     expect(out).toContain(REPO_ROOT)
-    expect(out).toContain('Launch CC Manager UI (system tray)')
+    expect(out).toContain('Launch AgentHydra (system tray)')
 
     expect(existsSync(INSTANCE_LNK)).toBe(true)
     const quick = execFileSync(
@@ -278,7 +278,7 @@ describe.skipIf(!win)('tray launcher', () => {
     )
     expect(quick.toLowerCase()).toContain('wscript.exe')
     expect(quick).toContain('Instance-Launch.vbs')
-    expect(quick).toContain('Quick launch CC Manager UI instances')
+    expect(quick).toContain('Quick launch AgentHydra instances')
   }, 20_000)
 
   test('the headless tray self-test passes against the rewritten adapter (icon loads, bun on PATH, entry present)', () => {
@@ -289,7 +289,7 @@ describe.skipIf(!win)('tray launcher', () => {
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', TRAY, '-SelfTest'],
       { encoding: 'utf8' },
     )
-    expect(out).toContain('CCMANAGERUI_TRAY_SELFTEST_OK')
+    expect(out).toContain('AGENTHYDRA_TRAY_SELFTEST_OK')
   })
 
   test('a single named mutex guards one tray host per desktop session, acquired before the icon', () => {
@@ -298,7 +298,7 @@ describe.skipIf(!win)('tray launcher', () => {
     // app config (adapter); the acquire-before-icon ordering, loser-branch shape, and release
     // points are engine machinery.
     const ps = readFileSync(TRAY, 'utf8')
-    expect(ps).toMatch(/MutexName\s*=\s*["']CCManagerUITrayHost["']/)
+    expect(ps).toMatch(/MutexName\s*=\s*["']AgentHydraTrayHost["']/)
 
     const engine = readFileSync(ENGINE, 'utf8')
     const mutexCreateCall = engine.indexOf(
@@ -355,7 +355,7 @@ describe.skipIf(!win)('tray launcher', () => {
     expect(openAppUi).not.toContain('tray.Visible')
   })
 
-  test('CC Manager UI declares its full-shutdown sentinel (web-UI "Shut down" tears the app down)', () => {
+  test('AgentHydra declares its full-shutdown sentinel (web-UI "Shut down" tears the app down)', () => {
     // The tray polls this sentinel; the daemon drops it on a UI-source shutdown without the tray
     // token (server/src/index.ts), so a web-UI "Shut down" quits the whole app (icon + daemon)
     // instead of the watchdog reviving it. Path sits beside runtime.json in $cmHome.
@@ -363,12 +363,12 @@ describe.skipIf(!win)('tray launcher', () => {
     expect(ps).toMatch(/SentinelFile\s*=\s*Join-Path \$cmHome "shutdown\.request"/)
   })
 
-  test('CC Manager UI uses the token/HTTP graceful-shutdown protocol, not force-kill', () => {
+  test('AgentHydra uses the token/HTTP graceful-shutdown protocol, not force-kill', () => {
     // new: documents the shutdown-protocol divergence the adapter must declare correctly —
     // ShutdownTokenEnvVar set (token apps) vs $null (force-kill apps like ReDesign/RepoYeti).
     const ps = readFileSync(TRAY, 'utf8')
-    expect(ps).toMatch(/ShutdownTokenEnvVar\s*=\s*["']CCMANAGERUI_SHUTDOWN_TOKEN["']/)
-    expect(ps).toMatch(/ShutdownHeaderPrefix\s*=\s*["']x-ccmanagerui["']/)
+    expect(ps).toMatch(/ShutdownTokenEnvVar\s*=\s*["']AGENTHYDRA_SHUTDOWN_TOKEN["']/)
+    expect(ps).toMatch(/ShutdownHeaderPrefix\s*=\s*["']x-agenthydra["']/)
   })
 
   test("Quit's belt-and-braces daemon stop cannot re-run a second bounded graceful POST", () => {
@@ -393,7 +393,7 @@ describe.skipIf(!win)('tray launcher', () => {
   })
 
   test('the adapter opts the auto-restart watchdog out of the ownership gate (OLD parity: revive regardless of who started the daemon)', () => {
-    // OLD ccmanagerui's watchdog had no startedByUs gate — it revived on any health-check
+    // OLD agenthydra's watchdog had no startedByUs gate — it revived on any health-check
     // failure. The engine's default (WatchdogRequiresOwnership=$true, inherited from DevWebUI)
     // would silently stop reviving a daemon this tray attached to rather than started, so the
     // adapter must explicitly opt out.

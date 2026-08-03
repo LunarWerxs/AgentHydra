@@ -16,36 +16,36 @@ afterEach(() => {
 describe('instanceModeShortcutSpec', () => {
   test('source checkout launches the VBS through wscript', () => {
     const spec = instanceModeShortcutSpec({
-      appRoot: 'D:\\Apps\\CC Manager',
+      appRoot: 'D:\\Apps\\AgentHydra',
       compiled: false,
       systemRoot: 'C:\\Windows',
     })
 
     expect(spec.target).toBe('C:\\Windows\\System32\\wscript.exe')
-    expect(spec.args).toBe('"D:\\Apps\\CC Manager\\misc\\Instance-Launch.vbs"')
-    expect(spec.workingDir).toBe('D:\\Apps\\CC Manager')
+    expect(spec.args).toBe('"D:\\Apps\\AgentHydra\\misc\\Instance-Launch.vbs"')
+    expect(spec.workingDir).toBe('D:\\Apps\\AgentHydra')
   })
 
   test('packaged release launches its own executable with --instances', () => {
     const spec = instanceModeShortcutSpec({
-      appRoot: 'D:\\Portable\\CCManagerUI',
+      appRoot: 'D:\\Portable\\AgentHydra',
       compiled: true,
-      execPath: 'D:\\Portable\\CCManagerUI\\ccmanagerui.exe',
+      execPath: 'D:\\Portable\\AgentHydra\\agenthydra.exe',
     })
 
-    expect(spec.target).toBe('D:\\Portable\\CCManagerUI\\ccmanagerui.exe')
+    expect(spec.target).toBe('D:\\Portable\\AgentHydra\\agenthydra.exe')
     expect(spec.args).toBe('--instances')
-    expect(spec.workingDir).toBe('D:\\Portable\\CCManagerUI')
+    expect(spec.workingDir).toBe('D:\\Portable\\AgentHydra')
   })
 })
 
 test('creates a Windows .lnk in an explicitly selected Desktop folder', async () => {
   if (process.platform !== 'win32') return
 
-  const root = mkdtempSync(join(tmpdir(), 'ccmanagerui-instance-shortcut-'))
+  const root = mkdtempSync(join(tmpdir(), 'agenthydra-instance-shortcut-'))
   cleanup.push(root)
   const desktopDir = join(root, 'Desktop')
-  const fakeExe = join(root, 'ccmanagerui.exe')
+  const fakeExe = join(root, 'agenthydra.exe')
   writeFileSync(fakeExe, '')
 
   const result = await createInstanceModeShortcut({
@@ -57,6 +57,6 @@ test('creates a Windows .lnk in an explicitly selected Desktop folder', async ()
   })
 
   expect(result.ok).toBe(true)
-  expect(result.data?.path).toBe(join(desktopDir, 'CCManagerUI Instances.lnk'))
-  expect(existsSync(join(desktopDir, 'CCManagerUI Instances.lnk'))).toBe(true)
+  expect(result.data?.path).toBe(join(desktopDir, 'AgentHydra Instances.lnk'))
+  expect(existsSync(join(desktopDir, 'AgentHydra Instances.lnk'))).toBe(true)
 })

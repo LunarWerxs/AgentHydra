@@ -206,7 +206,7 @@ create index if not exists idx_session_scan_cache_path on session_scan_cache(pat
     const del = db.query('delete from monitor_state where item_id = ?')
     for (const r of bogus) del.run(r.id)
     console.log(
-      `[ccmanagerui] repaired ${bogus.length} run(s) mislabeled 'rate_limited' by the old detector (they exited 0)`,
+      `[agenthydra] repaired ${bogus.length} run(s) mislabeled 'rate_limited' by the old detector (they exited 0)`,
     )
   }
 }
@@ -247,7 +247,7 @@ create index if not exists idx_session_scan_cache_path on session_scan_cache(pat
       del.run(r.id)
     }
     console.log(
-      `[ccmanagerui] repaired ${overloads.length} run(s) mislabeled 'rate_limited' that were really a transient 529 overload`,
+      `[agenthydra] repaired ${overloads.length} run(s) mislabeled 'rate_limited' that were really a transient 529 overload`,
     )
   }
 }

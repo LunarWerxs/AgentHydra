@@ -1,4 +1,4 @@
-// A harmless stand-in for the real `claude` CLI, used when CCMANAGERUI_FAKE=1.
+// A harmless stand-in for the real `claude` CLI, used when AGENTHYDRA_FAKE=1.
 // Emits a few stream-json lines shaped like Claude Code's real output, then exits 0.
 // Lets us verify the entire dispatch → parse → run_events → SSE → status pipeline
 // WITHOUT spending any real Claude quota or touching a real repo.

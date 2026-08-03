@@ -15,7 +15,7 @@ every instance with auto-update enabled will fast-forward to it on its next chec
    in that file.
 3. **Run local CI before pushing**, mirroring what CI runs: `bun install --frozen-lockfile`,
    `bun run typecheck`, `bun run check`, `bun run build`, `bun test`, `bun run dist`, and
-   `bun run scripts/smoke-release.ts dist/CCManagerUI.exe`. Don't rely on pushing to find
+   `bun run scripts/smoke-release.ts dist/AgentHydra.exe`. Don't rely on pushing to find
    out one of these fails.
 
    A local pass is one leg of a two-leg matrix. CI runs `[ubuntu-latest, windows-latest]`, so a

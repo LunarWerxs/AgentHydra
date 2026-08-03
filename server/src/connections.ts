@@ -1,24 +1,24 @@
 // ---------------------------------------------------------------------------
 // "Sync my settings with Connections" — the daemon-side Backend-for-Frontend.
 //
-// CC Manager UI is a single-user local daemon, so the daemon IS the BFF: it runs the
+// AgentHydra is a single-user local daemon, so the daemon IS the BFF: it runs the
 // OIDC login (Authorization Code + PKCE, public client — no secret), holds the
 // owner's refresh token server-side, mints access tokens, and calls the Connections
 // settings-sync store (studio.connections.icu/v1/app-data/{clientId}). The browser
 // never holds a token.
 //
 // Mirrors DevWebUI's server/src/connections.ts (the family-standard shape) adapted to
-// ccmanagerui's SQLite settings table (server/src/db.ts) instead of a separate JSON
+// agenthydra's SQLite settings table (server/src/db.ts) instead of a separate JSON
 // state file — the sync state (SDK session + sync prefs) rides one settings row,
-// serialized as JSON, alongside every other ccmanagerui setting.
+// serialized as JSON, alongside every other agenthydra setting.
 //
 // The OAuth/refresh/identity machinery is the official SDK — @cnct/connect (the data
 // locker store ships from the same package now): single-flight rotation-safe refresh,
 // per-attempt redirect_uri, server-side revoke on forget, and id_token identity all come
-// from the shared package. This module keeps only the ccmanagerui-specific parts: the
+// from the shared package. This module keeps only the agenthydra-specific parts: the
 // settings-row persistence seam, the settings allowlist, and the sync orchestration.
 //
-// Because ccmanagerui is loopback-only (no tunnel / remote mode), there is NO auth gate
+// Because agenthydra is loopback-only (no tunnel / remote mode), there is NO auth gate
 // and NO session cookie: "signed in" simply means the daemon holds a refresh token.
 //
 // Off by default: with sync disabled (the default), nothing here runs. What syncs is a
@@ -39,8 +39,8 @@ import { getSetting, setSetting } from './db'
 import { unseal, wrapTokenStore } from './dpapi-seal.mjs'
 import type { SyncStatus } from './types'
 
-/** CC Manager UI's own public "Sign in with Connections" OAuth client (PKCE — no secret).
- *  Its client_id doubles as the settings-sync store `appId`, so ccmanagerui's synced data
+/** AgentHydra's own public "Sign in with Connections" OAuth client (PKCE — no secret).
+ *  Its client_id doubles as the settings-sync store `appId`, so agenthydra's synced data
  *  is namespaced to itself. Self-registered once via @cnct/connect's registerApp() (RFC 7591
  *  dynamic client registration — no console needed); safe to embed (public client). */
 const OAUTH = {

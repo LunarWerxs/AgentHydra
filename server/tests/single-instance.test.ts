@@ -6,19 +6,19 @@ describe('skipSingleInstanceGuard', () => {
     expect(skipSingleInstanceGuard({})).toBe(false)
   })
 
-  it('skips the probe for the auto-update relaunch successor (CCMANAGERUI_RELAUNCH=1)', () => {
+  it('skips the probe for the auto-update relaunch successor (AGENTHYDRA_RELAUNCH=1)', () => {
     // Regression guard for the zero-instances relaunch race: the successor must NOT
     // probe /api/health here (its predecessor is still alive and answering it during
     // the handoff), or it would conclude "already running" and exit, leaving no daemon.
-    expect(skipSingleInstanceGuard({ CCMANAGERUI_RELAUNCH: '1' })).toBe(true)
+    expect(skipSingleInstanceGuard({ AGENTHYDRA_RELAUNCH: '1' })).toBe(true)
   })
 
-  it('skips the probe when the dev launcher pins the port (CCMANAGERUI_PORT_FIXED=1)', () => {
-    expect(skipSingleInstanceGuard({ CCMANAGERUI_PORT_FIXED: '1' })).toBe(true)
+  it('skips the probe when the dev launcher pins the port (AGENTHYDRA_PORT_FIXED=1)', () => {
+    expect(skipSingleInstanceGuard({ AGENTHYDRA_PORT_FIXED: '1' })).toBe(true)
   })
 
   it('treats only exactly "1" as set', () => {
-    expect(skipSingleInstanceGuard({ CCMANAGERUI_RELAUNCH: '0' })).toBe(false)
-    expect(skipSingleInstanceGuard({ CCMANAGERUI_PORT_FIXED: 'true' })).toBe(false)
+    expect(skipSingleInstanceGuard({ AGENTHYDRA_RELAUNCH: '0' })).toBe(false)
+    expect(skipSingleInstanceGuard({ AGENTHYDRA_PORT_FIXED: 'true' })).toBe(false)
   })
 })

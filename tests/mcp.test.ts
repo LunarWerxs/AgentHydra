@@ -36,7 +36,7 @@ afterEach(() => {
 
 // ── protocol: initialize ──────────────────────────────────────────────────────────
 describe('initialize', () => {
-  test('echoes protocolVersion and reports serverInfo.name "ccmanagerui"', async () => {
+  test('echoes protocolVersion and reports serverInfo.name "agenthydra"', async () => {
     const res = (await handleRpc(
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
       ctx,
@@ -51,7 +51,7 @@ describe('initialize', () => {
     expect(res.id).toBe(1)
     expect(res.result.protocolVersion).toBe('2025-03-26')
     expect(res.result.capabilities).toEqual({ tools: {} })
-    expect(res.result.serverInfo.name).toBe('ccmanagerui')
+    expect(res.result.serverInfo.name).toBe('agenthydra')
   })
 
   test('falls back to the default protocolVersion when none is supplied', async () => {
@@ -229,25 +229,25 @@ describe('protocol edges', () => {
 
 // ── URL resolution ────────────────────────────────────────────────────────────────────
 describe('daemonBase', () => {
-  const origUrl = process.env.CCMANAGERUI_URL
-  const origPort = process.env.CCMANAGERUI_PORT
+  const origUrl = process.env.AGENTHYDRA_URL
+  const origPort = process.env.AGENTHYDRA_PORT
 
   afterEach(() => {
-    if (origUrl === undefined) delete process.env.CCMANAGERUI_URL
-    else process.env.CCMANAGERUI_URL = origUrl
-    if (origPort === undefined) delete process.env.CCMANAGERUI_PORT
-    else process.env.CCMANAGERUI_PORT = origPort
+    if (origUrl === undefined) delete process.env.AGENTHYDRA_URL
+    else process.env.AGENTHYDRA_URL = origUrl
+    if (origPort === undefined) delete process.env.AGENTHYDRA_PORT
+    else process.env.AGENTHYDRA_PORT = origPort
   })
 
-  test('CCMANAGERUI_URL overrides everything', () => {
-    process.env.CCMANAGERUI_URL = 'http://example.test:1234'
-    delete process.env.CCMANAGERUI_PORT
+  test('AGENTHYDRA_URL overrides everything', () => {
+    process.env.AGENTHYDRA_URL = 'http://example.test:1234'
+    delete process.env.AGENTHYDRA_PORT
     expect(daemonBase()).toBe('http://example.test:1234')
   })
 
-  test('CCMANAGERUI_PORT is used when no explicit URL is set', () => {
-    delete process.env.CCMANAGERUI_URL
-    process.env.CCMANAGERUI_PORT = '9999'
+  test('AGENTHYDRA_PORT is used when no explicit URL is set', () => {
+    delete process.env.AGENTHYDRA_URL
+    process.env.AGENTHYDRA_PORT = '9999'
     expect(daemonBase()).toBe('http://127.0.0.1:9999')
   })
 })

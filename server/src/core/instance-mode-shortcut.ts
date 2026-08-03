@@ -1,7 +1,7 @@
 // Creates a one-click desktop shortcut for the lightweight Instances launcher.
 //
 // Source checkout: wscript.exe -> misc/Instance-Launch.vbs
-// Packaged release: compiled ccmanagerui executable -> --instances
+// Packaged release: compiled agenthydra executable -> --instances
 //
 // Dynamic values are passed to PowerShell through the environment so paths containing quotes or
 // other shell-significant characters never get interpolated into the script.
@@ -11,7 +11,7 @@ import { win32 } from 'node:path'
 import { APP_ROOT, IS_COMPILED } from '../config'
 import type { CMActionResult } from './shared'
 
-const SHORTCUT_NAME = 'CCManagerUI Instances'
+const SHORTCUT_NAME = 'AgentHydra Instances'
 
 export interface InstanceModeShortcutSpecOptions {
   appRoot?: string
@@ -56,7 +56,7 @@ export function instanceModeShortcutSpec(
   const systemRoot = options.systemRoot ?? process.env.SystemRoot ?? 'C:\\Windows'
   const target = win32.join(systemRoot, 'System32', 'wscript.exe')
   const launcher = win32.join(appRoot, 'misc', 'Instance-Launch.vbs')
-  const appIcon = win32.join(appRoot, 'misc', 'CCManagerUI.ico')
+  const appIcon = win32.join(appRoot, 'misc', 'AgentHydra.ico')
   return {
     target,
     args: `"${launcher}"`,
@@ -142,7 +142,7 @@ export async function createInstanceModeShortcut(
           CM_ARGS: spec.args,
           CM_WORKDIR: spec.workingDir,
           CM_ICON: spec.icon,
-          CM_DESC: 'Open the lightweight CCManagerUI Instances launcher',
+          CM_DESC: 'Open the lightweight AgentHydra Instances launcher',
         },
         windowsHide: true,
         stdin: 'ignore',

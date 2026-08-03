@@ -1,7 +1,7 @@
 // Pins the daemon's first-run portable-window size (PORTABLE_WINDOW_SIZE in
 // server/src/config.ts) the way devwebui pins its DASHBOARD_WINDOW_SIZE: exact digits plus
 // the measured intent behind them, so a future tweak has to re-measure rather than drift.
-// The tray adapter (misc/CCManagerUI-Tray.ps1 PortableWindowSize) carries a copy of the
+// The tray adapter (misc/AgentHydra-Tray.ps1 PortableWindowSize) carries a copy of the
 // same numbers — keep them in step.
 import { expect, test } from 'bun:test'
 import { PORTABLE_WINDOW_SIZE } from '../src/config'

@@ -24,16 +24,16 @@ const sessionInstanceFilter = ref('')
 // All scopes are applied server-side BEFORE the newest-N cap, so a quiet corner of the list can't
 // be starved out of the window by rows it was never going to show.
 const sessionArchivedScope = useStorage<ArchivedScope>(
-  'ccmanagerui.sessions.archivedScope',
+  'agenthydra.sessions.archivedScope',
   'include',
 )
 // How far back the list reaches, by last activity. Defaults to the last 24 hours: this list
 // answers "what am I working on", and a store that has been accumulating transcripts for months
 // answers it worse the further back it goes. Applied server-side before the cap, like the scopes
 // above, so a widened window genuinely reaches further rather than reshuffling the same 200 rows.
-const sessionPeriod = useStorage<SessionPeriod>('ccmanagerui.sessions.period', '24h')
+const sessionPeriod = useStorage<SessionPeriod>('agenthydra.sessions.period', '24h')
 // Provider scope for the unified local conversation list.
-const sessionSourceFilter = useStorage<SessionSourceScope>('ccmanagerui.sessions.source', 'all')
+const sessionSourceFilter = useStorage<SessionSourceScope>('agenthydra.sessions.source', 'all')
 // true once the first queue fetch has settled — gates the queue's first-load skeletons
 const queueLoaded = ref(false)
 const lastError = ref<string | null>(null)

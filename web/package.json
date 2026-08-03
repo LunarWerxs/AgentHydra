@@ -1,5 +1,5 @@
 {
-  "name": "@ccmanagerui/web",
+  "name": "@agenthydra/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "check:i18n": "bun run scripts/check-i18n.ts"
   },
   "dependencies": {
-    "@ccmanagerui/server": "workspace:*",
+    "@agenthydra/server": "workspace:*",
     "@lucide/vue": "^1.26.0",
     "@vueuse/core": "^14.3.0",
     "class-variance-authority": "^0.7.1",

@@ -64,7 +64,7 @@ const {
   remove,
 } = useCodexInstances()
 const { t } = useI18n()
-const open = useStorage('ccmanagerui.instances.codexOpen', true)
+const open = useStorage('agenthydra.instances.codexOpen', true)
 const isBusy = (instance: CodexInstance) => busyIds.value.has(instance.id)
 
 const { sortedRows, toggleSort, indicatorFor } = useSortable(

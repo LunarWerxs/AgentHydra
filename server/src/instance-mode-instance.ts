@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { CONFIG_DIR, HOST } from './config'
 import { createInstancePointer, type InstanceInfo } from './instance-pointer.mjs'
 
-export const INSTANCE_MODE_SERVICE_NAME = 'ccmanagerui-instances'
+export const INSTANCE_MODE_SERVICE_NAME = 'agenthydra-instances'
 export const INSTANCE_MODE_CONFIG_DIR = join(CONFIG_DIR, 'instance-mode')
 
 const pointer = createInstancePointer({

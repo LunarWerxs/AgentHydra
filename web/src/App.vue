@@ -32,6 +32,7 @@ import { useData } from '@/composables/useData'
 import { usePanels } from '@/composables/usePanels'
 import { SHELL_BASE_MAX, SHELL_WIDE_MAX, useShellWidth } from '@/composables/useShellWidth'
 import { shutdownApp } from '@/lib/api'
+import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
 import SettingsPanel from '@/shell/SettingsPanel.vue'
@@ -131,8 +132,31 @@ function handleConnectRedirect() {
   else if (failed === 'failed') toast.error(t('settings.cloudSyncConnectFailed'))
 }
 
+// One-time rename notice, shown only to installs that carried CC Manager UI state across (the
+// carry-over in lib/storage-rebrand sets the flag). Cleared before the toast is raised, not after
+// it is dismissed: an unread toast that survives a reload would follow the user around forever,
+// and the same explanation lives permanently in the README and changelog.
+function showRebrandNoticeOnce() {
+  try {
+    if (localStorage.getItem(REBRAND_NOTICE_KEY) !== '1') return
+    localStorage.removeItem(REBRAND_NOTICE_KEY)
+  } catch {
+    return // storage blocked; the notice is not worth a broken mount
+  }
+  toast(t('app.rebrandTitle'), {
+    description: t('app.rebrandBody'),
+    duration: 30_000,
+    action: {
+      label: t('app.rebrandAction'),
+      onClick: () =>
+        window.open('https://github.com/LunarWerxs/AgentHydra/blob/main/CHANGELOG.md', '_blank'),
+    },
+  })
+}
+
 onMounted(startPolling)
 onMounted(handleConnectRedirect)
+onMounted(showRebrandNoticeOnce)
 </script>
 
 <template>
@@ -156,7 +180,7 @@ onMounted(handleConnectRedirect)
       <div class="flex items-center gap-2.5">
         <!-- the real brand mark (same asset as the favicon/tray icon), not a placeholder glyph -->
         <img src="/favicon.svg" alt="" class="size-8 rounded-lg" />
-        <span class="hidden text-sm font-bold tracking-tight min-[480px]:inline">CC Manager UI</span>
+        <span class="hidden text-sm font-bold tracking-tight min-[480px]:inline">AgentHydra</span>
       </div>
 
       <!-- view tabs -->

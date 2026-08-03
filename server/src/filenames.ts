@@ -1,8 +1,8 @@
 // server/src/filenames.ts — build a filesystem-safe download name for a session transcript.
 //
 // A LEAF module on purpose: pure string logic, zero imports (no bun:sqlite, no node:fs), so the
-// web bundle can import it at runtime via the '@ccmanagerui/server/filenames' export the same way
-// it already type-imports '@ccmanagerui/server/types'. Both the download <a> in the SPA and the
+// web bundle can import it at runtime via the '@agenthydra/server/filenames' export the same way
+// it already type-imports '@agenthydra/server/types'. Both the download <a> in the SPA and the
 // server's /file Content-Disposition run THIS one function, so the two never disagree — which they
 // otherwise would, because the browser honors the <a download> name only for a same-origin fetch
 // (prod) and the server's Content-Disposition filename only cross-origin (dev on :5173, or remote).

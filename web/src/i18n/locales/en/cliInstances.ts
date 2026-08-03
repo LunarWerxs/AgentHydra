@@ -53,7 +53,7 @@ export default {
   linkDesktop: 'Link to desktop instance',
   linkDialogTitle: 'Link to a desktop instance',
   linkDialogDescription:
-    "A desktop instance and a CLI instance are two separate logins, but they are usually the same Claude account used two different ways. Linking them lets CC Manager UI show them together, and lets each one check usage on the other's behalf if its own sign-in has expired.",
+    "A desktop instance and a CLI instance are two separate logins, but they are usually the same Claude account used two different ways. Linking them lets AgentHydra show them together, and lets each one check usage on the other's behalf if its own sign-in has expired.",
   linkDesktopLabel: 'Desktop instance',
   linkNone: 'Not linked',
   linkDialogSubmit: 'Save',

@@ -9,7 +9,7 @@ Set shell = CreateObject("WScript.Shell")
 
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 root = fso.GetParentFolderName(scriptDir)
-releaseExe = fso.BuildPath(root, "CCManagerUI.exe")
+releaseExe = fso.BuildPath(root, "AgentHydra.exe")
 sourceEntry = fso.BuildPath(root, "server\src\main.ts")
 shell.CurrentDirectory = root
 comspec = shell.ExpandEnvironmentStrings("%ComSpec%")
@@ -27,7 +27,7 @@ ElseIf fso.FileExists(sourceEntry) Then
   If Not fso.FolderExists(fso.BuildPath(root, "web\dist")) Then
     rc = shell.Run(Cmd(Quote(bunCommand) & " run build"), 0, True)
     If rc <> 0 Then
-      MsgBox "CC Manager UI could not build the quick instance interface.", vbCritical, "Quick Instances"
+      MsgBox "AgentHydra could not build the quick instance interface.", vbCritical, "Quick Instances"
       WScript.Quit rc
     End If
   End If
@@ -35,7 +35,7 @@ ElseIf fso.FileExists(sourceEntry) Then
   ' locations explicitly and execute through cmd so a .cmd shim is always launchable.
   shell.Run Cmd(Quote(bunCommand) & " server/src/main.ts --instances"), 0, False
 Else
-  MsgBox "CC Manager UI could not find its executable or source entrypoint.", vbCritical, "Quick Instances"
+  MsgBox "AgentHydra could not find its executable or source entrypoint.", vbCritical, "Quick Instances"
 End If
 
 Function Quote(value)

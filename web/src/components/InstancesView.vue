@@ -130,7 +130,7 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
 // Collapse state, persisted: someone who only uses the desktop app (or only the CLI) collapses the
 // other table once and expects it to stay that way. Same storage-key convention as the sessions
 // sidebar's width/scope refs.
-const desktopOpen = useStorage('ccmanagerui.instances.desktopOpen', true)
+const desktopOpen = useStorage('agenthydra.instances.desktopOpen', true)
 
 const createOpen = ref(false)
 const creating = ref(false)

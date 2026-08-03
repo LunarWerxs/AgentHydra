@@ -24,7 +24,7 @@
 // bun runs). The .d.mts side is a focused classifier over its narrow grammar — and it FLAGS any
 // export form it does not recognize (e.g. `export *`, a renamed clause) as a finding rather than
 // skipping it, because for a drift check the dangerous failure is a SILENT miss (a value dropped
-// from one side would read as agreement). We do not import `typescript`: ccmanagerui has none at
+// from one side would read as agreement). We do not import `typescript`: agenthydra has none at
 // its root (it lives in the web/ and server/ workspaces), so an import there would not resolve, and
 // this check is meant to run identically in all four consumers with zero install.
 //

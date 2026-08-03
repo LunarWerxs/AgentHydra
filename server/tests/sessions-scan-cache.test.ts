@@ -32,9 +32,9 @@ const env = {
   ...process.env,
   USERPROFILE: home,
   HOME: home,
-  CCMANAGERUI_HOME: join(home, '.ccmanagerui'),
-  CCMANAGERUI_DB: join(home, 'test.db'),
-  CCMANAGERUI_RUN_LOG_DIR: join(home, 'run-logs'),
+  AGENTHYDRA_HOME: join(home, '.agenthydra'),
+  AGENTHYDRA_DB: join(home, 'test.db'),
+  AGENTHYDRA_RUN_LOG_DIR: join(home, 'run-logs'),
 }
 const SESSIONS = JSON.stringify(join(import.meta.dir, '..', 'src', 'sessions.ts'))
 const DB = JSON.stringify(join(import.meta.dir, '..', 'src', 'db.ts'))

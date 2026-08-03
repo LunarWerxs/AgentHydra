@@ -19,7 +19,7 @@ import { classifyLimit, isApiErrorEvent, type LimitKind } from './rate-limit-sig
 import { eventToTailEvents } from './transcript'
 import type { QueueItem, RunEvent } from './types'
 
-// A dispatched `claude` run must OUTLIVE the daemon: quitting CC Manager UI (or an auto-update
+// A dispatched `claude` run must OUTLIVE the daemon: quitting AgentHydra (or an auto-update
 // relaunch) tree-kills the daemon (`taskkill /T`), and killing in-flight work with it is exactly
 // what we refuse to do. So the daemon does NOT spawn `claude` directly. It spawns a DETACHED
 // supervisor (dispatch-runner.ts) that owns `claude` and appends its output to a per-run log file;
@@ -159,7 +159,7 @@ export function getRunEvents(id: string): RunEvent[] {
 // --- argv --------------------------------------------------------------------
 
 export function buildArgv(item: QueueItem): string[] {
-  const useFake = !!process.env.CCMANAGERUI_FAKE
+  const useFake = !!process.env.AGENTHYDRA_FAKE
   // Compiled binaries can't spawn sibling .ts files (import.meta.dir is virtual inside the exe);
   // the exe re-spawns itself with the __fake_claude subcommand instead (server/src/main.ts).
   const argv: string[] = useFake
@@ -303,7 +303,7 @@ function parseMarker(
  * spec rather than the daemon's env. POSIX has no such problem: a plain `detached:true` (setsid) is a
  * genuine session detach.
  *
- * `CCMANAGERUI_RUNNER_LAUNCH` (documented in .env.example) overrides the per-OS default:
+ * `AGENTHYDRA_RUNNER_LAUNCH` (documented in .env.example) overrides the per-OS default:
  *   'wmi'   win32 default — survives Quit (needs PowerShell + WMI).
  *   'start' escape hatch for a box where WMI/PowerShell is blocked: launch via `cmd /c start`
  *           instead. Dispatch still works, but a run will NOT survive Quit (it stays in the job).
@@ -312,7 +312,7 @@ function parseMarker(
  */
 function launchDetachedRunner(specPath: string): void {
   const method =
-    process.env.CCMANAGERUI_RUNNER_LAUNCH || (process.platform === 'win32' ? 'wmi' : 'posix')
+    process.env.AGENTHYDRA_RUNNER_LAUNCH || (process.platform === 'win32' ? 'wmi' : 'posix')
 
   if (process.platform !== 'win32' || method === 'posix') {
     const { argv } = buildDetachedSpawn(process.platform, runnerArgv(specPath))
@@ -350,7 +350,7 @@ function launchDetachedRunner(specPath: string): void {
     return
   }
 
-  // `start` / `start /b` escape hatch (CCMANAGERUI_RUNNER_LAUNCH): launches without WMI for a box
+  // `start` / `start /b` escape hatch (AGENTHYDRA_RUNNER_LAUNCH): launches without WMI for a box
   // where it's blocked. The run works but will NOT survive Quit (a console child stays in the
   // daemon's job object) — that trade-off is documented on the setting in .env.example.
   const b = method === 'startb' ? ['/b'] : []
@@ -725,7 +725,7 @@ async function tailRun(id: string, entry: ActiveEntry): Promise<void> {
             id,
             'system',
             'meta',
-            'run interrupted: the claude process exited without finishing this turn (killed, or CC Manager UI restarted under it). Work it had already completed is on disk — open the session to see how far it got.',
+            'run interrupted: the claude process exited without finishing this turn (killed, or AgentHydra restarted under it). Work it had already completed is on disk — open the session to see how far it got.',
             null,
           )
         finalize(id, -1, { canceled: entry.canceled })
@@ -841,7 +841,7 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
     cliConfigDir,
     dbPath: DB_PATH,
     envExtra: {
-      ...(process.env.CCMANAGERUI_FAKE ? { FAKE_SESSION_ID: item.session_id } : {}),
+      ...(process.env.AGENTHYDRA_FAKE ? { FAKE_SESSION_ID: item.session_id } : {}),
       // FAKE_SLEEP_MS is a test-only knob; forward it so a fake run launched via WMI (which does
       // NOT inherit the daemon's env) can still be slowed down for the survive/reattach tests.
       ...(process.env.FAKE_SLEEP_MS ? { FAKE_SLEEP_MS: process.env.FAKE_SLEEP_MS } : {}),
@@ -959,7 +959,7 @@ export async function reattachRuns(): Promise<void> {
         id,
         'system',
         'meta',
-        'run lost: CC Manager UI restarted and this run left no output to recover from.',
+        'run lost: AgentHydra restarted and this run left no output to recover from.',
         null,
       )
       finalize(id, -1)

@@ -34,7 +34,7 @@ import type {
   UsageCheckResult,
   UsageSettings,
   UsageSnapshot,
-} from '@ccmanagerui/server/types'
+} from '@agenthydra/server/types'
 
 export type {
   Account,
@@ -82,14 +82,14 @@ export type {
   UsageSeverity,
   UsageSnapshot,
   UsageSource,
-} from '@ccmanagerui/server/types'
+} from '@agenthydra/server/types'
 // Value re-export: the curated icon/color key sets that drive the instance appearance pickers
 // (single source of truth, also validated server-side). See lib/instance-appearance.ts.
 export {
   INSTANCE_COLOR_KEYS,
   INSTANCE_ICON_KEYS,
   INSTANCE_LABEL_MAX,
-} from '@ccmanagerui/server/types'
+} from '@agenthydra/server/types'
 
 // Prod bundles are served by the daemon itself, so same-origin relative URLs follow the
 // daemon to whatever port it actually bound (the port-hop). Dev (Vite on :5173) still needs
@@ -331,7 +331,7 @@ export const updateAutoUpdateSettings = (b: Partial<AutoUpdateSettings>) =>
 export const shutdownApp = () =>
   j<{ ok: boolean }>('/api/shutdown', {
     method: 'POST',
-    headers: { 'x-ccmanagerui-shutdown-source': 'ui' },
+    headers: { 'x-agenthydra-shutdown-source': 'ui' },
   })
 
 // --- app settings (portable mode, hide tray icon, usage auto-refresh + section visibility) -------

@@ -99,7 +99,7 @@ onMounted(consumeRequestedTab)
 
 // --- updates ---
 const { updateStatus, updateChecking, updateApplying, checkForUpdate, applyUpdate } = useUpdates()
-// No git remote (and no CCMANAGERUI_UPDATE_REPO) means there is nowhere to pull updates
+// No git remote (and no AGENTHYDRA_UPDATE_REPO) means there is nowhere to pull updates
 // from: the no-source row explains it and the auto-update rows gray out.
 const noUpdateSource = computed(() => !!updateStatus.value && !updateStatus.value.remote)
 // The engine's `reason` is a terse internal string (e.g. "local changes must be committed or
@@ -741,7 +741,7 @@ defineExpose({ save })
       </ExpandTransition>
     </SettingsGroup>
 
-    <!-- provider surfaces: decide which installed tools and optional handoffs CC Manager exposes -->
+    <!-- provider surfaces: decide which installed tools and optional handoffs AgentHydra exposes -->
     <SettingsGroup
       :ref="(el: unknown) => setSectionEl('providers', el)"
       :class="flashSection === 'providers' ? 'settings-flash' : ''"

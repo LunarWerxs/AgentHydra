@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { safeTranscriptFilename } from '@ccmanagerui/server/filenames'
+import { safeTranscriptFilename } from '@agenthydra/server/filenames'
 import {
   Archive,
   ArrowLeft,
@@ -230,7 +230,7 @@ const selectedSource = ref<SessionSource | null>(null)
 const tail = ref<TailResult | null>(null)
 const tailLoading = ref(false)
 // verbose mode: also show tool_use / tool_result events (off = responses only)
-const showTools = useStorage('ccmanagerui.sessions.showTools', false)
+const showTools = useStorage('agenthydra.sessions.showTools', false)
 
 // --- sidebar: persisted drag-resize + animated collapse, auto-collapsing when narrow ---
 const RAIL_WIDTH = 44
@@ -239,7 +239,7 @@ const SIDEBAR_MAX = 560
 const SIDEBAR_DEFAULT = 340
 const clampWidth = (w: number) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w))
 
-const sidebarWidth = useStorage('ccmanagerui.sessions.sidebarWidth', SIDEBAR_DEFAULT)
+const sidebarWidth = useStorage('agenthydra.sessions.sidebarWidth', SIDEBAR_DEFAULT)
 sidebarWidth.value = clampWidth(sidebarWidth.value)
 
 const isWide = useMediaQuery('(min-width: 1024px)')
@@ -295,7 +295,7 @@ const emptyBecauseOfPeriod = computed(
 const advancedOpen = ref(false)
 const advancedQuery = ref('')
 const advancedRegex = ref(false)
-const advancedCaseSensitive = useStorage('ccmanagerui.sessions.advancedCaseSensitive', false)
+const advancedCaseSensitive = useStorage('agenthydra.sessions.advancedCaseSensitive', false)
 const bodySearching = ref(false)
 const bodySearchActive = ref(false)
 const bodySearchQueryUsed = ref('')

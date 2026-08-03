@@ -1,8 +1,8 @@
 // server/src/core/paths.ts — per-OS Claude dir, instances root, app-data dir, launch binary.
 // Adapted from an internal LunarWerx tool's server/src/core/paths.ts (PLAN.md §2), ADAPTED:
 // appDataDir() (and therefore accountsCacheFile()/settingsFile()/logFile()) now resolve under
-// THIS app's CONFIG_DIR (~/.ccmanagerui) instead of that tool's own per-OS %APPDATA% config
-// dir — so the instance-identity cache lives at ~/.ccmanagerui/instances-cache.json, separate
+// THIS app's CONFIG_DIR (~/.agenthydra) instead of that tool's own per-OS %APPDATA% config
+// dir — so the instance-identity cache lives at ~/.agenthydra/instances-cache.json, separate
 // from this app's sqlite `accounts` table (see server/src/core/shared.ts header comment).
 //
 // Pure path/dir resolution — no throwing. Callers that need to distinguish "doesn't exist"
@@ -28,8 +28,8 @@ export function instancesRoot(): string {
   return path.join(os.homedir(), INSTANCES_DIR_NAME)
 }
 
-/** Our own app-data dir: instances-cache.json / ccmanagerui settings / logs (never an
- *  instance dir). Adapted to live under this app's CONFIG_DIR (~/.ccmanagerui) rather than
+/** Our own app-data dir: instances-cache.json / agenthydra settings / logs (never an
+ *  instance dir). Adapted to live under this app's CONFIG_DIR (~/.agenthydra) rather than
  *  the internal tool's own standalone per-OS %APPDATA% dir — one config dir per app. */
 export function appDataDir(): string {
   return CONFIG_DIR
@@ -77,7 +77,7 @@ export function instanceMetaFile(): string {
 }
 
 export function logFile(): string {
-  return path.join(appDataDir(), 'ccmanagerui.log')
+  return path.join(appDataDir(), 'agenthydra.log')
 }
 
 /** Resolve the Claude launch binary path on this OS. Never throws — returns null when no

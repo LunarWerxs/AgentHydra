@@ -24,7 +24,7 @@ is a direct read of the same endpoint the CLI's own `/usage` screen uses, no
   percentage: how fast the cap is being eaten, how long you have, and roughly
   how many more assistant turns fit. See "quantifying it" below.
 - All of these are reads. None of them consume quota. They also work with the
-  CC Manager UI app **closed**: the tokens are files on disk, the quota endpoint
+  AgentHydra app **closed**: the tokens are files on disk, the quota endpoint
   is one HTTPS GET, and the transcripts are local, so the MCP server answers
   in-process when the daemon is not running. (The queue and dispatch tools do
   need the daemon, and will say so.)

@@ -1,7 +1,7 @@
-// CC Manager UI MCP server (stdio) — a thin client over the running daemon's REST API, so an
+// AgentHydra MCP server (stdio) — a thin client over the running daemon's REST API, so an
 // MCP-speaking agent (Claude Desktop/Code, Cursor) shares one source of truth with the web UI.
 // Start the daemon first (`bun run start` from repo root); point elsewhere with
-// CCMANAGERUI_URL / CCMANAGERUI_PORT.
+// AGENTHYDRA_URL / AGENTHYDRA_PORT.
 //
 // The JSON-RPC 2.0 / MCP protocol + the stdio loop live in the SHARED, zero-dependency engine
 // `./mcp-stdio.mjs` (part of the shared kit — edit it there, never here). This file is only the
@@ -12,7 +12,7 @@
 // auto-resume monitor.
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { IS_COMPILED, PORT, VERSION } from './config'
+import { appEnv, IS_COMPILED, PORT, VERSION } from './config'
 import { readInstanceInfo } from './instance'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 import { runMcpStdio } from './mcp-stdio.mjs'
@@ -20,12 +20,14 @@ import { runMcpStdio } from './mcp-stdio.mjs'
 /** Where a plain `claude` login (no CLAUDE_CONFIG_DIR override) keeps its credentials. */
 const defaultClaudeConfigDir = (): string => join(homedir(), '.claude')
 
-// Resolve the base URL per call: an explicit CCMANAGERUI_URL/CCMANAGERUI_PORT always wins, else
-// follow the port the daemon ACTUALLY bound (~/.ccmanagerui/runtime.json), so an auto-hopped port
+// Resolve the base URL per call: an explicit AGENTHYDRA_URL/AGENTHYDRA_PORT always wins, else
+// follow the port the daemon ACTUALLY bound (~/.agenthydra/runtime.json), so an auto-hopped port
 // still works, else fall back to the static configured default.
 export function daemonBase(): string {
-  if (process.env.CCMANAGERUI_URL) return process.env.CCMANAGERUI_URL
-  if (process.env.CCMANAGERUI_PORT) return `http://127.0.0.1:${process.env.CCMANAGERUI_PORT}`
+  const url = appEnv('URL')
+  if (url) return url
+  const port = appEnv('PORT')
+  if (port) return `http://127.0.0.1:${port}`
   return readInstanceInfo()?.url ?? `http://127.0.0.1:${PORT}`
 }
 
@@ -37,7 +39,7 @@ class DaemonUnreachable extends Error {}
 /** How to START the daemon, phrased for THIS distribution: a packaged build has no Bun, so telling
  *  its user to `bun run start` is a dead end — point them at the executable / tray instead. */
 const startHint = IS_COMPILED
-  ? 'Start it by running the CCManagerUI executable (or its tray shortcut).'
+  ? 'Start it by running the AgentHydra executable (or its tray shortcut).'
   : 'Start it with `bun run start`.'
 
 async function api(pathname: string, init?: RequestInit): Promise<unknown> {
@@ -46,10 +48,10 @@ async function api(pathname: string, init?: RequestInit): Promise<unknown> {
     res = await fetch(`${daemonBase()}${pathname}`, init)
   } catch (e) {
     throw new DaemonUnreachable(
-      `couldn't reach the CC Manager UI daemon at ${daemonBase()}. ${startHint} (${e instanceof Error ? e.message : String(e)})`,
+      `couldn't reach the AgentHydra daemon at ${daemonBase()}. ${startHint} (${e instanceof Error ? e.message : String(e)})`,
     )
   }
-  if (!res.ok) throw new Error(`CC Manager UI ${res.status}: ${await res.text()}`)
+  if (!res.ok) throw new Error(`AgentHydra ${res.status}: ${await res.text()}`)
   return res.json()
 }
 
@@ -379,7 +381,7 @@ export const TOOLS: McpEngineTool[] = [
         // of the daemon's sqlite, and racing the daemon for that DB is not worth the complexity.
         if (!a.dir)
           throw new Error(
-            'the CC Manager UI daemon is not running; usage_budget can answer offline for `dir` (a desktop instance) but not for `account`. Start the app, or pass `dir`.',
+            'the AgentHydra daemon is not running; usage_budget can answer offline for `dir` (a desktop instance) but not for `account`. Start the app, or pass `dir`.',
           )
         const { checkUsageForDesktop } = await import('./usage-service')
         const { buildUsageBudget, budgetSummary } = await import('./usage-budget')
@@ -556,13 +558,13 @@ export const TOOLS: McpEngineTool[] = [
   // --- self-update ------------------------------------------------------------------
   {
     name: 'check_update',
-    description: 'Check whether a CC Manager UI update is available (git-based).',
+    description: 'Check whether a AgentHydra update is available (git-based).',
     inputSchema: S(),
     run: () => api('/api/update'),
   },
 ]
 
-export const SERVER_INFO = { name: 'ccmanagerui', version: VERSION }
+export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {

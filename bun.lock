@@ -3,13 +3,13 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "ccmanagerui",
+      "name": "agenthydra",
       "devDependencies": {
         "@biomejs/biome": "^2.5.5",
       },
     },
     "server": {
-      "name": "@ccmanagerui/server",
+      "name": "@agenthydra/server",
       "version": "0.1.0",
       "dependencies": {
         "@cnct/connect": "^1.2.0",
@@ -22,10 +22,10 @@
       },
     },
     "web": {
-      "name": "@ccmanagerui/web",
+      "name": "@agenthydra/web",
       "version": "0.1.0",
       "dependencies": {
-        "@ccmanagerui/server": "workspace:*",
+        "@agenthydra/server": "workspace:*",
         "@lucide/vue": "^1.26.0",
         "@vueuse/core": "^14.3.0",
         "class-variance-authority": "^0.7.1",
@@ -50,6 +50,10 @@
     },
   },
   "packages": {
+    "@agenthydra/server": ["@agenthydra/server@workspace:server"],
+
+    "@agenthydra/web": ["@agenthydra/web@workspace:web"],
+
     "@babel/helper-string-parser": ["@babel/helper-string-parser@7.29.7", "", {}, "sha512-Pb5ijPrZ89GDH8223L4UP8i6QApWxs04RbPQJTeWDV0/keR2E36MeKnyr6LYmUUvqRRI+Iv87SuF1W6ErINzYw=="],
 
     "@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.29.7", "", {}, "sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg=="],
@@ -75,10 +79,6 @@
     "@biomejs/cli-win32-arm64": ["@biomejs/cli-win32-arm64@2.5.5", "", { "os": "win32", "cpu": "arm64" }, "sha512-7BryINPuYypLUAH3o/o5ZdgomJ4zn3EDR0ChZJst7n32S6ZhKbgHXuYydLu+YAnx59ehGFR0z/MG6qnzQi3Yyw=="],
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.5", "", { "os": "win32", "cpu": "x64" }, "sha512-bIBFo+n6MIxdNcVFy5CrurbKiZQiUciK3bt8+O9I4wjFZNTfXLpi+giq47522eXqW5NBc9ulx7dR1SlZKi2J5g=="],
-
-    "@ccmanagerui/server": ["@ccmanagerui/server@workspace:server"],
-
-    "@ccmanagerui/web": ["@ccmanagerui/web@workspace:web"],
 
     "@cnct/connect": ["@cnct/connect@1.2.0", "", { "peerDependencies": { "react": ">=17", "vue": ">=3" }, "optionalPeers": ["react", "vue"], "bin": { "cnct-connect": "dist/cli.js", "connect": "dist/cli.js" } }, "sha512-CNBqRtYqGdKoIFuG2kjtN0rTODRNwdEtvzaYj5ClRevWAgSr1j9y/GoswgL4sAH0pf21pagMAgml0XDvj6dnAA=="],
 

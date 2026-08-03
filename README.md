@@ -1,26 +1,41 @@
 <div align="center">
 
-<img alt="CC Manager UI. Run, queue and orchestrate Claude: many instances, one dashboard" src=".github/og-image.png" width="820" />
+<img alt="AgentHydra. Every local AI coding session, in one tab: many heads, one dashboard" src=".github/og-image.png" width="820" />
 
 ### Every local AI session, plus your isolated Claude and Codex instances
 
-[**Website**](https://ccmanagerui.github.io) &nbsp;·&nbsp; [Download](https://github.com/LunarWerxs/CCManagerUI/releases) &nbsp;·&nbsp; [Reference](docs/REFERENCE.md) &nbsp;·&nbsp; [Changelog](CHANGELOG.md)
+[**Website**](https://agenthydra.lunarwerx.com) &nbsp;·&nbsp; [Download](https://github.com/LunarWerxs/AgentHydra/releases) &nbsp;·&nbsp; [Reference](docs/REFERENCE.md) &nbsp;·&nbsp; [Changelog](CHANGELOG.md)
 
-[![Website](https://img.shields.io/badge/website-ccmanagerui.github.io-c15f3c?style=flat-square)](https://ccmanagerui.github.io)
-[![CI](https://img.shields.io/github/actions/workflow/status/LunarWerxs/CCManagerUI/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/LunarWerxs/CCManagerUI/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/LunarWerxs/CCManagerUI?style=flat-square&color=c15f3c)](https://github.com/LunarWerxs/CCManagerUI/releases)
+[![Website](https://img.shields.io/badge/website-agenthydra.lunarwerx.com-c15f3c?style=flat-square)](https://agenthydra.lunarwerx.com)
+[![CI](https://img.shields.io/github/actions/workflow/status/LunarWerxs/AgentHydra/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/LunarWerxs/AgentHydra/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/LunarWerxs/AgentHydra?style=flat-square&color=c15f3c)](https://github.com/LunarWerxs/AgentHydra/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-c15f3c?style=flat-square)](LICENSE)
 
 </div>
 
 ---
 
-If you run AI tools in more than one place—a couple of isolated Claude Desktop instances on
-different accounts, Claude Code and Codex terminals across repos, or OpenCode CLI/Desktop—nothing
+> ### CC Manager UI is now AgentHydra
+>
+> The name stopped being true. It manages Claude, Codex and OpenCode now, not just Claude Code, so
+> it is named for the many-headed thing it actually is. Nothing about your install changes:
+>
+> - **Update normally.** GitHub redirects the old repo URL, so existing clones, remotes and the
+>   built-in updater keep working without you touching anything.
+> - **Your data comes with you.** `~/.ccmanagerui` is moved to `~/.agenthydra` on first run, with
+>   the queue, settings, instance names and accounts cache intact. If the move cannot happen, the
+>   app keeps reading the old folder rather than starting empty.
+> - **Old env vars still work.** Every `CCMANAGERUI_*` variable is still read as a fallback for its
+>   `AGENTHYDRA_*` replacement.
+> - **What you should update at your leisure:** desktop shortcuts pointing at `CCManagerUI.exe`, and
+>   any MCP config naming the old binary. Both are one-line changes.
+
+If you run AI tools in more than one place (a couple of isolated Claude Desktop instances on
+different accounts, Claude Code and Codex terminals across repos, or OpenCode CLI/Desktop), nothing
 shows all of that local history at once. You alt-tab to remember which account is which, whether a
 session is still going, and what you asked it to do.
 
-CC Manager UI is one local daemon that reads what is already on your machine and puts it in a single
+AgentHydra is one local daemon that reads what is already on your machine and puts it in a single
 browser tab. It is not a Claude client and it does not replace one. It is the dashboard the CLI and
 the desktop app do not come with.
 
@@ -40,7 +55,7 @@ finding its terminal. Pick several Claude sessions and you can send the same mes
 them. Codex and OpenCode support is read-only.
 
 An optional **ChatGPT handoff** in that composer turns the task and repository into a bounded
-Markdown context file, copies a ready-to-paste prompt, and opens ChatGPT. CC Manager omits common
+Markdown context file, copies a ready-to-paste prompt, and opens ChatGPT. AgentHydra omits common
 secret files and likely credentials; you still review the attachment and submit it yourself.
 
 When you want a raw Claude or Codex file, there is a button for opening the `.jsonl` in your editor,
@@ -88,10 +103,10 @@ When you only need to pick an instance and start it, instance mode skips the ses
 database, queue recovery, scheduler, monitor, usage refresh, settings sync and updater. It opens a
 compact portable window with Claude Desktop, Claude CLI and Codex start/focus/stop controls.
 
-- Packaged build: run `CCManagerUI.exe --instances`.
+- Packaged build: run `AgentHydra.exe --instances`.
 - Source checkout: run `bun run instances` (after the normal one-time `bun run build`).
 - Windows shortcut: run `misc\Create-Shortcut.ps1` once, then open
-  **CCManagerUI Instances** from the repository root.
+  **AgentHydra Instances** from the repository root.
 - Or add the same one-click launcher from **Settings → Appearance → Quick Instances shortcut**.
 
 The quick daemon uses its own port and runtime pointer, so the full manager can open later without
@@ -100,8 +115,8 @@ retires its lightweight daemon automatically after a short reconnect grace perio
 
 ## Install
 
-**Download** your OS build from [Releases](https://github.com/LunarWerxs/CCManagerUI/releases).
-On Windows, run the versioned `CCManagerUI-…-windows-x64.exe` directly; it is an icon-bearing GUI
+**Download** your OS build from [Releases](https://github.com/LunarWerxs/AgentHydra/releases).
+On Windows, run the versioned `AgentHydra-…-windows-x64.exe` directly; it is an icon-bearing GUI
 executable with the web app embedded and no console window. The ZIP is the smaller automatic-update
 transport. Linux and macOS builds remain one-executable archives. No Bun or sidecar folders are
 needed.
@@ -109,14 +124,14 @@ needed.
 **Or from source**, with [Bun](https://bun.sh):
 
 ```sh
-git clone https://github.com/LunarWerxs/CCManagerUI.git
-cd CCManagerUI && bun install
+git clone https://github.com/LunarWerxs/AgentHydra.git
+cd AgentHydra && bun install
 bun run build && bun run start
 ```
 
 Either way the UI is at <http://localhost:7787>.
 
-> **Just trying it?** Set `CCMANAGERUI_FAKE=1` and dispatch uses a harmless stand-in for the `claude`
+> **Just trying it?** Set `AGENTHYDRA_FAKE=1` and dispatch uses a harmless stand-in for the `claude`
 > CLI, so nothing touches your quota or your repos. The scheduler is off by default. Note that
 > instance actions (open / quit / create / delete) act on **real** Claude Desktop instances; delete
 > asks you to type the name.

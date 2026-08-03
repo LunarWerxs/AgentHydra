@@ -1,6 +1,6 @@
 // Regression guard for the instance-launch DETACH contract (see buildInstanceLaunch).
 //
-// The bug this locks out: quitting CC Manager UI took the launched Claude Desktop instance down
+// The bug this locks out: quitting AgentHydra took the launched Claude Desktop instance down
 // with it. The Windows tray host quits by tree-killing the daemon's whole process tree
 // (`taskkill /PID <daemon> /T /F`), so an instance launched as a DIRECT child of the daemon is in
 // that tree and dies on Quit. Empirically (2026-07-12) neither `.unref()` nor Bun's

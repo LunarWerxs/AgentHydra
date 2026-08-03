@@ -47,7 +47,7 @@
 # terminal (or the tool/job that ran the rebuild) can tear the whole app down minutes later
 # -- silent, nothing in the daemon log, exactly the hard-kill signature of the incident's
 # endgame. Win32_Process.Create parents it to WmiPrvSE instead, outside this tree and job
-# (the same isolation trick ccmanagerui uses to keep dispatch supervisors alive across a
+# (the same isolation trick agenthydra uses to keep dispatch supervisors alive across a
 # daemon restart), so the app outlives whatever ran this script.
 #
 # WHY WE ONLY KILL PROCESSES OLDER THAN THIS RUN:
@@ -59,7 +59,7 @@
 # is younger than the restart, i.e. that it really is a new process.
 #
 # App-agnostic on purpose: everything derives from package.json `name` and the sibling
-# "*-Tray.ps1" adapter, so the same file works in ccmanagerui / redesign / repoyeti /
+# "*-Tray.ps1" adapter, so the same file works in agenthydra / redesign / repoyeti /
 # devwebui. Keep the four copies identical.
 
 [CmdletBinding()]
@@ -232,11 +232,11 @@ while ($true) {
   foreach ($procId in $order) {
     # /T reaps whatever the target actually parented (a tray host's cmd->bun daemon; a daemon's
     # children). Note what it does NOT reach, and must not: work the app has already dispatched.
-    # ccmanagerui launches a run's supervisor through WMI (Win32_Process.Create) precisely so it is
+    # agenthydra launches a run's supervisor through WMI (Win32_Process.Create) precisely so it is
     # parented to WmiPrvSE, outside this tree AND outside the daemon's job object -- restarting the
     # app is not a reason to destroy a run in flight. (Verified 2026-07-15: a run survives this
     # exact taskkill with no daemon alive at all, and the reopened app reattaches and finalizes it
-    # 'completed'. ccmanagerui guards the property with the WmiPrvSE-parent test in
+    # 'completed'. agenthydra guards the property with the WmiPrvSE-parent test in
     # server/tests/dispatch.test.ts.)
     taskkill /PID $procId /T /F *> $null
     if (-not $killed.ContainsKey($procId)) {

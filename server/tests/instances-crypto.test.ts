@@ -87,7 +87,7 @@ describe('static AES-128-CBC + PBKDF2-SHA1 vector (mac/linux math path)', () => 
   //   keyLen    = 16 bytes (AES-128)
   //   IV        = 16 x 0x20 (Chromium's fixed space-byte IV)
   const PASSWORD = 'test-password-123'
-  const PLAINTEXT = 'hello from cc manager ui'
+  const PLAINTEXT = 'hello from agenthydra'
 
   test("PBKDF2-HMAC-SHA1(pw, 'saltysalt', 1003, 16) matches an independently-verified key", async () => {
     const key = await deriveMacKey(PASSWORD)

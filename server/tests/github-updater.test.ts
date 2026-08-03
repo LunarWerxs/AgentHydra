@@ -31,12 +31,12 @@ describe('github-updater version logic', () => {
     const extension = process.platform === 'win32' ? '.zip' : '.tar.gz'
     const directExtension = process.platform === 'win32' ? '.exe' : ''
     const direct = {
-      name: `CCManagerUI-9.9.9-${target}${directExtension}`,
+      name: `AgentHydra-9.9.9-${target}${directExtension}`,
       browser_download_url: 'https://example.test/direct',
       size: 100,
     }
     const compressed = {
-      name: `CCManagerUI-9.9.9-${target}${extension}`,
+      name: `AgentHydra-9.9.9-${target}${extension}`,
       browser_download_url: 'https://example.test/compressed',
       size: 40,
     }

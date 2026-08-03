@@ -1,10 +1,36 @@
 # Changelog
 
-All notable changes to CC Manager UI are documented here. The format is based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
+All notable changes to AgentHydra are documented here. Entries up to v0.13.0 were written when the
+project was called CC Manager UI and are left in its name, because that is what shipped. The format
+is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- **CC Manager UI is now AgentHydra.** The old name described a Claude Code manager, and the app
+  has read Codex and OpenCode sessions for several releases. The upgrade is designed to be
+  uneventful:
+  - `~/.ccmanagerui` is moved to `~/.agenthydra` the first time the new build starts, carrying the
+    run queue, settings, instance labels and the accounts cache. The move only runs when the new
+    directory does not exist yet, and any failure (a pre-rename daemon still holding the pointer
+    file, a permission problem) falls back to reading the old directory where it stands rather than
+    starting from empty state.
+  - `server/data/ccmanagerui.db` is renamed to `agenthydra.db` in place, with its `-wal`/`-shm`
+    sidecars, and falls back to the old filename if the file is locked.
+  - Every `CCMANAGERUI_*` environment variable is still accepted as a fallback for its
+    `AGENTHYDRA_*` replacement. This is load-bearing for exactly one upgrade: the last CC Manager UI
+    release spawns its successor with `CCMANAGERUI_RELAUNCH=1`, and without the fallback that
+    auto-update would land in the zero-daemons race the relaunch flag exists to prevent.
+  - Saved UI preferences (`ccmanagerui.*` in localStorage) are copied to the `agenthydra.*`
+    namespace before the app mounts, so sidebar width, provider scope, collapse state and locale
+    all survive.
+  - The Windows executable, tray script and icon are renamed to `AgentHydra.*`. Release archives
+    keep their existing wrapper-directory layout so the updater in older builds still recognises
+    them. Desktop shortcuts pointing at the old exe need re-creating once.
+- **New logo.** A three-headed hydra replaces the figure mark, on a tile split between the existing
+  orange and a new sage green. The app's accent colour and the rest of the theme are unchanged.
 
 ### Fixed
 
@@ -18,6 +44,14 @@ All notable changes to CC Manager UI are documented here. The format is based on
   usage reading, its stored usage history, and its per-account auto-resume setting. Only the queue's
   reference to an account was ever cleaned up automatically, so the others accumulated with every
   account removed and could be re-applied to a new account that happened to reuse the same id.
+- An instance signed into a different account kept showing the previous account's email, name and
+  plan. Resolved identities were cached per instance folder and treated as final: nothing compared
+  them against the account the profile was actually signed into, and nothing re-checked them once
+  resolved, so the old identity survived every offline read and every poll until someone pressed
+  Refresh. Identity is now checked against the instance's current login, a cached identity that
+  belongs to another account is discarded rather than displayed, and a sign-in change is picked up
+  on its own within seconds. A resolved identity is also re-checked periodically, so an email, name
+  or plan changed at claude.ai catches up without a restart.
 
 ## [0.13.0] - 2026-07-30
 
@@ -251,8 +285,8 @@ All notable changes to CC Manager UI are documented here. The format is based on
   cell. The value is worked out server-side from two signals, because neither is reliable alone: an
   account's rate-limit tier is sometimes a generic passthrough even for a paid plan (a real Max
   account can arrive labelled `default_claude_ai`), so the normalized plan is used as the fallback
-  and a raw internal string is never shown; the column reads "—" only when the plan genuinely can't
-  be determined.
+  and a raw internal string is never shown; the column reads as a bare dash only when the plan
+  genuinely can't be determined.
 
 ### Changed
 

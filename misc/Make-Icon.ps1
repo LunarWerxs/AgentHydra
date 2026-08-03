@@ -1,19 +1,25 @@
-# Generates misc\CCManagerUI.ico — the CC Manager UI brand icon (orange rounded tile + white
-# figure mark). Emits a proper MULTI-SIZE icon: 16/24/32/48 (true 32bpp DIB) + 256 (PNG). The
-# Windows system tray needs small frames; a 256-only icon renders BLANK or fuzzy in the tray.
+# Generates misc\AgentHydra.ico — the AgentHydra brand icon (split orange/teal rounded tile +
+# white three-headed hydra). Emits a proper MULTI-SIZE icon: 16/24/32/48 (true 32bpp DIB) + 256
+# (PNG). The Windows system tray needs small frames; a 256-only icon renders BLANK or fuzzy there.
 #
-# Source art is misc\CCManagerUI-icon.png (a committed 1024x1024 render of the brand icon) so
-# this script needs NO SVG renderer at runtime — it just loads the PNG and downscales. To
-# change the logo: re-render the PNG from the web favicon, then re-run this script, e.g.
-#     magick -background none web\public\favicon.svg -resize 1024x1024 misc\CCManagerUI-icon.png
-# The brand vector lives in misc\brand\icon.svg. After regenerating, re-run Create-Shortcut.ps1
-# (Windows caches icons; refreshing the shortcut picks up the new one).
+# Source art is misc\AgentHydra-icon.png (a committed 1024x1024 render of the brand icon) so
+# this script needs NO SVG renderer at runtime — it just loads the PNG and downscales.
+#
+# The brand vector is misc\brand\icon.svg, and it is the ONLY place the mark is authored;
+# web\public\favicon.svg and .github\og-image.png are both derived from it. To change the logo:
+#     copy misc\brand\icon.svg web\public\favicon.svg
+#     magick -background none misc\brand\icon.svg -resize 1024x1024 -depth 8 PNG32:misc\AgentHydra-icon.png
+#     powershell -File misc\Make-Icon.ps1
+#     copy misc\AgentHydra.ico web\public\favicon.ico
+#     bun run og-image
+# After regenerating, re-run Create-Shortcut.ps1 (Windows caches icons; refreshing the shortcut
+# picks up the new one).
 Add-Type -AssemblyName System.Drawing
 
 # Load the source PNG into a detached 32bpp ARGB bitmap (frees the file handle, keeps alpha).
 function Get-SourceArt([string]$PngPath){
   if(-not (Test-Path $PngPath)){
-    throw "Source art not found: $PngPath`nRe-render it, e.g.:  magick -background none web\public\favicon.svg -resize 1024x1024 $PngPath"
+    throw "Source art not found: $PngPath`nRe-render it, e.g.:  magick -background none misc\brand\icon.svg -resize 1024x1024 -depth 8 PNG32:$PngPath"
   }
   $img = [System.Drawing.Image]::FromFile($PngPath)
   try {
@@ -87,7 +93,7 @@ function Save-MultiIcon([string]$Path,[System.Drawing.Bitmap]$art){
 }
 
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$art = Get-SourceArt (Join-Path $dir "CCManagerUI-icon.png")
-Save-MultiIcon (Join-Path $dir "CCManagerUI.ico") $art
+$art = Get-SourceArt (Join-Path $dir "AgentHydra-icon.png")
+Save-MultiIcon (Join-Path $dir "AgentHydra.ico") $art
 $art.Dispose()
-Write-Host "Wrote $dir\CCManagerUI.ico (16/24/32/48 + 256) from CCManagerUI-icon.png"
+Write-Host "Wrote $dir\AgentHydra.ico (16/24/32/48 + 256) from AgentHydra-icon.png"

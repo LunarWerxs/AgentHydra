@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createChatGptContextPack } from '../src/context-pack'
 
 test('ChatGPT context pack is bounded, useful, and omits likely secrets', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ccmanager-context-pack-'))
+  const root = mkdtempSync(join(tmpdir(), 'agenthydra-context-pack-'))
   try {
     mkdirSync(join(root, 'src'))
     mkdirSync(join(root, 'node_modules'))

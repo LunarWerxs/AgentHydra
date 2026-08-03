@@ -24,7 +24,7 @@ import { contributeContentInset } from "@/lib/content-inset";
  * the centered shell only partially (or not at all). The shift then becomes just
  * that overlap instead of the full panel width — without it, opening the panel
  * squeezes the content against a band of dead space (bug class caught in
- * ccmanagerui 2026-07-10: Instances table crushed to half width by a 480px pad
+ * agenthydra 2026-07-10: Instances table crushed to half width by a 480px pad
  * while the panel overlapped the shell by ~30px).
  *
  * Usage (in an app shell):

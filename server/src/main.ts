@@ -13,7 +13,7 @@
 //   --instances | --instance-mode → the lightweight instance launcher (./instance-mode.ts)
 //   --mcp                         → the MCP stdio server (./mcp.ts)
 //   __dispatch_runner <specPath>  → the detached per-run supervisor (./dispatch-runner.ts)
-//   __fake_claude <prompt>        → the CCMANAGERUI_FAKE stand-in for `claude` (./fake-claude.ts)
+//   __fake_claude <prompt>        → the AGENTHYDRA_FAKE stand-in for `claude` (./fake-claude.ts)
 //
 // Imports are dynamic per-branch ON PURPOSE: the runner/fake modes must never open the daemon's
 // sqlite DB or bind ports, and --version must answer instantly.

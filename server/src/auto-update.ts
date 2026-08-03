@@ -4,11 +4,11 @@
  * A single daemon-wide timer that, each time it fires, asks the shared updater engine whether a
  * newer commit is on the update remote AND the working tree is clean (`canApply`). If so it applies
  * the update (git pull --ff-only + reinstall + rebuild — see server/src/updater.ts) and then
- * SELF-RELAUNCHES so the freshly-pulled code takes over. The tray (misc/CCManagerUI-Tray.ps1) is a
+ * SELF-RELAUNCHES so the freshly-pulled code takes over. The tray (misc/AgentHydra-Tray.ps1) is a
  * bare supervisor that does NOT relaunch the daemon on exit, so the daemon must relaunch itself; the
  * concrete relaunch (spawn a detached copy of our launch command, then gracefully shut down) is
  * injected from server/src/index.ts, which owns the shutdown handle. The tray then finds the
- * successor via ~/.ccmanagerui/runtime.json + /api/health exactly as it does after a manual restart.
+ * successor via ~/.agenthydra/runtime.json + /api/health exactly as it does after a manual restart.
  *
  * OFF unless the `auto_update_enabled` setting is explicitly '1' — it restarts the daemon
  * unattended, so it's never on by default. A dirty working tree is NEVER updated (`canApply` gates
@@ -49,7 +49,7 @@ function defaultRelaunch(): void {
   // No relaunch handler wired (e.g. a bare test harness) — the update is applied on disk and takes
   // effect on the next manual restart. Never exit here; we don't own a successor.
   console.warn(
-    'ccmanagerui: auto-update applied, but no relaunch handler is wired — restart to apply the new code.',
+    'agenthydra: auto-update applied, but no relaunch handler is wired — restart to apply the new code.',
   )
 }
 const realHooks: AutoUpdateHooks = {

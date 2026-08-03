@@ -204,7 +204,7 @@ export async function resolveCodexDesktopBinary(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | null> {
-  const configured = env.CCMANAGERUI_CODEX_DESKTOP_PATH?.trim()
+  const configured = env.AGENTHYDRA_CODEX_DESKTOP_PATH?.trim()
   if (configured) return existsSync(configured) ? configured : null
 
   if (platform === 'win32') {
@@ -245,7 +245,7 @@ export async function resolveCodexDesktopBinary(
 const powershellLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`
 
 /**
- * Builds a launch that survives quitting/updating CC Manager UI. On Windows, a short-lived
+ * Builds a launch that survives quitting/updating AgentHydra. On Windows, a short-lived
  * PowerShell process applies the instance environment and hands the GUI to Start-Process. Once the
  * hand-off exits, Codex is no longer in the daemon's live process tree. The generic WMI detacher is
  * intentionally not used there: an MSIX full-trust executable created by the WMI service exits
@@ -317,7 +317,7 @@ export async function openCodexDesktop(
       action: 'codex-desktop-open',
       dir: target.codexHome,
       message:
-        'Codex Desktop was not found. Install the Codex desktop app or set CCMANAGERUI_CODEX_DESKTOP_PATH.',
+        'Codex Desktop was not found. Install the Codex desktop app or set AGENTHYDRA_CODEX_DESKTOP_PATH.',
       data: { id: target.id, desktopUserDataDir: desktopDir },
     }
   }
@@ -357,7 +357,7 @@ export async function openCodexDesktop(
 async function focusWindowsPid(pid: number): Promise<'focused' | 'no-window' | string> {
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    'Add-Type -Namespace CCManagerUICodex -Name Win32 -MemberDefinition @"' +
+    'Add-Type -Namespace AgentHydraCodex -Name Win32 -MemberDefinition @"' +
       '\n[DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);' +
       '\n[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);' +
       '\n[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);' +
@@ -370,17 +370,17 @@ async function focusWindowsPid(pid: number): Promise<'focused' | 'no-window' | s
     '$callback = {',
     '  param([IntPtr]$hWnd, [IntPtr]$lParam)',
     '  $procId = 0',
-    '  [void][CCManagerUICodex.Win32]::GetWindowThreadProcessId($hWnd, [ref]$procId)',
-    '  if ($procId -eq $targetPid -and [CCManagerUICodex.Win32]::IsWindowVisible($hWnd)) {',
+    '  [void][AgentHydraCodex.Win32]::GetWindowThreadProcessId($hWnd, [ref]$procId)',
+    '  if ($procId -eq $targetPid -and [AgentHydraCodex.Win32]::IsWindowVisible($hWnd)) {',
     '    $script:found = $hWnd',
     '    return $false',
     '  }',
     '  return $true',
     '}',
-    '[void][CCManagerUICodex.Win32]::EnumWindows($callback, [IntPtr]::Zero)',
+    '[void][AgentHydraCodex.Win32]::EnumWindows($callback, [IntPtr]::Zero)',
     'if ($found -eq [IntPtr]::Zero) { Write-Output "NO_WINDOW" } else {',
-    '  [void][CCManagerUICodex.Win32]::ShowWindow($found, 9)',
-    '  if ([CCManagerUICodex.Win32]::SetForegroundWindow($found)) { Write-Output "FOCUSED" } else { Write-Output "FOREGROUND_DENIED" }',
+    '  [void][AgentHydraCodex.Win32]::ShowWindow($found, 9)',
+    '  if ([AgentHydraCodex.Win32]::SetForegroundWindow($found)) { Write-Output "FOCUSED" } else { Write-Output "FOREGROUND_DENIED" }',
     '}',
   ].join('\n')
   const stdout = await capture(['powershell', '-NoProfile', '-NonInteractive', '-Command', script])

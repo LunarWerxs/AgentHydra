@@ -8,7 +8,7 @@
 //
 // The param name and the "WxH" shape are a contract shared with the daemon
 // (server/src/window-size.ts) and the tray (misc/Tray-Host.ps1) — keep the three in step.
-// CCManagerUI has no web+server shared module, so the literal and the parser live here too
+// AgentHydra has no web+server shared module, so the literal and the parser live here too
 // rather than being imported (the daemon holds its own copies).
 const WINDOW_SIZE_HINT_PARAM = 'window-size'
 

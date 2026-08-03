@@ -35,7 +35,7 @@ const TRANSLATABLE_ATTRS = new Set([
 ])
 
 // Intentional non-translatable literals (brand names, etc.). Keep this list tiny.
-const ALLOWLIST = new Set(['CC Manager UI'])
+const ALLOWLIST = new Set(['AgentHydra'])
 
 const HAS_LETTER = /\p{L}/u
 const SENTENCE_LIKE = /\s/

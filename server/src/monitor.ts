@@ -386,7 +386,7 @@ async function tick(deps: MonitorDeps): Promise<void> {
     await dispatchDueResumes()
     await processRateLimited(deps)
   } catch (err) {
-    console.error('[ccmanagerui] monitor tick error:', err)
+    console.error('[agenthydra] monitor tick error:', err)
   } finally {
     ticking = false
   }
@@ -431,7 +431,7 @@ async function processRateLimited(deps: MonitorDeps): Promise<void> {
   try {
     found = await deps.discoverStops()
   } catch (err) {
-    console.error('[ccmanagerui] rate-limit discovery failed:', err)
+    console.error('[agenthydra] rate-limit discovery failed:', err)
   }
 
   // Discovery already refuses archived sessions; a stop WE dispatched needs the same guard, or

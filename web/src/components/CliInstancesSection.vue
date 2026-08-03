@@ -134,7 +134,7 @@ function isBusy(inst: CliInstance): boolean {
 }
 
 // Persisted collapse state, matching the Instances table's own.
-const cliOpen = useStorage('ccmanagerui.instances.cliOpen', true)
+const cliOpen = useStorage('agenthydra.instances.cliOpen', true)
 
 // --- create ---
 const createOpen = ref(false)

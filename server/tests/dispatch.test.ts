@@ -1,5 +1,5 @@
 // Integration tests for the detached-dispatch pipeline (server/src/dispatch.ts + dispatch-runner.ts).
-// These drive the REAL flow with the fake `claude` stand-in (CCMANAGERUI_FAKE): dispatchItem writes
+// These drive the REAL flow with the fake `claude` stand-in (AGENTHYDRA_FAKE): dispatchItem writes
 // a spec, launches the detached runner (WMI on win32 / setsid on POSIX), which runs the fake CLI and
 // appends its stream-json to a per-run log; the daemon tails that log, records run_events, and
 // finalizes the DB row. Locks in complete / cancel / reattach, plus the property the whole detached
@@ -13,11 +13,11 @@ import { markDispatchReady } from '../src/boot-state'
 import { db } from '../src/db'
 import * as dispatch from '../src/dispatch'
 
-// CCMANAGERUI_DB / CCMANAGERUI_HOME / CCMANAGERUI_RUN_LOG_DIR are isolated by the preload
-// (tests/setup.ts); CCMANAGERUI_FAKE is read at dispatch-CALL time, so setting it here (before any
+// AGENTHYDRA_DB / AGENTHYDRA_HOME / AGENTHYDRA_RUN_LOG_DIR are isolated by the preload
+// (tests/setup.ts); AGENTHYDRA_FAKE is read at dispatch-CALL time, so setting it here (before any
 // dispatchItem call) makes buildArgv use the harmless fake `claude` stand-in.
-process.env.CCMANAGERUI_FAKE = '1'
-const RUN_LOG_DIR = process.env.CCMANAGERUI_RUN_LOG_DIR as string
+process.env.AGENTHYDRA_FAKE = '1'
+const RUN_LOG_DIR = process.env.AGENTHYDRA_RUN_LOG_DIR as string
 const dir = tmpdir() // a real cwd for the fake run; nothing is written to it
 
 let counter = 0
@@ -129,7 +129,7 @@ test('dispatchItem: "cli:" with an empty suffix fails loudly instead of falling 
 })
 
 test('dispatchItem: a "desktop:" ref pointing at a deleted/nonexistent dir fails loudly', async () => {
-  const missingDir = join(tmpdir(), `ccmanagerui-missing-desktop-${counter}-${Date.now()}`)
+  const missingDir = join(tmpdir(), `agenthydra-missing-desktop-${counter}-${Date.now()}`)
   const item = makeItem({ instance_ref: `desktop:${missingDir}` })
   await dispatch.dispatchItem(item)
 
@@ -141,7 +141,7 @@ test('dispatchItem: a "desktop:" ref pointing at a deleted/nonexistent dir fails
   expect(events.some((e) => e.text.includes('desktop instance not found'))).toBe(true)
 })
 
-// THE guard for the promise the whole detached design exists to keep: "close CC Manager UI and your
+// THE guard for the promise the whole detached design exists to keep: "close AgentHydra and your
 // runs carry on". It exists because that promise was previously only "verified manually", and
 // nothing stopped it regressing.
 //
@@ -151,7 +151,7 @@ test('dispatchItem: a "desktop:" ref pointing at a deleted/nonexistent dir fails
 // the OS builds the process for us, outside our job, parented to the WMI provider host.
 //
 // So this asserts the parent is WmiPrvSE *specifically*. "Parent isn't the daemon" would be too weak
-// to be worth writing: under CCMANAGERUI_RUNNER_LAUNCH='start' the runner's parent is a cmd.exe that
+// to be worth writing: under AGENTHYDRA_RUNNER_LAUNCH='start' the runner's parent is a cmd.exe that
 // has already exited, which also isn't the daemon — that check passes for the very method documented
 // NOT to survive. Naming the expected parent is what gives this teeth (confirmed: it goes red under
 // 'startb', where the parent is cmd.exe).

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 
 const binary = resolve(
-  process.argv[2] ?? join('dist', process.platform === 'win32' ? 'CCManagerUI.exe' : 'ccmanagerui'),
+  process.argv[2] ?? join('dist', process.platform === 'win32' ? 'AgentHydra.exe' : 'agenthydra'),
 )
 if (!existsSync(binary)) throw new Error(`release smoke: missing executable at ${binary}`)
 
@@ -21,15 +21,15 @@ async function freePort(): Promise<number> {
   return address.port
 }
 
-const scratch = mkdtempSync(join(tmpdir(), 'ccmanagerui-release-smoke-'))
+const scratch = mkdtempSync(join(tmpdir(), 'agenthydra-release-smoke-'))
 mkdirSync(join(scratch, 'cwd'))
 const port = await freePort()
 const child = Bun.spawn([binary], {
   cwd: join(scratch, 'cwd'),
   env: {
     ...process.env,
-    CCMANAGERUI_HOME: join(scratch, 'state'),
-    CCMANAGERUI_NO_OPEN: '1',
+    AGENTHYDRA_HOME: join(scratch, 'state'),
+    AGENTHYDRA_NO_OPEN: '1',
     PORT: String(port),
   },
   stdin: 'ignore',
@@ -54,7 +54,7 @@ try {
     service?: string
     distribution?: string
   }
-  if (healthBody.service !== 'ccmanagerui' || healthBody.distribution !== 'compiled') {
+  if (healthBody.service !== 'agenthydra' || healthBody.distribution !== 'compiled') {
     throw new Error(`release smoke: unexpected health response ${JSON.stringify(healthBody)}`)
   }
 

@@ -20,15 +20,15 @@ Agents looking for the quota tools specifically want [AI_USAGE_SELFCHECK.md](AI_
 The daemon's REST API is also exposed over MCP stdio (`server/src/mcp.ts`, or `bun run mcp`), so
 agents (Claude Code, Claude Desktop, Cursor) can drive sessions, the run queue, accounts, the
 scheduler, and instances the same way the web UI does. Start the daemon first; the MCP server
-follows its actual bound port via the runtime pointer, overridable with `CCMANAGERUI_URL` (full base
-URL) or `CCMANAGERUI_PORT`.
+follows its actual bound port via the runtime pointer, overridable with `AGENTHYDRA_URL` (full base
+URL) or `AGENTHYDRA_PORT`.
 
 ```json
 {
   "mcpServers": {
-    "ccmanagerui": {
+    "agenthydra": {
       "command": "bun",
-      "args": ["run", "--cwd", "<path-to-ccmanagerui>", "mcp"]
+      "args": ["run", "--cwd", "<path-to-agenthydra>", "mcp"]
     }
   }
 }
@@ -82,20 +82,20 @@ stable interface and must not be assumed by product logic.
 | Var | Default | Meaning |
 |---|---|---|
 | `PORT` | `7787` | preferred API/UI port (hops if busy) |
-| `CCMANAGERUI_INSTANCE_PORT` | `PORT + 1` | preferred port for `--instances` quick mode (hops if busy; separate from the full daemon) |
+| `AGENTHYDRA_INSTANCE_PORT` | `PORT + 1` | preferred port for `--instances` quick mode (hops if busy; separate from the full daemon) |
 | `HOST` | `127.0.0.1` | loopback bind host; only `127.0.0.1`, `localhost`, and `::1` are accepted because the local API is intentionally passwordless |
-| `CCMANAGERUI_PORT_FIXED` | unset | `1` = bind `PORT` exactly, skip the single-instance/port-hop |
-| `CCMANAGERUI_HOME` | `~/.ccmanagerui` | config dir (`runtime.json`, instance-identity cache) |
-| `CCMANAGERUI_SHUTDOWN_TOKEN` | unset | if set, `/api/shutdown` requires a matching `x-ccmanagerui-shutdown-token` header (the tray sets it) |
-| `CCMANAGERUI_FAKE` | unset | dispatch uses the harmless fake CLI |
-| `CCMANAGERUI_DB` | `server/data/ccmanagerui.db` | sqlite path |
-| `CCMANAGERUI_RUN_LOG_DIR` | `server/data/run-logs` | detached-run log and sidecar directory |
-| `CCMANAGERUI_CODEX_HOME` | `~/.codex` | default Codex rollout store to scan |
-| `CCMANAGERUI_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
-| `CCMANAGERUI_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
-| `CCMANAGERUI_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
+| `AGENTHYDRA_PORT_FIXED` | unset | `1` = bind `PORT` exactly, skip the single-instance/port-hop |
+| `AGENTHYDRA_HOME` | `~/.agenthydra` | config dir (`runtime.json`, instance-identity cache) |
+| `AGENTHYDRA_SHUTDOWN_TOKEN` | unset | if set, `/api/shutdown` requires a matching `x-agenthydra-shutdown-token` header (the tray sets it) |
+| `AGENTHYDRA_FAKE` | unset | dispatch uses the harmless fake CLI |
+| `AGENTHYDRA_DB` | `server/data/agenthydra.db` | sqlite path |
+| `AGENTHYDRA_RUN_LOG_DIR` | `server/data/run-logs` | detached-run log and sidecar directory |
+| `AGENTHYDRA_CODEX_HOME` | `~/.codex` | default Codex rollout store to scan |
+| `AGENTHYDRA_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
+| `AGENTHYDRA_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
+| `AGENTHYDRA_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
 
-`/api/health` returns `service: "ccmanagerui"`, which is load-bearing for the single-instance
+`/api/health` returns `service: "agenthydra"`, which is load-bearing for the single-instance
 pointer.
 
 Manually added dispatch API keys and OAuth tokens are stored as plain values in the per-user SQLite
@@ -109,7 +109,7 @@ read those manually supplied credentials.
 Enable **Settings → Providers → ChatGPT handoff** to add a ChatGPT action to the single-session
 composer. It uses the composer task and effective working directory to create a Markdown
 attachment, downloads it in the browser, copies a matching prompt, and opens
-<https://chatgpt.com/>. CC Manager never signs in, submits the prompt, uploads the attachment, or
+<https://chatgpt.com/>. AgentHydra never signs in, submits the prompt, uploads the attachment, or
 reads the response.
 
 The pack is capped at roughly 100,000 estimated tokens and 256 KiB per file. Git checkouts respect
@@ -131,7 +131,7 @@ POST /api/update/settings   { "enabled": true, "intervalSecs": 21600 }
 
 `intervalSecs` clamps to [900, 604800]; default 21600 (6h). Each tick checks the remote and, only if
 the working tree is clean, applies (`git pull --ff-only` + reinstall + rebuild) and relaunches itself
-on the same port (`CCMANAGERUI_RELAUNCH=1` makes the successor wait for the predecessor to free it).
+on the same port (`AGENTHYDRA_RELAUNCH=1` makes the successor wait for the predecessor to free it).
 A dirty tree is never touched.
 
 Because updates are a `git pull --ff-only` against `origin/main`, **pushing `main` is the release**:
@@ -145,7 +145,7 @@ can hold a running profile folder open, and the folder name is also the stable s
 The removed `POST /api/instances/:dir/rename` endpoint must not be restored as a live folder rename.
 
 Appearance metadata `{ label, icon, color }` lives in
-`~/.ccmanagerui/instance-meta.json`, keyed by normalized folder path and cleaned up when the
+`~/.agenthydra/instance-meta.json`, keyed by normalized folder path and cleaned up when the
 instance is deleted. `POST /api/instances/:dir/meta` applies a present value, clears a field when it
 is `null`, and leaves an absent field unchanged. The curated icon/color keys live in
 `server/src/core/shared.ts`; the web mapping and deterministic defaults live in

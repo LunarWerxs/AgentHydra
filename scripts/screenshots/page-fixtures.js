@@ -246,8 +246,8 @@
     {
       id: 'codex-1',
       name: 'work (Codex)',
-      codexHome: 'C:\\Users\\dev\\.ccmanagerui\\codex-instances\\codex-1',
-      desktopUserDataDir: 'C:\\Users\\dev\\.ccmanagerui\\codex-instances\\codex-1\\desktop',
+      codexHome: 'C:\\Users\\dev\\.agenthydra\\codex-instances\\codex-1',
+      desktopUserDataDir: 'C:\\Users\\dev\\.agenthydra\\codex-instances\\codex-1\\desktop',
       isDesktopRunning: true,
       desktopPid: 48216,
       loggedIn: true,

@@ -2,7 +2,7 @@
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 /**
- * Build one self-contained CCManagerUI executable. The generated compile-only entrypoint embeds
+ * Build one self-contained AgentHydra executable. The generated compile-only entrypoint embeds
  * every Vite output, then loads server/src/main.ts. No web/ or misc/ sidecars are required.
  *
  * Options used by release.yml:
@@ -75,11 +75,11 @@ function writeReleaseEntrypoint(): string {
     entry,
     `${imports.join('\n')}
 
-(globalThis as { __CCMANAGERUI_EMBEDDED_WEB__?: Readonly<Record<string, string>> })
-  .__CCMANAGERUI_EMBEDDED_WEB__ = Object.freeze({
+(globalThis as { __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>> })
+  .__AGENTHYDRA_EMBEDDED_WEB__ = Object.freeze({
 ${routes.map(([route, asset]) => `  ${JSON.stringify(route)}: ${asset},`).join('\n')}
 });
-(globalThis as { __CCMANAGERUI_RELEASE_BUILD__?: boolean }).__CCMANAGERUI_RELEASE_BUILD__ = true;
+(globalThis as { __AGENTHYDRA_RELEASE_BUILD__?: boolean }).__AGENTHYDRA_RELEASE_BUILD__ = true;
 await import(${JSON.stringify(importPath(entry, join(ROOT, 'server', 'src', 'main.ts')))});
 `,
   )
@@ -89,7 +89,7 @@ await import(${JSON.stringify(importPath(entry, join(ROOT, 'server', 'src', 'mai
 const target = option('--target')
 const targetFlag = target ? `bun-${target}` : undefined
 const windowsTarget = target ? target.startsWith('windows-') : process.platform === 'win32'
-const defaultName = windowsTarget ? 'CCManagerUI.exe' : 'ccmanagerui'
+const defaultName = windowsTarget ? 'AgentHydra.exe' : 'agenthydra'
 const requestedOutfile = option('--outfile')
 const outBin = resolve(requestedOutfile ?? join(ROOT, 'dist', defaultName))
 if (!requestedOutfile) rmSync(join(ROOT, 'dist'), { recursive: true, force: true })
@@ -105,9 +105,9 @@ const entry = writeReleaseEntrypoint()
 try {
   if (windowsTarget) {
     if (targetFlag) {
-      await $`bun build --compile --sourcemap=none --target=${targetFlag} --windows-hide-console --windows-icon=${join(ROOT, 'misc', 'CCManagerUI.ico')} --windows-title=${'CC Manager UI'} --windows-publisher=LunarWerx --windows-version=${`${pkg.version}.0`} --windows-description=${'Local AI coding-session manager'} ${entry} --outfile=${outBin}`
+      await $`bun build --compile --sourcemap=none --target=${targetFlag} --windows-hide-console --windows-icon=${join(ROOT, 'misc', 'AgentHydra.ico')} --windows-title=${'AgentHydra'} --windows-publisher=LunarWerx --windows-version=${`${pkg.version}.0`} --windows-description=${'Local AI coding-session manager'} ${entry} --outfile=${outBin}`
     } else {
-      await $`bun build --compile --sourcemap=none --windows-hide-console --windows-icon=${join(ROOT, 'misc', 'CCManagerUI.ico')} --windows-title=${'CC Manager UI'} --windows-publisher=LunarWerx --windows-version=${`${pkg.version}.0`} --windows-description=${'Local AI coding-session manager'} ${entry} --outfile=${outBin}`
+      await $`bun build --compile --sourcemap=none --windows-hide-console --windows-icon=${join(ROOT, 'misc', 'AgentHydra.ico')} --windows-title=${'AgentHydra'} --windows-publisher=LunarWerx --windows-version=${`${pkg.version}.0`} --windows-description=${'Local AI coding-session manager'} ${entry} --outfile=${outBin}`
     }
   } else if (targetFlag) {
     await $`bun build --compile --minify --sourcemap=none --target=${targetFlag} ${entry} --outfile=${outBin}`

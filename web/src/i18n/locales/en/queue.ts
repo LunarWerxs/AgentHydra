@@ -43,6 +43,6 @@ export default {
   allDone: 'Nothing left to run.',
   exitLost: 'interrupted',
   exitLostHint:
-    'The run was cut off before it finished. The process was killed, or CC Manager UI restarted under it. Whatever it had already done is on disk; open the session to see how far it got.',
+    'The run was cut off before it finished. The process was killed, or AgentHydra restarted under it. Whatever it had already done is on disk; open the session to see how far it got.',
   deletedInstance: '(deleted instance)',
 }

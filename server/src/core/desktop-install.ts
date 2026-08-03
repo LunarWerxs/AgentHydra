@@ -123,7 +123,7 @@ export function appxOutputHasPfn(output: string): boolean {
   return output.split(/\r?\n/).some((line) => MSIX_PFN_RE.test(line.trim()))
 }
 
-/** Dev/test override: CCMANAGERUI_FAKE_DESKTOP_INSTALL = msix-only | none | ok. Always reports
+/** Dev/test override: AGENTHYDRA_FAKE_DESKTOP_INSTALL = msix-only | none | ok. Always reports
  *  platform 'win32' — the whole point is exercising the win32-only Instances-tab warning, and
  *  the banner is gated on platform === 'win32', so passing through a mac/linux dev machine's
  *  real platform would silently make every fake mode a no-op there. */
@@ -171,7 +171,7 @@ export async function detectDesktopInstall(
 ): Promise<CMDesktopInstall> {
   const platform = currentPlatform()
 
-  const fakeMode = process.env.CCMANAGERUI_FAKE_DESKTOP_INSTALL
+  const fakeMode = process.env.AGENTHYDRA_FAKE_DESKTOP_INSTALL
   if (fakeMode) {
     const fake = fakeResult(fakeMode.trim().toLowerCase())
     if (fake) return fake

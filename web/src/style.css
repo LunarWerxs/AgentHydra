@@ -4,7 +4,7 @@
 @import "./styles/kit-accent.css";
 
 /* ---------------------------------------------------------------------------
-   CC Manager UI "Claude" theme layer — app-local on purpose.
+   AgentHydra "Claude" theme layer — app-local on purpose.
 
    This app is the Claude Code manager, so it uses Claude's own surface values,
    taken from their site and applied verbatim as hex rather than re-derived: three

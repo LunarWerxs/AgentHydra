@@ -1,8 +1,8 @@
 #!/bin/sh
-# CC Manager UI pre-commit gate: refuse a kit-synced file edited away from the kit.
+# AgentHydra pre-commit gate: refuse a kit-synced file edited away from the kit.
 # Enable once with:  git config core.hooksPath .githooks
 # Bypass a single commit with:  git commit --no-verify
 if command -v node >/dev/null 2>&1; then
   echo "› kit-sync guard…"
-  node .githooks/check-kit-sync-staged.mjs ccmanagerui || exit 1
+  node .githooks/check-kit-sync-staged.mjs agenthydra || exit 1
 fi

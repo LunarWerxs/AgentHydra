@@ -1,6 +1,6 @@
 // server/src/dispatch-runner.ts — the DETACHED per-run supervisor for a dispatched `claude` CLI run.
 //
-// WHY this process exists: a dispatch run must OUTLIVE the daemon (quitting CC Manager UI, or an
+// WHY this process exists: a dispatch run must OUTLIVE the daemon (quitting AgentHydra, or an
 // auto-update relaunch, tree-kills the daemon — see server-lib/detached-spawn.mjs). If the daemon
 // spawned `claude` directly it would (a) be a daemon descendant reaped by `taskkill /T`, and (b) hold
 // `claude`'s stdout pipe, which breaks the instant the daemon dies. So dispatch.ts instead spawns

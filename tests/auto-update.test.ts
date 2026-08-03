@@ -1,7 +1,7 @@
 // The auto-update orchestrator's decision logic, driven through injected hooks so nothing actually
 // pulls git / spawns / exits. Gates applying strictly on updateAvailable && canApply, and only
 // relaunches after a successful apply that reports restartRequired. Mirrors DevWebUI's
-// tests/auto-update.test.ts, adapted for ccmanagerui's settings-table persistence.
+// tests/auto-update.test.ts, adapted for agenthydra's settings-table persistence.
 
 import { afterEach, expect, test } from 'bun:test'
 import {
@@ -31,7 +31,7 @@ afterEach(() => {
 function status(over: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
     ok: true,
-    service: 'ccmanagerui',
+    service: 'agenthydra',
     currentVersion: '0.1.0',
     currentCommit: 'aaaa',
     remoteCommit: 'bbbb',

@@ -1,4 +1,4 @@
-# Test preload isolates the suite's state (CCMANAGERUI_DB -> temp sqlite, CCMANAGERUI_HOME -> temp
+# Test preload isolates the suite's state (AGENTHYDRA_DB -> temp sqlite, AGENTHYDRA_HOME -> temp
 # dir) so tests never pollute the real settings table or runtime pointer. See tests/setup.ts.
 [test]
 preload = ["./tests/setup.ts"]

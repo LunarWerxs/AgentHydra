@@ -13,7 +13,7 @@
 // Uses a REAL throwaway directory under instancesRoot() (~/.claude-instances) — removeInstance()'s
 // guard 2 requires the target dir to live there, and instancesRoot() is not env-overridable (unlike
 // CONFIG_DIR, which IS overridden to a temp scratch dir by tests/setup.ts, so the CLI-instance store
-// itself never touches the developer's real ~/.ccmanagerui state). The desktop dir is created fresh
+// itself never touches the developer's real ~/.agenthydra state). The desktop dir is created fresh
 // and always removed (by removeInstance() on success, or by this test's cleanup on any failure) —
 // never a pre-existing instance.
 import { afterEach, describe, expect, test } from 'bun:test'

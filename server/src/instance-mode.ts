@@ -11,7 +11,14 @@ import { bodyLimit } from 'hono/body-limit'
 import { serveStatic } from 'hono/bun'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
-import { HOST, INSTANCE_MODE_PORT, IS_COMPILED, VERSION, WEB_DIST_CANDIDATES } from './config'
+import {
+  HOST,
+  INSTANCE_MODE_PORT,
+  IS_COMPILED,
+  noAutoOpen,
+  VERSION,
+  WEB_DIST_CANDIDATES,
+} from './config'
 import { launchCliInstance, listCliInstances } from './core/cli-instances'
 import {
   focusCodexDesktopInstance,
@@ -40,7 +47,7 @@ import { openUi } from './open-ui'
 // `/instances` surface is even cheaper than keeping a second (albeit tiny) server process.
 const full = await findLiveInstance(750, 2)
 if (full) {
-  if (process.env.CCMANAGERUI_NO_OPEN !== '1') await openInstanceModeWindow(full.url)
+  if (!noAutoOpen()) await openInstanceModeWindow(full.url)
   process.exit(0)
 }
 
@@ -48,7 +55,7 @@ if (full) {
 // daemon. Its separate pointer means this never mistakes the full manager for quick mode.
 const existing = await findLiveInstanceMode(750, 2)
 if (existing) {
-  if (process.env.CCMANAGERUI_NO_OPEN !== '1') {
+  if (!noAutoOpen()) {
     await openInstanceModeWindow(existing.url)
     // A detached Chromium hand-off can report a successful spawn even when an existing background
     // profile process swallows the app-window request. Give the quick UI time to attach, then fall
@@ -85,11 +92,11 @@ if (!startupLock) throw new Error('timed out waiting for another instance-mode l
 process.on('exit', () => startupLock?.release())
 
 process.on('uncaughtException', (error) => {
-  console.error('[ccmanagerui:instances] uncaught exception:', error)
+  console.error('[agenthydra:instances] uncaught exception:', error)
   process.exit(1)
 })
 process.on('unhandledRejection', (reason) => {
-  console.error('[ccmanagerui:instances] unhandled rejection:', reason)
+  console.error('[agenthydra:instances] unhandled rejection:', reason)
   process.exit(1)
 })
 
@@ -113,7 +120,7 @@ function cancelIdleExit(): void {
 }
 
 function exitCleanly(): void {
-  console.log('[ccmanagerui:instances] exiting')
+  console.log('[agenthydra:instances] exiting')
   clearInstanceModeInfo()
   startupLock?.release()
   process.exit(0)
@@ -146,7 +153,14 @@ app.get('/api/instances/:dir/account', async (c) => {
   // and profile/cache machinery do not join the cold-start import graph.
   const { resolveAccount } = await import('./core/accounts')
   const dir = decodeURIComponent(c.req.param('dir'))
-  return c.json(await resolveAccount(dir, { noNetwork: true }))
+  const cached = await resolveAccount(dir, { noNetwork: true })
+  // The cache-only path is what keeps quick-launch off the network, but it can't SEED the cache —
+  // and it now (correctly) returns nothing for an instance that was re-logged into another
+  // account, since the cached identity describes the previous one. Spend one live resolve in
+  // exactly that case, so the quick panel self-heals instead of showing "Account unavailable"
+  // forever while waiting for someone to open the full manager.
+  if (cached.status === 'loggedout' || cached.email || cached.name) return c.json(cached)
+  return c.json(await resolveAccount(dir))
 })
 app.get('/api/usage/cache', async (c) => {
   // Cached readings only: the quick daemon never starts a live quota sweep. Keeping cache access
@@ -189,13 +203,13 @@ app.get('/api/instance-mode/lifetime', (c) =>
   streamSSE(c, async (stream) => {
     let closed = false
     connectedWindows += 1
-    console.log(`[ccmanagerui:instances] window connected (${connectedWindows})`)
+    console.log(`[agenthydra:instances] window connected (${connectedWindows})`)
     cancelIdleExit()
     stream.onAbort(() => {
       if (closed) return
       closed = true
       connectedWindows = Math.max(0, connectedWindows - 1)
-      console.log(`[ccmanagerui:instances] window disconnected (${connectedWindows})`)
+      console.log(`[agenthydra:instances] window disconnected (${connectedWindows})`)
       if (connectedWindows === 0) scheduleIdleExit(30_000)
     })
     await stream.writeSSE({ event: 'ready', data: String(process.pid) })
@@ -216,9 +230,9 @@ app.post('/api/instance-mode/shutdown', (c) => {
 // Serve the same build, whose tiny entrypoint dynamically selects QuickInstancesApp for this path.
 const embeddedWeb = (
   globalThis as {
-    __CCMANAGERUI_EMBEDDED_WEB__?: Readonly<Record<string, string>>
+    __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>>
   }
-).__CCMANAGERUI_EMBEDDED_WEB__
+).__AGENTHYDRA_EMBEDDED_WEB__
 const dist = WEB_DIST_CANDIDATES.find((path) => existsSync(path))
 if (embeddedWeb) {
   app.get('/*', async (c) => {
@@ -265,16 +279,16 @@ process.on('exit', clearInstanceModeInfo)
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, exitCleanly)
 
 const url = `http://${HOST}:${boundPort}`
-console.log(`[ccmanagerui:instances] ${url}/instances`)
-if (process.env.CCMANAGERUI_NO_OPEN !== '1') {
+console.log(`[agenthydra:instances] ${url}/instances`)
+if (!noAutoOpen()) {
   const result = await openInstanceModeWindow(url)
   console.log(
-    `[ccmanagerui:instances] portable window: ${result.ok ? `opened with ${result.browser}` : result.reason}`,
+    `[agenthydra:instances] portable window: ${result.ok ? `opened with ${result.browser}` : result.reason}`,
   )
   setTimeout(() => {
     if (connectedWindows > 0) return
     console.warn(
-      '[ccmanagerui:instances] portable window did not connect; opening a normal browser tab',
+      '[agenthydra:instances] portable window did not connect; opening a normal browser tab',
     )
     openUi(instanceModeUrl(url))
   }, 4_000)

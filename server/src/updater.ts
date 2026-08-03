@@ -11,11 +11,17 @@ import { createUpdater, type UpdateApplyResult, type UpdateStatus } from './upda
 
 export type { UpdateApplyResult, UpdateStatus }
 
+// Pre-rename override kept working. The shared kit engine takes a SINGLE env-var name, so mirror
+// the legacy spelling forward here rather than fork updater-engine.mjs for one alias.
+if (!process.env.AGENTHYDRA_UPDATE_REPO && process.env.CCMANAGERUI_UPDATE_REPO) {
+  process.env.AGENTHYDRA_UPDATE_REPO = process.env.CCMANAGERUI_UPDATE_REPO
+}
+
 const gitUpdater = createUpdater({
   appRoot: APP_ROOT,
   serviceName: SERVICE_NAME,
-  appLabel: 'CC Manager UI',
-  updateRepoEnvVar: 'CCMANAGERUI_UPDATE_REPO',
+  appLabel: 'AgentHydra',
+  updateRepoEnvVar: 'AGENTHYDRA_UPDATE_REPO',
   installCmd: ['bun', 'install'],
   buildCmd: ['bun', 'run', '--cwd', 'web', 'build'],
 })

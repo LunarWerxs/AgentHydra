@@ -1,7 +1,7 @@
 // Tests for the SDK-backed NETWORK paths in server/src/connections.ts that
 // tests/connections.test.ts deliberately leaves uncovered: pushNow/pullNow, buildAuthorizeUrl,
 // handleCallback, and the connected branches of enable/disable(forget). Modeled on RepoYeti's
-// tests/connections-sync.test.ts (src/connections-sync.ts): same idea, adapted to ccmanagerui's
+// tests/connections-sync.test.ts (src/connections-sync.ts): same idea, adapted to agenthydra's
 // SQLite-settings-row state store instead of a JSON file + OS keychain.
 //
 // NEVER reaches the real network: global.fetch is fully mocked to a fake in-memory Connections

@@ -1,6 +1,10 @@
 import { createApp } from 'vue'
 import { appModeForPath } from './lib/app-mode'
+import { migrateLegacyStorageKeys } from './lib/storage-rebrand'
 import './style.css'
+
+// Before any component setup runs — useStorage reads its key once and keeps it.
+migrateLegacyStorageKeys()
 
 async function mountApp(): Promise<void> {
   if (appModeForPath(window.location.pathname) === 'instances') {

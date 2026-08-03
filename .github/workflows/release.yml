@@ -16,7 +16,8 @@
 # - The SPA is embedded into the executable by scripts/build.ts. Windows publishes both a direct
 #   exe and a smaller updater zip; Unix targets publish updater tarballs. Each archive has one
 #   versioned wrapper directory containing only the executable. That wrapper preserves the update
-#   path from older CC Manager releases, whose updater expects it. There are no web/, node_modules/,
+#   path from older CC Manager UI releases (the pre-rename name), whose updater expects it. There
+#   are no web/, node_modules/,
 #   source-map, or tray-script sidecars.
 name: Release
 
@@ -80,7 +81,7 @@ jobs:
         run: |
           VERSION=$(bun -e 'console.log(require("./package.json").version)')
           target="${{ matrix.target }}"
-          name="CCManagerUI-${VERSION}-${target}"
+          name="AgentHydra-${VERSION}-${target}"
           stage="tmp/release-stage"
           rm -rf "$stage"
           mkdir -p "$stage/$name" out
@@ -93,14 +94,14 @@ jobs:
             # from Linux), so the icon + title are applied at compile time — no rcedit post-step.
             # Unminified costs a few MB.
             bun run scripts/build.ts --skip-web --target "$target" \
-              --outfile "${stage}/${name}/CCManagerUI.exe"
-            "${stage}/${name}/CCManagerUI.exe" --version   # canary: the compiled exe runs
-            cp "${stage}/${name}/CCManagerUI.exe" "out/${name}.exe"
+              --outfile "${stage}/${name}/AgentHydra.exe"
+            "${stage}/${name}/AgentHydra.exe" --version   # canary: the compiled exe runs
+            cp "${stage}/${name}/AgentHydra.exe" "out/${name}.exe"
             # windows-latest has 7z on PATH; git-bash there has no `zip`
             (cd "$stage" && 7z a -tzip "$GITHUB_WORKSPACE/out/${name}.zip" "$name" > /dev/null)
           else
             bun run scripts/build.ts --skip-web --target "$target" \
-              --outfile "${stage}/${name}/ccmanagerui"
+              --outfile "${stage}/${name}/agenthydra"
             tar -C "$stage" -czf "out/${name}.tar.gz" "$name"
           fi
           rm -rf "$stage"
@@ -133,17 +134,17 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x64
-            bin: ccmanagerui
+            bin: agenthydra
           - os: ubuntu-latest
             target: linux-arm64
-            bin: ccmanagerui
+            bin: agenthydra
             qemu: true
           - os: windows-latest
             target: windows-x64
-            bin: CCManagerUI.exe
+            bin: AgentHydra.exe
           - os: macos-latest # arm64 runner
             target: darwin-arm64
-            bin: ccmanagerui
+            bin: agenthydra
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/download-artifact@v8
@@ -163,8 +164,8 @@ jobs:
         run: |
           cd out
           case "${{ matrix.target }}" in
-            windows-*) bundle=$(ls CCManagerUI-*-${{ matrix.target }}.zip | head -1) ;;
-            *) bundle=$(ls CCManagerUI-*-${{ matrix.target }}.tar.gz | head -1) ;;
+            windows-*) bundle=$(ls AgentHydra-*-${{ matrix.target }}.zip | head -1) ;;
+            *) bundle=$(ls AgentHydra-*-${{ matrix.target }}.tar.gz | head -1) ;;
           esac
           echo "smoking $bundle"
           mkdir smoke
@@ -187,8 +188,8 @@ jobs:
           cd "$BUNDLE_DIR"
           chmod +x "$BIN" 2>/dev/null || true
           "./$BIN" --version
-          export CCMANAGERUI_HOME="$RUNNER_TEMP/ccm-smoke-home"
-          export CCMANAGERUI_NO_OPEN=1
+          export AGENTHYDRA_HOME="$RUNNER_TEMP/ccm-smoke-home"
+          export AGENTHYDRA_NO_OPEN=1
           PORT=7797 "./$BIN" > daemon.out 2>&1 &
           ok=""
           for _ in $(seq 1 40); do
@@ -197,7 +198,7 @@ jobs:
           done
           if [ -z "$ok" ]; then echo "daemon never served /api/health"; cat daemon.out; exit 1; fi
           cat health.json; echo
-          grep -q '"service":"ccmanagerui"' health.json
+          grep -q '"service":"agenthydra"' health.json
           grep -q '"distribution":"compiled"' health.json
           curl -sf http://127.0.0.1:7797/ > index.html
           grep -qi '<!doctype html' index.html
@@ -214,7 +215,7 @@ jobs:
           # binary at least loads + runs; a full daemon boot under QEMU is slow/flaky, so the arm64
           # leg asserts the launch, and the native x64 leg covers the serving behavior.
           docker run --rm --platform linux/arm64 -v "$PWD/$BUNDLE_DIR:/app" -w /app \
-            arm64v8/debian:stable-slim ./ccmanagerui --version
+            arm64v8/debian:stable-slim ./agenthydra --version
 
   release:
     name: publish the GitHub release
@@ -264,12 +265,12 @@ jobs:
               --clobber
             gh release edit "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "CC Manager UI ${GITHUB_REF_NAME#v}" \
+              --title "AgentHydra ${GITHUB_REF_NAME#v}" \
               --notes-file RELEASE_NOTES.md \
               --draft=false
           else
             gh release create "$GITHUB_REF_NAME" out/*.zip out/*.tar.gz out/*.exe out/SHA256SUMS.txt \
               --repo "$GITHUB_REPOSITORY" \
-              --title "CC Manager UI ${GITHUB_REF_NAME#v}" \
+              --title "AgentHydra ${GITHUB_REF_NAME#v}" \
               --notes-file RELEASE_NOTES.md
           fi

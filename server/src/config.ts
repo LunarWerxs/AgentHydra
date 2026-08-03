@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import rootPkg from '../../package.json'
@@ -6,6 +6,79 @@ import rootPkg from '../../package.json'
 const HOME = homedir()
 const APPDATA = process.env.APPDATA ?? join(HOME, 'AppData', 'Roaming')
 const LOCALAPPDATA = process.env.LOCALAPPDATA ?? join(HOME, 'AppData', 'Local')
+
+/**
+ * Read an app env var by its unprefixed suffix, honouring the pre-rename `CCMANAGERUI_*` spelling.
+ *
+ * The app shipped as "CC Manager UI" through v0.13.x, so an upgrading install can still carry the
+ * old names in a shell profile, a scheduled task, a tray shortcut or a portable launcher we do not
+ * control. The new name wins when both are set; the legacy name keeps working indefinitely rather
+ * than silently reverting someone's port pin or data-dir override to a default.
+ */
+export function appEnv(suffix: string): string | undefined {
+  return process.env[`AGENTHYDRA_${suffix}`] ?? process.env[`CCMANAGERUI_${suffix}`]
+}
+
+/** `*_NO_OPEN=1` — suppress the browser/app window a double-clicked release normally opens.
+ *  Read at call time, not module load, because the smoke test sets it per spawn. */
+export function noAutoOpen(): boolean {
+  return appEnv('NO_OPEN') === '1'
+}
+
+/**
+ * Resolve the per-user config dir, moving a pre-rename `~/.ccmanagerui` across on first run.
+ *
+ * Deliberately non-destructive: the move only happens when the new dir does NOT exist yet, and any
+ * failure (a pre-rename daemon still holding runtime.json open, a cross-device home, a permission
+ * problem) falls back to using the legacy dir where it stands. Losing this directory would lose the
+ * run queue, settings, instance labels and the accounts cache, so "keep working from the old path"
+ * always beats "start clean at the new one".
+ *
+ * `home` is a parameter purely so the test can drive it against a scratch dir; production always
+ * takes the default.
+ */
+export function resolveConfigDir(home: string = HOME): string {
+  const override = appEnv('HOME')?.trim()
+  if (override) return override
+  const preferred = join(home, '.agenthydra')
+  const legacy = join(home, '.ccmanagerui')
+  if (existsSync(preferred)) return preferred
+  if (!existsSync(legacy)) return preferred
+  try {
+    renameSync(legacy, preferred)
+    return preferred
+  } catch {
+    return legacy
+  }
+}
+
+/**
+ * The sqlite file, renamed `ccmanagerui.db` -> `agenthydra.db` in place.
+ *
+ * Runs after {@link resolveConfigDir}, so for a compiled install the whole directory has usually
+ * moved already and only the leaf name is stale. A live daemon holding the file makes renameSync
+ * throw on Windows, which is exactly when we want to keep using the legacy name instead of opening
+ * a second, empty database beside it. The `-wal`/`-shm` sidecars only exist when sqlite did NOT
+ * close cleanly; they are moved best-effort after the main file so the set stays consistent.
+ */
+export function resolveDbPath(dataDir: string): string {
+  const preferred = join(dataDir, 'agenthydra.db')
+  const legacy = join(dataDir, 'ccmanagerui.db')
+  if (existsSync(preferred) || !existsSync(legacy)) return preferred
+  try {
+    renameSync(legacy, preferred)
+  } catch {
+    return legacy
+  }
+  for (const suffix of ['-wal', '-shm']) {
+    try {
+      if (existsSync(legacy + suffix)) renameSync(legacy + suffix, preferred + suffix)
+    } catch {
+      // Sidecar left behind; sqlite rebuilds it from the main file on next open.
+    }
+  }
+  return preferred
+}
 
 /** App version — the root package.json's, bundled at build time (the JSON import is embedded into
  *  a compiled binary, so `--version` answers without any file on disk). */
@@ -23,14 +96,14 @@ export const IS_COMPILED = !existsSync(join(import.meta.dir, 'config.ts'))
 export const CLAUDE_PROJECTS_ROOT = join(HOME, '.claude', 'projects')
 
 /** Codex stores active rollouts in date folders and archived rollouts in a flat sibling folder. */
-export const CODEX_HOME = process.env.CCMANAGERUI_CODEX_HOME?.trim() || join(HOME, '.codex')
+export const CODEX_HOME = appEnv('CODEX_HOME')?.trim() || join(HOME, '.codex')
 export const CODEX_SESSIONS_ROOT = join(CODEX_HOME, 'sessions')
 export const CODEX_ARCHIVED_SESSIONS_ROOT = join(CODEX_HOME, 'archived_sessions')
 export const CODEX_SESSION_INDEX_PATH = join(CODEX_HOME, 'session_index.jsonl')
 
 /** OpenCode CLI and Desktop share this SQLite session store. */
 export const OPENCODE_DB_PATH =
-  process.env.CCMANAGERUI_OPENCODE_DB?.trim() ||
+  appEnv('OPENCODE_DB')?.trim() ||
   join(
     process.env.XDG_DATA_HOME?.trim() || join(HOME, '.local', 'share'),
     'opencode',
@@ -38,7 +111,7 @@ export const OPENCODE_DB_PATH =
   )
 
 /** Per-user config dir; the running-instance pointer (runtime.json) lives here. */
-export const CONFIG_DIR = process.env.CCMANAGERUI_HOME?.trim() || join(HOME, '.ccmanagerui')
+export const CONFIG_DIR = resolveConfigDir()
 
 /** App root: the repo checkout (source mode — parent of server/ and web/) or the directory the
  *  compiled binary sits in (release layout: exe + web/dist side by side). The self-updater and
@@ -54,12 +127,12 @@ export const APP_ROOT = IS_COMPILED ? dirname(process.execPath) : join(import.me
  *  developer's REAL server/data, so a test touching usage-cache.json or usage-history.json would
  *  otherwise write into their live state (see tests/setup.ts). */
 export const DATA_DIR =
-  process.env.CCMANAGERUI_DATA_DIR?.trim() ||
+  appEnv('DATA_DIR')?.trim() ||
   (IS_COMPILED ? join(CONFIG_DIR, 'data') : join(import.meta.dir, '..', 'data'))
-export const DB_PATH = process.env.CCMANAGERUI_DB ?? join(DATA_DIR, 'ccmanagerui.db')
+export const DB_PATH = appEnv('DB') ?? resolveDbPath(DATA_DIR)
 /** Per-run logs (+ the detached runner's spec/status sidecars). Overridable so tests (and a
  *  portable install) can isolate them from the default data dir. */
-export const RUN_LOG_DIR = process.env.CCMANAGERUI_RUN_LOG_DIR?.trim() || join(DATA_DIR, 'run-logs')
+export const RUN_LOG_DIR = appEnv('RUN_LOG_DIR')?.trim() || join(DATA_DIR, 'run-logs')
 
 /**
  * Staging area for "copy the session file to the clipboard".
@@ -79,7 +152,7 @@ export const PORT = Number(process.env.PORT ?? 7787)
 /** Preferred port for the disposable instance-only daemon. It intentionally differs from the
  * full manager's port so opening the full app later never has to evict or upgrade quick mode.
  * Like the full daemon, quick mode hops upward if the preferred port is occupied. */
-export const INSTANCE_MODE_PORT = Number(process.env.CCMANAGERUI_INSTANCE_PORT ?? PORT + 1)
+export const INSTANCE_MODE_PORT = Number(appEnv('INSTANCE_PORT') ?? PORT + 1)
 
 const LOOPBACK_BIND_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 
@@ -99,7 +172,7 @@ export function validateBindHost(value: string | undefined): string {
 export const HOST = validateBindHost(process.env.HOST)
 
 /** Service identity — used in /api/health and the runtime.json pointer (single-instance). */
-export const SERVICE_NAME = 'ccmanagerui'
+export const SERVICE_NAME = 'agenthydra'
 
 /** Built Vue SPA: web/dist under APP_ROOT in BOTH modes (repo checkout, or beside the binary in
  *  the release zip). Kept as a candidate list so a future layout can add entries, not re-plumb. */
@@ -121,7 +194,7 @@ export const WEB_DIST_CANDIDATES = [join(APP_ROOT, 'web', 'dist')]
  * fits the ~48px header, the sidebar's search toolbar and ~10 session rows, with matching
  * reading room in the transcript pane — 800 outer (outer = viewport + ~34 title + ~8 frame;
  * Chromium draws its title bar inside the client area). The tray's cold start carries the
- * same numbers (misc/CCManagerUI-Tray.ps1 PortableWindowSize) — keep them in step.
+ * same numbers (misc/AgentHydra-Tray.ps1 PortableWindowSize) — keep them in step.
  */
 export const PORTABLE_WINDOW_SIZE = { width: 1060, height: 800 }
 
@@ -150,7 +223,7 @@ export function resolveClaudeExe(): string {
  * binaries below LocalAppData, while npm/homebrew installs normally put `codex` on PATH.
  */
 export function resolveCodexExe(): string {
-  const configured = process.env.CCMANAGERUI_CODEX_PATH?.trim()
+  const configured = appEnv('CODEX_PATH')?.trim()
   if (configured) return configured
 
   const desktopBin = join(LOCALAPPDATA, 'OpenAI', 'Codex', 'bin')

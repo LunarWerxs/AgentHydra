@@ -122,7 +122,7 @@ export function createInstancePointer({ configDir, serviceName, host = "127.0.0.
    * (boot-time scanning, a slow sync tick) misses one probe, the guard concludes the port
    * is free, and the caller starts a SECOND daemon that then hops to PORT+1 — leaving two
    * live daemons and a runtime pointer aimed at the wrong one. Observed repeatedly in
-   * ccmanagerui's daemon.log (paired starts seconds apart, the second logging "port N was
+   * agenthydra's daemon.log (paired starts seconds apart, the second logging "port N was
    * busy"). Callers deciding whether to SPAWN should pass attempts >= 2; callers merely
    * reporting status can keep the cheap single probe.
    *

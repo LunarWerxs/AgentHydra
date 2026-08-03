@@ -1,6 +1,6 @@
 // App settings persistence — the sqlite settings table (server/src/db.ts) backing
 // GET/POST /api/settings. Happy-path only; mirrors tests/auto-update.test.ts's direct-import,
-// no-HTTP-server style (the preload in tests/setup.ts already points CCMANAGERUI_DB at a
+// no-HTTP-server style (the preload in tests/setup.ts already points AGENTHYDRA_DB at a
 // throwaway file, so this never touches the developer's real db).
 
 import { expect, test } from 'bun:test'

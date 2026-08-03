@@ -19,10 +19,12 @@ import {
 } from './auto-update'
 import { markDispatchReady } from './boot-state'
 import {
+  appEnv,
   CLIPBOARD_DIR,
   CONFIG_DIR,
   HOST,
   IS_COMPILED,
+  noAutoOpen,
   PORT,
   PORTABLE_WINDOW_SIZE,
   SERVICE_NAME,
@@ -184,11 +186,11 @@ initFileLogging(CONFIG_DIR)
 // the process is gone. process.exit is safe here; the daemon already exits deliberately in its
 // own clean-shutdown paths below (unlike ReDesign, whose entry avoids it for undici's sake).
 process.on('uncaughtException', (err) => {
-  console.error('[ccmanagerui] uncaught exception:', err)
+  console.error('[agenthydra] uncaught exception:', err)
   process.exit(1)
 })
 process.on('unhandledRejection', (reason) => {
-  console.error('[ccmanagerui] unhandled rejection:', reason)
+  console.error('[agenthydra] unhandled rejection:', reason)
   process.exit(1)
 })
 
@@ -201,7 +203,7 @@ function setPortableMode(value: boolean): void {
   updateInstanceInfo({ portableMode: value })
 }
 
-// --- hide tray icon (server/src/db.ts settings table; read live by misc/CCManagerUI-Tray.ps1) ---
+// --- hide tray icon (server/src/db.ts settings table; read live by misc/AgentHydra-Tray.ps1) ---
 function hideTrayIconEnabled(): boolean {
   return getSetting('hide_tray_icon') === '1'
 }
@@ -627,12 +629,12 @@ app.post('/api/sessions/:id/copy-file', async (c) => {
           '-NonInteractive',
           '-Command',
           // -LiteralPath: a title may contain [ ] which -Path would read as a wildcard.
-          'Set-Clipboard -LiteralPath $env:CCMANAGERUI_CLIP_PATH',
+          'Set-Clipboard -LiteralPath $env:AGENTHYDRA_CLIP_PATH',
         ]
       : [
           'osascript',
           '-e',
-          'set the clipboard to (POSIX file (system attribute "CCMANAGERUI_CLIP_PATH"))',
+          'set the clipboard to (POSIX file (system attribute "AGENTHYDRA_CLIP_PATH"))',
         ]
   try {
     // windowsHide: true on every console-program spawn in this file, not just this one. The daemon
@@ -641,7 +643,7 @@ app.post('/api/sessions/:id/copy-file', async (c) => {
     // that inheritance is gone and a plain click on this button would flash a real console window.
     // Stating the intent at the spawn call makes that impossible regardless of how the daemon started.
     const proc = Bun.spawn(cmd, {
-      env: { ...process.env, CCMANAGERUI_CLIP_PATH: staged },
+      env: { ...process.env, AGENTHYDRA_CLIP_PATH: staged },
       stdio: ['ignore', 'ignore', 'ignore'],
       windowsHide: true,
     })
@@ -1447,12 +1449,12 @@ function clearShutdownRequest(): void {
 }
 
 // --- graceful shutdown (tray Quit calls this before falling back to taskkill) ---
-const SHUTDOWN_TOKEN = process.env.CCMANAGERUI_SHUTDOWN_TOKEN
+const SHUTDOWN_TOKEN = appEnv('SHUTDOWN_TOKEN')
 async function flushConnectionsBeforeExit(): Promise<void> {
   await Promise.race([
     flushPending().catch((error) => {
       console.error(
-        `[ccmanagerui] final settings sync failed: ${
+        `[agenthydra] final settings sync failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       )
@@ -1462,8 +1464,8 @@ async function flushConnectionsBeforeExit(): Promise<void> {
 }
 
 app.post('/api/shutdown', (c) => {
-  const trayHeader = c.req.header('x-ccmanagerui-shutdown-token') ?? ''
-  const uiSource = c.req.header('x-ccmanagerui-shutdown-source') === 'ui'
+  const trayHeader = c.req.header('x-agenthydra-shutdown-token') ?? ''
+  const uiSource = c.req.header('x-agenthydra-shutdown-source') === 'ui'
   // The tray's Restart/Quit carry the session token (source=ui + token). A user "Shut down" from
   // the web UI is source=ui WITHOUT the token — allowed, and it drops the sentinel so the tray
   // tears the whole app down rather than reviving the daemon. A non-UI request must still bear the
@@ -1484,9 +1486,9 @@ app.post('/api/shutdown', (c) => {
 // --- serve the built SPA (single-process / production) ----------------------
 const embeddedWeb = (
   globalThis as {
-    __CCMANAGERUI_EMBEDDED_WEB__?: Readonly<Record<string, string>>
+    __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>>
   }
-).__CCMANAGERUI_EMBEDDED_WEB__
+).__AGENTHYDRA_EMBEDDED_WEB__
 const dist = WEB_DIST_CANDIDATES.find((p) => existsSync(p))
 if (embeddedWeb) {
   app.get('/*', async (c) => {
@@ -1544,7 +1546,7 @@ function isPortListening(port: number, host: string): Promise<boolean> {
 }
 
 /** Poll until `port` is free (the predecessor released it), up to timeoutMs. Used by the
- *  auto-update relaunch: a daemon respawned with CCMANAGERUI_RELAUNCH=1 waits for its predecessor
+ *  auto-update relaunch: a daemon respawned with AGENTHYDRA_RELAUNCH=1 waits for its predecessor
  *  to free the preferred port so it rebinds the SAME port instead of hopping. */
 async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -1555,14 +1557,14 @@ async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
 }
 
 // --- boot: single-instance guard, port hop, publish runtime pointer ---------
-// The dev launcher (CCMANAGERUI_PORT_FIXED) and the auto-update successor
-// (CCMANAGERUI_RELAUNCH) are exempt; see skipSingleInstanceGuard for why, and
+// The dev launcher (AGENTHYDRA_PORT_FIXED) and the auto-update successor
+// (AGENTHYDRA_RELAUNCH) are exempt; see skipSingleInstanceGuard for why, and
 // single-instance.test.ts for the regression guard on the relaunch exemption.
 const releaseDoubleClick =
-  (globalThis as { __CCMANAGERUI_RELEASE_BUILD__?: boolean }).__CCMANAGERUI_RELEASE_BUILD__ ===
+  (globalThis as { __AGENTHYDRA_RELEASE_BUILD__?: boolean }).__AGENTHYDRA_RELEASE_BUILD__ ===
     true &&
-  process.env.CCMANAGERUI_RELAUNCH !== '1' &&
-  !process.env.CCMANAGERUI_SHUTDOWN_TOKEN
+  process.env.AGENTHYDRA_RELAUNCH !== '1' &&
+  !appEnv('SHUTDOWN_TOKEN')
 
 if (!skipSingleInstanceGuard()) {
   // Re-probe (3 attempts, 2s each) rather than trusting ONE 1s probe. This decides whether to
@@ -1575,16 +1577,16 @@ if (!skipSingleInstanceGuard()) {
   const live = await findLiveInstance(2000, 3)
   if (live) {
     console.log(
-      `\n  CC Manager UI is already running  →  ${live.url}\n  Not starting a second instance.\n`,
+      `\n  AgentHydra is already running  →  ${live.url}\n  Not starting a second instance.\n`,
     )
-    if (releaseDoubleClick && process.env.CCMANAGERUI_NO_OPEN !== '1') openUi(live.url)
+    if (releaseDoubleClick && !noAutoOpen()) openUi(live.url)
     process.exit(0)
   }
 }
-// A daemon relaunched by the auto-updater (CCMANAGERUI_RELAUNCH=1) waits for its predecessor to
+// A daemon relaunched by the auto-updater (AGENTHYDRA_RELAUNCH=1) waits for its predecessor to
 // free the preferred port BEFORE probing/binding, so it rebinds the SAME port (an open browser
 // tab's SSE then reconnects seamlessly instead of the daemon hopping to a port the tab can't reach).
-if (process.env.CCMANAGERUI_RELAUNCH === '1') await waitForPortFree(PORT, 8000)
+if (process.env.AGENTHYDRA_RELAUNCH === '1') await waitForPortFree(PORT, 8000)
 // Probe the SAME interface the server binds (HOST); the wildcard probe misses a
 // squatter that holds only 127.0.0.1 (e.g. wrangler dev's workerd on 8787).
 // A tray "Restart"/"Rebuild & Restart" spawns the successor while the predecessor is still
@@ -1593,7 +1595,7 @@ if (process.env.CCMANAGERUI_RELAUNCH === '1') await waitForPortFree(PORT, 8000)
 // open tab on the old port starts erroring; the "crashes on relaunch" symptom. A genuine
 // squatter (some other app on the port) just costs this one bounded wait, then we hop as before.
 let boundPort = PORT
-if (process.env.CCMANAGERUI_PORT_FIXED !== '1') {
+if (process.env.AGENTHYDRA_PORT_FIXED !== '1') {
   if (await isPortListening(PORT, HOST)) await waitForPortFree(PORT, 5000)
   boundPort = await findFreePort(PORT, 50, HOST)
 }
@@ -1616,7 +1618,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
   })
 
 const moved = boundPort !== PORT ? `  (port ${PORT} was busy)` : ''
-console.log(`[ccmanagerui] http://${HOST}:${boundPort}${moved}`)
+console.log(`[agenthydra] http://${HOST}:${boundPort}${moved}`)
 
 // --- Connections cloud sync (opt-in; see server/src/connections.ts) ---------
 // Load the persisted session/sync state into memory before the server starts accepting requests.
@@ -1624,7 +1626,7 @@ initConnections()
 
 // Restart the daemon so a freshly-applied update takes over. The tray is a bare supervisor that
 // never relaunches us, so the daemon must relaunch ITSELF: spawn a DETACHED copy of this exact
-// launch command (CCMANAGERUI_RELAUNCH=1 so the successor waits for our port), then gracefully
+// launch command (AGENTHYDRA_RELAUNCH=1 so the successor waits for our port), then gracefully
 // shut THIS daemon down to free the port. Shared by the auto-update loop AND the manual
 // /api/update/apply route (a compiled apply swapped the binary on disk — process.execPath now
 // points at the NEW exe, so respawning it boots the updated build). Returns false (no shutdown)
@@ -1642,14 +1644,14 @@ function relaunchDaemon(): boolean {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
-      env: { ...process.env, CCMANAGERUI_RELAUNCH: '1', PORT: String(PORT) },
+      env: { ...process.env, AGENTHYDRA_RELAUNCH: '1', PORT: String(PORT) },
     })
     child.unref()
   } catch (e) {
-    console.error('[ccmanagerui] relaunch failed to spawn; staying on the running version.', e)
+    console.error('[agenthydra] relaunch failed to spawn; staying on the running version.', e)
     return false
   }
-  console.log('[ccmanagerui] update applied, relaunching the daemon…')
+  console.log('[agenthydra] update applied, relaunching the daemon…')
   setTimeout(async () => {
     await flushConnectionsBeforeExit()
     clearInstanceInfo()
@@ -1722,13 +1724,13 @@ const server = Bun.serve({
 // ever serves it. Warming is purely an optimization (the list still builds on demand), so any
 // failure must degrade to a cold first request, never to a dead process.
 warmSessionScanCache().catch((error) => {
-  console.error('[ccmanagerui] session-scan warm failed; the list will build on demand:', error)
+  console.error('[agenthydra] session-scan warm failed; the list will build on demand:', error)
 })
 
-if (releaseDoubleClick && process.env.CCMANAGERUI_NO_OPEN !== '1') {
+if (releaseDoubleClick && !noAutoOpen()) {
   const url = `http://127.0.0.1:${server.port}/`
   if (!openUi(url))
-    console.error(`[ccmanagerui] Could not open a browser automatically. Open ${url} manually.`)
+    console.error(`[agenthydra] Could not open a browser automatically. Open ${url} manually.`)
 }
 
 export type App = typeof app

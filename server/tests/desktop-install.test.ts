@@ -34,7 +34,7 @@ afterEach(() => {
       // Best-effort temp cleanup.
     }
   }
-  delete process.env.CCMANAGERUI_FAKE_DESKTOP_INSTALL
+  delete process.env.AGENTHYDRA_FAKE_DESKTOP_INSTALL
 })
 
 describe('detectDesktopInstall — win32 detection matrix (injected dirs)', () => {
@@ -304,8 +304,8 @@ describe('detectDesktopInstall — cross-platform behavior', () => {
     expect(result.msixDetected).toBe(false)
   })
 
-  test('CCMANAGERUI_FAKE_DESKTOP_INSTALL=msix-only forces the warning shape', async () => {
-    process.env.CCMANAGERUI_FAKE_DESKTOP_INSTALL = 'msix-only'
+  test('AGENTHYDRA_FAKE_DESKTOP_INSTALL=msix-only forces the warning shape', async () => {
+    process.env.AGENTHYDRA_FAKE_DESKTOP_INSTALL = 'msix-only'
     const result = await detectDesktopInstall({ fresh: true })
     expect(result.manageable).toBe(false)
     expect(result.msixDetected).toBe(true)
@@ -315,8 +315,8 @@ describe('detectDesktopInstall — cross-platform behavior', () => {
     expect(result.platform).toBe('win32')
   })
 
-  test('CCMANAGERUI_FAKE_DESKTOP_INSTALL=ok forces the manageable shape', async () => {
-    process.env.CCMANAGERUI_FAKE_DESKTOP_INSTALL = 'ok'
+  test('AGENTHYDRA_FAKE_DESKTOP_INSTALL=ok forces the manageable shape', async () => {
+    process.env.AGENTHYDRA_FAKE_DESKTOP_INSTALL = 'ok'
     const result = await detectDesktopInstall({ fresh: true })
     expect(result.manageable).toBe(true)
     expect(result.msixDetected).toBe(false)
@@ -324,7 +324,7 @@ describe('detectDesktopInstall — cross-platform behavior', () => {
   })
 
   test('unknown fake mode falls through to real detection', async () => {
-    process.env.CCMANAGERUI_FAKE_DESKTOP_INSTALL = 'bogus'
+    process.env.AGENTHYDRA_FAKE_DESKTOP_INSTALL = 'bogus'
     const result = await detectDesktopInstall({ fresh: true, appxProbe: null })
     expect(result.msixSignals).not.toEqual(['fake'])
   })
@@ -355,7 +355,7 @@ describe('openInstance — no-binary failure message', () => {
       const lad = fakeLocalAppData()
       cleanups.push(lad)
       process.env.LOCALAPPDATA = lad
-      process.env.CCMANAGERUI_FAKE_DESKTOP_INSTALL = 'msix-only'
+      process.env.AGENTHYDRA_FAKE_DESKTOP_INSTALL = 'msix-only'
       try {
         const result = await openInstance('C:\\nonexistent\\ccmui-msix-message-test')
         expect(result.ok).toBe(false)
