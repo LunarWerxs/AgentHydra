@@ -41,7 +41,7 @@ the desktop app do not come with.
 
 ## Every session, in one list
 
-![The sessions view: a searchable list of Claude Code transcripts on the left, one open on the right with a message box at the bottom](.github/screenshots/sessions.png)
+![The sessions view: a searchable list on the left holding Claude, Codex and OpenCode transcripts together, each badged with the tool that wrote it, one open on the right with a message box at the bottom](.github/screenshots/sessions.png)
 
 <sub>Screenshots use demo data.</sub>
 

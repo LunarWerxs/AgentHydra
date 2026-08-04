@@ -89,7 +89,11 @@ const SHOTS = [
     // loads, and the fixture supplies exactly four turns, so a bare count is satisfied identically
     // by the skeleton state (4) and the loaded state (4). Exclude skeletons by their data-slot AND
     // assert on text only the fixture's transcript can produce.
-    expect: `document.querySelectorAll('.rounded-2xl:not([data-slot="skeleton"])').length >= 3 && /empty postcode/.test(document.body.innerText)`,
+    //
+    // All three provider badges too. This shot's job is to show that one list holds Claude, Codex
+    // and OpenCode together; a fixture edit that quietly made them uniform again would otherwise
+    // produce a perfectly valid-looking screenshot that no longer says the thing it is here to say.
+    expect: `document.querySelectorAll('.rounded-2xl:not([data-slot="skeleton"])').length >= 3 && /empty postcode/.test(document.body.innerText) && ['Claude','Codex','OpenCode'].every((p) => [...document.querySelectorAll('aside [data-slot="badge"]')].some((b) => b.textContent.trim() === p))`,
   },
   {
     name: 'instances',

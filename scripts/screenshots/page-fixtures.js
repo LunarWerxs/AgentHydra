@@ -18,34 +18,58 @@
   const proj = (n) => `C:\\Projects\\${n}`
   const projKey = (n) => `C--Projects-${n}`
 
+  // Where each provider's transcript actually lives, so the raw-file affordances in the UI line
+  // up with the badge on the row. OpenCode has no per-session file: CLI and Desktop share one
+  // SQLite store, which is why its row points at the database.
+  const transcriptPath = (source, p, i) =>
+    source === 'codex'
+      ? `C:\\Users\\dev\\.codex\\sessions\\2026\\08\\04\\rollout-2026-08-04T09-14-22-s${i}.jsonl`
+      : source === 'opencode'
+        ? 'C:\\Users\\dev\\.local\\share\\opencode\\opencode.db'
+        : `C:\\Users\\dev\\.claude\\projects\\${projKey(p)}\\s${i}.jsonl`
+
+  // A mixed list is the point of the shot: the app reads all three providers, and the badge
+  // column is the only thing that says so. The fields the server nulls out for non-Claude rows
+  // (instance, queue_status, and git_branch for OpenCode, which parses no repo metadata) are
+  // nulled here too — a fixture that fills them would photograph a UI the daemon cannot produce.
   const sessions = [
-    ['Refactor checkout validation', 'acme-storefront', 'main', 128, 2, 'work'],
-    ['Fix flaky upload test', 'atlas-api', 'main', 64, 18, 'work'],
-    ['Add pagination to search results', 'acme-storefront', 'feat/search', 212, 63, 'personal'],
-    ['Friendlier parser error messages', 'pico-cli', 'feat/parser', 48, 184, 'work'],
-    ['Audit log retention policy', 'atlas-api', 'main', 91, 300, 'research'],
-    ['Dark mode token pass', 'acme-storefront', 'main', 156, 480, 'personal'],
-    ['Rate limiter backoff', 'atlas-api', 'main', 73, 1500, 'work'],
-    ['Tidy up CLI help output', 'pico-cli', 'main', 39, 2900, 'work'],
-  ].map(([title, p, branch, count, mins, instance], i) => ({
+    ['Refactor checkout validation', 'acme-storefront', 'main', 128, 2, 'work', 'claude'],
+    ['Fix flaky upload test', 'atlas-api', 'main', 64, 18, null, 'codex'],
+    [
+      'Add pagination to search results',
+      'acme-storefront',
+      'feat/search',
+      212,
+      63,
+      'personal',
+      'claude',
+    ],
+    ['Friendlier parser error messages', 'pico-cli', 'feat/parser', 48, 184, null, 'opencode'],
+    ['Audit log retention policy', 'atlas-api', 'main', 91, 300, 'research', 'claude'],
+    ['Dark mode token pass', 'acme-storefront', 'main', 156, 480, 'personal', 'claude'],
+    ['Rate limiter backoff', 'atlas-api', 'main', 73, 1500, 'work', 'claude'],
+    ['Tidy up CLI help output', 'pico-cli', 'main', 39, 2900, 'work', 'claude'],
+  ].map(([title, p, branch, count, mins, instance, source], i) => ({
     session_id: `s${i}0000000-0000-4000-8000-00000000000${i}`,
-    source: 'claude',
+    source,
     title,
     cwd: proj(p),
     project: projKey(p),
-    git_branch: branch,
+    git_branch: source === 'opencode' ? null : branch,
     message_count: count,
     created_at: ago(mins + 240),
     last_activity_at: ago(mins),
     last_role: 'assistant',
     last_text_preview: 'Updated the module and re-ran the suite; everything passes locally.',
     size_bytes: count * 3200,
-    transcript_path: `C:\\Users\\dev\\.claude\\projects\\${projKey(p)}\\s${i}.jsonl`,
+    transcript_path: transcriptPath(source, p, i),
     queue_status: null,
-    instance,
+    instance: source === 'claude' ? instance : null,
     archived: false,
     done: i === 7,
   }))
+  /** The queue only ever holds `claude` runs, so its rows may only point at Claude sessions. */
+  const claudeSessions = sessions.filter((s) => s.source === 'claude')
 
   const turns = [
     {
@@ -207,7 +231,7 @@
     ['Tidy up CLI help output', 'pico-cli', 'completed'],
   ].map(([title, p, status], i) => ({
     id: `q${i}0000000-0000-4000-8000-00000000000${i}`,
-    session_id: sessions[i % sessions.length].session_id,
+    session_id: claudeSessions[i % claudeSessions.length].session_id,
     title,
     cwd: proj(p),
     prompt: 'resume',
