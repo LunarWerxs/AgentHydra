@@ -3,6 +3,7 @@ import { safeTranscriptFilename } from '@agenthydra/server/filenames'
 import {
   Archive,
   ArrowLeft,
+  BookOpen,
   Boxes,
   CalendarRange,
   Check,
@@ -509,6 +510,17 @@ const composerTargets = computed<ComposerTarget[]>(() => {
   return s?.source === 'claude'
     ? [{ session_id: s.session_id, title: s.title, cwd: s.cwd, instance: s.instance }]
     : []
+})
+
+// Only the `claude` CLI can be handed a prompt, so Codex and OpenCode transcripts get no
+// composer. Left at that the reply box simply is not there, which reads as a bug rather
+// than a boundary, so name the source that owns the conversation instead.
+// Deliberately not `!composerTargets.length`: in select mode an empty selection also
+// empties that list, and the open session there may well be a Claude one.
+const readOnlySource = computed(() => {
+  if (selectMode.value) return null
+  const s = selected.value
+  return s && s.source !== 'claude' ? s.source : null
 })
 
 function onComposerSent(mode: 'now' | 'queued') {
@@ -1220,6 +1232,15 @@ function copy(text: string) {
         :targets="composerTargets"
         @sent="onComposerSent"
       />
+      <!-- ...and, where there can be no input, why -->
+      <div v-else-if="readOnlySource" class="shrink-0 bg-background">
+        <div
+          class="mx-auto flex w-full max-w-3xl items-center gap-2 px-4 py-3 text-xs text-muted-foreground"
+        >
+          <BookOpen class="size-3.5 shrink-0" />
+          <span>{{ $t('sessions.readOnlySource', { source: sourceLabel(readOnlySource) }) }}</span>
+        </div>
+      </div>
     </section>
   </div>
 </template>
