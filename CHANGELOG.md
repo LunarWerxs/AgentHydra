@@ -7,7 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-## [0.14.0] - 2026-08-02
+## [0.14.0] - 2026-08-04
 
 ### Changed
 
@@ -54,6 +54,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   belongs to another account is discarded rather than displayed, and a sign-in change is picked up
   on its own within seconds. A resolved identity is also re-checked periodically, so an email, name
   or plan changed at claude.ai catches up without a restart.
+- An open Codex or OpenCode session showed no reply box and no reason for it. Only the `claude` CLI
+  can be handed a prompt, so the composer is deliberately dropped for the other two sources, but
+  nothing stood in its place and the gap read as a failed render rather than a boundary. Those
+  sessions now say they are read-only here and name the tool to carry the conversation on in.
 
 ## [0.13.0] - 2026-07-30
 
