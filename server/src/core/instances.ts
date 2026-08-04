@@ -14,8 +14,8 @@
 // Nothing here throws for expected failure conditions (missing dirs, no processes found, spawn
 // failures, permission errors); every public function returns a status-carrying result instead.
 
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { basename } from 'node:path'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { detectDesktopInstall } from './desktop-install'
 import { readInstanceMetaMap } from './instance-meta'
@@ -95,6 +95,32 @@ function dirSizeBytes(dir: string): number | undefined {
     return total
   } catch {
     return undefined
+  }
+}
+
+/**
+ * Which account an instance is signed into right now: `<dir>/config.json`'s `lastKnownAccountUuid`
+ * (null when signed out, unreadable, or malformed).
+ *
+ * This is the ONLY part of account identity cheap enough to ship with every list response — the
+ * rest needs a safeStorage decrypt and a profile call (core/accounts.ts). It exists so the UI can
+ * notice that an instance was re-logged into a DIFFERENT account and re-resolve, instead of
+ * showing the identity it resolved once forever.
+ *
+ * Deliberately un-memoized: these files run 3–9 KB, so re-reading one per instance per poll tick
+ * is far cheaper than the staleness a stat-keyed cache would risk (an account switch rewrites
+ * config.json to the SAME size, since one uuid is exactly as long as another). Identity only —
+ * never reads or returns a token. Never throws.
+ */
+export function readLoginUuid(instanceDir: string): string | null {
+  try {
+    if (!instanceDir?.trim()) return null
+    const raw = readFileSync(join(instanceDir, 'config.json'), 'utf8')
+    if (!raw?.trim()) return null
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    return typeof parsed.lastKnownAccountUuid === 'string' ? parsed.lastKnownAccountUuid : null
+  } catch {
+    return null
   }
 }
 
@@ -188,6 +214,7 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
       sizeBytes,
       memoryBytes,
       account,
+      loginUuid: readLoginUuid(meta.dir),
       isExternal: meta.isExternal,
       label: ui?.label ?? null,
       icon: ui?.icon ?? null,
@@ -213,7 +240,7 @@ export interface InstanceLaunch {
 
 /**
  * Builds the launch argv for an instance binary, per-OS, such that the launched Claude Desktop
- * is NOT a descendant of this daemon, so quitting CC Manager UI can't take the instance with it.
+ * is NOT a descendant of this daemon, so quitting AgentHydra can't take the instance with it.
  *
  * WHY this matters: the Windows tray host quits by tree-killing the daemon's whole process tree
  * (`taskkill /PID <daemon> /T /F`, see lunarwerx-ui/src/tray-host/Tray-Host.ts). A Claude Desktop
@@ -530,7 +557,7 @@ export async function quitInstance(
 async function focusWindowByPid(pid: number): Promise<'focused' | 'no-window' | string> {
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    'Add-Type -Namespace CCManagerUI -Name Win32 -MemberDefinition @"' +
+    'Add-Type -Namespace AgentHydra -Name Win32 -MemberDefinition @"' +
       '\n[DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);' +
       '\n[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);' +
       '\n[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);' +
@@ -543,19 +570,19 @@ async function focusWindowByPid(pid: number): Promise<'focused' | 'no-window' | 
     '$callback = {',
     '  param([IntPtr]$hWnd, [IntPtr]$lParam)',
     '  $procId = 0',
-    '  [void][CCManagerUI.Win32]::GetWindowThreadProcessId($hWnd, [ref]$procId)',
-    '  if ($procId -eq $targetPid -and [CCManagerUI.Win32]::IsWindowVisible($hWnd)) {',
+    '  [void][AgentHydra.Win32]::GetWindowThreadProcessId($hWnd, [ref]$procId)',
+    '  if ($procId -eq $targetPid -and [AgentHydra.Win32]::IsWindowVisible($hWnd)) {',
     '    $script:found = $hWnd',
     '    return $false',
     '  }',
     '  return $true',
     '}',
-    '[void][CCManagerUI.Win32]::EnumWindows($callback, [IntPtr]::Zero)',
+    '[void][AgentHydra.Win32]::EnumWindows($callback, [IntPtr]::Zero)',
     'if ($found -eq [IntPtr]::Zero) {',
     '  Write-Output "NO_WINDOW"',
     '} else {',
-    '  [void][CCManagerUI.Win32]::ShowWindow($found, 9)',
-    '  $ok = [CCManagerUI.Win32]::SetForegroundWindow($found)',
+    '  [void][AgentHydra.Win32]::ShowWindow($found, 9)',
+    '  $ok = [AgentHydra.Win32]::SetForegroundWindow($found)',
     '  if ($ok) { Write-Output "FOCUSED" } else { Write-Output "FOREGROUND_DENIED" }',
     '}',
   ].join('\n')

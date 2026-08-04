@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import type { CMAccount } from '../../server/src/core/shared'
-import { accountName, displayName } from '../src/lib/instance-appearance'
+import { accountName, displayName, loginChanged } from '../src/lib/instance-appearance'
 
 /** A CMAccount is 11 fields and these functions read exactly two — build from a base so each test
  *  states only the field it is actually about. */
@@ -67,6 +67,28 @@ describe('accountName', () => {
 
   test('handles an email-shaped string with no @ by using the whole thing', () => {
     expect(accountName(account({ email: 'not-an-email' }))).toBe('not-an-email')
+  })
+})
+
+describe('loginChanged', () => {
+  const A = 'aaaa-1111'
+  const B = 'bbbb-2222'
+
+  test('is true when the instance is signed into a different account than the one shown', () => {
+    expect(loginChanged({ loginUuid: B, account: account({ accountUuid: A }) })).toBe(true)
+  })
+
+  test('is false while the shown identity still matches the login', () => {
+    expect(loginChanged({ loginUuid: A, account: account({ accountUuid: A }) })).toBe(false)
+  })
+
+  test('is false whenever either side is unknown', () => {
+    // Nothing resolved yet — already being chased, so this must not also count as drift.
+    expect(loginChanged({ loginUuid: A, account: null })).toBe(false)
+    expect(loginChanged({ loginUuid: A, account: account({ accountUuid: null }) })).toBe(false)
+    // Signed out (or an unreadable config.json): no uuid to disagree with.
+    expect(loginChanged({ loginUuid: null, account: account({ accountUuid: A }) })).toBe(false)
+    expect(loginChanged({ loginUuid: null, account: LOGGED_OUT })).toBe(false)
   })
 })
 

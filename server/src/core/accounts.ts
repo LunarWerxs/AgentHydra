@@ -2,7 +2,7 @@
 // Adapted from an internal LunarWerx tool's instance-account resolver: imports DTOs/tier/
 // constants from ./shared (local, no cross-repo import) instead of ../../../shared/index;
 // the identity cache resolves via paths.ts's accountsCacheFile()/appDataDir(), which are
-// now wired to THIS app's CONFIG_DIR (~/.ccmanagerui/instances-cache.json).
+// now wired to THIS app's CONFIG_DIR (~/.agenthydra/instances-cache.json).
 //
 // Resolves which Anthropic account an isolated Claude Desktop **instance** is logged into —
 // distinct from this app's own sqlite `accounts` table (Anthropic auth secrets for queue
@@ -137,9 +137,29 @@ function writeAccountsCacheEntry(instanceDir: string, entry: CMAccountCacheEntry
   }
 }
 
+/** Drops one instance's cached identity (used when it turns out to describe a different account
+ *  than the instance is signed into now). Best-effort — never throws. */
+function deleteAccountsCacheEntry(instanceDir: string): void {
+  try {
+    const cache = readAccountsCache()
+    const key = normalizeInstancePath(instanceDir)
+    if (!(key in cache)) return
+    delete cache[key]
+    const file = accountsCacheFile()
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+    writeFileSync(tmp, JSON.stringify(cache, null, 2), { mode: 0o600 })
+    renameSync(tmp, file)
+  } catch (err) {
+    log('warn', `deleteAccountsCacheEntry: failed for '${instanceDir}': ${String(err)}`)
+  }
+}
+
 function accountFromCache(
   instanceDir: string,
   opts: {
+    /** The account the instance is signed into RIGHT NOW (config.json's lastKnownAccountUuid).
+     *  A cached identity carrying a DIFFERENT uuid is a previous login — see the guard below. */
+    currentUuid?: string | null
     fallbackUuid?: string | null
     fallbackOrgUuid?: string | null
     fallbackPlan?: string | null
@@ -153,6 +173,21 @@ function accountFromCache(
     entry = cache[key]
   } catch (err) {
     log('warn', `accountFromCache: failed reading cache for '${instanceDir}': ${String(err)}`)
+  }
+
+  // Stale-login guard. The cache is keyed by instance DIR, but identity belongs to an ACCOUNT —
+  // sign an instance out and back in as someone else and the dir is unchanged while everything
+  // in the entry (email, name, plan, org) now describes the previous account. Without this check
+  // that entry survives every offline/noNetwork/expired-token resolve, so the manager keeps
+  // confidently displaying an email the instance hasn't been logged into for weeks. Showing no
+  // identity until we can resolve the new one is strictly better than showing the wrong one.
+  if (entry && opts.currentUuid && entry.uuid && entry.uuid !== opts.currentUuid) {
+    log(
+      'info',
+      `accountFromCache: cached identity for '${instanceDir}' belongs to a different account — discarding.`,
+    )
+    deleteAccountsCacheEntry(instanceDir)
+    entry = undefined
   }
 
   // "cache" only when we actually have a cached identity; otherwise "offline" — we resolved
@@ -193,7 +228,12 @@ interface Grant {
   expiresAt: number
   subscriptionType: string | null
   rateLimitTier: string | null
-  accountUuid: string | null
+  /** First segment of the grant key. NOT the account uuid — it is the OAuth CLIENT id, and it is
+   *  the same constant across every instance and every account (verified 2026-08-02 across 10
+   *  local instances: the full/CLI client and the profile-only client). Kept only so the parse is
+   *  self-documenting; identity must come from config.json's lastKnownAccountUuid or the profile
+   *  API, never from here. */
+  clientId: string | null
   orgUuid: string | null
 }
 
@@ -239,8 +279,9 @@ function pickBestGrant(decryptedJson: string): Grant | null {
 
     if (!best || expiresAt > best.expiresAt) {
       const parts = grantKey.split(':')
-      // parts[0] = accountUuid, parts[1] = orgUuid, remainder (rejoined) = "https://api...:<scopes>"
-      const accountUuid = parts.length >= 1 ? (parts[0] ?? null) : null
+      // parts[0] = OAuth client id (NOT the account — see Grant.clientId), parts[1] = orgUuid,
+      // remainder (rejoined) = "https://api...:<scopes>"
+      const clientId = parts.length >= 1 ? (parts[0] ?? null) : null
       const orgUuid = parts.length >= 2 ? (parts[1] ?? null) : null
 
       let token: string | null = null
@@ -256,7 +297,7 @@ function pickBestGrant(decryptedJson: string): Grant | null {
         subscriptionType:
           typeof value.subscriptionType === 'string' ? value.subscriptionType : null,
         rateLimitTier: typeof value.rateLimitTier === 'string' ? value.rateLimitTier : null,
-        accountUuid,
+        clientId,
         orgUuid,
       }
     }
@@ -553,7 +594,8 @@ export async function resolveAccount(
       log('info', `resolveAccount: resolving '${instanceDir}' from cache/offline (${reason}).`)
 
       return accountFromCache(instanceDir, {
-        fallbackUuid: bestGrant?.accountUuid ?? lastKnownAccountUuid,
+        currentUuid: lastKnownAccountUuid,
+        fallbackUuid: lastKnownAccountUuid,
         fallbackOrgUuid: bestGrant?.orgUuid ?? null,
         fallbackPlan: bestGrant?.subscriptionType ?? null,
         fallbackTier: bestGrant?.rateLimitTier ?? null,
@@ -567,7 +609,8 @@ export async function resolveAccount(
     if (!profile) {
       log('warn', `resolveAccount: profile API call failed for '${instanceDir}'.`)
       return accountFromCache(instanceDir, {
-        fallbackUuid: bestGrant?.accountUuid ?? lastKnownAccountUuid,
+        currentUuid: lastKnownAccountUuid,
+        fallbackUuid: lastKnownAccountUuid,
         fallbackOrgUuid: bestGrant?.orgUuid ?? null,
         fallbackPlan: bestGrant?.subscriptionType ?? null,
         fallbackTier: bestGrant?.rateLimitTier ?? null,
@@ -576,7 +619,7 @@ export async function resolveAccount(
 
     const email = profile.account?.email ?? null
     const fullName = profile.account?.full_name ?? null
-    const accountUuid = profile.account?.uuid ?? bestGrant?.accountUuid ?? lastKnownAccountUuid
+    const accountUuid = profile.account?.uuid ?? lastKnownAccountUuid
     const orgUuid = profile.organization?.uuid ?? bestGrant?.orgUuid ?? null
     const orgName = profile.organization?.name ?? null
     const rawTier = profile.organization?.rate_limit_tier ?? bestGrant?.rateLimitTier ?? null
@@ -588,17 +631,27 @@ export async function resolveAccount(
     const tier = prettyTier(rawTier)
     const label = buildLabel(fullName, email, tier)
 
-    // Write identity ONLY (never the token) to the cache.
-    writeAccountsCacheEntry(instanceDir, {
-      email,
-      name: fullName,
-      plan,
-      rateLimitTier: rawTier,
-      uuid: accountUuid,
-      orgUuid,
-      orgName,
-      resolvedAt: new Date().toISOString(),
-    })
+    // Write identity ONLY (never the token) to the cache — and only when the identity we just
+    // resolved is the account config.json says this instance is signed into. Caching an identity
+    // that contradicts lastKnownAccountUuid would be immediately discarded by the stale-login
+    // guard in accountFromCache on the next offline read, so the entry would only ever churn.
+    if (!accountUuid || !lastKnownAccountUuid || accountUuid === lastKnownAccountUuid) {
+      writeAccountsCacheEntry(instanceDir, {
+        email,
+        name: fullName,
+        plan,
+        rateLimitTier: rawTier,
+        uuid: accountUuid,
+        orgUuid,
+        orgName,
+        resolvedAt: new Date().toISOString(),
+      })
+    } else {
+      log(
+        'warn',
+        `resolveAccount: profile identity (${accountUuid}) disagrees with config.json's lastKnownAccountUuid (${lastKnownAccountUuid}) for '${instanceDir}' — not caching.`,
+      )
+    }
 
     log('info', `resolveAccount: resolved '${instanceDir}' live -> ${label}`)
 

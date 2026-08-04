@@ -179,6 +179,12 @@ export interface CMInstance {
   memoryBytes: number | null
   /** Attached lazily/omitted — null until /account is resolved. */
   account: CMAccount | null
+  /** Which account this instance is signed into RIGHT NOW — config.json's `lastKnownAccountUuid`,
+   *  null when signed out. Cheap enough (stat-gated, see instances.ts readLoginUuid) to ship with
+   *  every list, unlike `account`: the UI compares it against `account.accountUuid` to notice that
+   *  an instance was re-logged into a different account and re-resolve the identity immediately,
+   *  instead of showing the previous account's email until someone hits Refresh. */
+  loginUuid: string | null
   /** True when discovered from a running process whose --user-data-dir isn't under
    *  the instances root. */
   isExternal: boolean

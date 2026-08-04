@@ -37,6 +37,7 @@ import {
   quitCodexDesktopInstance,
   quitInstance,
 } from '@/lib/api'
+import { loginChanged } from '@/lib/instance-appearance'
 import { useTheme } from '@/lib/theme'
 import { isStaleSnap, usageBadgeVariant, usageCellLabel, usageCheckedAgo } from '@/lib/usage'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
@@ -114,7 +115,7 @@ async function hydrateClaudeAccounts(rows: CMInstance[], force = false): Promise
   await Promise.all(
     rows.map(async (instance) => {
       const last = lastAccountResolveAt.get(instance.dir) ?? 0
-      if (!force && instance.account && now - last < 60_000) return
+      if (!force && !loginChanged(instance) && instance.account && now - last < 60_000) return
       setResolvingAccount(instance.dir, true)
       try {
         // Cache/local-token only: identity and plan appear without putting Anthropic network work
@@ -150,10 +151,15 @@ async function refresh(silent = false): Promise<void> {
     const previousAccounts = new Map(
       claude.value.map((instance) => [instance.dir, instance.account]),
     )
-    claude.value = desktopRows.map((instance) => ({
-      ...instance,
-      account: instance.account ?? previousAccounts.get(instance.dir) ?? null,
-    }))
+    claude.value = desktopRows.map((instance) => {
+      // Carry a previously resolved identity forward (the list omits it) — unless the instance has
+      // since been signed into a different account, in which case it is dropped rather than shown.
+      const next = {
+        ...instance,
+        account: instance.account ?? previousAccounts.get(instance.dir) ?? null,
+      }
+      return loginChanged(next) ? { ...instance, account: instance.account ?? null } : next
+    })
     claudeCli.value = cliRows
     codex.value = codexRows
     if (usageResult) usageSnapshots.value = new Map(Object.entries(usageResult.cache))
@@ -250,7 +256,7 @@ async function closeWindow(): Promise<void> {
 }
 
 onMounted(() => {
-  document.title = 'Quick Instances · CC Manager UI'
+  document.title = 'Quick Instances · AgentHydra'
   void connectLifetime()
   void refresh()
   pollTimer = window.setInterval(() => {

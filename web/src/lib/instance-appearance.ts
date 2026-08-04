@@ -128,5 +128,22 @@ export function displayName(inst: Pick<CMInstance, 'name' | 'label' | 'account'>
   return inst.label?.trim() || accountName(inst.account) || inst.name
 }
 
+/** True when an instance is signed into a DIFFERENT account than the identity attached to it:
+ *  `loginUuid` (config.json's lastKnownAccountUuid, re-read on every list) against the uuid of the
+ *  identity we resolved earlier.
+ *
+ *  This is the drift displayName() warns about, caught in the act. A resolved identity is what
+ *  names the row AND what fills the account column, so an instance signed into another account
+ *  goes on presenting the PREVIOUS account's name, email and plan until something re-resolves it —
+ *  and nothing did, because a resolved identity used to be treated as final. Callers use this to
+ *  drop the stale identity and to re-resolve promptly instead of on the slow refresh timer.
+ *
+ *  False whenever either side is unknown: an unresolved identity is already being chased, and a
+ *  signed-out instance has no uuid to disagree with. */
+export function loginChanged(inst: Pick<CMInstance, 'loginUuid' | 'account'>): boolean {
+  const shown = inst.account?.accountUuid
+  return Boolean(inst.loginUuid && shown && inst.loginUuid !== shown)
+}
+
 export type { InstanceColorKey, InstanceIconKey }
 export { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS }

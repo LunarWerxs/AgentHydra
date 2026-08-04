@@ -5,6 +5,7 @@
 import { ref } from 'vue'
 import type { CMInstance } from '@/lib/api'
 import * as api from '@/lib/api'
+import { loginChanged } from '@/lib/instance-appearance'
 
 const instances = ref<CMInstance[]>([])
 const loading = ref(false)
@@ -19,6 +20,16 @@ const lastAutoResolveAt = new Map<string, number>()
  *  in the next minute and then looks straight at this table to confirm. A retry is a local file
  *  read that finds no token and gives up, so this is close to free. */
 const UNRESOLVED_RETRY_MS = 60_000
+/** How long a RESOLVED identity is trusted before a background re-check. An account's email, name
+ *  or plan can change without anything on disk changing (the user edits it at claude.ai), so the
+ *  only way to notice is to ask again on a timer. Slow, because it costs one profile call per
+ *  instance and the answer rarely changes. */
+const RESOLVED_REFRESH_MS = 15 * 60_000
+/** A re-login IS visible on disk — config.json's `lastKnownAccountUuid` stops matching the
+ *  identity on screen (see CMInstance.loginUuid) — so that case doesn't wait for the slow timer.
+ *  Still throttled, so a mismatch that somehow persists can't turn the 4s poll into a profile-API
+ *  hammer. */
+const LOGIN_CHANGED_RETRY_MS = 30_000
 
 function guard<T>(p: Promise<T>): Promise<T | undefined> {
   return p.catch((e) => {
@@ -55,10 +66,17 @@ async function refreshInstances(opts: { silent?: boolean; force?: boolean } = {}
   if (r) {
     // Preserve any account identity we've already resolved: the /api/instances list omits it
     // (account is null there), so a naive replace would wipe resolved emails on every poll.
+    // Exception: an identity that no longer matches the instance's current login is dropped
+    // instead of carried — a blank cell for the tick it takes to re-resolve beats the previous
+    // account's email.
     const prev = new Map(instances.value.map((i) => [i.dir, i.account]))
-    instances.value = r.map((i) =>
-      i.account == null && prev.get(i.dir) ? { ...i, account: prev.get(i.dir) ?? null } : i,
-    )
+    instances.value = r.map((i) => {
+      if (i.account != null) return i
+      const carried = prev.get(i.dir) ?? null
+      if (!carried) return i
+      const next = { ...i, account: carried }
+      return loginChanged(next) ? i : next
+    })
   }
   if (!opts.silent) loading.value = false
   void autoResolveAccounts({ force: opts.force })
@@ -75,18 +93,24 @@ async function refreshInstances(opts: { silent?: boolean; force?: boolean } = {}
  * which is a chore, not a choice.
  *
  * What gets retried: an instance with NO identity (logged out / offline / unreadable) is re-tried
- * every UNRESOLVED_RETRY_MS, so signing one in shows up on its own. A resolved identity is left
- * alone until the user hits Refresh (`force`), which re-resolves everything live.
+ * every UNRESOLVED_RETRY_MS, so signing one in shows up on its own. A RESOLVED identity is not
+ * final either — the account behind an instance can change under us, so it is re-checked every
+ * RESOLVED_REFRESH_MS, and much sooner (LOGIN_CHANGED_RETRY_MS) when the instance's on-disk login
+ * uuid stops matching the identity on screen. Refresh (`force`) still re-resolves everything now.
  */
 async function autoResolveAccounts(opts: { force?: boolean } = {}): Promise<void> {
   if (resolvingAccounts.value) return
   const now = Date.now()
   const stale = instances.value.filter((i) => {
     if (opts.force) return true
-    // Identity known — nothing to chase.
-    if (i.account?.email || i.account?.name) return false
     const last = lastAutoResolveAt.get(i.dir)
-    return last === undefined || now - last >= UNRESOLVED_RETRY_MS
+    const age = last === undefined ? Number.POSITIVE_INFINITY : now - last
+    // No identity yet (signed out / offline / unreadable) — retry on the short timer.
+    if (!i.account?.email && !i.account?.name) return age >= UNRESOLVED_RETRY_MS
+    // Signed into a different account than the one on screen — re-resolve promptly.
+    if (loginChanged(i)) return age >= LOGIN_CHANGED_RETRY_MS
+    // Known identity, same account: re-check occasionally in case the email/name/plan changed.
+    return age >= RESOLVED_REFRESH_MS
   })
   if (stale.length === 0) return
 
