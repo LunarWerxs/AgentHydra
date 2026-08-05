@@ -5,6 +5,7 @@ import {
   ArrowUp,
   Boxes,
   ChevronDown,
+  Cpu,
   EllipsisVertical,
   FolderOpen,
   Gauge,
@@ -16,6 +17,7 @@ import {
   RefreshCw,
   Square,
   Terminal,
+  Timer,
   Trash2,
   TriangleAlert,
   Unlink,
@@ -31,6 +33,7 @@ import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
+import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -55,6 +58,7 @@ import { useCliInstances } from '@/composables/useCliInstances'
 import { useInstances } from '@/composables/useInstances'
 import { useSortable } from '@/composables/useSortable'
 import { useUsage } from '@/composables/useUsage'
+import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
@@ -72,6 +76,14 @@ import {
 } from '@/lib/instance-appearance'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import { bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
+import {
+  msUntilReset,
+  resetLabel,
+  SESSION_WINDOW_MS,
+  WEEK_WINDOW_MS,
+  waitSeverity,
+  windowRemainingPct,
+} from '@/lib/usage-reset'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const {
@@ -105,6 +117,36 @@ const {
 const usageKeyFor = (inst: CMInstance) => `desktop:${inst.dir}`
 const usageFor = (inst: CMInstance) => snapshotFor(usageKeyFor(inst))
 
+// --- usage mode ---------------------------------------------------------------------------------
+// One toolbar toggle swaps the PROCESS columns (PID / uptime / memory — "is it healthy?") for the
+// QUOTA columns ("how much is left, and when does it come back?"). See composables/useUsageMode.ts
+// for why it's a mode rather than a per-column picker. `now` is the shared clock every countdown
+// cell in both tables formats against, so the whole tab ticks together.
+const { usageMode, toggle: toggleUsageMode, now } = useUsageMode(true)
+
+/** "2h 14m" left on a window, or null when there is no reset instant to count down to. */
+function sessionResetFor(inst: CMInstance): string | null {
+  return resetLabel(usageFor(inst)?.session, now.value)
+}
+function weeklyResetFor(inst: CMInstance): string | null {
+  return resetLabel(usageFor(inst)?.weekAll, now.value)
+}
+// How much of each window is still to run. This ONE number drives both the bar's length and its
+// colour (waitSeverity bands it as a fraction of its own window), so short+green = nearly back and
+// long+red = most of the window still ahead — on a 5-hour session exactly as on a 7-day week.
+function sessionRemaining(inst: CMInstance): number {
+  return windowRemainingPct(usageFor(inst)?.session, SESSION_WINDOW_MS, now.value) ?? 0
+}
+function weeklyRemaining(inst: CMInstance): number {
+  return windowRemainingPct(usageFor(inst)?.weekAll, WEEK_WINDOW_MS, now.value) ?? 0
+}
+function sessionWait(inst: CMInstance) {
+  return waitSeverity(sessionRemaining(inst))
+}
+function weeklyWait(inst: CMInstance) {
+  return waitSeverity(weeklyRemaining(inst))
+}
+
 const { sortedRows, toggleSort, indicatorFor } = useSortable(
   () => instances.value,
   [
@@ -116,6 +158,17 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
     { key: 'pid', accessor: (i: CMInstance) => i.pid ?? undefined },
     { key: 'uptime', accessor: (i: CMInstance) => (i.isRunning ? i.startTime : null) },
     { key: 'memory', accessor: (i: CMInstance) => i.memoryBytes ?? undefined },
+    // Usage-mode columns. Sorted by TIME REMAINING, not by the reset timestamp string: "soonest
+    // reset first" is the ordering anyone asking this question wants, and it is stable as the
+    // clock advances because every row shifts by the same amount.
+    {
+      key: 'session',
+      accessor: (i: CMInstance) => msUntilReset(usageFor(i)?.session, now.value) ?? undefined,
+    },
+    {
+      key: 'weekly',
+      accessor: (i: CMInstance) => msUntilReset(usageFor(i)?.weekAll, now.value) ?? undefined,
+    },
     {
       key: 'usage',
       accessor: (i: CMInstance) => {
@@ -123,6 +176,7 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
         return snap ? (bindingWeeklyPct(snap) ?? undefined) : undefined
       },
     },
+    { key: 'usageSession', accessor: (i: CMInstance) => usageFor(i)?.session?.pct ?? undefined },
     { key: 'plan', accessor: (i: CMInstance) => i.account?.planLabel ?? undefined },
   ],
 )
@@ -545,6 +599,23 @@ onUnmounted(() => {
         />
       </button>
       <div class="flex flex-wrap items-center gap-1.5">
+        <!-- Usage mode: swaps the process columns for the quota ones across the whole tab. Pressed
+             (secondary) while on, so the toolbar itself says which set of columns you're looking
+             at — the glyph flips too, from a stopwatch (quota/time-to-reset) to a chip (process). -->
+        <IconTooltip
+          :label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
+          :description="$t('instances.usageModeHint')"
+        >
+          <Button
+            :variant="usageMode ? 'secondary' : 'outline'"
+            size="icon"
+            :aria-pressed="usageMode"
+            :aria-label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
+            @click="toggleUsageMode"
+          >
+            <component :is="usageMode ? Cpu : Timer" />
+          </Button>
+        </IconTooltip>
         <IconTooltip :label="$t('instances.refresh')" :description="$t('instances.refreshHint')">
           <Button
             variant="outline"
@@ -654,25 +725,57 @@ onUnmounted(() => {
                 <ArrowDown v-else-if="indicatorFor('account') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('pid')">
+            <!-- Process columns (default mode) … -->
+            <template v-if="!usageMode">
+              <TableHead class="cursor-pointer select-none" @click="toggleSort('pid')">
+                <span class="inline-flex items-center gap-0.5">
+                  {{ $t('instances.colPid') }}
+                  <ArrowUp v-if="indicatorFor('pid') === 'asc'" class="size-3" />
+                  <ArrowDown v-else-if="indicatorFor('pid') === 'desc'" class="size-3" />
+                </span>
+              </TableHead>
+              <TableHead class="cursor-pointer select-none" @click="toggleSort('uptime')">
+                <span class="inline-flex items-center gap-0.5">
+                  {{ $t('instances.colUptime') }}
+                  <ArrowUp v-if="indicatorFor('uptime') === 'asc'" class="size-3" />
+                  <ArrowDown v-else-if="indicatorFor('uptime') === 'desc'" class="size-3" />
+                </span>
+              </TableHead>
+              <TableHead class="cursor-pointer select-none" @click="toggleSort('memory')">
+                <span class="inline-flex items-center gap-0.5">
+                  {{ $t('instances.colMemory') }}
+                  <ArrowUp v-if="indicatorFor('memory') === 'asc'" class="size-3" />
+                  <ArrowDown v-else-if="indicatorFor('memory') === 'desc'" class="size-3" />
+                </span>
+              </TableHead>
+            </template>
+            <!-- … swapped one-for-one for the quota columns in usage mode, so the table keeps its
+                 shape and only its subject changes. -->
+            <template v-else>
+              <TableHead class="cursor-pointer select-none" @click="toggleSort('session')">
+                <span class="inline-flex items-center gap-0.5">
+                  {{ $t('instances.colSession') }}
+                  <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
+                  <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
+                </span>
+              </TableHead>
+              <TableHead class="cursor-pointer select-none" @click="toggleSort('weekly')">
+                <span class="inline-flex items-center gap-0.5">
+                  {{ $t('instances.colWeekly') }}
+                  <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
+                  <ArrowDown v-else-if="indicatorFor('weekly') === 'desc'" class="size-3" />
+                </span>
+              </TableHead>
+            </template>
+            <TableHead
+              v-if="usageMode"
+              class="cursor-pointer select-none"
+              @click="toggleSort('usageSession')"
+            >
               <span class="inline-flex items-center gap-0.5">
-                {{ $t('instances.colPid') }}
-                <ArrowUp v-if="indicatorFor('pid') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('pid') === 'desc'" class="size-3" />
-              </span>
-            </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('uptime')">
-              <span class="inline-flex items-center gap-0.5">
-                {{ $t('instances.colUptime') }}
-                <ArrowUp v-if="indicatorFor('uptime') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('uptime') === 'desc'" class="size-3" />
-              </span>
-            </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('memory')">
-              <span class="inline-flex items-center gap-0.5">
-                {{ $t('instances.colMemory') }}
-                <ArrowUp v-if="indicatorFor('memory') === 'asc'" class="size-3" />
-                <ArrowDown v-else-if="indicatorFor('memory') === 'desc'" class="size-3" />
+                {{ $t('instances.colUsageSession') }}
+                <ArrowUp v-if="indicatorFor('usageSession') === 'asc'" class="size-3" />
+                <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
               </span>
             </TableHead>
             <TableHead class="cursor-pointer select-none" @click="toggleSort('usage')">
@@ -693,7 +796,10 @@ onUnmounted(() => {
           </TableRow>
         </TableHeader>
         <TableBody v-if="instances.length === 0" class="[&>tr]:transition-colors [&>tr]:duration-200">
-          <TableEmpty v-if="!loading" :colspan="9">
+          <!-- Usage mode swaps three process columns for two quota ones and adds the 5-hour
+               usage chip, which lands back on nine either way. Kept as an expression rather than a
+               literal so a future column change cannot silently desync the span from the header. -->
+          <TableEmpty v-if="!loading" :colspan="usageMode ? 9 : 9">
             <div class="flex flex-col items-center gap-1 text-center">
               <Boxes class="mb-1 size-6 opacity-40" />
               <p class="font-medium text-foreground">{{ $t('instances.empty') }}</p>
@@ -708,9 +814,16 @@ onUnmounted(() => {
               <Skeleton class="mt-1.5 h-3 w-44" />
             </TableCell>
             <TableCell><Skeleton class="h-5 w-24" /></TableCell>
-            <TableCell><Skeleton class="h-3 w-10" /></TableCell>
-            <TableCell><Skeleton class="h-3 w-12" /></TableCell>
-            <TableCell><Skeleton class="h-3 w-14" /></TableCell>
+            <template v-if="!usageMode">
+              <TableCell><Skeleton class="h-3 w-10" /></TableCell>
+              <TableCell><Skeleton class="h-3 w-12" /></TableCell>
+              <TableCell><Skeleton class="h-3 w-14" /></TableCell>
+            </template>
+            <template v-else>
+              <TableCell><Skeleton class="h-8 w-20" /></TableCell>
+              <TableCell><Skeleton class="h-8 w-20" /></TableCell>
+              <TableCell><Skeleton class="h-5 w-14" /></TableCell>
+            </template>
             <TableCell><Skeleton class="h-5 w-14" /></TableCell>
             <TableCell><Skeleton class="h-5 w-16" /></TableCell>
             <TableCell>
@@ -746,9 +859,18 @@ onUnmounted(() => {
               </span>
             </TableCell>
             <TableCell class="font-medium">
+              <!-- The folder used to sit under the name as a permanent mono sub-line, which made
+                   every row two lines tall to show a path nobody reads at rest. It moved into the
+                   tooltip, where it is one hover away and costs no height. The tooltip is on EVERY
+                   row now, not just running ones, because the folder is what it is really for; the
+                   focus hint rides along as the description when clicking would actually focus. -->
               <div class="flex items-center gap-1.5">
-                <IconTooltip v-if="inst.isRunning" :label="$t('instances.focus')" :description="$t('instances.focusHint')">
+                <IconTooltip
+                  :label="inst.dir"
+                  :description="inst.isRunning ? $t('instances.focusHint') : undefined"
+                >
                   <button
+                    v-if="inst.isRunning"
                     type="button"
                     class="cursor-pointer text-left hover:underline"
                     :disabled="isBusy(inst)"
@@ -756,14 +878,11 @@ onUnmounted(() => {
                   >
                     {{ displayName(inst) }}
                   </button>
+                  <span v-else class="cursor-default">{{ displayName(inst) }}</span>
                 </IconTooltip>
-                <span v-else class="cursor-default">{{ displayName(inst) }}</span>
                 <Badge v-if="inst.isExternal" variant="outline">{{ $t('instances.external') }}</Badge>
               </div>
-              <div class="mono max-w-[22rem] truncate text-[0.625rem] text-muted-foreground">
-                {{ inst.dir }}
-              </div>
-              <!-- No inline CLI sub-line here anymore: it made one row taller than the rest and
+              <!-- No inline CLI sub-line here either: it made one row taller than the rest and
                    only ever showed for whichever account happened to be linked. The linked CLI
                    login (and CLI sign-in for rows without one) lives in the actions menu, where
                    EVERY row gets it without cluttering the table. -->
@@ -787,11 +906,48 @@ onUnmounted(() => {
                 {{ $t('instances.resolving') }}
               </span>
             </TableCell>
-            <TableCell class="mono text-xs text-muted-foreground">{{ inst.pid ?? '—' }}</TableCell>
-            <TableCell class="text-xs text-muted-foreground">
-              {{ inst.isRunning ? formatUptime(inst.startTime) : '—' }}
+            <template v-if="!usageMode">
+              <TableCell class="mono text-xs text-muted-foreground">{{ inst.pid ?? '—' }}</TableCell>
+              <TableCell class="text-xs text-muted-foreground">
+                {{ inst.isRunning ? formatUptime(inst.startTime) : '—' }}
+              </TableCell>
+              <TableCell class="text-xs text-muted-foreground">{{ formatBytes(inst.memoryBytes) }}</TableCell>
+            </template>
+            <template v-else>
+              <!-- A bar, not a bare number: the point of usage mode is scanning ten rows at once
+                   for the ones up against a wall, and ten integers all look alike until you read
+                   each one. The number stays inside the bar (91 vs 96 is the whole decision), and
+                   the countdown under it says when the number stops mattering. -->
+              <TableCell class="text-xs">
+                <UsageBar
+                  v-if="sessionResetFor(inst)"
+                  :fill-pct="sessionRemaining(inst)"
+                  :variant="sessionWait(inst)"
+                  :label="sessionResetFor(inst) ?? ''"
+                  :aria-label="$t('instances.resetsIn', { when: sessionResetFor(inst) })"
+                />
+                <span v-else class="text-muted-foreground">—</span>
+              </TableCell>
+              <TableCell class="text-xs">
+                <UsageBar
+                  v-if="weeklyResetFor(inst)"
+                  :fill-pct="weeklyRemaining(inst)"
+                  :variant="weeklyWait(inst)"
+                  :label="weeklyResetFor(inst) ?? ''"
+                  :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
+                />
+                <span v-else class="text-muted-foreground">—</span>
+              </TableCell>
+            </template>
+            <TableCell v-if="usageMode">
+              <UsageBadge
+                scope="session"
+                :snapshot="usageFor(inst)"
+                :checking="isChecking(usageKeyFor(inst))"
+                :usage-key="usageKeyFor(inst)"
+                @check="onCheckUsage(inst)"
+              />
             </TableCell>
-            <TableCell class="text-xs text-muted-foreground">{{ formatBytes(inst.memoryBytes) }}</TableCell>
             <TableCell>
               <UsageBadge
                 :snapshot="usageFor(inst)"

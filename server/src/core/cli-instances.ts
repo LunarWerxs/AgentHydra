@@ -16,8 +16,16 @@
 // Never throws for expected failures (bad name, collision, missing dir, guard refusal) — every
 // mutating function returns a status-carrying CMActionResult, same contract as core/lifecycle.ts.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { basename, join } from 'node:path'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
 import type { CliInstance, UsageSnapshot } from '../types'
 import { CLAUDE_LAUNCH_EFFORTS, type LaunchOptionsInput, launchOptionError } from './launch-options'
@@ -65,16 +73,79 @@ export function isLoggedIn(configDir: string): boolean {
   }
 }
 
+// --- config-dir canonicalisation (the ccmanagerui → agenthydra rebrand) -------
+//
+// A record's `configDir` is written ONCE, at create time, as `<CONFIG_DIR>/cli-instances/<id>` and
+// never edited afterwards. When CONFIG_DIR itself moved (`~/.ccmanagerui` → `~/.agenthydra`, see
+// resolveConfigDir in ../config), the folder came with it but the ABSOLUTE PATH STRING baked into
+// every existing record did not. Nothing rewrote it, so a carried-over install ended up with a
+// record pointing at a directory that no longer exists: `loggedIn` is recomputed from
+// `<configDir>/.credentials.json`, so it went permanently false, and a re-login would have written
+// fresh credentials back under the dead brand folder.
+//
+// The fix is to treat "`<CLI_INSTANCES_ROOT>/<id>`" as what it always was — a derivation, not
+// user data. `canonicalConfigDir` re-derives it on read (so every process, including the separate
+// quick-instances window, agrees without needing a write), and migrateCliInstanceConfigDirs
+// persists the rewrite and carries any credentials still sitting at the old path across.
+
+/**
+ * Where this record's config dir MUST be, if it is one we manage.
+ *
+ * Only rewrites a path whose last segment is the record's own id — that is the signature of a
+ * dir this module minted. Anything else is left exactly as stored, so a hand-pointed or otherwise
+ * unusual configDir is never "corrected" out from under its owner.
+ */
+export function canonicalConfigDir(rec: Pick<CliInstance, 'id' | 'configDir'>): string {
+  if (!rec.configDir || basename(rec.configDir) !== rec.id) return rec.configDir
+  return join(CLI_INSTANCES_ROOT, rec.id)
+}
+
 /** A stored record hydrated with its LIVE loggedIn state (the store value is only a hint).
  *  Also backfills fields added after a store was first written (records predating the desktop link
  *  have no `associatedDesktop*` keys at all), so callers never see `undefined` where they expect null. */
 function hydrate(rec: CliInstance): CliInstance {
+  const configDir = canonicalConfigDir(rec)
   return {
     ...rec,
+    configDir,
     associatedDesktopDir: rec.associatedDesktopDir ?? null,
     associatedDesktopLabel: rec.associatedDesktopLabel ?? null,
-    loggedIn: isLoggedIn(rec.configDir),
+    loggedIn: isLoggedIn(configDir),
   }
+}
+
+/**
+ * Persist the canonicalisation above, moving any credentials left behind at the old path.
+ *
+ * Called once at daemon boot. Copy-then-leave rather than move: the old directory is under a config
+ * root we no longer own, and deleting a user's credentials to tidy up a path string is not a trade
+ * worth making. Returns the ids it rewrote (empty = nothing to do, and nothing was written).
+ */
+export function migrateCliInstanceConfigDirs(): string[] {
+  const store = readStore()
+  const changed: string[] = []
+  for (const rec of store.instances) {
+    const canonical = canonicalConfigDir(rec)
+    if (canonical === rec.configDir) continue
+    const legacy = rec.configDir
+    try {
+      // Only carry credentials over when the canonical dir has none of its own — a populated
+      // canonical dir is the newer login and must win.
+      const canonicalEmpty = !existsSync(canonical) || readdirSync(canonical).length === 0
+      if (existsSync(legacy) && canonicalEmpty) {
+        mkdirSync(canonical, { recursive: true })
+        cpSync(legacy, canonical, { recursive: true })
+      } else {
+        mkdirSync(canonical, { recursive: true })
+      }
+    } catch (err) {
+      console.error(`[cli-instances] could not migrate '${legacy}' → '${canonical}':`, err)
+    }
+    rec.configDir = canonical
+    changed.push(rec.id)
+  }
+  if (changed.length) writeStore(store)
+  return changed
 }
 
 // --- read --------------------------------------------------------------------

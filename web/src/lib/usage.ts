@@ -39,12 +39,36 @@ export function usageBadgeVariant(pct: number): UsageBadgeVariant {
   return 'success'
 }
 
-/** Short table-cell label for a usage snapshot ("42% wk"), or "—" when there's nothing
- *  to show yet (never checked, or a checked-but-empty snapshot). */
-export function usageCellLabel(snap: UsageSnapshot | null | undefined): string {
+/** Which window a usage chip is reporting. 'week' is the binding all-models cap; 'session' is the
+ *  rolling 5-hour one, which the Instances table shows as its own chip beside it. */
+export type UsageScope = 'week' | 'session'
+
+/** The percentage a chip of this scope reports, or null when that window has no reading. */
+export function usagePctFor(
+  snap: UsageSnapshot | null | undefined,
+  scope: UsageScope = 'week',
+): number | null {
+  if (!snap) return null
+  return scope === 'session' ? (snap.session?.pct ?? null) : bindingWeeklyPct(snap)
+}
+
+/**
+ * Short chip label for a usage snapshot ("42%"), or "—" when there's nothing to show yet (never
+ * checked, or a checked-but-empty snapshot).
+ *
+ * `withScope` appends the window ("42% wk" / "13% 5h") and is OFF by default. In the instances
+ * tables the column heading already names the window, so the suffix repeated it on every row; the
+ * quick-instances window has no headings, and there the chip has to say which window it means.
+ */
+export function usageCellLabel(
+  snap: UsageSnapshot | null | undefined,
+  scope: UsageScope = 'week',
+  withScope = false,
+): string {
   if (!snap || isNoDataSnap(snap)) return '—'
-  const pct = bindingWeeklyPct(snap)
-  return pct == null ? '—' : `${pct}% wk`
+  const pct = usagePctFor(snap, scope)
+  if (pct == null) return '—'
+  return withScope ? `${pct}% ${scope === 'session' ? '5h' : 'wk'}` : `${pct}%`
 }
 
 /** "3m ago" style relative time for a snapshot's `capturedAt`, English fallback (see

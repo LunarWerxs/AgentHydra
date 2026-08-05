@@ -7,6 +7,65 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-05
+
+### Added
+
+- **Reset notifications.** The app already kept every instance's quota percentage warm; it now
+  tells you the moment a window rolls over. The detection does not poll for a percentage that
+  dropped: the usage endpoint reports the reset instant *in advance*, so a rollover is a wall-clock
+  comparison against a timestamp already on record, and a timer is armed for that exact instant
+  rather than waiting on the next 15-minute sweep. Percentages are integers and can sit still for
+  an hour, which is why a delta-based detector would be both late and ambiguous here.
+  - Native OS notifications (a Windows toast under AgentHydra's own registered app identity, so it
+    appears in Windows' Notifications settings like any other app; `osascript` on macOS,
+    `notify-send` on Linux). These fire from the daemon, so they reach you with the app in the tray.
+  - **Keep reminding me** re-raises an unacknowledged reset on an interval and makes the toast
+    sticky instead of letting it fade after a few seconds. Bounded by a repeat cap and a hard
+    expiry, so a forgotten toggle cannot outlive its usefulness.
+  - Optional **email**, through your own SMTP server (implicit TLS or STARTTLS, AUTH LOGIN/PLAIN).
+    The password is DPAPI-sealed at rest and is never returned by the settings API.
+  - Pending resets survive a restart. The one notification most worth having is the one that fires
+    at 3am, which is exactly when an auto-update restart is most likely to have cycled the process.
+  - Settings → Notifications, with a **Send a test notification** button so the plumbing can be
+    proven now rather than five hours from now.
+
+- **Usage mode** in the Instances tab. One toolbar toggle swaps the process columns (PID, uptime,
+  memory) for the quota ones across every table on the tab. Each window renders as a bar of the
+  WAIT: its length is how much of the window is still to run, its colour bands that same fraction
+  (green, amber, red), and the time remaining is written inside it. Length and colour are one number
+  rendered twice, so a short green bar reads as "nearly back" without being decoded. The bands are
+  proportional rather than absolute: on the weekly window they land where the intuitive day
+  boundaries are (under a day green, one to two days amber, beyond that red), and the 5-hour session
+  window gets the same scale instead of reading green throughout and carrying no signal. The burn
+  percentage keeps its own column and rides under each bar as a caption. The per-model weekly
+  sub-limit is not given a column of its own (it shares the weekly reset instant, so its bar would
+  be a copy of the weekly one); it is still in the usage badge's breakdown.
+
+### Changed
+
+- The usage badge now opens its breakdown on **hover** as well as on click, and the breakdown
+  carries live "resets in" countdowns alongside the raw reset times. Hovering never steals focus.
+- Usage chips in the instances tables read `92%` rather than `92% wk`: the column heading already
+  names the window, so the suffix was repeating it once per row. The quick-instances window keeps
+  its suffix, having no headings to carry it.
+- An instance's folder moved out of a permanent second line under its name and into the row's
+  tooltip, halving the height of every row. The tooltip is now on every row rather than only
+  running ones, since the folder is what it is mostly for.
+- The Instances/Sessions tab you were last on is remembered across reloads.
+
+### Fixed
+
+- **A CLI instance carried across the CC Manager UI rename lost its login.** Each record stored its
+  `CLAUDE_CONFIG_DIR` as an absolute path written once at creation. The rename moved the folder but
+  nothing rewrote that string, so the record pointed at a directory that no longer existed: it read
+  as permanently signed out, and a re-login would have written fresh credentials back under the dead
+  `~/.ccmanagerui` folder. The path is now re-derived on read, persisted once at startup, and any
+  credentials still sitting at the old location are carried across.
+- The CLI instances heading showed a bare `(0)` when every CLI instance was linked to a desktop
+  instance and therefore rendered on that account's row instead. It now reads `(0 of 1)`, so the
+  shortfall explains itself even while the section is collapsed.
+
 ## [0.14.0] - 2026-08-04
 
 ### Changed

@@ -387,7 +387,7 @@ onBeforeUnmount(() => {
                 :class="isStaleSnap(usageForClaude(instance)) ? 'opacity-60' : ''"
                 :title="usageTitle(usageForClaude(instance))"
               >
-                {{ usageCellLabel(usageForClaude(instance)) }}
+                {{ usageCellLabel(usageForClaude(instance), 'week', true) }}
               </Badge>
             </div>
             <div class="flex w-28 shrink-0 justify-end gap-1">
@@ -451,7 +451,7 @@ onBeforeUnmount(() => {
                 :class="isStaleSnap(usageForClaudeCli(instance)) ? 'opacity-60' : ''"
                 :title="usageTitle(usageForClaudeCli(instance))"
               >
-                {{ usageCellLabel(usageForClaudeCli(instance)) }}
+                {{ usageCellLabel(usageForClaudeCli(instance), 'week', true) }}
               </Badge>
             </div>
             <div class="flex w-28 shrink-0 justify-end">

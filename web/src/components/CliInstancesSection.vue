@@ -32,6 +32,7 @@ import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
 import LinkCliInstanceDialog from '@/components/LinkCliInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
+import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -56,8 +57,17 @@ import { useData } from '@/composables/useData'
 import { useInstances } from '@/composables/useInstances'
 import { useSortable } from '@/composables/useSortable'
 import { useUsage } from '@/composables/useUsage'
+import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
 import { bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
+import {
+  msUntilReset,
+  resetLabel,
+  SESSION_WINDOW_MS,
+  WEEK_WINDOW_MS,
+  waitSeverity,
+  windowRemainingPct,
+} from '@/lib/usage-reset'
 
 const {
   cliInstances,
@@ -85,6 +95,21 @@ const { t } = useI18n()
 
 const usageKey = (inst: CliInstance) => `cli:${inst.id}`
 const usageFor = (inst: CliInstance) => snapshotFor(usageKey(inst))
+
+// Usage mode is a TAB-WIDE mode, not a per-table one (see composables/useUsageMode.ts): the toolbar
+// toggle up in InstancesView flips this table too, because "how much quota is left" is a question
+// you ask of every instance at once. Here the swap trades the config-dir column — the least useful
+// thing on screen when you're asking about quota — for the two reset countdowns.
+const { usageMode, now } = useUsageMode(true)
+const sessionResetFor = (inst: CliInstance) => resetLabel(usageFor(inst)?.session, now.value)
+const weeklyResetFor = (inst: CliInstance) => resetLabel(usageFor(inst)?.weekAll, now.value)
+// One number per window drives both the bar's length and its colour — see InstancesView above.
+const sessionRemaining = (inst: CliInstance) =>
+  windowRemainingPct(usageFor(inst)?.session, SESSION_WINDOW_MS, now.value) ?? 0
+const weeklyRemaining = (inst: CliInstance) =>
+  windowRemainingPct(usageFor(inst)?.weekAll, WEEK_WINDOW_MS, now.value) ?? 0
+const sessionWait = (inst: CliInstance) => waitSeverity(sessionRemaining(inst))
+const weeklyWait = (inst: CliInstance) => waitSeverity(weeklyRemaining(inst))
 
 /**
  * ONLY the UNLINKED CLI instances live in this table.
@@ -119,6 +144,15 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
     { key: 'name', accessor: (i: CliInstance) => i.name },
     { key: 'account', accessor: (i: CliInstance) => i.associatedAccountLabel ?? null },
     { key: 'configDir', accessor: (i: CliInstance) => i.configDir },
+    // Usage-mode columns — by time remaining, so "soonest reset first" is what a sort gives you.
+    {
+      key: 'session',
+      accessor: (i: CliInstance) => msUntilReset(usageFor(i)?.session, now.value) ?? undefined,
+    },
+    {
+      key: 'weekly',
+      accessor: (i: CliInstance) => msUntilReset(usageFor(i)?.weekAll, now.value) ?? undefined,
+    },
     {
       key: 'usage',
       accessor: (i: CliInstance) => {
@@ -126,6 +160,7 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
         return snap ? (bindingWeeklyPct(snap) ?? undefined) : undefined
       },
     },
+    { key: 'usageSession', accessor: (i: CliInstance) => usageFor(i)?.session?.pct ?? undefined },
   ],
 )
 
@@ -336,7 +371,20 @@ onUnmounted(stopPolling)
       >
         <Terminal class="size-4" />
         {{ $t('cliInstances.title') }}
-        <span class="text-muted-foreground">({{ unlinkedCliInstances.length }})</span>
+        <!-- "(0)" on its own read as "you have no CLI instances" to someone who could see one in
+             the quick-instances window — the linked ones are simply rendered on their account row
+             instead. Saying "0 of 1" makes the shortfall self-explanatory even while collapsed,
+             which is when the chip below is hidden. -->
+        <span class="text-muted-foreground">
+          ({{
+            linkedCount > 0
+              ? $t('cliInstances.countOfTotal', {
+                  shown: unlinkedCliInstances.length,
+                  total: cliInstances.length,
+                })
+              : unlinkedCliInstances.length
+          }})
+        </span>
         <!-- Linked ones aren't missing, they've moved up onto their account's row. Say so, or their
              absence from this count reads as a bug. -->
         <span v-if="linkedCount > 0" class="text-xs font-normal text-muted-foreground">
@@ -398,11 +446,42 @@ onUnmounted(stopPolling)
                 <ArrowDown v-else-if="indicatorFor('account') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('configDir')">
+            <TableHead
+              v-if="!usageMode"
+              class="cursor-pointer select-none"
+              @click="toggleSort('configDir')"
+            >
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('cliInstances.colConfigDir') }}
                 <ArrowUp v-if="indicatorFor('configDir') === 'asc'" class="size-3" />
                 <ArrowDown v-else-if="indicatorFor('configDir') === 'desc'" class="size-3" />
+              </span>
+            </TableHead>
+            <template v-else>
+              <TableHead class="cursor-pointer select-none" @click="toggleSort('session')">
+                <span class="inline-flex items-center gap-0.5">
+                  {{ $t('instances.colSession') }}
+                  <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
+                  <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
+                </span>
+              </TableHead>
+              <TableHead class="cursor-pointer select-none" @click="toggleSort('weekly')">
+                <span class="inline-flex items-center gap-0.5">
+                  {{ $t('instances.colWeekly') }}
+                  <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
+                  <ArrowDown v-else-if="indicatorFor('weekly') === 'desc'" class="size-3" />
+                </span>
+              </TableHead>
+            </template>
+            <TableHead
+              v-if="usageMode"
+              class="cursor-pointer select-none"
+              @click="toggleSort('usageSession')"
+            >
+              <span class="inline-flex items-center gap-0.5">
+                {{ $t('instances.colUsageSession') }}
+                <ArrowUp v-if="indicatorFor('usageSession') === 'asc'" class="size-3" />
+                <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
               </span>
             </TableHead>
             <TableHead class="cursor-pointer select-none" @click="toggleSort('usage')">
@@ -416,7 +495,7 @@ onUnmounted(stopPolling)
           </TableRow>
         </TableHeader>
         <TableBody v-if="unlinkedCliInstances.length === 0">
-          <TableEmpty v-if="!loading" :colspan="6">
+          <TableEmpty v-if="!loading" :colspan="usageMode ? 8 : 6">
             <div class="flex flex-col items-center gap-1 text-center">
               <Terminal class="mb-1 size-6 opacity-40" />
               <p class="font-medium text-foreground">
@@ -431,7 +510,12 @@ onUnmounted(stopPolling)
             <TableCell><Skeleton class="size-2 rounded-full" /></TableCell>
             <TableCell><Skeleton class="h-4 w-28" /></TableCell>
             <TableCell><Skeleton class="h-5 w-20" /></TableCell>
-            <TableCell><Skeleton class="h-3 w-32" /></TableCell>
+            <TableCell v-if="!usageMode"><Skeleton class="h-3 w-32" /></TableCell>
+            <template v-else>
+              <TableCell><Skeleton class="h-8 w-16" /></TableCell>
+              <TableCell><Skeleton class="h-8 w-16" /></TableCell>
+              <TableCell><Skeleton class="h-5 w-14" /></TableCell>
+            </template>
             <TableCell><Skeleton class="h-5 w-14" /></TableCell>
             <TableCell>
               <div class="flex justify-end"><Skeleton class="h-6 w-20" /></div>
@@ -454,8 +538,42 @@ onUnmounted(stopPolling)
               </Badge>
               <span v-else class="text-xs text-muted-foreground">{{ $t('cliInstances.noAccount') }}</span>
             </TableCell>
-            <TableCell class="mono max-w-[16rem] truncate text-[0.625rem] text-muted-foreground">
+            <TableCell
+              v-if="!usageMode"
+              class="mono max-w-[16rem] truncate text-[0.625rem] text-muted-foreground"
+            >
               {{ inst.configDir }}
+            </TableCell>
+            <template v-else>
+              <TableCell class="text-xs">
+                <UsageBar
+                  v-if="sessionResetFor(inst)"
+                  :fill-pct="sessionRemaining(inst)"
+                  :variant="sessionWait(inst)"
+                  :label="sessionResetFor(inst) ?? ''"
+                  :aria-label="$t('instances.resetsIn', { when: sessionResetFor(inst) })"
+                />
+                <span v-else class="text-muted-foreground">—</span>
+              </TableCell>
+              <TableCell class="text-xs">
+                <UsageBar
+                  v-if="weeklyResetFor(inst)"
+                  :fill-pct="weeklyRemaining(inst)"
+                  :variant="weeklyWait(inst)"
+                  :label="weeklyResetFor(inst) ?? ''"
+                  :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
+                />
+                <span v-else class="text-muted-foreground">—</span>
+              </TableCell>
+            </template>
+            <TableCell v-if="usageMode">
+              <UsageBadge
+                scope="session"
+                :snapshot="usageFor(inst)"
+                :checking="isChecking(usageKey(inst)) || isBusy(inst)"
+                :usage-key="usageKey(inst)"
+                @check="onCheckUsageFromPopover(inst)"
+              />
             </TableCell>
             <TableCell>
               <UsageBadge

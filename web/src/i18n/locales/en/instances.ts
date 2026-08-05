@@ -13,6 +13,11 @@ export default {
   colUptime: 'Uptime',
   colMemory: 'Memory',
   colUsage: 'Usage',
+  colUsageSession: 'Usage 5h',
+  // Usage-mode columns — they replace PID/Uptime/Memory, they don't add to them.
+  colSession: 'Session (5h)',
+  colWeekly: 'Weekly',
+  resetsIn: 'in {when}',
   colPlan: 'Plan',
   colActions: 'Actions',
   running: 'Running',
@@ -47,6 +52,10 @@ export default {
     'This is your real, non-isolated Claude Desktop, not an instance created here. Quitting it closes any conversation in progress.',
   quitExternalDialogSubmit: 'Quit it anyway',
   quitExternalDialogQuitting: 'Quitting…',
+  usageModeOn: 'Show usage columns',
+  usageModeOff: 'Show process columns',
+  usageModeHint:
+    'Swap PID, uptime and memory for what is left of each quota window and how long until it resets.',
   refreshAllUsage: 'Refresh all usage',
   refreshAllUsageHint:
     'Re-check every instance now. Reading your quota does not use any of it, and takes about a third of a second per instance.',
@@ -60,6 +69,8 @@ export default {
   usageSession: 'Session (5h)',
   usageWeekAll: 'Week (all models)',
   usageWeekModel: 'Week ({model})',
+  usageSessionResetsIn: 'Session resets in',
+  usageWeekResetsIn: 'Week resets in',
   usageCheckedAgo: 'Checked {when}',
   usageChecking: 'Checking…',
   usageCheckNow: 'Check now',

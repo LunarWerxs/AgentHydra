@@ -20,6 +20,26 @@ const showCliInstances = ref(true)
 const codexDesktopEnabled = ref(true)
 const codexCliEnabled = ref(true)
 const chatGptHandoffEnabled = ref(false)
+// Reset notifications (server/src/reset-watch.ts). Defaults mirror getNotificationSettings():
+// announcing a rollover is on, the intrusive channels (persistent repeats, email) are opt-in.
+const notifyEnabled = ref(true)
+const notifySessionReset = ref(true)
+const notifyWeeklyReset = ref(true)
+const notifyMinPct = ref(0)
+const notifyDesktop = ref(true)
+const notifyPersistent = ref(false)
+const notifyPersistentIntervalMin = ref(10)
+const notifyPersistentMaxRepeats = ref(10)
+const notifyEmail = ref(false)
+const notifyEmailTo = ref('')
+const notifyEmailFrom = ref('')
+const notifySmtpHost = ref('')
+const notifySmtpPort = ref(587)
+const notifySmtpSecure = ref(false)
+const notifySmtpUser = ref('')
+/** Read-only echo. The password itself never crosses the wire in this direction — see
+ *  server/src/notify-settings.ts; a patch carries it write-only. */
+const notifySmtpPassSet = ref(false)
 // '' = auto-detect (server/src/transcript-open.ts picks the first installed editor it knows).
 const transcriptEditor = ref('')
 // Server-derived echo: what will ACTUALLY open a transcript once auto-detect has run and an
@@ -37,6 +57,22 @@ function absorb(s: api.AppSettings): void {
   chatGptHandoffEnabled.value = s.chatGptHandoffEnabled
   transcriptEditor.value = s.transcriptEditor
   transcriptEditorResolved.value = s.transcriptEditorResolved
+  notifyEnabled.value = s.notifyEnabled
+  notifySessionReset.value = s.notifySessionReset
+  notifyWeeklyReset.value = s.notifyWeeklyReset
+  notifyMinPct.value = s.notifyMinPct
+  notifyDesktop.value = s.notifyDesktop
+  notifyPersistent.value = s.notifyPersistent
+  notifyPersistentIntervalMin.value = s.notifyPersistentIntervalMin
+  notifyPersistentMaxRepeats.value = s.notifyPersistentMaxRepeats
+  notifyEmail.value = s.notifyEmail
+  notifyEmailTo.value = s.notifyEmailTo
+  notifyEmailFrom.value = s.notifyEmailFrom
+  notifySmtpHost.value = s.notifySmtpHost
+  notifySmtpPort.value = s.notifySmtpPort
+  notifySmtpSecure.value = s.notifySmtpSecure
+  notifySmtpUser.value = s.notifySmtpUser
+  notifySmtpPassSet.value = s.notifySmtpPassSet
   loaded.value = true
 }
 
@@ -52,7 +88,7 @@ async function load(): Promise<void> {
 /** Apply a patch and absorb the server's echo. Returns false if the write failed. Widened past
  *  UsageSettings (rather than a second copy of this function) so transcriptEditor round-trips
  *  through the exact same load/absorb contract as every other setting here. */
-async function update(patch: Partial<api.AppSettings>): Promise<boolean> {
+async function update(patch: api.AppSettingsPatch): Promise<boolean> {
   try {
     absorb(await api.updateSettings(patch))
     return true
@@ -72,6 +108,22 @@ export function useAppSettings() {
     chatGptHandoffEnabled,
     transcriptEditor,
     transcriptEditorResolved,
+    notifyEnabled,
+    notifySessionReset,
+    notifyWeeklyReset,
+    notifyMinPct,
+    notifyDesktop,
+    notifyPersistent,
+    notifyPersistentIntervalMin,
+    notifyPersistentMaxRepeats,
+    notifyEmail,
+    notifyEmailTo,
+    notifyEmailFrom,
+    notifySmtpHost,
+    notifySmtpPort,
+    notifySmtpSecure,
+    notifySmtpUser,
+    notifySmtpPassSet,
     loaded,
     load,
     update,

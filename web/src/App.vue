@@ -9,6 +9,7 @@ import {
   Settings2,
   Sun,
 } from '@lucide/vue'
+import { useStorage } from '@vueuse/core'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -29,6 +30,7 @@ import {
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useData } from '@/composables/useData'
+import { useNotifications } from '@/composables/useNotifications'
 import { usePanels } from '@/composables/usePanels'
 import { SHELL_BASE_MAX, SHELL_WIDE_MAX, useShellWidth } from '@/composables/useShellWidth'
 import { shutdownApp } from '@/lib/api'
@@ -47,9 +49,24 @@ applyWindowSizeHint()
 const { t } = useI18n()
 
 const { queue, startPolling } = useData()
+// Reset notifications. The NATIVE notification is raised by the daemon whether or not this window
+// exists (that is the point of it); this mirror is so the news also lands in the app when you do
+// happen to be looking at it, with the Acknowledge action that stops persistent mode repeating.
+const { startPolling: startNotificationPolling } = useNotifications()
 
+// Which tab you were on, remembered across reloads. The app is a long-lived tray window that gets
+// reloaded for all sorts of incidental reasons (an update, a restart, a stray F5), and landing back
+// on Sessions every time undid whatever you were in the middle of looking at.
+// Validated on read, not trusted: a stale or hand-edited value must fall back rather than render a
+// tab that no longer exists.
 type View = 'sessions' | 'instances'
-const view = ref<View>('sessions')
+const VIEWS: View[] = ['sessions', 'instances']
+const view = useStorage<View>('agenthydra.app.view', 'sessions', undefined, {
+  serializer: {
+    read: (raw) => (VIEWS.includes(raw as View) ? (raw as View) : 'sessions'),
+    write: (v) => v,
+  },
+})
 
 // settings + queue share the right edge; usePanels keeps them mutually exclusive
 const { settingsOpen, queueOpen } = usePanels()
@@ -155,6 +172,7 @@ function showRebrandNoticeOnce() {
 }
 
 onMounted(startPolling)
+onMounted(() => startNotificationPolling(t))
 onMounted(handleConnectRedirect)
 onMounted(showRebrandNoticeOnce)
 </script>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   AppWindow,
+  BellRing,
   CalendarClock,
   ChevronDown,
   Cloud,
@@ -13,11 +14,13 @@ import {
   FilePenLine,
   Gauge,
   LogOut,
+  Mail,
   MessageCircleQuestion,
   Monitor,
   MonitorDown,
   Power,
   RefreshCw,
+  Repeat,
   RotateCcw,
   SlidersHorizontal,
   Terminal,
@@ -263,6 +266,22 @@ const {
   chatGptHandoffEnabled,
   transcriptEditor,
   transcriptEditorResolved,
+  notifyEnabled,
+  notifySessionReset,
+  notifyWeeklyReset,
+  notifyMinPct,
+  notifyDesktop,
+  notifyPersistent,
+  notifyPersistentIntervalMin,
+  notifyPersistentMaxRepeats,
+  notifyEmail,
+  notifyEmailTo,
+  notifyEmailFrom,
+  notifySmtpHost,
+  notifySmtpPort,
+  notifySmtpSecure,
+  notifySmtpUser,
+  notifySmtpPassSet,
   load: loadUsageSettings,
   update: updateAppSettings,
 } = useAppSettings()
@@ -274,6 +293,50 @@ async function patchUsageSettings(patch: Partial<api.UsageSettings>) {
 
 async function patchProviderSettings(patch: Partial<api.ProviderSettings>) {
   if (!(await updateAppSettings(patch))) toast.error(t('settings.providerToastFailed'))
+}
+
+// --- reset notifications (server/src/reset-watch.ts) --------------------------------------------
+// Every control here auto-saves through the same round-trip as the rest of the panel. The SMTP
+// password is the one exception to "the field shows what is stored": the server never returns it,
+// so this field is always blank and an empty value on save means "keep the stored one".
+async function patchNotifications(patch: api.AppSettingsPatch) {
+  if (!(await updateAppSettings(patch))) toast.error(t('settings.usageToastFailed'))
+}
+
+const smtpPassDraft = ref('')
+async function saveSmtpPass() {
+  const value = smtpPassDraft.value
+  if (!value) return
+  smtpPassDraft.value = ''
+  await patchNotifications({ notifySmtpPass: value })
+}
+
+const testingNotification = ref(false)
+async function onTestNotification() {
+  testingNotification.value = true
+  try {
+    const r = await api.sendTestNotification()
+    if (!r.desktop.attempted && !r.email.attempted) {
+      toast.info(t('notifications.testNothingEnabled'))
+      return
+    }
+    if (r.desktop.attempted) {
+      if (r.desktop.ok) toast.success(t('notifications.testDesktopOk'))
+      else toast.error(t('notifications.testDesktopFailed', { error: r.desktop.error ?? '' }))
+    }
+    if (r.email.attempted) {
+      if (r.email.ok) toast.success(t('notifications.testEmailOk'))
+      else toast.error(t('notifications.testEmailFailed', { error: r.email.error ?? '' }))
+    }
+  } catch (err) {
+    toast.error(
+      t('notifications.testDesktopFailed', {
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
+  } finally {
+    testingNotification.value = false
+  }
 }
 
 // --- transcript editor (server/src/transcript-open.ts): which editor "Open the session file"
@@ -845,6 +908,228 @@ defineExpose({ save })
           </div>
         </template>
       </SettingsRow>
+    </SettingsGroup>
+
+    <!-- notifications: the quota EDGE, not the number. See server/src/reset-watch.ts.
+         Everything below the master switch is disclosed only when it is on - the whole group is
+         several rows of nothing when notifications are off. -->
+    <SettingsGroup :label="$t('notifications.title')">
+      <SettingsRow :icon="BellRing" :label="$t('notifications.enabled')">
+        <template #info>
+          <InfoHint :text="$t('notifications.enabledHint')" />
+        </template>
+        <template #control>
+          <Switch
+            :model-value="notifyEnabled"
+            @update:model-value="(v: boolean) => patchNotifications({ notifyEnabled: v })"
+          />
+        </template>
+      </SettingsRow>
+      <ExpandTransition :open="notifyEnabled">
+        <div class="divide-y divide-border">
+          <SettingsRow :icon="Timer" :label="$t('notifications.sessionReset')">
+            <template #control>
+              <Switch
+                :model-value="notifySessionReset"
+                @update:model-value="(v: boolean) => patchNotifications({ notifySessionReset: v })"
+              />
+            </template>
+          </SettingsRow>
+          <SettingsRow :icon="CalendarClock" :label="$t('notifications.weeklyReset')">
+            <template #control>
+              <Switch
+                :model-value="notifyWeeklyReset"
+                @update:model-value="(v: boolean) => patchNotifications({ notifyWeeklyReset: v })"
+              />
+            </template>
+          </SettingsRow>
+          <SettingsRow :icon="Gauge" :label="$t('notifications.minPct')">
+            <template #info>
+              <InfoHint :text="$t('notifications.minPctHint')" />
+            </template>
+            <template #control>
+              <div class="flex items-center gap-1">
+                <Input
+                  class="h-7 w-16 text-right"
+                  type="number"
+                  min="0"
+                  max="100"
+                  :model-value="notifyMinPct"
+                  @change="(e: Event) => patchNotifications({ notifyMinPct: Number((e.target as HTMLInputElement).value) })"
+                />
+                <span>%</span>
+              </div>
+            </template>
+          </SettingsRow>
+          <SettingsRow :icon="Monitor" :label="$t('notifications.desktop')">
+            <template #info>
+              <InfoHint :text="$t('notifications.desktopHint')" />
+            </template>
+            <template #control>
+              <Switch
+                :model-value="notifyDesktop"
+                @update:model-value="(v: boolean) => patchNotifications({ notifyDesktop: v })"
+              />
+            </template>
+          </SettingsRow>
+          <SettingsRow :icon="Repeat" :label="$t('notifications.persistent')">
+            <template #info>
+              <InfoHint :text="$t('notifications.persistentHint')" />
+            </template>
+            <template #control>
+              <Switch
+                :model-value="notifyPersistent"
+                @update:model-value="(v: boolean) => patchNotifications({ notifyPersistent: v })"
+              />
+            </template>
+          </SettingsRow>
+          <ExpandTransition :open="notifyPersistent">
+            <div class="divide-y divide-border">
+              <SettingsRow :icon="Timer" :label="$t('notifications.persistentInterval')">
+                <template #control>
+                  <div class="flex items-center gap-1">
+                    <Input
+                      class="h-7 w-16 text-right"
+                      type="number"
+                      min="1"
+                      max="1440"
+                      :model-value="notifyPersistentIntervalMin"
+                      @change="(e: Event) => patchNotifications({ notifyPersistentIntervalMin: Number((e.target as HTMLInputElement).value) })"
+                    />
+                    <span>{{ $t('notifications.minutes') }}</span>
+                  </div>
+                </template>
+              </SettingsRow>
+              <SettingsRow :icon="Repeat" :label="$t('notifications.persistentMaxRepeats')">
+                <template #info>
+                  <InfoHint :text="$t('notifications.persistentMaxRepeatsHint')" />
+                </template>
+                <template #control>
+                  <div class="flex items-center gap-1">
+                    <Input
+                      class="h-7 w-16 text-right"
+                      type="number"
+                      min="0"
+                      max="200"
+                      :model-value="notifyPersistentMaxRepeats"
+                      @change="(e: Event) => patchNotifications({ notifyPersistentMaxRepeats: Number((e.target as HTMLInputElement).value) })"
+                    />
+                    <span>{{ $t('notifications.reminders') }}</span>
+                  </div>
+                </template>
+              </SettingsRow>
+            </div>
+          </ExpandTransition>
+          <SettingsRow :icon="Mail" :label="$t('notifications.email')">
+            <template #info>
+              <InfoHint :text="$t('notifications.emailHint')" />
+            </template>
+            <template #control>
+              <Switch
+                :model-value="notifyEmail"
+                @update:model-value="(v: boolean) => patchNotifications({ notifyEmail: v })"
+              />
+            </template>
+          </SettingsRow>
+          <ExpandTransition :open="notifyEmail">
+            <div class="divide-y divide-border">
+              <SettingsRow :icon="Mail" :label="$t('notifications.emailTo')">
+                <template #control>
+                  <Input
+                    class="h-7 w-56"
+                    type="email"
+                    :model-value="notifyEmailTo"
+                    @change="(e: Event) => patchNotifications({ notifyEmailTo: (e.target as HTMLInputElement).value })"
+                  />
+                </template>
+              </SettingsRow>
+              <SettingsRow :icon="Mail" :label="$t('notifications.emailFrom')">
+                <template #control>
+                  <Input
+                    class="h-7 w-56"
+                    type="email"
+                    :model-value="notifyEmailFrom"
+                    @change="(e: Event) => patchNotifications({ notifyEmailFrom: (e.target as HTMLInputElement).value })"
+                  />
+                </template>
+              </SettingsRow>
+              <SettingsRow :icon="Cloud" :label="$t('notifications.smtpHost')">
+                <template #control>
+                  <Input
+                    class="h-7 w-56"
+                    :model-value="notifySmtpHost"
+                    @change="(e: Event) => patchNotifications({ notifySmtpHost: (e.target as HTMLInputElement).value })"
+                  />
+                </template>
+              </SettingsRow>
+              <SettingsRow :icon="Cloud" :label="$t('notifications.smtpPort')">
+                <template #control>
+                  <Input
+                    class="h-7 w-20 text-right"
+                    type="number"
+                    min="1"
+                    max="65535"
+                    :model-value="notifySmtpPort"
+                    @change="(e: Event) => patchNotifications({ notifySmtpPort: Number((e.target as HTMLInputElement).value) })"
+                  />
+                </template>
+              </SettingsRow>
+              <SettingsRow :icon="CloudCheck" :label="$t('notifications.smtpSecure')">
+                <template #info>
+                  <InfoHint :text="$t('notifications.smtpSecureHint')" />
+                </template>
+                <template #control>
+                  <Switch
+                    :model-value="notifySmtpSecure"
+                    @update:model-value="(v: boolean) => patchNotifications({ notifySmtpSecure: v })"
+                  />
+                </template>
+              </SettingsRow>
+              <SettingsRow :icon="User" :label="$t('notifications.smtpUser')">
+                <template #control>
+                  <Input
+                    class="h-7 w-56"
+                    :model-value="notifySmtpUser"
+                    @change="(e: Event) => patchNotifications({ notifySmtpUser: (e.target as HTMLInputElement).value })"
+                  />
+                </template>
+              </SettingsRow>
+              <!-- Always blank: the server does not return the stored password, so there is
+                   nothing to prefill. Saving an empty value keeps whatever is stored. -->
+              <SettingsRow :icon="User" :label="$t('notifications.smtpPass')">
+                <template #description>
+                  <span v-if="notifySmtpPassSet">{{ $t('notifications.smtpPassStored') }}</span>
+                </template>
+                <template #control>
+                  <Input
+                    v-model="smtpPassDraft"
+                    class="h-7 w-56"
+                    type="password"
+                    autocomplete="new-password"
+                    @change="saveSmtpPass"
+                  />
+                </template>
+              </SettingsRow>
+            </div>
+          </ExpandTransition>
+          <SettingsRow :icon="BellRing" :label="$t('notifications.test')">
+            <template #info>
+              <InfoHint :text="$t('notifications.testHint')" />
+            </template>
+            <template #control>
+              <Button
+                size="xs"
+                variant="outline"
+                :disabled="testingNotification"
+                @click="onTestNotification"
+              >
+                <RefreshCw v-if="testingNotification" class="animate-spin" />
+                {{ testingNotification ? $t('notifications.testSending') : $t('notifications.test') }}
+              </Button>
+            </template>
+          </SettingsRow>
+        </div>
+      </ExpandTransition>
     </SettingsGroup>
 
     <!-- updates -->

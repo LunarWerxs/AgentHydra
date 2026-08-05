@@ -24,6 +24,7 @@ import { cliInstanceForDesktop, getCliInstance, listCliInstances } from './core/
 import { listInstances } from './core/instances'
 import { normalizeInstancePath } from './core/paths'
 import { db } from './db'
+import { noteUsageSnapshot } from './reset-watch'
 import type { AuthType, UsageCheckResult, UsageReason, UsageSnapshot } from './types'
 import {
   checkUsage,
@@ -128,6 +129,12 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
     // Every real reading feeds the time series. This is what lets a later call differentiate the
     // percentage into a burn rate (see usage-history.ts) — without it, "98%" stays uninterpretable.
     recordUsageSample(key, snapshot)
+    // …and the reset watcher, which compares this reading's window against the last one and raises
+    // a notification when one has rolled over. Fire-and-forget: a notification must never delay (or
+    // fail) the usage check that produced it.
+    void noteUsageSnapshot(key, label ?? dir, snapshot).catch((err) =>
+      console.error('[usage-service] reset-watch note failed:', err),
+    )
     return { snapshot, cached: false, key, reason: 'ok', advice: usageAdvice(snapshot) }
   }
 
@@ -185,6 +192,9 @@ export async function checkUsageForCliInstance(id: string): Promise<UsageCheckRe
     // Every real reading feeds the time series. This is what lets a later call differentiate the
     // percentage into a burn rate (see usage-history.ts) — without it, "98%" stays uninterpretable.
     recordUsageSample(key, snapshot)
+    void noteUsageSnapshot(key, inst.name, snapshot).catch((err) =>
+      console.error('[usage-service] reset-watch note failed:', err),
+    )
     return { snapshot, cached: false, key, reason: 'ok', advice: usageAdvice(snapshot) }
   }
 

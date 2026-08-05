@@ -6,6 +6,7 @@ import cliInstances from './en/cliInstances'
 import codexInstances from './en/codexInstances'
 import composer from './en/composer'
 import instances from './en/instances'
+import notifications from './en/notifications'
 import queue from './en/queue'
 import run from './en/run'
 import scheduler from './en/scheduler'
@@ -19,6 +20,7 @@ export default {
   codexInstances,
   composer,
   instances,
+  notifications,
   queue,
   run,
   scheduler,

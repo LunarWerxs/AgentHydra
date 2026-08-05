@@ -14,11 +14,14 @@ import type {
   InstanceIconKey,
   MonitorSettings,
   MonitorView,
+  NotificationSettings,
+  NotifyDeliveryResult,
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
   ProviderSettings,
   QueueItem,
+  ResetEvent,
   RunEvent,
   SchedulerState,
   SessionPeriod,
@@ -55,12 +58,16 @@ export type {
   MonitorStateName,
   MonitorStatusRow,
   MonitorView,
+  NotificationSettings,
+  NotifyDeliveryResult,
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
   ProviderSettings,
   QueueItem,
   QueueStatus,
+  ResetEvent,
+  ResetKind,
   RunEvent,
   SchedulerState,
   SessionPeriod,
@@ -335,13 +342,21 @@ export const shutdownApp = () =>
   })
 
 // --- app settings (portable mode, hide tray icon, usage auto-refresh + section visibility) -------
-/** Everything /api/settings returns: window/tray, usage, provider, and editor settings. */
+/** Everything /api/settings returns: window/tray, usage, provider, editor, and notification settings. */
 export type AppSettings = PortableModeSettings &
   UsageSettings &
   ProviderSettings &
-  TranscriptSettings
+  TranscriptSettings &
+  NotificationSettings
+/**
+ * What a settings PATCH may carry. Identical to AppSettings except for the SMTP password, which is
+ * WRITE-ONLY: the server never returns it (AppSettings carries `notifySmtpPassSet` instead), so it
+ * cannot be part of the read type without inviting a round-trip that echoes a secret back.
+ * An empty string means "leave the stored password alone", never "clear it".
+ */
+export type AppSettingsPatch = Partial<AppSettings> & { notifySmtpPass?: string }
 export const getSettings = () => j<AppSettings>('/api/settings')
-export const updateSettings = (b: Partial<AppSettings>) =>
+export const updateSettings = (b: AppSettingsPatch) =>
   j<AppSettings>('/api/settings', { method: 'POST', body: JSON.stringify(b) })
 export const openPortableWindow = () =>
   j<PortableWindowResult>('/api/portable-window', { method: 'POST' })
@@ -397,6 +412,22 @@ export const getUsageCache = () =>
 /** Force one background refresh sweep now (the same pass the auto-refresh timer runs). */
 export const refreshAllUsage = () =>
   j<{ ok: boolean; checked: number }>('/api/usage/refresh', { method: 'POST' })
+
+// --- reset notifications (see server/src/reset-watch.ts) ----------------------------------------
+// Quota-window rollovers the daemon noticed. They are raised server-side (so a notification still
+// fires with no browser open) and mirrored here so the app can toast them and let you acknowledge —
+// which is also what stops persistent mode from re-raising them.
+/** Open (unacknowledged, unexpired) reset events, newest first. */
+export const getResetEvents = () => j<ResetEvent[]>('/api/notifications/events')
+/** Acknowledge one event, or every open one when `id` is omitted. */
+export const acknowledgeResetEvents = (id?: string) =>
+  j<ResetEvent[]>('/api/notifications/ack', {
+    method: 'POST',
+    body: JSON.stringify(id ? { id } : {}),
+  })
+/** Fire a test notification through the configured channels, so the plumbing can be proven now. */
+export const sendTestNotification = () =>
+  j<NotifyDeliveryResult>('/api/notifications/test', { method: 'POST' })
 
 // --- CLI instances (Feature A) -------------------------------------------------
 export const listCliInstances = () => j<CliInstance[]>('/api/cli-instances')

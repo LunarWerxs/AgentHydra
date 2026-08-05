@@ -15,6 +15,8 @@ export default {
   loggedOut: 'Not logged in',
   noAccount: 'No account',
   linkedElsewhere: '+ {count} shown on their desktop instance',
+  // "(0)" alone reads as "you have none"; "(0 of 1)" says the missing one is elsewhere, not absent.
+  countOfTotal: '{shown} of {total}',
   allLinked: 'Every CLI instance is linked to a desktop instance',
   allLinkedHint:
     'Linked ones appear on their desktop instance row above, since they are the same account. Unlink one to bring it back here.',

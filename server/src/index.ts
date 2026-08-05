@@ -55,6 +55,7 @@ import {
   launchCliInstance,
   linkCliInstanceToDesktop,
   listCliInstances,
+  migrateCliInstanceConfigDirs,
   pruneCliInstanceAccountAssociations,
   renameCliInstance,
   setCliInstanceUsage,
@@ -123,9 +124,20 @@ import {
   setMonitorSettings,
   startMonitor,
 } from './monitor'
+import {
+  getNotificationSettings,
+  type NotificationSettingsPatch,
+  setNotificationSettings,
+} from './notify-settings'
 import { openUi } from './open-ui'
 import { openPortableWindow } from './portable-window.mjs'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
+import {
+  acknowledgeResetEvents,
+  listResetEvents,
+  sendTestNotification,
+  startResetWatch,
+} from './reset-watch'
 import { schedulerState, setSchedulerSettings } from './scheduler'
 import { searchSessionBodies } from './session-search'
 import { getSession, listSessions, sessionMarkKey, warmSessionScanCache } from './sessions'
@@ -349,6 +361,10 @@ const appSettings = () => ({
   ),
   ...getUsageSettings(),
   ...getProviderSettings(),
+  // Notification settings ride the same envelope as every other app setting so the web app keeps
+  // ONE settings round-trip. The SMTP password is not in here by construction — the DTO carries
+  // `notifySmtpPassSet` instead (see notify-settings.ts).
+  ...getNotificationSettings(),
 })
 app.get('/api/settings', (c) => c.json(appSettings()))
 app.post('/api/settings', async (c) => {
@@ -375,8 +391,55 @@ app.post('/api/settings', async (c) => {
     chatGptHandoffEnabled:
       typeof body.chatGptHandoffEnabled === 'boolean' ? body.chatGptHandoffEnabled : undefined,
   })
+  // Notifications: whitelisted field by field, same as the blocks above. setNotificationSettings
+  // ignores anything absent, so a patch touching one toggle leaves the rest (and the stored SMTP
+  // password) alone.
+  setNotificationSettings(notificationPatch(body))
   return c.json(appSettings())
 })
+
+// --- reset notifications (server/src/reset-watch.ts) ---------------------------------------------
+
+/** Narrow an untyped request body to the notification patch, dropping anything mistyped. Split out
+ *  of the settings handler because the same shape is accepted on the dedicated route below. */
+function notificationPatch(body: Record<string, unknown>): NotificationSettingsPatch {
+  const b = (k: string) => (typeof body[k] === 'boolean' ? (body[k] as boolean) : undefined)
+  const n = (k: string) =>
+    typeof body[k] === 'number' && Number.isFinite(body[k]) ? (body[k] as number) : undefined
+  const s = (k: string) => (typeof body[k] === 'string' ? (body[k] as string) : undefined)
+  return {
+    notifyEnabled: b('notifyEnabled'),
+    notifySessionReset: b('notifySessionReset'),
+    notifyWeeklyReset: b('notifyWeeklyReset'),
+    notifyMinPct: n('notifyMinPct'),
+    notifyDesktop: b('notifyDesktop'),
+    notifyPersistent: b('notifyPersistent'),
+    notifyPersistentIntervalMin: n('notifyPersistentIntervalMin'),
+    notifyPersistentMaxRepeats: n('notifyPersistentMaxRepeats'),
+    notifyEmail: b('notifyEmail'),
+    notifyEmailTo: s('notifyEmailTo'),
+    notifyEmailFrom: s('notifyEmailFrom'),
+    notifySmtpHost: s('notifySmtpHost'),
+    notifySmtpPort: n('notifySmtpPort'),
+    notifySmtpSecure: b('notifySmtpSecure'),
+    notifySmtpUser: s('notifySmtpUser'),
+    notifySmtpPass: s('notifySmtpPass'),
+  }
+}
+
+/** Open reset events (newest first) — what the UI polls to raise its in-app toast. */
+app.get('/api/notifications/events', (c) => c.json(listResetEvents()))
+
+/** Acknowledge one event, or every open one when `id` is omitted. Acking stops persistent repeats. */
+app.post('/api/notifications/ack', async (c) => {
+  const body = await jsonBody(c)
+  const id = typeof body.id === 'string' && body.id ? body.id : undefined
+  return c.json(acknowledgeResetEvents(id))
+})
+
+/** Fire a test notification through the configured channels. Without this, verifying an SMTP
+ *  config or a muted Windows toast would mean waiting up to five hours for a real reset. */
+app.post('/api/notifications/test', async (c) => c.json(await sendTestNotification()))
 
 // Manual handoff only: create a bounded local context attachment, then the browser opens ChatGPT
 // and the user chooses what to send. No ChatGPT credentials, cookies, prompts, or responses cross
@@ -1704,6 +1767,29 @@ startMonitor()
 // your quota does not consume it — so keeping the numbers warm costs essentially nothing. Toggle in
 // Settings → Usage.
 startUsageRefresh()
+
+// --- one-time repair: CLI config dirs still naming the pre-rebrand config root ------------------
+// See migrateCliInstanceConfigDirs. A no-op on every install except one carried across the
+// ccmanagerui → agenthydra rename, where it is what makes an existing CLI login readable again.
+{
+  const migrated = migrateCliInstanceConfigDirs()
+  if (migrated.length)
+    console.log(`[cli-instances] repointed ${migrated.length} config dir(s) to ${CONFIG_DIR}`)
+}
+
+// --- reset notifications (ON by default; see server/src/reset-watch.ts) ------------------------
+// The sweep above keeps the numbers warm; this turns the EDGE — a 5-hour or weekly window rolling
+// over — into a native OS notification. `recheck` is injected rather than imported so reset-watch
+// never imports usage-service (which imports back into the usage stack).
+startResetWatch({
+  recheck: async (key) => {
+    if (key.startsWith('desktop:')) {
+      await checkUsageForDesktop(key.slice('desktop:'.length))
+      return
+    }
+    if (key.startsWith('cli:')) await checkUsageForCliInstance(key.slice('cli:'.length))
+  },
+})
 
 // Explicit serve, NOT Bun's implicit `export default { fetch }` sugar: the implicit form only
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon

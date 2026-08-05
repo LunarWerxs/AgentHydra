@@ -485,6 +485,80 @@ export interface UsageSettings {
   showCliInstances: boolean
 }
 
+// --- reset notifications -----------------------------------------------------
+// "Tell me the moment my quota comes back." The percentages already flow through the usage sweep;
+// these types are about turning the EDGE (a window rolling over) into something that reaches the
+// user while the app is in the tray and they're looking at something else.
+
+/** Which quota window rolled over. */
+export type ResetKind = 'session' | 'weekAll'
+
+/**
+ * One detected reset, kept until acknowledged.
+ *
+ * It outlives the process on purpose (persisted to disk): a reset that fires at 3am while the
+ * daemon is restarting for an auto-update would otherwise be lost, which is the one case the whole
+ * feature exists for. `repeats` is what persistent ("annoying") mode counts.
+ */
+export interface ResetEvent {
+  id: string
+  /** Usage-cache key of the instance whose window reset (`desktop:<dir>` / `cli:<id>`). */
+  key: string
+  /** Human label for the instance, resolved when the event was raised. */
+  label: string
+  kind: ResetKind
+  /** ISO instant the window was scheduled to reset at. */
+  resetAt: string
+  /** ISO instant we noticed. Later than `resetAt` by however long the detection lagged. */
+  detectedAt: string
+  /** The percentage that was in use just before the rollover — the "you were at 97%" in the copy. */
+  previousPct: number | null
+  /** The percentage read after it. Usually near 0; null when the post-reset read had no numbers. */
+  currentPct: number | null
+  acknowledged: boolean
+  /** How many times it has been re-raised by persistent mode (0 = only the original). */
+  repeats: number
+  /** ISO instant of the most recent delivery — what the repeat interval is measured from. */
+  lastNotifiedAt: string
+}
+
+/** Per-channel outcome of one delivery attempt, so the UI can say WHICH channel failed. */
+export interface NotifyDeliveryResult {
+  desktop: { attempted: boolean; ok: boolean; error?: string }
+  email: { attempted: boolean; ok: boolean; error?: string }
+}
+
+/** Notification settings (persisted in the db `settings` table; the SMTP password is sealed). */
+export interface NotificationSettings {
+  /** Master switch for reset notifications. */
+  notifyEnabled: boolean
+  /** Notify when the 5-hour session window rolls over. */
+  notifySessionReset: boolean
+  /** Notify when the weekly (all-models) window rolls over. */
+  notifyWeeklyReset: boolean
+  /** Suppress a reset whose pre-reset usage was below this. 0 = notify on every reset. */
+  notifyMinPct: number
+  /** Raise a native OS notification (Windows toast / macOS / notify-send). */
+  notifyDesktop: boolean
+  /** Persistent ("annoying") mode: keep re-raising until acknowledged. */
+  notifyPersistent: boolean
+  /** Minutes between repeats in persistent mode. */
+  notifyPersistentIntervalMin: number
+  /** Stop after this many repeats (0 = never stop until acknowledged). */
+  notifyPersistentMaxRepeats: number
+  /** Also send an email. */
+  notifyEmail: boolean
+  notifyEmailTo: string
+  notifyEmailFrom: string
+  notifySmtpHost: string
+  notifySmtpPort: number
+  /** true = implicit TLS (465); false = plaintext connect + STARTTLS (587/25). */
+  notifySmtpSecure: boolean
+  notifySmtpUser: string
+  /** Read-only echo: whether a password is stored. The password itself never leaves the server. */
+  notifySmtpPassSet: boolean
+}
+
 // --- auto-resume monitor (Feature E) ----------------------------------------
 
 export type MonitorStateName = 'scheduled' | 'blocked_weekly' | 'needs_human' | 'done'
