@@ -40,6 +40,37 @@ every instance with auto-update enabled will fast-forward to it on its next chec
    **If a tag does end up on a red commit,** do not move a published tag. Fix the failure, bump to
    the next patch version, and release that immutable version instead.
 
+## When a push doesn't trigger anything
+
+GitHub's standard mitigation for an Actions incident is to **throttle webhook triggers**, which
+fails in the most confusing possible way: `git push` succeeds, the commit and the tag are really on
+`origin`, and no workflow run is ever created. Nothing is red; there is simply nothing. Both steps 5
+and 6 above silently stall, because both wait on a run that will never exist.
+
+Check <https://www.githubstatus.com/api/v2/components.json> for the `Actions` component before
+assuming it's your fault:
+
+```sh
+curl -s https://www.githubstatus.com/api/v2/components.json | grep -A2 '"name": "Actions"'
+```
+
+`workflow_dispatch` is NOT throttled with the webhooks, so it is the way through. Both workflows
+accept it:
+
+```sh
+gh workflow run ci.yml --ref main          # step 5's green gate
+gh workflow run release.yml --ref vX.Y.Z   # step 6's publish
+```
+
+Dispatching `release.yml` **against the tag ref** is the important part. The publish job gates on
+`github.ref_type == 'tag'`, not on the event that started the run, so a dispatch on a tag publishes
+a real release exactly as a tag push would; a dispatch on a branch runs build + smoke and publishes
+nothing. This is how v0.16.0 and v0.16.1 actually shipped on 2026-08-06.
+
+Do NOT try to force the webhook by deleting and re-pushing the tag. Re-pushing an identical tag is
+still a published tag moving, the failure mode this file warns about at the end of step 6, and it
+buys nothing a dispatch doesn't already give you.
+
 ## What the tag push triggers
 
 Pushing a tag matching `v*.*.*` triggers `.github/workflows/release.yml`. It builds one

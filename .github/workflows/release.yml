@@ -1,8 +1,14 @@
 # Release: compile real executables for every OS and publish them with versioned changelog notes.
 #
 # Trigger: pushing a version tag (v0.2.1). The release is published automatically only after every
-# build and smoke job succeeds. workflow_dispatch runs build + smoke only (no release), for
-# validating the pipeline without a tag.
+# build and smoke job succeeds.
+#
+# workflow_dispatch is gated the same way, on `github.ref_type == 'tag'` rather than on the event:
+# dispatching against a BRANCH runs build + smoke and publishes nothing (validating the pipeline
+# without a tag), while dispatching against a TAG ref is a real, publishing release. That second
+# case is not a curiosity — on 2026-08-06 a GitHub Actions incident throttled webhook triggers, so
+# `git push origin v0.16.0` created the tag and fired no run at all. `gh workflow run release.yml
+# --ref v0.16.0` was what actually shipped it. See docs/RELEASING.md.
 #
 # Design notes (verified 2026-07-16 against a real compiled exe on Windows):
 # - `bun build --compile` cross-compiles every POSIX target (minified) from one Linux runner. The
