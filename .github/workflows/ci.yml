@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual runs, so a commit can be verified without a dummy push. Added 2026-08-06, during a
+  # GitHub Actions outage whose recovery plan was to throttle webhook triggers: pushes landed on
+  # main and simply never produced a run. Since docs/RELEASING.md makes "main is green" the gate on
+  # tagging a release, the only ways to re-check an already-pushed commit were an empty commit or
+  # waiting for the next real one. Release.yml already had this; CI should too.
+  workflow_dispatch:
 
 # A newer push to the same ref supersedes an in-flight run.
 concurrency:
