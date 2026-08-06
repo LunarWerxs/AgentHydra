@@ -1,7 +1,10 @@
 // server/tests/plan-label.test.ts — resolvePlanLabel: how CMAccount.planLabel (the "Plan" column)
-// is derived. The rate-limit TIER is authoritative for the current plan; the has_claude_max/pro
-// flags are stale entitlement history (owner-confirmed 2026-07-22: accounts that expired from a
-// paid plan back to free still report the flag). A generic `default_claude_ai` tier ⇒ Free.
+// is derived.
+//
+// Evidence order: a SPECIFIC rate-limit tier, then the OAuth grant's subscriptionType (which
+// accounts.ts puts in `plan`), then nothing. A GENERIC `default_claude_ai` tier is not evidence of
+// anything and must not override the grant — see the 2026-08-06 case below. The separate
+// has_claude_max/pro booleans remain distrusted; accounts.ts no longer lets them overwrite a grant.
 
 import { describe, expect, test } from 'bun:test'
 import { prettyTier, resolvePlanLabel } from '../src/core/shared'
@@ -16,18 +19,33 @@ describe('resolvePlanLabel', () => {
     expect(resolvePlanLabel(null, prettyTier('default_claude_enterprise_x'))).toBe('Enterprise')
   })
 
-  test('a generic default_* tier ⇒ Free, ignoring the stale has_claude_max/pro plan flags', () => {
-    // The real-world case (owner-confirmed): an account that was Max/Pro and lapsed to free still
-    // reports has_claude_max/pro=true, but Anthropic drops its rate-limit tier to the generic
-    // "default_claude_ai". The tier is the current-plan truth, so all of these are Free.
-    expect(resolvePlanLabel('max', 'default_claude_ai')).toBe('Free')
-    expect(resolvePlanLabel('pro', 'default_claude_ai')).toBe('Free')
-    expect(resolvePlanLabel('free', 'default_claude_ai')).toBe('Free')
-    expect(resolvePlanLabel('claude_max', 'default_claude_ai')).toBe('Free')
-    expect(resolvePlanLabel(null, 'default_claude_ai')).toBe('Free')
+  test('a specific tier still wins over a disagreeing plan', () => {
+    // The tier is the only signal with 5×/20× granularity, so it is never overridden by the
+    // coarser subscriptionType.
+    expect(resolvePlanLabel('pro', prettyTier('default_claude_max_20x'))).toBe('Max 20×')
+    expect(resolvePlanLabel('max', prettyTier('default_claude_pro'))).toBe('Pro')
   })
 
-  test('with no tier at all, falls back to the plan flags (best-effort)', () => {
+  test('a generic default_claude_ai tier falls through to the grant, it is not proof of Free', () => {
+    // REGRESSION, owner-reported 2026-08-06: an actively-paid Pro account reports
+    // `rateLimitTier: "default_claude_ai"` on its own grant (verified by decrypting the token
+    // cache: sub=pro, tier=default_claude_ai, unexpired). Treating the generic tier as "this
+    // account is free" labelled a live Pro account Free. The generic value means the tier signal
+    // knows nothing; the grant's subscriptionType is what answers.
+    expect(resolvePlanLabel('pro', 'default_claude_ai')).toBe('Pro')
+    expect(resolvePlanLabel('max', 'default_claude_ai')).toBe('Max')
+    expect(resolvePlanLabel('claude_max', 'default_claude_ai')).toBe('Max')
+    expect(resolvePlanLabel('free', 'default_claude_ai')).toBe('Free')
+  })
+
+  test('a generic tier with no subscription evidence behind it is Free', () => {
+    // The genuine free/default account: Anthropic reports the generic tier and there is no
+    // subscription type to describe.
+    expect(resolvePlanLabel(null, 'default_claude_ai')).toBe('Free')
+    expect(resolvePlanLabel('', 'default_claude_ai')).toBe('Free')
+  })
+
+  test('with no tier at all, falls back to the plan (best-effort)', () => {
     expect(resolvePlanLabel('max', null)).toBe('Max')
     expect(resolvePlanLabel('claude_pro', null)).toBe('Pro')
     // An unrecognized non-default plan passes through as-is rather than being dropped.

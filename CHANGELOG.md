@@ -5,6 +5,29 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-08-06
+
+### Fixed
+
+- **A paid account no longer shows as "Free".** Two independent faults in the same evidence chain,
+  both owner-reported and both verified against real accounts:
+  - The rate-limit tier was read from the profile's ORGANIZATION (`organization.rate_limit_tier`),
+    which for a personal org is routinely the generic `default_claude_ai` even on a paid plan. That
+    generic value was preferred unconditionally over the OAuth grant's own tier, so a Max 20x
+    account whose grant plainly said `default_claude_max_20x` had its only specific answer thrown
+    away and rendered as Free. A specific tier now wins wherever it comes from, and the generic
+    value is only settled for when nothing better exists.
+  - A generic tier was itself treated as proof of a free account. It is not: an actively-paid Pro
+    account reports `default_claude_ai` on its grant too (confirmed by decrypting the token cache:
+    subscriptionType `pro`, unexpired). A generic tier now means "this signal knows nothing" and
+    falls through to the grant's subscription type; it only resolves to Free when there is no
+    subscription evidence behind it at all, which is the genuine free-account shape.
+  - The 2026-07-22 finding that motivated the old behaviour still stands, because it was about a
+    different field: the profile's `has_claude_max` / `has_claude_pro` booleans stay true for an
+    account that lapsed back to free. Those are entitlement history rather than current state, and
+    they can no longer overwrite a grant that says otherwise; they are consulted only when there is
+    no grant to ask.
+
 ## [0.16.0] - 2026-08-06
 
 ### Added

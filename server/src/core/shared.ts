@@ -61,14 +61,28 @@ export function prettyTier(tier: string | null | undefined): string | null {
  * The account's plan / "type" as one display-ready label ("Max 20×" | "Pro" | "Free" | …), or
  * null when it genuinely can't be determined.
  *
- * The RATE-LIMIT TIER is the source of truth for the CURRENT plan, because Anthropic derives it
- * from the active subscription: a live paid plan reports a SPECIFIC tier
- * ("default_claude_max_20x" → "Max 20×"), while a free / default account reports the GENERIC
- * "default_claude_ai". The profile's has_claude_max / has_claude_pro flags are NOT reliable for
- * the current plan — they stay `true` for an account that WAS Max/Pro and has since lapsed back to
- * free (owner-confirmed, 2026-07-22: several accounts were higher-tier, expired, and are now free,
- * yet still report has_claude_max=true). So we trust the tier and do NOT upgrade off those flags;
- * `plan` is only a last-resort fallback when there is no tier information at all.
+ * Evidence, strongest first:
+ *
+ * 1. A SPECIFIC rate-limit tier ("default_claude_max_20x" → "Max 20×"). Anthropic derives it from
+ *    the active subscription, and it is the only signal carrying 5×/20× granularity.
+ * 2. `plan`, which is the OAuth grant's own `subscriptionType` (see accounts.ts). The grant is
+ *    minted and re-minted by Anthropic on every token refresh, so it tracks the CURRENT
+ *    subscription.
+ * 3. Nothing → null, and the column renders "—".
+ *
+ * WHY A GENERIC TIER IS NOT PROOF OF "FREE" (fixed 2026-08-06). This used to return 'Free' the
+ * moment the tier came back as an unmapped `default_claude_*` passthrough, on the theory that
+ * Anthropic drops a lapsed account to the generic "default_claude_ai". That is true, but it is not
+ * the ONLY thing that reports the generic value: an owner-confirmed, actively-paid Pro account
+ * reports `rateLimitTier: "default_claude_ai"` on its grant too, and was being shown as Free.
+ * A generic tier means "this signal knows nothing", so it now falls through to the grant instead
+ * of overriding it.
+ *
+ * The 2026-07-22 finding this replaces is still respected, because it was about a DIFFERENT field:
+ * the profile's `has_claude_max` / `has_claude_pro` booleans, which stay `true` for an account that
+ * was paid and has since lapsed. Those are entitlement history, not current state, and accounts.ts
+ * no longer lets them override the grant. So `plan` reaching here is grant-derived, and the stale
+ * flags are still not trusted to upgrade anybody.
  *
  * Never returns a raw `default_*` string; returns null (callers render "—") when nothing is known.
  */
@@ -78,12 +92,8 @@ export function resolvePlanLabel(
 ): string | null {
   // A specific, recognized tier is the current plan — trust it (keeps the 5×/20× granularity).
   if (prettyTierLabel && !/^default_claude/i.test(prettyTierLabel)) return prettyTierLabel
-  // A generic, unmapped `default_claude_*` passthrough (e.g. "default_claude_ai") is what Anthropic
-  // reports for a free / default account — INCLUDING one that used to be Max/Pro and expired. It is
-  // not an active paid tier, so it resolves to Free, and the stale has_claude_max/pro-derived plan
-  // is deliberately ignored here.
-  if (prettyTierLabel) return 'Free'
-  // No tier information at all: last-resort best-effort from the plan flags.
+  // Otherwise the tier told us nothing usable (absent, or a generic `default_claude_*`
+  // passthrough): fall through to the grant's subscription type.
   const p = plan?.toLowerCase()
   if (p) {
     if (p.includes('max')) return 'Max'
@@ -91,6 +101,9 @@ export function resolvePlanLabel(
     if (p.includes('free')) return 'Free'
     return plan // some other subscriptionType passthrough (already not a raw default_*)
   }
+  // A generic tier with NO subscription evidence behind it is the genuine free/default account:
+  // that is exactly what Anthropic reports when there is no paid plan to describe.
+  if (prettyTierLabel) return 'Free'
   return null
 }
 

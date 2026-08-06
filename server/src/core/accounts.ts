@@ -622,11 +622,31 @@ export async function resolveAccount(
     const accountUuid = profile.account?.uuid ?? lastKnownAccountUuid
     const orgUuid = profile.organization?.uuid ?? bestGrant?.orgUuid ?? null
     const orgName = profile.organization?.name ?? null
-    const rawTier = profile.organization?.rate_limit_tier ?? bestGrant?.rateLimitTier ?? null
+    // Tier: a SPECIFIC value wins wherever it comes from, and only then do we settle for a generic
+    // `default_claude_*` passthrough.
+    //
+    // The profile's value is the ORGANIZATION's rate_limit_tier, and for a personal org that is
+    // routinely the generic "default_claude_ai" even when the account is on a paid plan — observed
+    // 2026-08-06 on a Max 20× account whose org reported the generic value while its own grant
+    // reported `default_claude_max_20x`. Preferring the profile unconditionally therefore threw
+    // away the only specific answer available and the row rendered as "Free". Ask both, prefer
+    // whichever actually names a plan.
+    const specific = (t: string | null | undefined): string | null =>
+      t && !/^default_claude_ai$/i.test(t) && /^default_claude_.+/i.test(t) ? t : null
+    const orgTier = profile.organization?.rate_limit_tier ?? null
+    const grantTier = bestGrant?.rateLimitTier ?? null
+    const rawTier = specific(orgTier) ?? specific(grantTier) ?? orgTier ?? grantTier ?? null
 
+    // Plan: the GRANT's subscriptionType, which Anthropic re-mints on every token refresh and which
+    // therefore tracks the current subscription. has_claude_max/pro are entitlement HISTORY — they
+    // stay true for an account that lapsed back to free (owner-confirmed 2026-07-22) — so they are
+    // only consulted when there is no grant to ask, and can no longer overwrite one that says
+    // otherwise. resolvePlanLabel leans on this being grant-derived; see its comment.
     let plan = bestGrant?.subscriptionType ?? null
-    if (profile.account?.has_claude_max) plan = 'max'
-    else if (profile.account?.has_claude_pro) plan = 'pro'
+    if (!plan) {
+      if (profile.account?.has_claude_max) plan = 'max'
+      else if (profile.account?.has_claude_pro) plan = 'pro'
+    }
 
     const tier = prettyTier(rawTier)
     const label = buildLabel(fullName, email, tier)
