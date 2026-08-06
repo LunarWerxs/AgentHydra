@@ -15,8 +15,22 @@
 import { useStorage } from '@vueuse/core'
 import { computed, onUnmounted, ref } from 'vue'
 
-/** Persisted so the mode survives a reload — it is a way of working, not a momentary filter. */
-const usageMode = useStorage('agenthydra.instances.usageMode', false)
+/**
+ * Persisted so the mode survives a reload — it is a way of working, not a momentary filter.
+ *
+ * DEFAULTS ON. "How much quota is left" is the question this table gets opened for; PID / uptime /
+ * memory answer "is the process healthy", which is the rarer follow-up. The toolbar toggle is one
+ * click away for anyone who wants the process columns back.
+ *
+ * `.usageMode2`, not `.usageMode` — the same reasoning as useUsageFilter's `.scope2`, and it is
+ * the whole reason a new key exists rather than a flipped default. useStorage WRITES its default
+ * on first read, so every install that has ever rendered this tab already has an explicit `false`
+ * on disk; changing the default alone would reach nobody who has used the app. The stale key is a
+ * dead 5-byte entry, and anyone who deliberately chose process columns re-picks them once rather
+ * than being silently overridden by a migration that cannot tell a deliberate choice from the old
+ * default.
+ */
+const usageMode = useStorage('agenthydra.instances.usageMode2', true)
 
 // --- the shared clock ---------------------------------------------------------
 // Every countdown cell in both tables derives from ONE ticking ref. Per-cell timers would drift

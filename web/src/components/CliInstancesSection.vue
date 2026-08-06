@@ -13,6 +13,7 @@ import {
   ArrowUp,
   ChevronDown,
   EllipsisVertical,
+  Funnel,
   Link2,
   LogIn,
   Monitor,
@@ -30,6 +31,7 @@ import { toast } from 'vue-sonner'
 import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.vue'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
+import ExpandArea from '@/components/ExpandArea.vue'
 import LinkCliInstanceDialog from '@/components/LinkCliInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
@@ -57,6 +59,7 @@ import { useData } from '@/composables/useData'
 import { useInstances } from '@/composables/useInstances'
 import { useSortable } from '@/composables/useSortable'
 import { useUsage } from '@/composables/useUsage'
+import { useUsageFilter } from '@/composables/useUsageFilter'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
 import { bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
@@ -162,6 +165,38 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
     },
     { key: 'usageSession', accessor: (i: CliInstance) => usageFor(i)?.session?.pct ?? undefined },
   ],
+)
+
+// The usage filter is tab-wide too (composables/useUsageFilter.ts): "which accounts have I already
+// spent" is asked of every table at once, so a CLI login over the threshold is set aside here on
+// exactly the same terms as a desktop instance up above.
+const {
+  threshold: filterThreshold,
+  dimmed: filterDimmed,
+  visible: filterVisible,
+} = useUsageFilter()
+
+const visibleRows = computed(() => filterVisible(sortedRows.value, usageFor))
+/** Rows this table dropped for the filter — said out loud in the heading beside the count. */
+const hiddenByFilter = computed(() => sortedRows.value.length - visibleRows.value.length)
+/** There ARE unlinked CLI instances, the filter just took all of them. */
+const allHiddenByFilter = computed(
+  () => unlinkedCliInstances.value.length > 0 && visibleRows.value.length === 0,
+)
+
+/**
+ * The heading's parenthetical. "x of y" whenever this table is showing fewer rows than there are
+ * CLI instances — for either reason, a linked one that moved up onto its account row or one the
+ * usage filter set aside. A bare "(0)" read as "you have no CLI instances" to someone who could
+ * plainly see one elsewhere, which is the whole reason this says the total.
+ */
+const headingCount = computed(() =>
+  visibleRows.value.length === cliInstances.value.length
+    ? String(cliInstances.value.length)
+    : t('cliInstances.countOfTotal', {
+        shown: visibleRows.value.length,
+        total: cliInstances.value.length,
+      }),
 )
 
 function isBusy(inst: CliInstance): boolean {
@@ -374,21 +409,16 @@ onUnmounted(stopPolling)
         <!-- "(0)" on its own read as "you have no CLI instances" to someone who could see one in
              the quick-instances window — the linked ones are simply rendered on their account row
              instead. Saying "0 of 1" makes the shortfall self-explanatory even while collapsed,
-             which is when the chip below is hidden. -->
-        <span class="text-muted-foreground">
-          ({{
-            linkedCount > 0
-              ? $t('cliInstances.countOfTotal', {
-                  shown: unlinkedCliInstances.length,
-                  total: cliInstances.length,
-                })
-              : unlinkedCliInstances.length
-          }})
-        </span>
+             which is when the chips below are hidden. (See headingCount: the usage filter can now
+             cause the same shortfall, and it reads the same way.) -->
+        <span class="text-muted-foreground">({{ headingCount }})</span>
         <!-- Linked ones aren't missing, they've moved up onto their account's row. Say so, or their
              absence from this count reads as a bug. -->
         <span v-if="linkedCount > 0" class="text-xs font-normal text-muted-foreground">
           {{ $t('cliInstances.linkedElsewhere', { count: linkedCount }) }}
+        </span>
+        <span v-if="hiddenByFilter > 0" class="text-xs font-normal text-muted-foreground">
+          {{ $t('instances.usageFilterHiddenCount', { count: hiddenByFilter }) }}
         </span>
         <ChevronDown
           class="size-4 text-muted-foreground transition-transform duration-200"
@@ -421,9 +451,11 @@ onUnmounted(stopPolling)
       </div>
     </div>
 
-    <!-- v-show rather than a height animation, for the same reason as the Instances table: an
-         overflow-hidden wrapper would break this table's `sticky top-0` header. -->
-    <Table v-show="cliOpen">
+    <!-- ExpandArea rather than the kit's ExpandTransition, for the same reason as the Instances
+         table: a permanently overflow-hidden wrapper would break this table's `sticky top-0`
+         header. ExpandArea only clips while the transition is actually running. -->
+    <ExpandArea :open="cliOpen">
+    <Table>
         <TableHeader class="sticky top-0 z-10 bg-card">
           <TableRow>
             <TableHead class="w-10 cursor-pointer select-none" @click="toggleSort('loggedIn')">
@@ -494,15 +526,29 @@ onUnmounted(stopPolling)
             <TableHead class="text-right">{{ $t('cliInstances.colActions') }}</TableHead>
           </TableRow>
         </TableHeader>
-        <TableBody v-if="unlinkedCliInstances.length === 0">
+        <!-- visibleRows, not unlinkedCliInstances: with the usage filter set to hide, this table can
+             be emptied while it still has rows to show, and a blank tbody explains nothing. -->
+        <TableBody v-if="visibleRows.length === 0">
           <TableEmpty v-if="!loading" :colspan="usageMode ? 8 : 6">
             <div class="flex flex-col items-center gap-1 text-center">
-              <Terminal class="mb-1 size-6 opacity-40" />
+              <component :is="allHiddenByFilter ? Funnel : Terminal" class="mb-1 size-6 opacity-40" />
               <p class="font-medium text-foreground">
-                {{ linkedCount > 0 ? $t('cliInstances.allLinked') : $t('cliInstances.empty') }}
+                {{
+                  allHiddenByFilter
+                    ? $t('instances.usageFilterAllHidden', { pct: filterThreshold })
+                    : linkedCount > 0
+                      ? $t('cliInstances.allLinked')
+                      : $t('cliInstances.empty')
+                }}
               </p>
               <p class="text-xs text-muted-foreground">
-                {{ linkedCount > 0 ? $t('cliInstances.allLinkedHint') : $t('cliInstances.emptyHint') }}
+                {{
+                  allHiddenByFilter
+                    ? $t('instances.usageFilterAllHiddenHint')
+                    : linkedCount > 0
+                      ? $t('cliInstances.allLinkedHint')
+                      : $t('cliInstances.emptyHint')
+                }}
               </p>
             </div>
           </TableEmpty>
@@ -523,7 +569,15 @@ onUnmounted(stopPolling)
           </TableRow>
         </TableBody>
         <TableBody v-else>
-          <TableRow v-for="inst in sortedRows" :key="inst.id">
+          <!-- Dimmed, never disabled, and inert to the pointer — same contract as the desktop table
+               above: a filtered row is one you've set aside, not one you've lost access to, and it
+               shouldn't light up every time the cursor crosses it. -->
+          <TableRow
+            v-for="inst in visibleRows"
+            :key="inst.id"
+            class="transition-opacity"
+            :class="filterDimmed(usageFor(inst)) ? 'opacity-25 hover:bg-transparent' : ''"
+          >
             <TableCell>
               <span
                 class="inline-block size-2 rounded-full"
@@ -637,6 +691,7 @@ onUnmounted(stopPolling)
           </TableRow>
         </TableBody>
       </Table>
+    </ExpandArea>
 
     <CliInstanceNameDialog
       v-model:open="createOpen"

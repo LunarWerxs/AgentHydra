@@ -56,6 +56,34 @@ export default {
   usageModeOff: 'Show process columns',
   usageModeHint:
     'Swap PID, uptime and memory for what is left of each quota window and how long until it resets.',
+  // Usage filter (toolbar flyout, usage mode only) — see composables/useUsageFilter.ts.
+  usageFilterTitle: 'Usage filter',
+  usageFilterHint:
+    'Set aside the accounts you have already spent, so the ones you can still work on stand out.',
+  usageFilterEnable: 'Filter by usage',
+  usageFilterThreshold: 'Threshold',
+  usageFilterThresholdHint:
+    'Instances whose Usage column is at or above this percentage are dimmed. Instances that have never been checked are never filtered — an unknown reading is not a full one.',
+  usageFilterThresholdValue: '{pct}%',
+  usageFilterHide: 'Hide instead of dim',
+  usageFilterHideHint:
+    'Matching instances leave the table entirely. The section heading still says how many are hidden.',
+  usageFilterScope: 'Measure against',
+  usageFilterScopeHint:
+    'Weekly is the Usage column, and the default: it is the cap that decides whether an account is worth starting on. 5h reads the shorter session window instead, and Either uses whichever of the two is closest to its cap.',
+  usageFilterScopeEither: 'Either',
+  usageFilterScopeWeek: 'Weekly',
+  usageFilterScopeSession: '5h',
+  usageFilterHiddenCount: '{count} hidden',
+  usageFilterAllHidden: 'Every instance is at or above {pct}%.',
+  usageFilterAllHiddenHint: 'Lower the threshold, or turn the usage filter off in the toolbar.',
+  // "x of y" for a heading whose table is showing fewer rows than it has.
+  countOfTotal: '{shown} of {total}',
+  // Sections flyout (toolbar) — the same provider switches Settings shows, where they apply.
+  sectionsTitle: 'Sections',
+  sectionsHint: 'Which instance tables this tab shows.',
+  // Small-caps heading over the auto-refresh rows inside the usage flyout.
+  usageDataTitle: 'Usage data',
   refreshAllUsage: 'Refresh all usage',
   refreshAllUsageHint:
     'Re-check every instance now. Reading your quota does not use any of it, and takes about a third of a second per instance.',

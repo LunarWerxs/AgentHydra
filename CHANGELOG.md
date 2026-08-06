@@ -7,6 +7,99 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Usage filter.** With the quota columns on, a funnel button appears in the Instances toolbar:
+  set a percentage and the instances at or above it are dimmed, so the accounts you can still work
+  on are the ones that read clearly. A **Hide instead of dim** switch drops them from the table
+  outright; both tables then say "4 of 11 · 7 hidden" in their heading, because an instance that
+  silently stopped being listed reads as a bug rather than as the filter working.
+  - **Measure against** picks the window the threshold applies to. It defaults to *Weekly*, the
+    Usage column: that is the cap that decides whether an account is worth starting on. *5h* reads
+    the shorter session window and *Either* takes whichever of the two is closest to its cap, both
+    of which are opt-in, since a 5-hour reading comes back the same day and would otherwise have
+    rows dropping out and back in over an afternoon.
+  - An instance that has never been checked is never filtered. An unknown reading is not a full one,
+    and treating it as one would quietly remove a perfectly usable account from the table.
+  - The filter lives and dies with usage mode: switching back to the process columns restores a
+    plain table, so a dimmed row always has the control that explains it visible in the same toolbar.
+- **Expanding and collapsing a section animates.** The two instance tables, the Codex table and the
+  queue card's run viewer used to appear and vanish between frames, with a rotating chevron as the
+  only sign anything had happened. They now open and close over 0.22s, matching the speed the kit's
+  collapsibles already used elsewhere in the app, and honour `prefers-reduced-motion`.
+  - This needed a component of its own rather than the kit's `ExpandTransition`, which keeps
+    `overflow: hidden` on its wrapper permanently. An element with a non-visible overflow becomes
+    the scrollport that `position: sticky` resolves against, so wrapping a table in it silently
+    stops the header sticking, which is exactly why these tables had no animation to begin with.
+    The local one clips only while the transition is actually running, i.e. the one moment nothing
+    is being scrolled. Popovers and focus rings inside an expanded block stop being cut off at its
+    edge as a side effect.
+
+### Fixed
+
+- **Reset toasts no longer deal themselves into the wrong slots, or jitter under the pointer.**
+  vue-sonner (2.0.9, the current release) positions its stack from a heights array it keeps beside
+  the rendered toasts, and each toast measures itself in an effect that awaits a tick. Raise two in
+  the same tick and those measurements come back in the reverse of the raise order while the array
+  blindly prepends each one, so every card's offset is attributed to a different card. Measured
+  here with three at once: the front toast got the middle card's offset and the middle one got zero.
+  With a backlog of ten it threw the front toast ~817px up, past the top of the window and out from
+  under the pointer, which collapses the stack, puts the toast back under the pointer and re-expands
+  it: the up-down-up-down jitter, at hover speed. Toasts are now raised one macrotask apart, which
+  is enough for each measurement to land before the next card mounts.
+- **A backlog of resets is one toast, not ten.** Above three at once (the window was closed while
+  several accounts rolled over) they collapse into a single "N quota windows reset" card whose
+  action acknowledges the batch. Ten 20-second cards timed out before they could be read, and the
+  stack's expanded height is the sum of all of them, so a hover unfurled something taller than the
+  window. Every event is still in the list the header badge counts.
+- **The Instances tab stopped starting a PowerShell process every few seconds.** Listing instances
+  needs each Claude process's command line, which on Windows means
+  `powershell -NoProfile -Command "Get-CimInstance Win32_Process ..."`: measured here at ~490ms, of
+  which ~130ms is the shell starting and ~260ms is the WMI query. That ran per request, and the tab
+  polls every 4 seconds, with the Codex table running a near-identical second query on its own 5s
+  timer. So for as long as the app was open it was starting shells, forever, and every one of those
+  half-seconds sat on the request path, first paint included. `GET /api/instances` went from ~490ms
+  to ~5ms on the same machine and the same data.
+  - The scan is now one shared snapshot. Concurrent callers join a single in-flight query instead of
+    each starting a shell; a result under 3s old is reused outright; an older one is returned
+    immediately while a refresh runs behind it, so the tick that pays for the scan is never the tick
+    that waits for it. Nothing here holds a timer, so closing the UI stops the scanning dead.
+  - Everything that ACTS on the answer still enumerates for real: launching, quitting, focusing, and
+    the guard that refuses to delete a running instance. Launching and quitting also drop the
+    snapshot, so the row you just clicked updates on the next poll rather than when a TTL expires.
+- **The account column fills at page load instead of a second and a half later.** Every instance's
+  identity was resolved over the network, one strictly after another, and on a fresh load nothing is
+  resolved yet, so eleven accounts meant eleven serial round trips. The locally cached identity is
+  now painted first (25ms for all eleven, against ~1.5s for the same eleven over the network) and
+  the live resolve follows behind it, a few at a time, correcting anything that has changed.
+
+### Changed
+
+- **The Instances tab opens on the quota columns.** "How much have I got left" is the question the
+  table gets opened for; PID, uptime and memory answer "is the process healthy", which is the rarer
+  follow-up. The toolbar toggle still swaps back in one click. This is a genuine default change
+  rather than a flipped flag: `useStorage` writes its default on first read, so every install that
+  had ever rendered the tab already carried an explicit `false` on disk and changing the default
+  alone would have reached nobody. The mode moved to a new key, leaving the old one as a dead
+  entry, on the same reasoning as the usage filter's `scope2`.
+- **Inter is served by the app, not fetched from Google.** The shared kit's base stylesheet opens
+  with an `@import` of `fonts.googleapis.com`, and a remote `@import` at the head of a
+  render-blocking stylesheet blocks first paint on a round trip to the internet. Free on a warm HTTP
+  cache, which is why it went unnoticed, but dead time on a first run or after a cache eviction and
+  an outright stall with no network, on a local desktop app that otherwise never needs to be online.
+  The two Latin subsets of Inter's variable woff2 now ship under `web/public/fonts/`. Same typeface,
+  no flash of fallback text, and the app renders offline.
+  - The kit copy is left byte-identical (its sync tool compares and rewrites synced files as text,
+    so it cannot carry font binaries without being reworked first); the remote import is stripped
+    from this app's CSS at build time instead. Any sibling app can adopt the same two files and
+    stylesheet block, and if they all do, that is the point to teach the kit about binaries.
+
+- **Settings that belong to a screen now live on that screen.** Usage auto-refresh (and its
+  interval) moved into the new usage flyout, and the provider switches that decide which instance
+  tables are drawn moved into a **Sections** flyout beside them. Both are still in Settings; these
+  are the same components rendered twice over the same state, not copies, so flipping either surface
+  moves the other. A setting nobody can find is a setting nobody knows exists.
+
 ## [0.15.0] - 2026-08-05
 
 ### Added

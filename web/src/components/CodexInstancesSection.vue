@@ -20,6 +20,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
+import ExpandArea from '@/components/ExpandArea.vue'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -212,7 +213,10 @@ onUnmounted(stopPolling)
       </div>
     </div>
 
-    <Table v-show="open">
+    <!-- ExpandArea, not the kit's ExpandTransition: its permanent overflow clip would break this
+         table's `sticky top-0` header. See ExpandArea.vue. -->
+    <ExpandArea :open="open">
+    <Table>
       <TableHeader class="sticky top-0 z-10 bg-card">
         <TableRow>
           <TableHead class="cursor-pointer select-none" @click="toggleSort('status')">
@@ -367,6 +371,7 @@ onUnmounted(stopPolling)
         </TableRow>
       </TableBody>
     </Table>
+    </ExpandArea>
 
     <CliInstanceNameDialog
       v-model:open="createOpen"

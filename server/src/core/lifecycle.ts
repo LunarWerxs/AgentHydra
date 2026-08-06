@@ -321,7 +321,9 @@ export async function removeInstance(
 
   // --- Guard 3: must not be currently running. ---
   try {
-    const procs = await listClaudeProcesses()
+    // fresh: this guard is the only thing standing between "delete the profile tree" and a live
+    // instance writing into it. It must never clear on a cached snapshot.
+    const procs = await listClaudeProcesses({ fresh: true })
     const running = procs.find((p) => p.dir && normalizePath(p.dir) === normDir)
     if (running) {
       return {

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { join, normalize } from 'node:path'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { extractUserDataDir } from './process'
+import { createScanCache } from './scan-cache'
 import type { CMActionResult } from './shared'
 
 export interface CodexDesktopTarget {
@@ -29,7 +30,7 @@ export interface CodexDesktopLaunch {
   envOverrides: Record<string, string>
 }
 
-type ListDesktopProcesses = () => Promise<CodexDesktopRuntime[]>
+type ListDesktopProcesses = (options?: { fresh?: boolean }) => Promise<CodexDesktopRuntime[]>
 
 /** Codex Desktop's Chromium/Electron profile. CODEX_HOME remains the sibling CLI/agent store. */
 export function codexDesktopUserDataDir(codexHome: string): string {
@@ -176,26 +177,54 @@ async function listUnixDesktopProcessRecords(): Promise<CodexDesktopProcessRecor
   return records
 }
 
-export async function listCodexDesktopProcesses(): Promise<CodexDesktopRuntime[]> {
-  try {
-    const records =
-      process.platform === 'win32'
-        ? await listWindowsDesktopProcessRecords()
-        : await listUnixDesktopProcessRecords()
-    return codexDesktopRuntimesFromRecords(records)
-  } catch {
-    return []
-  }
+/** The one OS scan behind {@link listCodexDesktopProcesses} — a second `Get-CimInstance
+ *  Win32_Process` on Windows, and therefore a second ~490ms PowerShell spawn, on the Codex
+ *  table's own 5s poll. Cached for the same reasons as core/process.ts's; see scan-cache.ts. */
+const codexProcessCache = createScanCache<CodexDesktopRuntime[]>(
+  async () => {
+    try {
+      const records =
+        process.platform === 'win32'
+          ? await listWindowsDesktopProcessRecords()
+          : await listUnixDesktopProcessRecords()
+      return codexDesktopRuntimesFromRecords(records)
+    } catch {
+      return []
+    }
+  },
+  { freshMs: 3_000, staleMs: 30_000 },
+)
+
+/**
+ * Running Codex/ChatGPT Desktop processes, keyed by their `--user-data-dir`.
+ *
+ * Served from a shared cached snapshot (see scan-cache.ts): the Codex instances table polls this
+ * every 5s and the underlying scan is a PowerShell + WMI round trip. `fresh: true` bypasses the
+ * cache for anything about to act on the answer (launch / stop), which must not decide from a
+ * snapshot a poll tick old.
+ */
+export async function listCodexDesktopProcesses(
+  options: { fresh?: boolean } = {},
+): Promise<CodexDesktopRuntime[]> {
+  return await codexProcessCache.get({ fresh: options.fresh })
+}
+
+/** Forget the cached Codex process snapshot — call after launching or stopping one, so the row
+ *  the user just clicked updates on the next poll instead of waiting out the TTL. */
+export function invalidateCodexProcessCache(): void {
+  codexProcessCache.invalidate()
 }
 
 async function findRuntime(
   target: CodexDesktopTarget,
   listProcesses: ListDesktopProcesses = listCodexDesktopProcesses,
+  opts: { fresh?: boolean } = {},
 ): Promise<CodexDesktopRuntime | null> {
   const wanted = pathKey(codexDesktopUserDataDir(target.codexHome))
   return (
-    (await listProcesses()).find((runtime) => pathKey(runtime.desktopUserDataDir) === wanted) ??
-    null
+    (await listProcesses({ fresh: opts.fresh })).find(
+      (runtime) => pathKey(runtime.desktopUserDataDir) === wanted,
+    ) ?? null
   )
 }
 
@@ -299,7 +328,8 @@ export async function openCodexDesktop(
   options: OpenCodexDesktopOptions = {},
 ): Promise<CMActionResult> {
   const desktopDir = codexDesktopUserDataDir(target.codexHome)
-  const running = await findRuntime(target, options.listProcesses)
+  // fresh: this decides whether to LAUNCH a second Codex Desktop on the same profile.
+  const running = await findRuntime(target, options.listProcesses, { fresh: true })
   if (running) {
     return {
       ok: true,
@@ -336,6 +366,9 @@ export async function openCodexDesktop(
       ...(launch.detached ? { detached: true } : {}),
     })
     child.unref()
+    // The cached snapshot is now wrong by construction — drop it so the next poll shows the row
+    // as running rather than waiting out the TTL.
+    invalidateCodexProcessCache()
     return {
       ok: true,
       action: 'codex-desktop-open',
@@ -395,7 +428,8 @@ export async function focusCodexDesktop(
   options: { listProcesses?: ListDesktopProcesses; platform?: NodeJS.Platform } = {},
 ): Promise<CMActionResult> {
   const desktopDir = codexDesktopUserDataDir(target.codexHome)
-  const runtime = await findRuntime(target, options.listProcesses)
+  // fresh: the PID here is about to be focused / killed, so a recycled stale one is not acceptable.
+  const runtime = await findRuntime(target, options.listProcesses, { fresh: true })
   if (!runtime) {
     return {
       ok: false,
@@ -453,7 +487,8 @@ export async function quitCodexDesktop(
   } = {},
 ): Promise<CMActionResult> {
   const desktopDir = codexDesktopUserDataDir(target.codexHome)
-  const runtime = await findRuntime(target, options.listProcesses)
+  // fresh: the PID here is about to be focused / killed, so a recycled stale one is not acceptable.
+  const runtime = await findRuntime(target, options.listProcesses, { fresh: true })
   if (!runtime) {
     return {
       ok: true,
@@ -491,6 +526,7 @@ export async function quitCodexDesktop(
         process.kill(runtime.pid, 'SIGKILL')
       }
     }
+    invalidateCodexProcessCache()
     return {
       ok: true,
       action: 'codex-desktop-quit',

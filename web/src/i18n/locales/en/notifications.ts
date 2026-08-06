@@ -9,6 +9,11 @@ export default {
   toastBody: 'Your {window} quota window has rolled over.',
   toastBodyWas: 'Your {window} quota window has rolled over. You were at {pct}%.',
   acknowledge: 'Got it',
+  // Shown instead of N separate cards when a whole backlog arrives at once (e.g. the window was
+  // closed while several accounts rolled over).
+  toastSummaryTitle: '{count} quota windows reset',
+  toastSummaryBody: 'Several accounts rolled over while you were away.',
+  acknowledgeAll: 'Got it, all',
 
   // --- settings ---
   enabled: 'Reset notifications',

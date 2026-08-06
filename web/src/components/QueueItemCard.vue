@@ -14,6 +14,7 @@ import {
   Trash2,
   UserCircle2,
 } from '@lucide/vue'
+import ExpandArea from '@/components/ExpandArea.vue'
 import RunViewer from '@/components/RunViewer.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { Badge } from '@/components/ui/badge'
@@ -121,8 +122,10 @@ defineEmits<{
       </div>
     </div>
 
-    <div v-if="expanded" class="h-72 border-t border-border bg-background/40">
-      <RunViewer :item-id="item.id" />
-    </div>
+    <ExpandArea :open="expanded">
+      <div class="h-72 border-t border-border bg-background/40">
+        <RunViewer :item-id="item.id" />
+      </div>
+    </ExpandArea>
   </div>
 </template>

@@ -1,7 +1,70 @@
 /* App entry stylesheet — the two kit imports plus genuinely app-specific rules only.
-   Tokens, dark mode, Inter, and shared utilities all come from the kit. */
+   Tokens, dark mode and shared utilities all come from the kit; Inter is served locally
+   from this app (see the @font-face block below). */
 @import "./styles/kit-base.css";
 @import "./styles/kit-accent.css";
+
+/* ---------------------------------------------------------------------------
+   Inter, SELF-HOSTED — replaces the kit's Google Fonts CDN @import.
+
+   THE PROBLEM. styles/kit-base.css opens with
+
+     @import url('https://fonts.googleapis.com/css2?family=Inter:...&display=swap');
+
+   and a remote @import at the top of a render-blocking stylesheet is itself
+   render-blocking: the browser will not paint until it has been to
+   fonts.googleapis.com and back. On a warm HTTP cache that is free, which is why it
+   went unnoticed — but on a first run, after a cache eviction, or on a slow or absent
+   network it is dead time on the startup path of a LOCAL DESKTOP APP that has no other
+   reason to touch the internet at all. Measured 2026-08-06 at ~150ms on this machine
+   with warm DNS and good bandwidth; the offline case is bounded only by Chromium's
+   stylesheet timeout.
+
+   THE FIX. The two Latin subsets of Inter's variable woff2 are vendored under
+   web/public/fonts/ (Vite copies public/ verbatim into dist/, and the daemon serves
+   dist/), and declared here. Same typeface, same rendering, zero network, no
+   flash-of-fallback-text, and it works with the machine offline.
+
+   WHY NOT IN THE KIT, where the offending @import actually lives: sync.mjs's copyFile
+   is TEXT-ONLY by construction — it compares and rewrites synced files as utf8 and
+   normalises their line endings, which would corrupt a woff2 byte-for-byte. Carrying
+   font binaries in the kit therefore means reworking the sync tool that five sibling
+   apps depend on, which is a great deal more risk than a ~150ms cold-start win is
+   worth. The kit's remote @import is stripped from THIS app's CSS at build time
+   instead (web/vite.config.ts, `stripRemoteFontImport`), so kit-base.css stays
+   byte-identical to the kit and `bun run check:kit` stays green. Any sibling app can
+   adopt the same two files plus this block; if they all do, that is the moment to
+   teach sync.mjs about binaries and promote it.
+
+   The subsets are latin + latin-ext only: every app in this family ships English UI
+   copy, and latin alone already covers all of Latin-1, so latin-ext is here purely so
+   accented names in USER data (session titles, folder names) don't drop to a fallback
+   face mid-word. unicode-range values are Google's own, copied verbatim from the css2
+   response so the browser downloads latin-ext only when a page actually needs it.
+   --------------------------------------------------------------------------- */
+/* Both files must exist under web/public/fonts/. If either goes missing the UI silently drops to
+   the next family in --font-sans (ui-sans-serif / Segoe UI) rather than breaking — so a missing
+   font shows up as "the app looks slightly off", not as an error anywhere. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
 
 /* ---------------------------------------------------------------------------
    AgentHydra "Claude" theme layer — app-local on purpose.

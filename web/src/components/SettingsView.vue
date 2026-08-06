@@ -23,19 +23,20 @@ import {
   Repeat,
   RotateCcw,
   SlidersHorizontal,
-  Terminal,
   Timer,
   User,
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import ProviderRows from '@/components/ProviderRows.vue'
+import UsageRefreshRows from '@/components/UsageRefreshRows.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { USAGE_REFRESH_INTERVALS, useAppSettings } from '@/composables/useAppSettings'
+import { useAppSettings } from '@/composables/useAppSettings'
 import { useData } from '@/composables/useData'
 import { useMonitor } from '@/composables/useMonitor'
 import { usePanels } from '@/composables/usePanels'
@@ -252,18 +253,12 @@ async function toggleHideTrayIcon(enabled: boolean) {
   }
 }
 
-// --- usage: background auto-refresh + which instance tables to show -----------------------------
-// Auto-refresh is ON by default. A check is a ~300ms read of the same quota endpoint the CLI's
-// /usage screen reads, and reading your quota does not consume it, so keeping the numbers warm is
-// effectively free. See server/src/usage-refresh.ts.
+// --- app settings this panel still owns ---------------------------------------------------------
+// The usage auto-refresh rows and the provider/table switches moved into components of their own
+// (UsageRefreshRows / ProviderRows) so the Instances toolbar can render the SAME controls where
+// they apply; they read this composable directly. What is left here is everything with no better
+// home than the settings panel.
 const {
-  autoRefresh: usageAutoRefresh,
-  autoRefreshIntervalMin: usageIntervalMin,
-  showDesktopInstances,
-  showCliInstances,
-  codexDesktopEnabled,
-  codexCliEnabled,
-  chatGptHandoffEnabled,
   transcriptEditor,
   transcriptEditorResolved,
   notifyEnabled,
@@ -286,14 +281,6 @@ const {
   update: updateAppSettings,
 } = useAppSettings()
 onMounted(loadUsageSettings)
-
-async function patchUsageSettings(patch: Partial<api.UsageSettings>) {
-  if (!(await updateAppSettings(patch))) toast.error(t('settings.usageToastFailed'))
-}
-
-async function patchProviderSettings(patch: Partial<api.ProviderSettings>) {
-  if (!(await updateAppSettings(patch))) toast.error(t('settings.providerToastFailed'))
-}
 
 // --- reset notifications (server/src/reset-watch.ts) --------------------------------------------
 // Every control here auto-saves through the same round-trip as the rest of the panel. The SMTP
@@ -811,103 +798,17 @@ defineExpose({ save })
       :label="$t('settings.providersTitle')"
       :description="$t('settings.providersHint')"
     >
-      <SettingsRow :icon="Monitor" :label="$t('settings.claudeDesktopProviderLabel')">
-        <template #info>
-          <InfoHint :text="$t('settings.claudeDesktopProviderHint')" />
-        </template>
-        <template #control>
-          <Switch
-            :model-value="showDesktopInstances"
-            @update:model-value="(v: boolean) => patchUsageSettings({ showDesktopInstances: v })"
-          />
-        </template>
-      </SettingsRow>
-      <SettingsRow :icon="Terminal" :label="$t('settings.claudeCliProviderLabel')">
-        <template #info>
-          <InfoHint :text="$t('settings.claudeCliProviderHint')" />
-        </template>
-        <template #control>
-          <Switch
-            :model-value="showCliInstances"
-            @update:model-value="(v: boolean) => patchUsageSettings({ showCliInstances: v })"
-          />
-        </template>
-      </SettingsRow>
-      <SettingsRow :icon="AppWindow" :label="$t('settings.codexDesktopProviderLabel')">
-        <template #info>
-          <InfoHint :text="$t('settings.codexDesktopProviderHint')" />
-        </template>
-        <template #control>
-          <Switch
-            :model-value="codexDesktopEnabled"
-            @update:model-value="
-              (v: boolean) => patchProviderSettings({ codexDesktopEnabled: v })
-            "
-          />
-        </template>
-      </SettingsRow>
-      <SettingsRow :icon="Terminal" :label="$t('settings.codexCliProviderLabel')">
-        <template #info>
-          <InfoHint :text="$t('settings.codexCliProviderHint')" />
-        </template>
-        <template #control>
-          <Switch
-            :model-value="codexCliEnabled"
-            @update:model-value="(v: boolean) => patchProviderSettings({ codexCliEnabled: v })"
-          />
-        </template>
-      </SettingsRow>
-      <SettingsRow :icon="MessageCircleQuestion" :label="$t('settings.chatGptHandoffLabel')">
-        <template #info>
-          <InfoHint :text="$t('settings.chatGptHandoffHint')" />
-        </template>
-        <template #control>
-          <Switch
-            :model-value="chatGptHandoffEnabled"
-            @update:model-value="
-              (v: boolean) => patchProviderSettings({ chatGptHandoffEnabled: v })
-            "
-          />
-        </template>
-      </SettingsRow>
+      <!-- The rows themselves live in components/ProviderRows.vue, because the Instances toolbar
+           renders the same four table switches in a flyout (InstanceSectionsMenu.vue) where they
+           take effect. One component, one behaviour — the two surfaces cannot drift. -->
+      <ProviderRows />
     </SettingsGroup>
 
-    <!-- usage: keep the quota numbers warm -->
+    <!-- usage: keep the quota numbers warm.
+         Shared with the Instances tab's usage flyout for the same reason as Providers above — see
+         components/UsageRefreshRows.vue. -->
     <SettingsGroup :label="$t('settings.usage')">
-      <SettingsRow :icon="Gauge" :label="$t('settings.usageAutoRefreshLabel')">
-        <template #info>
-          <InfoHint :text="$t('settings.usageAutoRefreshHint')" />
-        </template>
-        <template #control>
-          <Switch
-            :model-value="usageAutoRefresh"
-            @update:model-value="(v: boolean) => patchUsageSettings({ autoRefresh: v })"
-          />
-        </template>
-      </SettingsRow>
-      <SettingsRow
-        v-if="usageAutoRefresh"
-        :icon="Timer"
-        :label="$t('settings.usageIntervalLabel')"
-      >
-        <template #info>
-          <InfoHint :text="$t('settings.usageIntervalHint')" />
-        </template>
-        <template #control>
-          <div class="flex items-center gap-1">
-            <Button
-              v-for="mins in USAGE_REFRESH_INTERVALS"
-              :key="mins"
-              :variant="usageIntervalMin === mins ? 'secondary' : 'ghost'"
-              size="xs"
-              :aria-pressed="usageIntervalMin === mins"
-              @click="patchUsageSettings({ autoRefreshIntervalMin: mins })"
-            >
-              {{ $t('settings.usageIntervalMinutes', { minutes: mins }) }}
-            </Button>
-          </div>
-        </template>
-      </SettingsRow>
+      <UsageRefreshRows />
     </SettingsGroup>
 
     <!-- notifications: the quota EDGE, not the number. See server/src/reset-watch.ts.

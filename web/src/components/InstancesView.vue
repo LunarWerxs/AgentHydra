@@ -8,6 +8,7 @@ import {
   Cpu,
   EllipsisVertical,
   FolderOpen,
+  Funnel,
   Gauge,
   LogIn,
   MonitorDown,
@@ -31,9 +32,12 @@ import CodexInstancesSection from '@/components/CodexInstancesSection.vue'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
+import ExpandArea from '@/components/ExpandArea.vue'
+import InstanceSectionsMenu from '@/components/InstanceSectionsMenu.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
+import UsageFilterMenu from '@/components/UsageFilterMenu.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -58,6 +62,7 @@ import { useCliInstances } from '@/composables/useCliInstances'
 import { useInstances } from '@/composables/useInstances'
 import { useSortable } from '@/composables/useSortable'
 import { useUsage } from '@/composables/useUsage'
+import { useUsageFilter } from '@/composables/useUsageFilter'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
 import {
@@ -179,6 +184,26 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
     { key: 'usageSession', accessor: (i: CMInstance) => usageFor(i)?.session?.pct ?? undefined },
     { key: 'plan', accessor: (i: CMInstance) => i.account?.planLabel ?? undefined },
   ],
+)
+
+// --- usage filter ---------------------------------------------------------------------------
+// "Set aside the accounts I've already spent" (composables/useUsageFilter.ts). It runs AFTER the
+// sort — it removes or greys rows, it never reorders them — and only in usage mode, which is also
+// the only mode where its toolbar control is on screen.
+const {
+  threshold: filterThreshold,
+  dimmed: filterDimmed,
+  visible: filterVisible,
+} = useUsageFilter()
+
+const visibleRows = computed(() => filterVisible(sortedRows.value, usageFor))
+/** How many rows the filter took out of this table — the heading has to say so, or an instance
+ *  that quietly stopped being listed reads as a bug rather than as the filter working. */
+const hiddenByFilter = computed(() => sortedRows.value.length - visibleRows.value.length)
+/** Every row filtered away. The table is not empty (there ARE instances), so the empty state has to
+ *  explain the filter rather than tell the user to create their first instance. */
+const allHiddenByFilter = computed(
+  () => instances.value.length > 0 && visibleRows.value.length === 0,
 )
 
 // Collapse state, persisted: someone who only uses the desktop app (or only the CLI) collapses the
@@ -591,7 +616,22 @@ onUnmounted(() => {
       >
         <Boxes class="size-4" />
         {{ $t('instances.title') }}
-        <span v-if="showDesktopInstances" class="text-muted-foreground">({{ instances.length }})</span>
+        <!-- "x of y" once the usage filter is hiding rows, so the count never silently disagrees
+             with the number of instances that exist (same convention as the CLI table's own
+             linked-elsewhere shortfall). -->
+        <span v-if="showDesktopInstances" class="text-muted-foreground">
+          ({{
+            hiddenByFilter > 0
+              ? $t('instances.countOfTotal', { shown: visibleRows.length, total: instances.length })
+              : instances.length
+          }})
+        </span>
+        <span
+          v-if="showDesktopInstances && hiddenByFilter > 0"
+          class="text-xs font-normal text-muted-foreground"
+        >
+          {{ $t('instances.usageFilterHiddenCount', { count: hiddenByFilter }) }}
+        </span>
         <ChevronDown
           v-if="showDesktopInstances"
           class="size-4 text-muted-foreground transition-transform duration-200"
@@ -616,6 +656,13 @@ onUnmounted(() => {
             <component :is="usageMode ? Cpu : Timer" />
           </Button>
         </IconTooltip>
+        <!-- The usage filter appears WITH the quota columns and disappears with them, because that
+             is exactly when it is allowed to act (see composables/useUsageFilter.ts): a dimmed or
+             short table always has the control that explains it visible in the same toolbar. -->
+        <UsageFilterMenu v-if="usageMode" />
+        <!-- Which tables this tab draws. Settings still has these switches; this is the copy that
+             is one click from the gap where a hidden table used to be. -->
+        <InstanceSectionsMenu />
         <IconTooltip :label="$t('instances.refresh')" :description="$t('instances.refreshHint')">
           <Button
             variant="outline"
@@ -694,11 +741,12 @@ onUnmounted(() => {
     <div class="flex flex-col gap-10">
       <!-- Both tables are hideable (Settings → Providers): plenty of people use only the desktop app,
            or only the CLI, and shouldn't have to look at an empty table for the other. -->
-      <!-- v-show, not a height animation: the table header is `sticky top-0`, and any wrapper with
-           `overflow: hidden` (which is how the kit's ExpandTransition animates) becomes the
-           scrollport sticky resolves against, so the header would silently stop sticking. The
-           chevron carries the state change instead. -->
-      <Table v-show="showDesktopInstances && desktopOpen">
+      <!-- ExpandArea, not the kit's ExpandTransition: this table's header is `sticky top-0`, and
+           a wrapper with a permanent `overflow: hidden` becomes the scrollport sticky resolves
+           against, so the header would silently stop sticking. ExpandArea only clips WHILE the
+           transition runs, which is the one moment nothing is being scrolled anyway. -->
+      <ExpandArea :open="showDesktopInstances && desktopOpen">
+      <Table>
         <TableHeader class="sticky top-0 z-10 bg-card">
           <TableRow>
             <TableHead
@@ -795,15 +843,30 @@ onUnmounted(() => {
             <TableHead class="text-right">{{ $t('instances.colActions') }}</TableHead>
           </TableRow>
         </TableHeader>
-        <TableBody v-if="instances.length === 0" class="[&>tr]:transition-colors [&>tr]:duration-200">
+        <!-- visibleRows, not instances: with "hide" on, the filter can empty a table that still has
+             instances in it. Keying the empty branch off the rows actually rendered is what stops
+             that landing as a blank tbody with no explanation. -->
+        <TableBody v-if="visibleRows.length === 0" class="[&>tr]:transition-colors [&>tr]:duration-200">
           <!-- Usage mode swaps three process columns for two quota ones and adds the 5-hour
                usage chip, which lands back on nine either way. Kept as an expression rather than a
                literal so a future column change cannot silently desync the span from the header. -->
           <TableEmpty v-if="!loading" :colspan="usageMode ? 9 : 9">
             <div class="flex flex-col items-center gap-1 text-center">
-              <Boxes class="mb-1 size-6 opacity-40" />
-              <p class="font-medium text-foreground">{{ $t('instances.empty') }}</p>
-              <p class="text-xs text-muted-foreground">{{ $t('instances.emptyHint') }}</p>
+              <component :is="allHiddenByFilter ? Funnel : Boxes" class="mb-1 size-6 opacity-40" />
+              <p class="font-medium text-foreground">
+                {{
+                  allHiddenByFilter
+                    ? $t('instances.usageFilterAllHidden', { pct: filterThreshold })
+                    : $t('instances.empty')
+                }}
+              </p>
+              <p class="text-xs text-muted-foreground">
+                {{
+                  allHiddenByFilter
+                    ? $t('instances.usageFilterAllHiddenHint')
+                    : $t('instances.emptyHint')
+                }}
+              </p>
             </div>
           </TableEmpty>
           <!-- first-load skeleton rows so the table never looks blank -->
@@ -838,7 +901,18 @@ onUnmounted(() => {
           data-slot="table-body"
           class="[&_tr:last-child]:border-0 [&>tr]:transition-colors [&>tr]:duration-200"
         >
-          <TableRow v-for="inst in sortedRows" :key="inst.dir">
+          <!-- Dimmed, not disabled: a filtered-out instance is one you've decided against for now,
+               not one you can't touch — every action on the row still works. It does not react to
+               the pointer at all, though (no lift on hover, and `hover:bg-transparent` overrides the
+               kit row's own hover tint via tailwind-merge): a row that brightens as you sweep past
+               it keeps pulling the eye back to the accounts you just told it to set aside, which is
+               the opposite of what the filter is for. -->
+          <TableRow
+            v-for="inst in visibleRows"
+            :key="inst.dir"
+            class="transition-opacity"
+            :class="filterDimmed(usageFor(inst)) ? 'opacity-25 hover:bg-transparent' : ''"
+          >
             <TableCell>
               <!-- per-instance icon (replaces the old status dot); the chosen glyph + color are
                    its identity, and a small pulsing badge on the top-right marks the active state -->
@@ -1067,6 +1141,7 @@ onUnmounted(() => {
           </TableRow>
         </TransitionGroup>
       </Table>
+      </ExpandArea>
 
       <CliInstancesSection v-if="showCliInstances" />
       <CodexInstancesSection

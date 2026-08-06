@@ -23,6 +23,7 @@
 // degrade to "no known running instances", not crash the caller.
 
 import { normalizePath } from './paths.ts'
+import { createScanCache } from './scan-cache.ts'
 
 // `--user-data-dir` shows up three ways in a reported command line, depending on how the value
 // was quoted when the process was launched — the discovery here must handle all three or a
@@ -73,6 +74,11 @@ export interface ListClaudeProcessesOptions {
    *  in addition to the main process. Default `false` (discovery wants one row per instance;
    *  quit/kill wants the whole tree). */
   includeChildren?: boolean
+  /** Bypass the shared scan cache and enumerate for real. Set it on any path that is about to
+   *  ACT on the answer (open / quit / focus / delete guards): those must not decide from a
+   *  snapshot that is a poll tick old. Read-only listing paths leave it off — see scan-cache.ts
+   *  for why the polling routes must not pay for a PowerShell spawn. */
+  fresh?: boolean
 }
 
 /** Parses a single raw process record into a CMProcessInfo, or `null` if it isn't a Claude
@@ -328,18 +334,48 @@ async function listUnixProcesses(): Promise<CMProcessInfo[]> {
  * Pass `{ includeChildren: true }` to get the full process tree per instance (used by
  * quitInstance()-style callers that need to kill every process, not just the main one).
  *
+ * The underlying OS scan is SHARED AND CACHED (see scan-cache.ts): the Instances tab polls this
+ * every 4s and the scan costs ~490ms of PowerShell + WMI on Windows, so paying for it per request
+ * put half a second on every poll tick and on first paint. Pass `{ fresh: true }` from anything
+ * about to act on the answer. `includeChildren` filters the SAME cached snapshot — it was never
+ * a different scan, so the two shapes share one cache entry.
+ *
  * Never throws: enumeration failures (powershell/wmic/ps unavailable, spawn error, timeout,
  * unparseable output) resolve to an empty array.
  */
 export async function listClaudeProcesses(
   options: ListClaudeProcessesOptions = {},
 ): Promise<CMProcessInfo[]> {
-  let all: CMProcessInfo[]
-  try {
-    all = process.platform === 'win32' ? await listWindowsProcesses() : await listUnixProcesses()
-  } catch {
-    return []
-  }
-
+  const all = await claudeProcessCache.get({ fresh: options.fresh })
   return options.includeChildren ? all : all.filter((p) => p.isMain)
+}
+
+/** The one OS scan behind {@link listClaudeProcesses}. Always returns the FULL set (main +
+ *  `--type=` children); the public function does the narrowing, so both shapes are served from a
+ *  single cached snapshot. */
+const claudeProcessCache = createScanCache<CMProcessInfo[]>(
+  async () => {
+    try {
+      return process.platform === 'win32' ? await listWindowsProcesses() : await listUnixProcesses()
+    } catch {
+      return []
+    }
+  },
+  // 3s fresh: comfortably inside the UI's 4s poll, so a tick that lands early costs nothing, and
+  // the tick that does refresh takes the cached answer while the scan runs behind it. 30s stale:
+  // past that the app has effectively been idle (nothing polling), and a caller coming back
+  // deserves a real answer rather than a snapshot from whenever it last had focus.
+  { freshMs: 3_000, staleMs: 30_000 },
+)
+
+/**
+ * Forget the cached process snapshot so the next listing scans for real.
+ *
+ * Call this after anything that CHANGES what a scan would return — launching, quitting, creating
+ * or deleting an instance. Freshness that lags by a poll tick is invisible when someone else's
+ * process appeared; it is very visible when the user just clicked the button themselves and the
+ * row didn't change.
+ */
+export function invalidateClaudeProcessCache(): void {
+  claudeProcessCache.invalidate()
 }

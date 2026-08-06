@@ -27,7 +27,12 @@ import {
   normalizePath,
   resolveLaunchBinary,
 } from './paths'
-import { type CMProcessInfo, type ListClaudeProcessesOptions, listClaudeProcesses } from './process'
+import {
+  type CMProcessInfo,
+  invalidateClaudeProcessCache,
+  type ListClaudeProcessesOptions,
+  listClaudeProcesses,
+} from './process'
 import type { CMActionResult, CMInstance } from './shared'
 
 // ----------------------------------------------------------------------------
@@ -276,7 +281,10 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
   const normDir = normalizePath(dir)
 
   try {
-    const procs = await listClaudeProcesses()
+    // fresh: this decides whether to LAUNCH. A cached snapshot a poll tick old could miss an
+    // instance that just started (→ a second copy on the same profile) or still show one the
+    // user just quit (→ a click that silently does nothing).
+    const procs = await listClaudeProcesses({ fresh: true })
     const running = procs.find((p) => p.dir && normalizePath(p.dir) === normDir)
     if (running) {
       return {
@@ -332,6 +340,9 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
       ...(detached ? { detached: true } : {}),
     })
     proc.unref()
+    // The world just changed under the cached snapshot — drop it so the poll tick that follows
+    // this click shows the row as running instead of waiting out the TTL.
+    invalidateClaudeProcessCache()
     return {
       ok: true,
       action: 'open',
@@ -480,7 +491,9 @@ export async function quitInstance(
 
   let matched: CMProcessInfo[]
   try {
-    const all = await listProcesses({ includeChildren: true })
+    // fresh: these PIDs are about to be KILLED. Acting on a cached snapshot risks signalling a
+    // PID the OS has since handed to an unrelated process.
+    const all = await listProcesses({ includeChildren: true, fresh: true })
     matched = all.filter((p) => p.dir && normalizePath(p.dir) === normDir)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -537,6 +550,10 @@ export async function quitInstance(
 
   const gracefullyStopped = pids.length - stillAlive.length
   const totalAccountedFor = Math.max(0, gracefullyStopped) + forceKilled
+
+  // Same reason as openInstance's: the row the user just acted on must go grey on the very next
+  // poll, not whenever the cached snapshot happens to age out.
+  invalidateClaudeProcessCache()
 
   return {
     ok: true,
@@ -637,7 +654,9 @@ export async function focusInstance(dir: string): Promise<CMActionResult> {
 
   let procs: CMProcessInfo[]
   try {
-    procs = await listClaudeProcesses()
+    // fresh: this resolves the PID whose window we are about to raise; a stale one is either a
+    // dead PID or, worse, a recycled one belonging to something else entirely.
+    procs = await listClaudeProcesses({ fresh: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return {

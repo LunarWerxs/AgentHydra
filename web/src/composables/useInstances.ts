@@ -97,6 +97,13 @@ async function refreshInstances(opts: { silent?: boolean; force?: boolean } = {}
  * final either — the account behind an instance can change under us, so it is re-checked every
  * RESOLVED_REFRESH_MS, and much sooner (LOGIN_CHANGED_RETRY_MS) when the instance's on-disk login
  * uuid stops matching the identity on screen. Refresh (`force`) still re-resolves everything now.
+ *
+ * Resolved a few AT A TIME, not one after another. On a fresh page load NOTHING has been resolved
+ * yet, so every instance is stale and the old strictly-serial loop turned the account column into
+ * a waterfall: measured 2026-08-06 at ~10 requests × 200-820ms each, i.e. roughly 3.5 SECONDS
+ * before the last row got its identity — on every single open of the app. Each resolve is an
+ * independent decrypt + profile call against a DIFFERENT account, so there is nothing to serialize
+ * for; the loop was only ever incidental.
  */
 async function autoResolveAccounts(opts: { force?: boolean } = {}): Promise<void> {
   if (resolvingAccounts.value) return
@@ -116,10 +123,33 @@ async function autoResolveAccounts(opts: { force?: boolean } = {}): Promise<void
 
   resolvingAccounts.value = true
   try {
-    for (const inst of stale) {
-      lastAutoResolveAt.set(inst.dir, Date.now())
-      await resolveAccount(inst.dir)
-    }
+    // Pass 1 — CACHE ONLY, and only for rows that would otherwise sit blank. `noNetwork` answers
+    // from the identity we already wrote to disk last time (no profile call, no decrypt round
+    // trip): measured 2026-08-06 at 25ms for ALL ELEVEN instances, against ~1.5s for the same
+    // eleven over the network. So the account column fills in essentially at page load instead of
+    // arriving a second and a half later, and pass 2 quietly corrects it if anything changed.
+    //
+    // Scoped to `!account` on purpose: on a poll tick every row already carries an identity
+    // (refreshInstances re-attaches them), so this finds nothing to do and costs nothing. It is a
+    // first-paint path, not a per-tick one. lastAutoResolveAt is deliberately NOT stamped here —
+    // a cached read is not a resolve, and stamping it would let the cache suppress the real one.
+    const blank = stale.filter((i) => !i.account)
+    if (blank.length) await Promise.all(blank.map((i) => resolveAccount(i.dir, true)))
+
+    // Pass 2 — the real resolve. Bounded, not unbounded: someone running a dozen accounts would
+    // otherwise open a dozen simultaneous profile calls, and each row lands as it arrives anyway
+    // (resolveAccount merges into `instances` per-instance), so the visible difference between
+    // 4-wide and all-at-once is nil while the risk of tripping Anthropic's rate limiter is not.
+    const queue = stale.slice()
+    const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+      for (;;) {
+        const inst = queue.shift()
+        if (!inst) return
+        lastAutoResolveAt.set(inst.dir, Date.now())
+        await resolveAccount(inst.dir)
+      }
+    })
+    await Promise.all(workers)
   } finally {
     resolvingAccounts.value = false
   }
