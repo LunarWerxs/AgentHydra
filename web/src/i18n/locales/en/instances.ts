@@ -8,7 +8,16 @@ export default {
   emptyHint: 'Create your first isolated Claude Desktop instance to get started.',
   sortByStatus: 'Sort by status',
   colName: 'Name',
+  colNameHint:
+    'The label you gave this instance. If you never named it, this falls back to the account it is signed into, and then to its profile folder — so a row can be named after any of the three. Rename it from the ⋯ menu; that only changes the label, never the folder.',
   colAccount: 'Instance account',
+  // NO literal "@" in this string. vue-i18n reads a bare @ as the start of a linked-message
+  // reference, so "before the @." threw a tokenizer SyntaxError at render time — and because the
+  // throw happened while rendering the header cell, Vue dropped the entire "Instance account"
+  // column header while leaving its body cells in place. Typecheck, Biome, the i18n key gate and
+  // the test suite were all green; only opening the page showed it.
+  colAccountHint:
+    'The Anthropic login this instance is signed into, shown as the first part of its email address. Hover a badge for the full address and the profile display name, if that account has one set.',
   colPid: 'PID',
   colUptime: 'Uptime',
   colMemory: 'Memory',
@@ -44,12 +53,25 @@ export default {
   numberMenuLabel: 'Instance #{num}',
   copyNumber: 'Copy instance number',
   toastNumberCopied: 'Copied “{num}” — refer to this instance by that number.',
+  // Account-column hover. The handle is on the badge; this is where the full address and the
+  // Anthropic profile display name live, so the column itself stays one comparable thing per row.
+  accountTitleWithProfile: '{email}\nAnthropic profile name: {profile}',
   openFolder: 'Open folder',
   createShortcut: 'Create desktop shortcut',
   checkUsage: 'Check usage',
   launchCli: 'Launch CLI',
   loginCli: 'Sign in CLI',
+  // Deliberately NOT "Sign in CLI": on a row with no CLI login yet this creates a whole new managed
+  // CLI instance and links it to this account before opening the terminal. Labelling that the same
+  // as the plain sign-in made a linked instance appear out of nowhere, which then showed up as the
+  // unexplained "CLI instances (0 of 1)" shortfall in the table below.
+  addCli: 'Add a CLI login…',
   unlinkCli: 'Unlink CLI instance',
+  // The row badge that makes a linked CLI login visible without opening the actions menu.
+  linkedCliBadge: 'Has a linked CLI login',
+  linkedCliTooltip: 'Claude CLI: {name}',
+  linkedCliSignedIn: 'Signed in — launch it from this row’s ⋯ menu.',
+  linkedCliSignedOut: 'Needs sign-in — open this row’s ⋯ menu to finish it.',
   toastCliLaunched: 'Opened a terminal for the linked CLI instance.',
   toastCliLaunchFailed: 'Failed to launch the linked CLI instance.',
   toastCliLoginOpened: 'Opened a terminal. Run /login there to sign this CLI instance in.',

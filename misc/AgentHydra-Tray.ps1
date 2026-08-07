@@ -40,6 +40,32 @@ $cmHome = if ($env:AGENTHYDRA_HOME) { $env:AGENTHYDRA_HOME } else { Join-Path $e
 $infoFile = Join-Path $cmHome "runtime.json"
 $logPath = Join-Path $cmHome "logs\daemon.log"
 
+# Resolve the REAL bun.exe rather than letting cmd.exe resolve "bun" off PATH.
+#
+# An `npm i -g bun` install puts a shim trio (bun / bun.cmd / bun.ps1) on PATH ahead of the actual
+# binary, and cmd.exe picks bun.cmd. That shim re-launches through another cmd.exe layer before the
+# real exe ever starts: measured on this machine, `bun --version` via the shim is ~245 ms against
+# ~65 ms for the binary directly — ~180 ms of pure launcher tax on every cold start, and again on
+# every Restart / watchdog relaunch. Get-Command's .Source gives us the resolved path when the shim
+# is a real file; when bun was installed by its own installer there is no shim and this simply
+# resolves to the binary anyway. Falls back to the bare word so a PATH we can't read still works.
+function Resolve-BunPath {
+  foreach ($candidate in @(
+    (Join-Path $env:USERPROFILE ".bun\bin\bun.exe"),
+    (Join-Path $env:APPDATA "npm\node_modules\bun\bin\bun.exe")
+  )) { if (Test-Path $candidate) { return $candidate } }
+  $found = Get-Command bun -ErrorAction SilentlyContinue
+  if ($found) {
+    # A .cmd/.ps1 shim's own folder usually holds node_modules\bun\bin\bun.exe next to it.
+    $sibling = Join-Path (Split-Path -Parent $found.Source) "node_modules\bun\bin\bun.exe"
+    if (Test-Path $sibling) { return $sibling }
+    if ($found.Source -and $found.Source.ToLower().EndsWith(".exe")) { return $found.Source }
+  }
+  return "bun"
+}
+$bunPath = Resolve-BunPath
+$bunCmd = if ($bunPath -eq "bun") { "bun" } else { "`"$bunPath`"" }
+
 # First run (blocking, once, cold start only): install deps and build the GUI if missing.
 $firstRun = {
   param($root)
@@ -55,7 +81,7 @@ $TrayConfig = @{
   UrlHost              = "localhost"
   InfoFile             = $infoFile
   DaemonLogPath        = $logPath
-  StartCommand         = if ($isCompiledTree) { "`"$exeFile`"" } else { "bun server/src/index.ts" }
+  StartCommand         = if ($isCompiledTree) { "`"$exeFile`"" } else { "$bunCmd server/src/index.ts" }
   StartEnv             = @{}                            # PortEnvVar covers PORT; token env var added below
   PortEnvVar           = "PORT"
   EntryFile            = if ($isCompiledTree) { "AgentHydra.exe" } else { "server\src\index.ts" }
@@ -89,7 +115,7 @@ $TrayConfig = @{
   SelfTestMarker       = "AGENTHYDRA_TRAY_SELFTEST"
   MenuOpenLabel        = "Open AgentHydra"
   MutexName            = "AgentHydraTrayHost"
-  RuntimeCheckCommand  = if ($isCompiledTree) { $exeFile } else { "bun" }   # Get-Command accepts a full exe path
+  RuntimeCheckCommand  = if ($isCompiledTree) { $exeFile } else { $bunPath }   # Get-Command accepts a full exe path
   ScriptDir            = $scriptDir
   Root                 = $appRoot
   # OLD script's background worker (Restart / Rebuild & Restart) waited 15s for the daemon to

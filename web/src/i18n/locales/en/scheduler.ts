@@ -7,8 +7,13 @@ export default {
   onTooltip:
     'The scheduler is on: queued items dispatch automatically, respecting your spacing and concurrency limits. A spinner means a run is executing now; a countdown is the next scheduled item.',
   offTooltip:
-    'The scheduler is off; nothing runs on its own. Turn it on in Settings → Scheduler, or press Run on a queued item.',
-  clickToOpen: 'Click to open scheduler settings.',
+    'The scheduler is off; nothing runs on its own. Turn it on here, or press Run on a queued item.',
+  clickToToggle: 'Click to turn it on or off.',
+  // The chip's popover: the on/off switch used to be a Settings row three clicks away, even though
+  // the chip beside it already reported the state it controls.
+  enabledLabel: 'Auto-dispatch queued items',
+  countsLine: '{running} running · {queued} queued',
+  advancedLink: 'Spacing, poll and concurrency…',
 
   // --- the shared "run at…" panel (SchedulePanel.vue) ---
   // These used to live under composer.*, back when the chat composer was the only thing that could
@@ -25,7 +30,8 @@ export default {
   hoursIncrease: 'One hour more',
   minutesDecrease: 'Ten minutes less',
   minutesIncrease: 'Ten minutes more',
-  editTomorrowTime: 'Change this time (Settings → Scheduler)',
+  // No longer "(Settings → Scheduler)": the gear edits the value in place now.
+  editTomorrowTime: 'Change this time',
   schedulePickLabel: 'Or pick a date & time',
   scheduleConfirm: 'Queue for then',
   scheduleUseTime: 'Use this time',

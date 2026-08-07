@@ -93,8 +93,45 @@ const sortedClaude = computed(() =>
       (a.label ?? a.name).localeCompare(b.label ?? b.name),
   ),
 )
+/**
+ * ONLY the UNLINKED CLI logins get their own row here — the same rule the full manager's CLI table
+ * uses (components/CliInstancesSection.vue unlinkedCliInstances).
+ *
+ * Without this the two windows disagreed about the same machine: the full manager folded a linked
+ * CLI login onto its desktop instance's row and reported "CLI instances (0 of 1)", while this
+ * window listed that identical login as a standalone "Claude CLI" row — so the same account
+ * appeared once in one window and twice in the other, and the header totals could never be
+ * reconciled. A linked login is the same Anthropic account signed in twice; it belongs to the
+ * desktop row, which now carries a terminal badge for it.
+ *
+ * The `desktopDirs` check is the same ghost-link backstop as over there: a link pointing at a
+ * desktop instance that no longer exists must resurface here rather than vanish from both views.
+ */
+const unlinkedClaudeCli = computed(() => {
+  const desktopDirs = new Set(claude.value.map((i) => i.dir))
+  return claudeCli.value.filter(
+    (c) => !c.associatedDesktopDir || !desktopDirs.has(c.associatedDesktopDir),
+  )
+})
+/** The linked ones, per desktop dir, for that row's badge. */
+const linkedCliByDir = computed(() => {
+  const byDir = new Map<string, CliInstance[]>()
+  const desktopDirs = new Set(claude.value.map((i) => i.dir))
+  for (const cli of claudeCli.value) {
+    const dir = cli.associatedDesktopDir
+    if (!dir || !desktopDirs.has(dir)) continue
+    const list = byDir.get(dir)
+    if (list) list.push(cli)
+    else byDir.set(dir, [cli])
+  }
+  return byDir
+})
+function linkedClisFor(dir: string): CliInstance[] {
+  return linkedCliByDir.value.get(dir) ?? []
+}
+
 const sortedClaudeCli = computed(() =>
-  [...claudeCli.value].sort((a, b) => a.name.localeCompare(b.name)),
+  [...unlinkedClaudeCli.value].sort((a, b) => a.name.localeCompare(b.name)),
 )
 
 // Sort first, then filter: the filter REMOVES rows, it never reorders them.
@@ -114,7 +151,11 @@ const sortedCodex = computed(() =>
       Number(b.isDesktopRunning) - Number(a.isDesktopRunning) || a.name.localeCompare(b.name),
   ),
 )
-const total = computed(() => claude.value.length + claudeCli.value.length + codex.value.length)
+// Counts ROWS, not records: a CLI login folded onto its desktop row is one instance shown once, so
+// counting claudeCli in full would report a machine as having more instances than it has rows.
+const total = computed(
+  () => claude.value.length + unlinkedClaudeCli.value.length + codex.value.length,
+)
 
 function usageForClaude(instance: CMInstance): UsageSnapshot | undefined {
   return usageSnapshots.value.get(`desktop:${instance.dir}`)
@@ -433,6 +474,17 @@ onBeforeUnmount(() => {
               <div class="flex items-center gap-2">
                 <span class="truncate text-sm font-medium">{{ instance.label ?? instance.name }}</span>
                 <Badge v-if="instance.isExternal" variant="outline">External</Badge>
+                <!-- Same badge as the full manager's Instances table: the CLI login folded onto
+                     this row has to be visible SOMEWHERE, or folding it just looks like it went
+                     missing. Amber when it still needs /login. -->
+                <Terminal
+                  v-for="cli in linkedClisFor(instance.dir)"
+                  :key="`cli-badge-${cli.id}`"
+                  class="size-3.5 shrink-0"
+                  :class="cli.loggedIn ? 'text-muted-foreground' : 'text-warning'"
+                  :aria-label="`Linked CLI login: ${cli.name}`"
+                  :title="`Claude CLI: ${cli.name}${cli.loggedIn ? '' : ' — needs sign-in'}`"
+                />
                 <Badge
                   v-if="instance.account?.planLabel"
                   variant="secondary"
@@ -509,7 +561,9 @@ onBeforeUnmount(() => {
               </span>
             </template>
             <div class="flex w-28 justify-end">
-              <Badge variant="secondary">{{ claudeCli.length }}</Badge>
+              <!-- The UNLINKED count, matching the rows actually rendered below. Using the raw
+                   claudeCli length here would have promised a row that folding removed. -->
+              <Badge variant="secondary">{{ sortedClaudeCli.length }}</Badge>
             </div>
           </div>
           <div

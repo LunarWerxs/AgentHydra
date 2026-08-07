@@ -2,12 +2,13 @@
 /**
  * i18n compliance checker. Run with `bun run check:i18n` (also gates `bun run build`).
  *
- * Three guarantees, each a hard failure (exit 1):
+ * Four guarantees, each a hard failure (exit 1):
  *   1. No hardcoded UI strings — rendered template text and user-facing static attributes
  *      (aria-label, title, placeholder, …) must go through i18n.
  *   2. Every referenced key resolves — every static `t("a.b")` / `keypath="a.b"` points at a
  *      real key in the English base catalog.
  *   3. Locale parity — every non-base locale has exactly the same key shape as English.
+ *   4. Every message COMPILES — see checkMessageSyntax.
  *
  * Escape hatches: brand names in ALLOWLIST; an `<!-- i18n-ignore -->` comment immediately
  * before an element suppresses checks for that node and its subtree.
@@ -15,6 +16,7 @@
 import { readFileSync } from 'node:fs'
 import { parse } from '@vue/compiler-sfc'
 import { Glob } from 'bun'
+import { createI18n } from 'vue-i18n'
 import { LOCALES } from '../src/i18n/locales'
 import enBase from '../src/i18n/locales/en'
 
@@ -214,6 +216,61 @@ function findUnusedKeys(): void {
   }
 }
 
+/** Every leaf value in a catalog, as [dotted key, message]. */
+function flattenEntries(obj: unknown, prefix = '', out: Array<[string, string]> = []) {
+  if (obj && typeof obj === 'object')
+    for (const [k, v] of Object.entries(obj)) {
+      const path = prefix ? `${prefix}.${k}` : k
+      if (v && typeof v === 'object') flattenEntries(v, path, out)
+      else if (typeof v === 'string') out.push([path, v])
+    }
+  return out
+}
+
+/**
+ * Every message must COMPILE under vue-i18n's own message syntax.
+ *
+ * The bug this exists for (2026-08-07): a hint string ended "...the part of its email before the
+ * @." — and a bare `@` opens a LINKED-MESSAGE reference in vue-i18n, so the message threw
+ * `Unexpected empty linked modifier` the first time it was rendered. Because the throw happened
+ * inside a `<th>`'s render, Vue discarded that whole node: the "Instance account" column header
+ * silently disappeared while its body cells stayed, leaving the table one column out of alignment.
+ *
+ * Nothing else caught it. The key existed, so rule 2 passed; every locale had it, so rule 3
+ * passed; it is a plain string, so vue-tsc, Biome and 733 unit tests were all green. The failure
+ * only exists at message-COMPILE time, which is why this check compiles them.
+ *
+ * Uses vue-i18n itself rather than a regex over `@`/`|`/`{`, so it stays correct by construction:
+ * legitimately linked messages and escaped literals keep passing, and any future syntax rule comes
+ * along for free. Compiling is done once per message with dummy named args — the arguments do not
+ * affect parsing, only interpolation.
+ */
+function checkMessageSyntax(catalog: unknown, file: string) {
+  for (const [key, message] of flattenEntries(catalog)) {
+    const i18n = createI18n({
+      legacy: false,
+      locale: 'en',
+      messages: { en: { probe: message } },
+      missingWarn: false,
+      fallbackWarn: false,
+      warnHtmlMessage: false,
+    })
+    try {
+      // Every name resolves to something so a missing arg can never be mistaken for bad syntax.
+      i18n.global.t('probe', new Proxy({}, { get: () => 'x', has: () => true }))
+    } catch (e) {
+      const detail = (e as Error).message.split('\n')[0]
+      add(
+        file,
+        1,
+        'error',
+        'message-syntax',
+        `"${key}" does not compile: ${detail}. A bare "@" starts a linked-message reference and "|" splits plurals — escape them as {'@'} / {'|'}, or reword.`,
+      )
+    }
+  }
+}
+
 async function checkLocaleParity() {
   for (const meta of LOCALES) {
     if (meta.code === 'en') continue
@@ -230,6 +287,7 @@ async function checkLocaleParity() {
       )
       continue
     }
+    checkMessageSyntax(mod.default, `src/i18n/locales/${meta.code}.ts`)
     const keys = flatten(mod.default)
     for (const k of enKeys)
       if (!keys.has(k))
@@ -269,6 +327,7 @@ for (const path of new Glob('src/**/*.ts').scanSync('.')) {
   if (SKIP(path)) continue
   checkKeyRefs(path, readFileSync(path, 'utf8'))
 }
+checkMessageSyntax(enBase, 'src/i18n/locales/en.ts')
 await checkLocaleParity()
 findUnusedKeys()
 

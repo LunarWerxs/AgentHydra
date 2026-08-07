@@ -10,6 +10,11 @@
 # =====================================================================================
 
 $ErrorActionPreference = "SilentlyContinue"
+# Windows PowerShell 5.1 renders a progress bar for every Invoke-RestMethod / Invoke-WebRequest,
+# and that rendering is not free — it is the single best-known speedup for those cmdlets. This host
+# runs them in a tight startup poll and again on every health tick, all on the WinForms UI thread,
+# and none of it has anywhere to draw (the console is hidden). Off.
+$ProgressPreference = "SilentlyContinue"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -416,13 +421,23 @@ function Start-TrayHost($Config) {
     # Wait for the daemon to come up and return the URL it ACTUALLY bound (validated via
     # /api/health), which may differ from the preferred port if it hopped. If a process handle is
     # given, bail early when it exits before serving (RepoYeti: usually "no scan root configured").
+    # The poll interval RAMPS instead of sitting at a flat 250 ms, because this loop is the last
+    # thing standing between the daemon being ready and the user's window opening. A flat 250 ms
+    # grid costs ~125 ms on average — and once a daemon boots in ~120 ms (AgentHydra, after its
+    # 2026-08 startup work) that overshoot is LONGER than the boot it is waiting on, i.e. the
+    # waiter, not the app, became the slow part. 15 ms for the first second covers every warm
+    # start almost exactly; the ramp then backs off so a genuinely slow/cold boot still polls
+    # gently instead of spinning for the full timeout.
     function Wait-ForUrl($infoFile, $port, $service, $urlHost, $seconds, $proc) {
-      $deadline = (Get-Date).AddSeconds($seconds)
+      $started = Get-Date
+      $deadline = $started.AddSeconds($seconds)
       while ((Get-Date) -lt $deadline) {
         $u = Get-RunningUrl $infoFile $port $service $urlHost
         if ($u) { return $u }
         if ($proc -and $proc.HasExited) { return (Get-RunningUrl $infoFile $port $service $urlHost) }
-        Start-Sleep -Milliseconds 250
+        $elapsed = ((Get-Date) - $started).TotalMilliseconds
+        $wait = if ($elapsed -lt 1000) { 15 } elseif ($elapsed -lt 4000) { 100 } else { 250 }
+        Start-Sleep -Milliseconds $wait
       }
       return (Get-RunningUrl $infoFile $port $service $urlHost)
     }

@@ -4,18 +4,42 @@
 // when does the next scheduled item fire. Built for peace-of-mind ("I'm going to bed — will
 // this actually run?"). Reads the same polled data the queue uses; a 1s local tick keeps the
 // countdown live between polls.
-import { Loader2, PowerOff } from '@lucide/vue'
+import { Loader2, PowerOff, SlidersHorizontal } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Switch } from '@/components/ui/switch'
 import { useData } from '@/composables/useData'
 import { usePanels } from '@/composables/usePanels'
+import * as api from '@/lib/api'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const { t } = useI18n()
-const { queue, scheduler } = useData()
-// The header chip is the one place people SEE the scheduler state (especially "off"), so make it
-// the way to fix it: a click deep-links straight to Settings → Scheduler (the enable/disable toggle).
+const { queue, scheduler, refreshScheduler } = useData()
+// The header chip is the one place people SEE the scheduler state (especially "off"), so it is also
+// where it gets switched. It used to deep-link into Settings → Scheduler, which is a strange trip
+// for a single boolean: you left the screen you were on, a settings page scrolled and flashed a
+// row at you, and the thing you actually wanted was one switch. The switch is here now; only the
+// advanced tuning (spacing / poll / concurrency) still lives in Settings, and this links to it.
 const { openSettingsTab } = usePanels()
+const open = ref(false)
+const toggling = ref(false)
+
+async function setEnabled(next: boolean) {
+  toggling.value = true
+  try {
+    await api.updateScheduler({ enabled: next })
+    await refreshScheduler()
+  } finally {
+    toggling.value = false
+  }
+}
+
+function openAdvanced() {
+  open.value = false
+  openSettingsTab('scheduler')
+}
 
 // Local clock so the "next in 4m 12s" text ticks every second, not only on the 2s queue poll.
 const now = ref(Date.now())
@@ -82,8 +106,10 @@ const label = computed(() => {
 
 const tooltip = computed(
   () =>
-    `${enabled.value ? t('scheduler.onTooltip') : t('scheduler.offTooltip')} ${t('scheduler.clickToOpen')}`,
+    `${enabled.value ? t('scheduler.onTooltip') : t('scheduler.offTooltip')} ${t('scheduler.clickToToggle')}`,
 )
+
+const queuedCount = computed(() => queued.value.length)
 
 // green when actively working, dim-green when on-but-idle, amber when off so it draws the eye.
 const tone = computed(() => {
@@ -94,27 +120,56 @@ const tone = computed(() => {
 </script>
 
 <template>
+  <!-- Popover INSIDE IconTooltip, wrapped in a plain <span>. Reversing the two puts the tooltip's
+       PopperRoot between this trigger and its own root, which steals the anchor and leaves the
+       content parked off-screen — see scripts/checks/reka-popper-root-inside-tooltip.mjs, which
+       fails the build for exactly this nesting. -->
   <IconTooltip :label="label" :description="tooltip">
-    <button
-      type="button"
-      class="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-      :class="tone"
-      :aria-label="label"
-      @click="openSettingsTab('scheduler')"
-    >
-      <Loader2 v-if="state === 'running'" class="size-3.5 animate-spin" />
-      <span
-        v-else-if="state !== 'off'"
-        class="relative flex size-2"
-      >
-        <span
-          v-if="state === 'dispatching' || state === 'countdown'"
-          class="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-60"
-        />
-        <span class="relative inline-flex size-2 rounded-full bg-current" />
-      </span>
-      <PowerOff v-else class="size-3.5" />
-      <span class="hidden tabular-nums sm:inline">{{ label }}</span>
-    </button>
+    <span class="inline-flex">
+      <Popover v-model:open="open">
+        <PopoverTrigger as-child>
+          <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+          :class="tone"
+          :aria-label="label"
+        >
+          <Loader2 v-if="state === 'running'" class="size-3.5 animate-spin" />
+          <span
+            v-else-if="state !== 'off'"
+            class="relative flex size-2"
+          >
+            <span
+              v-if="state === 'dispatching' || state === 'countdown'"
+              class="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-60"
+            />
+            <span class="relative inline-flex size-2 rounded-full bg-current" />
+          </span>
+          <PowerOff v-else class="size-3.5" />
+          <span class="hidden tabular-nums sm:inline">{{ label }}</span>
+        </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" class="w-60 p-3">
+          <div class="flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-xs font-medium">{{ $t('scheduler.enabledLabel') }}</p>
+              <p class="text-[11px] text-muted-foreground">
+                {{ $t('scheduler.countsLine', { running: runningCount, queued: queuedCount }) }}
+              </p>
+            </div>
+            <Switch
+              :model-value="enabled"
+              :disabled="toggling"
+              :aria-label="$t('scheduler.enabledLabel')"
+              @update:model-value="setEnabled"
+            />
+          </div>
+          <!-- Only the rarely-touched numeric knobs still justify the trip to Settings. -->
+          <Button variant="ghost" size="xs" class="mt-2 w-full justify-start" @click="openAdvanced()">
+            <SlidersHorizontal class="size-3.5" /> {{ $t('scheduler.advancedLink') }}
+          </Button>
+        </PopoverContent>
+      </Popover>
+    </span>
   </IconTooltip>
 </template>

@@ -144,6 +144,24 @@ Renaming an instance changes only its display label; it never renames the profil
 can hold a running profile folder open, and the folder name is also the stable session/instance id.
 The removed `POST /api/instances/:dir/rename` endpoint must not be restored as a live folder rename.
 
+### The four names on an instance row
+
+They are four independent sources, and a row can legitimately show a different one in each column.
+Written down here because "where is this name coming from?" is otherwise unanswerable from the UI:
+
+| Shown as | Source | Changes when |
+|---|---|---|
+| **Name** column | `label` from `instance-meta.json`, else the account's friendly name, else the folder basename (`web/src/lib/instance-appearance.ts` `displayName`) | you rename the instance |
+| **Instance account** column | the local part of the account's email, one rule for every row (`accountHandle`) | the profile signs into a different account |
+| the hover on that badge | the full email, plus the Anthropic profile display name (`full_name`) when the account has one | that account's profile is edited at Anthropic |
+| profile **folder** | fixed by the name typed at creation (`server/src/core/lifecycle.ts`), sanitized | never |
+
+The account column deliberately does **not** use `accountName`. That resolver returns `full_name`
+when set and an email fragment when not, so the column rendered a mix: one row a person's name, the
+next an email fragment, with nothing distinguishing them. `accountName` remains the right
+choice for *naming* a row (`displayName`), where a friendly string is wanted and its provenance
+does not matter.
+
 Appearance metadata `{ label, icon, color }` lives in
 `~/.agenthydra/instance-meta.json`, keyed by normalized folder path and cleaned up when the
 instance is deleted. `POST /api/instances/:dir/meta` applies a present value, clears a field when it

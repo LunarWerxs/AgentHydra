@@ -1,4 +1,5 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
+import { stat as statAsync } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import {
   CLAUDE_PROJECTS_ROOT,
@@ -174,6 +175,54 @@ function readCodexRolloutIdentity(path: string, fallbackId: string): CodexRollou
   return identity
 }
 
+/**
+ * Async twin of {@link readCodexRolloutIdentity}, for the non-blocking index build.
+ *
+ * Same contract and the same shared cache; the only difference is that it never holds the event
+ * loop. The 64 KiB first slice is the overwhelmingly common case (a session_meta record is a few
+ * KB); the 1 MiB retry matches the sync reader's ceiling for a pathological single-line head.
+ */
+async function readCodexRolloutIdentityAsync(
+  path: string,
+  fallbackId: string,
+): Promise<CodexRolloutIdentity> {
+  const cached = codexIdentityCache.get(path)
+  if (cached) return cached
+
+  let head = ''
+  try {
+    const file = Bun.file(path)
+    head = await file.slice(0, 64 * 1024).text()
+    if (!head.includes('\n') && file.size > 64 * 1024)
+      head = await file.slice(0, 1024 * 1024).text()
+  } catch {
+    // Active rollouts can move to the archive between discovery and this read.
+    return { sessionId: fallbackId, isSubagent: false }
+  }
+
+  const newline = head.indexOf('\n')
+  let event: unknown = null
+  try {
+    event = JSON.parse((newline >= 0 ? head.slice(0, newline) : head).trim())
+  } catch {
+    // A just-created or legacy malformed rollout still remains discoverable by its filename.
+  }
+  const identity = codexRolloutIdentity(event, fallbackId)
+  if (event) codexIdentityCache.set(path, identity)
+  return identity
+}
+
+/** Bounded-concurrency map, local so this module stays free of a cycle back through sessions.ts. */
+async function mapPool<T, R>(items: T[], width: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(width, items.length) }, async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]!)
+  })
+  await Promise.all(workers)
+  return out
+}
+
 let refreshing = false
 
 /**
@@ -249,33 +298,110 @@ function scanRootSync(glob: Bun.Glob, cwd: string): string[] {
   }
 }
 
+/** Async twin of {@link scanRootSync}, with the same "a missing root is an empty one" contract.
+ *  The iterator throws lazily too, so the `for await` has to be INSIDE the try. */
+async function scanRootAsync(glob: Bun.Glob, cwd: string): Promise<string[]> {
+  const out: string[] = []
+  try {
+    for await (const rel of glob.scan({ cwd, onlyFiles: true })) out.push(rel)
+  } catch {
+    return out
+  }
+  return out
+}
+
+const CLAUDE_TRANSCRIPT_GLOB = '*/*.jsonl'
+const CODEX_ROLLOUT_GLOB = '**/rollout-*.jsonl'
+/** How many files the async build stats/reads at once. Wide enough to keep the disk busy, bounded
+ *  so a huge store cannot open thousands of handles at once. */
+const INDEX_SCAN_WIDTH = 24
+
+function claudeRecord(rel: string, mtimeMs: number, sizeBytes: number): TranscriptFile {
+  return {
+    session_id: basename(rel).replace(/\.jsonl$/, ''),
+    source: 'claude',
+    path: join(CLAUDE_PROJECTS_ROOT, rel),
+    project: rel.split(/[\\/]/)[0],
+    mtime_ms: mtimeMs,
+    size_bytes: sizeBytes,
+    archived: false,
+  }
+}
+
+/** The rollout uuid embedded in the filename — the identity fallback when the first record does
+ *  not parse (a rollout still being written, or a legacy shape). */
+function codexFallbackId(rel: string): string {
+  const name = basename(rel).replace(/\.jsonl$/, '')
+  return name.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)?.[1] ?? name
+}
+
+function codexRecord(
+  root: string,
+  rel: string,
+  archived: boolean,
+  mtimeMs: number,
+  sizeBytes: number,
+  identity: CodexRolloutIdentity,
+  indexed: CodexSessionIndexEntry | undefined,
+): TranscriptFile {
+  return {
+    session_id: identity.sessionId,
+    source: 'codex',
+    path: join(root, rel),
+    project: 'codex',
+    mtime_ms: Math.max(mtimeMs, indexed?.updatedAt ?? 0),
+    size_bytes: sizeBytes,
+    archived,
+    title: indexed?.title,
+  }
+}
+
+function openCodeRecords(): TranscriptFile[] {
+  return listOpenCodeSessions().map((session) => ({
+    session_id: session.session_id,
+    source: 'opencode' as const,
+    path: OPENCODE_DB_PATH,
+    project: session.project,
+    mtime_ms: session.last_activity_at,
+    size_bytes: session.size_bytes,
+    archived: session.archived,
+    title: session.title,
+    cwd: session.cwd,
+    created_at: session.created_at,
+  }))
+}
+
+/** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
+ *  settle. Source + id is the identity; newest wins, matching findTranscript's old behavior. */
+function finishIndex(files: TranscriptFile[], at: number): TranscriptFile[] {
+  const unique = new Map<string, TranscriptFile>()
+  for (const file of files) {
+    const key = `${file.source}:${file.session_id}`
+    const previous = unique.get(key)
+    if (!previous || file.mtime_ms >= previous.mtime_ms) unique.set(key, file)
+  }
+  const result = [...unique.values()]
+  cache = { at, files: result }
+  return result
+}
+
 function buildTranscriptIndex(): TranscriptFile[] {
   const now = performance.now()
   const files: TranscriptFile[] = []
-  const claudeGlob = new Bun.Glob('*/*.jsonl')
+  const claudeGlob = new Bun.Glob(CLAUDE_TRANSCRIPT_GLOB)
   for (const rel of scanRootSync(claudeGlob, CLAUDE_PROJECTS_ROOT)) {
-    const path = join(CLAUDE_PROJECTS_ROOT, rel)
     let st: ReturnType<typeof statSync>
     try {
-      st = statSync(path)
+      st = statSync(join(CLAUDE_PROJECTS_ROOT, rel))
     } catch {
       continue
     }
-    const project = rel.split(/[\\/]/)[0]
-    files.push({
-      session_id: basename(rel).replace(/\.jsonl$/, ''),
-      source: 'claude',
-      path,
-      project,
-      mtime_ms: st.mtimeMs,
-      size_bytes: st.size,
-      archived: false,
-    })
+    files.push(claudeRecord(rel, st.mtimeMs, st.size))
   }
 
   const codexSessionIndex = readCodexSessionIndex()
   const addCodexRoot = (root: string, archived: boolean) => {
-    const glob = new Bun.Glob('**/rollout-*.jsonl')
+    const glob = new Bun.Glob(CODEX_ROLLOUT_GLOB)
     for (const rel of scanRootSync(glob, root)) {
       const path = join(root, rel)
       let st: ReturnType<typeof statSync>
@@ -284,56 +410,114 @@ function buildTranscriptIndex(): TranscriptFile[] {
       } catch {
         continue
       }
-      const name = basename(rel).replace(/\.jsonl$/, '')
-      const rolloutId =
-        name.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)?.[1] ?? name
-      const identity = readCodexRolloutIdentity(path, rolloutId)
+      const identity = readCodexRolloutIdentity(path, codexFallbackId(rel))
       // Subagents are implementation detail of their parent chat. Their visible user history is a
       // forked copy of that chat, so merging them would duplicate turns; the top-level rollout is
       // the complete user-facing conversation and is the only row Codex itself exposes.
       if (identity.isSubagent) continue
-      const indexed = codexSessionIndex.get(identity.sessionId)
-      files.push({
-        session_id: identity.sessionId,
-        source: 'codex',
-        path,
-        project: 'codex',
-        mtime_ms: Math.max(st.mtimeMs, indexed?.updatedAt ?? 0),
-        size_bytes: st.size,
-        archived,
-        title: indexed?.title,
-      })
+      files.push(
+        codexRecord(
+          root,
+          rel,
+          archived,
+          st.mtimeMs,
+          st.size,
+          identity,
+          codexSessionIndex.get(identity.sessionId),
+        ),
+      )
     }
   }
   addCodexRoot(CODEX_SESSIONS_ROOT, false)
   addCodexRoot(CODEX_ARCHIVED_SESSIONS_ROOT, true)
 
-  for (const session of listOpenCodeSessions()) {
-    files.push({
-      session_id: session.session_id,
-      source: 'opencode',
-      path: OPENCODE_DB_PATH,
-      project: session.project,
-      mtime_ms: session.last_activity_at,
-      size_bytes: session.size_bytes,
-      archived: session.archived,
-      title: session.title,
-      cwd: session.cwd,
-      created_at: session.created_at,
+  files.push(...openCodeRecords())
+  return finishIndex(files, now)
+}
+
+/**
+ * The same index, built WITHOUT holding the event loop.
+ *
+ * This exists because the sync builder is not merely slow, it is *blocking*: globbing the store,
+ * statting every transcript and reading the head of every Codex rollout measured 1,288 ms for 1,405
+ * files on the author's machine. The daemon binds its port ~250 ms after launch, so a startup warm
+ * that used the sync builder left the socket accepting connections while nothing could be answered
+ * — the browser's very first GET sat in the queue for over a second, and moving the warm call after
+ * `Bun.serve` (which it already was) could not help, because the block is inside the same turn.
+ *
+ * Correctness is identical: same globs, same records, same dedupe, same cache slot.
+ */
+async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
+  const now = performance.now()
+  const files: TranscriptFile[] = []
+
+  const claudeRels = await scanRootAsync(new Bun.Glob(CLAUDE_TRANSCRIPT_GLOB), CLAUDE_PROJECTS_ROOT)
+  const claudeStats = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
+    try {
+      const st = await statAsync(join(CLAUDE_PROJECTS_ROOT, rel))
+      return claudeRecord(rel, st.mtimeMs, st.size)
+    } catch {
+      return null
+    }
+  })
+  for (const record of claudeStats) if (record) files.push(record)
+
+  const codexSessionIndex = readCodexSessionIndex()
+  for (const [root, archived] of [
+    [CODEX_SESSIONS_ROOT, false],
+    [CODEX_ARCHIVED_SESSIONS_ROOT, true],
+  ] as const) {
+    const rels = await scanRootAsync(new Bun.Glob(CODEX_ROLLOUT_GLOB), root)
+    const records = await mapPool(rels, INDEX_SCAN_WIDTH, async (rel) => {
+      const path = join(root, rel)
+      try {
+        const st = await statAsync(path)
+        const identity = await readCodexRolloutIdentityAsync(path, codexFallbackId(rel))
+        if (identity.isSubagent) return null
+        return codexRecord(
+          root,
+          rel,
+          archived,
+          st.mtimeMs,
+          st.size,
+          identity,
+          codexSessionIndex.get(identity.sessionId),
+        )
+      } catch {
+        return null
+      }
     })
+    for (const record of records) if (record) files.push(record)
   }
 
-  // A moved JSONL can briefly appear in both active and archived roots while filesystem caches
-  // settle. Source + id is the identity; newest wins, matching findTranscript's old behavior.
-  const unique = new Map<string, TranscriptFile>()
-  for (const file of files) {
-    const key = `${file.source}:${file.session_id}`
-    const previous = unique.get(key)
-    if (!previous || file.mtime_ms >= previous.mtime_ms) unique.set(key, file)
+  files.push(...openCodeRecords())
+  return finishIndex(files, now)
+}
+
+let indexBuild: Promise<TranscriptFile[]> | null = null
+
+/**
+ * The async, request-safe way to get the index — prefer this over {@link listTranscriptFiles} in
+ * any caller that is already async.
+ *
+ * Keeps listTranscriptFiles's stale-while-revalidate contract (a caller holding a snapshot never
+ * waits for the sweep) and adds coalescing: concurrent callers on a cold cache share ONE build
+ * instead of each paying for their own, which is exactly the startup shape — the boot warm-up and
+ * the first `/api/sessions` request arrive within milliseconds of each other.
+ */
+export async function ensureTranscriptIndex(force = false): Promise<TranscriptFile[]> {
+  const now = performance.now()
+  if (!force && cache && now - cache.at < TTL_MS) return cache.files
+  if (!indexBuild) {
+    indexBuild = buildTranscriptIndexAsync()
+      .catch(() => cache?.files ?? [])
+      .finally(() => {
+        indexBuild = null
+      })
   }
-  const result = [...unique.values()]
-  cache = { at: now, files: result }
-  return result
+  const build = indexBuild
+  if (!force && cache) return cache.files
+  return build
 }
 
 export function findTranscript(sessionId: string, source?: SessionSource): TranscriptFile | null {

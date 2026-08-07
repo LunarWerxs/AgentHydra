@@ -3,6 +3,7 @@ import { sessionMetaMap } from './instance-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
 import {
   decodeProjectKey,
+  ensureTranscriptIndex,
   eventToTailEventsForSource,
   isCommandWrapperText,
   listTranscriptFiles,
@@ -370,7 +371,10 @@ export async function listSessions(
   source: SessionSourceScope = 'all',
 ): Promise<SessionSummary[]> {
   const mmap = sessionMetaMap()
-  let files = listTranscriptFiles()
+  // Async on purpose: this handler is already async, and on a cold cache the sync builder blocks
+  // the whole daemon for the length of a full store sweep. ensureTranscriptIndex also coalesces
+  // with the boot warm-up, so the first request after launch joins that build instead of racing it.
+  let files = await ensureTranscriptIndex()
   if (source !== 'all') files = files.filter((file) => file.source === source)
   if (instance) {
     files = files.filter((f) =>
@@ -446,7 +450,10 @@ export function sessionMarkKey(source: SessionSource, sessionId: string): string
  * it doesn't finish.
  */
 export async function warmSessionScanCache(newest = 400): Promise<void> {
-  const files = listTranscriptFiles()
+  // The ASYNC builder, not listTranscriptFiles(): this runs immediately after Bun.serve, so a
+  // blocking sweep here would leave the port bound but unanswerable for the length of the scan —
+  // the browser's first GET would queue behind it. See buildTranscriptIndexAsync.
+  const files = await ensureTranscriptIndex(true)
 
   // Prune first, so a store that churns transcripts doesn't accumulate rows forever. Cheaper than it
   // looks: one indexed read of the key column against an in-memory set of the paths we just globbed.

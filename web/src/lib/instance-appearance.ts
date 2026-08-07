@@ -107,12 +107,36 @@ export function colorValue(key: InstanceColorKey): string {
 
 /** The short human name of a resolved account: the profile's full name, else the local part of
  *  its email ("4claude" out of "4claude@lunarwerx.com"). Null when nothing is resolved yet, or
- *  the instance is logged out — both leave name/email null, so no status check is needed. */
+ *  the instance is logged out — both leave name/email null, so no status check is needed.
+ *
+ *  FRIENDLY, NOT IDENTIFYING. Whether it returns a profile name or an email fragment depends on
+ *  whether that account happens to have `full_name` set on its Anthropic profile, and nothing on
+ *  screen says which one you got. That is fine for NAMING a row (see displayName) and wrong for
+ *  the account column, which is answering "which login is this?" — use {@link accountHandle}. */
 export function accountName(account: CMAccount | null | undefined): string | null {
   const name = account?.name?.trim()
   if (name) return name
-  const localPart = account?.email?.trim().split('@')[0]?.trim()
+  const localPart = accountHandle(account)
   return localPart || null
+}
+
+/**
+ * The account's IDENTIFYING handle: the local part of the email it is signed in with, always.
+ *
+ * One rule for every row, which is the entire point. The account column used to render
+ * {@link accountName}, so a machine with several logins showed a column reading "noviero",
+ * "5claude", "Martin", "Michael Griswold" — a mix of Anthropic profile display names and email
+ * fragments, indistinguishable from each other and from the instance's own name and folder. There
+ * was no way to tell that "noviero" was a profile name for akyl.cher@gmail.com while "5claude" was
+ * just an email with the domain cut off.
+ *
+ * The email is the one field that every signed-in account has, that is unique, and that the user
+ * actually typed — so it is what identifies a login. The local part fits the column; the full
+ * address and the profile name ride in the tooltip. Null when nothing is resolved or the instance
+ * is signed out.
+ */
+export function accountHandle(account: CMAccount | null | undefined): string | null {
+  return account?.email?.trim().split('@')[0]?.trim() || null
 }
 
 /** The name to show for an instance: the user's own label, else the ACCOUNT it is signed into,

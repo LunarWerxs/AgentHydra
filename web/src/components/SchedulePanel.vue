@@ -16,7 +16,7 @@ import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useData } from '@/composables/useData'
-import { usePanels } from '@/composables/usePanels'
+import * as api from '@/lib/api'
 
 const props = withDefaults(
   defineProps<{
@@ -35,8 +35,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const { scheduler } = useData()
-const { openSettingsTab } = usePanels()
+const { scheduler, refreshScheduler } = useData()
 
 const pickLabel = computed(() => props.confirmLabel || t('scheduler.scheduleConfirm'))
 
@@ -85,9 +84,40 @@ function pickExact() {
   if (!Number.isFinite(ms)) return
   emit('pick', new Date(ms).toISOString())
 }
-function openSchedulerSettings() {
-  emit('close')
-  openSettingsTab('scheduler')
+/**
+ * The gear edits the time HERE, instead of closing this panel and scrolling Settings to a row.
+ *
+ * It is the clearest case of a setting living in the wrong place in this app: the entry point was
+ * already in exactly the right spot (a gear on the button whose label the value renders), and only
+ * the control itself was somewhere else — so using it meant losing the popover you were in, landing
+ * in a settings page, and navigating back. The value is one input; it belongs under the button.
+ * Advanced scheduler tuning (spacing / poll / concurrency) stays in Settings, where it belongs.
+ */
+const editingTomorrow = ref(false)
+const tomorrowDraft = ref(tomorrowTime.value)
+const savingTomorrow = ref(false)
+
+function toggleTomorrowEditor() {
+  tomorrowDraft.value = tomorrowTime.value
+  editingTomorrow.value = !editingTomorrow.value
+}
+
+async function saveTomorrowTime() {
+  const next = tomorrowDraft.value
+  // An <input type="time"> hands back '' when cleared, and a blank would make pickTomorrow fall
+  // back to 09:00 silently on every use. Keep what is stored instead.
+  if (!/^\d{2}:\d{2}$/.test(next) || next === tomorrowTime.value) {
+    editingTomorrow.value = false
+    return
+  }
+  savingTomorrow.value = true
+  try {
+    await api.updateScheduler({ tomorrow_time: next })
+    await refreshScheduler()
+    editingTomorrow.value = false
+  } finally {
+    savingTomorrow.value = false
+  }
 }
 </script>
 
@@ -98,7 +128,7 @@ function openSchedulerSettings() {
       <Button variant="outline" size="xs" @click="pickInMinutes(300)">
         {{ $t('scheduler.presetIn5h') }}
       </Button>
-      <!-- the tomorrow time is user-configurable; the tiny gear jumps to where -->
+      <!-- the tomorrow time is user-configurable; the tiny gear edits it in place, below -->
       <div class="relative">
         <Button variant="outline" size="xs" class="w-full pr-5" @click="pickTomorrow()">
           {{ $t('scheduler.presetTomorrow', { time: tomorrowTime }) }}
@@ -106,13 +136,29 @@ function openSchedulerSettings() {
         <button
           type="button"
           class="absolute right-0.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+          :class="editingTomorrow ? 'text-foreground' : ''"
           :title="$t('scheduler.editTomorrowTime')"
           :aria-label="$t('scheduler.editTomorrowTime')"
-          @click.stop="openSchedulerSettings()"
+          :aria-expanded="editingTomorrow"
+          @click.stop="toggleTomorrowEditor()"
         >
           <Settings2 class="size-2.5" />
         </button>
       </div>
+    </div>
+
+    <!-- Disclosed by the gear above, hidden otherwise: one input, right under the button whose
+         label it changes, instead of a trip to Settings. -->
+    <div v-if="editingTomorrow" class="flex items-center gap-1.5">
+      <label class="text-[11px] text-muted-foreground">{{ $t('scheduler.editTomorrowTime') }}</label>
+      <Input
+        v-model="tomorrowDraft"
+        type="time"
+        class="h-7 w-24 text-xs"
+        :disabled="savingTomorrow"
+        @change="saveTomorrowTime()"
+        @keyup.enter="saveTomorrowTime()"
+      />
     </div>
 
     <!-- exact delay: an hours stepper and a 10-minute stepper side by side, then one button that

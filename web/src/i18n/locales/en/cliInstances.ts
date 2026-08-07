@@ -14,12 +14,15 @@ export default {
   loggedIn: 'Logged in',
   loggedOut: 'Not logged in',
   noAccount: 'No account',
-  linkedElsewhere: '+ {count} shown on their desktop instance',
+  // Names the marker to look for. "shown on their desktop instance" was true but unactionable —
+  // the row it pointed at had no visible sign of the link, so the reader was told where to look
+  // and then found nothing there.
+  linkedElsewhere: '+ {count} on a desktop row above (⌨ marks them)',
   // "(0)" alone reads as "you have none"; "(0 of 1)" says the missing one is elsewhere, not absent.
   countOfTotal: '{shown} of {total}',
   allLinked: 'Every CLI instance is linked to a desktop instance',
   allLinkedHint:
-    'Linked ones appear on their desktop instance row above, since they are the same account. Unlink one to bring it back here.',
+    'Linked ones sit on their desktop instance’s row above, marked with a terminal icon, since they are the same account. Unlink one to bring it back here.',
   launch: 'Launch',
   moreActions: 'More actions',
   login: 'Log in',

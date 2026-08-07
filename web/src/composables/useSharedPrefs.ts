@@ -33,6 +33,16 @@ interface SharedPref {
 const registry: SharedPref[] = []
 let hydrated = false
 let hydrating: Promise<void> | null = null
+/**
+ * The last value each key is known to hold ON THE SERVER — what we read during hydrate, or what we
+ * last pushed. It exists to kill an echo: Vue watchers flush on a later tick than the assignment
+ * that triggered them, so by the time hydrate's own corrections reach their watchers the `hydrated`
+ * latch below is already true, and every value the server had just sent us was being POSTed
+ * straight back. On this machine that was three redundant writes on every single page load, each a
+ * full round trip during first paint. Comparing against what the server already has skips them
+ * without weakening the ownership rule — a genuine user change still differs, and still pushes.
+ */
+const synced = new Map<string, string>()
 
 /**
  * Parse a stored string back into the ref's own type.
@@ -64,7 +74,14 @@ export function registerSharedPref(key: string, ref: Ref<boolean> | Ref<number>)
   watch(ref, (value) => {
     // Pre-hydrate writes are the app materializing defaults, not the user choosing anything.
     if (!hydrated) return
-    void api.updateUiPrefs({ [key]: String(value) }).catch(() => {
+    const next = String(value)
+    // Already what the store holds — this is hydrate's own correction arriving on a later tick.
+    if (synced.get(key) === next) return
+    synced.set(key, next)
+    void api.updateUiPrefs({ [key]: next }).catch(() => {
+      // The push failed, so the store does NOT hold this value; forget it or the next attempt at
+      // the same value would be skipped as already-synced.
+      synced.delete(key)
       // A preference that fails to reach the daemon still applies locally and is still in
       // localStorage; the next change re-tries. Never surface this — it is not the user's problem.
     })
@@ -84,6 +101,9 @@ export function hydrateSharedPrefs(): Promise<void> {
     try {
       const { prefs } = await api.getUiPrefs()
       const known = registry.filter((entry) => prefs[entry.key] !== undefined)
+      // Record what the store holds BEFORE anything is assigned, so the watchers that fire for
+      // those assignments recognise their own echo and stay quiet. See `synced`.
+      for (const entry of known) synced.set(entry.key, prefs[entry.key] as string)
 
       // FIRST RUN after this feature shipped: the store holds none of our keys, but this browser
       // may have years of settings in localStorage. Seed the store from them in one write, so the
@@ -93,7 +113,10 @@ export function hydrateSharedPrefs(): Promise<void> {
       if (known.length === 0) {
         const seed: Record<string, string> = {}
         for (const entry of registry) seed[entry.key] = String(entry.ref.value)
-        if (Object.keys(seed).length) await api.updateUiPrefs(seed)
+        if (Object.keys(seed).length) {
+          await api.updateUiPrefs(seed)
+          for (const [key, value] of Object.entries(seed)) synced.set(key, value)
+        }
         return
       }
 
@@ -119,4 +142,5 @@ export function resetSharedPrefsForTest(): void {
   registry.length = 0
   hydrated = false
   hydrating = null
+  synced.clear()
 }

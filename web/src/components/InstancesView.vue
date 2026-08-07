@@ -75,7 +75,7 @@ import {
 } from '@/lib/api'
 import { formatBytes, formatUptime } from '@/lib/format'
 import {
-  accountName,
+  accountHandle,
   colorValue,
   displayName,
   iconComponent,
@@ -94,6 +94,7 @@ import {
   windowRemainingPct,
 } from '@/lib/usage-reset'
 import IconTooltip from '@/shell/IconTooltip.vue'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const {
   instances,
@@ -226,19 +227,24 @@ const editTarget = ref<CMInstance | null>(null)
 const editing = ref(false)
 const editError = ref<string | null>(null)
 
-// The account cell shows a short NAME only (email hidden, tier moved to its own column). Reuse the
-// canonical resolver (profile name, else the email's local-part like "4claude") that displayName
-// already uses, with the account's own label as a last resort so a logged-out/nameless row still
-// reads "(not logged in)" instead of collapsing to "Resolving…".
+// The account cell identifies the LOGIN, so it shows the email handle and nothing else — see
+// accountHandle for why it is no longer accountName. The account's own label is the last resort so
+// a logged-out row still reads "(not logged in)" instead of collapsing to "Resolving…".
 function accountCellName(inst: CMInstance): string | null {
-  return accountName(inst.account) ?? inst.account?.label ?? null
+  return accountHandle(inst.account) ?? inst.account?.label ?? null
 }
 
-// Full email, revealed only on hover over the name. accountCellName never renders the full address
-// itself (it shows a name or the local-part), so this is always an additive reveal; null when
-// there's no email (e.g. a logged-out row), which also drops the hover affordance.
-function accountEmail(inst: CMInstance): string | null {
-  return inst.account?.email ?? null
+// The hover reveal: the full address, plus the Anthropic profile name when the account has one and
+// it isn't just the handle again. This is where the friendly name went — it is still one hover
+// away, it just no longer competes with the handle for the same slot, which is what made the
+// column unreadable (some rows a person's name, some rows an email fragment, no way to tell).
+function accountTitle(inst: CMInstance): string | undefined {
+  const email = inst.account?.email?.trim()
+  if (!email) return undefined
+  const profile = inst.account?.name?.trim()
+  return profile && profile !== accountHandle(inst.account)
+    ? t('instances.accountTitleWithProfile', { email, profile })
+    : email
 }
 
 function accountBadgeVariant(inst: CMInstance) {
@@ -800,9 +806,14 @@ onUnmounted(() => {
                 <ArrowDown v-else-if="indicatorFor('running') === 'desc'" class="size-3" />
               </span>
             </TableHead>
+            <!-- Both header hints exist because these two columns were the source of a real "where
+                 do these names even come from?" — one row's Name can be a label you typed, the
+                 next row's the account it is signed into, the next its folder, and nothing said
+                 which. The rule is now written down where the question gets asked. -->
             <TableHead class="cursor-pointer select-none" @click="toggleSort('name')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colName') }}
+                <InfoHint :text="$t('instances.colNameHint')" @click.stop />
                 <ArrowUp v-if="indicatorFor('name') === 'asc'" class="size-3" />
                 <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
               </span>
@@ -810,6 +821,7 @@ onUnmounted(() => {
             <TableHead class="cursor-pointer select-none" @click="toggleSort('account')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colAccount') }}
+                <InfoHint :text="$t('instances.colAccountHint')" @click.stop />
                 <ArrowUp v-if="indicatorFor('account') === 'asc'" class="size-3" />
                 <ArrowDown v-else-if="indicatorFor('account') === 'desc'" class="size-3" />
               </span>
@@ -1000,24 +1012,52 @@ onUnmounted(() => {
                   <span v-else class="cursor-default">{{ displayName(inst) }}</span>
                 </IconTooltip>
                 <Badge v-if="inst.isExternal" variant="outline">{{ $t('instances.external') }}</Badge>
+                <!-- A linked CLI login used to be visible NOWHERE on the row — its only trace was
+                     the "CLI instances (0 of 1)" shortfall in the table below, which reads as
+                     something hiding a row rather than as "it moved up here". An icon costs no row
+                     height (the reason the old mono sub-line was removed) and answers "which of
+                     these accounts owns the missing CLI login?" at a glance. Indicator only: the
+                     actions stay in the ⋯ menu so a stray click can't launch a terminal. -->
+                <IconTooltip
+                  v-for="cli in linkedClis(inst.dir)"
+                  :key="`cli-badge-${cli.id}`"
+                  :label="$t('instances.linkedCliTooltip', { name: cli.name })"
+                  :description="
+                    cli.loggedIn
+                      ? $t('instances.linkedCliSignedIn')
+                      : $t('instances.linkedCliSignedOut')
+                  "
+                >
+                  <span
+                    class="inline-flex items-center"
+                    :aria-label="$t('instances.linkedCliBadge')"
+                  >
+                    <Terminal
+                      class="size-3.5"
+                      :class="cli.loggedIn ? 'text-muted-foreground' : 'text-warning'"
+                    />
+                  </span>
+                </IconTooltip>
               </div>
               <!-- No inline CLI sub-line here either: it made one row taller than the rest and
                    only ever showed for whichever account happened to be linked. The linked CLI
-                   login (and CLI sign-in for rows without one) lives in the actions menu, where
-                   EVERY row gets it without cluttering the table. -->
+                   login's ACTIONS (and CLI sign-in for rows without one) live in the actions menu,
+                   where EVERY row gets them without cluttering the table; only the badge above,
+                   which is what makes the link discoverable at all, sits on the row. -->
             </TableCell>
             <TableCell>
               <!-- No "Resolve" button: every instance resolves itself (see
                    useInstances.autoResolveAccounts), so a missing account is a moment, not a
-                   state you act on. The cell shows the account NAME; the email is hidden and
-                   revealed on hover (title), and the plan/tier is its own column now. A
-                   logged-out instance still lands here as a badge — its account.label reads
+                   state you act on. The cell shows the account's EMAIL HANDLE — one rule for every
+                   row, so this column can be compared down the table; the full address and the
+                   Anthropic profile name are one hover away, and the plan/tier is its own column.
+                   A logged-out instance still lands here as a badge — its account.label reads
                    "(not logged in)". -->
               <Badge
                 v-if="accountCellName(inst)"
                 :variant="accountBadgeVariant(inst)"
-                :title="accountEmail(inst) ?? undefined"
-                :class="accountEmail(inst) ? 'cursor-help' : undefined"
+                :title="accountTitle(inst)"
+                :class="accountTitle(inst) ? 'cursor-help' : undefined"
               >
                 {{ accountCellName(inst) }}
               </Badge>
@@ -1158,8 +1198,12 @@ onUnmounted(() => {
                     </DropdownMenuItem>
                     <!-- CLI section, on EVERY row: a desktop instance and its CLI login are the
                          same Anthropic account signed in twice. With a linked CLI instance the
-                         items act on it (Launch / Sign in + Unlink); without one, "Sign in CLI"
-                         creates + links one on demand and opens the /login terminal. -->
+                         items act on it (Launch / Sign in + Unlink); without one, "Add a CLI
+                         login…" creates + links one on demand and opens the /login terminal. That
+                         item is worded as a CREATE, not as a sign-in: it used to share the exact
+                         label of the plain sign-in above, so clicking it silently produced a new
+                         managed instance and the only visible consequence was the CLI table below
+                         quietly reading "0 of 1". -->
                     <DropdownMenuSeparator />
                     <template v-if="linkedCliFor(inst.dir)">
                       <template v-for="cli in linkedClis(inst.dir)" :key="`cli-${cli.id}`">
@@ -1179,7 +1223,7 @@ onUnmounted(() => {
                       :disabled="cliSignInBusy.has(inst.dir)"
                       @click="onSignInCli(inst)"
                     >
-                      <LogIn /> {{ $t('instances.loginCli') }}
+                      <LogIn /> {{ $t('instances.addCli') }}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <!-- Edit (name + icon + color) is pure UI metadata, so it stays enabled even
