@@ -11,7 +11,10 @@ import {
   autoUpdateEnabled,
   clampAutoUpdateInterval,
   getAutoUpdateIntervalSecs,
+  lastUpdateCheck,
+  recordUpdateCheck,
   runAutoUpdateOnce,
+  runUpdateCheckOnce,
   setAutoUpdateEnabled,
   setAutoUpdateHooks,
   setAutoUpdateIntervalSecs,
@@ -195,7 +198,11 @@ test('disabled by default, and setAutoUpdateEnabled/Interval persist + clamp liv
   expect(getAutoUpdateIntervalSecs()).toBe(AUTO_UPDATE_INTERVAL_MIN_S)
 })
 
-test('the timer never fires when disabled, even after startAutoUpdate', async () => {
+test('nothing is checked synchronously by startAutoUpdate', async () => {
+  // The first tick is always one interval out, in BOTH modes: a cold boot must never spend a
+  // network round trip it was not asked for, and must never be interrupted by an immediate
+  // self-restart. (This used to assert "no timer is armed when disabled" — that is no longer true,
+  // and was the bug: with auto-apply off, nothing ever checked. See runUpdateCheckOnce.)
   let checked = 0
   setAutoUpdateHooks({
     check: async () => {
@@ -207,7 +214,50 @@ test('the timer never fires when disabled, even after startAutoUpdate', async ()
   })
   setAutoUpdateEnabled(false)
   startAutoUpdate()
-  // no timer should have been armed — nothing to advance; a synchronous tick check suffices.
   expect(checked).toBe(0)
   stopAutoUpdate()
+})
+
+test('with auto-apply OFF, a check still runs and records what it found', async () => {
+  // The whole point of the notify half: someone ran an old build for weeks and was never told,
+  // because `enabled` gated the check as well as the apply.
+  let applied = 0
+  setAutoUpdateHooks({
+    check: async () => status({ updateAvailable: true, canApply: true, remoteCommit: 'v9.9.9' }),
+    apply: async () => {
+      applied++
+      return applyResult({})
+    },
+    relaunch: () => {},
+  })
+  setAutoUpdateEnabled(false)
+  const r = await runUpdateCheckOnce()
+  expect(r.ok).toBe(true)
+  expect(r.updateAvailable).toBe(true)
+  // Checking must never apply — applying restarts the daemon and is opt-in.
+  expect(applied).toBe(0)
+  expect(lastUpdateCheck()?.status.remoteCommit).toBe('v9.9.9')
+})
+
+test('a check performed elsewhere still feeds the passive hint', () => {
+  // GET /api/update runs a REAL check (the Settings screen does it on open). Without recording it
+  // here, Settings could say "an update is available" while the dot beside it stayed dark until the
+  // background tick came round hours later — the hint must never be staler than what the app has
+  // already been shown.
+  recordUpdateCheck(status({ updateAvailable: true, remoteCommit: 'v1.2.3' }), 4242)
+  expect(lastUpdateCheck()?.at).toBe(4242)
+  expect(lastUpdateCheck()?.status.remoteCommit).toBe('v1.2.3')
+})
+
+test('a check-only pass reports a failed check without recording a false "up to date"', async () => {
+  setAutoUpdateHooks({
+    check: async () => {
+      throw new Error('GitHub unreachable')
+    },
+    apply: async () => applyResult({}),
+    relaunch: () => {},
+  })
+  const r = await runUpdateCheckOnce()
+  expect(r.ok).toBe(false)
+  expect(r.updateAvailable).toBe(false)
 })

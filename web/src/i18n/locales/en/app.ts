@@ -4,6 +4,7 @@ export default {
   tabInstances: 'Instances',
   queue: 'Queue',
   settings: 'Settings',
+  settingsUpdateAvailable: 'Settings — an update is available',
   rebrandTitle: 'CC Manager UI is now AgentHydra',
   rebrandBody:
     'It manages Claude, Codex and OpenCode, so it is named for the many-headed thing it is. Your queue, settings and instance names came across. Old shortcuts pointing at CCManagerUI.exe need re-creating.',

@@ -84,6 +84,7 @@ import {
 } from '@/lib/instance-appearance'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import { bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
+import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import {
   msUntilReset,
   resetLabel,
@@ -118,6 +119,7 @@ const {
   isChecking,
   checkDesktop,
   reasonFor,
+  hydrated: usageHydrated,
   startPolling: startUsagePolling,
   stopPolling: stopUsagePolling,
 } = useUsage()
@@ -258,7 +260,10 @@ async function handleRefresh() {
   // hitting Refresh actually clears the warning banner below.
   // force: re-resolve every account live. Accounts resolve themselves now, so this button is the
   // one way left to say "that identity is stale, go ask again" (e.g. after a plan upgrade).
-  await Promise.all([refreshInstances({ force: true }), refreshDesktopInstall(true)])
+  await Promise.all([
+    refreshInstances({ force: true, resolve: 'full' }),
+    refreshDesktopInstall(true),
+  ])
 }
 
 async function onCheckUsage(inst: CMInstance) {
@@ -379,30 +384,56 @@ async function onRefreshAllUsage() {
   }
 }
 
-// --- cold-start usage: force one real probe per instance as the lists first load ----------------
-// The background usage poll only HYDRATES from the server's cache (a plain read), which is empty or
-// stale right after launch — so without this the table sits on "—" until the server's own ~15-min
-// sweep runs or the user clicks "Refresh all usage". This does on load what that button does on
-// click. Desktop and CLI lists arrive on independent polls (and Settings can hide either), so each
-// gets its own one-shot guard and watches its show-flag too: a single shared flag, or watching only
-// the list, would skip whichever became ready second.
+// --- cold-start usage: catch up the readings that have aged out, a couple at a time -------------
+// The background usage poll only HYDRATES from the server's cache (a plain read), so something has
+// to decide when a real probe is due. This used to be "every instance, right now, all at once" —
+// one unbounded Promise.all the moment the lists arrived. Measured 2026-08-07 on a 15-instance
+// install: 14 simultaneous probes at t+0.5s, slowest 8.8s, on every open of the app.
+//
+// That was over-correcting for a cache that is actually warm. The server persists its usage cache
+// to disk and re-sweeps on a timer, so an opening window already has numbers on screen; the only
+// rows worth a probe are the ones whose reading has aged past USAGE_CATCHUP_MAX_AGE_MS (plus any
+// that have no reading at all, which is the genuinely blank cell). Those go out two at a time with
+// a stagger — see lib/usage-catchup.ts for the whole rationale.
+//
+// Desktop and CLI lists arrive on independent polls (and Settings can hide either), so each gets
+// its own one-shot guard and watches its show-flag too: a single shared flag, or watching only the
+// list, would skip whichever became ready second.
+//
+// `hydrated` is in the guard because the decision READS the cache: running before the first
+// /api/usage/cache response lands would see every snapshot as missing and probe everything, which
+// is the exact herd this replaced.
 const didInitialDesktopUsage = ref(false)
 const didInitialCliUsage = ref(false)
+// Aborts both catch-ups if the tab is left while they are still trickling through the queue.
+const catchupSignal = { aborted: false }
 watch(
-  [instances, showDesktopInstances],
-  ([list, show]) => {
-    if (didInitialDesktopUsage.value || !show || list.length === 0) return
+  [instances, showDesktopInstances, usageHydrated],
+  ([list, show, ready]) => {
+    if (didInitialDesktopUsage.value || !show || !ready || list.length === 0) return
     didInitialDesktopUsage.value = true
-    void Promise.all(list.map((i) => checkDesktop(i.dir)))
+    const due = selectUsageCatchup(list as CMInstance[], usageFor)
+    if (due.length) {
+      void runUsageCatchup(due, (i) => checkDesktop(i.dir), { signal: catchupSignal })
+    }
   },
   { immediate: true },
 )
 watch(
-  [cliInstances, showCliInstances],
-  ([list, show]) => {
-    if (didInitialCliUsage.value || !show || list.length === 0) return
+  [cliInstances, showCliInstances, usageHydrated],
+  ([list, show, ready]) => {
+    if (didInitialCliUsage.value || !show || !ready || list.length === 0) return
     didInitialCliUsage.value = true
-    void Promise.all(list.map((i) => checkCliUsage(i.id)))
+    const due = selectUsageCatchup(
+      list as CliInstance[],
+      (i) =>
+        // A CLI row carries its own last reading in the list payload; fall back to the shared cache
+        // for one that hasn't been folded in yet.
+        snapshotFor(`cli:${i.id}`) ?? i.lastUsageCheck,
+    )
+    if (due.length) {
+      void runUsageCatchup(due, (i) => checkCliUsage(i.id), { signal: catchupSignal })
+    }
   },
   { immediate: true },
 )
@@ -600,6 +631,10 @@ onMounted(() => {
 onUnmounted(() => {
   stopPolling()
   stopUsagePolling()
+  // Leaving the tab cancels whatever is still trickling through the catch-up queue: those probes
+  // exist to fill in THIS table, and a tab you have navigated away from has no business holding a
+  // slow queue of network requests open behind you.
+  catchupSignal.aborted = true
   if (desktopInstallTimer !== null) window.clearInterval(desktopInstallTimer)
 })
 </script>

@@ -19,6 +19,12 @@ import { USAGE_THRESHOLD_PRESETS } from '@/lib/usage-filter'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
+// Every string arrives as a PROP — there is not a t() or $t() left in here. The quick-instances
+// window (QuickUsageFilter.vue) renders these same two windows and deliberately runs without
+// vue-i18n installed, so a translate call anywhere in this subtree would throw there. Taking the
+// last two literals ("Set aside at" / the preset captions) as props is what lets both surfaces
+// share one slider, one preset row and one clamped setter instead of growing a second copy of the
+// control that the filter's whole correctness story is written around.
 const props = defineProps<{
   /** Row label, e.g. "Weekly usage". */
   label: string
@@ -26,6 +32,11 @@ const props = defineProps<{
   hint: string
   /** Spoken name for the number box, which has no visible label of its own. */
   thresholdLabel: string
+  /** Caption above the number box, e.g. "Set aside at". */
+  thresholdCaption: string
+  /** Renders one preset button's caption, e.g. (80) => "80%". A function rather than a formatted
+   *  list so a translated surface can keep its own number formatting. */
+  presetLabel: (pct: number) => string
   threshold: number
 }>()
 
@@ -56,9 +67,7 @@ const fill = computed(() => `${props.threshold}%`)
     <ExpandTransition :open="enabled">
       <div class="space-y-2 border-t border-border/60 px-2.5 py-2">
         <div class="flex items-center justify-between gap-3">
-          <span class="text-[12px] text-muted-foreground">
-            {{ $t('instances.usageFilterThreshold') }}
-          </span>
+          <span class="text-[12px] text-muted-foreground">{{ thresholdCaption }}</span>
           <div class="flex items-baseline gap-1">
             <!-- `md:text-[13px]` as well as the unprefixed size: the Input's own base class list
                  carries a `md:text-xs/relaxed`, and twMerge treats a responsive variant as its own
@@ -98,7 +107,7 @@ const fill = computed(() => `${props.threshold}%`)
             :aria-pressed="threshold === preset"
             @click="emit('update:threshold', preset)"
           >
-            {{ $t('instances.usageFilterThresholdValue', { pct: preset }) }}
+            {{ presetLabel(preset) }}
           </Button>
         </div>
       </div>

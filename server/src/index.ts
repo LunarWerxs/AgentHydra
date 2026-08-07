@@ -10,7 +10,9 @@ import { streamSSE } from 'hono/streaming'
 import {
   autoUpdateEnabled,
   getAutoUpdateIntervalSecs,
+  lastUpdateCheck,
   loadAutoUpdateSettings,
+  recordUpdateCheck,
   setAutoUpdateEnabled,
   setAutoUpdateHooks,
   setAutoUpdateIntervalSecs,
@@ -96,6 +98,7 @@ import {
 import { createInstance, removeInstance } from './core/lifecycle'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from './core/shared'
 import { createInstanceShortcut } from './core/shortcut'
+import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { coerceQueueItem, db, getSetting, setSetting } from './db'
 import {
   activeCount,
@@ -116,6 +119,7 @@ import {
   clearInstanceInfo,
   findLiveInstance,
   readInstanceInfo,
+  singleInstanceProbeAttempts,
   updateInstanceInfo,
   writeInstanceInfo,
 } from './instance'
@@ -165,6 +169,7 @@ import {
   type SessionSource,
   type UsageCheckResult,
 } from './types'
+import { updateProgress } from './update-progress'
 import { applyUpdate, checkForUpdate } from './updater'
 import {
   allCachedUsage,
@@ -326,23 +331,67 @@ app.get('/api/health', (c) =>
 )
 
 // --- self-update (source: git engine; compiled: GitHub Releases — see server/src/updater.ts) --
-app.get('/api/update', async (c) =>
-  c.json({
-    ...(await checkForUpdate()),
+app.get('/api/update', async (c) => {
+  const status = await checkForUpdate()
+  // Feed the passive hint with this REAL check, not just the background tick's. Otherwise opening
+  // Settings could tell you an update exists while the dot beside it stayed dark for hours.
+  recordUpdateCheck(status)
+  return c.json({
+    ...status,
     // Informational: which mechanism is live. Both compiled + source support check/apply now, so
     // the UI drives the same controls for either; this just lets a caller distinguish them.
     distribution: IS_COMPILED ? 'compiled' : 'source',
     autoUpdate: { enabled: autoUpdateEnabled(), intervalSecs: getAutoUpdateIntervalSecs() },
-  }),
-)
+  })
+})
+/**
+ * The last BACKGROUND check's answer — a plain memory read, no network, no git.
+ *
+ * Deliberately separate from GET /api/update, which performs a real check: this one is cheap enough
+ * for the whole app to poll on a timer, which is what lets an "update available" hint live outside
+ * the Settings screen. Before it existed, the only code that ever asked was SettingsView's
+ * onMounted, so a user who never opened Settings was never told an update existed.
+ *
+ * `checked: false` means the first background tick has not landed yet (the loop's first run is one
+ * interval out, so a cold boot spends no network on it) — the UI shows nothing rather than
+ * asserting "up to date" on the strength of never having looked.
+ */
+app.get('/api/update/available', (c) => {
+  const last = lastUpdateCheck()
+  if (!last) return c.json({ checked: false, updateAvailable: false })
+  return c.json({
+    checked: true,
+    checkedAt: last.at,
+    updateAvailable: last.status.ok && last.status.updateAvailable,
+    canApply: last.status.canApply,
+    currentVersion: last.status.currentVersion,
+    latestVersion: last.status.remoteCommit,
+    reason: last.status.reason,
+    autoApply: autoUpdateEnabled(),
+  })
+})
+// Where a running apply currently is (see server/src/update-progress.ts). A plain memory read, so
+// the UI can poll it every second while its POST /api/update/apply is still in flight — that
+// request covers minutes of real work and used to report nothing until it finished.
+app.get('/api/update/progress', (c) => c.json(updateProgress()))
 app.post('/api/update/apply', async (c) => {
   const result = await applyUpdate()
   // A compiled apply swapped the binary on disk; the running process is still the OLD one, so it
   // MUST relaunch for the update to take effect (a source apply leaves the daemon to be restarted
-  // manually — restartGuidance in the UI — matching its historical behavior). Fire after the
-  // response is sent so the client sees the result before the port drops.
+  // manually — restartGuidance in the UI — matching its historical behavior).
+  //
+  // The delay is the whole point, and 250ms was too short. relaunchDaemon exits the process 800ms
+  // after IT is called, so at 250ms the socket carrying this very response died about a second
+  // after the response was written — and a client that had not finished reading by then saw the
+  // request fail on an update that had in fact succeeded. That is the "clicked update, it just span
+  // forever" report: the work was done in a few seconds and the news never arrived.
+  //
+  // Three seconds costs a user nothing (the app is about to restart under them either way) and is
+  // far more time than a loopback response needs to flush. The client also recovers on its own now
+  // by polling /api/health (composables/useUpdates.ts) — belt and braces, because this end of it
+  // can only ever be a race that is made unlikely, never one that is closed.
   if (IS_COMPILED && result.ok && result.restartRequired) {
-    setTimeout(() => relaunchDaemon(), 250)
+    setTimeout(() => relaunchDaemon(), 3000)
   }
   return c.json(result)
 })
@@ -376,6 +425,11 @@ const appSettings = () => ({
   // `notifySmtpPassSet` instead (see notify-settings.ts).
   ...getNotificationSettings(),
 })
+// Cross-window UI preferences (see core/ui-prefs.ts). Deliberately NOT folded into /api/settings:
+// these are a mirror of the browser's own localStorage, written on every toggle, and they must be
+// served identically by the quick-instances daemon — which has no settings surface at all.
+app.get('/api/ui-prefs', (c) => c.json({ prefs: readUiPrefs() }))
+app.post('/api/ui-prefs', async (c) => c.json({ prefs: writeUiPrefs(await jsonBody(c)) }))
 app.get('/api/settings', (c) => c.json(appSettings()))
 app.post('/api/settings', async (c) => {
   const body = await jsonBody(c)
@@ -1788,7 +1842,10 @@ if (!skipSingleInstanceGuard()) {
   // the field logs show (paired starts ~6.4s apart == one 1s probe + the 5s waitForPortFree,
   // then the hop). A stale pointer with nothing listening still resolves in well under a second
   // (connections are refused instantly), so this costs a genuine cold start almost nothing.
-  const live = await findLiveInstance(2000, 3)
+  // Attempts are chosen from the pointer rather than fixed at 3: a pointer whose process is gone
+  // is a tombstone, and re-probing it only buys 500ms of setTimeout on the boot right after a
+  // crash. See singleInstanceProbeAttempts in instance.ts.
+  const live = await findLiveInstance(2000, singleInstanceProbeAttempts(3))
   if (live) {
     console.log(
       `\n  AgentHydra is already running  →  ${live.url}\n  Not starting a second instance.\n`,

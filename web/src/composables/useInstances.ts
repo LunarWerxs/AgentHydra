@@ -31,6 +31,25 @@ const RESOLVED_REFRESH_MS = 15 * 60_000
  *  hammer. */
 const LOGIN_CHANGED_RETRY_MS = 30_000
 
+/**
+ * How hard a caller wants identities resolved.
+ *
+ * `'full'` is the Instances tab: it is the screen ABOUT accounts, so it pays for the profile calls
+ * that keep emails, names and plans current.
+ *
+ * `'cache'` is everyone else, and it is the DEFAULT because everyone else outnumbers it. The
+ * sessions list, the queue drawer and the composer all consume this singleton just to put a name on
+ * a chip, and they mount at app start — so with one shared resolve policy, opening the app on the
+ * Sessions view fired a full profile call for EVERY instance. Measured 2026-08-07 on a 15-instance
+ * install: 15 network resolves, 4-wide, ~1.4 SECONDS of continuous requests, to label chips that
+ * the on-disk identity cache answers in about 25ms. Cache mode reads that cache and stops.
+ *
+ * The one thing cache mode still pays for is a login it can PROVE is wrong (`loginChanged`): the
+ * cached identity belongs to a different account than the instance is now signed into, so showing
+ * it would be showing the wrong person's email. That set is empty on essentially every tick.
+ */
+type ResolveMode = 'cache' | 'full'
+
 function guard<T>(p: Promise<T>): Promise<T | undefined> {
   return p.catch((e) => {
     lastError.value = e instanceof Error ? e.message : String(e)
@@ -60,7 +79,9 @@ function upsert(next: CMInstance) {
  *  toggle so the toolbar Refresh icon only spins on a first load or a user-initiated refresh —
  *  not every poll tick, which reads as a distracting constant spinner. `force` re-resolves every
  *  account from scratch (the toolbar Refresh button), rather than only the ones still unknown. */
-async function refreshInstances(opts: { silent?: boolean; force?: boolean } = {}) {
+async function refreshInstances(
+  opts: { silent?: boolean; force?: boolean; resolve?: ResolveMode } = {},
+) {
   if (!opts.silent) loading.value = true
   const r = await guard(api.listInstances())
   if (r) {
@@ -79,7 +100,7 @@ async function refreshInstances(opts: { silent?: boolean; force?: boolean } = {}
     })
   }
   if (!opts.silent) loading.value = false
-  void autoResolveAccounts({ force: opts.force })
+  void autoResolveAccounts({ force: opts.force, mode: opts.resolve ?? 'cache' })
 }
 
 /**
@@ -104,9 +125,16 @@ async function refreshInstances(opts: { silent?: boolean; force?: boolean } = {}
  * before the last row got its identity — on every single open of the app. Each resolve is an
  * independent decrypt + profile call against a DIFFERENT account, so there is nothing to serialize
  * for; the loop was only ever incidental.
+ *
+ * `mode` decides whether pass 2 runs at all — see ResolveMode. Only the Instances tab asks for
+ * 'full'; every other consumer of this singleton wants a name for a chip and is served by the
+ * cache.
  */
-async function autoResolveAccounts(opts: { force?: boolean } = {}): Promise<void> {
+async function autoResolveAccounts(
+  opts: { force?: boolean; mode?: ResolveMode } = {},
+): Promise<void> {
   if (resolvingAccounts.value) return
+  const mode = opts.mode ?? 'cache'
   const now = Date.now()
   const stale = instances.value.filter((i) => {
     if (opts.force) return true
@@ -140,7 +168,13 @@ async function autoResolveAccounts(opts: { force?: boolean } = {}): Promise<void
     // otherwise open a dozen simultaneous profile calls, and each row lands as it arrives anyway
     // (resolveAccount merges into `instances` per-instance), so the visible difference between
     // 4-wide and all-at-once is nil while the risk of tripping Anthropic's rate limiter is not.
-    const queue = stale.slice()
+    //
+    // In CACHE mode it is narrowed to the rows whose cached identity is provably the WRONG account
+    // (see ResolveMode). Not skipped outright: showing another account's email against an instance
+    // is a correctness bug, not a staleness one, and that set is empty on virtually every tick —
+    // whereas the periodic re-check cohort is every instance you own, which is the storm.
+    const queue = mode === 'full' ? stale.slice() : stale.filter(loginChanged)
+    if (queue.length === 0) return
     const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
       for (;;) {
         const inst = queue.shift()
@@ -157,11 +191,14 @@ async function autoResolveAccounts(opts: { force?: boolean } = {}): Promise<void
 
 let pollTimer: number | null = null
 
+/** Started by the Instances tab alone, which is why this is the one caller that resolves in 'full'
+ *  mode: it is the screen where an out-of-date email or plan is the thing you came to look at.
+ *  Every other consumer calls refreshInstances() directly and gets the cache. */
 function startPolling() {
   if (pollTimer !== null) return
-  refreshInstances()
+  refreshInstances({ resolve: 'full' })
   // Background ticks are silent (no `loading` toggle) — see refreshInstances().
-  pollTimer = window.setInterval(() => refreshInstances({ silent: true }), 4000)
+  pollTimer = window.setInterval(() => refreshInstances({ silent: true, resolve: 'full' }), 4000)
 }
 
 function stopPolling() {

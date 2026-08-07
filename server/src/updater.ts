@@ -7,6 +7,7 @@
 // auto-update loop, and the web UI drive whichever is active without knowing which it is.
 import { APP_ROOT, IS_COMPILED, SERVICE_NAME } from './config'
 import { applyUpdate as ghApplyUpdate, checkForUpdate as ghCheckForUpdate } from './github-updater'
+import { beginUpdateProgress, finishUpdateProgress, setUpdatePhase } from './update-progress'
 import { createUpdater, type UpdateApplyResult, type UpdateStatus } from './updater-engine.mjs'
 
 export type { UpdateApplyResult, UpdateStatus }
@@ -30,6 +31,25 @@ export function checkForUpdate(): Promise<UpdateStatus> {
   return IS_COMPILED ? ghCheckForUpdate() : gitUpdater.checkForUpdate()
 }
 
-export function applyUpdate(): Promise<UpdateApplyResult> {
-  return IS_COMPILED ? ghApplyUpdate() : gitUpdater.applyUpdate()
+export async function applyUpdate(): Promise<UpdateApplyResult> {
+  // The compiled path publishes its own fine-grained progress (it owns the download loop).
+  if (IS_COMPILED) return ghApplyUpdate()
+
+  // The source path cannot: git pull / `bun install` / the web build all run inside the shared kit
+  // engine, which is synced and not ours to instrument. So report the phase honestly and say why it
+  // is slow, rather than leaving a mute spinner over several minutes of real work — that silence is
+  // the whole complaint. Coarse and true beats precise and invented.
+  beginUpdateProgress('Starting the update…')
+  setUpdatePhase(
+    'building',
+    'Pulling, reinstalling dependencies and rebuilding the web app. This runs three commands back to back and usually takes a few minutes.',
+  )
+  try {
+    const result = await gitUpdater.applyUpdate()
+    finishUpdateProgress(result.ok, result.message ?? (result.ok ? 'Updated.' : 'Update failed.'))
+    return result
+  } catch (e) {
+    finishUpdateProgress(false, e instanceof Error ? e.message : String(e))
+    throw e
+  }
 }

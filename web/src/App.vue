@@ -10,7 +10,7 @@ import {
   Sun,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import InstancesView from '@/components/InstancesView.vue'
@@ -33,6 +33,7 @@ import { useData } from '@/composables/useData'
 import { useNotifications } from '@/composables/useNotifications'
 import { usePanels } from '@/composables/usePanels'
 import { SHELL_BASE_MAX, SHELL_WIDE_MAX, useShellWidth } from '@/composables/useShellWidth'
+import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
@@ -70,6 +71,8 @@ const view = useStorage<View>('agenthydra.app.view', 'sessions', undefined, {
 
 // settings + queue share the right edge; usePanels keeps them mutually exclusive
 const { settingsOpen, queueOpen } = usePanels()
+// The passive "a newer version exists" signal — see the dot on the Settings button below.
+const { updateAvailable, startAvailabilityPolling, stopAvailabilityPolling } = useUpdates()
 const anyPanelOpen = computed(() => settingsOpen.value || queueOpen.value)
 const { wide } = useShellWidth()
 // widthPx drives the content shift, the --content-inset-right var, and both panels'
@@ -175,6 +178,10 @@ onMounted(startPolling)
 onMounted(() => startNotificationPolling(t))
 onMounted(handleConnectRedirect)
 onMounted(showRebrandNoticeOnce)
+// Reads the daemon's LAST background check — a memory read, no network from the daemon's side and
+// nothing that delays boot. See composables/useUpdates.ts.
+onMounted(startAvailabilityPolling)
+onUnmounted(stopAvailabilityPolling)
 </script>
 
 <template>
@@ -241,14 +248,25 @@ onMounted(showRebrandNoticeOnce)
             {{ runningCount }}
           </span>
         </Button>
+        <!-- The update hint lives HERE, on the button that leads to the update controls, rather
+             than as a banner or a toast. A newer version is not urgent — it does not want the
+             screen — but it does have to be visible without going looking for it, and that was the
+             whole failure: the only code that ever checked was the Settings screen's own onMounted,
+             so a user who never opened Settings was never told. A dot on the door to the thing is
+             the smallest signal that still reaches someone who isn't already there. -->
         <Button
           variant="ghost"
           size="icon-sm"
-          :title="$t('app.settings')"
+          class="relative"
+          :title="updateAvailable ? $t('app.settingsUpdateAvailable') : $t('app.settings')"
           :aria-pressed="settingsOpen"
           @click="settingsOpen = !settingsOpen"
         >
           <Settings2 />
+          <span
+            v-if="updateAvailable"
+            class="absolute right-0.5 top-0.5 size-2 rounded-full bg-info ring-2 ring-background"
+          />
         </Button>
       </div>
     </header>
@@ -325,7 +343,13 @@ onMounted(showRebrandNoticeOnce)
       </template>
     </SettingsPanel>
 
-    <Toaster />
+    <!-- close-button: vue-sonner defaults it OFF, which left every toast in the app dismissable
+         only by waiting it out or clicking its body. The plain ones showed it worst — an
+         "Auto-updates enabled" success toast carries no action button either, so it had no
+         controls at all. The kit's wrapper (components/ui/sonner/Sonner.vue) already ships the
+         close glyph and pins it top-right, so this is switching on a control that was built and
+         never enabled, not adding one. -->
+    <Toaster close-button />
   </div>
   </TooltipProvider>
 </template>

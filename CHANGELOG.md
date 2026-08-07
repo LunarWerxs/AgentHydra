@@ -5,6 +5,76 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-08-07
+
+### Added
+
+- **Quick Instances gets the quota columns and the usage filter, and remembers how you left them in
+  the full manager.** The compact window showed a single weekly badge and no way to act on it. It
+  now carries both readings (5h and week) behind the same usage-mode toggle the Instances tab uses,
+  and the same "set aside the accounts I've used up" filter, with dim/hide and per-window
+  thresholds. It is the same state, not a copy: both surfaces read one shared singleton, and the
+  filter rule itself has only ever had one implementation.
+  - **The state is mirrored through the daemon**, which is what makes "remembers" true. Quick
+    Instances normally opens on the running daemon's port, but with no daemon it starts its own
+    server on a *different* port, and a browser scopes `localStorage` per origin, port included. So
+    the window that ran standalone landed on a blank slate every time. A small store
+    (`~/.agenthydra/ui-prefs.json`, served by both daemons) now holds the handful of keys; the
+    server wins on load and `localStorage` stays as the instant-paint cache. A first run seeds the
+    store from whatever the browser already had, so existing settings carry over rather than
+    trickling in as controls are touched.
+- **The app checks for updates on its own, and says so where you can see it.** Auto-*apply* is off
+  by default because it restarts the daemon, but that flag also gated the *check*, and the only
+  other code that ever asked was the Settings screen's own mount. Run an older build and never open
+  Settings, and nothing ever told you. Checking and applying are now separate: the loop always
+  checks, applying stays opt-in and unchanged, and a newer version puts a dot on the Settings
+  button. A manual check feeds the same signal, so the hint is never staler than what you have
+  already been shown.
+- **The update tells you what it is doing.** Clicking the version to update bound a spinner to one
+  request that legitimately covers minutes on a source checkout (a pull, then a dependency reinstall,
+  then a web build), and reported nothing until it finished, so a healthy slow update and a hung one
+  looked identical. The compiled path now streams its download and reports real progress
+  (`Downloading v0.17.0… 62% (22/36 MB)`), then extraction, verification and install; the source
+  path reports its phase and says why it takes a few minutes. The apply request is also bounded at
+  20 minutes, so the spinner always ends: a daemon that restarts itself mid-apply (which a compiled
+  apply does on purpose) used to leave it turning until the user reloaded the page.
+
+### Fixed
+
+- **Clicking update on a downloaded release no longer spins forever after the update has already
+  succeeded.** This was the actual cause, and it is not slowness: a compiled apply is only a few
+  seconds of work (measured on the real v0.17.0 asset: 2.3 s to download, 0.5 s to extract). But the
+  daemon deliberately restarts itself afterwards, and it began that restart 250 ms after writing the
+  response, exiting about a second later. A browser that had not finished reading by then lost the
+  socket, the request failed, and the spinner turned on an update that had in fact completed. The
+  restart now waits three seconds, and the page independently recovers by polling the daemon's
+  health and reporting the version that comes back, so the outcome is reported either way.
+
+- **Toasts have a close button.** `<Toaster>` was mounted without `close-button`, and vue-sonner
+  defaults it off, so no toast in the app could be dismissed except by waiting. It showed worst on
+  the plain ones ("Auto-updates enabled"), which carry no action button either and so had no
+  controls at all. The kit's wrapper already shipped the glyph and pinned it top-right; it was
+  simply never switched on.
+- **Opening the app no longer resolves every instance over the network.** The sessions list, the
+  queue drawer and the composer all pull the shared instance singleton just to put a name on a chip,
+  and each one triggered a full identity resolve of every instance. Measured on a 15-instance
+  install: 15 profile calls, 4-wide, ~1.4 seconds of continuous requests, to label chips the on-disk
+  cache answers in about 25 ms. Those callers now read the cache; only the Instances tab, the
+  screen that is *about* accounts, resolves for real, and a login that provably changed is still
+  corrected immediately. Now 1 network resolve, done in under 0.6 s.
+- **The Instances tab no longer probes every account's quota at once on open.** It fired one forced
+  probe per instance from a single unbounded `Promise.all` the moment the lists arrived. Measured
+  at 14 simultaneous requests, the slowest taking 8.8 seconds, on every open. The server already
+  keeps a usage cache that survives restarts and re-sweeps on its own timer, so the table has
+  numbers immediately; only readings that have aged out are re-checked now, two at a time with a
+  stagger. Now 2 probes instead of 14.
+- **A crashed daemon no longer costs half a second on the next boot.** The single-instance guard
+  re-probes three times before concluding nothing is running, which is right when a daemon might be
+  alive but busy, and pointless when `runtime.json` names a process that no longer exists. The
+  tombstone case is now detected directly. Boot after a hard kill: ~1,420 ms → ~920 ms.
+- The full manager's toast stylesheet loaded on its own round trip after the app and i18n chunks,
+  rather than alongside them.
+
 ## [0.17.0] - 2026-08-07
 
 ### Added

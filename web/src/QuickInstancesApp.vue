@@ -3,6 +3,7 @@ import {
   AppWindow,
   Boxes,
   Focus,
+  Gauge,
   Moon,
   Play,
   RefreshCw,
@@ -12,8 +13,11 @@ import {
   X,
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import QuickUsageFilter from '@/components/QuickUsageFilter.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useUsageFilter } from '@/composables/useUsageFilter'
+import { useUsageMode } from '@/composables/useUsageMode'
 import type {
   CliInstance,
   CMActionResult,
@@ -39,7 +43,14 @@ import {
 } from '@/lib/api'
 import { loginChanged } from '@/lib/instance-appearance'
 import { useTheme } from '@/lib/theme'
-import { isStaleSnap, usageBadgeVariant, usageCellLabel, usageCheckedAgo } from '@/lib/usage'
+import type { UsageScope } from '@/lib/usage'
+import {
+  isStaleSnap,
+  usageBadgeVariant,
+  usageCellLabel,
+  usageCheckedAgo,
+  usagePctFor,
+} from '@/lib/usage'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
 
 // A second --app launch can be forwarded into an existing Chromium process, which ignores both
@@ -61,6 +72,20 @@ const lastAccountResolveAt = new Map<string, number>()
 
 const { isDark, toggle: toggleTheme } = useTheme()
 
+// --- quota columns + the filter -----------------------------------------------------------------
+// Both are the SAME shared singletons the full manager's Instances tab uses, not a private copy:
+// composables/useUsageMode.ts and composables/useUsageFilter.ts. So a filter set over there is
+// already set here — and via composables/useSharedPrefs.ts that holds even when this window is
+// served from its own port (a different browser origin, and therefore its own empty localStorage),
+// which is exactly the case where it used to forget.
+//
+// `usageMode` gates the quota badges here the same way it swaps columns there. This window has no
+// process columns to swap TO, so off simply means a plainer list — but it stays gated because the
+// filter itself is gated on it (see useUsageFilter's `active`), and a filter quietly dimming rows
+// with no visible control that explains it is the one outcome to avoid.
+const { usageMode, toggle: toggleUsageMode } = useUsageMode()
+const { active: filterActive, dimmed, hidden, visible } = useUsageFilter()
+
 const sortedClaude = computed(() =>
   [...claude.value].sort(
     (a, b) =>
@@ -70,6 +95,18 @@ const sortedClaude = computed(() =>
 )
 const sortedClaudeCli = computed(() =>
   [...claudeCli.value].sort((a, b) => a.name.localeCompare(b.name)),
+)
+
+// Sort first, then filter: the filter REMOVES rows, it never reorders them.
+const visibleClaude = computed(() => visible(sortedClaude.value, usageForClaude))
+const visibleClaudeCli = computed(() => visible(sortedClaudeCli.value, usageForClaudeCli))
+
+/** Rows the filter is holding back, so a short table never reads as a discovery failure. Counted
+ *  across both Claude tables, which is how the flyout reports it. */
+const hiddenCount = computed(
+  () =>
+    sortedClaude.value.filter((i) => hidden(usageForClaude(i))).length +
+    sortedClaudeCli.value.filter((i) => hidden(usageForClaudeCli(i))).length,
 )
 const sortedCodex = computed(() =>
   [...codex.value].sort(
@@ -87,9 +124,23 @@ function usageForClaudeCli(instance: CliInstance): UsageSnapshot | undefined {
   return instance.lastUsageCheck ?? usageSnapshots.value.get(`cli:${instance.id}`)
 }
 
-function usageTitle(snapshot: UsageSnapshot | undefined): string {
-  if (!snapshot?.weekAll) return 'Usage has not been checked yet.'
-  return `Weekly usage · checked ${usageCheckedAgo(snapshot.capturedAt)}`
+/** Badge colour for one window's reading. Outline (neutral) whenever there is no CURRENT number —
+ *  never checked, checked-but-empty, or a window that has since reset. A missing reading is
+ *  unknown, not healthy and not spent, so it must not borrow either colour. */
+function usageVariant(
+  snapshot: UsageSnapshot | undefined,
+  scope: UsageScope,
+): 'success' | 'warning' | 'destructive' | 'outline' {
+  const pct = usagePctFor(snapshot, scope)
+  return pct == null ? 'outline' : usageBadgeVariant(pct)
+}
+
+function usageTitle(snapshot: UsageSnapshot | undefined, scope: UsageScope): string {
+  const window = scope === 'session' ? '5-hour session' : 'Weekly usage'
+  if (usagePctFor(snapshot, scope) == null || !snapshot) {
+    return `${window} has not been checked yet.`
+  }
+  return `${window} · checked ${usageCheckedAgo(snapshot.capturedAt)}`
 }
 
 function message(error: unknown): string {
@@ -283,9 +334,20 @@ onBeforeUnmount(() => {
         <div class="min-w-0 flex-1">
           <h1 class="truncate text-sm font-semibold">Quick Instances</h1>
           <p class="truncate text-xs text-muted-foreground">
-            Instance controls only · {{ total }} available
+            Instance controls only · {{ total }} available<template v-if="hiddenCount">
+              · {{ hiddenCount }} hidden by filter</template>
           </p>
         </div>
+        <Button
+          :variant="usageMode ? 'secondary' : 'ghost'"
+          size="icon-sm"
+          :title="usageMode ? 'Hide quota columns' : 'Show quota columns'"
+          :aria-pressed="usageMode"
+          @click="toggleUsageMode"
+        >
+          <Gauge />
+        </Button>
+        <QuickUsageFilter v-if="usageMode" :hidden-count="hiddenCount" />
         <Button
           variant="ghost"
           size="icon-sm"
@@ -336,9 +398,14 @@ onBeforeUnmount(() => {
           <div class="flex items-center gap-2 border-b px-3 py-2.5">
             <AppWindow class="size-4 text-primary" />
             <h2 class="flex-1 text-sm font-medium">Claude Desktop</h2>
-            <span class="w-20 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              Usage
-            </span>
+            <template v-if="usageMode">
+              <span class="w-16 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                5h
+              </span>
+              <span class="w-16 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                Week
+              </span>
+            </template>
             <div class="flex w-28 justify-end">
               <Badge variant="secondary">{{ claude.length }}</Badge>
             </div>
@@ -347,9 +414,16 @@ onBeforeUnmount(() => {
             No Claude Desktop instances found.
           </div>
           <div
-            v-for="instance in sortedClaude"
+            v-else-if="visibleClaude.length === 0"
+            class="px-4 py-6 text-center text-sm text-muted-foreground"
+          >
+            Every instance is set aside by the usage filter.
+          </div>
+          <div
+            v-for="instance in visibleClaude"
             :key="instance.dir"
-            class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0"
+            class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0 transition-opacity"
+            :class="dimmed(usageForClaude(instance)) ? 'opacity-25' : ''"
           >
             <span
               class="size-2.5 shrink-0 rounded-full"
@@ -377,19 +451,26 @@ onBeforeUnmount(() => {
                 {{ instance.isRunning ? `Running · PID ${instance.pid ?? '—'}` : 'Stopped' }}
               </p>
             </div>
-            <div class="flex w-20 shrink-0 justify-center">
-              <Badge
-                :variant="
-                  usageForClaude(instance)?.weekAll
-                    ? usageBadgeVariant(usageForClaude(instance)!.weekAll!.pct)
-                    : 'outline'
-                "
-                :class="isStaleSnap(usageForClaude(instance)) ? 'opacity-60' : ''"
-                :title="usageTitle(usageForClaude(instance))"
-              >
-                {{ usageCellLabel(usageForClaude(instance), 'week', true) }}
-              </Badge>
-            </div>
+            <template v-if="usageMode">
+              <div class="flex w-16 shrink-0 justify-center">
+                <Badge
+                  :variant="usageVariant(usageForClaude(instance), 'session')"
+                  :class="isStaleSnap(usageForClaude(instance)) ? 'opacity-60' : ''"
+                  :title="usageTitle(usageForClaude(instance), 'session')"
+                >
+                  {{ usageCellLabel(usageForClaude(instance), 'session') }}
+                </Badge>
+              </div>
+              <div class="flex w-16 shrink-0 justify-center">
+                <Badge
+                  :variant="usageVariant(usageForClaude(instance), 'week')"
+                  :class="isStaleSnap(usageForClaude(instance)) ? 'opacity-60' : ''"
+                  :title="usageTitle(usageForClaude(instance), 'week')"
+                >
+                  {{ usageCellLabel(usageForClaude(instance), 'week') }}
+                </Badge>
+              </div>
+            </template>
             <div class="flex w-28 shrink-0 justify-end gap-1">
               <Button
                 size="sm"
@@ -419,17 +500,29 @@ onBeforeUnmount(() => {
           <div class="flex items-center gap-2 border-b px-3 py-2.5">
             <Terminal class="size-4 text-primary" />
             <h2 class="flex-1 text-sm font-medium">Claude CLI</h2>
-            <span class="w-20 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              Usage
-            </span>
+            <template v-if="usageMode">
+              <span class="w-16 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                5h
+              </span>
+              <span class="w-16 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                Week
+              </span>
+            </template>
             <div class="flex w-28 justify-end">
               <Badge variant="secondary">{{ claudeCli.length }}</Badge>
             </div>
           </div>
           <div
-            v-for="instance in sortedClaudeCli"
+            v-if="visibleClaudeCli.length === 0"
+            class="px-4 py-6 text-center text-sm text-muted-foreground"
+          >
+            Every CLI instance is set aside by the usage filter.
+          </div>
+          <div
+            v-for="instance in visibleClaudeCli"
             :key="instance.id"
-            class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0"
+            class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0 transition-opacity"
+            :class="dimmed(usageForClaudeCli(instance)) ? 'opacity-25' : ''"
           >
             <span
               class="size-2.5 shrink-0 rounded-full"
@@ -441,19 +534,26 @@ onBeforeUnmount(() => {
                 {{ instance.loggedIn ? 'Signed in' : 'Needs sign-in' }}
               </p>
             </div>
-            <div class="flex w-20 shrink-0 justify-center">
-              <Badge
-                :variant="
-                  usageForClaudeCli(instance)?.weekAll
-                    ? usageBadgeVariant(usageForClaudeCli(instance)!.weekAll!.pct)
-                    : 'outline'
-                "
-                :class="isStaleSnap(usageForClaudeCli(instance)) ? 'opacity-60' : ''"
-                :title="usageTitle(usageForClaudeCli(instance))"
-              >
-                {{ usageCellLabel(usageForClaudeCli(instance), 'week', true) }}
-              </Badge>
-            </div>
+            <template v-if="usageMode">
+              <div class="flex w-16 shrink-0 justify-center">
+                <Badge
+                  :variant="usageVariant(usageForClaudeCli(instance), 'session')"
+                  :class="isStaleSnap(usageForClaudeCli(instance)) ? 'opacity-60' : ''"
+                  :title="usageTitle(usageForClaudeCli(instance), 'session')"
+                >
+                  {{ usageCellLabel(usageForClaudeCli(instance), 'session') }}
+                </Badge>
+              </div>
+              <div class="flex w-16 shrink-0 justify-center">
+                <Badge
+                  :variant="usageVariant(usageForClaudeCli(instance), 'week')"
+                  :class="isStaleSnap(usageForClaudeCli(instance)) ? 'opacity-60' : ''"
+                  :title="usageTitle(usageForClaudeCli(instance), 'week')"
+                >
+                  {{ usageCellLabel(usageForClaudeCli(instance), 'week') }}
+                </Badge>
+              </div>
+            </template>
             <div class="flex w-28 shrink-0 justify-end">
               <Button
                 size="sm"

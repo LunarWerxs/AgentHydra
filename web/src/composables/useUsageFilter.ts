@@ -32,6 +32,7 @@ import {
   matchesUsageFilter,
   type UsageFilterRule,
 } from '@/lib/usage-filter'
+import { registerSharedPref } from './useSharedPrefs'
 import { useUsageMode } from './useUsageMode'
 
 // The carry-over from the old single-threshold `scope2` shape runs in main.ts, before any of this
@@ -54,6 +55,17 @@ const weekThreshold = useStorage(`${KEY}.threshold`, DEFAULT_USAGE_THRESHOLD)
  *  accounts dropping out of the table and back in over an afternoon. */
 const sessionEnabled = useStorage(`${KEY}.session`, false)
 const sessionThreshold = useStorage(`${KEY}.sessionThreshold`, DEFAULT_USAGE_THRESHOLD)
+
+// Every switch and threshold above is ALSO mirrored through the daemon, because the quick-instances
+// window can be served from a different PORT and browser storage is scoped per origin — so without
+// this, "the filter I set in the full manager" would not follow you into the compact window when it
+// runs standalone. See composables/useSharedPrefs.ts for the server-wins-on-hydrate rule.
+registerSharedPref(`${KEY}.enabled`, enabled)
+registerSharedPref(`${KEY}.hide`, hideMatches)
+registerSharedPref(`${KEY}.week`, weekEnabled)
+registerSharedPref(`${KEY}.threshold`, weekThreshold)
+registerSharedPref(`${KEY}.session`, sessionEnabled)
+registerSharedPref(`${KEY}.sessionThreshold`, sessionThreshold)
 
 export function useUsageFilter() {
   // No clock needed: nothing here counts down, it only compares percentages.

@@ -82,6 +82,13 @@ export function instanceNumbersFile(): string {
   return path.join(appDataDir(), 'instance-numbers.json')
 }
 
+/** Cross-WINDOW UI preferences (usage mode, usage filter), mirrored out of localStorage so the
+ *  quick-instances window agrees with the full manager even when the two are served from
+ *  different ports (and therefore different browser origins); see server/src/core/ui-prefs.ts. */
+export function uiPrefsFile(): string {
+  return path.join(appDataDir(), 'ui-prefs.json')
+}
+
 export function logFile(): string {
   return path.join(appDataDir(), 'agenthydra.log')
 }

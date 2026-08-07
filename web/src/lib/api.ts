@@ -324,7 +324,75 @@ export type UpdateStatusWithDistribution = UpdateStatus & {
   distribution?: 'source' | 'compiled'
 }
 export const checkUpdate = () => j<UpdateStatusWithDistribution>('/api/update')
-export const applyUpdate = () => j<UpdateApplyResult>('/api/update/apply', { method: 'POST' })
+
+/**
+ * Apply an update.
+ *
+ * Bounded, unlike every other call here, because this is the one request that can legitimately run
+ * for many minutes and the one where "still working" and "never coming back" are indistinguishable
+ * from the outside. On a source checkout the server runs git pull (120s cap) then `bun install`
+ * (240s) then a web build (240s), and a failure re-runs install+build to roll back, so the honest
+ * worst case is around 17 minutes of real work. Twenty minutes therefore cannot false-trip on a
+ * healthy update, while still guaranteeing the spinner ENDS: before this, a daemon that died
+ * mid-apply (which it does on purpose — a compiled apply relaunches the process) left the promise
+ * unresolved forever, and the UI simply span until the user gave up and reloaded.
+ *
+ * The abort surfaces as a normal rejection, which SettingsView already renders as applyError.
+ */
+const APPLY_UPDATE_TIMEOUT_MS = 20 * 60 * 1000
+export const applyUpdate = () =>
+  j<UpdateApplyResult>('/api/update/apply', {
+    method: 'POST',
+    signal: AbortSignal.timeout(APPLY_UPDATE_TIMEOUT_MS),
+  })
+
+/** What the BACKGROUND check last found — a memory read on the server, no network, no git. Cheap
+ *  enough to poll from the app shell, which is what lets the "update available" hint live outside
+ *  the Settings screen. `checked: false` means no background tick has landed yet. */
+export interface UpdateAvailability {
+  checked: boolean
+  checkedAt?: number
+  updateAvailable: boolean
+  canApply?: boolean
+  currentVersion?: string
+  latestVersion?: string | null
+  reason?: string | null
+  autoApply?: boolean
+}
+export const getUpdateAvailability = () => j<UpdateAvailability>('/api/update/available')
+
+/** The daemon's identity + version. Used to tell "it restarted" from "it died" after an update:
+ *  a short timeout, because the whole point is to poll it while the port is coming back. */
+export interface Health {
+  ok: boolean
+  service: string
+  version: string
+  distribution: 'compiled' | 'source'
+  ts: number
+}
+export const getHealth = (timeoutMs = 2000) =>
+  j<Health>('/api/health', { signal: AbortSignal.timeout(timeoutMs) })
+
+/** Where a running apply currently is (server/src/update-progress.ts). Polled while an apply is in
+ *  flight so a multi-minute update reports itself instead of showing a mute spinner. */
+export interface UpdateProgress {
+  phase:
+    | 'idle'
+    | 'preparing'
+    | 'downloading'
+    | 'extracting'
+    | 'verifying'
+    | 'installing'
+    | 'building'
+    | 'done'
+    | 'failed'
+  message: string
+  startedAt: number | null
+  receivedBytes: number | null
+  totalBytes: number | null
+  seq: number
+}
+export const getUpdateProgress = () => j<UpdateProgress>('/api/update/progress')
 
 export interface AutoUpdateSettings {
   enabled: boolean
@@ -362,6 +430,20 @@ export type AppSettingsPatch = Partial<AppSettings> & { notifySmtpPass?: string 
 export const getSettings = () => j<AppSettings>('/api/settings')
 export const updateSettings = (b: AppSettingsPatch) =>
   j<AppSettings>('/api/settings', { method: 'POST', body: JSON.stringify(b) })
+
+// --- cross-window UI preferences (see server/src/core/ui-prefs.ts) ------------------------------
+// A mirror of a few localStorage keys, kept server-side because the quick-instances window can be
+// served from a DIFFERENT PORT than the full manager — and a browser scopes localStorage per
+// origin, port included. Values are the raw strings vueuse's useStorage reads and writes, so this
+// carries no schema of its own; `null` in a patch deletes the key.
+/** Every mirrored preference, keyed exactly as it is in localStorage. */
+export const getUiPrefs = () => j<{ prefs: Record<string, string> }>('/api/ui-prefs')
+/** Merge preferences into the shared store; returns everything that was kept. */
+export const updateUiPrefs = (patch: Record<string, string | null>) =>
+  j<{ prefs: Record<string, string> }>('/api/ui-prefs', {
+    method: 'POST',
+    body: JSON.stringify(patch),
+  })
 export const openPortableWindow = () =>
   j<PortableWindowResult>('/api/portable-window', { method: 'POST' })
 export const createChatGptContextPack = (cwd: string, task: string) =>

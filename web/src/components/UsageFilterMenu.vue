@@ -66,6 +66,10 @@ const triggerLabel = computed(() => {
 
 /** Section caption: uppercase, tracked, accent-coloured. Shared so the three of them cannot drift. */
 const CAPTION = 'text-[11px] font-semibold uppercase tracking-wider text-primary'
+
+/** UsageFilterWindow takes every string as a prop so the un-i18n'd quick window can render it too
+ *  (see the note at the top of that component). This is the translated half of that contract. */
+const presetLabel = (pct: number) => t('instances.usageFilterThresholdValue', { pct })
 </script>
 
 <template>
@@ -127,6 +131,8 @@ const CAPTION = 'text-[11px] font-semibold uppercase tracking-wider text-primary
                     :label="$t('instances.usageFilterWeek')"
                     :hint="$t('instances.usageFilterWeekHint')"
                     :threshold-label="$t('instances.usageFilterWeekThresholdLabel')"
+                    :threshold-caption="$t('instances.usageFilterThreshold')"
+                    :preset-label="presetLabel"
                     :threshold="weekThreshold"
                     @update:threshold="setWeekThreshold"
                   />
@@ -135,6 +141,8 @@ const CAPTION = 'text-[11px] font-semibold uppercase tracking-wider text-primary
                     :label="$t('instances.usageFilterSession')"
                     :hint="$t('instances.usageFilterSessionHint')"
                     :threshold-label="$t('instances.usageFilterSessionThresholdLabel')"
+                    :threshold-caption="$t('instances.usageFilterThreshold')"
+                    :preset-label="presetLabel"
                     :threshold="sessionThreshold"
                     @update:threshold="setSessionThreshold"
                   />

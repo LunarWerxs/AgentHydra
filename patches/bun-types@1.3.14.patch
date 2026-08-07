@@ -1,0 +1,14 @@
+diff --git a/package.json b/package.json
+index 199e2554e1ee87dde46f331f6207d10148de8be7..ee68480759a8c3039e65989d69aab22a1fbdbed2 100644
+--- a/package.json
++++ b/package.json
+@@ -33,5 +33,8 @@
+     "bun.js",
+     "types"
+   ],
+-  "version": "1.3.14"
++  "version": "1.3.14",
++  "peerDependencies": {
++    "undici-types": "*"
++  }
+ }

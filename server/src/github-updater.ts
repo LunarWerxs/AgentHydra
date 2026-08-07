@@ -21,6 +21,12 @@ import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { APP_ROOT, SERVICE_NAME, VERSION } from './config'
+import {
+  beginUpdateProgress,
+  finishUpdateProgress,
+  setUpdateBytes,
+  setUpdatePhase,
+} from './update-progress'
 import type { UpdateApplyResult, UpdateStatus } from './updater-engine.mjs'
 
 const REPO = 'LunarWerxs/agenthydra'
@@ -186,6 +192,53 @@ function verifyExeVersion(exePath: string, expected: string): Promise<boolean> {
   })
 }
 
+/**
+ * Stream a download to disk, publishing bytes-received as it goes (see update-progress.ts).
+ *
+ * `Bun.write(path, response)` is the shorter way to do this and was what ran here before, but it is
+ * opaque: the whole transfer is one await with nothing observable in between, which is precisely
+ * what made a healthy multi-MB download look like a hang.
+ *
+ * `expected` comes from the release asset's own `size`. The response's content-length is preferred
+ * when present (a redirect to a CDN can serve a different encoding), and a missing one is reported
+ * as null rather than guessed — the UI then shows bytes without a percentage.
+ */
+async function writeWithProgress(
+  response: Response,
+  destPath: string,
+  expected: number,
+): Promise<void> {
+  const header = Number(response.headers.get('content-length'))
+  const total = Number.isFinite(header) && header > 0 ? header : (expected ?? null)
+  const body = response.body
+  if (!body) {
+    // No readable stream (shouldn't happen for a release asset) — fall back to the simple path
+    // rather than failing an update over a missing progress nicety.
+    await Bun.write(destPath, response)
+    return
+  }
+
+  const file = Bun.file(destPath).writer()
+  let received = 0
+  // Throttled: a 100 MB download delivers thousands of chunks and the UI polls once a second, so
+  // publishing every chunk would be pure churn for identical readings.
+  let lastPublishedAt = 0
+  try {
+    for await (const chunk of body) {
+      file.write(chunk)
+      received += (chunk as Uint8Array).byteLength
+      const now = Date.now()
+      if (now - lastPublishedAt >= 250) {
+        lastPublishedAt = now
+        setUpdateBytes(received, total)
+      }
+    }
+    setUpdateBytes(received, total)
+  } finally {
+    await file.end()
+  }
+}
+
 async function extract(archivePath: string, destDir: string): Promise<void> {
   if (process.platform === 'win32') {
     await run('powershell', [
@@ -212,6 +265,10 @@ function moveInto(from: string, to: string): void {
 }
 
 function fail(message: string): UpdateApplyResult {
+  // Every early return in applyUpdate goes through here, so this is the one place that has to
+  // settle the progress record — otherwise a failed apply leaves the UI on "Downloading…" forever,
+  // which is the exact symptom this reporting exists to remove.
+  finishUpdateProgress(false, message)
   return {
     ok: false,
     message,
@@ -222,6 +279,7 @@ function fail(message: string): UpdateApplyResult {
 }
 
 export async function applyUpdate(): Promise<UpdateApplyResult> {
+  beginUpdateProgress('Checking for the latest release…')
   const status = await checkForUpdate({ fresh: true })
   if (!status.ok) return fail(status.reason ?? 'update check failed')
   if (!status.updateAvailable) return fail('already up to date')
@@ -257,15 +315,22 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
     rmSync(staging, { recursive: true, force: true })
     mkdirSync(staging, { recursive: true }) // tar -C needs it to exist; Expand-Archive/Bun.write are fine either way
     const archivePath = join(staging, asset.name)
-    output.push(`downloading ${asset.name} (${Math.round(asset.size / 1048576)} MB)`)
+    const totalMb = Math.round(asset.size / 1048576)
+    output.push(`downloading ${asset.name} (${totalMb} MB)`)
+    setUpdatePhase('downloading', `Downloading v${remoteVersion} (${totalMb} MB)…`)
     const dl = await fetch(asset.browser_download_url, {
       headers: { accept: 'application/octet-stream', 'user-agent': `${SERVICE_NAME}/${VERSION}` },
       redirect: 'follow',
     })
     if (!dl.ok) return fail(`download failed (HTTP ${dl.status})`)
-    await Bun.write(archivePath, dl)
+    // Streamed rather than `Bun.write(path, response)` so the bytes can be COUNTED as they land.
+    // This is the step the "it just sat there spinning" report was actually about: a ~100 MB
+    // release over a normal connection is tens of seconds during which the old code emitted
+    // nothing at all, and a slow download was indistinguishable from a dead one.
+    await writeWithProgress(dl, archivePath, asset.size)
 
     output.push('extracting')
+    setUpdatePhase('extracting', 'Extracting the update…')
     await extract(archivePath, staging)
 
     // Updater bundles retain the versioned wrapper directory expected by older releases, while
@@ -278,9 +343,11 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
     if (!existsSync(newExe)) return fail(`the update bundle has no ${exeName}`)
 
     output.push('verifying the new binary runs')
+    setUpdatePhase('verifying', 'Checking that the downloaded build runs…')
     if (!(await verifyExeVersion(newExe, remoteVersion))) {
       return fail('the downloaded binary failed its version self-check — not swapping it in')
     }
+    setUpdatePhase('installing', `Installing v${remoteVersion}…`)
 
     // --- swap the exe (rename-aside is allowed on a running Windows image) ---
     exeMovedAside = join(installDir, `${exeName}.old-${stamp}`)
@@ -297,6 +364,7 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
 
     rmSync(staging, { recursive: true, force: true })
     cached = null // force the next check to re-read the (now-current) version
+    finishUpdateProgress(true, `Updated to v${remoteVersion}. Restarting…`)
 
     return {
       ok: true,

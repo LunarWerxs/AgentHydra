@@ -2,3 +2,8 @@
 # dir) so tests never pollute the real settings table or runtime pointer. See tests/setup.ts.
 [test]
 preload = ["./tests/setup.ts"]
+
+[install]
+linker = "isolated"
+globalStore = true
+publicHoistPattern = ["*"]

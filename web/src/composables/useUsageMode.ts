@@ -14,6 +14,7 @@
 
 import { useStorage } from '@vueuse/core'
 import { computed, onUnmounted, ref } from 'vue'
+import { registerSharedPref } from './useSharedPrefs'
 
 /**
  * Persisted so the mode survives a reload — it is a way of working, not a momentary filter.
@@ -31,6 +32,10 @@ import { computed, onUnmounted, ref } from 'vue'
  * default.
  */
 const usageMode = useStorage('agenthydra.instances.usageMode2', true)
+
+// Mirrored through the daemon as well as localStorage: the quick-instances window can be served
+// from a different PORT, and browser storage is per-origin. See composables/useSharedPrefs.ts.
+registerSharedPref('agenthydra.instances.usageMode2', usageMode)
 
 // --- the shared clock ---------------------------------------------------------
 // Every countdown cell in both tables derives from ONE ticking ref. Per-cell timers would drift

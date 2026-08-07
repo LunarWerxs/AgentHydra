@@ -168,6 +168,21 @@ app.get('/api/usage/cache', async (c) => {
   const { allCachedUsage } = await import('./usage-cache')
   return c.json({ cache: allCachedUsage(), lastAutoRefreshAt: null })
 })
+
+// The SAME cross-window preferences the full daemon serves, backed by the same file (see
+// core/ui-prefs.ts). This is the whole reason the store is server-side: this daemon binds a
+// different PORT, so the window it opens gets a different browser origin and an empty
+// localStorage. Without these two routes the quick window would forget the usage filter every
+// time it ran standalone, which is exactly when someone is leaning on it most.
+app.get('/api/ui-prefs', async (c) => {
+  const { readUiPrefs } = await import('./core/ui-prefs')
+  return c.json({ prefs: readUiPrefs() })
+})
+app.post('/api/ui-prefs', async (c) => {
+  const { writeUiPrefs } = await import('./core/ui-prefs')
+  const body = await c.req.json().catch(() => ({}))
+  return c.json({ prefs: writeUiPrefs(body && typeof body === 'object' ? body : {}) })
+})
 app.post('/api/instances/:dir/open', async (c) =>
   c.json(await openInstance(decodeURIComponent(c.req.param('dir')))),
 )

@@ -102,7 +102,8 @@ watch(settingsRequestedTab, consumeRequestedTab)
 onMounted(consumeRequestedTab)
 
 // --- updates ---
-const { updateStatus, updateChecking, updateApplying, checkForUpdate, applyUpdate } = useUpdates()
+const { updateStatus, updateChecking, updateApplying, checkForUpdate, applyUpdate, progressLabel } =
+  useUpdates()
 // No git remote (and no AGENTHYDRA_UPDATE_REPO) means there is nowhere to pull updates
 // from: the no-source row explains it and the auto-update rows gray out.
 const noUpdateSource = computed(() => !!updateStatus.value && !updateStatus.value.remote)
@@ -1094,6 +1095,17 @@ defineExpose({ save })
           </Tooltip>
         </template>
       </SettingsRow>
+      <!-- What the update is DOING, while it does it. The apply request covers minutes of real
+           work (a ~100 MB download, or a pull + reinstall + rebuild), and until this existed the
+           only feedback was a spinning icon — so a healthy slow update and a hung one looked
+           identical. See composables/useUpdates.ts. -->
+      <p
+        v-if="updateApplying && progressLabel"
+        class="px-3.5 pb-2.5 text-xs text-muted-foreground"
+        aria-live="polite"
+      >
+        {{ progressLabel }}
+      </p>
       <p v-if="applyMessage" class="px-3.5 pb-2.5 text-xs text-muted-foreground">
         {{ applyMessage }}
         <span v-if="restartRequired">{{ $t('settings.restartGuidance') }}</span>
