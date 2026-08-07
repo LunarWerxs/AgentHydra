@@ -78,6 +78,33 @@ describe.skipIf(!win)('tray launcher', () => {
     expect(existsSync(join(APP, 'server', 'src', 'index.ts'))).toBe(true)
   })
 
+  test('the native tray host and its config are present and coherent', () => {
+    // The main shortcut runs these two files and nothing else, so a missing or malformed pair is
+    // an app that will not open at all. Asserted here rather than only through the .lnk because
+    // this failure is silent: the shortcut still resolves, it just launches nothing useful.
+    const exe = join(APP, 'misc', 'lunarwerx-tray.exe')
+    const cfgPath = join(APP, 'misc', 'AgentHydra-Tray.json')
+    expect(existsSync(exe)).toBe(true)
+    expect(existsSync(cfgPath)).toBe(true)
+
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'))
+    // Identity must match what the daemon answers with, or every health probe reads as "some
+    // other app is on that port" and the tray waits forever for a daemon that is already up.
+    expect(cfg.serviceName).toBe('agenthydra')
+    expect(cfg.port).toBe(7787)
+    expect(cfg.iconFile).toBe('AgentHydra.ico')
+    // Both start paths, so a release zip (compiled exe at the root) and a source checkout each
+    // resolve without a per-machine setup step.
+    expect(cfg.compiledExe).toBe('AgentHydra.exe')
+    expect(cfg.startCommand).toContain('server/src/index.ts')
+    // The shutdown protocol the daemon actually enforces (server/src/index.ts).
+    expect(cfg.shutdownTokenEnvVar).toBe('AGENTHYDRA_SHUTDOWN_TOKEN')
+    expect(cfg.shutdownHeaderPrefix).toBe('x-agenthydra')
+    // Sentinel + pointer must sit under the SAME config dir the daemon writes to.
+    expect(cfg.infoFile).toContain('runtime.json')
+    expect(cfg.sentinelFile).toContain('shutdown.request')
+  })
+
   test('the .ico has a tray-sized (<=48px) frame (a 256-only icon renders blank)', () => {
     // unchanged: binary property of the icon file itself, not the script.
     expect(icoHasSmallFrame(ICO)).toBe(true)
@@ -239,10 +266,16 @@ describe.skipIf(!win)('tray launcher', () => {
 
   // 20s timeout: two real PowerShell spawns + COM. A cold CI runner has taken 6.8s against the
   // 5s default (flaked the 2026-07-16 run); the assertions are unchanged, only the allowance.
-  test('the desktop shortcut points at wscript + Tray-Launch.vbs + the icon', () => {
-    // was: asserted AgentHydra.vbs as the target. Create-Shortcut.ps1 is now a thin adapter
-    // over the shared New-TrayShortcut.ps1 engine, and the regenerated .lnk must resolve to the
-    // shared Tray-Launch.vbs instead — still a real subprocess run + COM resolution end-to-end.
+  test('the desktop shortcut points at the native tray host + the icon', () => {
+    // was: asserted wscript.exe + the shared Tray-Launch.vbs. The main shortcut now runs
+    // misc\lunarwerx-tray.exe directly: the .vbs existed only to launch PowerShell without a
+    // console flash, and a native host suppresses its own console, so both layers are gone.
+    // Measured, alternating runs: the wscript -> powershell chain started the daemon at +475ms and
+    // served at +745-1115ms; the native host starts it at +25ms and serves at ~400ms.
+    //
+    // The QUICK-INSTANCES shortcut below is deliberately NOT migrated and still asserts the
+    // wscript path: it launches a different, trayless mode (--instances) and has no tray host to
+    // replace, so moving it would be churn with nothing to gain.
     execFileSync(
       'powershell',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', CREATE_SHORTCUT],
@@ -260,8 +293,11 @@ describe.skipIf(!win)('tray launcher', () => {
       ],
       { encoding: 'utf8' },
     )
-    expect(out.toLowerCase()).toContain('wscript.exe')
-    expect(out).toContain('Tray-Launch.vbs')
+    expect(out.toLowerCase()).toContain('lunarwerx-tray.exe')
+    // The config filename IS the per-app surface: the host binary is generic and shared, so a
+    // shortcut that lost this argument would start a tray host with nothing to host.
+    expect(out).toContain('AgentHydra-Tray.json')
+    expect(out.toLowerCase()).not.toContain('wscript.exe')
     expect(out).toContain('AgentHydra.ico')
     expect(out).toContain(REPO_ROOT)
     expect(out).toContain('Launch AgentHydra (system tray)')

@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "AgentHydra's tray-host config, read by misc/lunarwerx-tray.exe (kit source:",
+    "lunarwerx-ui/src/tray-host-native). This file is the whole per-app surface; the host binary is",
+    "generic and shared, exactly as AgentHydra-Tray.ps1's $TrayConfig hashtable was.",
+    "",
+    "Paths are relative to THIS file unless absolute. %VAR% expands an environment variable,",
+    "%VAR|fallback% supplies a default, and a leading ~ is the user profile. That is what lets one",
+    "committed config serve both a source checkout and an extracted release zip with no setup step."
+  ],
+
+  "displayName": "AgentHydra",
+  "serviceName": "agenthydra",
+  "mutexName": "AgentHydraTrayHost",
+  "menuOpenLabel": "Open AgentHydra",
+  "iconFile": "AgentHydra.ico",
+  "appRoot": "..",
+
+  "port": 7787,
+  "portEnvVar": "PORT",
+  "urlHost": "localhost",
+  "infoFile": "%AGENTHYDRA_HOME|~\\.agenthydra%\\runtime.json",
+  "sentinelFile": "%AGENTHYDRA_HOME|~\\.agenthydra%\\shutdown.request",
+
+  "compiledExe": "AgentHydra.exe",
+  "startCommandCompiled": "\"{COMPILED}\"",
+  "startCommand": "{RUNTIME} server/src/index.ts",
+  "runtimeCandidates": ["~\\.bun\\bin\\bun.exe", "%APPDATA%\\npm\\node_modules\\bun\\bin\\bun.exe"],
+  "runtimeFallback": "bun",
+
+  "firstRun": [
+    { "missing": "node_modules", "run": "bun install" },
+    { "missing": "web\\dist", "run": "bun run build" }
+  ],
+
+  "rebuildCommand": "bun run build",
+  "rebuildLogName": "AgentHydra-Rebuild.log",
+  "isDevTree": "%AGENTHYDRA_DEV%",
+
+  "shutdownTokenEnvVar": "AGENTHYDRA_SHUTDOWN_TOKEN",
+  "shutdownHeaderPrefix": "x-agenthydra",
+
+  "onStrayDaemon": "attach",
+  "watchdogRequiresOwnership": false,
+
+  "workerWaitSec": 15,
+  "portableWindowSize": { "width": 1060, "height": 800 },
+  "portableWindowSizeHint": true
+}

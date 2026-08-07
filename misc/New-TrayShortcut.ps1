@@ -21,7 +21,13 @@ function New-TrayShortcut {
     [Parameter(Mandatory = $true)] [string]   $IconFile,
     [Parameter(Mandatory = $true)] [string]   $Description,
     [string]   $VbsFile = 'Tray-Launch.vbs',
-    [string[]] $LegacyLnks = @()
+    [string[]] $LegacyLnks = @(),
+    # NATIVE HOST (opt-in): point the shortcut straight at an executable in ScriptDir instead of at
+    # wscript.exe + the .vbs. The .vbs indirection exists only to launch PowerShell without a
+    # console flash; a native host suppresses its own console, so both layers can go. An app that
+    # has not moved over simply omits these and keeps the wscript path byte-identical.
+    [string]   $ExeFile = '',
+    [string]   $ExeArguments = ''
   )
 
   $finalLnk = Join-Path $Root ($LnkName + '.lnk')
@@ -59,9 +65,16 @@ function New-TrayShortcut {
 
   $ws = New-Object -ComObject WScript.Shell
   $sc = $ws.CreateShortcut($tmpLnk)
-  # Run the .vbs through wscript explicitly (no console window, no file-association surprises).
-  $sc.TargetPath = Join-Path $env:SystemRoot "System32\wscript.exe"
-  $sc.Arguments  = '"' + (Join-Path $ScriptDir $VbsFile) + '"'
+  if ($ExeFile) {
+    # Native host: the shortcut runs the executable directly. One process instead of three
+    # (wscript -> powershell -> daemon), and no console to suppress.
+    $sc.TargetPath = Join-Path $ScriptDir $ExeFile
+    $sc.Arguments  = $ExeArguments
+  } else {
+    # Run the .vbs through wscript explicitly (no console window, no file-association surprises).
+    $sc.TargetPath = Join-Path $env:SystemRoot "System32\wscript.exe"
+    $sc.Arguments  = '"' + (Join-Path $ScriptDir $VbsFile) + '"'
+  }
   $sc.WorkingDirectory = $Root
   $sc.IconLocation = (Join-Path $ScriptDir $IconFile) + ",0"
   # WScript.Shell's .lnk Description property is ANSI-limited and silently drops non-ASCII (ē
