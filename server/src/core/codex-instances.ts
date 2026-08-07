@@ -1,10 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { CONFIG_DIR, resolveCodexExe } from '../config'
+import { basename, dirname, join } from 'node:path'
+import { CODEX_HOME, CONFIG_DIR, resolveCodexExe } from '../config'
 import type { CodexInstance } from '../types'
+import { localCodexAccount } from './codex-account'
 import {
   type CodexDesktopRuntime,
   codexDesktopUserDataDir,
+  codexPathKey,
+  defaultCodexDesktopUserDataDir,
   focusCodexDesktop,
   isCodexDesktopRunning,
   listCodexDesktopProcesses,
@@ -21,7 +24,13 @@ const NAME_MAX = 60
 
 type StoredCodexInstance = Omit<
   CodexInstance,
-  'loggedIn' | 'desktopUserDataDir' | 'isDesktopRunning' | 'desktopPid'
+  | 'loggedIn'
+  | 'account'
+  | 'desktopUserDataDir'
+  | 'isDesktopRunning'
+  | 'desktopPid'
+  | 'isExternal'
+  | 'isDefault'
 >
 
 interface Store {
@@ -58,10 +67,89 @@ function hydrate(
   return {
     ...instance,
     loggedIn: isCodexLoggedIn(instance.codexHome),
+    // Eager, because it is cheap here: auth.json is plain JSON and the identity is a base64 payload
+    // decode, so the Codex table gets an email/plan on first paint with no extra request. The live
+    // usage route refreshes the plan from the server-computed value (see codex-account.ts).
+    account: localCodexAccount(instance.codexHome),
     desktopUserDataDir: codexDesktopUserDataDir(instance.codexHome),
     isDesktopRunning: runtime !== null,
     desktopPid: runtime?.pid ?? null,
+    isExternal: false,
+    isDefault: false,
   }
+}
+
+/** Stable synthetic id for the default install. Not a uuid, so it can never collide with a stored
+ *  row and is recognizable in a usage cache key (`codex:default`). */
+export const DEFAULT_CODEX_INSTANCE_ID = 'default'
+
+/** Synthetic id for a Codex Desktop discovered running from an unrecognized profile. */
+const externalIdFor = (userDataDir: string): string => `external:${codexPathKey(userDataDir)}`
+
+/**
+ * The rows this app did not create: the DEFAULT Codex install, plus any Codex Desktop running from
+ * a profile that belongs to no stored instance.
+ *
+ * Why this exists: before it, `listCodexInstances` returned only rows created through this app, so a
+ * user with a perfectly normal Codex Desktop running saw an empty table and the message "No Codex
+ * instances found" (owner-reported 2026-08-07). The Claude side already lists such installs via
+ * `CMInstance.isExternal`; this is the same rule for Codex.
+ *
+ * The default install is listed WHETHER OR NOT it is running, because its identity lives in
+ * CODEX_HOME on disk and is readable either way — the same reason the Claude table resolves stopped
+ * instances. Its profile path is taken from the running process when there is one (authoritative,
+ * no platform guessing) and from the documented default otherwise.
+ */
+function discoveredInstances(
+  runtimes: CodexDesktopRuntime[],
+  claimed: Set<string>,
+): CodexInstance[] {
+  const out: CodexInstance[] = []
+
+  const defaultProfile = defaultCodexDesktopUserDataDir()
+  const defaultKey = codexPathKey(defaultProfile)
+  const defaultRuntime = runtimes.find((r) => codexPathKey(r.desktopUserDataDir) === defaultKey)
+  if (!claimed.has(codexPathKey(CODEX_HOME))) {
+    out.push({
+      id: DEFAULT_CODEX_INSTANCE_ID,
+      name: basename(CODEX_HOME),
+      codexHome: CODEX_HOME,
+      loggedIn: isCodexLoggedIn(CODEX_HOME),
+      account: localCodexAccount(CODEX_HOME),
+      desktopUserDataDir: defaultRuntime?.desktopUserDataDir ?? defaultProfile,
+      isDesktopRunning: defaultRuntime !== undefined,
+      desktopPid: defaultRuntime?.pid ?? null,
+      isExternal: true,
+      isDefault: true,
+      createdAt: 0,
+    })
+  }
+
+  for (const runtime of runtimes) {
+    const key = codexPathKey(runtime.desktopUserDataDir)
+    if (key === defaultKey) continue // already the default row above
+    // A profile we launched sits at <codexHome>/desktop, so the parent IS the CODEX_HOME. For a
+    // profile someone else chose that inference can be wrong, which is why the row is flagged
+    // external: it is listed and readable, never renamed or deleted.
+    const codexHome = dirname(runtime.desktopUserDataDir)
+    if (claimed.has(codexPathKey(codexHome))) continue
+    claimed.add(codexPathKey(codexHome))
+    out.push({
+      id: externalIdFor(runtime.desktopUserDataDir),
+      name: basename(codexHome),
+      codexHome,
+      loggedIn: isCodexLoggedIn(codexHome),
+      account: localCodexAccount(codexHome),
+      desktopUserDataDir: runtime.desktopUserDataDir,
+      isDesktopRunning: true,
+      desktopPid: runtime.pid,
+      isExternal: true,
+      isDefault: false,
+      createdAt: 0,
+    })
+  }
+
+  return out
 }
 
 export interface ListCodexInstancesOptions {
@@ -75,17 +163,40 @@ export async function listCodexInstances(
   const runtimeByDir = new Map(
     runtimes.map((runtime) => [normalizePath(runtime.desktopUserDataDir), runtime]),
   )
-  return readStore().instances.map((instance) =>
+  const stored = readStore().instances.map((instance) =>
     hydrate(
       instance,
       runtimeByDir.get(normalizePath(codexDesktopUserDataDir(instance.codexHome))) ?? null,
     ),
   )
+  // Stored rows claim their CODEX_HOME first, so discovery can never duplicate one that this app
+  // manages (e.g. an instance deliberately pointed at the default home).
+  const claimed = new Set(stored.map((instance) => codexPathKey(instance.codexHome)))
+  return [...stored, ...discoveredInstances(runtimes, claimed)]
 }
 
+/**
+ * One STORED instance by id. Stays synchronous, and stays store-only, because every caller is a
+ * mutating action (launch / open / quit / rename / delete) and those apply solely to instances this
+ * app created — a discovered row has no store entry to act on.
+ */
 export function getCodexInstance(id: string): CodexInstance | null {
   const instance = readStore().instances.find((candidate) => candidate.id === id)
   return instance ? hydrate(instance) : null
+}
+
+/**
+ * One instance by id INCLUDING the discovered ones, for the read-only routes (account, usage) —
+ * so the default install's identity and quota are readable exactly like a stored instance's.
+ *
+ * Falls back to the (cached) process scan only when the id is not in the store, so the common
+ * stored-row lookup stays a pure file read.
+ */
+export async function findCodexInstance(id: string): Promise<CodexInstance | null> {
+  const stored = getCodexInstance(id)
+  if (stored) return stored
+  if (id !== DEFAULT_CODEX_INSTANCE_ID && !id.startsWith('external:')) return null
+  return (await listCodexInstances()).find((candidate) => candidate.id === id) ?? null
 }
 
 function validName(name: string): string | null {

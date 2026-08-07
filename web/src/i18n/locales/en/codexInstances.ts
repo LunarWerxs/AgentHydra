@@ -6,8 +6,17 @@ export default {
   emptyHint: 'Create an isolated Codex Desktop and CLI profile for each OpenAI login.',
   colStatus: 'Status',
   colName: 'Name',
+  colAccount: 'Account',
+  colUsage: 'Usage',
+  colPlan: 'Plan',
   colHome: 'CODEX_HOME',
   colActions: 'Actions',
+  /** An OPENAI_API_KEY login: a valid Codex auth, but no ChatGPT subscription and so no plan
+   *  or quota to report. */
+  authApiKey: 'API key',
+  /** Shown instead of the actions on a row this app didn't create (the default Codex install, or
+   *  one running from an outside profile) — readable, but not ours to launch or delete. */
+  externalHint: 'not managed here',
   desktopRunning: 'Desktop running',
   desktopStopped: 'Desktop stopped',
   loggedIn: 'Logged in',

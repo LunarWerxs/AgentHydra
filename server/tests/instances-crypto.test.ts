@@ -7,7 +7,8 @@
 //    AES-256-GCM) and asserts the plaintext contains 'sk-ant-oat01'. Skipped automatically on
 //    non-Windows platforms / if the fixture directory doesn't exist on this machine.
 // 2. Golden (Windows-only, no network): resolveAccount(lunarwerx, { noNetwork: true }) resolves
-//    from local decrypt/cache to lunawerx@gmail.com / "Max 20×" without ever calling fetch.
+//    from local decrypt/cache to lunawerx@gmail.com without ever calling fetch, and its plan label
+//    agrees with the cached organization_type rather than with the token cache's stale grants.
 // 3. Static AES-128-CBC + PBKDF2(SHA1) vector: proves the mac/linux math path (KDF + cipher)
 //    end-to-end using hand-computed values, independent of any live Keychain/keyring — so
 //    that path is unit-verified even without a live mac/linux machine.
@@ -23,7 +24,21 @@ import { decryptSafeStorage, deriveMacKey } from '../src/core/crypto/index'
 
 const GOLDEN_INSTANCE_DIR = 'C:\\Users\\blogi\\.claude-instances\\lunarwerx'
 const GOLDEN_EMAIL = 'lunawerx@gmail.com'
-const GOLDEN_TIER = 'Max 20×'
+
+/** The plan assertions below are written as an INVARIANT against `orgType`, not as a hardcoded
+ *  label, so they keep testing the right thing if this account's subscription changes. As of
+ *  2026-08-07 the fixture is `organization_type: "claude_free"` while its three unexpired grants
+ *  still say `subscriptionType: "max"` / `rateLimitTier: "default_claude_max_20x"` — so this
+ *  account is exactly the case that used to render "Max 20×" for a free plan. */
+function expectPlanAgreesWithOrgType(account: {
+  orgType: string | null
+  planLabel: string | null
+}) {
+  if (!account.orgType) return // offline / cache entry predating orgType — nothing to check
+  if (account.orgType.includes('free')) expect(account.planLabel).toBe('Free')
+  else if (account.orgType.includes('pro')) expect(account.planLabel).toBe('Pro')
+  else if (account.orgType.includes('max')) expect(account.planLabel).toMatch(/^Max\b/)
+}
 
 const goldenAvailable =
   process.platform === 'win32' && existsSync(join(GOLDEN_INSTANCE_DIR, 'config.json'))
@@ -153,7 +168,7 @@ describe('static AES-128-CBC + PBKDF2-SHA1 vector (mac/linux math path)', () => 
 
 describe('resolveAccount — golden noNetwork vector (local decrypt/cache only, no HTTP call)', () => {
   test.if(goldenAvailable)(
-    'resolves the real lunarwerx instance via noNetwork -> lunawerx@gmail.com, Max 20× (from cache/local decrypt)',
+    'resolves the real lunarwerx instance via noNetwork -> lunawerx@gmail.com, plan per cached orgType',
     async () => {
       const account = await resolveAccount(GOLDEN_INSTANCE_DIR, { noNetwork: true })
 
@@ -165,7 +180,9 @@ describe('resolveAccount — golden noNetwork vector (local decrypt/cache only, 
 
       if (account.status === 'cache') {
         expect(account.email).toBe(GOLDEN_EMAIL)
-        expect(account.rateLimitTier).toBe(GOLDEN_TIER)
+        // The cached organization_type must beat the token cache's stale grants offline too —
+        // that is the whole reason it is persisted (accounts.ts writeAccountsCacheEntry).
+        expectPlanAgreesWithOrgType(account)
       }
     },
   )
@@ -201,16 +218,19 @@ describe('resolveAccount — golden LIVE network vector (gated: CM_TEST_LIVE_ACC
   const liveFlagSet = process.env.CM_TEST_LIVE_ACCOUNT === '1'
 
   test.if(goldenAvailable && liveFlagSet)(
-    'resolves the real lunarwerx instance live -> lunawerx@gmail.com, Max 20×',
+    'resolves the real lunarwerx instance live -> lunawerx@gmail.com, plan per live orgType',
     async () => {
       const account = await resolveAccount(GOLDEN_INSTANCE_DIR)
 
       expect(account.status).toBe('live')
       expect(account.email).toBe(GOLDEN_EMAIL)
-      expect(account.rateLimitTier).toBe(GOLDEN_TIER)
-      expect(account.plan).toBe('max')
+      expect(account.orgType).toBeTruthy()
+      expectPlanAgreesWithOrgType(account)
       expect(account.label).toContain(GOLDEN_EMAIL)
-      expect(account.label).toContain(GOLDEN_TIER)
+      // The one-liner shows the reconciled plan label, never the raw tier — a `default_claude_ai`
+      // tier used to leak into it verbatim.
+      expect(account.label).toContain(account.planLabel as string)
+      expect(account.label).not.toContain('default_claude')
     },
     20_000,
   )

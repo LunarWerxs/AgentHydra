@@ -153,6 +153,23 @@ async function checkCli(id: string): Promise<boolean> {
   }
 }
 
+/** Check a Codex instance's usage (server key is `codex:<id>`). One call on the server resolves the
+ *  account AND its quota, so unlike the Claude paths there is no separate identity request. */
+async function checkCodex(id: string): Promise<boolean> {
+  const key = `codex:${id}`
+  setChecking(key, true)
+  try {
+    const result = await guard(api.checkCodexInstanceUsage(id, true))
+    if (result) {
+      setSnapshot(result.key, result.snapshot)
+      setReason(result.key, result.reason ?? 'unknown')
+    }
+    return !!result
+  } finally {
+    setChecking(key, false)
+  }
+}
+
 export function useUsage() {
   return {
     snapshots,
@@ -171,5 +188,6 @@ export function useUsage() {
     checkAccount,
     checkDesktop,
     checkCli,
+    checkCodex,
   }
 }

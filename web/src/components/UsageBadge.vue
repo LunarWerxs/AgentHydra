@@ -45,9 +45,11 @@ const { reasonFor } = useUsage()
 const { now } = useUsageMode(true)
 
 const noData = computed(() => !props.snapshot || isNoDataSnap(props.snapshot))
-const label = computed(() => usageCellLabel(props.snapshot, props.scope))
+// `now` is threaded through so a chip whose window resets while the table is open drops to "—" on
+// the next tick, instead of asserting a superseded percentage until someone clicks refresh.
+const label = computed(() => usageCellLabel(props.snapshot, props.scope, false, now.value))
 const variant = computed(() => {
-  const pct = usagePctFor(props.snapshot, props.scope)
+  const pct = usagePctFor(props.snapshot, props.scope, now.value)
   return pct == null ? 'outline' : usageBadgeVariant(pct)
 })
 const stale = computed(() => isStaleSnap(props.snapshot))

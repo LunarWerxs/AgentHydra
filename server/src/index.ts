@@ -60,9 +60,11 @@ import {
   renameCliInstance,
   setCliInstanceUsage,
 } from './core/cli-instances'
+import { codexUsageSnapshot, resolveCodexAccount } from './core/codex-account'
 import {
   createCodexInstance,
   deleteCodexInstance,
+  findCodexInstance,
   focusCodexDesktopInstance,
   launchCodexInstance,
   listCodexInstances,
@@ -180,6 +182,7 @@ import {
   checkUsageForAccount,
   checkUsageForCliInstance,
   checkUsageForDesktop,
+  codexKey,
   surveyUsage,
 } from './usage-service'
 import { WINDOW_SIZE_HINT_PARAM, windowSizeHintFor } from './window-size'
@@ -412,6 +415,7 @@ function notificationPatch(body: Record<string, unknown>): NotificationSettingsP
     notifySessionReset: b('notifySessionReset'),
     notifyWeeklyReset: b('notifyWeeklyReset'),
     notifyMinPct: n('notifyMinPct'),
+    notifySessionMaxWeeklyPct: n('notifySessionMaxWeeklyPct'),
     notifyDesktop: b('notifyDesktop'),
     notifyPersistent: b('notifyPersistent'),
     notifyPersistentIntervalMin: n('notifyPersistentIntervalMin'),
@@ -1391,6 +1395,53 @@ app.get('/api/cli-instances/:id/usage', async (c) => {
 
 // --- Codex CLI instances ----------------------------------------------------
 app.get('/api/codex-instances', async (c) => c.json(await listCodexInstances()))
+// Identity, on demand. The LIST already carries a local identity for every row (auth.json is plain
+// JSON, so that read is nearly free), so this route exists for the LIVE refresh: it re-reads the
+// plan from the server-computed value rather than the token's mint-time claim.
+app.get('/api/codex-instances/:id/account', async (c) => {
+  const inst = await findCodexInstance(c.req.param('id'))
+  if (!inst) return c.json({ error: 'Codex instance not found' }, 404)
+  const noNetwork = c.req.query('noNetwork')
+  const { account } = await resolveCodexAccount(inst.codexHome, {
+    noNetwork: noNetwork === '1' || noNetwork === 'true',
+  })
+  return c.json(account)
+})
+// Quota. One call answers identity AND usage on the OpenAI side, so unlike the Claude routes there
+// is no second probe to run — the snapshot is a by-product of resolving the account.
+app.get('/api/codex-instances/:id/usage', async (c) => {
+  const id = c.req.param('id')
+  const inst = await findCodexInstance(id)
+  if (!inst) return c.json({ error: 'Codex instance not found' }, 404)
+  const key = codexKey(id)
+  if (!wantsRefresh(c)) {
+    const cached = getCachedUsage(key)
+    if (cached)
+      return c.json({
+        snapshot: cached,
+        cached: true,
+        key,
+        reason: 'ok',
+      } satisfies UsageCheckResult)
+  }
+  const { account, usage } = await resolveCodexAccount(inst.codexHome)
+  if (!usage) {
+    // Distinguish "not signed in" from "signed in but the read failed", exactly as the Claude
+    // routes do — a bare "—" with no reason reads as a bug.
+    const reason: UsageCheckResult['reason'] =
+      account.status === 'loggedout' ? 'not_logged_in' : 'check_failed'
+    // codexUsageSnapshot(null, …) is the all-null shape — the same "checked, nothing to report"
+    // snapshot the Claude paths return, so the chip renders "—" with a reason rather than "0%".
+    return c.json({
+      snapshot: codexUsageSnapshot(null, account.label),
+      cached: false,
+      key,
+      reason,
+    } satisfies UsageCheckResult)
+  }
+  setCachedUsage(key, usage)
+  return c.json({ snapshot: usage, cached: false, key, reason: 'ok' } satisfies UsageCheckResult)
+})
 app.post('/api/codex-instances', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.name !== 'string' || !body.name.trim())

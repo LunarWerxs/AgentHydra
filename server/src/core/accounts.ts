@@ -44,34 +44,35 @@ function log(_level: 'info' | 'warn' | 'error', _message: string): void {
   }
 }
 
-function buildLabel(
-  name: string | null,
-  email: string | null,
-  prettyTierLabel: string | null,
-): string {
+/** `planLabel` — NOT the raw pretty tier. Passing the tier here leaked the unmapped generic value
+ *  into the Quick view's one-liner ("Michael <blogitech@gmail.com> · default_claude_ai") for every
+ *  account whose tier is `default_claude_ai`; the label must show what the Plan column shows. */
+function buildLabel(name: string | null, email: string | null, planLabel: string | null): string {
   let namePart: string | null = null
   if (name && email) namePart = `${name} <${email}>`
   else if (name) namePart = name
   else if (email) namePart = email
 
-  if (namePart && prettyTierLabel) return `${namePart} · ${prettyTierLabel}`
+  if (namePart && planLabel) return `${namePart} · ${planLabel}`
   if (namePart) return namePart
-  if (prettyTierLabel) return prettyTierLabel
+  if (planLabel) return planLabel
   return '(unknown account)'
 }
 
 function newAccount(partial: Partial<CMAccount> & { status: CMAccount['status'] }): CMAccount {
   const plan = partial.plan ?? null
   const rateLimitTier = partial.rateLimitTier ?? null
+  const orgType = partial.orgType ?? null
   return {
     status: partial.status,
     email: partial.email ?? null,
     name: partial.name ?? null,
     plan,
     rateLimitTier,
+    orgType,
     // Derived here, at the single construction point, so every account (live/cache/offline)
-    // carries the same display-ready value and no view has to reconcile plan vs tier itself.
-    planLabel: partial.planLabel ?? resolvePlanLabel(plan, rateLimitTier),
+    // carries the same display-ready value and no view has to reconcile the signals itself.
+    planLabel: partial.planLabel ?? resolvePlanLabel(plan, rateLimitTier, orgType),
     accountUuid: partial.accountUuid ?? null,
     orgUuid: partial.orgUuid ?? null,
     orgName: partial.orgName ?? null,
@@ -118,6 +119,7 @@ function writeAccountsCacheEntry(instanceDir: string, entry: CMAccountCacheEntry
       uuid: entry.uuid ?? null,
       orgUuid: entry.orgUuid ?? null,
       orgName: entry.orgName ?? null,
+      orgType: entry.orgType ?? null,
       resolvedAt: entry.resolvedAt ?? new Date().toISOString(),
     }
 
@@ -201,9 +203,14 @@ function accountFromCache(
   const accountUuid = entry?.uuid ?? opts.fallbackUuid ?? null
   const orgUuid = entry?.orgUuid ?? opts.fallbackOrgUuid ?? null
   const orgName = entry?.orgName ?? null
+  // Only the cache can carry organization_type offline — the token cache's grants have no such
+  // field. Its absence (never resolved live, or an entry written before 2026-08-07) is exactly
+  // when resolvePlanLabel falls back to the older tier/plan evidence.
+  const orgType = entry?.orgType ?? null
 
   const tier = prettyTier(rawTier)
-  const label = buildLabel(name, email, tier)
+  const planLabel = resolvePlanLabel(plan, tier, orgType)
+  const label = buildLabel(name, email, planLabel)
 
   return newAccount({
     status,
@@ -211,6 +218,8 @@ function accountFromCache(
     name,
     plan,
     rateLimitTier: tier,
+    orgType,
+    planLabel,
     accountUuid,
     orgUuid,
     orgName,
@@ -322,6 +331,16 @@ interface ProfileResponse {
     uuid?: string
     name?: string
     rate_limit_tier?: string
+    /** "claude_free" | "claude_pro" | "claude_max" | "claude_team…" | "claude_enterprise…" —
+     *  the authoritative, always-current plan family (see shared.ts resolvePlanLabel). */
+    organization_type?: string
+    /** "none" | "stripe_subscription" | "google_play_subscription" | … — corroborates
+     *  organization_type; "none" only ever appeared alongside "claude_free" in the 11-account
+     *  sample. Not used for the label; kept documented so the next reader doesn't re-derive it. */
+    billing_type?: string
+    /** NOT a paid/unpaid signal: an owner-confirmed active Pro account reports "canceled" here
+     *  (cancelled but still inside its paid period, organization_type still "claude_pro"). */
+    subscription_status?: string
   }
 }
 
@@ -622,26 +641,23 @@ export async function resolveAccount(
     const accountUuid = profile.account?.uuid ?? lastKnownAccountUuid
     const orgUuid = profile.organization?.uuid ?? bestGrant?.orgUuid ?? null
     const orgName = profile.organization?.name ?? null
-    // Tier: a SPECIFIC value wins wherever it comes from, and only then do we settle for a generic
-    // `default_claude_*` passthrough.
-    //
-    // The profile's value is the ORGANIZATION's rate_limit_tier, and for a personal org that is
-    // routinely the generic "default_claude_ai" even when the account is on a paid plan — observed
-    // 2026-08-06 on a Max 20× account whose org reported the generic value while its own grant
-    // reported `default_claude_max_20x`. Preferring the profile unconditionally therefore threw
-    // away the only specific answer available and the row rendered as "Free". Ask both, prefer
-    // whichever actually names a plan.
-    const specific = (t: string | null | undefined): string | null =>
-      t && !/^default_claude_ai$/i.test(t) && /^default_claude_.+/i.test(t) ? t : null
-    const orgTier = profile.organization?.rate_limit_tier ?? null
-    const grantTier = bestGrant?.rateLimitTier ?? null
-    const rawTier = specific(orgTier) ?? specific(grantTier) ?? orgTier ?? grantTier ?? null
+    // The plan family, and the only signal that is actually current: Anthropic recomputes
+    // organization_type on every profile call. Everything else here is either a mint-time snapshot
+    // (the grant) or entitlement history (has_claude_max/pro).
+    const orgType = profile.organization?.organization_type ?? null
 
-    // Plan: the GRANT's subscriptionType, which Anthropic re-mints on every token refresh and which
-    // therefore tracks the current subscription. has_claude_max/pro are entitlement HISTORY — they
-    // stay true for an account that lapsed back to free (owner-confirmed 2026-07-22) — so they are
-    // only consulted when there is no grant to ask, and can no longer overwrite one that says
-    // otherwise. resolvePlanLabel leans on this being grant-derived; see its comment.
+    // Tier: the ORGANIZATION's rate_limit_tier — same freshness as organization_type. The grant's
+    // copy is only a gap-filler now, because it is demonstrably stale in both directions: a free
+    // account still carrying `default_claude_max_20x` grants is what produced the "Max 20×" row
+    // this replaces, and two paid accounts carry `max_5x` grants while their org says `max_20x`
+    // (measured 2026-08-07 across 11 accounts; see resolvePlanLabel). The tier now only refines a
+    // Max family into 5×/20×, so a generic `default_claude_ai` here is harmless.
+    const rawTier = profile.organization?.rate_limit_tier ?? bestGrant?.rateLimitTier ?? null
+
+    // Plan: the GRANT's subscriptionType. Kept as the offline/legacy fallback and as a DTO field,
+    // but it no longer decides the label whenever orgType is known. has_claude_max/pro are
+    // entitlement HISTORY — they stay true for an account that lapsed back to free (owner-confirmed
+    // 2026-07-22) — so they are consulted only when there is no grant to ask.
     let plan = bestGrant?.subscriptionType ?? null
     if (!plan) {
       if (profile.account?.has_claude_max) plan = 'max'
@@ -649,7 +665,8 @@ export async function resolveAccount(
     }
 
     const tier = prettyTier(rawTier)
-    const label = buildLabel(fullName, email, tier)
+    const planLabel = resolvePlanLabel(plan, tier, orgType)
+    const label = buildLabel(fullName, email, planLabel)
 
     // Write identity ONLY (never the token) to the cache — and only when the identity we just
     // resolved is the account config.json says this instance is signed into. Caching an identity
@@ -664,6 +681,7 @@ export async function resolveAccount(
         uuid: accountUuid,
         orgUuid,
         orgName,
+        orgType,
         resolvedAt: new Date().toISOString(),
       })
     } else {
@@ -681,6 +699,8 @@ export async function resolveAccount(
       name: fullName,
       plan,
       rateLimitTier: tier,
+      orgType,
+      planLabel,
       accountUuid,
       orgUuid,
       orgName,

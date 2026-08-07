@@ -1,5 +1,9 @@
 // Shared types, imported by the Vue app via Eden for end-to-end typing.
 
+// CodexInstance below references this type directly, so it is imported as well as re-exported
+// (see the Codex re-export block further down).
+import type { CodexAccount } from './core/codex-account'
+
 /** "Sync my settings with Connections" DTO, defined HERE (not re-exported from
  * ./connections.ts) because that module imports Bun-only runtime files (db.ts), which
  * must never be pulled into the web app's vue-tsc pass; ./connections.ts imports it back.
@@ -22,6 +26,9 @@ export interface SyncStatus {
   /** Last-synced appearance blob (e.g. `{ theme }`) to apply locally, or null. */
   appearance: Record<string, unknown> | null
 }
+// The Codex/ChatGPT instance-account DTOs, defined next to their resolver for the same reason as
+// the Claude ones below.
+export type { CodexAccount, CodexAccountStatus, CodexAuthMode } from './core/codex-account'
 // Instance DTOs ("instance account" = which Anthropic account a Claude Desktop *instance*
 // is logged into) are defined in ./core/shared.ts, re-exported here so the web app only
 // ever imports types from this one module, same as every other DTO below.
@@ -444,10 +451,28 @@ export interface CodexInstance {
   name: string
   codexHome: string
   loggedIn: boolean
+  /**
+   * Which ChatGPT account this CODEX_HOME is signed into. Attached EAGERLY on every list, unlike
+   * the Claude side's lazily-resolved `CMInstance.account`: a CODEX_HOME's auth.json is plain JSON,
+   * so the local read is a file read plus a base64 decode rather than a safeStorage/DPAPI round
+   * trip. Carries the last-known plan from the token's claims; the live usage call refreshes it.
+   * Null only when the store row could not be read at all.
+   */
+  account: CodexAccount | null
   /** Electron/Chromium profile isolated from both the regular app and the other instances. */
   desktopUserDataDir: string
   isDesktopRunning: boolean
   desktopPid: number | null
+  /**
+   * True for a row this app did NOT create: the default Codex install, or a Codex Desktop found
+   * running from a profile outside our instances root. They are listed because they are real
+   * accounts doing real work, and mirror `CMInstance.isExternal` on the Claude side — but they have
+   * no store row, so they cannot be renamed or deleted.
+   */
+  isExternal: boolean
+  /** True for the ONE default (non-isolated) Codex install. Always external; never deletable. */
+  isDefault: boolean
+  /** Epoch ms; 0 for a discovered row, which has no creation record of ours. */
   createdAt: number
 }
 
@@ -538,6 +563,20 @@ export interface NotificationSettings {
   notifyWeeklyReset: boolean
   /** Suppress a reset whose pre-reset usage was below this. 0 = notify on every reset. */
   notifyMinPct: number
+  /**
+   * Suppress a 5-HOUR reset when the same account's WEEKLY cap is still at or above this.
+   *
+   * A session window coming back does not make an account usable if the weekly all-models cap is
+   * still spent — the account stays blocked, so the toast is pure noise. This is the same judgement
+   * the Instances tab's usage filter makes when it sets a row aside (see lib/usage-filter.ts, same
+   * default of 80), applied to notifications: an account outside the filter should not be paging
+   * you about a window that changes nothing.
+   *
+   * Only gates `session` events; a WEEKLY reset is always the one that actually unblocks an account
+   * and is never suppressed by this. 100 keeps only the fully-exhausted case suppressed; to silence
+   * session resets outright, turn off notifySessionReset.
+   */
+  notifySessionMaxWeeklyPct: number
   /** Raise a native OS notification (Windows toast / macOS / notify-send). */
   notifyDesktop: boolean
   /** Persistent ("annoying") mode: keep re-raising until acknowledged. */

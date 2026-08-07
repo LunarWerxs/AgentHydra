@@ -4,6 +4,7 @@
 // server/src/index.ts for the cache keys (`acct:<id>`, `cli:<id>`) each check lands under.
 import type { UsageSnapshot } from './api'
 import { formatAgo } from './relativeTime'
+import { isWindowSuperseded } from './usage-reset'
 
 /** Mirrors server's `UsageReason` (see server/src/types.ts). Not re-exported from lib/api.ts,
  *  so this is the single local source other modules (useUsage.ts, UsageBadge.vue, and the two
@@ -43,18 +44,28 @@ export function usageBadgeVariant(pct: number): UsageBadgeVariant {
  *  rolling 5-hour one, which the Instances table shows as its own chip beside it. */
 export type UsageScope = 'week' | 'session'
 
-/** The percentage a chip of this scope reports, or null when that window has no reading. */
+/**
+ * The percentage a chip of this scope reports, or null when that window has no CURRENT reading.
+ *
+ * Null covers two cases that must read identically: the window was never measured, and the window
+ * was measured but has since reset (isWindowSuperseded). A percentage from a window that has ended
+ * says nothing about the one running now — reporting it is not "slightly out of date", it is a
+ * different window's number. See the note on isWindowSuperseded for the reading this fixes.
+ */
 export function usagePctFor(
   snap: UsageSnapshot | null | undefined,
   scope: UsageScope = 'week',
+  now: Date = new Date(),
 ): number | null {
   if (!snap) return null
+  const limit = scope === 'session' ? snap.session : snap.weekAll
+  if (isWindowSuperseded(limit, now)) return null
   return scope === 'session' ? (snap.session?.pct ?? null) : bindingWeeklyPct(snap)
 }
 
 /**
- * Short chip label for a usage snapshot ("42%"), or "—" when there's nothing to show yet (never
- * checked, or a checked-but-empty snapshot).
+ * Short chip label for a usage snapshot ("42%"), or "—" when there's nothing current to show (never
+ * checked, a checked-but-empty snapshot, or a window that has since reset).
  *
  * `withScope` appends the window ("42% wk" / "13% 5h") and is OFF by default. In the instances
  * tables the column heading already names the window, so the suffix repeated it on every row; the
@@ -64,9 +75,10 @@ export function usageCellLabel(
   snap: UsageSnapshot | null | undefined,
   scope: UsageScope = 'week',
   withScope = false,
+  now: Date = new Date(),
 ): string {
   if (!snap || isNoDataSnap(snap)) return '—'
-  const pct = usagePctFor(snap, scope)
+  const pct = usagePctFor(snap, scope, now)
   if (pct == null) return '—'
   return withScope ? `${pct}% ${scope === 'session' ? '5h' : 'wk'}` : `${pct}%`
 }

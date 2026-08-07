@@ -8,6 +8,7 @@ import type {
   CMActionResult,
   CMDesktopInstall,
   CMInstance,
+  CodexAccount,
   CodexInstance,
   EffortLevel,
   InstanceColorKey,
@@ -50,6 +51,9 @@ export type {
   CMActionResult,
   CMDesktopInstall,
   CMInstance,
+  CodexAccount,
+  CodexAccountStatus,
+  CodexAuthMode,
   CodexInstance,
   EffortLevel,
   InstanceColorKey,
@@ -480,7 +484,18 @@ export const checkCliInstanceUsage = (id: string, refresh = false) =>
   )
 
 // --- Codex CLI + Desktop instances -------------------------------------------
+// Each listed instance already carries a locally-resolved `account` (auth.json is plain JSON, so
+// the server can afford to attach it eagerly); getCodexInstanceAccount is the LIVE refresh, which
+// re-reads the plan from ChatGPT rather than from the token's mint-time claim.
 export const listCodexInstances = () => j<CodexInstance[]>('/api/codex-instances')
+export const getCodexInstanceAccount = (id: string, opts: { noNetwork?: boolean } = {}) =>
+  j<CodexAccount>(
+    `/api/codex-instances/${encodeURIComponent(id)}/account${opts.noNetwork ? '?noNetwork=1' : ''}`,
+  )
+export const checkCodexInstanceUsage = (id: string, refresh = false) =>
+  j<UsageCheckResult>(
+    `/api/codex-instances/${encodeURIComponent(id)}/usage${refresh ? '?refresh=1' : ''}`,
+  )
 export const createCodexInstance = (name: string) =>
   j<CMActionResult>('/api/codex-instances', {
     method: 'POST',

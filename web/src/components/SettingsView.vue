@@ -265,6 +265,7 @@ const {
   notifySessionReset,
   notifyWeeklyReset,
   notifyMinPct,
+  notifySessionMaxWeeklyPct,
   notifyDesktop,
   notifyPersistent,
   notifyPersistentIntervalMin,
@@ -857,6 +858,31 @@ defineExpose({ save })
                   max="100"
                   :model-value="notifyMinPct"
                   @change="(e: Event) => patchNotifications({ notifyMinPct: Number((e.target as HTMLInputElement).value) })"
+                />
+                <span>%</span>
+              </div>
+            </template>
+          </SettingsRow>
+          <!-- Disabled when session resets are off entirely: there is nothing left for it to
+               suppress, and a live-looking control that changes nothing is worse than a greyed one. -->
+          <SettingsRow
+            :icon="Gauge"
+            :label="$t('notifications.sessionMaxWeeklyPct')"
+            :disabled="!notifySessionReset"
+          >
+            <template #info>
+              <InfoHint :text="$t('notifications.sessionMaxWeeklyPctHint')" />
+            </template>
+            <template #control>
+              <div class="flex items-center gap-1">
+                <Input
+                  class="h-7 w-16 text-right"
+                  type="number"
+                  min="0"
+                  max="100"
+                  :disabled="!notifySessionReset"
+                  :model-value="notifySessionMaxWeeklyPct"
+                  @change="(e: Event) => patchNotifications({ notifySessionMaxWeeklyPct: Number((e.target as HTMLInputElement).value) })"
                 />
                 <span>%</span>
               </div>

@@ -230,6 +230,32 @@ let repeatTimer: ReturnType<typeof setInterval> | null = null
 let recheckInFlight = false
 
 /**
+ * Is this 5-hour reset pointless to announce, because the WEEKLY cap still blocks the account?
+ *
+ * The percentages are not independent: the weekly all-models limit is the binding ceiling, and a
+ * session window coming back on an account that is out of weekly quota changes nothing you can act
+ * on. usage.ts already says as much for the advice text ("a fresh 5-hour session % is a red herring
+ * when weekly is near 100"); this applies the same rule to the toast, so an account the Instances
+ * tab has filtered out of view stops paging about it (owner request, 2026-08-07).
+ *
+ * Deliberately reads the CURRENT weekly figure from the same snapshot, not the pre-reset one: the
+ * question is "is this account usable NOW", and the session window is the only thing that just
+ * rolled over. Only ever gates 'session' — a weekly reset is the event that genuinely unblocks an
+ * account. Unknown weekly (never read, or a partial snapshot) never suppresses: silence has to be
+ * something we affirmatively concluded, not a side effect of missing data.
+ */
+export function sessionResetIsMoot(
+  kind: ResetKind,
+  snap: UsageSnapshot,
+  maxWeeklyPct: number,
+): boolean {
+  if (kind !== 'session') return false
+  const weekly = snap.weekAll?.pct
+  if (typeof weekly !== 'number' || !Number.isFinite(weekly)) return false
+  return weekly >= maxWeeklyPct
+}
+
+/**
  * Record a fresh reading and raise events for any window that rolled over since the last one.
  *
  * Called from usage-service's finish() for both desktop and CLI checks, so every real reading in
@@ -259,7 +285,10 @@ export async function noteUsageSnapshot(
       notifiedFor = dueAt
       const prevPct = prev?.pct ?? null
       const loud =
-        settings.notifyEnabled && enabled && (prevPct === null || prevPct >= settings.notifyMinPct)
+        settings.notifyEnabled &&
+        enabled &&
+        (prevPct === null || prevPct >= settings.notifyMinPct) &&
+        !sessionResetIsMoot(kind, snap, settings.notifySessionMaxWeeklyPct)
       if (loud) {
         raised.push({
           id: crypto.randomUUID(),

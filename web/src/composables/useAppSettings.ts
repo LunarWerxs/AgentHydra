@@ -26,6 +26,8 @@ const notifyEnabled = ref(true)
 const notifySessionReset = ref(true)
 const notifyWeeklyReset = ref(true)
 const notifyMinPct = ref(0)
+/** Mirrors DEFAULT_USAGE_THRESHOLD — the usage filter's own "this account is spent" line. */
+const notifySessionMaxWeeklyPct = ref(80)
 const notifyDesktop = ref(true)
 const notifyPersistent = ref(false)
 const notifyPersistentIntervalMin = ref(10)
@@ -61,6 +63,7 @@ function absorb(s: api.AppSettings): void {
   notifySessionReset.value = s.notifySessionReset
   notifyWeeklyReset.value = s.notifyWeeklyReset
   notifyMinPct.value = s.notifyMinPct
+  notifySessionMaxWeeklyPct.value = s.notifySessionMaxWeeklyPct
   notifyDesktop.value = s.notifyDesktop
   notifyPersistent.value = s.notifyPersistent
   notifyPersistentIntervalMin.value = s.notifyPersistentIntervalMin
@@ -112,6 +115,7 @@ export function useAppSettings() {
     notifySessionReset,
     notifyWeeklyReset,
     notifyMinPct,
+    notifySessionMaxWeeklyPct,
     notifyDesktop,
     notifyPersistent,
     notifyPersistentIntervalMin,

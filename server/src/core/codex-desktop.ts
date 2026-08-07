@@ -37,6 +37,41 @@ export function codexDesktopUserDataDir(codexHome: string): string {
   return join(codexHome, 'desktop')
 }
 
+/**
+ * Where the DEFAULT (non-isolated) Codex Desktop keeps its profile — the install a user already had
+ * before this app existed.
+ *
+ * NOT `<CODEX_HOME>/desktop`: that layout is one WE impose when creating an isolated instance. The
+ * shipped app uses its own Electron userData path, so the default install can never be matched by
+ * the isolated-layout rule, which is precisely why a running Codex Desktop used to appear nowhere in
+ * the table (owner-reported 2026-08-07: "I have at least one codex instance, it's running").
+ *
+ * The win32 path is VERIFIED against the running MSIX build (OpenAI.Codex 26.730.8199.0), read off
+ * its crashpad child's `--user-data-dir`. The mac/linux paths mirror the same relative layout under
+ * each platform's Electron userData root and are UNVERIFIED — which costs nothing, because a running
+ * instance is matched on the path the process itself announced (see listCodexInstances); this
+ * constant only has to answer for a default install that is NOT currently running.
+ */
+export function defaultCodexDesktopUserDataDir(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const home = env.USERPROFILE || env.HOME || ''
+  if (platform === 'win32') {
+    return join(env.APPDATA || join(home, 'AppData', 'Roaming'), 'Codex', 'web', 'Codex')
+  }
+  if (platform === 'darwin') {
+    return join(home, 'Library', 'Application Support', 'Codex', 'web', 'Codex')
+  }
+  return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'Codex', 'web', 'Codex')
+}
+
+/** Case-normalized path key, exported so the instance list can match runtimes against dirs the
+ *  same way findRuntime does rather than inventing a second comparison. */
+export function codexPathKey(value: string): string {
+  return pathKey(value)
+}
+
 function pathKey(value: string): string {
   const normalized = normalize(value).replace(/[\\/]+$/, '')
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized

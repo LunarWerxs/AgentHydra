@@ -24,6 +24,37 @@ export function msUntilReset(
 }
 
 /**
+ * How far a reset instant may sit in the past before the reading is treated as SUPERSEDED rather
+ * than as "resetting right now".
+ *
+ * Not zero: a window that reset seconds ago is a real, momentary state, and "now" is the honest
+ * word for it. Two minutes is longer than the countdown's own tick and than a refresh sweep's
+ * turnaround, so a genuinely-current reading is never called superseded.
+ */
+export const RESET_GRACE_MS = 2 * 60_000
+
+/**
+ * True when this limit's window has ENDED — its reset instant is meaningfully in the past.
+ *
+ * This is a stronger condition than lib/usage.ts's `isStaleSnap` (a reading merely older than half
+ * an hour, which is still the best number we have and is shown dimmed). A superseded window is one
+ * whose quota has already rolled over, so its percentage does not describe the CURRENT window at
+ * all — it is a historical number, not an old one.
+ *
+ * Owner-reported 2026-08-07: an instance sat at "100% · resets now" because the cached snapshot was
+ * eleven days old and both of its windows had reset long since. The countdown said "now" (formally
+ * true: the instant had passed) and the chip kept asserting 100%, so a fully-reset account read as
+ * exhausted.
+ */
+export function isWindowSuperseded(
+  limit: UsageLimit | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  const ms = msUntilReset(limit, now)
+  return ms !== null && ms < -RESET_GRACE_MS
+}
+
+/**
  * A compact countdown: "2h 14m", "47m", "31s", or "now" once the instant has passed.
  *
  * Deliberately coarse above an hour — nobody reading a quota table needs the seconds on a
@@ -45,7 +76,8 @@ export function formatCountdown(ms: number): string {
  * What a "resets in" cell should say for one limit.
  *
  * Returns null when the window has no reset at all — an unstarted (0%) window prints no reset
- * time, and rendering "—" for it is the honest answer, not "0s".
+ * time, and rendering "—" for it is the honest answer, not "0s" — and equally when the window is
+ * SUPERSEDED, because "now" would claim a reset is happening this instant when it happened days ago.
  */
 export function resetLabel(
   limit: UsageLimit | null | undefined,
@@ -53,7 +85,7 @@ export function resetLabel(
 ): string | null {
   if (!limit) return null
   const ms = msUntilReset(limit, now)
-  if (ms !== null) return formatCountdown(ms)
+  if (ms !== null) return ms < -RESET_GRACE_MS ? null : formatCountdown(ms)
   // No ISO instant (the `claude -p "/usage"` fallback path). Show the human string it did give us
   // rather than inventing a countdown from a yearless date.
   return limit.resets ? limit.resets : null

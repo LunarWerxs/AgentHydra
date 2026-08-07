@@ -42,3 +42,44 @@ test('a snapshot with nothing in it at all is "—" for either scope', () => {
   expect(usageCellLabel(null)).toBe('—')
   expect(usageCellLabel(undefined, 'session')).toBe('—')
 })
+
+// --- a window that has since reset --------------------------------------------
+//
+// Owner-reported 2026-08-07: an eleven-day-old cached snapshot kept asserting "100%" for an account
+// whose weekly window had reset days earlier. That percentage measures a window that no longer
+// exists, so it is not a stale reading of the current one — it is no reading of it at all.
+
+const NOW = new Date(Date.UTC(2026, 7, 6, 12, 0, 0))
+const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString()
+
+test('a superseded window reports "—", not its historical percentage', () => {
+  const old = snap({
+    session: { pct: 100, resets: 'Jul 26, 4am', resetsAt: ago(11 * 24 * 60 * 60_000) },
+    weekAll: { pct: 100, resets: 'Jul 26, 4am', resetsAt: ago(11 * 24 * 60 * 60_000) },
+  })
+  expect(usagePctFor(old, 'week', NOW)).toBeNull()
+  expect(usagePctFor(old, 'session', NOW)).toBeNull()
+  expect(usageCellLabel(old, 'week', false, NOW)).toBe('—')
+  expect(usageCellLabel(old, 'session', true, NOW)).toBe('—')
+})
+
+test('a window that reset seconds ago is still reported — only a real rollover blanks it', () => {
+  const fresh = snap({
+    weekAll: { pct: 92, resets: 'Aug 6, 4:59am', resetsAt: ago(5_000) },
+  })
+  expect(usagePctFor(fresh, 'week', NOW)).toBe(92)
+  expect(usageCellLabel(fresh, 'week', false, NOW)).toBe('92%')
+})
+
+test('each window is judged on its own reset, not the snapshot as a whole', () => {
+  const mixed = snap({
+    session: {
+      pct: 13,
+      resets: 'Aug 6, 2pm',
+      resetsAt: new Date(NOW.getTime() + 7_200_000).toISOString(),
+    },
+    weekAll: { pct: 100, resets: 'Jul 26, 4am', resetsAt: ago(11 * 24 * 60 * 60_000) },
+  })
+  expect(usagePctFor(mixed, 'session', NOW)).toBe(13)
+  expect(usagePctFor(mixed, 'week', NOW)).toBeNull()
+})

@@ -13,9 +13,13 @@
 // The one thing this must never do is treat "no reading" as "over the limit". An instance that has
 // never been checked (or came back empty) is UNKNOWN, not exhausted — dimming or hiding it would
 // quietly remove a perfectly usable account from the table on the strength of a missing number.
+// A reading whose window has since RESET counts as no reading for exactly the same reason: it is
+// the strongest form of the trap, because the number it hides the account on is one that provably
+// no longer applies (see isWindowSuperseded).
 
 import type { UsageSnapshot } from '@/lib/api'
 import { bindingWeeklyPct } from '@/lib/usage'
+import { isWindowSuperseded } from '@/lib/usage-reset'
 
 /** Which quota window the threshold is measured against. */
 export type UsageFilterScope = 'either' | 'week' | 'session'
@@ -42,10 +46,11 @@ export const USAGE_THRESHOLD_PRESETS = [50, 70, 80, 90] as const
 export function usageFilterPct(
   snap: UsageSnapshot | null | undefined,
   scope: UsageFilterScope = DEFAULT_USAGE_FILTER_SCOPE,
+  now: Date = new Date(),
 ): number | null {
   if (!snap) return null
-  const week = bindingWeeklyPct(snap)
-  const session = snap.session?.pct ?? null
+  const week = isWindowSuperseded(snap.weekAll, now) ? null : bindingWeeklyPct(snap)
+  const session = isWindowSuperseded(snap.session, now) ? null : (snap.session?.pct ?? null)
   if (scope === 'week') return week
   if (scope === 'session') return session
   if (week == null) return session
@@ -65,8 +70,9 @@ export function isOverUsageThreshold(
   snap: UsageSnapshot | null | undefined,
   threshold: number,
   scope: UsageFilterScope = DEFAULT_USAGE_FILTER_SCOPE,
+  now: Date = new Date(),
 ): boolean {
-  const pct = usageFilterPct(snap, scope)
+  const pct = usageFilterPct(snap, scope, now)
   if (pct == null) return false
   return pct >= threshold
 }

@@ -2,7 +2,9 @@
 import { expect, test } from 'bun:test'
 import {
   formatCountdown,
+  isWindowSuperseded,
   msUntilReset,
+  RESET_GRACE_MS,
   resetLabel,
   SESSION_WINDOW_MS,
   WEEK_WINDOW_MS,
@@ -53,6 +55,27 @@ test('resetLabel is null when there is no reset at all', () => {
 
 test('resetLabel prefers the ISO instant when both are present', () => {
   expect(resetLabel(at(2 * 60 * 60_000), now)).toBe('2h 0m')
+})
+
+// --- superseded windows: a reading whose window already ended ------------------
+//
+// Owner-reported 2026-08-07: an eleven-day-old cached snapshot rendered "100% · resets now" for an
+// account whose windows had reset long since. "now" was formally true (the instant HAD passed) and
+// completely misleading.
+
+test('isWindowSuperseded: only a reset that is meaningfully past, not one happening now', () => {
+  expect(isWindowSuperseded(at(60_000), now)).toBe(false) // still to come
+  expect(isWindowSuperseded(at(-5_000), now)).toBe(false) // just passed: genuinely "now"
+  expect(isWindowSuperseded(at(-RESET_GRACE_MS), now)).toBe(false) // exactly at the grace edge
+  expect(isWindowSuperseded(at(-11 * 24 * 60 * 60_000), now)).toBe(true) // the reported case
+  // No instant to judge by is not the same as superseded.
+  expect(isWindowSuperseded({ pct: 50, resets: 'Aug 6, 4:59am' }, now)).toBe(false)
+  expect(isWindowSuperseded(null, now)).toBe(false)
+})
+
+test('resetLabel says "now" only inside the grace, then goes null rather than lying', () => {
+  expect(resetLabel(at(-5_000), now)).toBe('now')
+  expect(resetLabel(at(-11 * 24 * 60 * 60_000), now)).toBeNull()
 })
 
 // --- the bar's LENGTH: how much of the wait is left ---------------------------

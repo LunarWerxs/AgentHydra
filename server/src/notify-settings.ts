@@ -61,6 +61,10 @@ export function getNotificationSettings(): NotificationSettings {
     notifySessionReset: onByDefault('notify_session_reset'),
     notifyWeeklyReset: onByDefault('notify_weekly_reset'),
     notifyMinPct: int('notify_min_pct', 0, 0, 100),
+    // Defaults to DEFAULT_USAGE_THRESHOLD, the same 80 the Instances tab's usage filter uses to
+    // decide a row is spent — so "don't page me about accounts I've set aside" means the same
+    // number in both places out of the box.
+    notifySessionMaxWeeklyPct: int('notify_session_max_weekly_pct', 80, 0, 100),
     notifyDesktop: onByDefault('notify_desktop'),
     // Persistent + email are opt-in: both are intrusive in ways a default must not be.
     notifyPersistent: offByDefault('notify_persistent'),
@@ -119,6 +123,14 @@ export function setNotificationSettings(patch: NotificationSettingsPatch): Notif
     setSetting('notify_weekly_reset', bool(patch.notifyWeeklyReset))
   if (typeof patch.notifyMinPct === 'number' && Number.isFinite(patch.notifyMinPct))
     setSetting('notify_min_pct', String(Math.min(100, Math.max(0, Math.round(patch.notifyMinPct)))))
+  if (
+    typeof patch.notifySessionMaxWeeklyPct === 'number' &&
+    Number.isFinite(patch.notifySessionMaxWeeklyPct)
+  )
+    setSetting(
+      'notify_session_max_weekly_pct',
+      String(Math.min(100, Math.max(0, Math.round(patch.notifySessionMaxWeeklyPct)))),
+    )
   if (typeof patch.notifyDesktop === 'boolean')
     setSetting('notify_desktop', bool(patch.notifyDesktop))
   if (typeof patch.notifyPersistent === 'boolean')

@@ -21,6 +21,8 @@ import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
+import UsageBadge from '@/components/UsageBadge.vue'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -41,6 +43,7 @@ import {
 } from '@/components/ui/table'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useSortable } from '@/composables/useSortable'
+import { useUsage } from '@/composables/useUsage'
 import type { CodexInstance } from '@/lib/api'
 
 const props = defineProps<{
@@ -68,6 +71,13 @@ const { t } = useI18n()
 const open = useStorage('agenthydra.instances.codexOpen', true)
 const isBusy = (instance: CodexInstance) => busyIds.value.has(instance.id)
 
+// Quota shares the app-wide usage store, keyed `codex:<id>` — so the Codex rows reuse the same
+// chip, the same cache, the same superseded-window rule as every other provider's rows.
+const { snapshotFor, isChecking, checkCodex } = useUsage()
+const usageFor = (instance: CodexInstance) => snapshotFor(`codex:${instance.id}`)
+const isCheckingUsage = (instance: CodexInstance) => isChecking(`codex:${instance.id}`)
+const onCheckUsage = (instance: CodexInstance) => checkCodex(instance.id)
+
 const { sortedRows, toggleSort, indicatorFor } = useSortable(
   () => instances.value,
   [
@@ -77,6 +87,15 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
         `${props.desktopEnabled && instance.isDesktopRunning ? '0' : '1'}:${props.cliEnabled && instance.loggedIn ? '0' : '1'}`,
     },
     { key: 'name', accessor: (instance: CodexInstance) => instance.name },
+    {
+      key: 'account',
+      accessor: (instance: CodexInstance) =>
+        instance.account?.email ?? instance.account?.name ?? undefined,
+    },
+    {
+      key: 'plan',
+      accessor: (instance: CodexInstance) => instance.account?.planLabel ?? undefined,
+    },
     { key: 'codexHome', accessor: (instance: CodexInstance) => instance.codexHome },
   ],
 )
@@ -233,6 +252,21 @@ onUnmounted(stopPolling)
               <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
             </span>
           </TableHead>
+          <TableHead class="cursor-pointer select-none" @click="toggleSort('account')">
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('codexInstances.colAccount') }}
+              <ArrowUp v-if="indicatorFor('account') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('account') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
+          <TableHead>{{ $t('codexInstances.colUsage') }}</TableHead>
+          <TableHead class="cursor-pointer select-none" @click="toggleSort('plan')">
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('codexInstances.colPlan') }}
+              <ArrowUp v-if="indicatorFor('plan') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('plan') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
           <TableHead class="cursor-pointer select-none" @click="toggleSort('codexHome')">
             <span class="inline-flex items-center gap-0.5">
               {{ $t('codexInstances.colHome') }}
@@ -244,7 +278,7 @@ onUnmounted(stopPolling)
         </TableRow>
       </TableHeader>
       <TableBody v-if="instances.length === 0">
-        <TableEmpty v-if="!loading" :colspan="4">
+        <TableEmpty v-if="!loading" :colspan="7">
           <div class="flex flex-col items-center gap-1 text-center">
             <AppWindow class="mb-1 size-6 opacity-40" />
             <p class="font-medium text-foreground">{{ $t('codexInstances.empty') }}</p>
@@ -254,6 +288,9 @@ onUnmounted(stopPolling)
         <TableRow v-for="i in 2" v-else :key="i">
           <TableCell><Skeleton class="size-2 rounded-full" /></TableCell>
           <TableCell><Skeleton class="h-4 w-28" /></TableCell>
+          <TableCell><Skeleton class="h-4 w-36" /></TableCell>
+          <TableCell><Skeleton class="h-5 w-10" /></TableCell>
+          <TableCell><Skeleton class="h-5 w-12" /></TableCell>
           <TableCell><Skeleton class="h-3 w-48" /></TableCell>
           <TableCell><div class="flex justify-end"><Skeleton class="h-6 w-20" /></div></TableCell>
         </TableRow>
@@ -292,11 +329,59 @@ onUnmounted(stopPolling)
             </div>
           </TableCell>
           <TableCell class="font-medium">{{ instance.name }}</TableCell>
+          <!-- Which ChatGPT account this CODEX_HOME is signed into. The name/email come straight
+               off the list payload (the server resolves them from auth.json), so this fills in on
+               first paint with no per-row request. -->
+          <TableCell class="max-w-[16rem] text-xs">
+            <template v-if="instance.account?.email || instance.account?.name">
+              <div class="truncate font-medium">
+                {{ instance.account.name ?? instance.account.email }}
+              </div>
+              <div
+                v-if="instance.account.name && instance.account.email"
+                class="truncate text-[0.625rem] text-muted-foreground"
+              >
+                {{ instance.account.email }}
+              </div>
+            </template>
+            <span v-else class="text-muted-foreground">
+              {{
+                instance.account?.authMode === 'apikey'
+                  ? $t('codexInstances.authApiKey')
+                  : $t('codexInstances.loggedOutShort')
+              }}
+            </span>
+          </TableCell>
+          <TableCell>
+            <UsageBadge
+              :snapshot="usageFor(instance)"
+              :checking="isCheckingUsage(instance)"
+              :usage-key="`codex:${instance.id}`"
+              @check="onCheckUsage(instance)"
+            />
+          </TableCell>
+          <TableCell>
+            <!-- Plan, from `plan_type`. The live check prefers ChatGPT's server-computed value over
+                 the id_token's mint-time claim, so a lapsed or upgraded plan cannot linger here. -->
+            <Badge v-if="instance.account?.planLabel" variant="outline">
+              {{ instance.account.planLabel }}
+            </Badge>
+            <span v-else class="text-xs text-muted-foreground">—</span>
+          </TableCell>
           <TableCell class="mono max-w-[28rem] truncate text-[0.625rem] text-muted-foreground">
             {{ instance.codexHome }}
           </TableCell>
           <TableCell>
-            <div class="flex items-center justify-end gap-1">
+            <!-- A DISCOVERED row (the default install, or a Codex Desktop running from a profile we
+                 didn't create) has no store entry, so every mutating action would fail with "not
+                 found". It is listed to be READ — identity, plan, quota — and says so instead of
+                 offering buttons that cannot work. -->
+            <div v-if="instance.isExternal" class="flex items-center justify-end">
+              <span class="text-[0.625rem] text-muted-foreground">
+                {{ $t('codexInstances.externalHint') }}
+              </span>
+            </div>
+            <div v-else class="flex items-center justify-end gap-1">
               <Button
                 v-if="desktopEnabled && !instance.isDesktopRunning"
                 variant="outline"

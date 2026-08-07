@@ -33,6 +33,32 @@ test('the default window is the weekly cap, not the 5-hour session', () => {
   expect(isOverUsageThreshold(sessionSpent, 80)).toBe(false)
 })
 
+test('a window that has already reset counts as UNKNOWN, never as spent', () => {
+  // The sharpest form of the "unknown is not exhausted" rule: an 11-day-old snapshot at 100% would
+  // otherwise hide a fully-reset account from the table indefinitely (owner-reported 2026-08-07).
+  const NOW = new Date(Date.UTC(2026, 7, 6, 12, 0, 0))
+  const past = new Date(NOW.getTime() - 11 * 24 * 60 * 60_000).toISOString()
+  const superseded = snap({
+    session: { pct: 100, resets: 'Jul 26, 4am', resetsAt: past },
+    weekAll: { pct: 100, resets: 'Jul 26, 4am', resetsAt: past },
+  })
+  expect(usageFilterPct(superseded, 'week', NOW)).toBeNull()
+  expect(usageFilterPct(superseded, 'either', NOW)).toBeNull()
+  expect(isOverUsageThreshold(superseded, 80, 'week', NOW)).toBe(false)
+
+  // ...while the window that is still running keeps deciding the filter on its own.
+  const mixed = snap({
+    session: {
+      pct: 97,
+      resets: 'Aug 6, 2pm',
+      resetsAt: new Date(NOW.getTime() + 7_200_000).toISOString(),
+    },
+    weekAll: { pct: 100, resets: 'Jul 26, 4am', resetsAt: past },
+  })
+  expect(usageFilterPct(mixed, 'either', NOW)).toBe(97)
+  expect(usageFilterPct(mixed, 'week', NOW)).toBeNull()
+})
+
 test('either takes whichever window is closest to its cap', () => {
   const s = snap({ session: limit(97), weekAll: limit(12) })
   expect(usageFilterPct(s, 'either')).toBe(97)

@@ -63,37 +63,67 @@ export function prettyTier(tier: string | null | undefined): string | null {
  *
  * Evidence, strongest first:
  *
- * 1. A SPECIFIC rate-limit tier ("default_claude_max_20x" → "Max 20×"). Anthropic derives it from
- *    the active subscription, and it is the only signal carrying 5×/20× granularity.
- * 2. `plan`, which is the OAuth grant's own `subscriptionType` (see accounts.ts). The grant is
- *    minted and re-minted by Anthropic on every token refresh, so it tracks the CURRENT
- *    subscription.
- * 3. Nothing → null, and the column renders "—".
+ * 1. `orgType` — the profile API's `organization.organization_type` ("claude_free" | "claude_pro" |
+ *    "claude_max" | "claude_team…" | "claude_enterprise…"). Anthropic computes it server-side on
+ *    every profile call, so it is the ONLY signal here that is current. It settles the plan FAMILY
+ *    outright; nothing below may upgrade or downgrade it.
+ * 2. `prettyTierLabel` — the rate-limit tier. Used to add 5×/20× granularity on top of a `claude_max`
+ *    family, and, when no orgType is known at all (offline / a cache entry written before this
+ *    field existed), as the legacy primary evidence.
+ * 3. `plan` — the OAuth grant's `subscriptionType`. Legacy/offline evidence only.
+ * 4. Nothing → null, and the column renders "—".
  *
- * WHY A GENERIC TIER IS NOT PROOF OF "FREE" (fixed 2026-08-06). This used to return 'Free' the
- * moment the tier came back as an unmapped `default_claude_*` passthrough, on the theory that
- * Anthropic drops a lapsed account to the generic "default_claude_ai". That is true, but it is not
- * the ONLY thing that reports the generic value: an owner-confirmed, actively-paid Pro account
- * reports `rateLimitTier: "default_claude_ai"` on its grant too, and was being shown as Free.
- * A generic tier means "this signal knows nothing", so it now falls through to the grant instead
- * of overriding it.
+ * WHY THE GRANT IS NOT THE AUTHORITY (fixed 2026-08-07, replacing the 2026-08-06 order). Both grant
+ * fields are a snapshot taken when that grant was minted; they do NOT track the subscription
+ * afterwards, and an unexpired grant is no evidence that they are fresh. Measured across 11 local
+ * accounts by decrypting every token cache and diffing it against the live profile:
  *
- * The 2026-07-22 finding this replaces is still respected, because it was about a DIFFERENT field:
- * the profile's `has_claude_max` / `has_claude_pro` booleans, which stay `true` for an account that
- * was paid and has since lapsed. Those are entitlement history, not current state, and accounts.ts
- * no longer lets them override the grant. So `plan` reaching here is grant-derived, and the stale
- * flags are still not trusted to upgrade anybody.
+ *   - lunawerx@gmail.com is `organization_type: "claude_free"`, `billing_type: "none"`,
+ *     `has_claude_max: false` — and all THREE of its unexpired grants still say
+ *     `subscriptionType: "max"` / `rateLimitTier: "default_claude_max_20x"`. Preferring the grant
+ *     therefore rendered "Max 20×" for a free account (owner-reported).
+ *   - Two paid accounts (2claude, temp1) carry a grant tier of `default_claude_max_5x` while their
+ *     org reports `default_claude_max_20x`. So the grant is stale in BOTH directions, and its
+ *     apparent 5×/20× "granularity" was granularity about the past.
  *
- * Never returns a raw `default_*` string; returns null (callers render "—") when nothing is known.
+ * WHY A GENERIC TIER IS STILL NOT PROOF OF "FREE" (2026-08-06 finding, kept). An actively-paid Pro
+ * account (`organization_type: "claude_pro"`, `has_claude_pro: true`) reports
+ * `rate_limit_tier: "default_claude_ai"`. A generic tier means "this signal knows nothing" — which
+ * is now moot whenever orgType is present, and still handled by the fall-through when it isn't.
+ *
+ * The 2026-07-22 finding also stands: `has_claude_max` / `has_claude_pro` stay `true` for an account
+ * that was paid and has since lapsed, so they are entitlement history and accounts.ts consults them
+ * only when there is nothing better.
+ *
+ * Never returns a raw `default_*` or `claude_*` string; returns null (callers render "—") when
+ * nothing is known.
  */
 export function resolvePlanLabel(
   plan: string | null,
   prettyTierLabel: string | null,
+  orgType?: string | null,
 ): string | null {
-  // A specific, recognized tier is the current plan — trust it (keeps the 5×/20× granularity).
-  if (prettyTierLabel && !/^default_claude/i.test(prettyTierLabel)) return prettyTierLabel
-  // Otherwise the tier told us nothing usable (absent, or a generic `default_claude_*`
-  // passthrough): fall through to the grant's subscription type.
+  // A tier that still looks like a raw `default_claude*` string is an unmapped passthrough, i.e.
+  // the generic "no plan to describe here" value — not a usable answer.
+  const specificTier =
+    prettyTierLabel && !/^default_claude/i.test(prettyTierLabel) ? prettyTierLabel : null
+
+  // 1. organization_type: current by construction, and therefore final for the plan family.
+  const org = orgType?.trim().toLowerCase()
+  if (org) {
+    if (org.includes('free')) return 'Free'
+    if (org.includes('enterprise')) return 'Enterprise'
+    if (org.includes('team')) return 'Team'
+    // Only the tier carries 5×/20×, and only a Max-shaped tier may refine a Max family.
+    if (org.includes('max')) return specificTier?.startsWith('Max') ? specificTier : 'Max'
+    if (org.includes('pro')) return 'Pro'
+    // An organization_type we don't recognize (a new plan family): fall through to the weaker
+    // evidence below rather than guess, and never render the raw `claude_*` string.
+  }
+
+  // 2. No usable organization_type — offline, or a cache entry predating the field. This is the
+  //    pre-2026-08-07 evidence order, kept verbatim for that path.
+  if (specificTier) return specificTier
   const p = plan?.toLowerCase()
   if (p) {
     if (p.includes('max')) return 'Max'
@@ -166,8 +196,12 @@ export interface CMAccount {
   /** Pretty rate-limit tier label, e.g. "Max 20×" (see prettyTier above). Can be a generic
    *  `default_*` passthrough even for a paid account — use `planLabel` for display. */
   rateLimitTier: string | null
-  /** Display-ready account type ("Max 20×" | "Pro" | "Free" | …), reconciled from `plan` +
-   *  `rateLimitTier` by resolvePlanLabel. Null when it can't be determined (render as "—"). */
+  /** The profile API's raw `organization.organization_type` ("claude_free" | "claude_pro" |
+   *  "claude_max" | …). The authoritative, always-current plan family — see resolvePlanLabel.
+   *  Null on the offline/cache path when we've never resolved this instance live. */
+  orgType: string | null
+  /** Display-ready account type ("Max 20×" | "Pro" | "Free" | …), reconciled from `orgType` +
+   *  `rateLimitTier` + `plan` by resolvePlanLabel. Null when it can't be determined (render "—"). */
   planLabel: string | null
   accountUuid: string | null
   orgUuid: string | null
@@ -252,5 +286,8 @@ export interface CMAccountCacheEntry {
   uuid: string | null
   orgUuid: string | null
   orgName: string | null
+  /** Last live `organization.organization_type`. Optional because entries written before
+   *  2026-08-07 don't have it; resolvePlanLabel falls back to the older evidence when absent. */
+  orgType?: string | null
   resolvedAt: string
 }

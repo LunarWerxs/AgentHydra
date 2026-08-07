@@ -107,6 +107,10 @@ export async function checkUsageAmbient(): Promise<UsageSnapshot> {
 export const desktopKey = (dir: string): string => `desktop:${normalizeInstancePath(dir)}`
 /** Cache key for a CLI instance's usage snapshot. */
 export const cliKey = (id: string): string => `cli:${id}`
+/** Cache key for a Codex instance's usage snapshot. Keyed by the instance id, like cliKey — a
+ *  CODEX_HOME is created by this app and never renamed, so there is no path-spelling problem to
+ *  normalize away here. */
+export const codexKey = (id: string): string => `codex:${id}`
 
 /**
  * Check a DESKTOP instance's usage, trying every credential that could speak for this account:

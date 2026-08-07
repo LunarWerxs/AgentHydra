@@ -24,6 +24,9 @@ export default {
   minPct: 'Only if usage was at least',
   minPctHint:
     'Skip a reset whose window was barely used. 0 announces every rollover; 50 announces only the ones you were actually pressing against.',
+  sessionMaxWeeklyPct: 'Skip 5-hour reset if weekly is at least',
+  sessionMaxWeeklyPctHint:
+    "The weekly cap is the one that actually blocks an account, so a 5-hour window coming back on an account that's out of weekly quota changes nothing. This is the same line the Instances usage filter uses to set a row aside, so accounts you've filtered out stop announcing themselves. Weekly resets are never skipped.",
   desktop: 'Desktop notification',
   desktopHint:
     'A native notification from the operating system, so it reaches you with the app minimised to the tray.',

@@ -5,6 +5,82 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-08-06
+
+### Added
+
+- **A Codex Desktop you didn't create through this app is now listed.** The table only ever showed
+  instances created here, so someone running a perfectly normal Codex Desktop saw "No Codex
+  instances found" (owner-reported). The default install is now always listed, running or not,
+  because its identity lives in CODEX_HOME on disk and is readable either way; a Codex Desktop found
+  running from any other unrecognized profile is listed too. Both are flagged external and offer no
+  actions, mirroring `isExternal` on the Claude side, since they have no store row to act on.
+  - The default install could never have matched before: its profile is the shipped app's own
+    Electron path (`%APPDATA%\Codex\web\Codex` on Windows), not the `<CODEX_HOME>/desktop` layout
+    this app imposes on instances it creates. A running instance is matched on the path its own
+    process announces, so no platform guessing is involved when it counts.
+- **Codex / ChatGPT instances now have a real identity, a plan, and a quota reading.** Until now a
+  Codex row carried exactly one identity signal, `loggedIn`, which was literally "does auth.json
+  exist", so every row looked alike no matter which account or plan was behind it. The table now
+  has **Account**, **Usage** and **Plan** columns, matching the Claude tables.
+  - Identity comes from `<CODEX_HOME>/auth.json`, which is plain JSON rather than a safeStorage
+    blob, so there is no decrypt step: the email, name, plan, account id, org and subscription end
+    date are read straight from the id_token's claims. That read is cheap enough to attach to every
+    row on every list, so the Account column fills in on first paint with no per-row request.
+  - Quota comes from the endpoint the Codex CLI's own status screen uses
+    (`GET /backend-api/codex/usage`), which answers identity AND rate limits in one call. The
+    windows are mapped onto the SAME `UsageSnapshot` the Claude rows use, so Codex inherits the
+    whole existing quota surface: the chip, the countdowns, the usage filter, the superseded-window
+    rule below. Windows are filed by their reported LENGTH, never by primary/secondary: a Plus
+    account reports its single 7-day window as `primary_window`, so position would have mislabelled
+    an entire plan tier as a 5-hour session.
+  - The live `plan_type` wins over the token's `chatgpt_plan_type` claim, which is a mint-time
+    snapshot. This is the same evidence rule the Claude-side fix below arrives at, applied from the
+    start rather than after a regression.
+  - An `OPENAI_API_KEY` login is labelled "API key" rather than rendered as a broken ChatGPT login:
+    it is a valid Codex auth with no subscription and therefore no plan or quota to report.
+
+### Changed
+
+- **A 5-hour reset no longer notifies for an account you have filtered out.** The weekly cap is what
+  actually blocks an account, so a session window coming back while weekly is still spent announces
+  a change you cannot act on. Reset notifications now skip a 5-hour rollover when that account's
+  weekly usage is at or above a threshold, defaulting to 80, the same line the Instances usage
+  filter uses to set a row aside. Weekly resets are never skipped, an unknown weekly figure never
+  silences anything, and the threshold is its own control in Settings › Notifications.
+
+### Fixed
+
+- **A free account no longer shows as "Max 20×".** Owner-reported: an account that is
+  `organization_type: "claude_free"`, `billing_type: "none"`, `has_claude_max: false` was labelled
+  Max 20×. The cause was the previous release's own fix, which promoted the OAuth grant to top
+  evidence on the premise that Anthropic re-mints it on every token refresh. It does not. Measured
+  by decrypting all eleven local token caches and diffing each against its live profile, the grant
+  is a snapshot from whenever it was minted and is stale in **both** directions: the free account
+  carried three unexpired grants all still claiming `subscriptionType: "max"` /
+  `rateLimitTier: "default_claude_max_20x"`, while two genuinely-paid accounts carried a `max_5x`
+  grant tier against an org reporting `max_20x`.
+  - The plan now comes from `organization.organization_type`, which the profile API recomputes on
+    every call. It settles the plan family outright; the rate-limit tier only refines a `claude_max`
+    family into 5× or 20×, and the grant is demoted to an offline fallback.
+  - Both prior findings still hold and are still respected: a paid Pro account really does report
+    the generic `default_claude_ai` tier (0.16.1), and `has_claude_max` / `has_claude_pro` really do
+    stay true after an account lapses (2026-07-22). Neither can decide the label any more, so
+    neither can be wrong about it.
+  - `organization_type` is cached alongside the rest of the identity, so the offline/no-network path
+    reaches the same answer instead of falling back to the stale grant.
+- **The account one-liner no longer leaks a raw tier string.** The Quick view showed
+  `Michael <blogitech@gmail.com> · default_claude_ai` for any account whose tier is the generic
+  value. It now shows the same reconciled label the Plan column does.
+- **A usage reading whose window has already reset no longer poses as current.** The same instance
+  sat at "100% · resets now" from an eleven-day-old cached snapshot: the countdown said *now*
+  (formally true, the instant had passed) and the percentage kept asserting a window that had rolled
+  over days earlier. A limit whose reset is more than a couple of minutes past is now treated as
+  superseded: the chip reads as no-data, the countdown blanks rather than saying "now", and the usage
+  filter counts it as unknown so a fully-reset account can never stay hidden behind a number that no
+  longer applies. This is distinct from the existing 30-minute "stale" dimming, which still shows
+  the last known reading because it is still a reading of the current window.
+
 ## [0.16.1] - 2026-08-06
 
 ### Fixed

@@ -11,9 +11,10 @@ import {
   nextWindowState,
   pruneEvents,
   resetDue,
+  sessionResetIsMoot,
   type WindowState,
 } from '../src/reset-watch'
-import type { ResetEvent } from '../src/types'
+import type { ResetEvent, UsageSnapshot } from '../src/types'
 
 const iso = (ms: number) => new Date(ms).toISOString()
 const T0 = Date.UTC(2026, 7, 5, 12, 0, 0)
@@ -23,6 +24,59 @@ const win = (over: Partial<WindowState> = {}): WindowState => ({
   pct: 90,
   notifiedFor: null,
   ...over,
+})
+
+// --- sessionResetIsMoot -------------------------------------------------------
+//
+// Owner request 2026-08-07: no 5-hour reset toast for an account the usage filter has set aside.
+// The weekly cap is what actually blocks an account, so a session window coming back on a
+// weekly-exhausted account announces a change you cannot act on.
+
+const snapshot = (over: Partial<UsageSnapshot> = {}): UsageSnapshot => ({
+  account: 'someone',
+  session: { pct: 0, resets: '' },
+  weekAll: { pct: 10, resets: '' },
+  weekModel: null,
+  capturedAt: iso(T0),
+  ...over,
+})
+
+test('sessionResetIsMoot: a 5-hour reset is suppressed once weekly is at or above the line', () => {
+  expect(sessionResetIsMoot('session', snapshot({ weekAll: { pct: 100, resets: '' } }), 80)).toBe(
+    true,
+  )
+  // At-or-above, matching the usage filter's own threshold rule.
+  expect(sessionResetIsMoot('session', snapshot({ weekAll: { pct: 80, resets: '' } }), 80)).toBe(
+    true,
+  )
+  expect(sessionResetIsMoot('session', snapshot({ weekAll: { pct: 79, resets: '' } }), 80)).toBe(
+    false,
+  )
+})
+
+test('sessionResetIsMoot: a WEEKLY reset is never suppressed — it is the one that unblocks you', () => {
+  expect(sessionResetIsMoot('weekAll', snapshot({ weekAll: { pct: 100, resets: '' } }), 80)).toBe(
+    false,
+  )
+})
+
+test('sessionResetIsMoot: an unknown weekly figure never silences anything', () => {
+  // Silence has to be a conclusion, not a side effect of a partial snapshot.
+  expect(sessionResetIsMoot('session', snapshot({ weekAll: null }), 80)).toBe(false)
+  expect(
+    sessionResetIsMoot('session', snapshot({ weekAll: { pct: Number.NaN, resets: '' } }), 80),
+  ).toBe(false)
+})
+
+test('sessionResetIsMoot: 100 still suppresses the fully-exhausted case', () => {
+  // The documented way to keep only the genuinely-moot toast quiet; turning session resets off
+  // entirely is the separate switch.
+  expect(sessionResetIsMoot('session', snapshot({ weekAll: { pct: 100, resets: '' } }), 100)).toBe(
+    true,
+  )
+  expect(sessionResetIsMoot('session', snapshot({ weekAll: { pct: 99, resets: '' } }), 100)).toBe(
+    false,
+  )
 })
 
 // --- resetDue -----------------------------------------------------------------
