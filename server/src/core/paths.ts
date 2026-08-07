@@ -76,6 +76,12 @@ export function instanceMetaFile(): string {
   return path.join(appDataDir(), 'instance-meta.json')
 }
 
+/** Permanent instance NUMBERS (`#1`, `#2`, …), keyed by instance ref. The short handle a human
+ *  says out loud and an MCP client passes around; see server/src/core/instance-numbers.ts. */
+export function instanceNumbersFile(): string {
+  return path.join(appDataDir(), 'instance-numbers.json')
+}
+
 export function logFile(): string {
   return path.join(appDataDir(), 'agenthydra.log')
 }

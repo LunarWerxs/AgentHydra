@@ -14,6 +14,7 @@ import {
   openCodexDesktop,
   quitCodexDesktop,
 } from './codex-desktop'
+import { instanceNumbers, instanceRef } from './instance-numbers'
 import { CODEX_LAUNCH_EFFORTS, type LaunchOptionsInput, launchOptionError } from './launch-options'
 import { isPathInside, normalizePath } from './paths'
 import type { CMActionResult } from './shared'
@@ -22,8 +23,11 @@ const CODEX_INSTANCES_ROOT = join(CONFIG_DIR, 'codex-instances')
 const STORE_PATH = join(CONFIG_DIR, 'codex-instances.json')
 const NAME_MAX = 60
 
+/** The store deliberately does NOT hold `num`: the number registry (core/instance-numbers.ts) owns
+ *  it, so there is exactly one place it can be assigned from and no stale mirror to reconcile. */
 type StoredCodexInstance = Omit<
   CodexInstance,
+  | 'num'
   | 'loggedIn'
   | 'account'
   | 'desktopUserDataDir'
@@ -60,10 +64,20 @@ export function isCodexLoggedIn(codexHome: string): boolean {
   }
 }
 
+/** An instance row before its number is stamped on. Every builder below produces this shape; the
+ *  number is attached in ONE place (numbered/withNumbers) so a row can never escape without one. */
+type UnnumberedCodexInstance = Omit<CodexInstance, 'num'>
+
+/** Stamp the permanent number onto a whole list in a single registry read/write. */
+function withNumbers(rows: UnnumberedCodexInstance[]): CodexInstance[] {
+  const numbers = instanceNumbers(rows.map((r) => instanceRef('codex', r.id)))
+  return rows.map((row) => ({ ...row, num: numbers.get(instanceRef('codex', row.id)) ?? 0 }))
+}
+
 function hydrate(
   instance: StoredCodexInstance,
   runtime: CodexDesktopRuntime | null = null,
-): CodexInstance {
+): UnnumberedCodexInstance {
   return {
     ...instance,
     loggedIn: isCodexLoggedIn(instance.codexHome),
@@ -103,8 +117,8 @@ const externalIdFor = (userDataDir: string): string => `external:${codexPathKey(
 function discoveredInstances(
   runtimes: CodexDesktopRuntime[],
   claimed: Set<string>,
-): CodexInstance[] {
-  const out: CodexInstance[] = []
+): UnnumberedCodexInstance[] {
+  const out: UnnumberedCodexInstance[] = []
 
   const defaultProfile = defaultCodexDesktopUserDataDir()
   const defaultKey = codexPathKey(defaultProfile)
@@ -172,7 +186,7 @@ export async function listCodexInstances(
   // Stored rows claim their CODEX_HOME first, so discovery can never duplicate one that this app
   // manages (e.g. an instance deliberately pointed at the default home).
   const claimed = new Set(stored.map((instance) => codexPathKey(instance.codexHome)))
-  return [...stored, ...discoveredInstances(runtimes, claimed)]
+  return withNumbers([...stored, ...discoveredInstances(runtimes, claimed)])
 }
 
 /**
@@ -182,7 +196,7 @@ export async function listCodexInstances(
  */
 export function getCodexInstance(id: string): CodexInstance | null {
   const instance = readStore().instances.find((candidate) => candidate.id === id)
-  return instance ? hydrate(instance) : null
+  return instance ? (withNumbers([hydrate(instance)])[0] ?? null) : null
 }
 
 /**

@@ -28,6 +28,7 @@ import {
 import { basename, join } from 'node:path'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
 import type { CliInstance, UsageSnapshot } from '../types'
+import { instanceNumberFor, instanceNumbers, instanceRef } from './instance-numbers'
 import { CLAUDE_LAUNCH_EFFORTS, type LaunchOptionsInput, launchOptionError } from './launch-options'
 import { isPathInside } from './paths'
 import type { CMActionResult } from './shared'
@@ -103,10 +104,14 @@ export function canonicalConfigDir(rec: Pick<CliInstance, 'id' | 'configDir'>): 
 /** A stored record hydrated with its LIVE loggedIn state (the store value is only a hint).
  *  Also backfills fields added after a store was first written (records predating the desktop link
  *  have no `associatedDesktop*` keys at all), so callers never see `undefined` where they expect null. */
-function hydrate(rec: CliInstance): CliInstance {
+function hydrate(rec: CliInstance, num?: number): CliInstance {
   const configDir = canonicalConfigDir(rec)
   return {
     ...rec,
+    // The registry is the source of truth for the number, not whatever the store file happens to
+    // hold — a store written before numbers existed has none at all. `num` is passed in by the
+    // bulk lister so a 14-instance list is one registry read, not fourteen.
+    num: num ?? instanceNumberFor('cli', rec.id),
     configDir,
     associatedDesktopDir: rec.associatedDesktopDir ?? null,
     associatedDesktopLabel: rec.associatedDesktopLabel ?? null,
@@ -152,7 +157,9 @@ export function migrateCliInstanceConfigDirs(): string[] {
 
 /** Every CLI instance, each with its live loggedIn state. */
 export function listCliInstances(): CliInstance[] {
-  return readStore().instances.map(hydrate)
+  const records = readStore().instances
+  const numbers = instanceNumbers(records.map((r) => instanceRef('cli', r.id)))
+  return records.map((rec) => hydrate(rec, numbers.get(instanceRef('cli', rec.id))))
 }
 
 /** One CLI instance by id (live loggedIn state), or null. */
@@ -194,6 +201,7 @@ export function createCliInstance(name: string): CMActionResult {
     }
   }
   const rec: CliInstance = {
+    num: instanceNumberFor('cli', id),
     id,
     name: name.trim(),
     configDir,
@@ -212,8 +220,8 @@ export function createCliInstance(name: string): CMActionResult {
     ok: true,
     action: 'cli-create',
     dir: configDir,
-    message: `CLI instance '${rec.name}' created. Use the log-in helper to sign it in.`,
-    data: { id, configDir },
+    message: `CLI instance #${rec.num} '${rec.name}' created. Use the log-in helper to sign it in.`,
+    data: { id, configDir, num: rec.num },
   }
 }
 

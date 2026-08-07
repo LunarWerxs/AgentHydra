@@ -34,6 +34,16 @@ export default {
   delete: 'Delete',
   edit: 'Edit',
   moreActions: 'More actions',
+  // The instance number chip. Deliberately explicit about WHAT the number is for: it is the only
+  // handle that survives being spoken to an AI or pasted into an MCP call, and it is permanent, so
+  // an old note that says "instance 7" still points at the same account.
+  numberTooltipTitle: 'Instance #{num}',
+  numberTooltipBody:
+    'Permanent number for this instance — unique across Claude Desktop, Claude CLI and Codex, and never reused. Say “instance {num}” to an AI, or pass instance: {num} to the MCP tools. Click to copy.',
+  numberCopyAria: 'Copy instance number {num}',
+  numberMenuLabel: 'Instance #{num}',
+  copyNumber: 'Copy instance number',
+  toastNumberCopied: 'Copied “{num}” — refer to this instance by that number.',
   openFolder: 'Open folder',
   createShortcut: 'Create desktop shortcut',
   checkUsage: 'Check usage',
@@ -62,21 +72,32 @@ export default {
     'Set aside the accounts you have already spent, so the ones you can still work on stand out.',
   usageFilterEnable: 'Filter by usage',
   usageFilterThreshold: 'Threshold',
-  usageFilterThresholdHint:
-    'Instances whose Usage column is at or above this percentage are dimmed. Instances that have never been checked are never filtered — an unknown reading is not a full one.',
   usageFilterThresholdValue: '{pct}%',
   usageFilterHide: 'Hide instead of dim',
   usageFilterHideHint:
     'Matching instances leave the table entirely. The section heading still says how many are hidden.',
-  usageFilterScope: 'Measure against',
-  usageFilterScopeHint:
-    'Weekly is the Usage column, and the default: it is the cap that decides whether an account is worth starting on. 5h reads the shorter session window instead, and Either uses whichever of the two is closest to its cap.',
-  usageFilterScopeEither: 'Either',
-  usageFilterScopeWeek: 'Weekly',
-  usageFilterScopeSession: '5h',
+  // Section captions inside the flyout.
+  usageFilterWindows: 'Quota windows',
+  usageFilterDisplay: 'Display behaviour',
+  // One switch + one threshold per quota window; an instance is set aside when it crosses either.
+  usageFilterWeek: 'Weekly usage',
+  usageFilterWeekHint:
+    'The Usage column — the cap that decides whether an account is worth starting on at all. Instances at or above the threshold are set aside. Instances that have never been checked are never filtered: an unknown reading is not a full one.',
+  usageFilterWeekThresholdLabel: 'Weekly usage threshold, percent',
+  usageFilterSession: 'Also 5-hour usage',
+  usageFilterSessionHint:
+    'Also set an instance aside when its 5-hour session window is at or above its own threshold, even if there is weekly quota left — a spent session means you cannot use the account right now. Off by default: this window refills the same day, so instances leave the table and come back over an afternoon.',
+  usageFilterSessionThresholdLabel: '5-hour usage threshold, percent',
+  usageFilterNoWindows: 'Both windows are off, so nothing is being filtered. Turn one back on.',
+  // Compact form of the rule, on the toolbar button. A bare percentage is the weekly cap.
+  usageFilterChipWeek: '{pct}%',
+  usageFilterChipSession: '5h {pct}%',
+  usageFilterChipBoth: '{week}% · 5h {session}%',
+  usageFilterChipNone: 'Off',
   usageFilterHiddenCount: '{count} hidden',
-  usageFilterAllHidden: 'Every instance is at or above {pct}%.',
-  usageFilterAllHiddenHint: 'Lower the threshold, or turn the usage filter off in the toolbar.',
+  usageFilterAllHidden: 'Every instance is at or above the usage filter.',
+  usageFilterAllHiddenHint:
+    'Raise the thresholds, or turn the usage filter off in the toolbar. It says what it is filtering on.',
   // "x of y" for a heading whose table is showing fewer rows than it has.
   countOfTotal: '{shown} of {total}',
   // Sections flyout (toolbar) — the same provider switches Settings shows, where they apply.

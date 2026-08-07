@@ -76,6 +76,12 @@ import { detectDesktopInstall } from './core/desktop-install'
 import { setInstanceMeta } from './core/instance-meta'
 import { createInstanceModeShortcut } from './core/instance-mode-shortcut'
 import {
+  instanceForConfigDir,
+  listAllInstances,
+  resolveInstance,
+  resolveInstanceError,
+} from './core/instance-ref'
+import {
   focusInstance,
   listInstances,
   openInstance,
@@ -166,6 +172,7 @@ import {
   dropCachedUsage,
   getCachedUsage,
   isNoData,
+  parseUsageOutput,
   setCachedUsage,
   usageAdvice,
 } from './usage'
@@ -1066,6 +1073,31 @@ app.post('/api/scheduler', async (c) => {
 app.get('/api/instances', async (c) => {
   return c.json(await listInstances())
 })
+
+// --- instance numbers -------------------------------------------------------
+// The whole fleet under ONE numbering, flattened across desktop / CLI / Codex. This is what makes
+// "check instance 7" a sentence a human can say and a tool can act on: every other identifier an
+// instance has is either a file path or a uuid. Kept at its own top-level path rather than under
+// /api/instances/* so it can never be mistaken for (or shadowed by) a `:dir` route.
+app.get('/api/instance-numbers', async (c) => c.json(await listAllInstances()))
+
+// Resolve one reference — a number, a `#N`, a dir/id, an explicit `kind:id` ref, or an unambiguous
+// name. 404 carries a reason, because "no such number" and "that number's instance was deleted"
+// call for different fixes.
+app.get('/api/instance-numbers/resolve', async (c) => {
+  const ref = c.req.query('ref') ?? ''
+  const hit = await resolveInstance(ref)
+  if (hit) return c.json(hit)
+  return c.json({ error: await resolveInstanceError(ref) }, 404)
+})
+
+// Reverse lookup: which instance owns this credential dir. Answers "which one am I?" for an agent
+// that knows only its own CLAUDE_CONFIG_DIR / CODEX_HOME. Null (200) for the plain ~/.claude login,
+// which is a real answer — it belongs to no managed instance — not an error.
+app.get('/api/instance-numbers/whoami', async (c) => {
+  const configDir = c.req.query('configDir') ?? ''
+  return c.json(await instanceForConfigDir(configDir))
+})
 // Which Claude Desktop build is installed; the Instances tab warns when only the MSIX
 // package is present (not launchable with --user-data-dir; see core/desktop-install.ts).
 app.get('/api/desktop-install', async (c) => {
@@ -1179,10 +1211,71 @@ const wantsRefresh = (c: Context): boolean => {
   return v === '1' || v === 'true'
 }
 
+/** A Codex instance's quota, cache-aware. Extracted from the route so `/api/usage?instance=N` can
+ *  reach the Codex family through the same code the Codex route uses, rather than a second copy of
+ *  the "signed out vs read failed" reasoning that would inevitably drift from it. */
+async function codexUsageResult(
+  codexHome: string,
+  id: string,
+  refresh: boolean,
+): Promise<UsageCheckResult> {
+  const key = codexKey(id)
+  if (!refresh) {
+    const cached = getCachedUsage(key)
+    if (cached) return { snapshot: cached, cached: true, key, reason: 'ok' }
+  }
+  const { account, usage } = await resolveCodexAccount(codexHome)
+  if (!usage) {
+    // Distinguish "not signed in" from "signed in but the read failed", exactly as the Claude
+    // routes do — a bare "—" with no reason reads as a bug.
+    const reason: UsageCheckResult['reason'] =
+      account.status === 'loggedout' ? 'not_logged_in' : 'check_failed'
+    // codexUsageSnapshot(null, …) is the all-null shape — the same "checked, nothing to report"
+    // snapshot the Claude paths return, so the chip renders "—" with a reason rather than "0%".
+    return { snapshot: codexUsageSnapshot(null, account.label), cached: false, key, reason }
+  }
+  setCachedUsage(key, usage)
+  return { snapshot: usage, cached: false, key, reason: 'ok' }
+}
+
 app.get('/api/usage', async (c) => {
   const account = c.req.query('account')
   const configDir = c.req.query('configDir')
+  const instance = c.req.query('instance')
   const refresh = wantsRefresh(c)
+
+  // `instance` is the number-first path: one param that takes `7`, `#7`, a dir, an id or a name and
+  // routes to whichever family's credential chain applies. It comes FIRST because it is the only
+  // one of the three that is unambiguous — `account` and `configDir` each address one store.
+  if (instance) {
+    const hit = await resolveInstance(instance)
+    if (!hit) return c.json({ error: await resolveInstanceError(instance) }, 404)
+    const result: UsageCheckResult =
+      hit.kind === 'desktop'
+        ? await checkUsageForDesktop(hit.handle)
+        : hit.kind === 'cli'
+          ? ((await checkUsageForCliInstance(hit.handle)) ?? {
+              snapshot: parseUsageOutput('', hit.name),
+              cached: false,
+              key: hit.ref,
+              reason: 'check_failed',
+            })
+          : await codexUsageResult(hit.configDir, hit.handle, refresh)
+    // Echo WHICH instance answered. Without it a caller that passed a name has no confirmation it
+    // reached the account it meant — and that is the whole failure mode numbers exist to prevent.
+    return c.json({
+      ...result,
+      advice: result.advice ?? usageAdvice(result.snapshot),
+      instance: {
+        num: hit.num,
+        kind: hit.kind,
+        name: hit.name,
+        email: hit.email,
+        plan: hit.plan,
+      },
+    })
+  }
+
   if (account) {
     const resolved = resolveAccountParam(account)
     if (!resolved) return c.json({ error: `unknown account '${account}'` }, 404)
@@ -1259,30 +1352,64 @@ app.post('/api/usage/refresh', async (c) => c.json({ ok: true, checked: await sw
 app.get('/api/usage/budget', async (c) => {
   const dir = c.req.query('dir')
   const account = c.req.query('account')
+  const instance = c.req.query('instance')
   const configDirs = c.req.queries('configDir')
 
-  const result = dir
-    ? await checkUsageForDesktop(dir)
-    : account
-      ? await (async () => {
-          const resolved = resolveAccountParam(account)
-          if (!resolved) return null
-          const snapshot = await checkUsageForAccount(resolved.id)
-          return { snapshot, cached: false, key: `acct:${resolved.id}`, reason: 'ok' as const }
-        })()
-      : null
-  if (!result)
-    return c.json({ error: 'pass dir (a desktop instance) or account (id or label)' }, 400)
+  // `instance` (a number, dir, id or name) is the one form that reaches ALL THREE families — the
+  // older `dir` only ever addressed a desktop instance, so a CLI or Codex login had no way to ask
+  // for a budget at all.
+  const hit = instance ? await resolveInstance(instance) : null
+  if (instance && !hit) return c.json({ error: await resolveInstanceError(instance) }, 404)
 
-  const budget = buildUsageBudget(result.snapshot, result.key, {
-    configDirs: configDirs?.length ? configDirs : undefined,
-  })
+  const result = hit
+    ? hit.kind === 'desktop'
+      ? await checkUsageForDesktop(hit.handle)
+      : hit.kind === 'cli'
+        ? await checkUsageForCliInstance(hit.handle)
+        : await codexUsageResult(hit.configDir, hit.handle, true)
+    : dir
+      ? await checkUsageForDesktop(dir)
+      : account
+        ? await (async () => {
+            const resolved = resolveAccountParam(account)
+            if (!resolved) return null
+            const snapshot = await checkUsageForAccount(resolved.id)
+            return { snapshot, cached: false, key: `acct:${resolved.id}`, reason: 'ok' as const }
+          })()
+        : null
+  if (!result)
+    return c.json(
+      { error: 'pass instance (its number), dir (a desktop instance) or account (id or label)' },
+      400,
+    )
+
+  // A CLI instance's transcripts live under its OWN config dir, so that is the right default for
+  // "how many tokens did this account spend" — the ~/.claude fallback would measure a different
+  // login entirely and quietly report someone else's burn.
+  const spendDirs = configDirs?.length
+    ? configDirs
+    : hit?.kind === 'cli'
+      ? [hit.configDir]
+      : undefined
+
+  const budget = buildUsageBudget(result.snapshot, result.key, { configDirs: spendDirs })
   return c.json({
     snapshot: result.snapshot,
     reason: result.reason,
     advice: usageAdvice(result.snapshot),
     budget,
     summary: budgetSummary(budget, result.snapshot.weekAll?.pct ?? null),
+    ...(hit
+      ? {
+          instance: {
+            num: hit.num,
+            kind: hit.kind,
+            name: hit.name,
+            email: hit.email,
+            plan: hit.plan,
+          },
+        }
+      : {}),
   })
 })
 
@@ -1413,34 +1540,7 @@ app.get('/api/codex-instances/:id/usage', async (c) => {
   const id = c.req.param('id')
   const inst = await findCodexInstance(id)
   if (!inst) return c.json({ error: 'Codex instance not found' }, 404)
-  const key = codexKey(id)
-  if (!wantsRefresh(c)) {
-    const cached = getCachedUsage(key)
-    if (cached)
-      return c.json({
-        snapshot: cached,
-        cached: true,
-        key,
-        reason: 'ok',
-      } satisfies UsageCheckResult)
-  }
-  const { account, usage } = await resolveCodexAccount(inst.codexHome)
-  if (!usage) {
-    // Distinguish "not signed in" from "signed in but the read failed", exactly as the Claude
-    // routes do — a bare "—" with no reason reads as a bug.
-    const reason: UsageCheckResult['reason'] =
-      account.status === 'loggedout' ? 'not_logged_in' : 'check_failed'
-    // codexUsageSnapshot(null, …) is the all-null shape — the same "checked, nothing to report"
-    // snapshot the Claude paths return, so the chip renders "—" with a reason rather than "0%".
-    return c.json({
-      snapshot: codexUsageSnapshot(null, account.label),
-      cached: false,
-      key,
-      reason,
-    } satisfies UsageCheckResult)
-  }
-  setCachedUsage(key, usage)
-  return c.json({ snapshot: usage, cached: false, key, reason: 'ok' } satisfies UsageCheckResult)
+  return c.json(await codexUsageResult(inst.codexHome, id, wantsRefresh(c)))
 })
 app.post('/api/codex-instances', async (c) => {
   const body = await jsonBody(c)

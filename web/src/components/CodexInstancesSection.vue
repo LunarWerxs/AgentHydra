@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
+  Copy,
   EllipsisVertical,
   LogIn,
   Pencil,
@@ -21,6 +22,7 @@ import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
+import InstanceNumber from '@/components/InstanceNumber.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -28,6 +30,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -189,6 +192,11 @@ async function onFocusDesktop(instance: CodexInstance) {
   else toast.error(result?.message ?? t('codexInstances.toastDesktopFocusFailed'))
 }
 
+/** Copy the bare number — same behavior as the Claude tables' menus (see InstancesView). */
+function copyInstanceNumber(num: number) {
+  navigator.clipboard?.writeText(String(num)).catch(() => {})
+  toast.success(t('instances.toastNumberCopied', { num }))
+}
 async function onQuitDesktop(instance: CodexInstance) {
   const result = await quitDesktop(instance.id)
   if (result?.ok) toast.success(t('codexInstances.toastDesktopQuit'))
@@ -328,7 +336,14 @@ onUnmounted(stopPolling)
               </span>
             </div>
           </TableCell>
-          <TableCell class="font-medium">{{ instance.name }}</TableCell>
+          <TableCell class="font-medium">
+            <!-- Codex instances share ONE number sequence with the Claude Desktop and CLI tables,
+                 so `#7` here can never be a different `#7` there. Same chip for the same reason. -->
+            <div class="flex items-center gap-1.5">
+              <InstanceNumber :num="instance.num" />
+              <span>{{ instance.name }}</span>
+            </div>
+          </TableCell>
           <!-- Which ChatGPT account this CODEX_HOME is signed into. The name/email come straight
                off the list payload (the server resolves them from auth.json), so this fills in on
                first paint with no per-row request. -->
@@ -416,6 +431,21 @@ onUnmounted(stopPolling)
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" class="w-52">
+                  <!-- Which instance this menu belongs to, by number — see InstancesView. -->
+                  <DropdownMenuLabel class="flex items-center justify-between gap-2 py-1">
+                    <span class="font-mono text-xs">{{
+                      $t('instances.numberMenuLabel', { num: instance.num })
+                    }}</span>
+                    <button
+                      type="button"
+                      class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      :aria-label="$t('instances.copyNumber')"
+                      @click.stop="copyInstanceNumber(instance.num)"
+                    >
+                      <Copy class="size-3.5" />
+                    </button>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem
                     v-if="desktopEnabled"
                     :disabled="!instance.isDesktopRunning || isBusy(instance)"

@@ -19,6 +19,7 @@ import { basename, join } from 'node:path'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { detectDesktopInstall } from './desktop-install'
 import { readInstanceMetaMap } from './instance-meta'
+import { instanceNumbers, instanceRef } from './instance-numbers'
 import {
   defaultClaudeDir,
   instancesRoot,
@@ -194,6 +195,10 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
   // One read of the presentation-metadata file (label/icon/color), keyed by normalized dir.
   const metaMap = readInstanceMetaMap()
 
+  // …and one read of the number registry for the WHOLE fleet, which also assigns a number to any
+  // instance seen for the first time. Bulk rather than per-row: this list runs on a refresh timer.
+  const numbers = instanceNumbers([...known.values()].map((m) => instanceRef('desktop', m.dir)))
+
   const results: CMInstance[] = []
   for (const meta of known.values()) {
     const running = runningByDir.get(meta.dir)
@@ -211,6 +216,7 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
     const ui = metaMap[meta.dir]
 
     const instance: CMInstance = {
+      num: numbers.get(instanceRef('desktop', meta.dir)) ?? 0,
       name: meta.name,
       dir: meta.dir,
       isRunning: Boolean(running),

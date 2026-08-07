@@ -1,10 +1,15 @@
 import { createApp } from 'vue'
 import { appModeForPath } from './lib/app-mode'
 import { migrateLegacyStorageKeys } from './lib/storage-rebrand'
+import { migrateLegacyUsageFilterScope } from './lib/usage-filter'
 import './style.css'
 
 // Before any component setup runs — useStorage reads its key once and keeps it.
 migrateLegacyStorageKeys()
+// After the rebrand pass, which is what puts a pre-AgentHydra `…usageFilter.scope2` under the name
+// this one looks for. Ordering is the whole reason both live here rather than at their own module
+// scope: the second would otherwise migrate a key the first has not moved yet.
+migrateLegacyUsageFilterScope()
 
 async function mountApp(): Promise<void> {
   if (appModeForPath(window.location.pathname) === 'instances') {

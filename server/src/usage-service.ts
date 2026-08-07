@@ -243,6 +243,9 @@ export async function checkUsageForCliInstance(id: string): Promise<UsageCheckRe
 /** One row of the whole-fleet usage survey. */
 export interface UsageSurveyRow {
   kind: 'desktop' | 'cli'
+  /** Permanent instance number (`#7`) — the handle to quote back at a human, and the one that is
+   *  unique across kinds. See core/instance-numbers.ts. */
+  num: number
   /** Desktop dir or CLI instance id — the handle to re-check this one. */
   id: string
   label: string
@@ -277,6 +280,7 @@ export async function surveyUsage(): Promise<UsageSurveyRow[]> {
     if (!(await desktopIsCheckable(inst.dir))) return null
     return {
       kind: 'desktop',
+      num: inst.num,
       id: inst.dir,
       label: inst.label ?? inst.name,
       result: await checkUsageForDesktop(inst.dir),
@@ -286,7 +290,7 @@ export async function surveyUsage(): Promise<UsageSurveyRow[]> {
   const cliRows = clis.map(async (inst): Promise<UsageSurveyRow | null> => {
     if (!inst.loggedIn && !inst.associatedAccountId && !inst.associatedDesktopDir) return null
     const result = await checkUsageForCliInstance(inst.id)
-    return result ? { kind: 'cli', id: inst.id, label: inst.name, result } : null
+    return result ? { kind: 'cli', num: inst.num, id: inst.id, label: inst.name, result } : null
   })
 
   const rows = await Promise.all([...desktopRows, ...cliRows])

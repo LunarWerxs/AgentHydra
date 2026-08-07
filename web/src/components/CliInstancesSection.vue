@@ -12,6 +12,7 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
+  Copy,
   EllipsisVertical,
   Funnel,
   Link2,
@@ -32,6 +33,7 @@ import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
+import InstanceNumber from '@/components/InstanceNumber.vue'
 import LinkCliInstanceDialog from '@/components/LinkCliInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
 import UsageBar from '@/components/UsageBar.vue'
@@ -41,6 +43,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -170,11 +173,7 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
 // The usage filter is tab-wide too (composables/useUsageFilter.ts): "which accounts have I already
 // spent" is asked of every table at once, so a CLI login over the threshold is set aside here on
 // exactly the same terms as a desktop instance up above.
-const {
-  threshold: filterThreshold,
-  dimmed: filterDimmed,
-  visible: filterVisible,
-} = useUsageFilter()
+const { dimmed: filterDimmed, visible: filterVisible } = useUsageFilter()
 
 const visibleRows = computed(() => filterVisible(sortedRows.value, usageFor))
 /** Rows this table dropped for the filter — said out loud in the heading beside the count. */
@@ -352,6 +351,11 @@ async function onLaunch(inst: CliInstance) {
   const result = await launch(inst.id)
   if (result?.ok) toast.success(t('cliInstances.toastLaunched'))
   else toast.error(result?.message ?? t('cliInstances.toastLaunchFailed'))
+}
+/** Copy the bare number — same behavior as the desktop table's menu (see InstancesView). */
+function copyInstanceNumber(num: number) {
+  navigator.clipboard?.writeText(String(num)).catch(() => {})
+  toast.success(t('instances.toastNumberCopied', { num }))
 }
 async function onLogin(inst: CliInstance) {
   const result = await login(inst.id)
@@ -535,7 +539,7 @@ onUnmounted(stopPolling)
               <p class="font-medium text-foreground">
                 {{
                   allHiddenByFilter
-                    ? $t('instances.usageFilterAllHidden', { pct: filterThreshold })
+                    ? $t('instances.usageFilterAllHidden')
                     : linkedCount > 0
                       ? $t('cliInstances.allLinked')
                       : $t('cliInstances.empty')
@@ -585,7 +589,15 @@ onUnmounted(stopPolling)
                 :title="inst.loggedIn ? $t('cliInstances.loggedIn') : $t('cliInstances.loggedOut')"
               />
             </TableCell>
-            <TableCell class="font-medium">{{ inst.name }}</TableCell>
+            <TableCell class="font-medium">
+              <!-- Same chip as the desktop table on purpose: the number comes from ONE sequence
+                   spanning all three instance families, so it must look identical everywhere or
+                   that guarantee stops being obvious. -->
+              <div class="flex items-center gap-1.5">
+                <InstanceNumber :num="inst.num" />
+                <span>{{ inst.name }}</span>
+              </div>
+            </TableCell>
             <TableCell>
               <Badge v-if="inst.associatedAccountLabel" variant="outline">
                 {{ inst.associatedAccountLabel }}
@@ -653,6 +665,22 @@ onUnmounted(stopPolling)
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" class="w-56">
+                    <!-- Which instance this menu belongs to, by number — see the desktop table's
+                         menu for why an open kebab needs to say so. -->
+                    <DropdownMenuLabel class="flex items-center justify-between gap-2 py-1">
+                      <span class="font-mono text-xs">{{
+                        $t('instances.numberMenuLabel', { num: inst.num })
+                      }}</span>
+                      <button
+                        type="button"
+                        class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        :aria-label="$t('instances.copyNumber')"
+                        @click.stop="copyInstanceNumber(inst.num)"
+                      >
+                        <Copy class="size-3.5" />
+                      </button>
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">
                       <LogIn /> {{ $t('cliInstances.login') }}
                     </DropdownMenuItem>

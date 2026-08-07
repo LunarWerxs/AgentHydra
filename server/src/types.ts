@@ -426,6 +426,10 @@ export interface UsageCheckResult {
 
 /** A CLI instance: a `CLAUDE_CONFIG_DIR` associated with an account, logged in once. */
 export interface CliInstance {
+  /** Permanent short handle (`#7`), shared with desktop + Codex instances in one sequence. See
+   *  core/instance-numbers.ts. Re-derived from the registry on every hydrate; the copy that ends
+   *  up in the store file is a mirror, never the source of truth. */
+  num: number
   id: string
   name: string
   configDir: string
@@ -447,6 +451,9 @@ export interface CliInstance {
 
 /** An isolated Codex CLI + Desktop login rooted at its own CODEX_HOME. */
 export interface CodexInstance {
+  /** Permanent short handle (`#7`), shared with the Claude desktop + CLI instances in one
+   *  sequence. See core/instance-numbers.ts. */
+  num: number
   id: string
   name: string
   codexHome: string

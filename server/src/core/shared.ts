@@ -214,6 +214,10 @@ export interface CMAccount {
 
 /** A single isolated Claude Desktop instance, running or available. */
 export interface CMInstance {
+  /** Permanent short handle (`#7`) — see core/instance-numbers.ts. Unique across desktop, CLI and
+   *  Codex instances alike, assigned on first sight and never reused, so it is the one identifier
+   *  a human can say out loud and an MCP client can resolve back to this exact account. */
+  num: number
   name: string
   dir: string
   isRunning: boolean

@@ -11,36 +11,61 @@
 // Shown only in usage mode, which is also exactly when the filter is allowed to do anything (see
 // composables/useUsageFilter.ts): the button and its effect appear and disappear together, so a
 // dimmed table always has a visible control that explains it.
+//
+// Laid out as LABELLED SECTIONS over card-shaped groups rather than one run of hairline-divided
+// rows. With two windows, each carrying a switch and a threshold, an undifferentiated list left the
+// eye no way to tell which threshold belonged to which switch; a card that visibly contains its own
+// controls answers that before it has to be read. The accent-coloured section captions are the same
+// idea one level up — they say what each run of controls is FOR, so "Hide instead of dim" reads as
+// a display choice rather than as a third quota window.
 import { Funnel } from '@lucide/vue'
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+import UsageFilterWindow from '@/components/UsageFilterWindow.vue'
 import UsageRefreshRows from '@/components/UsageRefreshRows.vue'
-import { Button, buttonVariants } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { buttonVariants } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { useUsageFilter } from '@/composables/useUsageFilter'
-import { USAGE_THRESHOLD_PRESETS, type UsageFilterScope } from '@/lib/usage-filter'
 import { cn } from '@/lib/utils'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
-import SettingsRow from '@/shell/SettingsRow.vue'
 
-const { enabled, threshold, hideMatches, scope, setThreshold } = useUsageFilter()
+const { t } = useI18n()
+const {
+  enabled,
+  hideMatches,
+  weekEnabled,
+  weekThreshold,
+  sessionEnabled,
+  sessionThreshold,
+  rule,
+  noWindows,
+  setWeekThreshold,
+  setSessionThreshold,
+} = useUsageFilter()
 
-/** Scope choices, default first: the weekly cap (the Usage column) is what decides whether an
- *  account is worth starting on; the 5-hour session and the either-of-the-two reading are the
- *  narrower questions you opt into. */
-const SCOPES: Array<{ value: UsageFilterScope; labelKey: string }> = [
-  { value: 'week', labelKey: 'instances.usageFilterScopeWeek' },
-  { value: 'session', labelKey: 'instances.usageFilterScopeSession' },
-  { value: 'either', labelKey: 'instances.usageFilterScopeEither' },
-]
-
-// The trigger carries the current threshold when the filter is on, so the toolbar says what the
-// table is doing without needing the flyout opened. `secondary` matches the pressed usage-mode
-// toggle beside it, which is the established "this mode is on" signal in this toolbar.
+// The trigger carries the rule when the filter is on, so the toolbar says what the table is doing
+// without needing the flyout opened. `secondary` matches the pressed usage-mode toggle beside it,
+// which is the established "this mode is on" signal in this toolbar.
 const triggerVariant = computed(() => (enabled.value ? 'secondary' : 'outline'))
+
+/** The rule, compact enough for a toolbar button. A bare percentage is the weekly cap — the window
+ *  that has always been the default — and the 5-hour line is the one that carries a "5h" tag, so
+ *  the common single-window case stays as short as it was before there were two. */
+const triggerLabel = computed(() => {
+  const { week, session } = rule.value
+  if (week != null && session != null) {
+    return t('instances.usageFilterChipBoth', { week, session })
+  }
+  if (session != null) return t('instances.usageFilterChipSession', { pct: session })
+  if (week != null) return t('instances.usageFilterChipWeek', { pct: week })
+  return t('instances.usageFilterChipNone')
+})
+
+/** Section caption: uppercase, tracked, accent-coloured. Shared so the three of them cannot drift. */
+const CAPTION = 'text-[11px] font-semibold uppercase tracking-wider text-primary'
 </script>
 
 <template>
@@ -61,106 +86,93 @@ const triggerVariant = computed(() => (enabled.value ? 'secondary' : 'outline'))
             :aria-label="$t('instances.usageFilterTitle')"
           >
             <Funnel />
-            <span v-if="enabled" class="tabular-nums">
-              {{ $t('instances.usageFilterThresholdValue', { pct: threshold }) }}
-            </span>
+            <span v-if="enabled" class="tabular-nums">{{ triggerLabel }}</span>
           </button>
         </PopoverTrigger>
-        <PopoverContent align="end" class="w-80 p-0">
-          <p
-            class="px-3.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
-          >
-            {{ $t('instances.usageFilterTitle') }}
-          </p>
-          <div class="divide-y divide-border/60">
-            <SettingsRow :label="$t('instances.usageFilterEnable')">
-              <template #info>
-                <InfoHint :text="$t('instances.usageFilterHint')" />
-              </template>
-              <template #control>
+        <!-- Wider than the default popover: two threshold cards, each with a four-up preset row,
+             and the shared auto-refresh rows below them, whose label wraps under a narrow control
+             column. 24rem is the width at which none of the three has to fold. -->
+        <PopoverContent align="end" class="w-96 p-0">
+          <!-- No max height and no scroller: the flyout GROWS as sections open. A scrollbar here
+               was worse than the height it saved — expanding a window moved the controls under the
+               cursor, and the section you had just opened could land below the fold. -->
+          <div class="space-y-3 px-3 py-3">
+            <header class="space-y-1.5">
+              <h2 class="text-sm font-semibold text-foreground">
+                {{ $t('instances.usageFilterTitle') }}
+              </h2>
+              <!-- The master switch sits at top level rather than inside a card: the cards below are
+                   the things it turns on, and nesting it among them would make it look like one more
+                   of them. -->
+              <div class="flex items-center gap-3">
+                <span class="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-foreground">
+                  {{ $t('instances.usageFilterEnable') }}
+                  <InfoHint :text="$t('instances.usageFilterHint')" />
+                </span>
                 <Switch v-model="enabled" />
-              </template>
-            </SettingsRow>
+              </div>
+            </header>
 
             <!-- Everything below is dead weight while the filter is off — collapse it rather than
-                 leaving a threshold you can set and three controls that do nothing. -->
+                 leaving thresholds you can set and controls that do nothing. -->
             <ExpandTransition :open="enabled">
-              <div class="divide-y divide-border/60">
-                <div class="space-y-2 px-3.5 py-2.5">
-                  <div class="flex items-center justify-between gap-3">
-                    <span class="flex items-center gap-1.5 text-sm text-foreground">
-                      {{ $t('instances.usageFilterThreshold') }}
-                      <InfoHint :text="$t('instances.usageFilterThresholdHint')" />
+              <div class="space-y-3">
+                <section class="space-y-1.5">
+                  <h3 :class="CAPTION">{{ $t('instances.usageFilterWindows') }}</h3>
+                  <!-- One card per quota window. Two windows and two thresholds, because "80% of
+                       the week" and "50% of this 5-hour session" are different questions — see
+                       lib/usage-filter.ts. -->
+                  <UsageFilterWindow
+                    v-model="weekEnabled"
+                    :label="$t('instances.usageFilterWeek')"
+                    :hint="$t('instances.usageFilterWeekHint')"
+                    :threshold-label="$t('instances.usageFilterWeekThresholdLabel')"
+                    :threshold="weekThreshold"
+                    @update:threshold="setWeekThreshold"
+                  />
+                  <UsageFilterWindow
+                    v-model="sessionEnabled"
+                    :label="$t('instances.usageFilterSession')"
+                    :hint="$t('instances.usageFilterSessionHint')"
+                    :threshold-label="$t('instances.usageFilterSessionThresholdLabel')"
+                    :threshold="sessionThreshold"
+                    @update:threshold="setSessionThreshold"
+                  />
+                  <!-- Both windows off is a switched-on filter told to look at nothing. It is a
+                       reachable state rather than a disabled switch, so it has to say so —
+                       otherwise the only symptom is a table that stopped reacting. -->
+                  <ExpandTransition :open="noWindows">
+                    <p
+                      class="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground"
+                    >
+                      {{ $t('instances.usageFilterNoWindows') }}
+                    </p>
+                  </ExpandTransition>
+                </section>
+
+                <section class="space-y-1.5">
+                  <h3 :class="CAPTION">{{ $t('instances.usageFilterDisplay') }}</h3>
+                  <div class="flex items-center gap-3 rounded-md border border-border bg-background/60 px-2.5 py-1.5">
+                    <span class="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-foreground">
+                      {{ $t('instances.usageFilterHide') }}
+                      <InfoHint :text="$t('instances.usageFilterHideHint')" />
                     </span>
-                    <div class="flex items-center gap-1 text-[13px] text-muted-foreground">
-                      <Input
-                        class="h-7 w-16 text-right"
-                        type="number"
-                        min="0"
-                        max="100"
-                        :model-value="threshold"
-                        @change="(e: Event) => setThreshold((e.target as HTMLInputElement).value)"
-                      />
-                      <span>%</span>
-                    </div>
-                  </div>
-                  <div class="flex items-center gap-1">
-                    <Button
-                      v-for="preset in USAGE_THRESHOLD_PRESETS"
-                      :key="preset"
-                      :variant="threshold === preset ? 'secondary' : 'ghost'"
-                      size="xs"
-                      class="flex-1"
-                      :aria-pressed="threshold === preset"
-                      @click="setThreshold(preset)"
-                    >
-                      {{ $t('instances.usageFilterThresholdValue', { pct: preset }) }}
-                    </Button>
-                  </div>
-                </div>
-
-                <SettingsRow :label="$t('instances.usageFilterHide')">
-                  <template #info>
-                    <InfoHint :text="$t('instances.usageFilterHideHint')" />
-                  </template>
-                  <template #control>
                     <Switch v-model="hideMatches" />
-                  </template>
-                </SettingsRow>
-
-                <div class="space-y-2 px-3.5 py-2.5">
-                  <span class="flex items-center gap-1.5 text-sm text-foreground">
-                    {{ $t('instances.usageFilterScope') }}
-                    <InfoHint :text="$t('instances.usageFilterScopeHint')" />
-                  </span>
-                  <div class="flex items-center gap-1">
-                    <Button
-                      v-for="option in SCOPES"
-                      :key="option.value"
-                      :variant="scope === option.value ? 'secondary' : 'ghost'"
-                      size="xs"
-                      class="flex-1"
-                      :aria-pressed="scope === option.value"
-                      @click="scope = option.value"
-                    >
-                      {{ $t(option.labelKey) }}
-                    </Button>
                   </div>
-                </div>
+                </section>
               </div>
             </ExpandTransition>
-          </div>
 
-          <p
-            class="px-3.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
-          >
-            {{ $t('instances.usageDataTitle') }}
-          </p>
-          <!-- The same rows Settings shows, from one source (components/UsageRefreshRows.vue). The
-               numbers this filter compares are only as fresh as this setting keeps them, so it is
-               the one other control that belongs in this flyout. -->
-          <div class="divide-y divide-border/60">
-            <UsageRefreshRows />
+            <section class="space-y-1.5">
+              <h3 :class="CAPTION">{{ $t('instances.usageDataTitle') }}</h3>
+              <!-- The same rows Settings shows, from one source (components/UsageRefreshRows.vue).
+                   The numbers this filter compares are only as fresh as this setting keeps them, so
+                   it is the one other control that belongs in this flyout. Its rows carry their own
+                   padding, so the card supplies only the frame. -->
+              <div class="divide-y divide-border/60 rounded-md border border-border bg-background/60">
+                <UsageRefreshRows />
+              </div>
+            </section>
           </div>
         </PopoverContent>
       </Popover>

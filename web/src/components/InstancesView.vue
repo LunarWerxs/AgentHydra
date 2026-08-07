@@ -5,6 +5,7 @@ import {
   ArrowUp,
   Boxes,
   ChevronDown,
+  Copy,
   Cpu,
   EllipsisVertical,
   FolderOpen,
@@ -33,6 +34,7 @@ import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
+import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionsMenu from '@/components/InstanceSectionsMenu.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
@@ -44,6 +46,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -190,11 +193,7 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
 // "Set aside the accounts I've already spent" (composables/useUsageFilter.ts). It runs AFTER the
 // sort — it removes or greys rows, it never reorders them — and only in usage mode, which is also
 // the only mode where its toolbar control is on screen.
-const {
-  threshold: filterThreshold,
-  dimmed: filterDimmed,
-  visible: filterVisible,
-} = useUsageFilter()
+const { dimmed: filterDimmed, visible: filterVisible } = useUsageFilter()
 
 const visibleRows = computed(() => filterVisible(sortedRows.value, usageFor))
 /** How many rows the filter took out of this table — the heading has to say so, or an instance
@@ -455,6 +454,13 @@ async function onFocus(inst: CMInstance) {
   const result = await focus(inst.dir)
   if (result?.ok) toast.success(t('instances.toastFocused'))
   else toast.error(result?.message ?? t('instances.toastFocusFailed'))
+}
+/** Copy the bare number (not `#7`) — it is what gets pasted straight into an MCP `instance:` arg or
+ *  typed at an agent, and both forms resolve anyway. The toast confirms the value because the whole
+ *  point of the number is being able to quote it later with confidence. */
+function copyInstanceNumber(num: number) {
+  navigator.clipboard?.writeText(String(num)).catch(() => {})
+  toast.success(t('instances.toastNumberCopied', { num }))
 }
 async function onRevealFolder(inst: CMInstance) {
   const result = await revealFolder(inst.dir)
@@ -856,7 +862,7 @@ onUnmounted(() => {
               <p class="font-medium text-foreground">
                 {{
                   allHiddenByFilter
-                    ? $t('instances.usageFilterAllHidden', { pct: filterThreshold })
+                    ? $t('instances.usageFilterAllHidden')
                     : $t('instances.empty')
                 }}
               </p>
@@ -939,6 +945,10 @@ onUnmounted(() => {
                    row now, not just running ones, because the folder is what it is really for; the
                    focus hint rides along as the description when clicking would actually focus. -->
               <div class="flex items-center gap-1.5">
+                <!-- The permanent number sits BEFORE the name because the name is the untrustworthy
+                     half: a profile signed into a different account than the folder it was named
+                     after keeps showing the old name, and the number never drifts. -->
+                <InstanceNumber :num="inst.num" />
                 <IconTooltip
                   :label="inst.dir"
                   :description="inst.isRunning ? $t('instances.focusHint') : undefined"
@@ -1073,6 +1083,24 @@ onUnmounted(() => {
                   <!-- w-56: without it the menu inherits the tiny kebab trigger's width and
                        "Create desktop shortcut" wraps/clips; a fixed width fits it on one line -->
                   <DropdownMenuContent align="end" class="w-56">
+                    <!-- The menu leads with WHICH instance it belongs to, by number. On a table of
+                         fourteen near-identically named rows, an open kebab menu is otherwise
+                         detached from the row it came from — and "Delete" is the wrong item to be
+                         unsure about. Copying it here is one click from every row's menu. -->
+                    <DropdownMenuLabel class="flex items-center justify-between gap-2 py-1">
+                      <span class="font-mono text-xs">{{
+                        $t('instances.numberMenuLabel', { num: inst.num })
+                      }}</span>
+                      <button
+                        type="button"
+                        class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        :aria-label="$t('instances.copyNumber')"
+                        @click.stop="copyInstanceNumber(inst.num)"
+                      >
+                        <Copy class="size-3.5" />
+                      </button>
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
                     <!-- Quit lives here now (the row's primary button is Focus when running);
                          disabled unless running, mirroring the old Focus item's guard -->
                     <DropdownMenuItem
