@@ -5,6 +5,71 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-08-07
+
+### Added
+
+- **Every instance now has a permanent number, and you can talk to the MCP server in numbers.**
+  Until now nothing an instance carried was usable as a spoken or written handle: a Claude Desktop
+  instance is identified by its folder path, a Claude CLI or Codex instance by a random uuid. Worse,
+  the folder name is not even reliable: sign a profile into a different account than the one it was
+  named after and it keeps showing the old name (this machine has exactly that, the folder
+  `3claude` is signed into the account labelled `4claude`, and vice versa). So "check instance 7's
+  usage" was a sentence with nothing behind it. Now `#7` is a real identifier.
+  - **One sequence across all three families** (Desktop, CLI, Codex), so a bare `7` never needs a
+    kind beside it. Assigned on first sight and **never reused**: a number retired by a deleted
+    instance stays retired, because the whole value of the handle is that a note saying "instance 7"
+    still means the same account next month. A cold start numbers the fleet in sorted-ref order, so
+    the same set of instances numbers identically on any machine.
+  - **Visible where you read it**: a `#N` chip on every row of all three instance tables, and a
+    header on every row's ⋯ menu naming which instance the menu belongs to. Both copy on click.
+  - **Accepted where you act**: every MCP tool that addresses an instance takes `instance`, which
+    accepts the number (`7`, `#7`), the dir/id, a `desktop:<dir>`/`cli:<id>` ref, or an unambiguous
+    name. The legacy `dir` / `id` parameters are unchanged, so nothing that already worked broke.
+  - **Three new MCP tools**: `list_instance_numbers` (the whole fleet, one flat numbered list with
+    each account's email and plan), `resolve_instance` (confirm which account a reference means
+    before spending its quota; its errors distinguish an unknown number from a retired one),
+    and `whoami` (which numbered instance THIS process is, matched from its own
+    `CLAUDE_CONFIG_DIR`/`CODEX_HOME`).
+  - `check_my_usage` now reports `instance` alongside the numbers, so an agent can say "instance #7
+    is at 84% weekly" instead of an unattributed percentage. `list_usage` rows carry `num` too.
+  - `usage_budget` gained the `instance` form, which incidentally **fixes a gap**: it previously
+    only accepted a desktop dir or a dispatch account, so a CLI or Codex login could not get a
+    budget at all. A CLI instance's token spend is now measured against its own config dir rather
+    than defaulting to the `~/.claude` login, which belongs to a different account.
+  - A queue item's `instance_ref` accepts a number too; it is expanded to a real ref before the item
+    is stored, so a pinned run can never fail to resolve later, at dispatch time, with nobody
+    watching.
+  - New REST routes: `GET /api/instance-numbers`, `/api/instance-numbers/resolve?ref=`,
+    `/api/instance-numbers/whoami?configDir=`, plus `instance=` on `/api/usage` and
+    `/api/usage/budget`.
+- **The usage filter can now set aside an account for its 5-hour window as well, on its own
+  threshold.** A spent 5-hour session means you cannot use an account *right now*; a spent weekly
+  cap means you cannot use it *at all*. Those are different questions, and the filter could only ask
+  one of them at a time: the old "Measure against Weekly / 5h / Either" tri-toggle shared a single
+  number across both windows, so "set it aside at 80% of the week, but already at 50% of this
+  session" was not expressible (owner-reported).
+  - Each window is now its own switch with its own threshold, and a row is set aside when **either**
+    line is crossed. **Weekly** stays on by default; **Also 5-hour usage** is opt-in, because that
+    window refills the same day and filtering on it by default had rows leaving the table and coming
+    back over an afternoon.
+  - A stored `Weekly` / `5h` / `Either` choice carries over to the pair of switches that behaves
+    identically, so nobody's filter silently re-points at a different window on upgrade. An
+    unreadable or missing threshold lands on the default rather than on 0, which as a threshold
+    would have meant "set aside every account that has any reading at all".
+  - The toolbar button says the whole rule (`80% · 5h 65%`), so a dimmed table explains itself
+    without opening the flyout.
+  - **Fixed**: the "every instance is filtered" empty state told you to *lower* the threshold, which
+    hides more rows, not fewer.
+
+### Changed
+
+- **The usage flyout is laid out as labelled sections over cards** rather than one run of
+  hairline-divided rows. With two windows, each carrying a switch and a threshold, an
+  undifferentiated list left no way to see which threshold belonged to which switch. Each window is
+  now a card that visibly contains its own controls, its threshold reads as a value display, and a
+  slider sits beside the presets for setting a figure that isn't one of the four.
+
 ## [0.16.2] - 2026-08-06
 
 ### Added
