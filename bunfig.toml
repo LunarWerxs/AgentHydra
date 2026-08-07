@@ -3,7 +3,13 @@
 [test]
 preload = ["./tests/setup.ts"]
 
-[install]
-linker = "isolated"
-globalStore = true
-publicHoistPattern = ["*"]
+# NO [install] block. An isolated linker backed by a global store was tried here on 2026-08-07 and
+# reverted the same day: it installs fine on a machine whose global store is already warm, and fails
+# on one where it is not. CI's windows-latest runner caches ~/.bun/install/cache but not the store,
+# so it hit `ENOENT: failed to link package (copyfile)` on 98 packages while ubuntu passed.
+#
+# The reason this must not come back casually is bigger than CI. Auto-update applies itself with a
+# `git pull` followed by a REINSTALL and a rebuild on the user's own machine (see docs/RELEASING.md
+# and server/src/updater.ts), so an install strategy that needs a pre-warmed store would break
+# updating for exactly the people who never populated one. `patchedDependencies` in package.json is
+# unaffected and stays; patching does not depend on the linker.
