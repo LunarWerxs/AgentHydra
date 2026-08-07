@@ -32,13 +32,25 @@ afterEach(resetRegistry)
 
 describe('instanceRef', () => {
   test('normalizes desktop dirs so one folder claims exactly one number', () => {
-    // The same folder reaches the registry spelled three ways across the codebase. Each spelling
+    // The same folder reaches the registry spelled several ways across the codebase. Each spelling
     // claiming its own number is the bug this normalization exists to prevent.
-    const a = instanceRef('desktop', 'C:\\Users\\me\\.claude-instances\\3claude')
-    const b = instanceRef('desktop', 'c:\\users\\me\\.claude-instances\\3claude')
-    const c = instanceRef('desktop', 'C:/Users/me/.claude-instances/3claude')
-    expect(b).toBe(a)
-    expect(c).toBe(a)
+    //
+    // Split by platform because the property itself is platform-specific, not because the test is
+    // being accommodating: NTFS folds case and treats both separators alike, while on Linux
+    // `/tmp/A` and `/tmp/a` are two different directories and collapsing them would be a bug.
+    // Asserting the Windows rule everywhere is what failed CI's ubuntu leg on v0.17.0.
+    if (process.platform === 'win32') {
+      const a = instanceRef('desktop', 'C:\\Users\\me\\.claude-instances\\3claude')
+      expect(instanceRef('desktop', 'c:\\users\\me\\.claude-instances\\3claude')).toBe(a)
+      expect(instanceRef('desktop', 'C:/Users/me/.claude-instances/3claude')).toBe(a)
+      expect(instanceRef('desktop', 'C:\\Users\\me\\.claude-instances\\3claude\\')).toBe(a)
+    } else {
+      const a = instanceRef('desktop', '/home/me/.claude-instances/3claude')
+      expect(instanceRef('desktop', '/home/me/.claude-instances/3claude/')).toBe(a)
+      expect(instanceRef('desktop', '/home/me/./.claude-instances/3claude')).toBe(a)
+      // ...and case is NOT folded here, because these really are two directories.
+      expect(instanceRef('desktop', '/home/me/.claude-instances/3Claude')).not.toBe(a)
+    }
   })
 
   test('leaves cli/codex ids untouched — they are opaque uuids, not paths', () => {
