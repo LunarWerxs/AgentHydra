@@ -369,6 +369,22 @@ fn health_tick() {
     }
     *a.revive_grace_until.lock().unwrap() = Some(Instant::now() + REVIVE_GRACE);
     a.started_by_us.store(true, Ordering::Relaxed);
+
+    // REAP THE PREDECESSOR FIRST. A daemon that missed three consecutive probes is not always
+    // dead - it can be alive and wedged before it ever binds, and spawning a replacement on top of
+    // it leaves both running. Observed here: one launch produced a daemon that never bound, the
+    // watchdog revived correctly 25s later, and the machine was then left with two bun processes,
+    // the orphan still holding its handles. Repeat that a few times and the pile is the problem.
+    //
+    // This is a deliberate improvement on the PowerShell host, which also re-spawned without
+    // reaping. Safe here because the grace period above means we only reach this after ~15s of
+    // silence: a daemon that has not bound by then is not about to, and taskkill /T takes the
+    // cmd.exe wrapper's whole tree with it.
+    let previous = a.server_pid.swap(0, Ordering::Relaxed);
+    if previous > 0 {
+        daemon::taskkill(previous);
+    }
+
     if let Some(pid) = daemon::spawn(&a.cfg, &a.token) {
         a.server_pid.store(pid, Ordering::Relaxed);
     }
