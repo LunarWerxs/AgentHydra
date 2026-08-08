@@ -257,6 +257,36 @@ pub fn request_shutdown(cfg: &Config, url: &str, token: &str, timeout: Duration)
     body.starts_with("HTTP/1.1 2") || body.starts_with("HTTP/1.0 2")
 }
 
+/// POST to an arbitrary path on the live daemon, for the optional app-action menu item.
+/// Returns whether the daemon answered 2xx.
+pub fn post(url: &str, path: &str, timeout: Duration) -> bool {
+    let Some((host, port)) = split_url(url) else {
+        return false;
+    };
+    let Some(addr) = resolve(&host, port) else {
+        return false;
+    };
+    let Ok(mut sock) = TcpStream::connect_timeout(&addr, timeout) else {
+        return false;
+    };
+    let _ = sock.set_read_timeout(Some(timeout));
+    let _ = sock.set_write_timeout(Some(timeout));
+    let req = format!(
+        "POST {path} HTTP/1.1
+Host: {host}:{port}
+Content-Length: 0
+Connection: close
+
+"
+    );
+    if sock.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    let mut body = String::new();
+    let _ = sock.read_to_string(&mut body);
+    body.starts_with("HTTP/1.1 2") || body.starts_with("HTTP/1.0 2")
+}
+
 /// Stop the live daemon, in the PowerShell host's two flavours.
 ///
 /// Token flavour: graceful POST first (unless `skip_graceful`, which Quit sets because it already

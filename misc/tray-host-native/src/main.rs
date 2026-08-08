@@ -18,6 +18,7 @@ mod browser;
 mod config;
 mod daemon;
 mod json;
+mod sha256;
 mod win;
 
 use config::{Config, StrayPolicy};
@@ -34,6 +35,8 @@ const ID_OPEN: usize = 1;
 const ID_REBUILD: usize = 2;
 const ID_RESTART: usize = 3;
 const ID_QUIT: usize = 4;
+/// Optional per-app extra item (see Config::action_path).
+const ID_ACTION: usize = 5;
 
 // --- timers -----------------------------------------------------------------------------------
 const TIMER_HEALTH: usize = 1;
@@ -58,6 +61,9 @@ const WORK_OK_READY: usize = 0;
 const WORK_OK_NOT_READY: usize = 1;
 const WORK_BUILD_FAILED: usize = 2;
 const WORK_CANCELED: usize = 3;
+const WORK_ACTION_OK: usize = 4;
+const WORK_ACTION_FAILED: usize = 5;
+const WORK_ACTION_NO_DAEMON: usize = 6;
 
 struct App {
     cfg: Config,
@@ -160,6 +166,12 @@ unsafe fn show_menu(hwnd: HWND) {
     }
     let restart = wide("Restart");
     AppendMenuW(menu, MF_STRING | grey, ID_RESTART, restart.as_ptr());
+    // The app-action item, for apps that supervise WORK the daemon owns rather than just the
+    // daemon itself: Restart and Quit act on the daemon, this acts on what the daemon is running.
+    if a.cfg.action_path.is_some() {
+        let label = wide(&a.cfg.action_label);
+        AppendMenuW(menu, MF_STRING | grey, ID_ACTION, label.as_ptr());
+    }
     AppendMenuW(menu, MF_SEPARATOR, 0, null_mut());
     let quit = wide("Quit");
     AppendMenuW(menu, MF_STRING, ID_QUIT, quit.as_ptr());
@@ -205,6 +217,35 @@ fn start_worker(hwnd: HWND, rebuild: bool) {
         app().busy.store(false, Ordering::SeqCst);
         unsafe {
             PostMessageW(hwnd_val as HWND, WM_APP_WORKER_DONE, outcome, 0);
+        }
+    });
+}
+
+/// Fire the app-action POST on a background thread.
+///
+/// Off the UI thread because the request can legitimately take seconds (DevWebUI's stop-all waits
+/// out each child's SIGTERM grace), and a tray menu that freezes while it runs is worse than the
+/// action itself. Deliberately NOT gated on `busy`: this acts on the daemon's work, not the daemon,
+/// so it stays available while a rebuild is in flight.
+fn start_action(hwnd: HWND) {
+    let a = app();
+    let Some(path) = a.cfg.action_path.clone() else {
+        return;
+    };
+    let Some(url) = get_url() else {
+        balloon(
+            &format!("{} isn't running.", a.cfg.display_name),
+            NIIF_WARNING,
+        );
+        return;
+    };
+    let hwnd_val = hwnd as usize;
+    let timeout = Duration::from_secs(a.cfg.action_timeout_secs);
+    std::thread::spawn(move || {
+        let ok = daemon::post(&url, &path, timeout);
+        let code = if ok { WORK_ACTION_OK } else { WORK_ACTION_FAILED };
+        unsafe {
+            PostMessageW(hwnd_val as HWND, WM_APP_WORKER_DONE, code, 0);
         }
     });
 }
@@ -488,6 +529,7 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 ID_OPEN => open_current_ui(),
                 ID_REBUILD => start_worker(h, true),
                 ID_RESTART => start_worker(h, false),
+                ID_ACTION => start_action(h),
                 ID_QUIT => quit_app(h),
                 _ => {}
             }
@@ -518,6 +560,17 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         open_current_ui();
                     }
                 }
+                WORK_ACTION_OK => {
+                    balloon(&a.cfg.action_ok_text.replace("{APP}", &a.cfg.display_name), NIIF_INFO)
+                }
+                WORK_ACTION_FAILED => balloon(
+                    &a.cfg.action_fail_text.replace("{APP}", &a.cfg.display_name),
+                    NIIF_WARNING,
+                ),
+                WORK_ACTION_NO_DAEMON => balloon(
+                    &format!("{} isn't running.", a.cfg.display_name),
+                    NIIF_WARNING,
+                ),
                 _ => {}
             }
             0
@@ -749,6 +802,34 @@ fn main() {
         // Only now do we wait: by this point the daemon has had our entire setup as a head start.
         if get_url().is_none() {
             set_url(daemon::wait_for_url(&app().cfg, startup_wait));
+        }
+
+        // "Started but not serving" guidance. One app's overwhelmingly likely cause is a missing
+        // configuration step, and the honest answer is to say which command to run rather than
+        // leave a tray icon that quietly does nothing. Tear the whole thing down after saying so:
+        // a half-started app with a tray icon invites the user to keep clicking it.
+        let a = app();
+        if get_url().is_none() {
+            if let Some(hint) = a.cfg.not_serving_hint.clone() {
+                daemon::stop(&a.cfg, &a.token, true, false);
+                let pid = a.server_pid.swap(0, Ordering::Relaxed);
+                if pid > 0 {
+                    daemon::taskkill(pid);
+                }
+                UI.with(|ui| {
+                    let mut slot = ui.borrow_mut();
+                    if let Some(ui) = slot.as_mut() {
+                        Shell_NotifyIconW(NIM_DELETE, &mut ui.nid);
+                        if !ui.mutex.is_null() {
+                            ReleaseMutex(ui.mutex);
+                            CloseHandle(ui.mutex);
+                            ui.mutex = null_mut();
+                        }
+                    }
+                });
+                win::message_box(&a.cfg.display_name, &hint, MB_ICONWARNING);
+                return;
+            }
         }
         open_current_ui();
 

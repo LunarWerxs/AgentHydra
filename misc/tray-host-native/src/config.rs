@@ -67,6 +67,20 @@ pub struct Config {
     /// Additionally append `?window-size=WxH`, for apps whose web build applies it via resizeTo.
     pub portable_window_size_hint: bool,
 
+    /// Optional EXTRA menu item that POSTs to the live daemon. For apps that supervise work the
+    /// daemon owns (DevWebUI's managed dev servers) rather than just the daemon itself: Restart and
+    /// Quit act on the daemon, this acts on what the daemon is running.
+    pub action_path: Option<String>,
+    pub action_label: String,
+    pub action_ok_text: String,
+    pub action_fail_text: String,
+    pub action_timeout_secs: u64,
+
+    /// Shown when the daemon starts but never serves. One app's overwhelmingly likely cause is a
+    /// missing configuration step, and a tray icon that silently does nothing is a worse answer
+    /// than telling the user which command to run.
+    pub not_serving_hint: Option<String>,
+
     /// First-run bootstrap: `[{ "missing": "node_modules", "run": "bun install" }, ...]`. Each
     /// entry runs (blocking, once) only when its path is absent from the app root. The tray icon is
     /// already up by then, so a fresh checkout looks like it is working rather than hung.
@@ -204,7 +218,23 @@ impl Config {
         Ok(Config {
             display_name: need("displayName")?,
             service_name: need("serviceName")?,
-            mutex_name: need("mutexName")?,
+            // {ROOTHASH} = the first 16 uppercase hex chars of SHA-256 over the lowercased
+            // resolved root, which is how one app gives a second checkout on the same machine its
+            // own tray host instead of colliding on a fixed global name. Computed here so the name
+            // matches the PowerShell host's byte for byte.
+            mutex_name: {
+                let raw = need("mutexName")?;
+                if raw.contains("{ROOTHASH}") {
+                    let id = app_root.to_string_lossy().to_lowercase();
+                    // canonicalize() yields a \?\ extended-length prefix; PowerShell's
+                    // Resolve-Path does not, and hashing the two would disagree.
+                    let id = id.strip_prefix(r"\?\").unwrap_or(&id).to_string();
+                    let hash = crate::sha256::hex(id.as_bytes())[..16].to_uppercase();
+                    raw.replace("{ROOTHASH}", &hash)
+                } else {
+                    raw
+                }
+            },
             icon_file: script_dir.join(expand(v.str_at("iconFile").unwrap_or("app.ico"))),
             script_dir,
             start_command,
@@ -246,6 +276,15 @@ impl Config {
                 .unwrap_or(true),
             portable_window_size: size,
             portable_window_size_hint: v.flag_at("portableWindowSizeHint"),
+            action_path: opt_string(v.str_at("actionPath")),
+            action_label: v.str_at("actionLabel").unwrap_or("Run action").to_string(),
+            action_ok_text: v.str_at("actionOkText").unwrap_or("Done.").to_string(),
+            action_fail_text: v
+                .str_at("actionFailText")
+                .unwrap_or("{APP} didn't accept that. Open it to check.")
+                .to_string(),
+            action_timeout_secs: v.num_at("actionTimeoutSec").unwrap_or(60.0) as u64,
+            not_serving_hint: opt_string(v.str_at("notServingHint")),
             first_run: match v.get("firstRun") {
                 Some(Json::Arr(items)) => items
                     .iter()
