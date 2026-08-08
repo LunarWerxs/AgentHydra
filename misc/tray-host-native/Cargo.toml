@@ -1,0 +1,15 @@
+[package]
+name = "lunarwerx-tray"
+version = "0.1.0"
+edition = "2021"
+
+# NO dependencies on purpose: every Win32 call this needs is declared inline, so the kit gains a
+# tray host without gaining a supply chain, a vendor directory or an offline-build problem.
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
