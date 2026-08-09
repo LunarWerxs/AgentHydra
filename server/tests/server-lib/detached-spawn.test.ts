@@ -41,13 +41,53 @@ test("win32: hands the launch to WMI so the child escapes the tree AND inherits 
   expect(s.detached).toBe(false);
 });
 
-test("win32: keeps a `cmd /c start` fallback — a leaked port beats a window that never opens", () => {
+test("win32: falls back to Start-Process (no cmd.exe reparse) — a leaked handle beats no launch", () => {
   const script = buildDetachedSpawn("win32", [EXE, ...ARGS]).argv[4]!;
-  expect(script).toContain("cmd.exe /c start");
+  // The fallback is Start-Process with an argument ARRAY, NOT `cmd.exe /c <string>`. cmd would
+  // re-split the string on its own metacharacters (& | ^); Start-Process passes the array straight
+  // to CreateProcess with no second parser.
+  expect(script).toContain("Start-Process -FilePath");
+  expect(script).toContain("-ArgumentList @(");
+  expect(script).not.toContain("cmd.exe");
   // The fallback only fires when WMI returned non-zero / threw.
   expect(script).toMatch(/if \(\$rc -ne 0\)/);
   // And a WMI failure must not surface as a spawn failure once the fallback has run.
   expect(script).toContain("exit 0");
+});
+
+test("win32: no-arg launch omits an empty -ArgumentList", () => {
+  // Start-Process throws on an empty ArgumentList, so the single-exe case must not emit one.
+  const script = buildDetachedSpawn("win32", [EXE]).argv[4]!;
+  expect(script).toContain("Start-Process -FilePath");
+  expect(script).not.toContain("-ArgumentList");
+});
+
+test("win32: a spaced -ArgumentList element is pre-quoted so Start-Process can't split it", () => {
+  // The round-2 regression: Windows PowerShell's Start-Process space-JOINS -ArgumentList without
+  // quoting elements that contain spaces, so a raw `C:\Program Files\x` reached the child as three
+  // tokens — corrupting the successor daemon's args. Each element is now quoteWinArg'd, so a spaced
+  // path appears in the array as a single double-quoted token that the child's CommandLineToArgvW
+  // parses back to one arg. Pin that the spaced arg is quoted and NOT present bare.
+  const script = buildDetachedSpawn("win32", [EXE, "C:\\path with space\\profile", "--flag"]).argv[4]!;
+  expect(script).toContain('"C:\\path with space\\profile"'); // one quoted token
+  // The bare (unquoted) spaced form must NOT appear as a standalone array element.
+  expect(script).not.toMatch(/'C:\\path with space\\profile'/);
+});
+
+test("win32: shell metacharacters in a path never become executable, in EITHER parser", () => {
+  // Legal in an NTFS filename, and this primitive is handed repo/file paths. The `& | ^` are the
+  // ones that mattered: PowerShell escaping alone left them live to cmd.exe in the old fallback.
+  const nasty = "C:\\repos\\a'; calc; $(whoami)`n&echo pwned|hack\\app.exe";
+  const script = buildDetachedSpawn("win32", [nasty, "arg&two", "arg|three"]).argv[4]!;
+  // Strip every single-quoted PowerShell literal ('' is an escaped quote inside one). What remains
+  // is the only text PowerShell parses as code, and it must be the fixed scaffold — nothing from
+  // the input, and no cmd.exe to re-parse & | ^.
+  const code = script.replace(/'(?:[^']|'')*'/g, "''");
+  for (const payload of ["calc", "whoami", "pwned", "echo", "hack", "two", "three"]) {
+    expect(code).not.toContain(payload);
+  }
+  expect(code).not.toContain("cmd.exe");
+  expect(code).not.toContain("&e"); // the `&echo` fragment, specifically
 });
 
 test("posix: spawns the command directly with detached:true (setsid), argv unchanged", () => {
@@ -81,4 +121,19 @@ test("a PowerShell-hostile path survives into the WMI CommandLine intact", () =>
   const script = buildDetachedSpawn("win32", [nasty]).argv[4]!;
   expect(script).toContain("''s a trap"); // doubled inside the single-quoted literal
   expect(script).not.toMatch(/CommandLine = 'C:\\it's/); // never left unescaped
+});
+
+test("win32: a trailing flag arg survives into the WMI CommandLine", () => {
+  // A caller that needs a signal to reach the launched process may carry it as a CLI flag when the
+  // env block won't survive — the WMI launch does NOT inherit the caller's environment, so an
+  // env-only handoff is lost (a real bug this bit: an auto-update relaunch signal). A flag rides in
+  // the command line WMI does deliver. This pins that a trailing arg actually reaches it.
+  const script = buildDetachedSpawn("win32", [EXE, "start", "--some-flag"]).argv[4]!;
+  expect(script).toContain("--some-flag");
+});
+
+test("posix: a trailing flag arg is preserved verbatim in argv", () => {
+  const plan = buildDetachedSpawn("linux", [EXE, "start", "--some-flag"]);
+  expect(plan.argv).toEqual([EXE, "start", "--some-flag"]);
+  expect(plan.detached).toBe(true);
 });

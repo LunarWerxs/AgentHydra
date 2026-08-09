@@ -37,6 +37,8 @@
 //     runs through cmd.exe, so on a machine without the packaged claude.exe an unhidden spawn is a
 //     CMD window flashing on a timer with no user action to blame. The literal-argv rule alone had
 //     a blind spot exactly the shape of the bug this check exists to prevent.
+//   · Anything inside a `//` or `/* */` comment: a comment cannot allocate a console window, and
+//     these files discuss their own spawns by name in prose (see blankComments below).
 //
 // Self-contained by design: imports nothing from the arkitect core (a bare
 // `import "connections-arkitect"` doesn't resolve from a check that lives in the repo rather than
@@ -148,16 +150,117 @@ function extractCall(text, openParenIndex) {
 
 const lineAt = (text, index) => text.slice(0, index).split('\n').length
 
+// A `/` opens a REGEX LITERAL only where an expression is expected; anywhere else it is division.
+// The preceding non-whitespace character decides, and these are the ones that end such a position.
+// Getting this right is not cosmetic: a regex is the one construct that can carry a bare quote, and
+// a missed one desyncs the string tracking below for the whole REST OF THE FILE (see blankComments).
+const REGEX_OPENS_AFTER = new Set(
+  ['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '^', '~', '<', '>'],
+)
+// The same position reached via a keyword rather than a punctuator, e.g. `return /x/.test(s)`.
+const REGEX_OPENS_AFTER_KEYWORD = /\b(?:return|typeof|instanceof|case|in|of|new|delete|void|do|else|yield|await)$/
+
+/** Consume the regex literal starting at `text[start]` (its opening `/`). Returns the index just
+ *  past the closing `/`, or -1 if it never closes on that line, in which case the `/` was not a
+ *  regex after all. `/` inside a `[...]` character class is literal, so classes are tracked. */
+function endOfRegex(text, start) {
+  let inClass = false
+  for (let j = start + 1; j < text.length; j++) {
+    const c = text[j]
+    if (c === '\\') {
+      j++ // an escaped character, `\/` included, is never a delimiter
+      continue
+    }
+    if (c === '\n') return -1
+    if (inClass) {
+      if (c === ']') inClass = false
+      continue
+    }
+    if (c === '[') inClass = true
+    else if (c === '/') return j + 1
+  }
+  return -1
+}
+
+/** Blank out `//` line and block comments, so a spawn call merely NAMED IN PROSE is not read as a
+ *  real one. This scan is textual and these files document their own win32 spawn story in detail:
+ *  server/src/detached-spawn.mjs's header explains which shell `spawn("powershell")` resolves to,
+ *  and that sentence alone was a finding until this existed. A comment cannot allocate a console
+ *  window, so scanning one can only ever produce a false positive.
+ *
+ *  Comment bodies become SPACES rather than being removed, and newlines are kept, so every byte
+ *  keeps its original offset: `lineAt` reports against the untouched text, and it must still agree.
+ *
+ *  Strings AND regex literals are both tracked, and the regex half is not optional. The first cut
+ *  skipped it and stayed red on the very file it was written for: quoteWinArg's
+ *  `!/[ \t\n\v"]/.test(arg)` carries a `"` inside a character class, which opened a string that
+ *  never closed, so every `//` for the next sixty lines looked like string content and the prose
+ *  spawn survived. A desync here inverts code and string wholesale, so it produces FALSE POSITIVES,
+ *  not misses — the expensive direction, and the reason this tracks more than the naive scanner in
+ *  extractCall does. */
+function blankComments(text) {
+  const out = text.split('')
+  let inString = null
+  // Last non-whitespace character of CODE seen, the regex-vs-division discriminator above. A closing
+  // quote counts (`"a" / 2` is division); characters inside strings and comments never do.
+  let prev = ''
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (inString) {
+      if (ch === '\\') {
+        i += 2 // an escaped character, whatever it is, can never end the string
+        continue
+      }
+      if (ch === inString) {
+        inString = null
+        prev = ch
+      }
+      i++
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inString = ch
+      i++
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') out[i++] = ' '
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2)
+      const stop = end === -1 ? text.length : end + 2
+      for (; i < stop; i++) if (text[i] !== '\n') out[i] = ' '
+      continue
+    }
+    if (ch === '/' && (prev === '' || REGEX_OPENS_AFTER.has(prev) || REGEX_OPENS_AFTER_KEYWORD.test(text.slice(0, i).trimEnd()))) {
+      const end = endOfRegex(text, i)
+      if (end !== -1) {
+        i = end // skipped whole; any quote it carried never reaches the string tracker
+        prev = '/'
+        continue
+      }
+    }
+    if (!/\s/.test(ch)) prev = ch
+    i++
+  }
+  return out.join('')
+}
+
 /** Every spawn call in `text` whose argv names a console program (as a literal, or via a
  *  CONSOLE_RESOLVERS helper) and whose call (argv + options) sets neither windowsHide nor the WMI
  *  ShowWindow=0 hide. Exported so the rule can be unit-tested against fixture strings rather than
  *  only against the live tree. */
 export function findViolations(text) {
   const hits = []
+  // Comments are blanked index-for-index, so every hit index below still points at the same offset
+  // in the caller's original `text`.
+  const code = blankComments(text)
   SPAWN_CALL_HEAD.lastIndex = 0
-  for (const head of text.matchAll(SPAWN_CALL_HEAD)) {
+  for (const head of code.matchAll(SPAWN_CALL_HEAD)) {
     const openParenIndex = head.index + head[0].length - 1
-    const callText = extractCall(text, openParenIndex)
+    const callText = extractCall(code, openParenIndex)
     const clean = (m) => m[0].replace(/['"(\s]/g, '')
 
     // Inverse rule first: a GUI program must NOT be hidden, and that mistake is the more damaging

@@ -86,14 +86,36 @@ const psLiteral = (s) => `'${s.replace(/'/g, "''")}'`;
 export function buildDetachedSpawn(platform, argv) {
   if (platform === "win32") {
     const commandLine = argv.map(quoteWinArg).join(" ");
-    // WMI first (detaches AND inherits no handles); the old cmd/start hand-off only if WMI refuses,
-    // because a leaked port is a far smaller failure than a window that never opens. `exit 0` keeps
-    // a non-zero WMI ReturnValue from reaching the caller as a spawn failure once we've fallen back.
+    // WMI first (detaches AND inherits no handles); a Start-Process fallback only if WMI refuses,
+    // because a leaked handle is a far smaller failure than a process that never launches. `exit 0`
+    // keeps a non-zero WMI ReturnValue from reaching the caller as a spawn failure once we've
+    // fallen back.
+    //
+    // NEITHER branch may let an argv element become executable text, and there are THREE parsers to
+    // get past, not one. (1) PowerShell CODE: everything is passed as DATA — psLiteral single-quotes
+    // each string, so nothing is spliced into the script. (2) cmd.exe: eliminated by not using it —
+    // the old `cmd.exe /c "start … <commandLine>"` re-parsed `&` `|` `^` and broke on any path
+    // containing them. (3) Start-Process's OWN array-to-command-line flattening: Windows PowerShell
+    // (powershell.exe, which `spawn("powershell")` resolves to) space-JOINS -ArgumentList elements
+    // WITHOUT quoting ones that contain spaces, so a raw `C:\Program Files\app.exe` element arrived
+    // at the child as three tokens — corrupting the successor daemon's args, the very failure this
+    // fallback exists to avoid. Fix: pre-quote each element with quoteWinArg (the CommandLineToArgvW
+    // token form). The space-join then reconstructs a correct command line, and the child's own
+    // CommandLineToArgvW parses it back to the exact original args. quoteWinArg is safe against `&`
+    // `|` too: those are inert to CommandLineToArgvW (only cmd treats them specially, and there is
+    // no cmd here). `-WindowStyle Hidden` matches the old `start ""` window suppression.
+    const psArray = (items) => `@(${items.map((a) => psLiteral(quoteWinArg(a))).join(", ")})`;
+    const exe = argv[0];
+    const rest = argv.slice(1);
+    const startProcess =
+      rest.length > 0
+        ? `Start-Process -FilePath ${psLiteral(exe)} -ArgumentList ${psArray(rest)} -WindowStyle Hidden`
+        : `Start-Process -FilePath ${psLiteral(exe)} -WindowStyle Hidden`;
     const ps = [
       "$ErrorActionPreference = 'Stop'",
       "$rc = 1",
       `try { $rc = (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${psLiteral(commandLine)} }).ReturnValue } catch { $rc = 1 }`,
-      `if ($rc -ne 0) { & cmd.exe /c start "" ${commandLine} }`,
+      `if ($rc -ne 0) { ${startProcess} }`,
       "exit 0",
     ].join("; ");
     return {

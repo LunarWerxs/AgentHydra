@@ -90,6 +90,19 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       Bun.spawn(['powershell', '-Command', script], { windowsHide: true })
       Bun.spawn(['explorer', dir], { stdin: 'ignore' })
       `,
+      // A spawn named only in PROSE. The scan is textual, so before comments were blanked this was
+      // a finding: the shared kit's detached-spawn.mjs header explains which shell
+      // spawn("powershell") resolves to, and syncing that comment in turned the whole suite red
+      // against a file that contains no spawn call at all (2026-08-09).
+      `
+      // Windows PowerShell (powershell.exe, which spawn("powershell") resolves to) space-joins
+      // -ArgumentList without quoting, so pre-quote each element.
+      /* Bun.spawn(['powershell', '-Command', script]) */
+      export function buildDetachedSpawn(platform, argv) { return { argv, detached: true } }
+      `,
+      // The inverse direction must survive the same treatment: a commented-out GUI spawn is not a
+      // gui-hidden finding either.
+      `// Bun.spawn(['explorer', dir], { windowsHide: true })`,
     ],
   },
   'wmi-commandline-query-self-match.mjs': {

@@ -5,6 +5,36 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1] - 2026-08-09
+
+### Fixed
+
+- **A detached launch no longer breaks on a path containing `&`, `|`, `^`, or a space.** Windows
+  launches that must outlive the daemon (a desktop shortcut, the relaunch an auto-update performs on
+  itself) go through the shared kit's detached-spawn helper. It prefers WMI, and when WMI refuses it
+  fell back to handing an already-quoted command line to `cmd.exe /c start ""`. That put a *second*
+  parser in the path, and cmd re-parses `&`, `|` and `^`, all of which are perfectly legal in an
+  NTFS path. A repo or profile directory containing one was re-split on its way to `CreateProcess`,
+  so the fallback that exists to keep a launch working was the thing that broke it. The fallback is
+  now `Start-Process -FilePath … -ArgumentList @(…)`, which never involves cmd.
+  - **Each argument is pre-quoted, because `Start-Process` does not do it for you.** Windows
+    PowerShell space-*joins* `-ArgumentList` without quoting elements that contain spaces, so a
+    plain `C:\Program Files\…` element reached the child as three separate arguments, corrupting
+    the successor daemon's own arguments, which is precisely the failure this fallback is for.
+  - Nothing here changes the WMI path, which is what almost every launch actually takes; this only
+    repairs the branch taken when WMI is unavailable or blocked.
+
+### Internal
+
+- **The console-window guardrail no longer reads prose as code.** `scripts/checks/spawn-console-window.mjs`
+  is a text scan, and it had no notion of comments, so a *sentence* naming a spawn counted as one.
+  The fix above ships a header explaining which shell `spawn("powershell")` resolves to, and that
+  alone turned CI red against a file containing no spawn call at all. Comments are now blanked
+  before the scan, index-for-index so reported line numbers still line up. Regex literals are
+  tracked too, and that half is not optional: a `"` inside a character class (`!/[ \t\n\v"]/`, in
+  the very file being scanned) opened a string that never closed, which inverts code and string for
+  the rest of the file and produces false positives rather than misses.
+
 ## [0.18.0] - 2026-08-07
 
 ### Added

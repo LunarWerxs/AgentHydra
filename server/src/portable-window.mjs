@@ -80,7 +80,9 @@ export function resolveChromiumBrowser() {
  * Build the `(command, args, detached)` to spawn `browserPath` with `browserArgs` so the window
  * process ESCAPES the daemon's process tree (see the file header: it must survive an auto-update
  * relaunch or tray Quit, both of which tree-kill the daemon). The per-OS detach is the shared
- * kit primitive (buildDetachedSpawn: win32 → a `cmd /c start ""` hand-off, POSIX → `detached:true`
+ * kit primitive (buildDetachedSpawn: win32 → WMI `Win32_Process.Create` as the primary hand-off,
+ * with `cmd /c start ""` only as a fallback if WMI is unavailable (`cmd start` leaked the daemon's
+ * listening socket, see the shared kit's own header for the story), POSIX → `detached:true`
  * setsid); this only adapts its flat `argv` into the `{ command, args }` split that node's
  * `spawn(command, args)` takes below. Pure + exported so the split adapter is unit-tested.
  */
