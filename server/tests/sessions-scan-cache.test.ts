@@ -39,6 +39,22 @@ const env = {
 const SESSIONS = JSON.stringify(join(import.meta.dir, '..', 'src', 'sessions.ts'))
 const DB = JSON.stringify(join(import.meta.dir, '..', 'src', 'db.ts'))
 
+// 30s, on EVERY test here, because every one of them spawns at least one child Bun that imports
+// sessions.ts (or db.ts) from source and opens a fresh SQLite file. That is real work, and its cost
+// is set by the runner rather than by anything the assertions do.
+//
+// Measured on this machine: 533ms, 1137ms, 343ms, 983ms. The 533ms one took 5083.99ms on CI's
+// windows-latest against the 5s default and failed the 2026-08-08 run — a ~9.5x cold-runner
+// penalty, which projects the 1137ms test to ~10.8s. So the test that actually flaked was not the
+// one most at risk; it was merely first, and paying the cold import for the whole file. Raising
+// only its allowance would have moved the failure to a sibling rather than fixed anything.
+//
+// The 30s figure follows tests/launcher.test.ts's precedent (2021ms local, 6.8s cold, given 20s):
+// roughly 3x the projected cold-runner worst case. These assertions are all sub-millisecond
+// comparisons on already-returned data, so a generous allowance costs nothing on a green run and
+// only ever buys a slow runner room. Nothing here is a timing assertion.
+const SPAWNS_A_CHILD_BUN = 30_000
+
 /** Run a snippet in a fresh Bun against the throwaway home, and parse whatever it prints. */
 function child<T>(body: string): T {
   const proc = Bun.spawnSync([process.execPath, '-e', body], {
@@ -68,60 +84,74 @@ function write(sessionId: string, body: string): string {
   return path
 }
 
-test('a transcript is parsed into a scan-cache row stamped with its exact revision', () => {
-  const id = 'aaaaaaaa-0000-4000-8000-000000000001'
-  const path = write(
-    id,
-    turn('user', 'first question', '2026-07-28T10:00:00.000Z') +
-      turn('assistant', 'first answer', '2026-07-28T10:00:01.000Z'),
-  )
+test(
+  'a transcript is parsed into a scan-cache row stamped with its exact revision',
+  () => {
+    const id = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const path = write(
+      id,
+      turn('user', 'first question', '2026-07-28T10:00:00.000Z') +
+        turn('assistant', 'first answer', '2026-07-28T10:00:01.000Z'),
+    )
 
-  const listed = listOne(id)
-  expect(listed?.title).toBe('first question')
-  expect(listed?.last_text_preview).toBe('first answer')
-  expect(listed?.message_count).toBe(2)
+    const listed = listOne(id)
+    expect(listed?.title).toBe('first question')
+    expect(listed?.last_text_preview).toBe('first answer')
+    expect(listed?.message_count).toBe(2)
 
-  // mtime+size are the only thing standing between a restarted daemon and a stale title.
-  const st = statSync(path)
-  const row = child<{ title: string; mtime_ms: number; size_bytes: number } | null>(
-    `const { db } = await import(${DB});
+    // mtime+size are the only thing standing between a restarted daemon and a stale title.
+    const st = statSync(path)
+    const row = child<{ title: string; mtime_ms: number; size_bytes: number } | null>(
+      `const { db } = await import(${DB});
      console.log(JSON.stringify(db.query('select title, mtime_ms, size_bytes from session_scan_cache where cache_key = ?').get(${JSON.stringify(`claude:${id}:${path}`)}) ?? null));`,
-  )
-  expect(row?.title).toBe('first question')
-  expect(row?.mtime_ms).toBe(st.mtimeMs)
-  expect(row?.size_bytes).toBe(st.size)
-})
+    )
+    expect(row?.title).toBe('first question')
+    expect(row?.mtime_ms).toBe(st.mtimeMs)
+    expect(row?.size_bytes).toBe(st.size)
+  },
+  SPAWNS_A_CHILD_BUN,
+)
 
-test('a cold process serves the cached parse instead of re-reading the transcript', () => {
-  const id = 'aaaaaaaa-0000-4000-8000-000000000002'
-  const path = write(id, turn('user', 'cache me', '2026-07-28T11:00:00.000Z'))
-  expect(listOne(id)?.title).toBe('cache me')
+test(
+  'a cold process serves the cached parse instead of re-reading the transcript',
+  () => {
+    const id = 'aaaaaaaa-0000-4000-8000-000000000002'
+    const path = write(id, turn('user', 'cache me', '2026-07-28T11:00:00.000Z'))
+    expect(listOne(id)?.title).toBe('cache me')
 
-  // Plant a title no parse could ever produce. A fresh process has an empty in-memory cache, so
-  // reading it back proves the persisted row — not the file — answered.
-  child(`const { db } = await import(${DB});
+    // Plant a title no parse could ever produce. A fresh process has an empty in-memory cache, so
+    // reading it back proves the persisted row — not the file — answered.
+    child(`const { db } = await import(${DB});
     db.query('update session_scan_cache set title = ? where cache_key = ?')
       .run('planted-by-the-test', ${JSON.stringify(`claude:${id}:${path}`)});
     console.log('null');`)
-  expect(listOne(id)?.title).toBe('planted-by-the-test')
+    expect(listOne(id)?.title).toBe('planted-by-the-test')
 
-  // ...and that the planted row is dropped the moment the transcript grows.
-  appendFileSync(path, turn('assistant', 'a brand new reply', '2026-07-28T11:00:05.000Z'))
-  const after = listOne(id)
-  expect(after?.title).toBe('cache me')
-  expect(after?.last_text_preview).toBe('a brand new reply')
-  expect(after?.message_count).toBe(2)
-})
+    // ...and that the planted row is dropped the moment the transcript grows.
+    appendFileSync(path, turn('assistant', 'a brand new reply', '2026-07-28T11:00:05.000Z'))
+    const after = listOne(id)
+    expect(after?.title).toBe('cache me')
+    expect(after?.last_text_preview).toBe('a brand new reply')
+    expect(after?.message_count).toBe(2)
+  },
+  SPAWNS_A_CHILD_BUN,
+)
 
-test('a transcript with no substantive turn stays out of the list', () => {
-  const id = 'aaaaaaaa-0000-4000-8000-000000000003'
-  write(id, `${JSON.stringify({ type: 'summary', summary: 'scaffolding only' })}\n`)
-  expect(listOne(id)).toBeNull()
-})
+test(
+  'a transcript with no substantive turn stays out of the list',
+  () => {
+    const id = 'aaaaaaaa-0000-4000-8000-000000000003'
+    write(id, `${JSON.stringify({ type: 'summary', summary: 'scaffolding only' })}\n`)
+    expect(listOne(id)).toBeNull()
+  },
+  SPAWNS_A_CHILD_BUN,
+)
 
-test('the scan pool never runs more than its ceiling at once, and keeps input order', () => {
-  const result = child<{ ceiling: number; peak: number; ordered: boolean }>(
-    `const { mapPooled, SCAN_CONCURRENCY } = await import(${SESSIONS});
+test(
+  'the scan pool never runs more than its ceiling at once, and keeps input order',
+  () => {
+    const result = child<{ ceiling: number; peak: number; ordered: boolean }>(
+      `const { mapPooled, SCAN_CONCURRENCY } = await import(${SESSIONS});
      let live = 0, peak = 0;
      const items = Array.from({ length: 200 }, (_, i) => i);
      const out = await mapPooled(items, 4, async (i) => {
@@ -134,10 +164,12 @@ test('the scan pool never runs more than its ceiling at once, and keeps input or
        peak,
        ordered: out.every((v, i) => v === i * 2),
      }));`,
-  )
-  expect(result.peak).toBeLessThanOrEqual(4)
-  expect(result.ordered).toBe(true)
-  // The whole point of the pool: a finite, small ceiling. 200-at-once is what cost 3 GB.
-  expect(result.ceiling).toBeGreaterThan(0)
-  expect(result.ceiling).toBeLessThan(64)
-})
+    )
+    expect(result.peak).toBeLessThanOrEqual(4)
+    expect(result.ordered).toBe(true)
+    // The whole point of the pool: a finite, small ceiling. 200-at-once is what cost 3 GB.
+    expect(result.ceiling).toBeGreaterThan(0)
+    expect(result.ceiling).toBeLessThan(64)
+  },
+  SPAWNS_A_CHILD_BUN,
+)

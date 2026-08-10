@@ -317,6 +317,10 @@ describe.skipIf(!win)('tray launcher', () => {
     expect(quick).toContain('Quick launch AgentHydra instances')
   }, 20_000)
 
+  // 20s for the same reason as the shortcut test above, and it was the odd one out: a real
+  // PowerShell spawn that loads an icon and probes PATH, left on the 5s default while its siblings
+  // here already had an allowance. 848ms on this machine, and this whole block is win32-gated, so
+  // it runs ONLY on the slower of the two CI legs.
   test('the headless tray self-test passes against the rewritten adapter (icon loads, bun on PATH, entry present)', () => {
     // unchanged intent, still a live subprocess run — but now exercises the adapter's
     // Invoke-TrayHostSelfTest hand-off end-to-end, not a self-contained inline check.
@@ -326,7 +330,7 @@ describe.skipIf(!win)('tray launcher', () => {
       { encoding: 'utf8' },
     )
     expect(out).toContain('AGENTHYDRA_TRAY_SELFTEST_OK')
-  })
+  }, 20_000)
 
   test('a single named mutex guards one tray host per desktop session, acquired before the icon', () => {
     // was: mutex literal + "icon created only after mutex" ordering + loser-branch behavior +
