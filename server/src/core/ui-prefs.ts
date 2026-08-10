@@ -29,8 +29,9 @@ export type UiPrefs = Record<string, string>
 /** Only this app's own namespaced keys. Anything else is not ours to hold. */
 const KEY_PATTERN = /^agenthydra\.[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/
 
-/** Enough for the usage mode, both filter windows and their thresholds several times over, with
- *  room for whatever the next mirrored preference turns out to be — and small enough that a buggy
+/** Three times what the client mirrors today (the usage mode, both filter windows and their
+ *  thresholds, the open tab, three table collapse states, the sessions filters, the sidebar width),
+ *  so a new preference is a web-only change for a long time yet — and small enough that a buggy
  *  client cannot turn this into a database. Writes beyond the cap are dropped, not rejected: a
  *  preference file is best-effort by nature and failing a settings write over a quota is worse
  *  than quietly keeping the ones that fit. */

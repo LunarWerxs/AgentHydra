@@ -9,7 +9,6 @@ import {
   Settings2,
   Sun,
 } from '@lucide/vue'
-import { useStorage } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -33,6 +32,7 @@ import { useData } from '@/composables/useData'
 import { useNotifications } from '@/composables/useNotifications'
 import { usePanels } from '@/composables/usePanels'
 import { SHELL_BASE_MAX, SHELL_WIDE_MAX, useShellWidth } from '@/composables/useShellWidth'
+import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
@@ -55,19 +55,10 @@ const { queue, startPolling } = useData()
 // happen to be looking at it, with the Acknowledge action that stops persistent mode repeating.
 const { startPolling: startNotificationPolling } = useNotifications()
 
-// Which tab you were on, remembered across reloads. The app is a long-lived tray window that gets
-// reloaded for all sorts of incidental reasons (an update, a restart, a stray F5), and landing back
-// on Sessions every time undid whatever you were in the middle of looking at.
-// Validated on read, not trusted: a stale or hand-edited value must fall back rather than render a
-// tab that no longer exists.
-type View = 'sessions' | 'instances'
-const VIEWS: View[] = ['sessions', 'instances']
-const view = useStorage<View>('agenthydra.app.view', 'sessions', undefined, {
-  serializer: {
-    read: (raw) => (VIEWS.includes(raw as View) ? (raw as View) : 'sessions'),
-    write: (v) => v,
-  },
-})
+// Which tab you were on, remembered across reloads — and across the daemon landing on a different
+// port, which is a different browser origin and therefore a different localStorage. Owned by
+// composables/useUiPrefs.ts, which is where every mirrored layout preference lives.
+const { view } = useUiPrefs()
 
 // settings + queue share the right edge; usePanels keeps them mutually exclusive
 const { settingsOpen, queueOpen } = usePanels()
@@ -127,7 +118,7 @@ async function onShutdown() {
   }
 }
 
-const nav: { id: View; labelKey: string; icon: typeof MessagesSquare }[] = [
+const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
   { id: 'sessions', labelKey: 'app.tabSessions', icon: MessagesSquare },
   { id: 'instances', labelKey: 'app.tabInstances', icon: Boxes },
 ]

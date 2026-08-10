@@ -15,7 +15,6 @@ import {
   Terminal,
   Trash2,
 } from '@lucide/vue'
-import { useStorage } from '@vueuse/core'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -46,6 +45,7 @@ import {
 } from '@/components/ui/table'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useSortable } from '@/composables/useSortable'
+import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import type { CodexInstance } from '@/lib/api'
 
@@ -71,7 +71,8 @@ const {
   remove,
 } = useCodexInstances()
 const { t } = useI18n()
-const open = useStorage('agenthydra.instances.codexOpen', true)
+// Persisted collapse state, alongside the other two tables' (composables/useUiPrefs.ts).
+const { codexOpen: open } = useUiPrefs()
 const isBusy = (instance: CodexInstance) => busyIds.value.has(instance.id)
 
 // Quota shares the app-wide usage store, keyed `codex:<id>` — so the Codex rows reuse the same

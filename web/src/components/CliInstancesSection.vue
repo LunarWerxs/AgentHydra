@@ -25,7 +25,6 @@ import {
   Terminal,
   Trash2,
 } from '@lucide/vue'
-import { useStorage } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -61,6 +60,7 @@ import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { useInstances } from '@/composables/useInstances'
 import { useSortable } from '@/composables/useSortable'
+import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageFilter } from '@/composables/useUsageFilter'
 import { useUsageMode } from '@/composables/useUsageMode'
@@ -202,8 +202,8 @@ function isBusy(inst: CliInstance): boolean {
   return busyIds.value.has(inst.id)
 }
 
-// Persisted collapse state, matching the Instances table's own.
-const cliOpen = useStorage('agenthydra.instances.cliOpen', true)
+// Persisted collapse state, matching the Instances table's own (composables/useUiPrefs.ts).
+const { cliOpen } = useUiPrefs()
 
 // --- create ---
 const createOpen = ref(false)

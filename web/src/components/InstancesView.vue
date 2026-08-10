@@ -24,7 +24,6 @@ import {
   TriangleAlert,
   Unlink,
 } from '@lucide/vue'
-import { useStorage } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -64,6 +63,7 @@ import { useAppSettings } from '@/composables/useAppSettings'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useInstances } from '@/composables/useInstances'
 import { useSortable } from '@/composables/useSortable'
+import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageFilter } from '@/composables/useUsageFilter'
 import { useUsageMode } from '@/composables/useUsageMode'
@@ -209,9 +209,9 @@ const allHiddenByFilter = computed(
 )
 
 // Collapse state, persisted: someone who only uses the desktop app (or only the CLI) collapses the
-// other table once and expects it to stay that way. Same storage-key convention as the sessions
-// sidebar's width/scope refs.
-const desktopOpen = useStorage('agenthydra.instances.desktopOpen', true)
+// other table once and expects it to stay that way. Owned by composables/useUiPrefs.ts, which is
+// where every preference that is also mirrored through the daemon lives.
+const { desktopOpen } = useUiPrefs()
 
 const createOpen = ref(false)
 const creating = ref(false)

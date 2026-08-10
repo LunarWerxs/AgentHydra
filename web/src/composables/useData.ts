@@ -10,6 +10,7 @@ import type {
   SessionSummary,
 } from '@/lib/api'
 import * as api from '@/lib/api'
+import { registerSharedPref } from './useSharedPrefs'
 
 const sessions = ref<SessionSummary[]>([])
 const queue = ref<QueueItem[]>([])
@@ -34,6 +35,18 @@ const sessionArchivedScope = useStorage<ArchivedScope>(
 const sessionPeriod = useStorage<SessionPeriod>('agenthydra.sessions.period', '24h')
 // Provider scope for the unified local conversation list.
 const sessionSourceFilter = useStorage<SessionSourceScope>('agenthydra.sessions.source', 'all')
+
+// All three are ALSO mirrored through the daemon (composables/useSharedPrefs.ts): the daemon hops
+// to another port whenever its preferred one is busy, and a browser scopes localStorage per origin
+// — port included — so without this these reset to their defaults on any launch that hops. Each one
+// declares its value set, because the store is a plain file and an unknown scope would reach a
+// control that has no such option.
+const ARCHIVED_SCOPES: readonly ArchivedScope[] = ['hide', 'include', 'only']
+const SESSION_PERIODS: readonly SessionPeriod[] = ['24h', '7d', '30d', 'all']
+const SESSION_SOURCES: readonly SessionSourceScope[] = ['all', 'claude', 'codex', 'opencode']
+registerSharedPref('agenthydra.sessions.archivedScope', sessionArchivedScope, ARCHIVED_SCOPES)
+registerSharedPref('agenthydra.sessions.period', sessionPeriod, SESSION_PERIODS)
+registerSharedPref('agenthydra.sessions.source', sessionSourceFilter, SESSION_SOURCES)
 // true once the first queue fetch has settled — gates the queue's first-load skeletons
 const queueLoaded = ref(false)
 const lastError = ref<string | null>(null)

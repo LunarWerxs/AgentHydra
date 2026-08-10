@@ -5,6 +5,54 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Every remembered layout choice now survives a port change, not just the usage filter.** The tab
+  you were on, the three Instances tables' collapse states, the sessions period / provider /
+  archived filters, transcript verbosity, body-search case sensitivity and the sidebar width all
+  lived in browser storage only, so they reset on any launch where the daemon had to hop to another
+  port. They go through the same daemon-side store as the usage filter now. Values still paint from
+  the browser cache first, and a key the store has never seen is seeded from whatever this browser
+  already had, so nothing anyone has already set is lost on the way in.
+  - The mirror carries short strings as well as switches and numbers, and a string preference
+    declares its own value set. The store is a plain file, and an unrecognised value reaching a tab
+    strip or a filter dropdown would render a control with nothing selected.
+  - These preferences moved out of the components that read them and into one module
+    (`composables/useUiPrefs.ts`). A mirrored ref has to outlive its component: registration is
+    keyed, so only the first mount's ref is the mirrored one, and views behind a tab unmount every
+    time you switch away.
+  - Not included, deliberately: the theme (owned by the shared kit under its own un-namespaced key,
+    which this store does not accept) and the locale (English is the only catalog that ships).
+
+### Fixed
+
+- **The usage filter stops forgetting whether it was on.** The cross-window store added in 0.18.0 is
+  the only memory the app has on a hopped port (the daemon moves to 7788/7789/… whenever its
+  preferred one is busy, and a new port is a new browser origin with an empty `localStorage`), so
+  every way of losing a write to it shows up as "my filter is off again". Three were open, and each
+  one is silent by nature: nothing throws, nothing logs, the switch is just back where it started.
+  - **A choice made while the first read was still in flight was dropped, then overwritten.** The
+    window paints from `localStorage` (defaults, on a port it has never seen), so the filter reads as
+    off; clicking it on in those first moments hit a watcher that deliberately pushes nothing before
+    the store has been read, and then hydrate applied the stored value on top. The click undid itself
+    a beat after it was made. Such a change is now recorded the instant it happens, hydrate leaves it
+    alone, and it is sent as soon as the read lands. The rule it was protecting is untouched: a
+    window still never pushes before it has read the store.
+  - **A read that failed once failed forever.** A window opened by a daemon that is still starting
+    can ask before the socket answers, and there was no retry and no second hydrate, so that window
+    ran on its local cache for the rest of its life, which on a fresh origin means defaults.
+    It now retries three times over ~750 ms, which nothing waits on.
+  - **A push cancelled by the closing window was silently reverted.** Toggling something and closing
+    the window straight after killed the request along with the document, and since the store is
+    authoritative the next launch handed the old value back. Unconfirmed changes are now queued
+    rather than assumed sent: the next change carries them, and `pagehide` hands whatever is left to
+    `sendBeacon`, which outlives the page.
+  - A preference registered *after* the store is read (a lazily-loaded view) now receives it too.
+    Nothing is loaded that late today, but hydrate runs once per window, so the failure mode was one
+    import away and would have looked exactly like the bugs above.
+
 ## [0.18.1] - 2026-08-09
 
 ### Fixed

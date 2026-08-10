@@ -27,7 +27,7 @@ import {
   Wrench,
   X,
 } from '@lucide/vue'
-import { useMediaQuery, useStorage } from '@vueuse/core'
+import { useMediaQuery } from '@vueuse/core'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -62,6 +62,7 @@ import { Switch } from '@/components/ui/switch'
 import { useData } from '@/composables/useData'
 import { useInstances } from '@/composables/useInstances'
 import { useShellWidth } from '@/composables/useShellWidth'
+import { clampWidth, SIDEBAR_DEFAULT, useUiPrefs } from '@/composables/useUiPrefs'
 import type {
   ArchivedScope,
   SessionPeriod,
@@ -230,18 +231,13 @@ const selectedId = ref<string | null>(null)
 const selectedSource = ref<SessionSource | null>(null)
 const tail = ref<TailResult | null>(null)
 const tailLoading = ref(false)
-// verbose mode: also show tool_use / tool_result events (off = responses only)
-const showTools = useStorage('agenthydra.sessions.showTools', false)
+// Verbose mode, the sidebar width and the body-search case flag are persisted AND mirrored through
+// the daemon, so they live in composables/useUiPrefs.ts: this view unmounts whenever you switch
+// tabs, and a mirrored ref owned by a component that unmounts stops being the mirrored one.
+const { showTools, sidebarWidth, advancedCaseSensitive } = useUiPrefs()
 
 // --- sidebar: persisted drag-resize + animated collapse, auto-collapsing when narrow ---
 const RAIL_WIDTH = 44
-const SIDEBAR_MIN = 240
-const SIDEBAR_MAX = 560
-const SIDEBAR_DEFAULT = 340
-const clampWidth = (w: number) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w))
-
-const sidebarWidth = useStorage('agenthydra.sessions.sidebarWidth', SIDEBAR_DEFAULT)
-sidebarWidth.value = clampWidth(sidebarWidth.value)
 
 const isWide = useMediaQuery('(min-width: 1024px)')
 const collapsed = ref(!isWide.value)
@@ -296,7 +292,6 @@ const emptyBecauseOfPeriod = computed(
 const advancedOpen = ref(false)
 const advancedQuery = ref('')
 const advancedRegex = ref(false)
-const advancedCaseSensitive = useStorage('agenthydra.sessions.advancedCaseSensitive', false)
 const bodySearching = ref(false)
 const bodySearchActive = ref(false)
 const bodySearchQueryUsed = ref('')
