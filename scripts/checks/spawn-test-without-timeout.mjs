@@ -9,7 +9,10 @@
 // of reading it.
 //
 // The rule: if a test reaches a subprocess, it must state a timeout explicitly. Any value counts.
-// The point is that someone decided, rather than inheriting 5s by accident. tests/launcher.test.ts
+// The point is that someone decided, rather than inheriting 5s by accident. A repo-wide
+// `bun test --timeout N` counts as deciding, for every test at once, and stands this check down
+// (see globalTimeoutMs) — for a suite where nearly everything spawns, that IS the better answer.
+// tests/launcher.test.ts
 // already worked this out the hard way ("20s timeout: two real PowerShell spawns + COM. A cold CI
 // runner has taken 6.8s against the 5s default (flaked the 2026-07-16 run)"), and that lesson only
 // ever got applied to the one test that happened to go red. This makes it apply to all of them.
@@ -274,6 +277,33 @@ export function findViolations(text) {
 
 const lineAt = (text, index) => text.slice(0, index).split('\n').length
 
+/** A repo-wide timeout, if this project sets one: `bun test --timeout 20000` in package.json's test
+ *  script, or `timeout = N` under bunfig.toml's [test]. Returns the ms value, or null.
+ *
+ *  This exists because the per-test third argument is NOT the only way to state a timeout, and
+ *  assuming it was made this check wrong in the most embarrassing direction: pointed at RepoYeti,
+ *  whose every test shells out to git through a helper and whose test script is already
+ *  `bun test tests --timeout 20000`, it reported 230 violations of a rule that repo had solved more
+ *  thoroughly than AgentHydra has. For a suite where essentially every test spawns, one global
+ *  allowance IS the better answer, and a check that can't see it is just noise. If a global timeout
+ *  is set, the 5s default this whole check is about does not apply and there is nothing to find. */
+export function globalTimeoutMs(root) {
+  try {
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+    const script = pkg?.scripts?.test
+    const m = typeof script === 'string' && script.match(/--timeout[=\s]+(\d+)/)
+    if (m) return Number(m[1])
+  } catch {}
+  try {
+    const bunfig = readFileSync(join(root, 'bunfig.toml'), 'utf8')
+    // Only under a [test] table; a timeout elsewhere in bunfig means something else entirely.
+    const testTable = bunfig.split(/^\s*\[/m).find((s) => s.startsWith('test]'))
+    const m = testTable && testTable.match(/^\s*timeout\s*=\s*(\d+)/m)
+    if (m) return Number(m[1])
+  } catch {}
+  return null
+}
+
 export const audit = {
   id: ID,
   title: 'a test that spawns a subprocess must set an explicit timeout, not inherit the 5s default',
@@ -286,6 +316,19 @@ export const audit = {
   async run(ctx) {
     const root = ctx?.root ?? process.cwd()
     const findings = []
+
+    // A repo-wide allowance settles it for every test at once; there is no 5s default left to
+    // inherit, so per-test annotations would be ceremony rather than protection.
+    const global = globalTimeoutMs(root)
+    if (global !== null) {
+      return {
+        failed: false,
+        findings: [],
+        report:
+          `This project sets a repo-wide test timeout of ${global}ms, so no test inherits the 5s ` +
+          'default and this check has nothing to enforce. ✓',
+      }
+    }
 
     for (const file of testFiles(root)) {
       const rel = relative(root, file).replace(/\\/g, '/')
@@ -312,7 +355,10 @@ export const audit = {
             'Pass an explicit timeout as the third argument: `test(name, fn, 30_000)`. Any value ' +
             'counts; the point is that it was chosen. Prefer a named constant with a comment ' +
             'recording the measured local cost, as sessions-scan-cache.test.ts and ' +
-            'launcher.test.ts do, so the next person can tell a generous allowance from a guess.',
+            'launcher.test.ts do, so the next person can tell a generous allowance from a guess. ' +
+            'If MOST tests in this project spawn (RepoYeti shells out to git nearly everywhere), ' +
+            'set one repo-wide allowance instead — `bun test --timeout 20000` in the test script, ' +
+            'or [test] timeout in bunfig.toml — and this check stands down entirely.',
         })
       }
     }

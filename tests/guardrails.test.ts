@@ -13,7 +13,8 @@
 // the fixed one. A guardrail that cannot fail is not a guardrail.
 
 import { describe, expect, test } from 'bun:test'
-import { readdirSync } from 'node:fs'
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -260,6 +261,49 @@ for (const file of CHECK_FILES) {
     }
   })
 }
+
+// spawn-test-without-timeout.mjs can stand ITSELF down: a repo-wide `bun test --timeout N` means
+// no test inherits the 5s default, so there is nothing to enforce. That is correct (RepoYeti shells
+// out to git in nearly every test and solves it exactly that way, and this check reported 230
+// violations there until it learned to look), but it is also a path that silently disables a
+// guardrail — precisely the failure this file exists to catch. So it gets asserted in BOTH
+// directions rather than trusted.
+describe('spawn-test-without-timeout.mjs — repo-wide timeout stand-down', () => {
+  const load = () => import(pathToFileURL(join(CHECKS_DIR, 'spawn-test-without-timeout.mjs')).href)
+
+  const withRoot = (files: Record<string, string>): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'agenthydra-guardrail-'))
+    for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body)
+    return dir
+  }
+
+  test('a --timeout in the test script stands the check down', async () => {
+    const { audit, globalTimeoutMs } = await load()
+    const root = withRoot({
+      'package.json': JSON.stringify({ scripts: { test: 'bun test tests --timeout 20000' } }),
+    })
+    expect(globalTimeoutMs(root)).toBe(20000)
+    const res = await audit.run({ root })
+    expect(res.failed).toBe(false)
+    expect(res.report).toContain('20000')
+  })
+
+  test('a [test] timeout in bunfig.toml also stands it down', async () => {
+    const { globalTimeoutMs } = await load()
+    const root = withRoot({
+      'package.json': JSON.stringify({ scripts: { test: 'bun test' } }),
+      'bunfig.toml': '[install]\nregistry = "x"\n\n[test]\ntimeout = 15000\n',
+    })
+    expect(globalTimeoutMs(root)).toBe(15000)
+  })
+
+  test('no repo-wide timeout means the per-test rule still applies (this repo)', async () => {
+    // The real guard: if AgentHydra ever gains a global --timeout, this flips and the check above
+    // stops enforcing anything. That should be a deliberate, visible change, not a silent one.
+    const { globalTimeoutMs } = await load()
+    expect(globalTimeoutMs(REPO_ROOT)).toBeNull()
+  })
+})
 
 test('at least one check was actually discovered and exercised above', () => {
   // Guards against the whole file above passing vacuously if CHECKS_DIR were ever empty or
