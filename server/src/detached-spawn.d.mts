@@ -2,8 +2,8 @@
 export interface DetachedSpawn {
   /**
    * The full argv to spawn: on win32 a transient `powershell` that hands the launch to WMI
-   * (`Win32_Process.Create`, falling back to `cmd /c start ""` if WMI refuses); on POSIX the input
-   * unchanged. Always a fresh array (never aliases the caller's input).
+   * (`Win32_Process.Create`, falling back to a `Start-Process` in that same powershell if WMI
+   * refuses); on POSIX the input unchanged. Always a fresh array (never aliases the caller's input).
    */
   argv: string[];
   /**

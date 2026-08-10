@@ -24,9 +24,10 @@ export interface PortableSpawn {
 
 /**
  * Build the spawn command for the window so it OUTLIVES the daemon (a tray Quit / auto-update
- * relaunch tree-kills the daemon). On win32 it goes through a `cmd /c start ""` hand-off (the only
- * reliable Windows detach; `.unref()`/`detached:true` do not break the process tree); POSIX spawns
- * the browser directly with `detached:true`. Pure + exported for unit tests.
+ * relaunch tree-kills the daemon). On win32 it goes through a WMI `Win32_Process.Create` hand-off,
+ * falling back to a PowerShell `Start-Process` (a hand-off is the only reliable Windows detach;
+ * `.unref()`/`detached:true` do not break the process tree); POSIX spawns the browser directly with
+ * `detached:true`. Pure + exported for unit tests.
  */
 export function buildPortableSpawn(
   platform: NodeJS.Platform,

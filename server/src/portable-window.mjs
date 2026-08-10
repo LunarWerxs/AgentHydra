@@ -12,9 +12,10 @@
  * tree-killing the daemon (`taskkill /PID <daemon> /T /F`), and an auto-update relaunch
  * kills+respawns it the same way, so the window must NOT be a descendant of the daemon.
  * On Windows neither `.unref()` nor `detached:true` removes a child from the parent's
- * process tree (verified 2026-07-12), so the launch goes through a `cmd /c start ""`
- * hand-off (buildPortableSpawn) that re-parents the browser out of the tree; POSIX uses
- * `detached:true` (a real setsid detach).
+ * process tree (verified 2026-07-12), so the launch goes through a WMI
+ * `Win32_Process.Create` hand-off (buildPortableSpawn — with a PowerShell `Start-Process`
+ * fallback), which starts the browser OUTSIDE the tree; POSIX uses `detached:true` (a
+ * real setsid detach).
  *
  * Runtime-agnostic (Bun + Node). Synced from the shared kit, do not edit in an
  * app; the `.d.mts` sibling types the import for the TypeScript apps.
@@ -81,10 +82,11 @@ export function resolveChromiumBrowser() {
  * process ESCAPES the daemon's process tree (see the file header: it must survive an auto-update
  * relaunch or tray Quit, both of which tree-kill the daemon). The per-OS detach is the shared
  * kit primitive (buildDetachedSpawn: win32 → WMI `Win32_Process.Create` as the primary hand-off,
- * with `cmd /c start ""` only as a fallback if WMI is unavailable (`cmd start` leaked the daemon's
- * listening socket, see the shared kit's own header for the story), POSIX → `detached:true`
- * setsid); this only adapts its flat `argv` into the `{ command, args }` split that node's
- * `spawn(command, args)` takes below. Pure + exported so the split adapter is unit-tested.
+ * with a PowerShell `Start-Process` only as a fallback if WMI is unavailable (the older `cmd /c
+ * start ""` hand-off leaked the daemon's listening socket, see the shared kit's own header for the
+ * story), POSIX → `detached:true` setsid); this only adapts its flat `argv` into the
+ * `{ command, args }` split that node's `spawn(command, args)` takes below. Pure + exported so the
+ * split adapter is unit-tested.
  */
 export function buildPortableSpawn(platform, browserPath, browserArgs) {
   const { argv, detached } = buildDetachedSpawn(platform, [browserPath, ...browserArgs]);

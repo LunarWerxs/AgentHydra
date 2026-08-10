@@ -33,16 +33,19 @@
  *     window. Every caller here launches a GUI app (browser, editor); do NOT route a console program
  *     (bun/node) through this without a Win32_ProcessStartup ShowWindow=0 — and note that setting
  *     ShowWindow=0 can also hide a GUI app's window, which is why it isn't set here.
- *   · If WMI is unavailable/blocked, the fallback below is the old `cmd /c start` hand-off: a leaked
- *     port beats a window that never opens.
+ *   · If WMI is unavailable/blocked, the fallback below is a `Start-Process` in that same transient
+ *     powershell — it replaced an older `cmd /c start ""` fallback (see the WHY NOT above) and keeps
+ *     cmd.exe out of the path entirely. A second-choice hand-off beats a window that never opens.
  *
  * CALLER RESPONSIBILITIES (this primitive is deliberately dumb about them; each caller keeps its own
  * guard where it matters):
- *   · The `%VAR%`/`^` cmd re-parse hazard is GONE on the WMI path (nothing re-parses through cmd.exe)
- *     but still applies to the fallback, so callers routing untrusted/confined paths keep refusing
- *     `%`/`^` up front. See RepoYeti's cmdReparseHazard.
- *   · Neither path can relaunch a spaced-path `.cmd`/`.bat` shim (WMI CreateProcess won't run a batch
- *     file at all; `start`'s internal `cmd /c "<batch>"` hits cmd's double-quote-strip) — detach a
+ *   · The `%VAR%`/`^` cmd re-parse hazard is GONE on BOTH paths now: neither the WMI hand-off nor the
+ *     `Start-Process` fallback re-parses through cmd.exe. Callers that still refuse `%`/`^` up front
+ *     for untrusted/confined paths are belt-and-suspenders, not load-bearing. See RepoYeti's
+ *     cmdReparseHazard.
+ *   · Neither path is a way to relaunch a spaced-path `.cmd`/`.bat` shim: WMI CreateProcess won't run
+ *     a batch file at all, and the fallback is a second choice you cannot count on reaching (the
+ *     `cmd /c start` fallback it replaced hit cmd's double-quote-strip on exactly this) — detach a
  *     real `.exe`. A caller holding a `.cmd` shim should launch it on its own plain `cmd /c`
  *     (undetached) rather than route it through here.
  *   · macOS callers that want LaunchServices semantics build an `open`/`open -a` argv themselves and
