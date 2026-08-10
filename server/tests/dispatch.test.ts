@@ -5,7 +5,7 @@
 // finalizes the DB row. Locks in complete / cancel / reattach, plus the property the whole detached
 // design exists for: the runner does NOT hang off the daemon, so quitting the app cannot take a run
 // with it (see 'the runner escapes...' below).
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,6 +19,16 @@ import * as dispatch from '../src/dispatch'
 process.env.AGENTHYDRA_FAKE = '1'
 const RUN_LOG_DIR = process.env.AGENTHYDRA_RUN_LOG_DIR as string
 const dir = tmpdir() // a real cwd for the fake run; nothing is written to it
+
+// FAKE_SLEEP_MS is how the slow-run tests below keep a runner alive long enough to inspect or
+// cancel it, and `bun test` shares ONE process across every file. Each of those tests used to clear
+// it on its LAST line, which is the success path only: one failed assertion and the value survives
+// into unrelated tests, where the fake CLI (which reads `FAKE_SLEEP_MS ?? 120` at spawn time) is
+// suddenly an order of magnitude slower for no visible reason. Clearing it here means a red test
+// stays one red test instead of dragging its neighbours down with it.
+afterEach(() => {
+  delete process.env.FAKE_SLEEP_MS
+})
 
 let counter = 0
 function makeItem(overrides: Record<string, unknown> = {}) {
@@ -161,38 +171,43 @@ test.if(process.platform === 'win32')(
     process.env.FAKE_SLEEP_MS = '1200' // keep the runner alive long enough to inspect it
     const item = makeItem()
     const p = dispatch.dispatchItem(item)
-    for (let i = 0; i < 60 && !dispatch.isActive(item.id); i++) await Bun.sleep(50)
+    // try/finally, because `p` is deliberately NOT awaited yet: the whole point is to inspect the
+    // runner WHILE it is alive. If the parent-name assertion below goes red, an un-awaited
+    // dispatchItem keeps running and finalizes mid-way through some later test, mutating the shared
+    // `active` map and its queue_items row there. Draining it here keeps the blast radius at one.
+    try {
+      for (let i = 0; i < 60 && !dispatch.isActive(item.id); i++) await Bun.sleep(50)
 
-    // Find OUR runner by its unique spec-file argument (the same identity trick isRunnerAlive uses).
-    // `AND Name <> 'powershell.exe'` matters: the launcher's OWN command line embeds the spec path
-    // (it is the argument to Win32_Process.Create), so an unqualified match also returns the
-    // transient PowerShell — which IS a child of the daemon and would make this assert the opposite
-    // of what it means to.
-    let parent = ''
-    for (let i = 0; i < 40 && !parent; i++) {
-      const proc = Bun.spawn(
-        [
-          'powershell',
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          `$r = Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%${item.id}.spec.json%' AND Name <> 'powershell.exe'" | Select-Object -First 1;` +
-            ` if ($r) { (Get-CimInstance Win32_Process -Filter "ProcessId=$($r.ParentProcessId)").Name }`,
-        ],
-        { stdout: 'pipe', stderr: 'ignore' },
-      )
-      const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-      const name = out.trim()
-      if (name) parent = name
-      else await Bun.sleep(100)
+      // Find OUR runner by its unique spec-file argument (the same identity trick isRunnerAlive uses).
+      // `AND Name <> 'powershell.exe'` matters: the launcher's OWN command line embeds the spec path
+      // (it is the argument to Win32_Process.Create), so an unqualified match also returns the
+      // transient PowerShell — which IS a child of the daemon and would make this assert the opposite
+      // of what it means to.
+      let parent = ''
+      for (let i = 0; i < 40 && !parent; i++) {
+        const proc = Bun.spawn(
+          [
+            'powershell',
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `$r = Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%${item.id}.spec.json%' AND Name <> 'powershell.exe'" | Select-Object -First 1;` +
+              ` if ($r) { (Get-CimInstance Win32_Process -Filter "ProcessId=$($r.ParentProcessId)").Name }`,
+          ],
+          { stdout: 'pipe', stderr: 'ignore' },
+        )
+        const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+        const name = out.trim()
+        if (name) parent = name
+        else await Bun.sleep(100)
+      }
+
+      // WmiPrvSE.exe as the parent IS the escape: it means the OS created the runner on our behalf,
+      // so it is in neither this process's tree nor its job object.
+      expect(parent.toLowerCase()).toBe('wmiprvse.exe')
+    } finally {
+      await p
     }
-
-    // WmiPrvSE.exe as the parent IS the escape: it means the OS created the runner on our behalf,
-    // so it is in neither this process's tree nor its job object.
-    expect(parent.toLowerCase()).toBe('wmiprvse.exe')
-
-    await p
-    delete process.env.FAKE_SLEEP_MS
   },
   30000,
 )
@@ -201,13 +216,17 @@ test('cancelItem: a running fake dispatch is killed and finalized as canceled', 
   process.env.FAKE_SLEEP_MS = '1500' // slow enough to cancel mid-run
   const item = makeItem()
   const p = dispatch.dispatchItem(item)
-  // wait until it's actually running (runner launched, registered active)
-  for (let i = 0; i < 40 && !dispatch.isActive(item.id); i++) await Bun.sleep(50)
-  await Bun.sleep(600)
-  expect(dispatch.cancelItem(item.id)).toBe(true)
-  await p
+  // Same reason as the WMI test above: `p` is intentionally left running so there is something to
+  // cancel, so the drain belongs in a finally or a red cancelItem strands it in a later test.
+  try {
+    // wait until it's actually running (runner launched, registered active)
+    for (let i = 0; i < 40 && !dispatch.isActive(item.id); i++) await Bun.sleep(50)
+    await Bun.sleep(600)
+    expect(dispatch.cancelItem(item.id)).toBe(true)
+  } finally {
+    await p
+  }
   expect(statusOf(item.id)?.status).toBe('canceled')
-  delete process.env.FAKE_SLEEP_MS
 })
 
 test('reattachRuns: a run that finished while the daemon was down is recovered from its log', async () => {
