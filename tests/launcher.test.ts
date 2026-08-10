@@ -158,7 +158,9 @@ describe.skipIf(!win)('tray launcher', () => {
         unlinkSync(probePath)
       } catch {}
     }
-  })
+    // 20s: a live cscript run, 109ms here. Same reasoning as the two tests below — the cost is the
+    // runner's, not the assertion's, and this block is win32-gated so it only runs on the slow leg.
+  }, 20_000)
 
   test('the shared tray engine is the real shared tray-host engine (not a hand-edited fork)', () => {
     // the refactor's central invariant — this app must run the real shared engine, not a

@@ -183,8 +183,16 @@ test.if(process.platform === 'win32')(
       // (it is the argument to Win32_Process.Create), so an unqualified match also returns the
       // transient PowerShell — which IS a child of the daemon and would make this assert the opposite
       // of what it means to.
+      // This resolves the parent in TWO steps (find the runner, then look up its ParentProcessId),
+      // and the second step is a race: WmiPrvSE is a service host that idles out, and Windows reuses
+      // PIDs aggressively, so if it exits between the two queries the lookup can name whatever
+      // process inherited its PID. Accepting the first non-empty answer therefore turned a rare
+      // misread into a hard failure. Instead: stop as soon as the expected parent is seen, and treat
+      // any OTHER name as a claim that has to be corroborated before it is believed.
+      const CONFIRMATIONS = 3
       let parent = ''
-      for (let i = 0; i < 40 && !parent; i++) {
+      let streak = 0
+      for (let i = 0; i < 40; i++) {
         const proc = Bun.spawn(
           [
             'powershell',
@@ -198,8 +206,21 @@ test.if(process.platform === 'win32')(
         )
         const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
         const name = out.trim()
-        if (name) parent = name
-        else await Bun.sleep(100)
+        if (!name) {
+          // The runner has not appeared yet, or has already exited. Keep whatever we last saw.
+          await Bun.sleep(100)
+          continue
+        }
+        if (name.toLowerCase() === 'wmiprvse.exe') {
+          parent = name
+          break
+        }
+        // A non-empty name that isn't the expected one: a real regression repeats it every poll (a
+        // 'startb' launch reports cmd.exe consistently), a PID-recycle misread does not.
+        streak = name === parent ? streak + 1 : 1
+        parent = name
+        if (streak >= CONFIRMATIONS) break
+        await Bun.sleep(100)
       }
 
       // WmiPrvSE.exe as the parent IS the escape: it means the OS created the runner on our behalf,

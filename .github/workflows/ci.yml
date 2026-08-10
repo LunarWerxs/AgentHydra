@@ -89,6 +89,15 @@ jobs:
       - name: Guardrail (windowsHide on console spawns, never on GUI spawns)
         run: bun scripts/checks/spawn-console-window.mjs
 
+      # Fails if a test that spawns a subprocess inherits bun's 5s default timeout. Such a test
+      # measures the RUNNER, not its own assertions: sessions-scan-cache.test.ts takes 533ms locally
+      # and took 5083.99ms here on windows-latest, failing the 2026-08-08 run 84ms over the line and
+      # passing again on re-run. The check resolves module-level helpers transitively, because the
+      # four tests that actually flaked reach their spawn through a child() helper and an
+      # inline-only scan finds nothing in the very file that caused it. See the check's header.
+      - name: Guardrail (subprocess tests must set an explicit timeout)
+        run: bun scripts/checks/spawn-test-without-timeout.mjs
+
       - name: Build (web SPA)
         run: bun run build
 

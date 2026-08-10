@@ -105,6 +105,67 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       `// Bun.spawn(['explorer', dir], { windowsHide: true })`,
     ],
   },
+  'spawn-test-without-timeout.mjs': {
+    broken: [
+      // Direction A: an inline spawn on the 5s default. The shape tests/launcher.test.ts:126 shipped.
+      `test('a live cscript probe resolves the discovery', () => {
+         const out = execFileSync('cscript', ['//NoLogo', probePath], { encoding: 'utf8' })
+         expect(out.trim()).toBe('AgentHydra-Tray.ps1|1')
+       })`,
+      // Direction B: the spawn is TWO hops away, through module-level helpers. This is the exact
+      // sessions-scan-cache.test.ts shape that actually failed CI, and the one an inline-only scan
+      // reports as clean.
+      `function child(body) {
+         return JSON.parse(Bun.spawnSync([process.execPath, '-e', body]).stdout.toString())
+       }
+       function listOne(id) {
+         return child('const { listSessions } = await import(S); console.log(1)')
+       }
+       test('a transcript is parsed into a scan-cache row', () => {
+         expect(listOne('abc').title).toBe('first question')
+       })`,
+      // Direction C: the curried test.if(cond)(name, fn) form, which reads as bodyless — and
+      // therefore as compliant — unless the second call span is the one examined.
+      `test.if(process.platform === 'win32')('the runner escapes the daemon job', async () => {
+         const proc = Bun.spawn(['powershell', '-NoProfile', '-Command', q])
+         expect((await new Response(proc.stdout).text()).trim()).toBe('WmiPrvSE.exe')
+       })`,
+    ],
+    fixed: [
+      // The same three, each stating an allowance. Any value counts; what matters is that it was
+      // chosen rather than inherited.
+      `test('a live cscript probe resolves the discovery', () => {
+         const out = execFileSync('cscript', ['//NoLogo', probePath], { encoding: 'utf8' })
+         expect(out.trim()).toBe('AgentHydra-Tray.ps1|1')
+       }, 20_000)`,
+      `function child(body) {
+         return JSON.parse(Bun.spawnSync([process.execPath, '-e', body]).stdout.toString())
+       }
+       function listOne(id) {
+         return child('const { listSessions } = await import(S); console.log(1)')
+       }
+       test(
+         'a transcript is parsed into a scan-cache row',
+         () => {
+           expect(listOne('abc').title).toBe('first question')
+         },
+         SPAWNS_A_CHILD_BUN,
+       )`,
+      `test.if(process.platform === 'win32')('the runner escapes the daemon job', async () => {
+         const proc = Bun.spawn(['powershell', '-NoProfile', '-Command', q])
+         expect((await new Response(proc.stdout).text()).trim()).toBe('WmiPrvSE.exe')
+       }, 30000)`,
+      // Precision, the half that keeps this check usable: a test that only NAMES a spawn, in a
+      // comment and in a string it asserts against, is not a spawn. These tests embed PowerShell and
+      // VBS source in template literals as a matter of course, and spawn-console-window.mjs already
+      // shipped once reading a sentence as a call.
+      `test('the adapter is a thin wrapper, not a re-inlined fork', () => {
+         // was: asserted the old Bun.spawn(['powershell', ...]) hand-off inline.
+         const ps = readFileSync(CREATE_SHORTCUT, 'utf8')
+         expect(ps).toContain("execFileSync('cscript', ['//NoLogo'])")
+       })`,
+    ],
+  },
   'wmi-commandline-query-self-match.mjs': {
     broken: [
       // The needle lives inside the LIKE pattern of the querying powershell's OWN command line, so
