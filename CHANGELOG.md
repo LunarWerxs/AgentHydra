@@ -5,6 +5,24 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] - 2026-08-10
+
+### Changed
+
+- **The periodic update check now doubles as an anonymous install ping.** The compiled distribution
+  already hit `api.github.com/repos/LunarWerxs/AgentHydra/releases/latest` on a timer to look for a
+  newer release. That call now goes to Studio's app-ping proxy instead, which relays the same GitHub
+  JSON back verbatim (so every reader of the response is unchanged) and logs one row per hit: a
+  random per-install id, the app version, and a coarse OS tag. Update-checking itself adds zero
+  extra network traffic to get fleet-wide install/version telemetry out of it, the same wiring
+  QuickDictate and AnatomyOf already run in prod. From that request the server also derives and
+  stores a coarse location (country, region, city, timezone), the network's ASN, locale, and a
+  truncated user agent, never an IP address, hostname, username, file path, account, or email.
+  `AGENTHYDRA_NO_PING=1` (also the default for dev/test/CI runs) opts out; the update check then
+  falls back to asking GitHub directly, carrying no install id and no telemetry params, so
+  update-checking never depends on the ping being allowed. README's old "no telemetry" claim is
+  replaced with this disclosure.
+
 ## [0.19.1] - 2026-08-10
 
 ### Fixed
