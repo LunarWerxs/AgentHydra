@@ -147,10 +147,11 @@ and leave the final upload to you.
 **Update check.** The one thing that does leave your machine on its own is the periodic check for
 a new release, against `studio.connections.icu` (a LunarWerx relay that mirrors GitHub's release
 feed). It sends the app version, a coarse OS tag (e.g. `win11-26100`), and a random per-install id,
-enough to count installs and see version/OS adoption. The server derives a coarse country from the
-request and stores no IP address. It never sends a hostname, username, file path, account, or
-email. Set `AGENTHYDRA_NO_PING=1` to opt out; the update check then goes straight to GitHub's API
-instead, carrying no install id or telemetry.
+enough to count installs and see version/OS adoption. From that request, the server also derives and stores a coarse location (country, region, city,
+timezone), your network's ASN, locale, and a truncated user agent, but never an IP address. It
+never sends a hostname, username, file path, account, or email. Set `AGENTHYDRA_NO_PING=1` to opt
+out; the update check then goes straight to GitHub's API instead, carrying no install id or
+telemetry.
 
 ## Requirements
 
