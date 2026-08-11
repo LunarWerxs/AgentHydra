@@ -18,9 +18,12 @@
 // Leftover `*.old-*` artifacts are swept on the next boot (cleanupStaleUpdateArtifacts).
 
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
+import os from 'node:os'
 import { basename, join } from 'node:path'
-import { APP_ROOT, SERVICE_NAME, VERSION } from './config'
+import { APP_ROOT, appEnv, SERVICE_NAME, VERSION } from './config'
+import { getSetting, setSetting } from './db'
 import {
   beginUpdateProgress,
   finishUpdateProgress,
@@ -31,7 +34,94 @@ import type { UpdateApplyResult, UpdateStatus } from './updater-engine.mjs'
 
 const REPO = 'LunarWerxs/agenthydra'
 const RELEASES_PAGE = `https://github.com/${REPO}/releases`
-const LATEST_API = `https://api.github.com/repos/${REPO}/releases/latest`
+/** LunarWerx's Studio proxy: relays GitHub's `releases/latest` JSON for this repo VERBATIM (so
+ *  every reader below is unchanged), and logs one anonymous install-count row per hit (random
+ *  install id, app version, coarse OS tag, and a CDN-derived coarse country — never the caller's
+ *  IP; 90-day retention). This IS the app's update check, not an addition to it: replacing the
+ *  former direct `api.github.com` call here means the periodic check that already ran adds zero
+ *  extra network traffic. See README.md "Update check" for the user-facing disclosure. */
+const STUDIO_LATEST_API = 'https://studio.connections.icu/v1/app/agenthydra/latest'
+/** Fallback used only when pinging is disabled (see {@link pingOptedOut}): the plain GitHub API,
+ *  carrying no install id and no version/os telemetry, so opting out still leaves update-checking
+ *  itself working. */
+const GITHUB_LATEST_API = `https://api.github.com/repos/${REPO}/releases/latest`
+
+// ── anonymous install ping ──────────────────────────────────────────────────────────────────
+//
+// Piggybacks entirely on the update check above: no separate request, no separate timer. The
+// settings table (server/src/db.ts) already IS "the app's existing config/state location" — the
+// auto-update loop persists its own settings there — so the install id and the reported flag
+// live beside them rather than inventing a second store.
+
+/** Windows build-number → "win11-26100" / "win10-19045", using Microsoft's Windows 11 cutover
+ *  build (22000). Exported so the parsing logic is testable independent of the host OS. */
+export function formatWindowsTag(release: string): string {
+  const build = Number(release.split('.')[2])
+  if (!Number.isFinite(build)) return 'windows'
+  return `win${build >= 22000 ? 11 : 10}-${build}`
+}
+
+/** Coarse OS tag sent with the ping: Windows gets its build number, everything else gets its
+ *  plain family. Never anything more identifying (no hostname, no arch, no locale). */
+export function coarseOsTag(): string {
+  if (process.platform === 'win32') return formatWindowsTag(os.release())
+  if (process.platform === 'darwin') return 'macos'
+  if (process.platform === 'linux') return 'linux'
+  return process.platform
+}
+
+/** Anonymous per-install id sent as `X-Install-Id`. Generated once and persisted in the settings
+ *  table; reused for the life of the install. Never derived from hostname, MAC, username, or any
+ *  other machine identifier. */
+export function installId(): string {
+  const existing = getSetting('app_install_id')
+  if (existing) return existing
+  const id = randomUUID()
+  setSetting('app_install_id', id)
+  return id
+}
+
+function pingAlreadyReported(): boolean {
+  return getSetting('app_ping_reported') === '1'
+}
+/** Called once, only after a ping the server actually received (HTTP success) — never before,
+ *  so a request that never left the machine (offline, timeout) does not consume the one-time
+ *  `new=1` signal. */
+function markPingReported(): void {
+  setSetting('app_ping_reported', '1')
+}
+
+/** True when the anonymous ping should be skipped: an explicit opt-out, or a dev/test/CI run
+ *  (which must never inflate install-count analytics or depend on network access). Update
+ *  CHECKING itself keeps working either way — it just falls back to asking GitHub directly,
+ *  carrying no install id and no version/os telemetry. */
+export function pingOptedOut(): boolean {
+  return appEnv('NO_PING') === '1' || process.env.NODE_ENV === 'test' || !!process.env.CI
+}
+
+/** Build the request for "the latest release" — the one call that serves both jobs (update info
+ *  + anonymous install ping) when pinging is allowed, or GitHub directly with no telemetry when
+ *  it is not. Exported so the URL/header shape is unit-testable without a real network call. */
+export function buildLatestReleaseRequest(): { url: string; headers: Record<string, string> } {
+  const headers: Record<string, string> = {
+    accept: 'application/vnd.github+json',
+    'user-agent': `${SERVICE_NAME}/${VERSION}`,
+  }
+  if (pingOptedOut()) return { url: GITHUB_LATEST_API, headers }
+
+  headers['X-Install-Id'] = installId()
+  const params = new URLSearchParams({ v: VERSION, os: coarseOsTag() })
+  if (!pingAlreadyReported()) params.set('new', '1')
+  return { url: `${STUDIO_LATEST_API}?${params.toString()}`, headers }
+}
+
+/** Fire the request built above. Bounded to 5s so a slow/unreachable endpoint never turns an
+ *  update check into a hang — every caller already wraps this in try/catch and treats a failure
+ *  as "no answer", exactly as before this ping existed. */
+function fetchLatestRelease(): Promise<Response> {
+  const { url, headers } = buildLatestReleaseRequest()
+  return fetch(url, { headers, signal: AbortSignal.timeout(5000) })
+}
 
 /** This binary's release target string (matches the release-asset naming: windows-x64, linux-arm64…). */
 export function currentTarget(): string {
@@ -106,12 +196,7 @@ export async function checkForUpdate(opts: { fresh?: boolean } = {}): Promise<Up
 
   let release: GhRelease
   try {
-    const res = await fetch(LATEST_API, {
-      headers: {
-        accept: 'application/vnd.github+json',
-        'user-agent': `${SERVICE_NAME}/${VERSION}`,
-      },
-    })
+    const res = await fetchLatestRelease()
     if (!res.ok) {
       return baseStatus({
         ok: false,
@@ -121,6 +206,9 @@ export async function checkForUpdate(opts: { fresh?: boolean } = {}): Promise<Up
             : `couldn't reach the GitHub Releases API (HTTP ${res.status}).`,
       })
     }
+    // The ping succeeded (the server answered) — record it before touching the body, so a
+    // malformed/unexpected JSON payload still counts as "this install was heard from".
+    if (!pingOptedOut()) markPingReported()
     release = (await res.json()) as GhRelease
   } catch (e) {
     return baseStatus({
@@ -286,14 +374,11 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
 
   const remoteVersion = (status.remoteCommit ?? '').replace(/^v/, '')
   // Re-fetch the release to get the asset URL (checkForUpdate intentionally doesn't carry it).
+  // The check above already marked the ping reported on success, so this second hit never
+  // resends `new=1` — one "first ping" signal per install, no matter how many requests it takes.
   let asset: GhAsset | null = null
   try {
-    const res = await fetch(LATEST_API, {
-      headers: {
-        accept: 'application/vnd.github+json',
-        'user-agent': `${SERVICE_NAME}/${VERSION}`,
-      },
-    })
+    const res = await fetchLatestRelease()
     if (res.ok) asset = assetForThisPlatform(((await res.json()) as GhRelease).assets ?? [])
   } catch {
     asset = null

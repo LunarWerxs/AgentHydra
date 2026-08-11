@@ -140,9 +140,17 @@ Either way the UI is at <http://localhost:7787>.
 > instance actions (open / quit / create / delete) act on **real** Claude Desktop instances; delete
 > asks you to type the name.
 
-Nothing leaves your machine automatically. There is no cloud service behind this, no account to
-sign up for, and no telemetry. It reads the local stores your tools already write and talks to
-`localhost`; optional external handoffs open the provider and leave the final upload to you.
+There is no cloud service behind this and no account to sign up for. It reads the local stores
+your tools already write and talks to `localhost`; optional external handoffs open the provider
+and leave the final upload to you.
+
+**Update check.** The one thing that does leave your machine on its own is the periodic check for
+a new release, against `studio.connections.icu` (a LunarWerx relay that mirrors GitHub's release
+feed). It sends the app version, a coarse OS tag (e.g. `win11-26100`), and a random per-install id,
+enough to count installs and see version/OS adoption. The server derives a coarse country from the
+request and stores no IP address. It never sends a hostname, username, file path, account, or
+email. Set `AGENTHYDRA_NO_PING=1` to opt out; the update check then goes straight to GitHub's API
+instead, carrying no install id or telemetry.
 
 ## Requirements
 
