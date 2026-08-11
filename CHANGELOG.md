@@ -5,6 +5,28 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The system-tray icon is back in the Windows download.** Packaged builds have shipped without it
+  since 0.12.0: the 0.11.2 release prep trimmed "sidecars" from the bundle and took the `misc\` tray
+  toolkit with them. The daemon contains no tray code at all, so with those files gone there was
+  nothing left to draw an icon, and no combination of settings could bring one back. The ZIP carries
+  the toolkit again, the release smoke test now fails if it ever goes missing, and both READMEs say
+  plainly that the icon comes from the shortcut rather than from `AgentHydra.exe`.
+- **The tray icon survives an Explorer restart.** When the Windows shell restarts it destroys every
+  tray icon and expects each app to add its own back. The native launcher never listened for that
+  broadcast, so the icon disappeared for the rest of the session while AgentHydra kept running
+  normally, and relaunching the shortcut only re-opened the UI. It listens now, and re-adds the icon.
+- **A tray icon that fails to appear at startup now retries instead of giving up.** The launcher
+  assumed its first attempt had worked. If it had not (most often because the taskbar did not exist
+  yet, on a launcher started at logon), the five-second health tick believed the icon was already
+  showing and never tried again. It records the real result and retries.
+- **A packaged build no longer tries to run `bun install` on itself.** The launcher's first-run
+  bootstrap is meant for a source checkout; in a release bundle none of the files it looks for exist,
+  so every step fired, on the one layout guaranteed to have no Bun.
+
 ## [0.19.0] - 2026-08-10
 
 ### Changed

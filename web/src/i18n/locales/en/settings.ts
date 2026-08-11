@@ -29,7 +29,7 @@ export default {
   instanceModeShortcutFailed: 'Failed to create the Quick Instances shortcut.',
   hideTrayIconLabel: 'Hide tray icon',
   hideTrayIconHint:
-    'Removes the AgentHydra icon from the notification area. AgentHydra keeps running in the background - launch the shortcut again to reopen the UI, or come back here to turn the icon back on.',
+    'Removes the AgentHydra icon from the notification area. AgentHydra keeps running in the background - launch the shortcut again to reopen the UI, or come back here to turn the icon back on. Only applies when AgentHydra was started from its tray shortcut: the icon comes from that launcher, so if you ran the executable directly there is no icon for this to affect.',
   hideTrayIconToastFailed: 'Failed to save hide tray icon setting.',
   transcriptEditorLabel: 'Transcript editor',
   transcriptEditorHint:

@@ -165,6 +165,9 @@ extern "system" {
         flags: u32,
     ) -> HICON;
     pub fn MessageBoxW(h: HWND, text: *const u16, caption: *const u16, kind: u32) -> i32;
+    /// Resolves a system-wide message name to its id. Needed for "TaskbarCreated", the broadcast
+    /// every tray app must listen for (see main.rs's handler).
+    pub fn RegisterWindowMessageW(name: *const u16) -> u32;
 }
 
 #[link(name = "shell32")]

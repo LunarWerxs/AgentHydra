@@ -124,28 +124,52 @@ fn balloon(text: &str, flag: u32) {
     });
 }
 
+/// Whether the SHELL currently holds our icon. Recorded from Shell_NotifyIcon's real return value,
+/// never assumed.
+///
+/// This used to default to `true` on the theory that the startup NIM_ADD had obviously worked.
+/// NIM_ADD genuinely fails — the taskbar not existing yet at logon is the common one, and Microsoft
+/// documents retrying — and treating a failure as success meant the sync below saw "already shown"
+/// forever and never retried. The symptom is the worst kind: the app runs perfectly, there is no
+/// icon anywhere (not even in the Windows 11 overflow flyout), and relaunching the shortcut hits
+/// the single-instance branch and just opens the UI, so nothing the user can do brings it back.
+/// Starting at `false` makes the health tick's sync a free five-second retry loop.
+static ICON_SHOWN: AtomicBool = AtomicBool::new(false);
+
+/// The shell's "TaskbarCreated" broadcast id, resolved once at startup (0 until then).
+static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+
+/// The "hide tray icon" opt-in, read fresh from the runtime pointer every time. A missing or
+/// unreadable pointer means visible: the icon is how the user reaches Quit.
+fn hide_tray_icon_setting() -> bool {
+    std::fs::read_to_string(&app().cfg.info_file)
+        .ok()
+        .and_then(|s| json::parse(&s))
+        .map(|v| v.flag_at("hideTrayIcon"))
+        .unwrap_or(false)
+}
+
 /// Live-sync the icon's visibility from the runtime pointer, so flipping "hide tray icon" in the
 /// web UI takes effect within one tick without restarting anything.
 ///
 /// Windows has no "hide a NotifyIcon" call, so hiding is DELETE and showing is ADD; the tray data
-/// itself is kept either way, because the menu, the timers and Quit all hang off it.
+/// itself is kept either way, because the menu, the timers and Quit all hang off it. Also the
+/// retry path for a failed ADD, and the re-add path after Explorer restarts (see wndproc).
 fn sync_icon_visibility() {
-    let hidden = std::fs::read_to_string(&app().cfg.info_file)
-        .ok()
-        .and_then(|s| json::parse(&s))
-        .map(|v| v.flag_at("hideTrayIcon"))
-        .unwrap_or(false);
+    let hidden = hide_tray_icon_setting();
     UI.with(|ui| {
         let mut slot = ui.borrow_mut();
         let Some(ui) = slot.as_mut() else { return };
-        static SHOWN: AtomicBool = AtomicBool::new(true);
-        let shown = SHOWN.load(Ordering::Relaxed);
+        let shown = ICON_SHOWN.load(Ordering::Relaxed);
         if hidden && shown {
             unsafe { Shell_NotifyIconW(NIM_DELETE, &mut ui.nid) };
-            SHOWN.store(false, Ordering::Relaxed);
+            ICON_SHOWN.store(false, Ordering::Relaxed);
         } else if !hidden && !shown {
-            unsafe { Shell_NotifyIconW(NIM_ADD, &mut ui.nid) };
-            SHOWN.store(true, Ordering::Relaxed);
+            // Restore the steady-state flags: a balloon leaves NIF_INFO behind if it fired between
+            // the icon going away and this add.
+            ui.nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+            let added = unsafe { Shell_NotifyIconW(NIM_ADD, &mut ui.nid) } != 0;
+            ICON_SHOWN.store(added, Ordering::Relaxed);
         }
     });
 }
@@ -579,6 +603,23 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             PostQuitMessage(0);
             0
         }
+        // Explorer (re)created the taskbar. EVERY tray icon on the machine was destroyed with the
+        // old one, and the shell expects each app to add its own back — an app that does not is
+        // simply gone from the tray for the rest of the session while its process keeps running
+        // fine. WinForms' NotifyIcon did this for us in the PowerShell host, which is why the
+        // hand-rolled port lost it silently: nothing here was wrong until Explorer restarted.
+        //
+        // This also covers the cold case. A host launched at logon (Startup folder, scheduled
+        // task) can beat the taskbar into existence; its first NIM_ADD fails, and this broadcast
+        // is precisely the signal that adding will work now.
+        //
+        // Requires a real top-level window: message-only windows (HWND_MESSAGE parent) do NOT
+        // receive broadcasts. Ours passes a null parent, so it does — do not "tidy" that.
+        m if m != 0 && m == TASKBAR_CREATED.load(Ordering::Relaxed) => {
+            ICON_SHOWN.store(false, Ordering::Relaxed);
+            sync_icon_visibility();
+            0
+        }
         _ => DefWindowProcW(h, msg, w, l),
     }
 }
@@ -752,7 +793,9 @@ fn main() {
         wc.hInstance = hinst;
         wc.lpszClassName = class.as_ptr();
         RegisterClassW(&wc);
-        // A message-only window: it exists solely to receive the tray callback and timer ticks.
+        // A plain top-level window, zero-sized and never shown. It exists to receive the tray
+        // callback and timer ticks — but it must NOT become a message-only window (HWND_MESSAGE
+        // parent), because those are excluded from broadcasts and TaskbarCreated is a broadcast.
         let title = wide(&display_name);
         let hwnd = CreateWindowExW(
             0,
@@ -779,6 +822,13 @@ fn main() {
             LR_LOADFROMFILE | LR_DEFAULTSIZE,
         );
 
+        // Subscribe to the taskbar-recreated broadcast BEFORE the icon exists, so a restart that
+        // lands during our own startup is still caught.
+        TASKBAR_CREATED.store(
+            RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
+            Ordering::Relaxed,
+        );
+
         let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = hwnd;
@@ -787,9 +837,10 @@ fn main() {
         nid.uCallbackMessage = WM_APP_TRAY;
         nid.hIcon = hicon;
         fill(&mut nid.szTip, &display_name);
-        Shell_NotifyIconW(NIM_ADD, &mut nid);
 
         UI.with(|ui| *ui.borrow_mut() = Some(Ui { nid, mutex }));
+        // The ADD itself: ICON_SHOWN starts false, so this is the initial add as well as the
+        // hide-gate. If it fails, the health tick retries every 5s and TaskbarCreated re-fires it.
         sync_icon_visibility();
 
         SetTimer(hwnd, TIMER_HEALTH, HEALTH_INTERVAL_MS, null_mut());

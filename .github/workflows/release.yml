@@ -21,10 +21,10 @@
 #   implicit-serve entrypoint trap) all pass the build and only explode at runtime.
 # - The SPA is embedded into the executable by scripts/build.ts. Windows publishes both a direct
 #   exe and a smaller updater zip; Unix targets publish updater tarballs. Each archive has one
-#   versioned wrapper directory containing only the executable. That wrapper preserves the update
-#   path from older CC Manager UI releases (the pre-rename name), whose updater expects it. There
-#   are no web/, node_modules/,
-#   source-map, or tray-script sidecars.
+#   versioned wrapper directory holding the executable, plus (Windows only) the misc/ tray toolkit
+#   the system-tray shortcut needs. That wrapper preserves the update path from older CC Manager UI
+#   releases (the pre-rename name), whose updater expects it. There are no web/, node_modules/ or
+#   source-map sidecars.
 name: Release
 
 on:
@@ -103,6 +103,26 @@ jobs:
               --outfile "${stage}/${name}/AgentHydra.exe"
             "${stage}/${name}/AgentHydra.exe" --version   # canary: the compiled exe runs
             cp "${stage}/${name}/AgentHydra.exe" "out/${name}.exe"
+            # THE TRAY TOOLKIT. Staged after the standalone .exe is copied out, so that download
+            # stays a single file and only the zip carries these.
+            #
+            # 0.11.2 dropped this step while trimming sidecars, and because the daemon contains no
+            # tray code whatsoever (the icon is drawn by misc/lunarwerx-tray.exe, a separate
+            # process), every bundle from 0.12.0 on could only run console-style. It presented as
+            # "the tray icon is gone and no setting brings it back", which is unfixable from the
+            # user's side and gives no clue that files are simply absent.
+            #
+            # AgentHydra-Tray.json resolves appRoot as ".." and compiledExe as "AgentHydra.exe",
+            # so misc/ sitting beside the executable is exactly the layout it expects.
+            mkdir -p "${stage}/${name}/misc"
+            cp misc/lunarwerx-tray.exe misc/AgentHydra-Tray.json misc/AgentHydra.ico \
+               misc/Create-Shortcut.ps1 misc/New-TrayShortcut.ps1 \
+               misc/Instance-Launch.vbs "${stage}/${name}/misc/"
+            # The `-Legacy` rollback (wscript + the WinForms PowerShell host) ships too: it is the
+            # documented one-switch fallback if the native host ever misbehaves on a user's machine,
+            # and a fallback that isn't in the bundle is not a fallback.
+            cp misc/Tray-Host.ps1 misc/AgentHydra-Tray.ps1 misc/Tray-Launch.vbs \
+               "${stage}/${name}/misc/"
             # windows-latest has 7z on PATH; git-bash there has no `zip`
             (cd "$stage" && 7z a -tzip "$GITHUB_WORKSPACE/out/${name}.zip" "$name" > /dev/null)
           else
@@ -183,6 +203,20 @@ jobs:
           bundle_dir=$(find smoke -mindepth 1 -maxdepth 1 -type d | head -1)
           test -n "$bundle_dir"
           echo "BUNDLE_DIR=out/$bundle_dir" >> "$GITHUB_ENV"
+          # Windows: the tray toolkit must be in the bundle. It went missing for 8 releases
+          # (0.12.0 through 0.19.0) with nothing failing, because a bundle without it still boots,
+          # serves and passes every other check here. Only its absence is the bug, so absence is
+          # what has to be asserted.
+          case "${{ matrix.target }}" in
+            windows-*)
+              for f in lunarwerx-tray.exe AgentHydra-Tray.json AgentHydra.ico \
+                       Create-Shortcut.ps1 New-TrayShortcut.ps1 Tray-Host.ps1 \
+                       AgentHydra-Tray.ps1 Tray-Launch.vbs Instance-Launch.vbs; do
+                test -f "$bundle_dir/misc/$f" || { echo "bundle is missing misc/$f"; exit 1; }
+              done
+              echo "tray toolkit present"
+              ;;
+          esac
 
       # The actual boot+assert, factored so native and QEMU paths run identical checks.
       - name: Boot + assert (native)

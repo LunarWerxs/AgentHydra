@@ -117,9 +117,13 @@ retires its lightweight daemon automatically after a short reconnect grace perio
 
 **Download** your OS build from [Releases](https://github.com/LunarWerxs/AgentHydra/releases).
 On Windows, run the versioned `AgentHydra-…-windows-x64.exe` directly; it is an icon-bearing GUI
-executable with the web app embedded and no console window. The ZIP is the smaller automatic-update
-transport. Linux and macOS builds remain one-executable archives. No Bun or sidecar folders are
-needed.
+executable with the web app embedded and no console window. Linux and macOS builds remain
+one-executable archives. No Bun is needed.
+
+**Want the system-tray icon?** Take the Windows ZIP instead of the bare `.exe`, then run
+`misc\Create-Shortcut.ps1` once and launch from the shortcut it creates. The tray icon comes from a
+small separate launcher (`misc\lunarwerx-tray.exe`), so running `AgentHydra.exe` on its own never
+shows one, and no in-app setting can change that. The ZIP doubles as the automatic-update transport.
 
 **Or from source**, with [Bun](https://bun.sh):
 

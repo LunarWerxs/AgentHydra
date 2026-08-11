@@ -285,7 +285,14 @@ impl Config {
                 .to_string(),
             action_timeout_secs: v.num_at("actionTimeoutSec").unwrap_or(60.0) as u64,
             not_serving_hint: opt_string(v.str_at("notServingHint")),
-            first_run: match v.get("firstRun") {
+            // A COMPILED tree has no first run. The steps bootstrap a source checkout (`bun
+            // install`, `bun run build`); a release bundle ships the built artifacts and no
+            // interpreter, so every step's `missing` path is absent there and all of them would
+            // fire — spawning bun commands that can only fail, on the one layout guaranteed not to
+            // have bun. The PowerShell adapters gated this per app (`FirstRun = if
+            // ($isCompiledTree) { $null }`); the JSON config has no place to express that, so the
+            // gate belongs here, where the compiled exe was just resolved.
+            first_run: match v.get("firstRun").filter(|_| compiled.is_none()) {
                 Some(Json::Arr(items)) => items
                     .iter()
                     .filter_map(|it| {
@@ -329,5 +336,50 @@ impl Config {
 
     pub fn shutdown_header(&self, suffix: &str) -> String {
         format!("{}-{suffix}", self.shutdown_header_prefix)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config whose `appRoot` is this crate dir, so `compiledExe` can point at a file that really
+    /// exists (the resolver filters on `.exists()`) without any temp-file dance.
+    fn config_with(compiled_exe: &str) -> Config {
+        let crate_dir = env!("CARGO_MANIFEST_DIR");
+        let src = format!(
+            r#"{{
+                "displayName": "Test", "serviceName": "test", "mutexName": "TestTray",
+                "appRoot": "{}", "infoFile": "runtime.json",
+                "startCommand": "{{RUNTIME}} server/src/index.ts",
+                "compiledExe": "{compiled_exe}",
+                "firstRun": [
+                    {{ "missing": "node_modules", "run": "bun install" }},
+                    {{ "missing": "web\\dist", "run": "bun run build" }}
+                ]
+            }}"#,
+            crate_dir.replace('\\', "\\\\")
+        );
+        let v = json::parse(&src).expect("valid json");
+        Config::from_json(&v, Path::new("test-tray.json")).expect("valid config")
+    }
+
+    #[test]
+    fn a_source_checkout_keeps_its_first_run_steps() {
+        // No compiled exe at the root ⇒ this is a checkout, and bootstrapping is exactly right.
+        let cfg = config_with("definitely-not-here.exe");
+        assert_eq!(cfg.first_run.len(), 2);
+    }
+
+    #[test]
+    fn a_compiled_release_has_no_first_run() {
+        // The release layout ships built artifacts and NO interpreter, so every `missing` path is
+        // absent and every step would fire `bun ...` on the one tree guaranteed to lack bun.
+        let cfg = config_with("Cargo.toml");
+        assert!(
+            cfg.first_run.is_empty(),
+            "a compiled tree must not bootstrap: {:?}",
+            cfg.first_run
+        );
     }
 }

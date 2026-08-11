@@ -362,6 +362,25 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
     }
     output.push(`installed v${remoteVersion}`)
 
+    // --- refresh the tray toolkit, when the bundle carries one ---
+    // The swap above moves ONE file, which is right for the daemon but would freeze misc/ at
+    // whatever version first installed it. The tray host is a separate executable with its own
+    // bugs (an icon that did not survive an Explorer restart, most recently), so without this a
+    // fixed launcher would never reach anyone who updates in place. These are app-owned launcher
+    // files, not user data: the shortcut lives at the install root and is untouched.
+    const bundledMisc = bundleDir ? join(staging, bundleDir.name, 'misc') : join(staging, 'misc')
+    if (existsSync(bundledMisc)) {
+      try {
+        cpSync(bundledMisc, join(installDir, 'misc'), { recursive: true })
+        output.push('refreshed the tray toolkit')
+      } catch {
+        // Best-effort, and deliberately non-fatal: the daemon is already updated and working, and
+        // a locked lunarwerx-tray.exe (the running tray host holds its own image) must not roll
+        // back an otherwise-good update. The next update retries.
+        output.push('could not refresh misc/ (in use?) — the app itself is updated')
+      }
+    }
+
     rmSync(staging, { recursive: true, force: true })
     cached = null // force the next check to re-read the (now-current) version
     finishUpdateProgress(true, `Updated to v${remoteVersion}. Restarting…`)

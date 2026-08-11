@@ -11,6 +11,7 @@
       "!.arkitect/reports",
       "!.claude",
       "!tmp",
+      "!**/tray-host-native/target",
       "!**/*.gen.ts",
       "!**/*.css",
       "!**/*.mjs",

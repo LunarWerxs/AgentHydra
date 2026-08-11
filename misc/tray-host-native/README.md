@@ -22,27 +22,31 @@ None of that is the app. A native exe has no script host, no CLR and nothing to 
 deletes the `.vbs` outright: `CREATE_NO_WINDOW` is what suppresses the console, so the wrapper the
 flash-avoidance needed stops being necessary.
 
-## Status: NOT wired to anything
+## Status: SHIPPING, this is the launcher
 
-Nothing uses this. `misc/*-Tray.ps1` remains every app's launcher. This is a spike that proves the
-number and the approach; it is not a replacement yet.
+The `<App>.lnk` shortcut in AgentHydra, ReDesign, RepoYeti and DevWebUI points straight at this
+binary. `misc/*-Tray.ps1` is retained as a working rollback (`Create-Shortcut.ps1 -Legacy`), not as
+the primary path. The porting list this section used to carry is done: watchdog, "Rebuild &
+Restart", portable-window placement, token-gated shutdown, the sentinel file, balloon tips, the
+hide-tray-icon setting, `OnStrayDaemon` and the mutex-loser messages all live here now.
 
-**What it does today**: single-instance mutex, spawn the daemon (before building any UI, so the
-daemon's ~120 ms boot overlaps our setup), tray icon from the app's own `.ico`, right-click menu
-(Open / Restart / Quit), double-click to open, health probe with the PowerShell host's exact
-identity rule (`ok:true` AND a matching `service`), runtime-pointer port discovery, and the same
-ramped startup poll.
+### The one thing WinForms did for free
 
-**What it does NOT do yet.** Every one of these exists in `Tray-Host.ps1`, and several were written
-in response to real incidents, so they need porting deliberately rather than quickly:
+`Shell_NotifyIcon` is not fire-and-forget, and a hand-rolled host has to cover two cases that
+`System.Windows.Forms.NotifyIcon` handled invisibly, which is exactly why they went missing in the
+port and stayed missing: nothing is wrong until the machine does something ordinary.
 
-- the crash-loop-guarded auto-restart watchdog (consecutive-miss counting, revive grace, ownership)
-- "Rebuild & Restart" and its background worker
-- portable-window placement (reading Chromium's `Preferences` for a remembered rect) and the
-  dedicated `--app` profile
-- token-gated graceful shutdown, and the full-shutdown sentinel file
-- balloon tips, the hide-tray-icon setting, the stray/attached-daemon policy (`OnStrayDaemon`)
-- the mutex-loser branch's user-facing messages
+1. **`TaskbarCreated`.** When Explorer restarts, every tray icon on the machine is destroyed and
+   each app is expected to add its own back. Register the broadcast with `RegisterWindowMessageW`
+   and re-`NIM_ADD` on receipt. This needs a real top-level window: message-only windows do not
+   receive broadcasts.
+2. **A failed `NIM_ADD` is normal.** Most often the taskbar does not exist yet (a host started at
+   logon). Record the actual return value rather than assuming success, and retry; here the health
+   tick's visibility sync doubles as a five-second retry loop.
+
+Get either wrong and the failure is silent and permanent: the app runs, the icon is nowhere (not
+even in the Windows 11 overflow flyout), and relaunching the shortcut hits the single-instance
+branch and just opens the UI, so the user has no way to recover it.
 
 ## Design notes
 
