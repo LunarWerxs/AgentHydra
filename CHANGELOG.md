@@ -5,6 +5,22 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.3] - 2026-08-11
+
+### Fixed
+
+- **Tooltips are reachable on a phone.** Reka UI ignores touch pointers on hover, so on a touch-only
+  device every tooltip here was dead, including the toolbar labels `IconTooltip` puts on icon-only
+  controls and, worst of all, the info icons: a setting's description lives behind that icon and
+  nowhere else, so on mobile the text simply did not exist. Info icons now disclose on a single tap
+  and close on a tap outside, a second tap, or a scroll. Every other tooltip opens on a
+  press-and-hold, so a plain tap still runs the control's action exactly as before, and the click
+  ending a hold is swallowed so nothing fires behind the tooltip. Sliding a finger abandons the
+  hold, leaving scrolling alone. Mouse and pen behaviour is untouched: the gestures key off the
+  event's own pointer type, not a device media query, so a touchscreen laptop keeps hover and merely
+  gains them. From the shared UI kit; reported against RepoYeti as
+  [#16](https://github.com/LunarWerxs/RepoYeti/issues/16).
+
 ## [0.19.2] - 2026-08-10
 
 ### Changed
