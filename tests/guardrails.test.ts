@@ -131,6 +131,20 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
          const proc = Bun.spawn(['powershell', '-NoProfile', '-Command', q])
          expect((await new Response(proc.stdout).text()).trim()).toBe('WmiPrvSE.exe')
        })`,
+      // Direction D: a lifecycle HOOK, which the check was blind to until 2026-08-12. This is
+      // ReDesign's tray-launcher beforeAll verbatim in shape: 0.35s locally, 5057ms on
+      // windows-latest, and it held that repo's daemon job red. A hook is the worse case because
+      // bun blames the timeout on an unnamed test, so the failure does not name what caused it.
+      `beforeAll(() => {
+         cp.execFileSync('powershell', ['-NoProfile', '-File', createShortcut], { stdio: 'ignore' })
+       })`,
+      // Direction E: the same blindness one hop away, and per-hook rather than per-file.
+      `function regenerate() {
+         return execFileSync('powershell', ['-NoProfile', '-File', p], { stdio: 'ignore' })
+       }
+       beforeEach(() => {
+         regenerate()
+       })`,
     ],
     fixed: [
       // The same three, each stating an allowance. Any value counts; what matters is that it was
@@ -156,6 +170,18 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
          const proc = Bun.spawn(['powershell', '-NoProfile', '-Command', q])
          expect((await new Response(proc.stdout).text()).trim()).toBe('WmiPrvSE.exe')
        }, 30000)`,
+      // A hook states its allowance as the SECOND argument, not the third. Getting that wrong in
+      // either direction is the whole risk in extending the rule to hooks: read it as third and
+      // every compliant hook reads as broken.
+      `beforeAll(() => {
+         cp.execFileSync('powershell', ['-NoProfile', '-File', createShortcut], { stdio: 'ignore' })
+       }, 60_000)`,
+      `function regenerate() {
+         return execFileSync('powershell', ['-NoProfile', '-File', p], { stdio: 'ignore' })
+       }
+       beforeEach(() => {
+         regenerate()
+       }, 20_000)`,
       // Precision, the half that keeps this check usable: a test that only NAMES a spawn, in a
       // comment and in a string it asserts against, is not a spawn. These tests embed PowerShell and
       // VBS source in template literals as a matter of course, and spawn-console-window.mjs already

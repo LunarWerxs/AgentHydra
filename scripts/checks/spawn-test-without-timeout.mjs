@@ -44,12 +44,30 @@ const ID = 'subprocess-test-without-explicit-timeout'
 // The spawn APIs this repo's tests actually use are Bun.spawn, Bun.spawnSync and execFileSync; the
 // child_process siblings are listed so a future test reaching for one is caught on its first day
 // rather than on the first cold-runner flake. `Bun.$` and a bare `$\`` are Bun's shell.
+//
+// The `execFileSync` family also matches through a NAMESPACE: `import cp from "node:child_process"`
+// then `cp.execFileSync(...)` is the same spawn, and the leading `(?<![\w.$])` rejected it outright
+// because the preceding character is a dot. That miss is not hypothetical, it is ReDesign's
+// tray-launcher hook exactly, the one that held its windows-latest leg red. Any identifier is
+// allowed as the qualifier for the four unambiguous names (nothing but child_process exports an
+// `execFileSync`), while a BARE `spawn` stays unqualified-only, since `queue.spawn(` and friends are
+// common enough that qualifying it would trade real precision for no recall.
 const SPAWN_CALL =
-  /(?<![\w.$])(?:Bun\.spawnSync|Bun\.spawn|Bun\.\$|spawnSync|execFileSync|execSync|execFile|spawn)\s*\(|\$`/
+  /(?<![\w.$])(?:Bun\.spawnSync|Bun\.spawn|Bun\.\$|(?:[A-Za-z_$][\w$]*\.)?(?:spawnSync|execFileSync|execSync|execFile)|spawn)\s*\(|\$`/
 
 // `test(`, `it(`, and the modifier forms. `.if`/`.skipIf` are CURRIED — test.if(cond)(name, fn, ms)
 // — which is handled at the call site below, not here.
 const TEST_HEAD = /(?<![\w.$])(?:test|it)(?:\.(?:skipIf|todoIf|if|only|failing|each|skip|todo))?\s*\(/g
+
+// Lifecycle hooks spawn too, and a hook on the 5s default is WORSE than a test on it: bun reports
+// the timeout against an unnamed test ("a beforeEach/afterEach hook timed out for this test"), so
+// the failure does not even name the hook that caused it. Missing this cost ReDesign a permanently
+// red windows-latest leg (2026-08-12): its tray-launcher beforeAll shells out to PowerShell to
+// regenerate a .lnk, 0.35s locally, over 5s on the runner, 5057ms. This check said ✓ the whole time
+// because it only ever looked inside test bodies.
+//
+// Their timeout is the SECOND argument, not the third: beforeAll(fn, ms).
+const HOOK_HEAD = /(?<![\w.$])(?:beforeAll|beforeEach|afterAll|afterEach)\s*\(/g
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'tmp', '.arkitect', 'coverage', 'build'])
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/
@@ -254,23 +272,31 @@ export function findViolations(text) {
     [...helpers].find((h) => new RegExp(`(?<![\\w.$])${h}\\s*[(<]`).test(span))
 
   const hits = []
-  TEST_HEAD.lastIndex = 0
-  for (const head of code.matchAll(TEST_HEAD)) {
-    const open = head.index + head[0].length - 1
-    let call = extractBalanced(code, open)
-    // `test.if(cond)(name, fn, ms)`: the first span is the condition and the real call is the next
-    // one. Without this the entire form reads as having no body and no timeout.
-    const after = open + call.length
-    if (code[after] === '(') call = extractBalanced(code, after)
+  // `test(name, fn, ms)` puts the timeout third; `beforeAll(fn, ms)` puts it second. Everything else
+  // about the rule is identical, so the two only differ by which argument has to be present.
+  for (const [head, timeoutArg, kind] of [
+    [TEST_HEAD, 2, 'test'],
+    [HOOK_HEAD, 1, 'hook'],
+  ]) {
+    head.lastIndex = 0
+    for (const m of code.matchAll(head)) {
+      const open = m.index + m[0].length - 1
+      let call = extractBalanced(code, open)
+      // `test.if(cond)(name, fn, ms)`: the first span is the condition and the real call is the next
+      // one. Without this the entire form reads as having no body and no timeout.
+      const after = open + call.length
+      if (code[after] === '(') call = extractBalanced(code, after)
 
-    const direct = SPAWN_CALL.test(call)
-    const via = direct ? null : helperHit(call)
-    if (!direct && !via) continue
+      const direct = SPAWN_CALL.test(call)
+      const via = direct ? null : helperHit(call)
+      if (!direct && !via) continue
 
-    const args = topLevelArgs(call)
-    if (args.length >= 3 && args[2].length > 0) continue // an explicit timeout, whatever its value
+      const args = topLevelArgs(call)
+      // an explicit timeout, whatever its value
+      if (args.length > timeoutArg && args[timeoutArg].length > 0) continue
 
-    hits.push({ index: head.index, via })
+      hits.push({ index: m.index, via, kind })
+    }
   }
   return hits.sort((a, b) => a.index - b.index)
 }
@@ -347,14 +373,21 @@ export const audit = {
           line: lineAt(text, hit.index),
           severity: 'error',
           message:
-            `This test reaches a subprocess ${hit.via ? `via ${hit.via}()` : 'directly'} but takes ` +
-            "bun's 5s default timeout. Its runtime is set by the machine, not by its assertions: " +
-            'sessions-scan-cache.test.ts runs in 533ms locally and took 5083.99ms on CI\'s ' +
-            'windows-latest, failing the 2026-08-08 run 84ms over the line.',
+            `This ${hit.kind} reaches a subprocess ${hit.via ? `via ${hit.via}()` : 'directly'} ` +
+            "but takes bun's 5s default timeout. Its runtime is set by the machine, not by its " +
+            "assertions: sessions-scan-cache.test.ts runs in 533ms locally and took 5083.99ms on " +
+            "CI's windows-latest, failing the 2026-08-08 run 84ms over the line." +
+            (hit.kind === 'hook'
+              ? ' A hook is the worse case: bun blames the timeout on an unnamed test rather than ' +
+                'on the hook, so the red run does not even say what timed out. ReDesign lost its ' +
+                'windows-latest leg to exactly this on 2026-08-12.'
+              : ''),
           fix:
-            'Pass an explicit timeout as the third argument: `test(name, fn, 30_000)`. Any value ' +
-            'counts; the point is that it was chosen. Prefer a named constant with a comment ' +
-            'recording the measured local cost, as sessions-scan-cache.test.ts and ' +
+            (hit.kind === 'hook'
+              ? 'Pass an explicit timeout as the second argument: `beforeAll(fn, 30_000)`. '
+              : 'Pass an explicit timeout as the third argument: `test(name, fn, 30_000)`. ') +
+            'Any value counts; the point is that it was chosen. Prefer a named constant with a ' +
+            'comment recording the measured local cost, as sessions-scan-cache.test.ts and ' +
             'launcher.test.ts do, so the next person can tell a generous allowance from a guess. ' +
             'If MOST tests in this project spawn (RepoYeti shells out to git nearly everywhere), ' +
             'set one repo-wide allowance instead — `bun test --timeout 20000` in the test script, ' +
@@ -365,7 +398,7 @@ export const audit = {
 
     const failed = findings.length > 0
     const report = failed
-      ? `Found ${findings.length} subprocess test(s) on the 5s default:\n${findings
+      ? `Found ${findings.length} subprocess test(s)/hook(s) on the 5s default:\n${findings
           .map((f) => `- ${f.file}:${f.line}`)
           .join('\n')}`
       : 'Every test that spawns a subprocess sets an explicit timeout. ✓'
