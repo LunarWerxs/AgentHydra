@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { TooltipProviderProps } from "reka-ui"
 import { TooltipProvider } from "reka-ui"
-import { computed } from "vue"
+import { computed, provide } from "vue"
 import { useTooltipConfig } from "@/lib/tooltip-config"
+import { TOOLTIP_DISABLED_KEY } from "./touch"
 
 const props = withDefaults(defineProps<TooltipProviderProps>(), {
   delayDuration: 0,
@@ -20,6 +21,11 @@ const props = withDefaults(defineProps<TooltipProviderProps>(), {
 // stay exempt.
 const { enabled } = useTooltipConfig()
 const resolvedDisabled = computed(() => props.disabled ?? !enabled.value)
+
+// reka keeps its provider context to itself, but the touch gestures in TooltipTrigger are ours and
+// have to obey the same kill-switch — otherwise "show tooltips: off" would silence hover while a
+// long press still popped one open. Republish the resolved state for them to read.
+provide(TOOLTIP_DISABLED_KEY, resolvedDisabled)
 </script>
 
 <template>
