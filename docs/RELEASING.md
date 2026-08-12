@@ -37,6 +37,14 @@ every instance with auto-update enabled will fast-forward to it on its next chec
    auto-update instances before anyone had looked at CI; it then failed the ubuntu leg on a
    win32-only path assertion. Prefer the two steps.
 
+   **Name the tag in the push. Never `git push --tags`.** It pushes every local tag the remote is
+   missing, not the one just created, and a `v*` tag is a release trigger. Releasing 0.19.3 that way
+   also pushed a stale local `v0.8.0` and started a real Release build for a months-old commit; it
+   was cancelled while still queued (`gh run cancel <id>`, then `git push --delete origin v0.8.0`),
+   so nothing published. A minute later it would have been a public 0.8.0 sitting above 0.19.2 in
+   the list that auto-update clients read. These trees accumulate stale local tags precisely because
+   releases are normally pushed one at a time, so `--tags` looks harmless right up until it isn't.
+
    **If a tag does end up on a red commit,** do not move a published tag. Fix the failure, bump to
    the next patch version, and release that immutable version instead.
 

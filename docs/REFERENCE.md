@@ -227,3 +227,24 @@ the individual checks instead:
 
 CI runs these across `[ubuntu-latest, windows-latest]`, so a green local run on one OS clears one
 leg of two.
+
+### Repo guardrails (`scripts/checks/`)
+
+Custom checks, each a standalone `bun scripts/checks/<name>.mjs` run as its own CI step, and each
+written from a bug that actually shipped. Node stdlib only, no install. Their headers carry the
+incident; `tests/guardrails.test.ts` proves every one of them still fires on the broken shape and
+stays quiet on the fixed one, so none can rot into a silent no-op.
+
+- `reka-popper-root-inside-tooltip.mjs`: a popper root (DropdownMenu, Popover) wrapped AROUND an
+  `IconTooltip` steals the anchor, so the real content opens off-screen and, when modal, freezes
+  pointer events.
+- `wmi-commandline-query-self-match.mjs`: a `CommandLine LIKE` query that forgets to exclude the
+  shell running it matches itself and answers "found" forever.
+- `kit-lib-type-drift.mjs`: a vendored kit lib whose `.mjs` and hand-written `.d.mts` disagree,
+  which is either a compile error on import or `undefined` at runtime.
+- `spawn-console-window.mjs`: `windowsHide` missing on a console spawn (a stray console window) or
+  present on a GUI one (the window never appears).
+- `spawn-test-without-timeout.mjs`: a test **or lifecycle hook** that reaches a subprocess while
+  inheriting bun's 5s default. Such a case times the runner, not itself, and a cold windows-latest
+  box runs this class ~10x slower than a dev machine. A repo-wide `bun test --timeout N` stands the
+  check down, which is the better answer for a suite where nearly everything spawns.
