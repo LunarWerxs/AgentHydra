@@ -324,7 +324,7 @@ export function globalTimeoutMs(root) {
     const bunfig = readFileSync(join(root, 'bunfig.toml'), 'utf8')
     // Only under a [test] table; a timeout elsewhere in bunfig means something else entirely.
     const testTable = bunfig.split(/^\s*\[/m).find((s) => s.startsWith('test]'))
-    const m = testTable && testTable.match(/^\s*timeout\s*=\s*(\d+)/m)
+    const m = testTable?.match(/^\s*timeout\s*=\s*(\d+)/m)
     if (m) return Number(m[1])
   } catch {}
   return null
