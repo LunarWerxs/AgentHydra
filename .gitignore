@@ -28,3 +28,6 @@ PLAN.md
 
 # Owner handoff notes: internal, not for the public repo
 docs/HANDOFF_MICHAEL.md
+
+# Local AI memory for this repo. Deliberately NOT published.
+/.claude/memory/
