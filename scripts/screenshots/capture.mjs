@@ -110,7 +110,10 @@ const SHOTS = [
     // Asserting on the CHARTS rather than on any text: the point of this shot is that the view
     // draws, and a fixture change that emptied the reports would otherwise photograph an empty
     // page with a perfectly correct heading on it.
-    expect: `/Cost by day/.test(document.body.innerText) && document.querySelectorAll('svg[role="img"]').length >= 2 && document.querySelectorAll('[title*=":00 ·"]').length === 168`,
+    // The hour grid is asserted through its cells' ACCESSIBLE NAMES, not a `title` attribute: the
+    // cells moved to a rich hover card and kept an aria-label, and this predicate catching that
+    // change is exactly its job.
+    expect: `/Cost by day/.test(document.body.innerText) && document.querySelectorAll('svg[role="img"]').length >= 2 && document.querySelectorAll('[aria-label*=":00, "]').length === 168`,
   },
   {
     name: 'queue',

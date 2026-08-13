@@ -112,3 +112,75 @@ export function shortUsd(n: number): string {
   if (n >= 0.01) return `$${n.toFixed(2)}`
   return n === 0 ? '$0' : '<$0.01'
 }
+
+/**
+ * Who actually makes a model, from its id.
+ *
+ * Two different naming conventions arrive here. OpenCode qualifies a model with the provider it
+ * routed through (`deepseek/deepseek-v4-pro`, `dashscope2/glm-5.2`), which is the more useful
+ * grouping because it is where the money went. Claude and Codex write a bare id (`claude-opus-5`,
+ * `gpt-5.6-sol`), so those are matched on their prefix.
+ *
+ * An unrecognised id becomes 'other' rather than a guess: a wrong vendor label on a cost chart is
+ * worse than an honest bucket.
+ */
+export function modelVendor(model: string): string {
+  const id = model.trim().toLowerCase()
+  if (!id) return 'other'
+  // A qualified id names its route: keep that, since two providers serving one model are different
+  // rows to anyone deciding where to spend.
+  const slash = id.indexOf('/')
+  if (slash > 0) {
+    const provider = id.slice(0, slash)
+    return VENDOR_ALIAS[provider] ?? provider
+  }
+  for (const [prefix, vendor] of VENDOR_PREFIXES) if (id.startsWith(prefix)) return vendor
+  return 'other'
+}
+
+/** Route names that are worth showing under a recognisable vendor instead of their own brand. */
+const VENDOR_ALIAS: Record<string, string> = {
+  openai: 'openai',
+  anthropic: 'anthropic',
+  google: 'google',
+  xai: 'xai',
+  deepseek: 'deepseek',
+}
+
+const VENDOR_PREFIXES: ReadonlyArray<readonly [string, string]> = [
+  ['claude-', 'anthropic'],
+  ['gpt-', 'openai'],
+  ['o1', 'openai'],
+  ['o3', 'openai'],
+  ['o4', 'openai'],
+  ['codex', 'openai'],
+  ['gemini', 'google'],
+  ['grok', 'xai'],
+  ['deepseek', 'deepseek'],
+  ['kimi', 'moonshot'],
+  ['glm', 'zhipu'],
+  ['qwen', 'alibaba'],
+  ['llama', 'meta'],
+  ['mistral', 'mistral'],
+]
+
+/** Display name for a vendor bucket. Kept here so the chart and the filter agree. */
+export function vendorLabel(vendor: string): string {
+  const NAMES: Record<string, string> = {
+    anthropic: 'Anthropic',
+    openai: 'OpenAI',
+    google: 'Google',
+    xai: 'xAI',
+    deepseek: 'DeepSeek',
+    moonshot: 'Moonshot',
+    zhipu: 'Zhipu',
+    alibaba: 'Alibaba',
+    meta: 'Meta',
+    mistral: 'Mistral',
+    dashscope: 'DashScope',
+    dashscope2: 'DashScope',
+    opencode: 'OpenCode',
+    other: 'Other',
+  }
+  return NAMES[vendor] ?? vendor.charAt(0).toUpperCase() + vendor.slice(1)
+}

@@ -48,12 +48,16 @@ import type {
   SpendReport,
 } from '@/lib/api'
 import * as api from '@/lib/api'
-import { shortUsd, topNWithOther } from '@/lib/chart'
+import { modelVendor, shortUsd, vendorLabel } from '@/lib/chart'
 import { baseName, formatCompact, formatUsd } from '@/lib/format'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const { t } = useI18n()
 const { analyticsPeriod } = useAnalyticsPrefs()
+
+/** Narrow every cost/model chart to one vendor. Client-side over the report already fetched: the
+ *  vendor is derived from the model id, so the daemon has nothing extra to compute. */
+const vendorFilter = ref<string>('all')
 
 const spend = ref<SpendReport | null>(null)
 const activity = ref<ActivityReport | null>(null)
@@ -130,24 +134,18 @@ const complete = computed(() => {
 const modelOrder = computed(() => (spend.value?.byModel ?? []).map((b) => b.key))
 
 /** Tokens, for the models a price table cannot reach. Magnitude, so one hue. */
-const unpricedTokenRows = computed(() =>
-  topNWithOther(
-    unpricedModelRows.value.map((b) => ({
+const unpricedBuckets = computed(() =>
+  unpricedModelRows.value
+    .filter((b) => matchesVendor(b.key))
+    .map((b) => ({
       key: b.key,
       label: b.key,
       value: b.tokens?.total ?? b.weighted,
       detail: t('analytics.modelDetail', { turns: b.turns, sessions: b.sessions }),
     })),
-    6,
-    (r) => r.value,
-    (total, count) => ({
-      key: 'other',
-      label: t('analytics.other', { n: count }),
-      value: total,
-      detail: '',
-    }),
-  ),
 )
+const unpricedTokenRows = computed(() => unpricedBuckets.value.slice(0, 6))
+const unpricedMore = computed(() => unpricedBuckets.value.slice(6))
 
 /**
  * A COST chart contains only things that have a cost.
@@ -162,43 +160,44 @@ const unpricedModelRows = computed(() =>
   (spend.value?.byModel ?? []).filter((b) => b.costUsd === null),
 )
 
-const modelRows = computed(() =>
-  topNWithOther(
-    pricedModels.value.map((b) => ({
+/** Every vendor present, for the filter. Built from the UNFILTERED report, so the control can never
+ *  hide the option that would bring the rest back. */
+const vendors = computed(() => {
+  const seen = new Map<string, number>()
+  for (const b of spend.value?.byModel ?? []) {
+    const v = modelVendor(b.key)
+    seen.set(v, (seen.get(v) ?? 0) + (b.tokens?.total ?? 0))
+  }
+  return [...seen.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([key]) => ({ key, label: vendorLabel(key) }))
+})
+const matchesVendor = (model: string) =>
+  vendorFilter.value === 'all' || modelVendor(model) === vendorFilter.value
+
+const modelBuckets = computed(() =>
+  pricedModels.value
+    .filter((b) => matchesVendor(b.key))
+    .map((b) => ({
       key: b.key,
       label: b.key,
       value: b.costUsd ?? 0,
       detail: t('analytics.modelDetail', { turns: b.turns, sessions: b.sessions }),
     })),
-    5,
-    (r) => r.value,
-    (total, count) => ({
-      key: 'other',
-      label: t('analytics.other', { n: count }),
-      value: total,
-      detail: '',
-    }),
-  ),
 )
+const modelRows = computed(() => modelBuckets.value.slice(0, 5))
+const modelMore = computed(() => modelBuckets.value.slice(5))
 
-const projectRows = computed(() =>
-  topNWithOther(
-    (spend.value?.byProject ?? []).slice(0, 12).map((b) => ({
-      key: b.key,
-      label: baseName(b.key) || b.key,
-      value: b.costUsd ?? 0,
-      detail: b.key,
-    })),
-    8,
-    (r) => r.value,
-    (total, count) => ({
-      key: 'other',
-      label: t('analytics.other', { n: count }),
-      value: total,
-      detail: '',
-    }),
-  ),
+const projectBuckets = computed(() =>
+  (spend.value?.byProject ?? []).map((b) => ({
+    key: b.key,
+    label: baseName(b.key) || b.key,
+    value: b.costUsd ?? 0,
+    detail: b.key,
+  })),
 )
+const projectRows = computed(() => projectBuckets.value.slice(0, 8))
+const projectMore = computed(() => projectBuckets.value.slice(8))
 
 const PROVIDER_LABEL: Record<string, string> = {
   claude: 'sessions.sourceClaude',
@@ -227,26 +226,16 @@ const accountRows = computed(() =>
   })),
 )
 
-const toolRows = computed(() =>
-  topNWithOther(
-    (activity.value?.tools ?? []).map((tRow) => ({
-      key: tRow.key,
-      label: tRow.key.startsWith('mcp__')
-        ? tRow.key.split('__').slice(-1)[0] || tRow.key
-        : tRow.key,
-      value: tRow.count,
-      detail: tRow.key,
-    })),
-    10,
-    (r) => r.value,
-    (total, count) => ({
-      key: 'other',
-      label: t('analytics.other', { n: count }),
-      value: total,
-      detail: '',
-    }),
-  ),
+const toolBuckets = computed(() =>
+  (activity.value?.tools ?? []).map((tRow) => ({
+    key: tRow.key,
+    label: tRow.key.startsWith('mcp__') ? tRow.key.split('__').slice(-1)[0] || tRow.key : tRow.key,
+    value: tRow.count,
+    detail: tRow.key,
+  })),
 )
+const toolRows = computed(() => toolBuckets.value.slice(0, 10))
+const toolMore = computed(() => toolBuckets.value.slice(10))
 
 const dayPoints = computed(() =>
   (spend.value?.byDay ?? []).map((b) => ({
@@ -306,6 +295,21 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
               <DropdownMenuRadioItem value="7d">{{ $t('sessions.period7d') }}</DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="30d">{{ $t('sessions.period30d') }}</DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="all">{{ $t('sessions.periodAll') }}</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu v-if="vendors.length > 1">
+          <DropdownMenuTrigger as-child>
+            <Button :variant="vendorFilter === 'all' ? 'outline' : 'secondary'" size="sm">
+              {{ vendorFilter === 'all' ? $t('analytics.allVendors') : vendorLabel(vendorFilter) }}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" class="w-52">
+            <DropdownMenuRadioGroup v-model="vendorFilter">
+              <DropdownMenuRadioItem value="all">{{ $t('analytics.allVendors') }}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem v-for="v in vendors" :key="v.key" :value="v.key">
+                {{ v.label }}
+              </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -381,24 +385,49 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
           <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium">
             <Coins class="size-3.5" />{{ $t('analytics.costByDay') }}
           </h3>
-          <TimeBars :points="dayPoints" :format="formatUsd" :axis-format="shortUsd" />
+          <TimeBars
+            :points="dayPoints"
+            :format="formatUsd"
+            :axis-format="shortUsd"
+            :value-label="$t('analytics.tipCost')"
+            :share-label="$t('analytics.tipShareOfWindow')"
+            :peak-label="$t('analytics.tipBusiestDay')"
+          />
         </section>
 
         <div class="grid gap-3 lg:grid-cols-2">
           <section class="rounded-lg border border-border p-3">
             <h3 class="mb-2 text-xs font-medium">{{ $t('analytics.costByModel') }}</h3>
-            <BarRows :rows="modelRows" :order="modelOrder" :format="formatUsd" />
+            <BarRows
+              :rows="modelRows"
+              :more="modelMore"
+              :more-label="$t('analytics.showMore', { n: modelMore.length })"
+              :order="modelOrder"
+              :format="formatUsd"
+            />
             <!-- Named, not drawn at zero: a model with no published price did not cost nothing. -->
             <div v-if="unpricedTokenRows.length" class="mt-3 border-t border-border pt-2">
               <p class="mb-1.5 text-[11px] text-muted-foreground">
                 {{ $t('analytics.unpricedNote') }}
               </p>
-              <BarRows :rows="unpricedTokenRows" :format="formatCompact" mono />
+              <BarRows
+                :rows="unpricedTokenRows"
+                :more="unpricedMore"
+                :more-label="$t('analytics.showMore', { n: unpricedMore.length })"
+                :format="formatCompact"
+                mono
+              />
             </div>
           </section>
           <section class="rounded-lg border border-border p-3">
             <h3 class="mb-2 text-xs font-medium">{{ $t('analytics.costByProject') }}</h3>
-            <BarRows :rows="projectRows" :format="formatUsd" mono />
+            <BarRows
+              :rows="projectRows"
+              :more="projectMore"
+              :more-label="$t('analytics.showMore', { n: projectMore.length })"
+              :format="formatUsd"
+              mono
+            />
           </section>
         </div>
 
@@ -423,6 +452,9 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
             :points="concurrencyPoints"
             :format="(n: number) => String(Math.round(n))"
             :label-at="clockLabel"
+            :value-label="$t('analytics.tipSessions')"
+            :change-label="$t('analytics.tipChange')"
+            :peak-label="$t('analytics.tipPeak')"
           />
         </section>
 
@@ -431,7 +463,13 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
             <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium">
               <Wrench class="size-3.5" />{{ $t('analytics.toolMix') }}
             </h3>
-            <BarRows :rows="toolRows" :format="formatCompact" mono />
+            <BarRows
+              :rows="toolRows"
+              :more="toolMore"
+              :more-label="$t('analytics.showMore', { n: toolMore.length })"
+              :format="formatCompact"
+              mono
+            />
           </section>
 
           <section class="rounded-lg border border-border p-3">

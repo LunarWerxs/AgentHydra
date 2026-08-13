@@ -37,6 +37,25 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **The concurrency chart's hover pointed at the wrong place.** An SVG with a viewBox is scaled to
+  fit and centred inside a wider element, so mapping the pointer across the element's full width
+  read every position as further right than it was: over a hundred pixels of error at the left edge
+  of a wide card. Both time charts are now drawn at exactly the width they are given, so one unit is
+  one pixel, nothing is letterboxed, and neither chart clips or scrolls.
+
+- **Charts have proper hover cards.** They used the browser's own tooltip, which waits about a
+  second before appearing, so sweeping across a heatmap (which is how a heatmap is read) showed
+  nothing at all. The cards appear on the pointer event and carry context rather than a repeat of
+  the label: an hour cell says its share of the week and its day and hour totals, the day chart says
+  its share of the window and the busiest day, and the concurrency line says what changed since the
+  previous point. Cells keep an accessible name, so the grid is not mouse-only.
+
+- **The folded "N more" rows expand.** Every ranked chart hid its tail with no way to see it. The
+  scale still spans the whole list, so revealing the tail never resizes the bars already on screen.
+
+- **Analytics can be filtered by provider** (Anthropic, OpenAI, DeepSeek and the rest), derived from
+  the model id, so a store with five vendors in it can be read one vendor at a time.
+
 - **The hour-of-week grid is square and fills its card.** Its cells were stretching into rectangles
   on a wide card, which stopped it reading as a calendar.
 
