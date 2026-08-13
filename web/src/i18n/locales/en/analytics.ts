@@ -32,6 +32,8 @@ export default {
   // --- charts ---
   costByDay: 'Cost by day',
   costByMonth: 'Cost by month',
+  grainDay: 'Daily',
+  grainMonth: 'Monthly',
   costByModel: 'Cost by model',
   costByProject: 'Cost by project',
   unpricedNote:

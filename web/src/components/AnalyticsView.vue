@@ -264,7 +264,13 @@ const toolMore = computed(() => toolBuckets.value.slice(10))
  */
 const MAX_DAY_BARS = 70
 
-const groupedByMonth = computed(() => (spend.value?.byDay ?? []).length > MAX_DAY_BARS)
+/** 'auto' rolls up only once a day chart would stop being readable; the other two are the reader
+ *  saying they know better, which on a window of a month or two they often do. */
+const timeGrain = ref<'auto' | 'day' | 'month'>('auto')
+const groupedByMonth = computed(() => {
+  if (timeGrain.value !== 'auto') return timeGrain.value === 'month'
+  return (spend.value?.byDay ?? []).length > MAX_DAY_BARS
+})
 
 const dayPoints = computed(() => {
   const days = spend.value?.byDay ?? []
@@ -443,6 +449,21 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
             <Coins class="size-3.5" />{{
               groupedByMonth ? $t('analytics.costByMonth') : $t('analytics.costByDay')
             }}
+            <!-- Pushed right and quiet: a grain switch is a preference, not a headline. -->
+            <span class="ml-auto flex items-center gap-0.5">
+              <button
+                v-for="g in (['day', 'month'] as const)"
+                :key="g"
+                type="button"
+                class="rounded px-1.5 py-0.5 text-[10px] font-normal transition-colors"
+                :class="
+                  (g === 'month') === groupedByMonth
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                "
+                @click="timeGrain = g"
+              >{{ g === 'day' ? $t('analytics.grainDay') : $t('analytics.grainMonth') }}</button>
+            </span>
           </h3>
           <TimeBars
             :points="dayPoints"
