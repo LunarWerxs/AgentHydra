@@ -9,6 +9,25 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **`bun run audit`: prove the numbers against the store.** Three counting errors shipped in one
+  day and every one of them passed a green test suite, which is the part worth fixing. A unit test
+  over a hand-written fixture pins the behaviour its author believed in; when the belief is wrong,
+  the fixture encodes the same wrong belief and the test agrees enthusiastically.
+
+  So the audit does two things a unit test cannot. It **accounts for every file**: each transcript
+  in each store is either indexed as a session, attached to one, or excluded for a NAMED reason,
+  and anything left over is a failure by definition, because nobody decided about it. And it
+  **recounts the tokens by a second implementation** that shares no code with the first: no import
+  of the usage parser, no call into the analytics scanner, enforced by a test that reads the source.
+  Two implementations only catch a wrong assumption while they are genuinely two.
+
+  It found real problems on its first run. Cowork's sandbox keeps a whole Claude Code home of its
+  own, so a run's directory holds the audit log, the CLI's own transcript and that session's
+  subagent tree; the file check reported them unowned. Chasing that surfaced two more: the store
+  scanner skipped dot-directories, so those nested transcripts were invisible to the indexer
+  entirely, and some Cowork runs write no audit log at all, so their nested transcript has to become
+  the session rather than attach to one that is not there.
+
 - **Prices are downloaded rather than frozen into the build.** A hand-typed price table is correct
   on the day it is written and decays from then on: providers cut prices, and every model missing
   from the table was reported as unpriced. AgentHydra now pulls LiteLLM's public price catalogue

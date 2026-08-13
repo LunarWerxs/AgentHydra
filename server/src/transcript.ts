@@ -313,7 +313,10 @@ export function listTranscriptFilesAfterMiss(): TranscriptFile[] {
  */
 function scanRootSync(glob: Bun.Glob, cwd: string): string[] {
   try {
-    return [...glob.scanSync({ cwd, onlyFiles: true })]
+    // `dot: true` because a real store hides transcripts behind a dot directory: Cowork's sandbox
+    // keeps the run's own Claude Code home at `local_<id>/.claude/projects/...`, and the default
+    // scan silently skipped every one of them. Found by the store audit, not by reading this line.
+    return [...glob.scanSync({ cwd, onlyFiles: true, dot: true })]
   } catch {
     return []
   }
@@ -324,7 +327,8 @@ function scanRootSync(glob: Bun.Glob, cwd: string): string[] {
 async function scanRootAsync(glob: Bun.Glob, cwd: string): Promise<string[]> {
   const out: string[] = []
   try {
-    for await (const rel of glob.scan({ cwd, onlyFiles: true })) out.push(rel)
+    // See scanRootSync: a dot directory can hold real transcripts.
+    for await (const rel of glob.scan({ cwd, onlyFiles: true, dot: true })) out.push(rel)
   } catch {
     return out
   }
@@ -358,6 +362,9 @@ interface ClaudeStore {
   glob: string
   idFrom: 'basename' | 'parent-dir'
   idPrefix: string
+  /** When set, only this filename is a session; everything else attaches to the nearest ancestor
+   *  directory whose name starts with idPrefix. See AgentTool.sessionFile. */
+  sessionFile: string
 }
 
 /** `<project>/<session-id>.jsonl` — Claude Code's own layout, and every fork's. */
@@ -365,6 +372,7 @@ const CLAUDE_STORE_DEFAULTS = {
   glob: CLAUDE_TRANSCRIPT_GLOB,
   idFrom: 'basename' as const,
   idPrefix: '',
+  sessionFile: '',
 }
 
 /**
@@ -393,10 +401,31 @@ function claudeSessionId(rel: string, store: ClaudeStore): string {
  */
 export function claudeParentId(rel: string, store: ClaudeStore): string | null {
   const parts = rel.split(/[\\/]/)
-  // `<project>/<session>.jsonl` for the default layout; a store with its own pattern (Cowork) is
-  // never nested, so its depth is whatever that pattern produced and always a session.
-  if (store.glob !== CLAUDE_TRANSCRIPT_GLOB || parts.length <= 2) return null
+  const name = parts[parts.length - 1] ?? ''
+
+  // A store that NAMES its session file (Cowork) decides by name, not by depth: its runs sit at
+  // several depths, and each run directory also contains a whole Claude Code home of its own —
+  // the CLI's transcript and that session's subagents/ tree, which are the same run's spend.
+  if (store.sessionFile) {
+    const owner = lastIndexStartingWith(parts, store.idPrefix)
+    if (owner < 0) return null
+    // The session file, directly inside the run's own directory, IS the session.
+    if (name === store.sessionFile && owner === parts.length - 2) return null
+    const raw = parts[owner] as string
+    return raw.startsWith(store.idPrefix) ? raw.slice(store.idPrefix.length) : raw
+  }
+
+  // `<project>/<session>.jsonl` is a session; anything deeper is a subagent of parts[1].
+  if (parts.length <= 2) return null
   return parts[1] ?? null
+}
+
+/** Index of the last path segment beginning with `prefix`, or -1. An empty prefix matches nothing,
+ *  which is what keeps this out of the default layout's way. */
+function lastIndexStartingWith(parts: string[], prefix: string): number {
+  if (!prefix) return -1
+  for (let i = parts.length - 1; i >= 0; i--) if ((parts[i] ?? '').startsWith(prefix)) return i
+  return -1
 }
 
 function claudeRecord(rel: string, mtimeMs: number, sizeBytes: number, store: ClaudeStore) {
@@ -412,6 +441,36 @@ function claudeRecord(rel: string, mtimeMs: number, sizeBytes: number, store: Cl
   }
 }
 
+/**
+ * A nested transcript whose owning session does not exist becomes a session itself.
+ *
+ * Found by the store audit rather than by reasoning: some Cowork runs write the sandbox's own
+ * Claude Code transcript but never an `audit.jsonl`, so attaching their files to an owner that is
+ * not there would drop the run entirely. Nothing may be silently unowned — either it belongs to a
+ * session or it IS one.
+ */
+function promoteOrphans(
+  files: TranscriptFile[],
+  children: Map<string, string[]>,
+  pending: Array<{
+    parentId: string
+    rel: string
+    store: ClaudeStore
+    mtimeMs: number
+    size: number
+  }>,
+): void {
+  const known = new Set(files.map((f) => f.session_id))
+  for (const c of pending) {
+    if (known.has(c.parentId)) {
+      rememberChild(children, c.parentId, join(c.store.root, c.rel))
+      continue
+    }
+    const orphan = { ...c.store, idFrom: 'basename' as const, idPrefix: '' }
+    files.push(claudeRecord(c.rel, c.mtimeMs, c.size, orphan))
+  }
+}
+
 /** Every claude-format store on this machine: Claude Code's own, then the catalog's. */
 function claudeStores(): ClaudeStore[] {
   const stores: ClaudeStore[] = [
@@ -424,6 +483,7 @@ function claudeStores(): ClaudeStore[] {
       glob: r.tool.glob ?? CLAUDE_STORE_DEFAULTS.glob,
       idFrom: r.tool.idFrom ?? CLAUDE_STORE_DEFAULTS.idFrom,
       idPrefix: r.tool.idPrefix ?? CLAUDE_STORE_DEFAULTS.idPrefix,
+      sessionFile: r.tool.sessionFile ?? CLAUDE_STORE_DEFAULTS.sessionFile,
     })
   }
   return stores
@@ -594,22 +654,30 @@ function buildTranscriptIndex(): TranscriptFile[] {
   const files: TranscriptFile[] = []
   const extra = extraStoreRecords()
   const claudeChildren = new Map<string, string[]>()
+  const pendingChildren: Array<{
+    parentId: string
+    rel: string
+    store: ClaudeStore
+    mtimeMs: number
+    size: number
+  }> = []
   for (const store of claudeStores()) {
     for (const rel of scanRootSync(new Bun.Glob(store.glob), store.root)) {
-      const parent = claudeParentId(rel, store)
-      if (parent) {
-        rememberChild(claudeChildren, parent, join(store.root, rel))
-        continue
-      }
       let st: ReturnType<typeof statSync>
       try {
         st = statSync(join(store.root, rel))
       } catch {
         continue
       }
+      const parent = claudeParentId(rel, store)
+      if (parent) {
+        pendingChildren.push({ parentId: parent, rel, store, mtimeMs: st.mtimeMs, size: st.size })
+        continue
+      }
       files.push(claudeRecord(rel, st.mtimeMs, st.size, store))
     }
   }
+  promoteOrphans(files, claudeChildren, pendingChildren)
 
   const codexSessionIndex = readCodexSessionIndex()
   const addCodexRoot = (root: string, archived: boolean, tool = 'codex') => {
@@ -674,24 +742,31 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
 
   const extra = extraStoreRecords()
   const claudeChildren = new Map<string, string[]>()
+  const pendingChildren: Array<{
+    parentId: string
+    rel: string
+    store: ClaudeStore
+    mtimeMs: number
+    size: number
+  }> = []
   for (const store of claudeStores()) {
     const claudeRels = await scanRootAsync(new Bun.Glob(store.glob), store.root)
-    const sessionRels: string[] = []
-    for (const rel of claudeRels) {
-      const parent = claudeParentId(rel, store)
-      if (parent) rememberChild(claudeChildren, parent, join(store.root, rel))
-      else sessionRels.push(rel)
-    }
-    const claudeStats = await mapPool(sessionRels, INDEX_SCAN_WIDTH, async (rel) => {
+    const scanned = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
       try {
         const st = await statAsync(join(store.root, rel))
-        return claudeRecord(rel, st.mtimeMs, st.size, store)
+        return { rel, mtimeMs: st.mtimeMs, size: st.size }
       } catch {
         return null
       }
     })
-    for (const record of claudeStats) if (record) files.push(record)
+    for (const f of scanned) {
+      if (!f) continue
+      const parent = claudeParentId(f.rel, store)
+      if (parent) pendingChildren.push({ parentId: parent, ...f, store })
+      else files.push(claudeRecord(f.rel, f.mtimeMs, f.size, store))
+    }
   }
+  promoteOrphans(files, claudeChildren, pendingChildren)
 
   const codexSessionIndex = readCodexSessionIndex()
   for (const { root, archived, tool } of [

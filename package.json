@@ -24,7 +24,8 @@
     "lint": "biome check .",
     "typecheck": "bun run --cwd web typecheck && bun run --cwd server typecheck",
     "format": "biome format --write .",
-    "test": "bun test"
+    "test": "bun test",
+    "audit": "bun run scripts/audit.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.5"

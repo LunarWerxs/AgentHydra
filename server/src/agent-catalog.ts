@@ -80,6 +80,15 @@ export interface AgentTool {
   idFrom?: 'basename' | 'parent-dir'
   /** Stripped from the front of an extracted session id. Cowork's directories are `local_<uuid>`. */
   idPrefix?: string
+  /**
+   * The one filename that IS a session, for a store that keeps other transcripts beside it.
+   *
+   * Cowork's sandbox contains a whole Claude Code home of its own, so a run's directory holds the
+   * run's `audit.jsonl` AND the CLI's own transcript AND that CLI's subagent transcripts. Naming
+   * the session file is what lets the rest be attached to it rather than listed as sessions or
+   * dropped on the floor.
+   */
+  sessionFile?: string
   /** Shown beside a detected-but-unreadable tool, so "why not?" has an answer. */
   note?: string
 }
@@ -145,9 +154,14 @@ export const AGENT_TOOLS: AgentTool[] = [
       'AppData/Roaming/Claude/local-agent-mode-sessions',
     ],
     format: 'claude',
-    glob: '*/*/local_*/audit.jsonl',
+    // Everything under the store, because a run's directory holds more than its audit log: the
+    // sandbox's own `.claude/projects/<proj>/<id>.jsonl` and that session's `subagents/` tree live
+    // in there too, and they are the same run's spend. The audit log is the session; the rest
+    // attach to it, and the per-request charge stops the overlap being counted twice.
+    glob: '**/*.jsonl',
     idFrom: 'parent-dir',
     idPrefix: 'local_',
+    sessionFile: 'audit.jsonl',
   },
   {
     id: 'opencode',
