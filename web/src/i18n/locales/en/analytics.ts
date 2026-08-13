@@ -13,6 +13,7 @@ export default {
   rescanDone: 'Scanned {n} session(s).',
   rescanPartial: 'Scanned {n} session(s), then stopped on time. Run it again to continue.',
   rescanFailed: "Couldn't rescan.",
+  rescanFailedSome: "Couldn't read {n} transcript(s). They will be retried next time.",
   // --- headline numbers ---
   totalCost: 'Cost',
   sessions: 'Sessions',

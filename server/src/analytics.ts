@@ -267,16 +267,28 @@ const selectRows = db.query<AnalyticsRow, []>(
 )
 
 const upsertAnalytics = db.query(
-  'update session_scan_cache set analytics_at = ?, analytics_version = ?, session_id = ?, ' +
+  'update session_scan_cache set analytics_at = ?, analytics_version = ?, ' +
+    'analytics_mtime_ms = ?, analytics_size_bytes = ?, session_id = ?, ' +
     'source = ?, project = ?, tokens_json = ?, days_json = ?, hours_json = ?, tools_json = ?, ' +
     'tool_errors = ?, tool_error_streak = ?, edit_count = ?, compactions = ?, active_ms = ?, ' +
     'first_ts = ?, last_ts = ? where cache_key = ?',
 )
 
+/**
+ * A placeholder row, so analytics can be stored for a transcript the LIST scanner has not parsed yet
+ * (the two warms run independently, and the list only warms the newest few hundred).
+ *
+ * `mtime_ms` and `size_bytes` are -1 ON PURPOSE. The list scanner validates its own cache by
+ * comparing those against the file on disk, so an impossible pair guarantees it treats this row as
+ * stale and re-parses. Writing the REAL pair here looked harmless and was not: the row satisfied the
+ * list's freshness check, so the list read this placeholder as a finished parse with a uuid for a
+ * title and zero substantive turns — and a session with zero substantive turns is DROPPED from the
+ * list. Analytics would have silently deleted sessions from the sessions view.
+ */
 const insertShell = db.query(
   'insert into session_scan_cache (cache_key, path, mtime_ms, size_bytes, title, cwd, git_branch, ' +
     'message_count, created_at, last_activity_at, last_role, last_text_preview, ' +
-    'substantive_turns, scanned_at) values (?, ?, ?, ?, ?, ?, null, 0, null, ?, null, null, 0, ?) ' +
+    'substantive_turns, scanned_at) values (?, ?, -1, -1, ?, ?, null, 0, null, ?, null, null, 0, ?) ' +
     'on conflict(cache_key) do nothing',
 )
 
@@ -293,42 +305,39 @@ export function analyticsCacheKey(tf: TranscriptFile): string {
 
 const selectRevision = db.query<
   {
-    mtime_ms: number
-    size_bytes: number
+    analytics_mtime_ms: number | null
+    analytics_size_bytes: number | null
     analytics_at: number | null
     analytics_version: number | null
   },
   [string]
 >(
-  'select mtime_ms, size_bytes, analytics_at, analytics_version from session_scan_cache where cache_key = ?',
+  'select analytics_mtime_ms, analytics_size_bytes, analytics_at, analytics_version ' +
+    'from session_scan_cache where cache_key = ?',
 )
 
+/** Compared against the ANALYTICS stamp, never the list scanner's: the two are written by different
+ *  passes, and reading the other one's stamp would make each rescan whenever the other ran. */
 function needsScan(tf: TranscriptFile): boolean {
   const row = selectRevision.get(analyticsCacheKey(tf))
   if (!row) return true
   if (row.analytics_at === null || row.analytics_version !== ANALYTICS_VERSION) return true
-  return row.mtime_ms !== tf.mtime_ms || row.size_bytes !== tf.size_bytes
+  return row.analytics_mtime_ms !== tf.mtime_ms || row.analytics_size_bytes !== tf.size_bytes
 }
 
 function persist(tf: TranscriptFile, a: SessionAnalytics): void {
   const key = analyticsCacheKey(tf)
   // The list scanner owns this row and may not have written it yet (analytics can warm first on a
-  // cold store). A shell row keeps the schema's not-null columns satisfied until the real scan
-  // fills in the title; nothing reads a shell row, because the list requires a matching revision.
-  insertShell.run(
-    key,
-    tf.path,
-    tf.mtime_ms,
-    tf.size_bytes,
-    tf.session_id,
-    tf.cwd ?? '',
-    tf.mtime_ms,
-    Date.now(),
-  )
+  // cold store), so a placeholder carries the not-null columns until the real parse fills them in.
+  // Its revision is hard-coded to (-1, -1) in the statement itself: see the comment on insertShell
+  // for why writing the file's real mtime and size here silently deleted sessions from the list.
+  insertShell.run(key, tf.path, tf.session_id, tf.cwd ?? '', tf.mtime_ms, Date.now())
   db.transaction(() => {
     upsertAnalytics.run(
       Date.now(),
       ANALYTICS_VERSION,
+      tf.mtime_ms,
+      tf.size_bytes,
       tf.session_id,
       tf.source,
       tf.project,
@@ -383,6 +392,8 @@ function pruneEdits(): void {
 export interface AnalyticsRefresh {
   scanned: number
   skipped: number
+  /** Transcripts that could not be totalled. Reported rather than swallowed — see the catch below. */
+  failed: number
   budgetExhausted: boolean
 }
 
@@ -402,6 +413,7 @@ export async function refreshAnalytics(
   const queue = [...files].sort((a, b) => b.mtime_ms - a.mtime_ms)
   let scanned = 0
   let skipped = 0
+  let failed = 0
   let next = 0
   let budgetExhausted = false
 
@@ -423,15 +435,23 @@ export async function refreshAnalytics(
         const a = await scanSessionAnalytics(tf.path, tf.source)
         persist(tf, a)
         scanned++
-      } catch {
-        // An unreadable or half-written transcript is skipped, not fatal. It will be retried on the
+      } catch (err) {
+        // An unreadable or half-written transcript is skipped, not fatal: it will be retried on the
         // next refresh, by which point the writer has usually finished.
+        //
+        // COUNTED AND REPORTED, though, because a silent catch here hid a real bug during
+        // development — a mismatched statement meant every single file failed, and the only symptom
+        // was a warm that reported nothing and a table that stayed empty. A failure that happens to
+        // EVERY file is not the transient case this catch is for, and `failed` is what makes the
+        // difference visible.
+        failed++
+        if (process.env.AGENTHYDRA_DEBUG_ANALYTICS) console.error('[analytics]', err)
       }
     }
   }
   await Promise.all(Array.from({ length: concurrency }, worker))
   if (scanned > 0) pruneEdits()
-  return { scanned, skipped, budgetExhausted }
+  return { scanned, skipped, failed, budgetExhausted }
 }
 
 let warming: Promise<void> | null = null
@@ -754,7 +774,8 @@ export function dropAnalytics(): boolean {
       'update session_scan_cache set analytics_at = null, analytics_version = null, ' +
         'tokens_json = null, days_json = null, hours_json = null, tools_json = null, ' +
         'tool_errors = null, tool_error_streak = null, edit_count = null, compactions = null, ' +
-        'active_ms = null, first_ts = null, last_ts = null',
+        'active_ms = null, first_ts = null, last_ts = null, analytics_mtime_ms = null, ' +
+        'analytics_size_bytes = null',
     )
     db.run('delete from session_edits')
     return true

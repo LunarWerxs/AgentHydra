@@ -165,9 +165,12 @@ export const getRecentEdits = (limit = 200) =>
   j<{ edits: EditEntry[] }>(`/api/analytics/edits?limit=${limit}`)
 export const getAnalyticsStatus = () => j<AnalyticsCoverage>('/api/analytics')
 export const refreshAnalytics = () =>
-  j<{ scanned: number; skipped: number; budgetExhausted: boolean }>('/api/analytics/refresh', {
-    method: 'POST',
-  })
+  j<{ scanned: number; skipped: number; failed: number; budgetExhausted: boolean }>(
+    '/api/analytics/refresh',
+    {
+      method: 'POST',
+    },
+  )
 export const deleteAnalytics = () =>
   j<AnalyticsCoverage & { ok: boolean }>('/api/analytics', { method: 'DELETE' })
 /** What one queued run cost. Computed on demand, never stored — see server/src/session-usage.ts. */

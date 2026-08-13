@@ -9,7 +9,8 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { scanSessionAnalytics } from '../src/analytics'
+import { analyticsCacheKey, refreshAnalytics, scanSessionAnalytics } from '../src/analytics'
+import { db } from '../src/db'
 
 const dir = mkdtempSync(join(tmpdir(), 'ah-analytics-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -194,5 +195,52 @@ describe('the edges', () => {
       'opencode',
     )
     expect(a.tokens).toEqual({})
+  })
+})
+
+describe('the placeholder row can never be mistaken for a parsed session', () => {
+  // THE BUG THIS PINS. Analytics and the session list both write session_scan_cache, and analytics
+  // may reach a transcript first. It therefore inserts a placeholder row to hang its totals on. The
+  // first version stamped that row with the file's REAL mtime and size — which is exactly what the
+  // list scanner validates its own cache against, so the list accepted the placeholder as a finished
+  // parse: title = a uuid, substantive_turns = 0. A session with zero substantive turns is dropped
+  // from the list outright, so warming analytics would have silently deleted sessions from the
+  // sessions view. The placeholder now carries an impossible (-1, -1) revision, which the list can
+  // only ever treat as stale.
+  test('a row written by the analytics pass is stale to the list scanner by construction', async () => {
+    const path = transcript([assistant('2026-08-10T10:00:00.000Z', U)])
+    const tf = {
+      source: 'claude' as const,
+      session_id: 'aaaaaaaa-0000-4000-8000-000000000001',
+      path,
+      project: 'test-project',
+      cwd: 'D:/test',
+      mtime_ms: 1_700_000_000_000,
+      size_bytes: 4096,
+      title: '',
+      archived: false,
+      created_at: null,
+    }
+    await refreshAnalytics([tf as never], { budgetMs: 5_000, concurrency: 1 })
+
+    const row = db
+      .query<{ mtime_ms: number; size_bytes: number; substantive_turns: number }, [string]>(
+        'select mtime_ms, size_bytes, substantive_turns from session_scan_cache where cache_key = ?',
+      )
+      .get(analyticsCacheKey(tf as never))
+    expect(row).toBeTruthy()
+    // The list's freshness test is `row.mtime_ms !== tf.mtime_ms || row.size_bytes !== tf.size_bytes`
+    // (see sessions.ts readScanCache). Both must differ, so that test can only ever say "stale".
+    expect(row?.mtime_ms).not.toBe(tf.mtime_ms)
+    expect(row?.size_bytes).not.toBe(tf.size_bytes)
+
+    // ...and the analytics were still stored, on their own revision stamp.
+    const a = db
+      .query<{ analytics_at: number | null; analytics_mtime_ms: number | null }, [string]>(
+        'select analytics_at, analytics_mtime_ms from session_scan_cache where cache_key = ?',
+      )
+      .get(analyticsCacheKey(tf as never))
+    expect(a?.analytics_at).toBeGreaterThan(0)
+    expect(a?.analytics_mtime_ms).toBe(tf.mtime_ms)
   })
 })

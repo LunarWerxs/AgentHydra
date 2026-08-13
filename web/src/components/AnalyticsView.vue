@@ -83,11 +83,15 @@ async function rescan() {
   refreshing.value = true
   try {
     const r = await api.refreshAnalytics()
-    toast.success(
-      r.budgetExhausted
-        ? t('analytics.rescanPartial', { n: r.scanned })
-        : t('analytics.rescanDone', { n: r.scanned }),
-    )
+    // A failure count is surfaced rather than swallowed: a warm where EVERY file failed reports the
+    // same "scanned 0" as a warm with nothing to do, and those are very different states.
+    if (r.failed > 0) toast.warning(t('analytics.rescanFailedSome', { n: r.failed }))
+    else
+      toast.success(
+        r.budgetExhausted
+          ? t('analytics.rescanPartial', { n: r.scanned })
+          : t('analytics.rescanDone', { n: r.scanned }),
+      )
     await load()
   } catch {
     toast.error(t('analytics.rescanFailed'))

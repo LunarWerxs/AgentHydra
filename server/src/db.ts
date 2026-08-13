@@ -188,6 +188,12 @@ create index if not exists idx_session_scan_cache_path on session_scan_cache(pat
   }
   add('analytics_at', 'integer')
   add('analytics_version', 'integer')
+  // The analytics pass keeps its OWN revision stamp rather than reading the list scanner's.
+  // They describe the same file but are written independently, and a row created by the analytics
+  // pass must never look to the list scanner like a finished parse of that file — see the shell-row
+  // comment in analytics.ts for the session-dropping bug that caused.
+  add('analytics_mtime_ms', 'real')
+  add('analytics_size_bytes', 'integer')
   // Denormalised from the transcript index so an aggregate never has to re-glob the store to know
   // which session, provider or project a row belongs to.
   add('session_id', 'text')
