@@ -80,9 +80,15 @@ test('discovery never duplicates an instance this app already manages', async ()
 test('discovered rows are readable by id but are not store rows', async () => {
   // The read-only routes resolve through findCodexInstance; every mutating action goes through
   // getCodexInstance, which stays store-only so it cannot act on something it did not create.
-  expect(await findCodexInstance(DEFAULT_CODEX_INSTANCE_ID)).not.toBeNull()
+  //
+  // The process listing is STUBBED, like every other test in this file: this one is about how an id
+  // resolves, and letting it enumerate the machine's real desktop processes made it shell out. That
+  // is what timed out at five seconds on a CI runner, on a test that asserts nothing about
+  // processes at all.
+  const noProcesses = { listDesktopProcesses: async () => [] }
+  expect(await findCodexInstance(DEFAULT_CODEX_INSTANCE_ID, noProcesses)).not.toBeNull()
   expect(getCodexInstance(DEFAULT_CODEX_INSTANCE_ID)).toBeNull()
-  expect(await findCodexInstance('no-such-id')).toBeNull()
+  expect(await findCodexInstance('no-such-id', noProcesses)).toBeNull()
 })
 
 test('defaultCodexDesktopUserDataDir is the shipped app profile, not our isolated layout', () => {

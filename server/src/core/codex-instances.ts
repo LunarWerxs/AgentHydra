@@ -206,11 +206,22 @@ export function getCodexInstance(id: string): CodexInstance | null {
  * Falls back to the (cached) process scan only when the id is not in the store, so the common
  * stored-row lookup stays a pure file read.
  */
-export async function findCodexInstance(id: string): Promise<CodexInstance | null> {
+/**
+ * Resolve an id that may be a DISCOVERED instance rather than one this app created.
+ *
+ * Takes the same process-listing override as listCodexInstances, and forwards it. Without that a
+ * caller (or a test) resolving an id has no way to avoid enumerating the machine's real desktop
+ * processes, which on Windows means shelling out: a test asserting only that ids resolve was doing
+ * a full process sweep, and timed out on a cold CI runner at five seconds.
+ */
+export async function findCodexInstance(
+  id: string,
+  options: ListCodexInstancesOptions = {},
+): Promise<CodexInstance | null> {
   const stored = getCodexInstance(id)
   if (stored) return stored
   if (id !== DEFAULT_CODEX_INSTANCE_ID && !id.startsWith('external:')) return null
-  return (await listCodexInstances()).find((candidate) => candidate.id === id) ?? null
+  return (await listCodexInstances(options)).find((candidate) => candidate.id === id) ?? null
 }
 
 function validName(name: string): string | null {
