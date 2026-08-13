@@ -87,6 +87,9 @@ export default {
   advancedSearchTitle: 'Search session content',
   advancedSearchQueryLabel: 'Search for',
   advancedSearchQueryPlaceholder: 'Text or pattern…',
+  searchBudgetExhausted:
+    'Stopped after {seconds}s, having read {searched} of {total} sessions. Anything not found may simply not have been reached: narrow it down with the source, instance or time filters.',
+  searchLimitReached: 'Showing the first {n} matching sessions. There may be more.',
   regexMode: 'Regex',
   regexModeHint: 'Treat the search text as a regular expression',
   caseSensitive: 'Case sensitive',

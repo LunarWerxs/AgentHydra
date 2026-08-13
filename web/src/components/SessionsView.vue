@@ -67,6 +67,7 @@ import { clampWidth, SIDEBAR_DEFAULT, useUiPrefs } from '@/composables/useUiPref
 import type {
   ArchivedScope,
   SessionPeriod,
+  SessionSearchResponse,
   SessionSearchResult,
   SessionSource,
   SessionSourceScope,
@@ -298,19 +299,23 @@ const bodySearching = ref(false)
 const bodySearchActive = ref(false)
 const bodySearchQueryUsed = ref('')
 const bodyResults = ref<SessionSearchResult[]>([])
+// Kept beside the results, because "nothing matched" and "the server gave up after 7 seconds" look
+// identical in a list of zero rows, and only one of them means the text isn't there.
+const bodySearchIncomplete = ref<SessionSearchResponse | null>(null)
 
 async function runBodySearch() {
   const q = advancedQuery.value.trim()
   if (!q) return
   bodySearching.value = true
   try {
-    const results = await api.searchSessionBodies(q, {
+    const r = await api.searchSessionBodies(q, {
       regex: advancedRegex.value,
       caseSensitive: advancedCaseSensitive.value,
       instance: sessionInstanceFilter.value || undefined,
       source: sessionSourceFilter.value === 'all' ? undefined : sessionSourceFilter.value,
     })
-    bodyResults.value = results
+    bodyResults.value = r.results
+    bodySearchIncomplete.value = r.budgetExhausted || r.limitReached ? r : null
     bodySearchQueryUsed.value = q
     bodySearchActive.value = true
     advancedOpen.value = false
@@ -322,9 +327,23 @@ async function runBodySearch() {
   }
 }
 
+/** The one-line "this answer is partial, here is why" note. Null when the search was complete. */
+const bodySearchNotice = computed(() => {
+  const r = bodySearchIncomplete.value
+  if (!r) return null
+  if (r.budgetExhausted)
+    return t('sessions.searchBudgetExhausted', {
+      seconds: Math.round(r.budgetMs / 1000),
+      searched: r.filesSearched,
+      total: r.filesTotal,
+    })
+  return t('sessions.searchLimitReached', { n: r.results.length })
+})
+
 function exitBodySearch() {
   bodySearchActive.value = false
   bodyResults.value = []
+  bodySearchIncomplete.value = null
 }
 
 /** Jump from a body-search hit to the full transcript, same as clicking it in the plain list. */
@@ -865,6 +884,14 @@ function copy(text: string) {
             {{ $t('sessions.bodySearchResultsFor', { query: bodySearchQueryUsed }) }}
           </span>
         </div>
+        <!-- the search is wall-clock bounded, so say when the answer is partial: an empty result
+             from a search that gave up early is not evidence the text isn't there -->
+        <p
+          v-if="bodySearchActive && bodySearchNotice"
+          class="shrink-0 border-b border-border bg-warning/10 px-3 py-1.5 text-[11px] text-muted-foreground"
+        >
+          {{ bodySearchNotice }}
+        </p>
 
         <div class="scroll-slim min-h-0 flex-1 overflow-y-auto p-2">
           <!-- first-load skeletons so the list never looks blank -->

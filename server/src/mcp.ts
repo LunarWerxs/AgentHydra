@@ -196,6 +196,48 @@ export const TOOLS: McpEngineTool[] = [
     run: (a) => api(`/api/sessions/${encodeURIComponent(str(a.id))}${qs({ source: a.source })}`),
   },
   {
+    name: 'search_sessions',
+    description:
+      // The completeness caveat is the load-bearing sentence. An agent that reads an empty result
+      // as "this text is nowhere on the machine" will confidently rebuild work that already exists,
+      // so the flag that says otherwise is named in the description, not just in the payload.
+      'Search the CONTENT of every local transcript (Claude, Codex, OpenCode) for text, or for a regular expression with regex=true. Returns the matching sessions newest-active first, each with a match count and snippets, plus how complete the search was. This streams every transcript, so it is far slower than list_sessions and runs under a wall-clock budget: ALWAYS check budgetExhausted on the result — when it is true the search gave up early and finding nothing proves nothing. limitReached means the hit list was capped, not that time ran out. Use list_sessions when you already know which session you want; use this to find one by something said inside it.',
+    inputSchema: S(
+      {
+        query: { type: 'string', description: 'Text to find, or a regex pattern if regex=true.' },
+        regex: {
+          type: 'boolean',
+          description:
+            'Treat query as a regular expression. Structurally unsafe patterns are rejected rather than risking a hang.',
+        },
+        caseSensitive: { type: 'boolean', description: 'Match case exactly (default false).' },
+        source: {
+          type: 'string',
+          enum: ['claude', 'codex', 'opencode'],
+          description: 'Optional provider filter.',
+        },
+        instance: {
+          type: 'string',
+          description:
+            "Scope to one Claude Desktop instance by its DIRECTORY NAME (list_instances -> name), or 'default' for the non-isolated install, or 'other' for plain CLI sessions. This one does NOT take an instance number.",
+        },
+        limit: { type: 'number', description: 'Max sessions to return (default 50, max 200).' },
+      },
+      ['query'],
+    ),
+    run: (a) =>
+      api(
+        `/api/sessions/search${qs({
+          q: str(a.query),
+          regex: a.regex ? '1' : undefined,
+          case: a.caseSensitive ? '1' : undefined,
+          source: a.source,
+          instance: a.instance,
+          limit: a.limit,
+        })}`,
+      ),
+  },
+  {
     name: 'tail_session',
     description:
       'Tail a session transcript: the most recent turns, optionally text-only (no tool_use/tool_result noise).',

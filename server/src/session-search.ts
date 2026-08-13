@@ -7,9 +7,9 @@ import safeRegex from 'safe-regex2'
 import { instanceSessionMap } from './instance-sessions'
 import { listOpenCodeSearchEvents } from './opencode-sessions'
 import { eventToTailEventsForSource, listTranscriptFiles, type TranscriptFile } from './transcript'
-import type { SessionSearchResult, SessionSource } from './types'
+import type { SessionSearchResponse, SessionSearchResult, SessionSource } from './types'
 
-export type { SessionSearchResult }
+export type { SessionSearchResponse, SessionSearchResult }
 
 export interface SearchOptions {
   query: string
@@ -105,19 +105,33 @@ function displayableText(tf: TranscriptFile, ev: any): string[] {
   return tes.map((e) => e.text).filter(Boolean)
 }
 
-async function searchOneFile(
+/** One file's outcome. `stoppedEarly` means the wall-clock budget ran out PART-WAY THROUGH this
+ *  file, so its match count is an undercount and a miss proves nothing — the caller has to be able
+ *  to say so rather than reporting a confident zero. */
+interface FileSearchOutcome {
+  hit: SessionSearchResult | null
+  stoppedEarly: boolean
+}
+
+/** Exported for the unit test: this is where the deadline is actually noticed, and the flag it
+ *  raises is what stops an empty result from being read as "the text is not on this machine". */
+export async function searchOneFile(
   tf: TranscriptFile,
   matcher: Matcher,
   perFileLimit: number,
   deadline: number,
-): Promise<SessionSearchResult | null> {
+): Promise<FileSearchOutcome> {
   let matchCount = 0
   const snippets: string[] = []
   let cwd = ''
+  let stoppedEarly = false
 
   try {
     for await (const rawLine of streamLines(tf.path)) {
-      if (performance.now() > deadline) break
+      if (performance.now() > deadline) {
+        stoppedEarly = true
+        break
+      }
       const line = rawLine.trim()
       if (!line) continue
       let ev: any
@@ -140,18 +154,21 @@ async function searchOneFile(
       if (snippets.length >= perFileLimit && matchCount >= perFileLimit * 4) break // this file is clearly a hit; stop early
     }
   } catch {
-    return null // unreadable/vanished file, skip silently, best-effort
+    return { hit: null, stoppedEarly } // unreadable/vanished file, skip silently, best-effort
   }
 
-  if (matchCount === 0) return null
+  if (matchCount === 0) return { hit: null, stoppedEarly }
   return {
-    session_id: tf.session_id,
-    source: tf.source,
-    cwd: cwd || tf.project,
-    project: tf.project,
-    match_count: matchCount,
-    truncated: snippets.length < matchCount,
-    snippets,
+    stoppedEarly,
+    hit: {
+      session_id: tf.session_id,
+      source: tf.source,
+      cwd: cwd || tf.project,
+      project: tf.project,
+      match_count: matchCount,
+      truncated: snippets.length < matchCount,
+      snippets,
+    },
   }
 }
 
@@ -206,15 +223,30 @@ async function pooledMap<T, R>(
   return results
 }
 
+/** Nothing searched, nothing found — the shape a blank query answers with. */
+const EMPTY_RESPONSE: SessionSearchResponse = {
+  results: [],
+  budgetExhausted: false,
+  limitReached: false,
+  filesSearched: 0,
+  filesTotal: 0,
+  budgetMs: 0,
+}
+
 /**
  * Streams every transcript's BODY content looking for `query`, newest files first. Constant
  * memory per file (streamLines), a small worker pool for cross-file concurrency, a per-file
  * early-exit once a file is clearly a match, and an overall wall-clock budget so a huge
  * history or a slow regex returns partial results instead of hanging the request.
+ *
+ * RETURNS A RESPONSE, NOT A BARE ARRAY, because the budget above makes "no matches" and "gave up
+ * after 7 seconds" indistinguishable otherwise. An agent that reads an empty array as proof the
+ * text does not exist anywhere is worse off than one that was never given the search at all, so
+ * every caller now gets `budgetExhausted` and the file counts behind it.
  */
-export async function searchSessionBodies(opts: SearchOptions): Promise<SessionSearchResult[]> {
+export async function searchSessionBodies(opts: SearchOptions): Promise<SessionSearchResponse> {
   const query = opts.query.trim()
-  if (!query) return []
+  if (!query) return EMPTY_RESPONSE
 
   const matcher = buildMatcher(opts)
   const limit = opts.limit ?? DEFAULT_LIMIT
@@ -241,15 +273,30 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
   // without giving up the pool's cross-file concurrency within each batch.
   const batchSize = CONCURRENCY * 3
   let fileFound = 0
+  let filesSearched = 0
+  let stoppedMidFile = false
+  let outOfTime = false
+  let limitReached = false
   for (let start = 0; start < files.length; start += batchSize) {
-    if (performance.now() > deadline || fileFound >= limit) break
+    // Deadline first: hitting the CAP is a different answer from running out of TIME, and the
+    // caller reports them differently ("your limit" vs "results may be incomplete").
+    if (performance.now() > deadline) {
+      outOfTime = true
+      break
+    }
+    if (fileFound >= limit) {
+      limitReached = true
+      break
+    }
     const batch = files.slice(start, start + batchSize)
     const results = await pooledMap(batch, CONCURRENCY, (tf) =>
       searchOneFile(tf, matcher, perFileLimit, deadline),
     )
+    filesSearched += batch.length
     for (const r of results) {
-      if (r) {
-        found.push(r)
+      if (r.stoppedEarly) stoppedMidFile = true
+      if (r.hit) {
+        found.push(r.hit)
         fileFound++
       }
     }
@@ -258,11 +305,23 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
   const activity = new Map(
     listTranscriptFiles().map((file) => [`${file.source}:${file.session_id}`, file.mtime_ms]),
   )
-  return found
-    .sort(
-      (a, b) =>
-        (activity.get(`${b.source}:${b.session_id}`) ?? 0) -
-        (activity.get(`${a.source}:${a.session_id}`) ?? 0),
-    )
-    .slice(0, limit)
+  const sorted = found.sort(
+    (a, b) =>
+      (activity.get(`${b.source}:${b.session_id}`) ?? 0) -
+      (activity.get(`${a.source}:${a.session_id}`) ?? 0),
+  )
+  // Trimming to `limit` here is also a cap: OpenCode's rows are collected outside the file loop, so
+  // the list can exceed the limit without the loop ever having noticed.
+  if (sorted.length > limit) limitReached = true
+  return {
+    results: sorted.slice(0, limit),
+    // Either a file was abandoned part-way through, or whole batches were never opened because the
+    // clock ran out. Both mean a miss is not evidence of absence. Files left unopened because the
+    // LIMIT was hit are a different thing entirely, and are reported as `limitReached`.
+    budgetExhausted: stoppedMidFile || outOfTime,
+    limitReached,
+    filesSearched,
+    filesTotal: files.length,
+    budgetMs,
+  }
 }

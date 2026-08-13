@@ -22,7 +22,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   only, because Codex and OpenCode record their spend in their own shapes and a second parser is how
   two numbers start disagreeing.
 
+- **Agents can search transcripts, and can tell a miss from a timeout.** The MCP server had 37 tools
+  and not one of them searched: an agent could list, get and tail sessions, but could not find one
+  by something said inside it. `search_sessions` now exposes the body search that the web UI has
+  always had. It also had to stop lying by omission. The search runs under a seven-second budget
+  and returned a bare list, so "this text is nowhere on your machine" and "we gave up early" were
+  the same answer. Every caller now gets `budgetExhausted`, `limitReached` and the file counts
+  behind them, and the UI says so above the results. This is not theoretical: on a real store of
+  1,357 transcripts a search reached 126 of them before the budget expired, so the old answer was
+  a 9% sample presented as a complete one.
+
 ### Fixed
+
+- **Content search was returning "session not found" for everyone.** `GET /api/sessions/search` was
+  registered after `GET /api/sessions/:id`, and the parameterised route wins, so every advanced
+  search in the web UI resolved to a lookup for a session literally called "search" and 404ed. The
+  search route now sits above it, with a comment saying why it has to stay there.
 
 - **The README screenshot run works again.** Its fixture table had no entry for `/api/ui-prefs` or
   `/api/notifications/events`, so those requests escaped to whatever daemon happened to be running

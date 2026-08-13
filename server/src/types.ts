@@ -163,6 +163,29 @@ export interface SessionSearchResult {
   snippets: string[]
 }
 
+/**
+ * A whole body-search answer, hits plus how complete they are.
+ *
+ * The completeness is not a nicety. The search runs under a wall-clock budget and returns whatever
+ * it has when the clock runs out, so a bare list of hits makes "this text appears nowhere" and "we
+ * gave up after seven seconds" the same answer. That is a bad trade for a human and a worse one for
+ * an agent, which will happily conclude the code it is looking for does not exist.
+ */
+export interface SessionSearchResponse {
+  results: SessionSearchResult[]
+  /** The budget ran out: a transcript was abandoned mid-read, or whole files were never opened.
+   *  A miss is NOT evidence of absence when this is true. */
+  budgetExhausted: boolean
+  /** The hit list was cut to `limit`. Not a timeout — searching longer would not add rows. */
+  limitReached: boolean
+  /** File-backed transcripts opened, out of how many were in scope. OpenCode is excluded from
+   *  both: it is one indexed SQLite store, searched in full and not time-bounded. */
+  filesSearched: number
+  filesTotal: number
+  /** The wall-clock budget that applied, so a caller can say "stopped after 7 s". */
+  budgetMs: number
+}
+
 export interface Account {
   id: string
   label: string

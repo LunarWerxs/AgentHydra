@@ -631,6 +631,32 @@ app.get('/api/sessions', async (c) => {
     ),
   )
 })
+// Advanced BODY search (streams every transcript file, substring or regex); deliberately a
+// separate, slower, opt-in path so the fast metadata list above (GET /api/sessions, used by the
+// default client-side filter) is never touched by this. See server/src/session-search.ts.
+//
+// MUST STAY ABOVE `/api/sessions/:id`. Both are two-segment routes, and the param one wins when it
+// is registered first — which is how this endpoint spent its whole life answering
+// `{"error":"session not found"}` to every content search, in the SPA and over MCP alike. Adding a
+// route below this line that could be read as a session id will break it again.
+app.get('/api/sessions/search', async (c) => {
+  const query = c.req.query('q') ?? ''
+  const regex = c.req.query('regex') === '1'
+  const caseSensitive = c.req.query('case') === '1'
+  const instance = c.req.query('instance') || undefined
+  const rawSource = c.req.query('source')
+  const source = isSessionSource(rawSource) ? rawSource : undefined
+  const limit = boundedQueryInt(c.req.query('limit'), 50, 200)
+  try {
+    // A blank query returns the same SHAPE as a real search rather than an empty array — a caller
+    // that has to special-case "did I get results or a response object?" will get it wrong.
+    return c.json(
+      await searchSessionBodies({ query, regex, caseSensitive, instance, source, limit }),
+    )
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
+  }
+})
 app.get('/api/sessions/:id', async (c) => {
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
@@ -813,24 +839,6 @@ app.get('/api/sessions/:id/usage', async (c) => {
   if (!tf) return c.json({ error: 'session not found' }, 404)
   return c.json(await sessionUsage(tf))
 })
-// Advanced BODY search (streams every transcript file, substring or regex); deliberately a
-// separate, slower, opt-in path so the fast metadata list above (GET /api/sessions, used by the
-// default client-side filter) is never touched by this. See server/src/session-search.ts.
-app.get('/api/sessions/search', async (c) => {
-  const query = c.req.query('q') ?? ''
-  if (!query.trim()) return c.json([])
-  const regex = c.req.query('regex') === '1'
-  const caseSensitive = c.req.query('case') === '1'
-  const instance = c.req.query('instance') || undefined
-  const rawSource = c.req.query('source')
-  const source = isSessionSource(rawSource) ? rawSource : undefined
-  try {
-    return c.json(await searchSessionBodies({ query, regex, caseSensitive, instance, source }))
-  } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
-  }
-})
-
 // --- accounts ---------------------------------------------------------------
 app.get('/api/accounts', (c) => c.json(listAccounts()))
 app.post('/api/accounts', async (c) => {

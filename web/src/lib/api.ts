@@ -26,7 +26,7 @@ import type {
   RunEvent,
   SchedulerState,
   SessionPeriod,
-  SessionSearchResult,
+  SessionSearchResponse,
   SessionSource,
   SessionSourceScope,
   SessionSummary,
@@ -76,6 +76,7 @@ export type {
   RunEvent,
   SchedulerState,
   SessionPeriod,
+  SessionSearchResponse,
   SessionSearchResult,
   SessionSource,
   SessionSourceScope,
@@ -192,7 +193,10 @@ export const getTail = (
   )
 /** Advanced BODY search: streams every transcript's raw content server-side (substring or
  *  regex, optionally case-sensitive). Deliberately separate from getSessions() above (slower,
- *  opt-in, and never used by the default fast client-side filter). */
+ *  opt-in, and never used by the default fast client-side filter).
+ *
+ *  Returns a response, not a bare list: the search runs under a wall-clock budget, so the caller
+ *  has to be able to tell "nothing matched" from "we ran out of time". */
 export const searchSessionBodies = (
   query: string,
   opts: {
@@ -202,7 +206,7 @@ export const searchSessionBodies = (
     source?: SessionSource
   } = {},
 ) =>
-  j<SessionSearchResult[]>(
+  j<SessionSearchResponse>(
     `/api/sessions/search?q=${encodeURIComponent(query)}` +
       `${opts.regex ? '&regex=1' : ''}` +
       `${opts.caseSensitive ? '&case=1' : ''}` +
