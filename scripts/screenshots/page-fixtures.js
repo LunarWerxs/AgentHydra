@@ -357,11 +357,35 @@
           sessions: 2,
           turns: 60,
         }))
+        // The token split, shaped like a real store: cache reads dominate, fresh input is a sliver.
+        // Internally consistent, so total is the sum of the four.
+        const tokens = {
+          input: 9_400_000,
+          cacheRead: 1_180_000_000,
+          cacheWrite: 41_000_000,
+          output: 12_600_000,
+          total: 0,
+        }
+        tokens.total = tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output
+        const slice = (f) => ({
+          input: Math.round(tokens.input * f),
+          cacheRead: Math.round(tokens.cacheRead * f),
+          cacheWrite: Math.round(tokens.cacheWrite * f),
+          output: Math.round(tokens.output * f),
+          total: Math.round(tokens.total * f),
+        })
         return {
           from: byDay[0].key,
           to: byDay[byDay.length - 1].key,
           totalCostUsd: total,
           totalWeighted: 1_310_000_000,
+          tokens,
+          // Three tools, because the shot's job is to show that the stats are not Claude-only.
+          byProvider: [
+            { key: 'claude', tokens: slice(0.72), sessions: 26, costUsd: 232.6 },
+            { key: 'codex', tokens: slice(0.21), sessions: 11, costUsd: null },
+            { key: 'opencode', tokens: slice(0.07), sessions: 4, costUsd: 4.1 },
+          ],
           sessions: 41,
           byModel,
           byProject: [

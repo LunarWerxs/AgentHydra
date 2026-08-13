@@ -5,6 +5,46 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The statistics were Claude-only.** Codex and OpenCode sessions reported zero tokens, which read
+  as "you have not used them" rather than "we did not look". Both record their spend; they simply
+  record it in shapes the Claude parser does not understand. On this machine that was **12.2 billion
+  Codex tokens across 136 sessions** and 57 OpenCode sessions, all previously invisible.
+
+  Codex has two traps in it. It writes a RUNNING total alongside a per-turn delta, and summing the
+  deltas overcounts, because the same turn is emitted more than once: measured 5% high on a real
+  3,476-event rollout. It also counts cached input INSIDE its input figure where Anthropic reports
+  it alongside, and on a real session that cached part is 98% of the input, so taking it at face
+  value double-counts nearly everything. OpenCode needed no parser at all, only a read: its totals
+  are already columns on its session row, and it computes its own cost, which is now used rather
+  than recomputed.
+
+- **Models with no published price showed as $0.** That is not "we could not price this", it is
+  "this was free", which for a month of GPT usage is simply false. The cost chart now lists only
+  what it can actually cost, and names the rest underneath with their token counts.
+
+### Added
+
+- **Where the tokens went.** Fresh input, cached input, cache writes and output, as a share and as
+  four numbers. They cost wildly different amounts per token, so the split explains a bill in a way
+  the total never can: on a real store, cached reads are 97% of all volume.
+
+- **Tokens by tool,** so which of Claude, Codex and OpenCode is doing the work is answerable at a
+  glance.
+
+### Changed
+
+- **The hour-of-week grid is square and fills its card.** Its cells were stretching into rectangles
+  on a wide card, which stopped it reading as a calendar.
+
+- **The recently-edited feed is readable.** It was absolute paths in a monospace column, so every
+  row began with the same thirty characters and the useful part sat off to the right. It now leads
+  with the filename, tags the file type, collapses repeated edits to one row with a count, and says
+  how long ago.
+
 ## [0.20.0] - 2026-08-13
 
 ### Added

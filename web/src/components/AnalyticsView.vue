@@ -10,14 +10,25 @@
 // PRICES ARE LIST PRICES. These are subscription accounts; nobody is billed per token. The figure
 // answers "what would this have cost on the API", which is the useful comparison, and the header
 // says so rather than letting a dollar sign imply a bill.
-import { BarChart3, Coins, FileEdit, Hourglass, RefreshCw, Wrench } from '@lucide/vue'
+import {
+  BarChart3,
+  Coins,
+  FileEdit,
+  FolderGit2,
+  Hourglass,
+  Layers,
+  RefreshCw,
+  Wrench,
+} from '@lucide/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AreaLine from '@/components/charts/AreaLine.vue'
 import BarRows from '@/components/charts/BarRows.vue'
+import EditsFeed from '@/components/charts/EditsFeed.vue'
 import HourGrid from '@/components/charts/HourGrid.vue'
 import TimeBars from '@/components/charts/TimeBars.vue'
+import TokenSplit from '@/components/charts/TokenSplit.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -118,9 +129,42 @@ const complete = computed(() => {
  *  repaint the models that remain. */
 const modelOrder = computed(() => (spend.value?.byModel ?? []).map((b) => b.key))
 
+/** Tokens, for the models a price table cannot reach. Magnitude, so one hue. */
+const unpricedTokenRows = computed(() =>
+  topNWithOther(
+    unpricedModelRows.value.map((b) => ({
+      key: b.key,
+      label: b.key,
+      value: b.tokens?.total ?? b.weighted,
+      detail: t('analytics.modelDetail', { turns: b.turns, sessions: b.sessions }),
+    })),
+    6,
+    (r) => r.value,
+    (total, count) => ({
+      key: 'other',
+      label: t('analytics.other', { n: count }),
+      value: total,
+      detail: '',
+    }),
+  ),
+)
+
+/**
+ * A COST chart contains only things that have a cost.
+ *
+ * Models with no published price used to be drawn at $0, which does not mean "we could not price
+ * this" — it means "this was free", and for a month of GPT usage that is simply a false statement.
+ * They are named underneath instead, so their absence is explained rather than silent, and their
+ * tokens still appear in the split and the per-tool chart above.
+ */
+const pricedModels = computed(() => (spend.value?.byModel ?? []).filter((b) => b.costUsd !== null))
+const unpricedModelRows = computed(() =>
+  (spend.value?.byModel ?? []).filter((b) => b.costUsd === null),
+)
+
 const modelRows = computed(() =>
   topNWithOther(
-    (spend.value?.byModel ?? []).map((b) => ({
+    pricedModels.value.map((b) => ({
       key: b.key,
       label: b.key,
       value: b.costUsd ?? 0,
@@ -154,6 +198,24 @@ const projectRows = computed(() =>
       detail: '',
     }),
   ),
+)
+
+const PROVIDER_LABEL: Record<string, string> = {
+  claude: 'sessions.sourceClaude',
+  codex: 'sessions.sourceCodex',
+  opencode: 'sessions.sourceOpenCode',
+}
+/** Every provider that has usage, so "my stats only show Claude" is answerable at a glance. */
+const providerRows = computed(() =>
+  (spend.value?.byProvider ?? []).map((p) => ({
+    key: p.key,
+    label: t(PROVIDER_LABEL[p.key] ?? 'sessions.sourceAll'),
+    value: p.tokens.total,
+    detail: t('analytics.providerDetail', {
+      sessions: p.sessions,
+      cost: p.costUsd === null ? '—' : formatUsd(p.costUsd),
+    }),
+  })),
 )
 
 const accountRows = computed(() =>
@@ -303,6 +365,19 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
         </div>
 
         <section class="rounded-lg border border-border p-3">
+          <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
+            <Layers class="size-3.5" />{{ $t('analytics.tokenSplit') }}
+          </h3>
+          <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.tokenSplitNote') }}</p>
+          <TokenSplit v-if="spend" :tokens="spend.tokens" />
+        </section>
+
+        <section v-if="providerRows.length > 1" class="rounded-lg border border-border p-3">
+          <h3 class="mb-2 text-xs font-medium">{{ $t('analytics.byProvider') }}</h3>
+          <BarRows :rows="providerRows" :format="formatCompact" mono />
+        </section>
+
+        <section class="rounded-lg border border-border p-3">
           <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium">
             <Coins class="size-3.5" />{{ $t('analytics.costByDay') }}
           </h3>
@@ -313,6 +388,13 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
           <section class="rounded-lg border border-border p-3">
             <h3 class="mb-2 text-xs font-medium">{{ $t('analytics.costByModel') }}</h3>
             <BarRows :rows="modelRows" :order="modelOrder" :format="formatUsd" />
+            <!-- Named, not drawn at zero: a model with no published price did not cost nothing. -->
+            <div v-if="unpricedTokenRows.length" class="mt-3 border-t border-border pt-2">
+              <p class="mb-1.5 text-[11px] text-muted-foreground">
+                {{ $t('analytics.unpricedNote') }}
+              </p>
+              <BarRows :rows="unpricedTokenRows" :format="formatCompact" mono />
+            </div>
           </section>
           <section class="rounded-lg border border-border p-3">
             <h3 class="mb-2 text-xs font-medium">{{ $t('analytics.costByProject') }}</h3>
@@ -392,18 +474,13 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
             v-if="!editGroups.length"
             class="text-[11px] text-muted-foreground"
           >{{ $t('analytics.editsNone') }}</p>
-          <div v-for="[project, list] in editGroups" :key="project" class="mb-2">
-            <p class="text-[11px] font-medium">{{ baseName(project) || project }}</p>
-            <ul class="mt-0.5 space-y-0.5">
-              <li
-                v-for="(e, i) in list"
-                :key="`${e.session_id}-${e.turn}-${i}`"
-                class="truncate font-mono text-[11px] text-muted-foreground"
-                :title="e.path"
-              >
-                {{ e.path }}
-              </li>
-            </ul>
+          <div v-for="[project, list] in editGroups" :key="project" class="mb-3">
+            <p class="mb-0.5 flex items-baseline gap-2 text-[11px] font-medium">
+              <FolderGit2 class="size-3 shrink-0 text-muted-foreground" />
+              {{ baseName(project) || project }}
+              <span class="text-[10px] font-normal text-muted-foreground">{{ project }}</span>
+            </p>
+            <EditsFeed :project="project" :edits="list" />
           </div>
         </section>
       </template>

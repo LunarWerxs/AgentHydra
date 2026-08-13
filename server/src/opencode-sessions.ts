@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { OPENCODE_DB_PATH } from './config'
 import type { TailEvent } from './types'
+import type { OpenCodeUsageRow } from './usage-foreign'
 
 export interface OpenCodeSessionRecord {
   session_id: string
@@ -265,5 +266,49 @@ export function listOpenCodeSearchEvents(path = OPENCODE_DB_PATH): OpenCodeSearc
     return []
   } finally {
     db.close()
+  }
+}
+
+/**
+ * One session's stored token totals.
+ *
+ * OpenCode keeps these as columns on the session row, already summed, so this is a read rather than
+ * a parse — which is why the analytics tier reporting zero for OpenCode was the least excusable of
+ * the three providers. Returns null when the row or the database is missing; a session that simply
+ * has no usage yet comes back with zeros, which is a different and true answer.
+ */
+export function readOpenCodeUsage(
+  sessionId: string,
+  path = OPENCODE_DB_PATH,
+): OpenCodeUsageRow | null {
+  const db = openDb(path)
+  if (!db) return null
+  try {
+    const row = db
+      .query<OpenCodeUsageRow, [string]>(
+        'select model, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, ' +
+          'tokens_cache_write, cost, time_updated from session where id = ?',
+      )
+      .get(sessionId)
+    if (!row) return null
+    // Assistant replies, so the model breakdown can say "N replies" for OpenCode as it does for the
+    // others. OpenCode keeps the role inside each message's JSON blob rather than in a column, so
+    // this matches on the blob: one indexed scan of this session's rows, not a parse of every body.
+    let turns = 0
+    try {
+      turns =
+        db
+          .query<{ n: number }, [string]>(
+            'select count(*) as n from message where session_id = ? ' +
+              `and data like '%"role":"assistant"%'`,
+          )
+          .get(sessionId)?.n ?? 0
+    } catch {
+      // A schema this query does not fit: the totals still stand, the reply count is simply 0.
+    }
+    return { ...row, turns }
+  } catch {
+    // An older OpenCode without these columns: no usage rather than a broken list.
+    return null
   }
 }

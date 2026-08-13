@@ -23,6 +23,7 @@
 // price-weighted figure per day per model.
 
 import { db } from './db'
+import { readOpenCodeUsage } from './opencode-sessions'
 import { priceTokens } from './pricing'
 import { streamLines } from './session-search'
 import { decodeProjectKey, listTranscriptFiles, type TranscriptFile } from './transcript'
@@ -35,11 +36,20 @@ import type {
   SessionSource,
   SpendBucket,
   SpendReport,
+  TokenBreakdown,
 } from './types'
+import { addTurn, CodexUsageReader, openCodeSpend } from './usage-foreign'
 import { accumulateUsageLine, emptySpend } from './usage-tokens'
 
-/** Bumped when the extracted shape changes, which forces every row to be recomputed. */
-export const ANALYTICS_VERSION = 1
+/**
+ * Bumped when the extracted shape changes, which forces every row to be recomputed.
+ *
+ * 2: Codex and OpenCode totals. Version 1 stored zero for both, and the freshness check is
+ *    (mtime, size) — neither of which moves when the PARSER changes — so every one of those
+ *    sessions would have kept its empty row forever. Caught by shipping it: the live daemon
+ *    reported one Codex session where the store has 136.
+ */
+export const ANALYTICS_VERSION = 2
 
 /**
  * Gaps longer than this are not work, they are a lunch break with the window left open.
@@ -89,6 +99,8 @@ export interface SessionAnalytics {
   activeMs: number
   firstTs: number | null
   lastTs: number | null
+  /** A cost the PROVIDER computed itself (OpenCode does). Null when nobody but us can price it. */
+  providerCostUsd: number | null
 }
 
 function emptyAnalytics(): SessionAnalytics {
@@ -105,6 +117,7 @@ function emptyAnalytics(): SessionAnalytics {
     activeMs: 0,
     firstTs: null,
     lastTs: null,
+    providerCostUsd: null,
   }
 }
 
@@ -143,11 +156,33 @@ function firstPath(input: unknown): string | null {
 export async function scanSessionAnalytics(
   path: string,
   source: SessionSource,
+  sessionId?: string,
 ): Promise<SessionAnalytics> {
   const out = emptyAnalytics()
-  // OpenCode keeps its sessions in a shared SQLite database with no per-turn usage at all, so
-  // there is nothing to total. An empty result is the honest answer, not a zero-filled one.
-  if (source === 'opencode') return out
+  // OpenCode has already totalled its own session: the numbers are columns on its row, not events
+  // in a log, so there is nothing to stream. See openCodeSpend for why `reasoning` is kept out of
+  // `output` rather than added to it.
+  if (source === 'opencode') {
+    const row = sessionId ? readOpenCodeUsage(sessionId) : null
+    if (row) {
+      const spend = openCodeSpend(row)
+      out.tokens = spend.byModel
+      out.providerCostUsd = spend.costUsd
+      // No per-turn timestamps exist, so the session's own clock places it on the day chart. That
+      // puts a session's whole spend on the day it last ran rather than spreading it, which for a
+      // provider that records no turn times is the only honest placement.
+      const at = typeof row.time_updated === 'number' ? row.time_updated : null
+      if (at) {
+        out.firstTs = at
+        out.lastTs = at
+        const weighted = Object.values(spend.byModel).reduce((n, m) => n + m.weighted, 0)
+        out.days[dayKey(at)] = weighted
+        out.hours[String(hourKey(at))] = 1
+      }
+    }
+    return out
+  }
+  if (source === 'codex') return scanCodexAnalytics(path, out)
 
   const spend = emptySpend()
   let lastWeighted = 0
@@ -232,6 +267,93 @@ export async function scanSessionAnalytics(
   return out
 }
 
+/**
+ * Codex rollouts: the same totals, from a completely different log.
+ *
+ * Separate from the Claude walk above rather than bolted into it, because almost nothing is shared.
+ * Codex announces its model in `turn_context`, reports usage as a running cumulative in
+ * `token_count`, files tool calls under `response_item` shapes of its own, and has no notion of a
+ * `tool_result.is_error` block at all. Forcing one loop to serve both would be a function with two
+ * unrelated halves and a flag.
+ */
+async function scanCodexAnalytics(path: string, out: SessionAnalytics): Promise<SessionAnalytics> {
+  const reader = new CodexUsageReader()
+  let prevTs: number | null = null
+  let turn = -1
+
+  for await (const raw of streamLines(path)) {
+    const line = raw.trim()
+    if (!line) continue
+    let ev: {
+      type?: string
+      timestamp?: string
+      payload?: { type?: string; name?: string; arguments?: unknown; call_id?: string }
+    }
+    try {
+      ev = JSON.parse(line)
+    } catch {
+      continue
+    }
+
+    const t = reader.push(ev)
+    if (t) {
+      addTurn(out.tokens, t.model, t)
+      if (t.ts !== null) {
+        const day = dayKey(t.ts)
+        // Weighted so the day chart apportions a Codex session the same way it does a Claude one.
+        out.days[day] =
+          (out.days[day] ?? 0) + t.input + t.cacheRead * 0.1 + t.cacheWrite * 1.25 + t.output * 5
+        const hour = String(hourKey(t.ts))
+        out.hours[hour] = (out.hours[hour] ?? 0) + 1
+        if (out.firstTs === null) out.firstTs = t.ts
+        out.lastTs = t.ts
+        if (prevTs !== null && t.ts > prevTs)
+          out.activeMs += Math.min(t.ts - prevTs, ACTIVE_GAP_CAP_MS)
+        prevTs = t.ts
+      }
+    }
+
+    const payload = ev.payload
+    if (!payload) continue
+    // Codex logs a compaction as its own top-level event type rather than a flag on a turn.
+    if (ev.type === 'compacted') out.compactions++
+    if (ev.type !== 'response_item') continue
+    turn++
+    // Codex has TWO call shapes and both are tool use: `function_call` for a declared tool, and
+    // `custom_tool_call` for its sandbox (`exec`, `wait`). Counting only the first missed the two
+    // most-used tools in a real rollout entirely.
+    //
+    // NOTE ON EDITS: no edit is recorded for Codex, deliberately. Its file changes happen INSIDE
+    // the `exec` sandbox as free-form code rather than as a tool call with a path argument, so
+    // there is nothing structured to read. Guessing a path out of a code string would produce a
+    // feed that is wrong in ways nobody could check, which is worse than one that is empty.
+    if (
+      (payload.type === 'function_call' || payload.type === 'custom_tool_call') &&
+      typeof payload.name === 'string'
+    ) {
+      const name = payload.name || 'tool'
+      out.tools[name] = (out.tools[name] ?? 0) + 1
+      if (EDIT_TOOLS.has(name) || /apply_patch|edit_file|write_file/i.test(name)) {
+        let input: unknown = payload.arguments
+        if (typeof input === 'string') {
+          try {
+            input = JSON.parse(input)
+          } catch {
+            input = null
+          }
+        }
+        const p = firstPath(input)
+        if (p) {
+          out.editCount++
+          if (out.edits.length < MAX_EDITS_PER_SESSION)
+            out.edits.push({ path: p, turn, ts: out.lastTs })
+        }
+      }
+    }
+  }
+  return out
+}
+
 // --- persistence -------------------------------------------------------------------------------
 // Stored on session_scan_cache, keyed by the same (path, mtime, size) revision the list scanner
 // uses, so a transcript that gains a turn invalidates its analytics along with its title. That is
@@ -257,18 +379,20 @@ interface AnalyticsRow {
   active_ms: number | null
   first_ts: number | null
   last_ts: number | null
+  provider_cost_usd: number | null
 }
 
 const selectRows = db.query<AnalyticsRow, []>(
   'select cache_key, session_id, source, project, cwd, analytics_at, analytics_version, ' +
     'tokens_json, days_json, hours_json, tools_json, tool_errors, tool_error_streak, ' +
-    'edit_count, compactions, active_ms, first_ts, last_ts from session_scan_cache ' +
+    'edit_count, compactions, active_ms, first_ts, last_ts, provider_cost_usd ' +
+    'from session_scan_cache ' +
     'where analytics_at is not null',
 )
 
 const upsertAnalytics = db.query(
   'update session_scan_cache set analytics_at = ?, analytics_version = ?, ' +
-    'analytics_mtime_ms = ?, analytics_size_bytes = ?, session_id = ?, ' +
+    'analytics_mtime_ms = ?, analytics_size_bytes = ?, provider_cost_usd = ?, session_id = ?, ' +
     'source = ?, project = ?, tokens_json = ?, days_json = ?, hours_json = ?, tools_json = ?, ' +
     'tool_errors = ?, tool_error_streak = ?, edit_count = ?, compactions = ?, active_ms = ?, ' +
     'first_ts = ?, last_ts = ? where cache_key = ?',
@@ -338,6 +462,7 @@ function persist(tf: TranscriptFile, a: SessionAnalytics): void {
       ANALYTICS_VERSION,
       tf.mtime_ms,
       tf.size_bytes,
+      a.providerCostUsd,
       tf.session_id,
       tf.source,
       tf.project,
@@ -432,7 +557,7 @@ export async function refreshAnalytics(
         continue
       }
       try {
-        const a = await scanSessionAnalytics(tf.path, tf.source)
+        const a = await scanSessionAnalytics(tf.path, tf.source, tf.session_id)
         persist(tf, a)
         scanned++
       } catch (err) {
@@ -542,6 +667,23 @@ function addTo(map: Map<string, SpendBucket>, key: string, weighted: number, cos
   return b
 }
 
+/** The four categories, zeroed. */
+function emptyTokens(): TokenBreakdown {
+  return { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0 }
+}
+
+/** Fold one model's counts into a running breakdown. The two cache-write TTL slots are summed:
+ *  only Anthropic distinguishes them, and a reader asking "how much did I write to cache" wants
+ *  one number. */
+function addTokens(into: TokenBreakdown, m: ModelSpend): void {
+  const write = m.cacheCreation5m + m.cacheCreation1h
+  into.input += m.input
+  into.cacheRead += m.cacheRead
+  into.cacheWrite += write
+  into.output += m.output
+  into.total += m.input + m.cacheRead + write + m.output
+}
+
 const sortBuckets = (m: Map<string, SpendBucket>) =>
   [...m.values()].sort((a, b) => (b.costUsd ?? b.weighted) - (a.costUsd ?? a.weighted))
 
@@ -567,6 +709,11 @@ export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport
   let anyPriced = false
   let totalWeighted = 0
   let sessions = 0
+  const tokenTotals = emptyTokens()
+  const byProvider = new Map<
+    SessionSource,
+    { key: SessionSource; tokens: TokenBreakdown; sessions: number; costUsd: number | null }
+  >()
   let from: string | null = null
   let to: string | null = null
 
@@ -583,22 +730,52 @@ export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport
     // surfaces cannot disagree about the same session.
     const at = row.last_ts ?? Date.now()
     const priced = priceTokens(tokens, at)
-    for (const m of priced.unpriced) unpriced.add(m)
-    const sessionCost = priced.costUsd
+    // A cost the provider computed itself wins over our table: OpenCode routes to models this repo
+    // has no prices for, and its own figure is the real one rather than a gap we would report as
+    // unpriced. Only its models are then left out of the unpriced list, since they ARE priced.
+    const ownCost = row.provider_cost_usd
+    const hasOwnCost = typeof ownCost === 'number' && Number.isFinite(ownCost)
+    if (!hasOwnCost) for (const m of priced.unpriced) unpriced.add(m)
+    const sessionCost = hasOwnCost ? ownCost : priced.costUsd
     if (sessionCost !== null) {
       totalCost += sessionCost
       anyPriced = true
     }
 
+    // When the PROVIDER priced the session, its models are priced too — split proportionally, the
+    // same way the day chart splits a session across days. Without this, "cost by model" showed a
+    // dash for every OpenCode model while "cost by provider" showed real money for the same
+    // sessions, which is two answers to one question.
+    const totalWeightedInSession = Object.values(tokens).reduce((n, m) => n + m.weighted, 0)
     let sessionWeighted = 0
     for (const [model, spend] of Object.entries(tokens)) {
       sessionWeighted += spend.weighted
-      const one = priceTokens({ [model]: spend }, at)
-      const b = addTo(byModel, model, spend.weighted, one.costUsd)
+      const share =
+        hasOwnCost && totalWeightedInSession > 0 ? spend.weighted / totalWeightedInSession : 0
+      const modelCost = hasOwnCost
+        ? (sessionCost ?? 0) * share
+        : priceTokens({ [model]: spend }, at).costUsd
+      const b = addTo(byModel, model, spend.weighted, modelCost)
       b.sessions++
       b.turns += spend.turns
+      b.tokens = b.tokens ?? emptyTokens()
+      addTokens(b.tokens, spend)
+      addTokens(tokenTotals, spend)
     }
     totalWeighted += sessionWeighted
+
+    // Per provider, because "my statistics only show Claude" is exactly the question this answers.
+    const provider = (row.source as SessionSource) ?? 'claude'
+    const pv = byProvider.get(provider) ?? {
+      key: provider,
+      tokens: emptyTokens(),
+      sessions: 0,
+      costUsd: null as number | null,
+    }
+    for (const spend of Object.values(tokens)) addTokens(pv.tokens, spend)
+    pv.sessions++
+    if (sessionCost !== null) pv.costUsd = (pv.costUsd ?? 0) + sessionCost
+    byProvider.set(provider, pv)
 
     // Decoded, not the raw key. A row whose scan never filled in `cwd` falls back to the transcript
     // store's own folder name (`d--NEWProjects-shared-Connections`), and leaving that undecoded put
@@ -631,6 +808,8 @@ export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport
     to,
     totalCostUsd: anyPriced ? totalCost : null,
     totalWeighted,
+    tokens: tokenTotals,
+    byProvider: [...byProvider.values()].sort((a, b) => b.tokens.total - a.tokens.total),
     sessions,
     byModel: sortBuckets(byModel),
     // Re-labelled with the spelling the reader will recognise, now that grouping is done.
@@ -774,7 +953,8 @@ export function dropAnalytics(): boolean {
       'update session_scan_cache set analytics_at = null, analytics_version = null, ' +
         'tokens_json = null, days_json = null, hours_json = null, tools_json = null, ' +
         'tool_errors = null, tool_error_streak = null, edit_count = null, compactions = null, ' +
-        'active_ms = null, first_ts = null, last_ts = null, analytics_mtime_ms = null, ' +
+        'active_ms = null, first_ts = null, last_ts = null, provider_cost_usd = null, ' +
+        'analytics_mtime_ms = null, ' +
         'analytics_size_bytes = null',
     )
     db.run('delete from session_edits')

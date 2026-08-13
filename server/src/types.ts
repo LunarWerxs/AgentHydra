@@ -151,6 +151,32 @@ export interface SpendBucket {
   costUsd: number | null
   sessions: number
   turns: number
+  /** Only populated where the split is meaningful (per model, per provider). */
+  tokens?: TokenBreakdown
+}
+
+/**
+ * Where the tokens actually went.
+ *
+ * Reported as four separate figures rather than one total because they cost wildly different
+ * amounts: a cache read is a tenth of fresh input, a cache write carries a premium over it, and
+ * output is several times either. A single "tokens used" number hides the one fact that explains a
+ * bill, which is that most of a heavy user's volume is cache reads.
+ *
+ * `input` is UNCACHED input on every provider. Anthropic reports it that way; Codex counts cached
+ * input inside its input figure, so it is subtracted out before it reaches here.
+ */
+export interface TokenBreakdown {
+  /** Fresh prompt tokens: the ones actually processed. */
+  input: number
+  /** Prompt tokens served from cache, at roughly a tenth of the price. */
+  cacheRead: number
+  /** Tokens written INTO the cache, at a premium over fresh input. */
+  cacheWrite: number
+  /** Generated tokens, the expensive end. */
+  output: number
+  /** input + cacheRead + cacheWrite + output. */
+  total: number
 }
 
 export interface SpendReport {
@@ -158,6 +184,15 @@ export interface SpendReport {
   to: string | null
   totalCostUsd: number | null
   totalWeighted: number
+  /** The four categories, summed across every counted session. */
+  tokens: TokenBreakdown
+  /** Per provider, so "I have Codex usage" is answerable at a glance. */
+  byProvider: Array<{
+    key: SessionSource
+    tokens: TokenBreakdown
+    sessions: number
+    costUsd: number | null
+  }>
   sessions: number
   byModel: SpendBucket[]
   byProject: SpendBucket[]

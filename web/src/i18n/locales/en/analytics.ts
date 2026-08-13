@@ -19,10 +19,22 @@ export default {
   sessions: 'Sessions',
   agentHours: 'Agent hours',
   tokens: 'Weighted tokens',
+  // --- token split ---
+  tokenSplit: 'Where the tokens went',
+  tokenSplitNote:
+    'Cached reads cost about a tenth of fresh input, and output costs several times either, so the split matters more than the total.',
+  tokenInput: 'Fresh input',
+  tokenCacheRead: 'Cached input',
+  tokenCacheWrite: 'Cache writes',
+  tokenOutput: 'Output',
+  byProvider: 'Tokens by tool',
+  providerDetail: '{sessions} session(s) · {cost}',
   // --- charts ---
   costByDay: 'Cost by day',
   costByModel: 'Cost by model',
   costByProject: 'Cost by project',
+  unpricedNote:
+    'No published price for these, so their tokens are counted but their cost is not. Showing tokens instead of a dollar figure, because zero would be a claim that they were free.',
   costByAccount: 'Cost by account',
   accountNote:
     'Only work AgentHydra dispatched: every run records the account it used, so this is known rather than guessed.',

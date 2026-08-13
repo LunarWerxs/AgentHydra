@@ -105,6 +105,7 @@ export type {
   SyncStatus,
   TailEvent,
   TailResult,
+  TokenBreakdown,
   TranscriptSettings,
   UpdateApplyResult,
   UpdateStatus,

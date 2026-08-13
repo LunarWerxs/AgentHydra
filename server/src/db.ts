@@ -192,6 +192,8 @@ create index if not exists idx_session_scan_cache_path on session_scan_cache(pat
   // They describe the same file but are written independently, and a row created by the analytics
   // pass must never look to the list scanner like a finished parse of that file — see the shell-row
   // comment in analytics.ts for the session-dropping bug that caused.
+  // A cost the PROVIDER computed itself. OpenCode does; nobody else here can be priced by us.
+  add('provider_cost_usd', 'real')
   add('analytics_mtime_ms', 'real')
   add('analytics_size_bytes', 'integer')
   // Denormalised from the transcript index so an aggregate never has to re-glob the store to know
