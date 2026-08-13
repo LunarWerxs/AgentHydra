@@ -157,7 +157,11 @@ export const AGENT_TOOLS: AgentTool[] = [
     name: 'Gemini CLI',
     vendor: 'Google',
     envVar: 'GEMINI_DIR',
-    dirs: ['.gemini'],
+    // `.gemini/tmp`, not `.gemini`. The parent also holds settings, MCP config and the whole
+    // Antigravity tree, so pointing at it reported 286 files for a Gemini CLI that had never been
+    // used on this machine — almost all of them Antigravity's, counted a second time under the
+    // wrong tool. A store root has to be where the CONVERSATIONS are.
+    dirs: ['.gemini/tmp'],
     format: null,
   },
   {

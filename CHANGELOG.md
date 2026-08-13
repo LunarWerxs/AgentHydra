@@ -47,6 +47,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   Copilot and the IDE integrations bill credits rather than tokens). Listing them is the point:
   silence would read as "AgentHydra looked and found nothing", which is a different claim entirely.
 
+  One store root is deliberately narrow: Gemini CLI is looked for under `.gemini/tmp` rather than
+  `.gemini`, because the parent also holds settings and the entire Antigravity tree, and pointing at
+  it reported hundreds of files for a Gemini CLI that had never been run.
+
   These entries are speculative and bounded by construction. A path that does not exist costs one
   filesystem check and produces nothing; a format claim that turns out to be wrong yields a store
   that parses to zero sessions. Neither can affect the three stores that were already supported.
