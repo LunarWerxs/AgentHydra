@@ -65,6 +65,28 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   falling back to the model the rest of that rollout used, and only staying unknown when nothing in
   it ever said.
 
+- **Claude spend was overstated by 57%, since long before this cycle.** Claude Code does not write
+  one transcript record per assistant reply. It writes one PER CONTENT BLOCK, and stamps the same
+  complete `usage` object on every one, so a reply that says something and then makes two tool calls
+  is three records each claiming the full input, cache-read and output of the single request behind
+  them. Every total built by summing records charged that request three times.
+
+  Measured across 1,230 transcripts here: 445,317 assistant records carry usage, but only 185,264
+  distinct requests. The naive sum reports 148.8 billion tokens where the real figure is 64.6
+  billion. Of a 5,000-group sample, 4,997 are identical copies rather than a growing partial count,
+  so this is content-block fan-out and not streaming.
+
+  A request is now charged once, keeping the largest output figure recorded for it, which also
+  handles the rarer streaming case where an early record carries a partial count and the final one
+  the billed count. Everything downstream moves with it: session costs, the analytics totals, the
+  hour grid (which now counts replies rather than records) and the quota calibration, whose numerator
+  and denominator both come from this parser and so stay self-consistent.
+
+  Not fixed, and stated rather than hidden: a resumed session copies its parent's earlier messages
+  into its own transcript, so a request billed once can appear in two sessions. That is another
+  10.8 billion tokens, about 7% of the naive total. Per-session totals cannot see across sessions,
+  and the quota window (which reads several files at once) now does dedupe across them.
+
 - **Codex spend was overstated by 53x, by a "fix" in this same unreleased cycle.** Codex writes one
   rollout file per execution thread, and it looks exactly as though each file carries that thread's
   own spend, so summing a conversation's files looks like the cure for an undercount. It is not.

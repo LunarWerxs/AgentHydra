@@ -39,7 +39,7 @@ import type {
   TokenBreakdown,
 } from './types'
 import { addTurn, CodexUsageReader, openCodeSpend } from './usage-foreign'
-import { accumulateUsageLine, emptySpend } from './usage-tokens'
+import { accumulateUsageLine, emptySpend, newUsageSeen } from './usage-tokens'
 
 /**
  * Bumped when the extracted shape changes, which forces every row to be recomputed.
@@ -60,8 +60,11 @@ import { accumulateUsageLine, emptySpend } from './usage-tokens'
  *    files multiplies its spend by the number of threads. It reported 637B tokens where the store
  *    holds 11.9B, a 53x overcount, and named Codex the largest provider on this machine when it is
  *    the second. A conversation is now the LARGEST of its rollouts, never the sum.
+ * 6: One Claude API response is charged once. Claude Code writes a transcript record per CONTENT
+ *    BLOCK and stamps the same complete usage object on each, so summing records charged a reply
+ *    with two tool calls three times: 148.8B tokens reported here against a real 64.6B, 57% high.
  */
-export const ANALYTICS_VERSION = 5
+export const ANALYTICS_VERSION = 6
 
 /**
  * Gaps longer than this are not work, they are a lunch break with the window left open.
@@ -201,6 +204,9 @@ export async function scanSessionAnalytics(
   if (source === 'codex') return scanCodexAnalytics([path, ...siblingPaths], out)
 
   const spend = emptySpend()
+  // One API response is one charge, however many transcript records Claude Code split it across.
+  // See newUsageSeen: without this a session's tokens read ~2.3x high.
+  const seen = newUsageSeen()
   let lastWeighted = 0
   let prevTs: number | null = null
   let turn = -1
@@ -213,7 +219,7 @@ export async function scanSessionAnalytics(
     // The usage pass first, and on the RAW line: it has its own cheap pre-filter and its own
     // JSON.parse, and letting it skip the ~90% of lines with no `"usage"` in them is most of why
     // this is fast enough to run over a whole store.
-    const ts = accumulateUsageLine(spend, line, 0)
+    const ts = accumulateUsageLine(spend, line, 0, seen)
     if (ts !== null) {
       const weighted = spend.weighted - lastWeighted
       lastWeighted = spend.weighted

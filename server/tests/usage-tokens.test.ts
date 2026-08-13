@@ -281,3 +281,78 @@ describe('tokensPerPercent', () => {
     expect(tokensPerPercent(10000, 2)).toBe(5000)
   })
 })
+
+describe('one API response is charged once, however many records it was split across', () => {
+  // THE BUG THIS PINS, measured on a real store before it was fixed. Claude Code writes one
+  // transcript record PER CONTENT BLOCK and stamps the same complete usage object on every one, so
+  // a reply that says something and then makes two tool calls is three records each claiming the
+  // full input, cache-read and output of the single request behind them. Summing records reported
+  // 148.8 BILLION tokens across 1,230 transcripts where the real figure is 64.6 billion.
+  const record = (
+    id: string,
+    req: string,
+    usage: Record<string, number>,
+    at = '2026-08-09T07:24:13.537Z',
+  ) =>
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: at,
+      requestId: req,
+      message: { id, model: 'claude-sonnet-4-6', usage },
+    })
+
+  const USAGE = { input_tokens: 2, output_tokens: 290, cache_read_input_tokens: 33693 }
+
+  test('three records for one request count as one', () => {
+    // Exactly the shape observed: same message id, same requestId, identical usage, three records
+    // because the reply carried text and two tool calls.
+    const text = [
+      record('msg_1', 'req_1', USAGE),
+      record('msg_1', 'req_1', USAGE, '2026-08-09T07:24:14.275Z'),
+      record('msg_1', 'req_1', USAGE, '2026-08-09T07:24:15.595Z'),
+    ].join('\n')
+    const spend = sumTranscriptTokens(text, 0)
+    expect(spend.output).toBe(290)
+    expect(spend.cacheRead).toBe(33693)
+    expect(spend.turns).toBe(1)
+  })
+
+  test('two DIFFERENT requests are still two charges', () => {
+    const text = [record('msg_1', 'req_1', USAGE), record('msg_2', 'req_2', USAGE)].join('\n')
+    const spend = sumTranscriptTokens(text, 0)
+    expect(spend.output).toBe(580)
+    expect(spend.turns).toBe(2)
+  })
+
+  test('a streaming turn whose output GROWS contributes only the difference', () => {
+    // The rarer case (3 of a 5,000-group sample): an early record carries a partial output count
+    // and the final one the billed count. Charging the larger figure twice, or keeping only the
+    // partial, are both wrong; the input side is charged once either way.
+    const text = [
+      record('msg_1', 'req_1', { input_tokens: 2, output_tokens: 5, cache_read_input_tokens: 900 }),
+      record('msg_1', 'req_1', {
+        input_tokens: 2,
+        output_tokens: 631,
+        cache_read_input_tokens: 900,
+      }),
+    ].join('\n')
+    const spend = sumTranscriptTokens(text, 0)
+    expect(spend.output).toBe(631)
+    expect(spend.input).toBe(2)
+    expect(spend.cacheRead).toBe(900)
+  })
+
+  test('a record with no requestId is counted, not dropped', () => {
+    // Older transcripts have no requestId. Deduping on an empty key would collapse every one of
+    // them into a single turn, which is a far worse error than the duplicate it would prevent.
+    const bare = (out: number) =>
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: '2026-08-09T07:24:13.537Z',
+        message: { model: 'claude-sonnet-4-6', usage: { output_tokens: out } },
+      })
+    const spend = sumTranscriptTokens([bare(10), bare(20)].join('\n'), 0)
+    expect(spend.output).toBe(30)
+    expect(spend.turns).toBe(2)
+  })
+})

@@ -124,6 +124,31 @@ function splitCacheWrite(usage: RawUsage): { w5m: number; w1h: number } {
 }
 
 /**
+ * Requests already counted, so one API response is charged once.
+ *
+ * WHY THIS IS NEEDED, measured on a real store rather than assumed. Claude Code does not write one
+ * transcript record per assistant reply; it writes one PER CONTENT BLOCK, and stamps the same
+ * complete `usage` object on every one of them. A reply that says something and then makes two tool
+ * calls is three records, each claiming the full input, cache-read and output of the single request
+ * that produced them. Summing records therefore charges that request three times.
+ *
+ * Across 1,230 transcripts here: 445,317 assistant records carry usage, but only 185,264 distinct
+ * (message.id, requestId) pairs. A naive sum reports 148.8 BILLION tokens where the real figure is
+ * 64.6 billion, an overcount of 56.6%. Of the 124,042 repeated keys, 4,997 out of a 5,000 sample are
+ * byte-identical copies rather than a growing partial, so this is content-block fan-out and not
+ * streaming.
+ *
+ * The map holds the output count applied for each request, which is what distinguishes the two
+ * cases: an equal-or-smaller output is a duplicate and contributes nothing, while a larger one is a
+ * streaming turn's final record and contributes only the difference.
+ */
+export type UsageSeen = Map<string, number>
+
+export function newUsageSeen(): UsageSeen {
+  return new Map()
+}
+
+/**
  * Fold ONE transcript line into `spend`, if it is an assistant turn carrying a usage block inside
  * the window. Returns that turn's timestamp when it counted a dated turn, else null.
  *
@@ -142,12 +167,19 @@ export function accumulateUsageLine(
   spend: TokenSpend,
   line: string,
   sinceMs: number,
+  /** See {@link newUsageSeen}. Omit only where a caller genuinely wants every record counted. */
+  seen?: UsageSeen,
 ): number | null {
   if (line?.charCodeAt(0) !== 123 /* '{' */) return null
   // Cheap pre-filter: skip the ~90% of lines that cannot contribute, before paying for JSON.parse.
   if (!line.includes('"usage"')) return null
 
-  let rec: { type?: string; timestamp?: string; message?: { model?: string; usage?: RawUsage } }
+  let rec: {
+    type?: string
+    timestamp?: string
+    requestId?: string
+    message?: { id?: string; model?: string; usage?: RawUsage }
+  }
   try {
     rec = JSON.parse(line)
   } catch {
@@ -162,20 +194,51 @@ export function accumulateUsageLine(
   const dated = Number.isFinite(ts)
   if (sinceMs > 0 && (!dated || ts < sinceMs)) return null
 
-  const input = num(usage.input_tokens)
-  const output = num(usage.output_tokens)
-  const cacheRead = num(usage.cache_read_input_tokens)
-  const cacheCreation = num(usage.cache_creation_input_tokens)
-  const { w5m, w1h } = splitCacheWrite(usage)
+  let input = num(usage.input_tokens)
+  let output = num(usage.output_tokens)
+  let cacheRead = num(usage.cache_read_input_tokens)
+  let cacheCreation = num(usage.cache_creation_input_tokens)
+  let { w5m, w1h } = splitCacheWrite(usage)
   const model = rec.message?.model ?? 'unknown'
-  const weighted = weighTurn(usage, model)
+
+  // ONE API RESPONSE, SEVERAL RECORDS. See newUsageSeen: Claude Code writes a transcript record per
+  // content block and stamps the SAME complete usage object on every one, so a reply with text plus
+  // two tool calls appears three times at full price. Counted once here.
+  const key = rec.requestId ? `${rec.message?.id ?? ''}|${rec.requestId}` : ''
+  if (seen && key) {
+    const applied = seen.get(key)
+    if (applied === undefined) {
+      seen.set(key, output)
+    } else if (output <= applied) {
+      // Output has not grown, so this record is a repeat of one already counted.
+      return null
+    } else {
+      // Output HAS grown: the finished form of a reply whose earlier record was a partial count.
+      // Only the new output is new spend — a request's input side is charged once and does not
+      // change between the partial record and the final one.
+      seen.set(key, output)
+      output -= applied
+      input = 0
+      cacheRead = 0
+      cacheCreation = 0
+      w5m = 0
+      w1h = 0
+    }
+  }
+
+  const weightedForModel =
+    (input * W_INPUT +
+      cacheCreation * W_CACHE_CREATION +
+      cacheRead * W_CACHE_READ +
+      output * W_OUTPUT) *
+    modelMultiplier(model)
 
   spend.input += input
   spend.output += output
   spend.cacheRead += cacheRead
   spend.cacheCreation += cacheCreation
   spend.raw += input + output + cacheRead + cacheCreation
-  spend.weighted += weighted
+  spend.weighted += weightedForModel
   spend.turns += 1
 
   const m = spend.byModel[model] ?? {
@@ -187,7 +250,7 @@ export function accumulateUsageLine(
     cacheCreation5m: 0,
     cacheCreation1h: 0,
   }
-  m.weighted += weighted
+  m.weighted += weightedForModel
   m.output += output
   m.turns += 1
   m.input += input
@@ -204,9 +267,15 @@ export function accumulateUsageLine(
  *
  * Exported for the unit test.
  */
-export function sumTranscriptTokens(text: string, sinceMs: number): TokenSpend {
+export function sumTranscriptTokens(
+  text: string,
+  sinceMs: number,
+  /** Pass one across several files to also catch a resumed session that copied its parent's
+   *  messages into a new transcript: the same request then appears in both, and was billed once. */
+  seen: UsageSeen = newUsageSeen(),
+): TokenSpend {
   const spend = emptySpend()
-  for (const line of text.split('\n')) accumulateUsageLine(spend, line, sinceMs)
+  for (const line of text.split('\n')) accumulateUsageLine(spend, line, sinceMs, seen)
   return spend
 }
 
@@ -285,10 +354,14 @@ function recentTranscripts(root: string, sinceMs: number): string[] {
 export function tokensSince(since: Date, configDirs: string[] = [defaultConfigDir()]): TokenSpend {
   const sinceMs = since.getTime()
   let spend = emptySpend()
+  // Shared across every file in the window. A window is a handful of files, and a resumed session
+  // copies its parent's messages into its own transcript, so the same request can appear in two of
+  // them and was billed once.
+  const seen = newUsageSeen()
   for (const dir of configDirs) {
     for (const file of recentTranscripts(projectsDir(dir), sinceMs)) {
       try {
-        spend = mergeSpend(spend, sumTranscriptTokens(readFileSync(file, 'utf8'), sinceMs))
+        spend = mergeSpend(spend, sumTranscriptTokens(readFileSync(file, 'utf8'), sinceMs, seen))
       } catch {
         // unreadable/locked file: skip rather than fail the whole count
       }

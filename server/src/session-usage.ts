@@ -23,7 +23,7 @@ import { pricesAsOf, priceTokens } from './pricing'
 import { streamLines } from './session-search'
 import { findTranscript, type TranscriptFile } from './transcript'
 import type { RunCost, SessionUsage, SessionUsageStatus } from './types'
-import { accumulateUsageLine, emptySpend, mergeSpend } from './usage-tokens'
+import { accumulateUsageLine, emptySpend, mergeSpend, newUsageSeen } from './usage-tokens'
 
 /** Small on purpose: a user opens a handful of sessions in a sitting, and each entry is a dozen
  *  numbers. Oldest-first eviction, which for this access pattern is close enough to LRU. */
@@ -77,9 +77,10 @@ export async function sessionUsage(tf: TranscriptFile): Promise<SessionUsage> {
   // The newest turn we counted, used as the pricing instant: a model on an introductory rate must
   // be billed at the rate that applied WHEN the session ran, not at today's.
   let newestTurnMs = 0
+  const seen = newUsageSeen()
   try {
     for await (const line of streamLines(tf.path)) {
-      const at = accumulateUsageLine(spend, line, 0 /* no cutoff: the whole session */)
+      const at = accumulateUsageLine(spend, line, 0 /* no cutoff: the whole session */, seen)
       if (at !== null && at > newestTurnMs) newestTurnMs = at
     }
   } catch {
@@ -155,13 +156,16 @@ export async function runCost(item: {
 
   let spend = emptySpend()
   let newestTurnMs = 0
+  // Shared across the whole file, not per line: a request Claude Code split into several records
+  // must be charged once, and the run window is a slice of the same transcript. See newUsageSeen.
+  const seen = newUsageSeen()
   try {
     for await (const line of streamLines(tf.path)) {
       // One turn at a time into a scratch, merged only if it falls inside the window. The parser
       // has no "peek the timestamp" entry point and adding one would put a second notion of what a
       // turn costs into the codebase; an empty spend is a handful of zeros, so this is cheap.
       const turn = emptySpend()
-      const at = accumulateUsageLine(turn, line, from)
+      const at = accumulateUsageLine(turn, line, from, seen)
       if (at === null || at > until) continue
       spend = mergeSpend(spend, turn)
       if (at > newestTurnMs) newestTurnMs = at
