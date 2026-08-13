@@ -724,7 +724,16 @@ app.get('/api/sessions/:id/export', async (c) => {
   const source = isSessionSource(rawSource) ? rawSource : undefined
   const format: ExportFormat = c.req.query('format') === 'html' ? 'html' : 'markdown'
   const thinking = c.req.query('thinking') === '1' || c.req.query('thinking') === 'true'
-  const result = await exportSession(c.req.param('id'), format, source, { thinking })
+  const id = c.req.param('id')
+  // The transcript index carries no title for a Claude session, so without this the document is
+  // headed with a uuid and the file is named after one twice. getSession derives the real title the
+  // list shows (cheap: scanMeta is mtime-cached), exactly as the raw-file download does.
+  const session = await getSession(id, source)
+  const result = await exportSession(id, format, source, {
+    thinking,
+    title: session?.title,
+    cwd: session?.cwd,
+  })
   if (!result) return c.json({ error: 'session not found' }, 404)
   return new Response(result.body, {
     headers: {

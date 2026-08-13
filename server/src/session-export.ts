@@ -207,8 +207,11 @@ ${body}
 
 /** Filesystem-safe, and identifiable months later: the title, then the id. */
 function exportFilename(title: string, sessionId: string, ext: string): string {
+  // A session with no derivable title falls back to its own id, and slugging that would name the
+  // file after the same uuid twice.
+  const base = title === sessionId ? '' : title
   const slug =
-    title
+    base
       .replace(/[^A-Za-z0-9 _-]+/g, ' ')
       .trim()
       .replace(/\s+/g, '-')
