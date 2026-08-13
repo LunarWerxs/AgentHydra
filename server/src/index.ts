@@ -99,7 +99,7 @@ import { createInstance, removeInstance } from './core/lifecycle'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from './core/shared'
 import { createInstanceShortcut } from './core/shortcut'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
-import { coerceQueueItem, db, getSetting, setSetting } from './db'
+import { coerceQueueItem, db, getSetting, runOutcome, setSetting } from './db'
 import {
   activeCount,
   cancelItem,
@@ -1103,7 +1103,15 @@ app.post('/api/queue/run-due', (c) => {
   return c.json({ ok: true, started, skipped })
 })
 app.post('/api/queue/:id/cancel', (c) => c.json({ ok: cancelItem(c.req.param('id')) }))
-app.get('/api/queue/:id/events', (c) => c.json(getRunEvents(c.req.param('id'))))
+// A run's events PLUS how it ended. The events alone cannot say whether the run finished, died or
+// was killed — an agent reading a truncated-looking log has no way to tell a short answer from a
+// crash — and the daemon already knows, because the runner reports the child's exit code.
+app.get('/api/queue/:id/events', (c) => {
+  const id = c.req.param('id')
+  const item = db.query<QueueItem, [string]>('select * from queue_items where id = ?').get(id)
+  if (!item) return c.json({ error: 'run not found' }, 404)
+  return c.json({ outcome: runOutcome(coerceQueueItem(item)), events: getRunEvents(id) })
+})
 
 // --- live run stream (SSE) --------------------------------------------------
 app.get('/api/queue/:id/stream', (c) => {

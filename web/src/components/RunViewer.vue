@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ChevronRight, Terminal, Wrench } from '@lucide/vue'
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import StatusBadge from '@/components/StatusBadge.vue'
 import { Switch } from '@/components/ui/switch'
+import { useData } from '@/composables/useData'
 import type { RunEvent } from '@/lib/api'
 import { streamUrl } from '@/lib/api'
 
@@ -37,6 +39,15 @@ function disconnect() {
   es = null
 }
 
+// How the run ended, from the queue's own record. A log that simply stops looks identical whether
+// the run finished, crashed or was killed, and the daemon knows which from the child's exit code —
+// so the panel says so rather than leaving the reader to guess from the last line.
+const { queue } = useData()
+const item = computed(() => queue.value.find((q) => q.id === props.itemId) ?? null)
+const finished = computed(
+  () => !!item.value && item.value.status !== 'queued' && item.value.status !== 'running',
+)
+
 onMounted(() => connect(props.itemId))
 watch(() => props.itemId, connect)
 onBeforeUnmount(disconnect)
@@ -48,10 +59,22 @@ onBeforeUnmount(disconnect)
       <div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Terminal class="size-3.5" /> {{ $t('run.liveOutput') }}
       </div>
-      <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-        <Wrench class="size-3.5" /> {{ $t('run.toolActivity') }}
-        <Switch v-model="showTools" />
-      </label>
+      <div class="flex items-center gap-2.5">
+        <template v-if="item && finished">
+          <StatusBadge :status="item.status" />
+          <span
+            v-if="item.exit_code !== null"
+            class="text-[11px] text-muted-foreground"
+            :title="item.exit_code === -1 ? $t('queue.exitLostHint') : undefined"
+          >
+            {{ item.exit_code === -1 ? $t('queue.exitLost') : $t('queue.exitCode', { code: item.exit_code }) }}
+          </span>
+        </template>
+        <label class="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+          <Wrench class="size-3.5" /> {{ $t('run.toolActivity') }}
+          <Switch v-model="showTools" />
+        </label>
+      </div>
     </div>
 
     <div ref="scroller" class="flex-1 space-y-2 overflow-y-auto p-3 text-sm">

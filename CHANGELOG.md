@@ -22,6 +22,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   only, because Codex and OpenCode record their spend in their own shapes and a second parser is how
   two numbers start disagreeing.
 
+- **You can see which overnight runs died, without opening any of them.** The daemon has always had
+  ground truth on this: the detached runner reports the child's exit code and the run's status is
+  finalized from it, so nothing is inferred from a transcript. It was only ever shown as an exit
+  number on a card. The finished list now filters to "only the ones that didn't finish", covering
+  everything terminal that isn't a completion (failed, canceled, rate-limited, overloaded), because
+  from "did the work happen?" those are the same answer. The run viewer shows how its run ended
+  instead of just stopping. And `get_run_events` now returns the outcome alongside the events, so an
+  agent reading a log that simply stops can tell a short answer from a crash or a kill.
+
 - **Content search is instant, from a 13 MB index that stores none of your text.** A full-text
   index was previously declined because it drops a large file on the user's machine. Measuring the
   store first showed why that was only half right: of 389 MB of searchable text, 88% is tool output
@@ -37,7 +46,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   every answer rather than hidden: it matches whole words and phrases rather than substrings, and
   it does not cover tool output. Both the web UI and the `search_sessions` tool say which path
   answered and offer the exhaustive scan; a regex search always takes the scan. `GET` and `DELETE
-  /api/search-index` report its size and remove it, and it rebuilds itself from the transcripts.
+  /api/search-index` report its size and remove it, and it rebuilds itself from the transcripts. Settings
+  shows its size and offers to delete it, because an index you cannot see or remove is a different
+  promise from one you can.
 
 - **Agents can search transcripts, and can tell a miss from a timeout.** The MCP server had 37 tools
   and not one of them searched: an agent could list, get and tail sessions, but could not find one

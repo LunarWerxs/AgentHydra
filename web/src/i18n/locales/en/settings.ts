@@ -39,6 +39,16 @@ export default {
   transcriptEditorResolved: 'Opens with {editor}',
   transcriptEditorNotFound: "That path doesn't exist. Using {editor}",
   transcriptEditorCustomBadge: 'Custom',
+  // --- search index (the conversation index behind fast content search) ---
+  searchIndexLabel: 'Search index',
+  searchIndexHint:
+    'Makes searching session content instant. It holds the words of your conversations, not the file contents or command output, and rebuilds itself from your transcripts whenever it is missing.',
+  searchIndexBuilt: '{size}, covering {n} sessions',
+  searchIndexAbsent:
+    'Not built yet. It is created in the background the first time you search session content.',
+  searchIndexDelete: 'Delete',
+  searchIndexDeleted: 'Search index deleted. It will rebuild on your next content search.',
+  searchIndexDeleteFailed: "Couldn't delete the search index",
   transcriptEditorReset: 'Back to auto-detect',
 
   // usage section

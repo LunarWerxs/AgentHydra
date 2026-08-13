@@ -59,6 +59,14 @@ const active = computed(() => queue.value.filter((q) => !isFinished(q)))
 const finished = computed(() => queue.value.filter(isFinished))
 const showFinished = ref(false)
 
+// Twenty runs finish overnight and the question in the morning is only ever "which ones died?".
+// The daemon knows exactly, from each run's exit code, so this is a filter over ground truth rather
+// than a guess: everything terminal that is not `completed`, whether it failed, was canceled, or
+// stopped on a limit.
+const diedOnly = ref(false)
+const died = computed(() => finished.value.filter((q) => q.status !== 'completed'))
+const finishedShown = computed(() => (diedOnly.value ? died.value : finished.value))
+
 // re-evaluated on every 2s queue poll, so a schedule crossing "now" surfaces the button
 const dueCount = computed(
   () =>
@@ -163,6 +171,7 @@ async function clearFinished() {
   else toast.success(t('queue.toastCleared', { n: results.length }))
   // Collapse the section: leaving an empty "Finished (0)" disclosure open reads as a broken filter.
   showFinished.value = false
+  diedOnly.value = false
   expanded.value = null
   await refreshQueue()
 }
@@ -305,9 +314,22 @@ async function clearFinished() {
           </Button>
         </div>
 
+        <!-- the morning question: which of last night's runs did not finish -->
+        <div v-if="showFinished && died.length > 0" class="mt-1 flex items-center gap-2 px-1">
+          <button
+            type="button"
+            class="rounded-md px-1.5 py-1 text-xs transition-colors"
+            :class="diedOnly ? 'font-medium text-warning' : 'text-muted-foreground hover:text-foreground'"
+            :aria-pressed="diedOnly"
+            @click="diedOnly = !diedOnly"
+          >
+            {{ diedOnly ? $t('queue.showAllFinished') : $t('queue.showDiedOnly', { n: died.length }) }}
+          </button>
+        </div>
+
         <div v-if="showFinished" class="mt-2">
           <QueueItemCard
-            v-for="item in finished"
+            v-for="item in finishedShown"
             :key="item.id"
             :item="item"
             :expanded="expanded === item.id"

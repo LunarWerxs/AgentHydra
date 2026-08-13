@@ -9,6 +9,7 @@ import {
   CloudCog,
   CloudDownload,
   CloudOff,
+  DatabaseZap,
   ExternalLink,
   EyeOff,
   FilePenLine,
@@ -41,9 +42,9 @@ import { useData } from '@/composables/useData'
 import { useMonitor } from '@/composables/useMonitor'
 import { usePanels } from '@/composables/usePanels'
 import { useUpdates } from '@/composables/useUpdates'
-import type { MonitorStateName, SyncStatus } from '@/lib/api'
+import type { MonitorStateName, SearchIndexStatus, SyncStatus } from '@/lib/api'
 import * as api from '@/lib/api'
-import { type BadgeVariant, baseName } from '@/lib/format'
+import { type BadgeVariant, baseName, formatBytes } from '@/lib/format'
 import { useTheme } from '@/lib/theme'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
@@ -338,6 +339,34 @@ const editorOpen = ref(false)
 // the transcript-editor override away by default (owner request) so the section leads with the
 // everyday choices.
 const appearanceAdvancedOpen = ref(false)
+
+// --- the search index, the one file we put on disk that nobody asked for ---------------------
+// Shown with its real size and a delete button, because an index the user cannot see or remove is
+// a very different promise from one they can. It rebuilds itself from the transcripts on the next
+// search, so removing it costs time and nothing else.
+const searchIndex = ref<SearchIndexStatus | null>(null)
+const deletingSearchIndex = ref(false)
+
+async function refreshSearchIndex() {
+  try {
+    searchIndex.value = await api.getSearchIndex()
+  } catch {
+    searchIndex.value = null // an unreachable daemon simply hides the row's detail
+  }
+}
+onMounted(refreshSearchIndex)
+
+async function removeSearchIndex() {
+  deletingSearchIndex.value = true
+  try {
+    searchIndex.value = await api.deleteSearchIndex()
+    toast.success(t('settings.searchIndexDeleted'))
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : t('settings.searchIndexDeleteFailed'))
+  } finally {
+    deletingSearchIndex.value = false
+  }
+}
 
 async function saveTranscriptEditor() {
   if (!(await updateAppSettings({ transcriptEditor: transcriptEditor.value.trim() })))
@@ -789,6 +818,35 @@ defineExpose({ save })
               </Button>
             </div>
           </ExpandTransition>
+          <!-- The search index is the one file AgentHydra puts on disk that the user did not ask
+               for, so it says how big it is and offers to remove it. It rebuilds itself from the
+               transcripts, which is why deleting is a plain button and not a confirmation dance. -->
+          <SettingsRow :icon="DatabaseZap" :label="$t('settings.searchIndexLabel')">
+            <template #info>
+              <InfoHint :text="$t('settings.searchIndexHint')" />
+            </template>
+            <template #description>
+              {{
+                searchIndex && searchIndex.exists
+                  ? $t('settings.searchIndexBuilt', {
+                      size: formatBytes(searchIndex.sizeBytes),
+                      n: searchIndex.sessions,
+                    })
+                  : $t('settings.searchIndexAbsent')
+              }}
+            </template>
+            <template #control>
+              <Button
+                v-if="searchIndex?.exists"
+                variant="outline"
+                size="xs"
+                :disabled="deletingSearchIndex"
+                @click="removeSearchIndex"
+              >
+                {{ $t('settings.searchIndexDelete') }}
+              </Button>
+            </template>
+          </SettingsRow>
         </div>
       </ExpandTransition>
     </SettingsGroup>

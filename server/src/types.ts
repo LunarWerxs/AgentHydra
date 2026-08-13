@@ -171,6 +171,36 @@ export interface SessionSearchResult {
  * gave up after seven seconds" the same answer. That is a bad trade for a human and a worse one for
  * an agent, which will happily conclude the code it is looking for does not exist.
  */
+/**
+ * How one queued run ended.
+ *
+ * The daemon has GROUND TRUTH here: the runner writes `{"__dispatch":"exit","code":N}` and the
+ * status is finalized from that exit code, so this is what the process actually did rather than an
+ * inference from a transcript. It rides alongside a run's events because the events alone cannot
+ * say whether the run finished, died, or was killed.
+ */
+export interface RunOutcome {
+  id: string
+  status: QueueStatus
+  /** The child's exit code. -1 means the daemon lost the runner (machine slept, process killed)
+   *  and finalized the run without ever seeing its exit marker. Null while still queued/running. */
+  exit_code: number | null
+  started_at: string | null
+  finished_at: string | null
+  /** Wall-clock run time in ms, when both ends are known. */
+  duration_ms: number | null
+  /** Transient-overload retries already spent on this item. */
+  retry_attempts: number
+  /** True for a terminal status that is not `completed`: the run stopped without finishing. */
+  died: boolean
+}
+
+/** A run's recorded output plus how it ended. */
+export interface RunEventsResult {
+  outcome: RunOutcome
+  events: RunEvent[]
+}
+
 /** Which code path produced a search answer. The two have genuinely different reach, so no caller
  *  is ever left guessing which one it got. */
 export type SearchPath =

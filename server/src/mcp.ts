@@ -356,7 +356,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'get_run_events',
     description:
-      "Get a queue item's recorded run events (assistant/user/system turns for that run).",
+      "Get a queue item's recorded run events (assistant/user/system turns for that run) AND how the run ended. Read `outcome` before drawing conclusions from the events: `died` is true whenever the run stopped without completing, `status` says which kind (failed / canceled / rate_limited / overloaded) and `exit_code` is the child process's own code, with -1 meaning the daemon lost the runner and never saw it exit. A log that simply stops is a crash or a kill, not a short answer, and the events alone cannot tell you which.",
     inputSchema: S({ id: { type: 'string' } }, ['id']),
     run: (a) => api(`/api/queue/${encodeURIComponent(str(a.id))}/events`),
   },

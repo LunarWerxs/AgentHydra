@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync } from 'node:fs'
 import { DATA_DIR, DB_PATH, RUN_LOG_DIR } from './config'
 import { unseal } from './dpapi-seal.mjs'
 import { classifyLimit } from './rate-limit-signal'
-import type { QueueItem } from './types'
+import type { QueueItem, QueueStatus, RunOutcome } from './types'
 
 mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
 mkdirSync(RUN_LOG_DIR, { recursive: true, mode: 0o700 })
@@ -259,6 +259,41 @@ create index if not exists idx_session_scan_cache_path on session_scan_cache(pat
  *  each had their own). db.ts imports nothing of theirs, so this is cycle-free for all of them. */
 export function coerceQueueItem(row: any): QueueItem {
   return { ...row, new_chat: !!row.new_chat, fork: !!row.fork }
+}
+
+/** A run's terminal statuses. `completed` is the only one that means the work got done. */
+const TERMINAL_STATUSES: QueueStatus[] = [
+  'completed',
+  'failed',
+  'canceled',
+  'rate_limited',
+  'overloaded',
+]
+
+/**
+ * How a run ended, from the daemon's own record rather than inferred from a transcript.
+ *
+ * `died` deliberately covers everything terminal that is not `completed` — failed, canceled,
+ * rate-limited and overloaded alike. From "did this piece of work happen?", which is the question
+ * someone asks of twenty overnight runs, those are the same answer; `status` is still there for
+ * anyone who needs to know WHICH kind of not-finished it was.
+ */
+export function runOutcome(item: QueueItem): RunOutcome {
+  const started = item.started_at ? Date.parse(item.started_at) : Number.NaN
+  const finished = item.finished_at ? Date.parse(item.finished_at) : Number.NaN
+  return {
+    id: item.id,
+    status: item.status,
+    exit_code: item.exit_code,
+    started_at: item.started_at,
+    finished_at: item.finished_at,
+    duration_ms:
+      Number.isFinite(started) && Number.isFinite(finished)
+        ? Math.max(0, finished - started)
+        : null,
+    retry_attempts: item.retry_attempts ?? 0,
+    died: TERMINAL_STATUSES.includes(item.status) && item.status !== 'completed',
+  }
 }
 
 // --- settings helpers -------------------------------------------------------
