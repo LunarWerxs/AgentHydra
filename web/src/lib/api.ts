@@ -189,11 +189,14 @@ export const getSessionUsage = (id: string, source: SessionSource) =>
 export const getTail = (
   id: string,
   source: SessionSource,
-  opts: { limit?: number; textOnly?: boolean } = {},
-) =>
-  j<TailResult>(
-    `/api/sessions/${id}/tail?limit=${opts.limit ?? 40}&textOnly=${opts.textOnly ? '1' : '0'}&source=${source}`,
+  opts: { limit?: number; textOnly?: boolean; thinking?: boolean; humanOnly?: boolean } = {},
+) => {
+  const flag = (on: boolean | undefined) => (on ? '1' : '0')
+  return j<TailResult>(
+    `/api/sessions/${id}/tail?limit=${opts.limit ?? 40}&textOnly=${flag(opts.textOnly)}` +
+      `&thinking=${flag(opts.thinking)}&humanOnly=${flag(opts.humanOnly)}&source=${source}`,
   )
+}
 /** Advanced BODY search: streams every transcript's raw content server-side (substring or
  *  regex, optionally case-sensitive). Deliberately separate from getSessions() above (slower,
  *  opt-in, and never used by the default fast client-side filter).

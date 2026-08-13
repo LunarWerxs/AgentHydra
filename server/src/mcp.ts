@@ -246,19 +246,33 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'tail_session',
     description:
-      'Tail a session transcript: the most recent turns, optionally text-only (no tool_use/tool_result noise).',
+      'Tail a session transcript: the most recent turns. `limit` is applied AFTER the filters, so ' +
+      'humanOnly=true gives you the last N things a PERSON said rather than N mixed turns — that is ' +
+      'the cheapest way to find out what a long session was actually asked to do. Reasoning blocks ' +
+      'are omitted unless thinking=true.',
     inputSchema: S(
       {
         id: { type: 'string' },
         limit: { type: 'number', description: 'Max turns to return (default 40).' },
         textOnly: { type: 'boolean', description: 'Drop tool_use/tool_result turns, text only.' },
+        thinking: { type: 'boolean', description: "Include the model's reasoning blocks." },
+        humanOnly: {
+          type: 'boolean',
+          description: 'Only the user turns. Overrides textOnly. Use this to skim a long session.',
+        },
         source: { type: 'string', enum: ['claude', 'codex', 'opencode'] },
       },
       ['id'],
     ),
     run: (a) =>
       api(
-        `/api/sessions/${encodeURIComponent(str(a.id))}/tail${qs({ limit: a.limit, textOnly: a.textOnly ? '1' : undefined, source: a.source })}`,
+        `/api/sessions/${encodeURIComponent(str(a.id))}/tail${qs({
+          limit: a.limit,
+          textOnly: a.textOnly ? '1' : undefined,
+          thinking: a.thinking ? '1' : undefined,
+          humanOnly: a.humanOnly ? '1' : undefined,
+          source: a.source,
+        })}`,
       ),
   },
 

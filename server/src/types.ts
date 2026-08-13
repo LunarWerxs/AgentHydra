@@ -133,10 +133,16 @@ export function periodCutoffMs(period: SessionPeriod, now = Date.now()): number 
   return period === 'all' ? null : now - PERIOD_MS[period]
 }
 
-/** One displayable turn from a transcript tail, after the hide-"thinking" filter. */
+/**
+ * One displayable turn from a transcript tail.
+ *
+ * `thinking` is the model's reasoning block. It is DROPPED unless the caller asks for it, which is
+ * the long-standing default and stays that way: it is the bulkiest and least useful part of a
+ * transcript to skim. See `TailOptions` in server/src/transcript.ts.
+ */
 export interface TailEvent {
   role: 'user' | 'assistant'
-  kind: 'text' | 'tool_use' | 'tool_result'
+  kind: 'text' | 'thinking' | 'tool_use' | 'tool_result'
   text: string
   tool_name: string | null
   timestamp: string | null

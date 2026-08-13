@@ -9,6 +9,29 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **A long session can now be read.** Two things were missing and they compound: there was no way to
+  change what a transcript shows, and no way to find anything inside the one on screen.
+
+  A **Display** menu in the session header now controls both what is fetched and how densely it is
+  drawn: *only what I typed*, *show tool activity*, *show reasoning*, and a *compact layout*. The
+  filters are applied on the daemon **before** the turn window is counted, which is the whole point:
+  asking for a person's turns on a 2,000-message session returns their last few dozen questions, not
+  whatever handful survives a filter over the last 40 mixed turns. Reasoning blocks are newly
+  *visible* at all (they were unconditionally discarded before, so there was no way to see what a
+  model had been thinking), and they stay off by default, because they are the bulkiest and least
+  skimmable part of a transcript. Every choice persists and is mirrored through the daemon, so it
+  survives the port hop that gives the browser a fresh origin. Also on the MCP `tail_session` tool,
+  where `humanOnly` is the cheapest way for an agent to find out what a session was actually asked
+  to do.
+
+  **Find in session** (the toolbar's magnifier, or Ctrl+F) searches the open transcript with a match
+  count, next/previous and Escape to close. It is client-side over what is already loaded, so there
+  is no request behind a keystroke. Matching is done against what the reader sees rather than the
+  underlying HTML: a message containing `a & b` is `a &amp; b` by the time it is markup, and a
+  search that ignores that finds nothing for `&` and a phantom hit for `amp`. Tag names, class
+  names and link targets are never matched, and the only tag highlighting adds is `<mark>` around
+  text that is still escaped, so it cannot turn inert transcript text into live markup.
+
 - **An open session now shows what it cost.** Every assistant turn in a transcript records its own
   token usage, and the daemon was already parsing those blocks, but only inside a quota lookback
   window and only to derive a percentage denominator, so there was no token count and no dollar

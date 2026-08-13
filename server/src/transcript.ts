@@ -702,6 +702,14 @@ export function unwrapTaggedText(text: string): string {
   return body || text
 }
 
+/** What a caller wants kept out of the raw stream. Every field defaults to the historical
+ *  behaviour, so an unchanged caller gets an unchanged answer. */
+export interface TailFilter {
+  /** Emit `thinking` blocks as their own events instead of dropping them. Off by default: they are
+   *  the bulkiest part of a transcript and the least useful part to skim. */
+  thinking?: boolean
+}
+
 /**
  * THE hide-"thinking" filter. Turns one raw transcript JSONL event into zero or more
  * displayable TailEvents. Reused for both disk-tail reading and the live stream-json path,
@@ -710,13 +718,13 @@ export function unwrapTaggedText(text: string): string {
  * Rules:
  *  - keep only user/assistant events
  *  - drop the CLI's own resume bookkeeping (see isCliBookkeeping)
- *  - drop `thinking` and `redacted_thinking` content blocks entirely (explicit type check)
+ *  - drop `thinking` and `redacted_thinking` content blocks unless `filter.thinking` asks for them
  *  - assistant `text` -> text event
  *  - `tool_use` -> collapsed tool event (name + compact input)
  *  - user `tool_result` -> collapsed tool_result event
  *  - a plain-string user message -> text event
  */
-export function eventToTailEvents(ev: any): TailEvent[] {
+export function eventToTailEvents(ev: any, filter: TailFilter = {}): TailEvent[] {
   const message = ev?.message
   const role: string | undefined = message?.role ?? ev?.type
   const type: string | undefined = ev?.type
@@ -739,7 +747,21 @@ export function eventToTailEvents(ev: any): TailEvent[] {
     for (const block of content) {
       if (!block || typeof block !== 'object') continue
       const bt = block.type
-      if (bt === 'thinking' || bt === 'redacted_thinking') continue // <- the filter
+      if (bt === 'thinking' || bt === 'redacted_thinking') {
+        // <- the filter. `redacted_thinking` carries an encrypted `data` field and no readable
+        // text, so asking for thinking still shows nothing for it: there is nothing to show.
+        if (!filter.thinking) continue
+        const t = compact(typeof block.thinking === 'string' ? block.thinking : '')
+        if (t)
+          out.push({
+            role: 'assistant',
+            kind: 'thinking',
+            text: truncate(t, 6000),
+            tool_name: null,
+            timestamp: ts,
+          })
+        continue
+      }
       if (bt === 'text' && typeof block.text === 'string') {
         const t = compact(block.text)
         if (t)
@@ -775,16 +797,34 @@ export function eventToTailEvents(ev: any): TailEvent[] {
   return out
 }
 
-export function eventToTailEventsForSource(source: SessionSource, ev: any): TailEvent[] {
-  return source === 'codex' ? codexEventToTailEvents(ev) : eventToTailEvents(ev)
+export function eventToTailEventsForSource(
+  source: SessionSource,
+  ev: any,
+  filter: TailFilter = {},
+): TailEvent[] {
+  return source === 'codex' ? codexEventToTailEvents(ev) : eventToTailEvents(ev, filter)
 }
 
 export interface TailOptions {
   limit?: number
   /** When true, drop tool_use/tool_result and only count text-bearing turns toward the limit. */
   textOnly?: boolean
+  /** Include the model's reasoning blocks (see TailFilter). */
+  thinking?: boolean
+  /** Only what a person typed. The point of `limit` is a window of turns, so this has to be applied
+   *  BEFORE the window is counted — filtering 40 mixed turns client-side yields a handful of human
+   *  ones, which is not a readable session. */
+  humanOnly?: boolean
   title?: string
   cwd?: string
+}
+
+/** The display filter, as one predicate, so the two source paths below cannot drift apart.
+ *  Exported for server/tests/tail-filter.test.ts, which pins the rules rather than the callers. */
+export function tailKeeper(opts: TailOptions): (e: TailEvent) => boolean {
+  if (opts.humanOnly) return (e) => e.kind === 'text' && e.role === 'user'
+  if (opts.textOnly) return (e) => e.kind === 'text' || e.kind === 'thinking'
+  return () => true
 }
 
 /** Read the last `limit` real turns of a session's transcript, thinking filtered out. */
@@ -794,7 +834,8 @@ export async function tailTranscript(
   source?: SessionSource,
 ): Promise<TailResult> {
   const limit = opts.limit ?? 40
-  const textOnly = opts.textOnly ?? false
+  const keep = tailKeeper(opts)
+  const filter: TailFilter = { thinking: opts.thinking ?? false }
   const tf = findTranscript(sessionId, source)
   if (!tf) {
     return {
@@ -818,9 +859,7 @@ export async function tailTranscript(
         error: 'transcript not found',
       }
     }
-    const events = (
-      textOnly ? content.events.filter((event) => event.kind === 'text') : content.events
-    ).slice(-limit)
+    const events = content.events.filter(keep).slice(-limit)
     return {
       session_id: sessionId,
       source: tf.source,
@@ -846,8 +885,7 @@ export async function tailTranscript(
     }
     if (!cwd && typeof ev?.cwd === 'string') cwd = ev.cwd
     if (!cwd && typeof ev?.payload?.cwd === 'string') cwd = ev.payload.cwd
-    let tes = eventToTailEventsForSource(tf.source, ev)
-    if (textOnly) tes = tes.filter((e) => e.kind === 'text')
+    const tes = eventToTailEventsForSource(tf.source, ev, filter).filter(keep)
     if (tes.length === 0) continue
     collected.push(tes)
     if (collected.length >= limit) break

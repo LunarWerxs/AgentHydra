@@ -50,6 +50,15 @@ const codexOpen = useStorage('agenthydra.instances.codexOpen', true)
 
 /** Verbose mode: also show tool_use / tool_result events (off = responses only). */
 const showTools = useStorage('agenthydra.sessions.showTools', false)
+/** Show the model's reasoning blocks. Off by default, and deliberately so: they are the bulkiest
+ *  part of a transcript and the least useful part to skim. */
+const showThinking = useStorage('agenthydra.sessions.showThinking', false)
+/** Only what a person typed. The tail's turn window is applied AFTER this filter on the daemon, so
+ *  turning it on genuinely reaches back through a long session rather than thinning 40 turns. */
+const humanOnly = useStorage('agenthydra.sessions.humanOnly', false)
+/** Tighter bubbles and smaller type — the same turns, more of them on screen. Purely visual, so it
+ *  never re-fetches. */
+const compactTranscript = useStorage('agenthydra.sessions.compact', false)
 /** Case sensitivity for the opt-in body search. */
 const advancedCaseSensitive = useStorage('agenthydra.sessions.advancedCaseSensitive', false)
 
@@ -74,6 +83,9 @@ registerSharedPref('agenthydra.instances.desktopOpen', desktopOpen)
 registerSharedPref('agenthydra.instances.cliOpen', cliOpen)
 registerSharedPref('agenthydra.instances.codexOpen', codexOpen)
 registerSharedPref('agenthydra.sessions.showTools', showTools)
+registerSharedPref('agenthydra.sessions.showThinking', showThinking)
+registerSharedPref('agenthydra.sessions.humanOnly', humanOnly)
+registerSharedPref('agenthydra.sessions.compact', compactTranscript)
 registerSharedPref('agenthydra.sessions.advancedCaseSensitive', advancedCaseSensitive)
 registerSharedPref('agenthydra.sessions.sidebarWidth', sidebarWidth)
 
@@ -85,6 +97,9 @@ export function useUiPrefs() {
     cliOpen,
     codexOpen,
     showTools,
+    showThinking,
+    humanOnly,
+    compactTranscript,
     advancedCaseSensitive,
     sidebarWidth,
   }

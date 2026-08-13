@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { safeTranscriptFilename } from '@agenthydra/server/filenames'
 import {
+  AlignJustify,
   Archive,
   ArrowLeft,
   BookOpen,
   Boxes,
+  Brain,
   CalendarRange,
   Check,
+  ChevronDown,
+  ChevronUp,
   CircleCheck,
   CircleSlash,
   ClipboardCopy,
@@ -25,11 +29,20 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  UserRound,
   Wrench,
   X,
 } from '@lucide/vue'
 import { useMediaQuery } from '@vueuse/core'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import {
+  type ComponentPublicInstance,
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import SessionComposer, { type ComposerTarget } from '@/components/SessionComposer.vue'
@@ -76,9 +89,10 @@ import type {
   TailResult,
 } from '@/lib/api'
 import * as api from '@/lib/api'
+import { highlightHtml } from '@/lib/find'
 import { baseName, formatCompact, formatUsd, shortId, timeAgo } from '@/lib/format'
 import { displayName } from '@/lib/instance-appearance'
-import { looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
+import { escapeHtml, looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
@@ -238,7 +252,14 @@ const tailLoading = ref(false)
 // Verbose mode, the sidebar width and the body-search case flag are persisted AND mirrored through
 // the daemon, so they live in composables/useUiPrefs.ts: this view unmounts whenever you switch
 // tabs, and a mirrored ref owned by a component that unmounts stops being the mirrored one.
-const { showTools, sidebarWidth, advancedCaseSensitive } = useUiPrefs()
+const {
+  showTools,
+  showThinking,
+  humanOnly,
+  compactTranscript,
+  sidebarWidth,
+  advancedCaseSensitive,
+} = useUiPrefs()
 
 // --- sidebar: persisted drag-resize + animated collapse, auto-collapsing when narrow ---
 const RAIL_WIDTH = 44
@@ -425,16 +446,91 @@ const LONG_CHARS = 1000
 const LONG_LINES = 16
 const isLong = (text: string) => text.length > LONG_CHARS || text.split('\n').length > LONG_LINES
 
-const events = computed(() =>
-  (tail.value?.events ?? []).map((ev) => ({
-    ...ev,
-    long: isLong(ev.text),
-    // Rendered here, once per message, rather than in the template: renderMarkdown escapes the text
-    // before it interprets anything, so the html below can never carry a tag the transcript wrote.
-    // Prose with no markdown in it keeps the cheaper plain-text path.
-    html: ev.kind === 'text' && looksLikeMarkdown(ev.text) ? renderMarkdown(ev.text) : null,
-  })),
+/**
+ * Every turn as HTML, ONCE per tail load.
+ *
+ * Both branches escape the text before anything else looks at it, so nothing below can carry a tag
+ * the transcript wrote. `pre` records which branch ran, because the two want different whitespace
+ * handling: markdown owns its own layout, plain prose must keep its line breaks.
+ *
+ * Split from the find pass below so that typing in the find bar re-highlights without re-parsing
+ * every message's markdown on each keystroke.
+ */
+const rendered = computed(() =>
+  (tail.value?.events ?? []).map((ev) => {
+    const md = ev.kind === 'text' && looksLikeMarkdown(ev.text) ? renderMarkdown(ev.text) : null
+    return { ...ev, long: isLong(ev.text), html: md ?? escapeHtml(ev.text), pre: md === null }
+  }),
 )
+
+// --- find within the open session (client-side; the loaded window, no server round-trip) --------
+const findOpen = ref(false)
+const findQuery = ref('')
+const findIndex = ref(0)
+// A template ref on <Input> yields the COMPONENT, not the element — the kit's Input is a
+// single-root wrapper, so the <input> is reached through $el.
+const findInput = ref<ComponentPublicInstance | null>(null)
+function focusFindInput() {
+  const el = findInput.value?.$el
+  if (el instanceof HTMLInputElement) el.focus()
+}
+
+/** The turns as rendered, with matches wrapped. `hits` is per message; `findTotal` sums them. */
+const events = computed(() => {
+  const q = findOpen.value ? findQuery.value : ''
+  if (!q) return rendered.value.map((ev) => ({ ...ev, hits: 0 }))
+  let seen = 0
+  return rendered.value.map((ev) => {
+    const r = highlightHtml(ev.html, q, seen, findIndex.value)
+    seen += r.count
+    return { ...ev, html: r.html, hits: r.count }
+  })
+})
+
+const findTotal = computed(() => events.value.reduce((n, ev) => n + ev.hits, 0))
+
+/** Clamp into range and scroll the current hit into view. Wraps at both ends, like every find bar. */
+async function goToMatch(next: number) {
+  const total = findTotal.value
+  if (total === 0) return
+  findIndex.value = ((next % total) + total) % total
+  await nextTick()
+  chatEl.value
+    ?.querySelector(`[data-find="${findIndex.value}"]`)
+    ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
+function openFind() {
+  findOpen.value = true
+  void nextTick(focusFindInput)
+}
+
+function closeFind() {
+  findOpen.value = false
+  findQuery.value = ''
+  findIndex.value = 0
+}
+
+// A new query starts from the first hit rather than wherever the last one left off.
+watch(findQuery, () => {
+  findIndex.value = 0
+  void nextTick(() => void goToMatch(0))
+})
+// Closing the session closes the bar with it; a match count against a transcript you can no longer
+// see is just a wrong number on screen.
+watch(selectedId, () => closeFind())
+
+/** Ctrl/Cmd+F takes over the browser's own find, which is the right trade: the browser can only
+ *  search the turns currently in the DOM anyway, and cannot show a count that means anything here. */
+function onWindowKeydown(e: KeyboardEvent) {
+  if (!selectedId.value) return
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    openFind()
+  }
+}
+onMounted(() => window.addEventListener('keydown', onWindowKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown))
 
 const expandedMsgs = ref<Set<number>>(new Set())
 const isExpanded = (i: number) => expandedMsgs.value.has(i)
@@ -470,6 +566,8 @@ async function loadTail(opts: { silent?: boolean } = {}) {
     const r = await api.getTail(id, source, {
       limit: 40,
       textOnly: !showTools.value,
+      thinking: showThinking.value,
+      humanOnly: humanOnly.value,
     })
     if (selectedId.value !== id || selectedSource.value !== source) return
     tail.value = r
@@ -557,7 +655,14 @@ const usageDetail = computed(() => {
   return parts.join(' ')
 })
 
-watch(showTools, () => loadTail())
+// The three display controls the daemon applies (compact is purely visual, so it is not here).
+watch([showTools, showThinking, humanOnly], () => loadTail())
+
+/** Whether the transcript is showing anything other than its default. Drives the pressed state on
+ *  the controls button, so "why am I not seeing tool calls" is answerable at a glance. */
+const displayFiltered = computed(
+  () => showTools.value || showThinking.value || humanOnly.value || compactTranscript.value,
+)
 
 // --- live transcript: follow the selected session's queue run -----------------
 // A run starting or finishing means the CLI just appended to the transcript on
@@ -1160,17 +1265,75 @@ function copy(text: string) {
               </div>
             </div>
             <div class="flex shrink-0 items-center gap-2">
-              <!-- icon-only toggle (same shape as the ID button): pressed = tool events shown -->
-              <IconTooltip :label="$t('sessions.showToolActivity')" :description="$t('sessions.showToolActivityHint')">
+              <IconTooltip
+                :label="$t('sessions.findInSession')"
+                :description="$t('sessions.findInSessionHint')"
+              >
                 <Button
-                  :variant="showTools ? 'secondary' : 'outline'"
+                  :variant="findOpen ? 'secondary' : 'outline'"
                   size="sm"
-                  :aria-label="$t('sessions.showToolActivity')"
-                  :aria-pressed="showTools"
-                  @click="showTools = !showTools"
+                  :aria-label="$t('sessions.findInSession')"
+                  @click="findOpen ? closeFind() : openFind()"
                 >
-                  <Wrench />
+                  <Search />
                 </Button>
+              </IconTooltip>
+              <!-- What the transcript shows. The DropdownMenu root MUST live INSIDE IconTooltip's
+                   slot, wrapped in an element the tooltip can anchor to — see
+                   scripts/checks/reka-popper-root-inside-tooltip.mjs for what happens otherwise. -->
+              <IconTooltip
+                :label="$t('sessions.displayControls')"
+                :description="$t('sessions.displayControlsHint')"
+              >
+                <span class="inline-flex">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger as-child>
+                      <Button
+                        :variant="displayFiltered ? 'secondary' : 'outline'"
+                        size="sm"
+                        :aria-label="$t('sessions.displayControls')"
+                      >
+                        <SlidersHorizontal />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" class="w-72">
+                      <DropdownMenuCheckboxItem
+                        :model-value="humanOnly"
+                        @select.prevent
+                        @update:model-value="humanOnly = $event"
+                      >
+                        <UserRound class="size-3.5" />{{ $t('sessions.humanOnly') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="showTools"
+                        :disabled="humanOnly"
+                        @select.prevent
+                        @update:model-value="showTools = $event"
+                      >
+                        <Wrench class="size-3.5" />{{ $t('sessions.showToolActivity') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuCheckboxItem
+                        :model-value="showThinking"
+                        :disabled="humanOnly"
+                        @select.prevent
+                        @update:model-value="showThinking = $event"
+                      >
+                        <Brain class="size-3.5" />{{ $t('sessions.showThinking') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuCheckboxItem
+                        :model-value="compactTranscript"
+                        @select.prevent
+                        @update:model-value="compactTranscript = $event"
+                      >
+                        <AlignJustify class="size-3.5" />{{ $t('sessions.compactLayout') }}
+                      </DropdownMenuCheckboxItem>
+                      <p class="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+                        {{ $t('sessions.displayControlsNote') }}
+                      </p>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </span>
               </IconTooltip>
               <IconTooltip
                 v-if="selected.source !== 'opencode'"
@@ -1252,8 +1415,67 @@ function copy(text: string) {
           </div>
         </div>
 
+        <!-- find within the loaded transcript: client-side, so the count is exact for what is on
+             screen and there is no request behind a keystroke -->
+        <div
+          v-if="findOpen"
+          class="flex shrink-0 items-center gap-2 border-b border-border bg-muted/30 px-4 py-2"
+        >
+          <Search class="size-3.5 shrink-0 text-muted-foreground" />
+          <Input
+            ref="findInput"
+            v-model="findQuery"
+            class="h-7 max-w-xs text-xs"
+            :placeholder="$t('sessions.findPlaceholder')"
+            :aria-label="$t('sessions.findInSession')"
+            @keydown.enter.exact.prevent="goToMatch(findIndex + 1)"
+            @keydown.enter.shift.prevent="goToMatch(findIndex - 1)"
+            @keydown.esc.prevent="closeFind"
+          />
+          <span class="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {{
+              findQuery
+                ? findTotal
+                  ? $t('sessions.findPosition', { i: findIndex + 1, n: findTotal })
+                  : $t('sessions.findNone')
+                : ''
+            }}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            :disabled="!findTotal"
+            :aria-label="$t('sessions.findPrevious')"
+            @click="goToMatch(findIndex - 1)"
+          >
+            <ChevronUp />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            :disabled="!findTotal"
+            :aria-label="$t('sessions.findNext')"
+            @click="goToMatch(findIndex + 1)"
+          >
+            <ChevronDown />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="ml-auto"
+            :aria-label="$t('sessions.findClose')"
+            @click="closeFind"
+          >
+            <X />
+          </Button>
+        </div>
+
         <!-- transcript, styled as a chat: user right / assistant left, tool events as log lines -->
-        <div ref="chatEl" class="scroll-slim min-h-0 flex-1 overflow-y-auto">
+        <div
+          ref="chatEl"
+          class="scroll-slim min-h-0 flex-1 overflow-y-auto"
+          :class="compactTranscript && 'transcript-compact'"
+        >
           <div class="mx-auto w-full max-w-3xl px-4 py-4">
             <template v-if="tailLoading">
               <div class="space-y-4">
@@ -1293,13 +1515,16 @@ function copy(text: string) {
                   <Copy v-else />
                 </Button>
 
-                <!-- tool activity: a compact log line, not a bubble -->
+                <!-- tool activity and reasoning: a compact log line, not a bubble -->
                 <div
                   v-if="ev.kind !== 'text'"
-                  class="w-full min-w-0 rounded-md border-l-2 border-border bg-muted/20 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground"
+                  class="w-full min-w-0 rounded-md border-l-2 border-border bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground"
+                  :class="ev.kind === 'thinking' ? 'italic' : 'font-mono'"
                 >
-                  <div class="mb-0.5 flex items-center gap-1 font-semibold">
-                    <Wrench class="size-3" />{{ ev.tool_name ?? ev.kind }}
+                  <div class="mb-0.5 flex items-center gap-1 font-semibold not-italic">
+                    <Brain v-if="ev.kind === 'thinking'" class="size-3" />
+                    <Wrench v-else class="size-3" />
+                    {{ ev.kind === 'thinking' ? $t('sessions.thinkingLabel') : ev.tool_name ?? ev.kind }}
                     <Button
                       variant="ghost"
                       size="icon-xs"
@@ -1311,19 +1536,17 @@ function copy(text: string) {
                       <Copy v-else />
                     </Button>
                   </div>
-                  <!-- eslint-disable-next-line vue/no-v-html -- renderMarkdown escapes first, so
-                       every tag here was written by lib/markdown.ts, never by the transcript -->
+                  <!-- eslint-disable-next-line vue/no-v-html -- the text is HTML-escaped before
+                       anything reads it (lib/markdown.ts), and lib/find.ts only ever adds <mark>
+                       around already-escaped slices, so no tag here came from the transcript -->
                   <div
-                    v-if="ev.html"
-                    class="md break-words"
-                    :class="ev.long && !isExpanded(i) ? 'max-h-48 overflow-hidden' : ''"
+                    class="break-words"
+                    :class="[
+                      ev.pre ? 'whitespace-pre-wrap' : 'md',
+                      ev.long && !isExpanded(i) ? 'max-h-48 overflow-hidden' : '',
+                    ]"
                     v-html="ev.html"
                   ></div>
-                  <div
-                    v-else
-                    class="whitespace-pre-wrap break-words"
-                    :class="ev.long && !isExpanded(i) ? 'max-h-48 overflow-hidden' : ''"
-                  >{{ ev.text }}</div>
                   <button
                     v-if="ev.long"
                     class="mt-1 text-[11px] font-medium text-primary hover:underline"
@@ -1343,16 +1566,13 @@ function copy(text: string) {
                 >
                   <!-- eslint-disable-next-line vue/no-v-html -- see the note above -->
                   <div
-                    v-if="ev.html"
-                    class="md break-words"
-                    :class="ev.long && !isExpanded(i) ? 'max-h-56 overflow-hidden' : ''"
+                    class="break-words"
+                    :class="[
+                      ev.pre ? 'whitespace-pre-wrap' : 'md',
+                      ev.long && !isExpanded(i) ? 'max-h-56 overflow-hidden' : '',
+                    ]"
                     v-html="ev.html"
                   ></div>
-                  <div
-                    v-else
-                    class="whitespace-pre-wrap break-words"
-                    :class="ev.long && !isExpanded(i) ? 'max-h-56 overflow-hidden' : ''"
-                  >{{ ev.text }}</div>
                   <button
                     v-if="ev.long"
                     class="mt-1 text-[11px] font-medium text-primary hover:underline"

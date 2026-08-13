@@ -208,7 +208,11 @@ function handleLine(id: string, line: string) {
       // A real turn from the model. This is what makes a retry unsafe (see shouldRetryTransient):
       // the CLI's own error notice is synthetic and carries no work, so it never counts.
       if (rt && !trusted) rt.sawOutput = true
-      recordEvent(id, te.role, te.kind, te.text, te.tool_name)
+      // A run's stored event log has no 'thinking' kind and is not getting one: it is what the queue
+      // replays, and reasoning is neither replayable nor worth the rows. eventToTailEvents drops
+      // those blocks unless asked, and this call never asks, so the guard is only here to keep that
+      // fact checked by the compiler rather than assumed.
+      if (te.kind !== 'thinking') recordEvent(id, te.role, te.kind, te.text, te.tool_name)
     }
   } else if (t === 'rate_limit_event') {
     // The CLI's FIRST-CLASS wall signal, and the only one that needs no regex:

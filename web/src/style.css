@@ -308,3 +308,36 @@
   color: var(--color-muted-foreground);
   font-style: italic;
 }
+
+/* --- find within the open session (lib/find.ts) ------------------------------------------------
+   <mark> is the only tag find.ts inserts. The active hit has to be findable at a glance while
+   scrolling, so it gets the accent; the rest stay a quiet wash. */
+.find-hit {
+  border-radius: 0.2rem;
+  padding: 0 0.05em;
+  background: color-mix(in oklab, var(--color-warning, #b7791f) 35%, transparent);
+  color: inherit;
+}
+.find-hit-active {
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+}
+
+/* --- compact transcript ------------------------------------------------------------------------
+   The same turns, denser. Scoped to one class on the scroll container so the layout has exactly
+   one switch rather than a conditional class on every element inside it. */
+.transcript-compact {
+  font-size: 0.92em;
+}
+.transcript-compact .rounded-2xl {
+  padding: 0.3rem 0.65rem;
+}
+.transcript-compact .mt-4 {
+  margin-top: 0.5rem;
+}
+.transcript-compact .mt-1\.5 {
+  margin-top: 0.2rem;
+}
+.transcript-compact .md-pre {
+  padding: 0.4rem 0.5rem;
+}

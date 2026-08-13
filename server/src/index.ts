@@ -819,15 +819,20 @@ app.post('/api/sessions/:id/copy-file', async (c) => {
 })
 app.get('/api/sessions/:id/tail', async (c) => {
   const limit = c.req.query('limit')
-  const textOnly = c.req.query('textOnly')
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
+  const flag = (name: string) => {
+    const v = c.req.query(name)
+    return v === '1' || v === 'true'
+  }
   return c.json(
     await tailTranscript(
       c.req.param('id'),
       {
         limit: boundedQueryInt(limit, 40, 200),
-        textOnly: textOnly === '1' || textOnly === 'true',
+        textOnly: flag('textOnly'),
+        thinking: flag('thinking'),
+        humanOnly: flag('humanOnly'),
       },
       source,
     ),
