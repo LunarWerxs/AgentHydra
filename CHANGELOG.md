@@ -22,6 +22,23 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   only, because Codex and OpenCode record their spend in their own shapes and a second parser is how
   two numbers start disagreeing.
 
+- **Content search is instant, from a 13 MB index that stores none of your text.** A full-text
+  index was previously declined because it drops a large file on the user's machine. Measuring the
+  store first showed why that was only half right: of 389 MB of searchable text, 88% is tool output
+  (file reads, greps, build logs) and only 46 MB is conversation. So this indexes what was said and
+  skips what was pasted, and holds it contentlessly, meaning the index alone with no second copy of
+  the text. Measured on a real 4.4 GB store: **13.2 MB for 1,359 sessions**, roughly a quarter of a
+  percent of what it covers, versus around 200 MB to index everything. Searches drop from seven
+  seconds covering a fifth of the store to well under a second covering all of it.
+
+  It is an accelerator, never a dependency. Missing, half-built or deleted, the streaming scan
+  answers exactly as before; the index only takes over once it covers 98% of the store, and it
+  builds in the background rather than inside anyone's request. Its two real limits are stated on
+  every answer rather than hidden: it matches whole words and phrases rather than substrings, and
+  it does not cover tool output. Both the web UI and the `search_sessions` tool say which path
+  answered and offer the exhaustive scan; a regex search always takes the scan. `GET` and `DELETE
+  /api/search-index` report its size and remove it, and it rebuilds itself from the transcripts.
+
 - **Agents can search transcripts, and can tell a miss from a timeout.** The MCP server had 37 tools
   and not one of them searched: an agent could list, get and tail sessions, but could not find one
   by something said inside it. `search_sessions` now exposes the body search that the web UI has

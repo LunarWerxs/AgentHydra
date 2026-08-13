@@ -90,6 +90,9 @@ export default {
   searchBudgetExhausted:
     'Stopped after {seconds}s, having read {searched} of {total} sessions. Anything not found may simply not have been reached: narrow it down with the source, instance or time filters.',
   searchLimitReached: 'Showing the first {n} matching sessions. There may be more.',
+  searchedConversation:
+    'Searched every conversation. Tool output, like file reads and command results, was not included.',
+  searchEverything: 'Search everything instead',
   regexMode: 'Regex',
   regexModeHint: 'Treat the search text as a regular expression',
   caseSensitive: 'Case sensitive',

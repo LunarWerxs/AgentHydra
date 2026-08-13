@@ -25,6 +25,7 @@ import type {
   ResetEvent,
   RunEvent,
   SchedulerState,
+  SearchIndexStatus,
   SessionPeriod,
   SessionSearchResponse,
   SessionSource,
@@ -75,6 +76,8 @@ export type {
   ResetKind,
   RunEvent,
   SchedulerState,
+  SearchIndexStatus,
+  SearchPath,
   SessionPeriod,
   SessionSearchResponse,
   SessionSearchResult,
@@ -204,6 +207,9 @@ export const searchSessionBodies = (
     caseSensitive?: boolean
     instance?: string
     source?: SessionSource
+    /** Force the exhaustive scan: every transcript in full, tool output included. Slower, and the
+     *  only way to match text inside a tool result or in the middle of a word. */
+    everything?: boolean
   } = {},
 ) =>
   j<SessionSearchResponse>(
@@ -211,8 +217,16 @@ export const searchSessionBodies = (
       `${opts.regex ? '&regex=1' : ''}` +
       `${opts.caseSensitive ? '&case=1' : ''}` +
       `${opts.instance ? `&instance=${encodeURIComponent(opts.instance)}` : ''}` +
-      `${opts.source ? `&source=${opts.source}` : ''}`,
+      `${opts.source ? `&source=${opts.source}` : ''}` +
+      `${opts.everything ? '&everything=1' : ''}`,
   )
+
+// --- search index -----------------------------------------------------------
+/** The conversation index behind the fast search path. It stores no text of its own and rebuilds
+ *  itself from the transcripts, so deleting it loses nothing but the time to build it again. */
+export const getSearchIndex = () => j<SearchIndexStatus>('/api/search-index')
+export const deleteSearchIndex = () =>
+  j<SearchIndexStatus & { ok: boolean }>('/api/search-index', { method: 'DELETE' })
 
 // --- accounts ---------------------------------------------------------------
 export const getAccounts = () => j<Account[]>('/api/accounts')

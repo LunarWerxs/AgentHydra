@@ -301,10 +301,10 @@ const bodySearchQueryUsed = ref('')
 const bodyResults = ref<SessionSearchResult[]>([])
 // Kept beside the results, because "nothing matched" and "the server gave up after 7 seconds" look
 // identical in a list of zero rows, and only one of them means the text isn't there.
-const bodySearchIncomplete = ref<SessionSearchResponse | null>(null)
+const bodySearchResponse = ref<SessionSearchResponse | null>(null)
 
-async function runBodySearch() {
-  const q = advancedQuery.value.trim()
+async function runBodySearch(opts: { everything?: boolean } = {}) {
+  const q = advancedQuery.value.trim() || bodySearchQueryUsed.value
   if (!q) return
   bodySearching.value = true
   try {
@@ -313,9 +313,10 @@ async function runBodySearch() {
       caseSensitive: advancedCaseSensitive.value,
       instance: sessionInstanceFilter.value || undefined,
       source: sessionSourceFilter.value === 'all' ? undefined : sessionSourceFilter.value,
+      everything: opts.everything,
     })
     bodyResults.value = r.results
-    bodySearchIncomplete.value = r.budgetExhausted || r.limitReached ? r : null
+    bodySearchResponse.value = r
     bodySearchQueryUsed.value = q
     bodySearchActive.value = true
     advancedOpen.value = false
@@ -327,23 +328,37 @@ async function runBodySearch() {
   }
 }
 
-/** The one-line "this answer is partial, here is why" note. Null when the search was complete. */
+/**
+ * The one line that says what was actually searched.
+ *
+ * There are three honest answers and they are not interchangeable: the index answered completely
+ * but only over conversation; the scan ran out of time; or the hit list was capped. Saying nothing
+ * would let any of the three read as "that text is nowhere on this machine".
+ */
 const bodySearchNotice = computed(() => {
-  const r = bodySearchIncomplete.value
+  const r = bodySearchResponse.value
   if (!r) return null
+  if (r.searched === 'index') return t('sessions.searchedConversation')
   if (r.budgetExhausted)
     return t('sessions.searchBudgetExhausted', {
       seconds: Math.round(r.budgetMs / 1000),
       searched: r.filesSearched,
       total: r.filesTotal,
     })
-  return t('sessions.searchLimitReached', { n: r.results.length })
+  if (r.limitReached) return t('sessions.searchLimitReached', { n: r.results.length })
+  return null
+})
+
+/** Offer the exhaustive path exactly when the answer we gave did not cover everything. */
+const canSearchEverything = computed(() => {
+  const r = bodySearchResponse.value
+  return !!r && (r.conversationOnly || r.budgetExhausted)
 })
 
 function exitBodySearch() {
   bodySearchActive.value = false
   bodyResults.value = []
-  bodySearchIncomplete.value = null
+  bodySearchResponse.value = null
 }
 
 /** Jump from a body-search hit to the full transcript, same as clicking it in the plain list. */
@@ -884,14 +899,22 @@ function copy(text: string) {
             {{ $t('sessions.bodySearchResultsFor', { query: bodySearchQueryUsed }) }}
           </span>
         </div>
-        <!-- the search is wall-clock bounded, so say when the answer is partial: an empty result
-             from a search that gave up early is not evidence the text isn't there -->
-        <p
+        <!-- say what was actually searched. An empty result means nothing until you know whether
+             the search covered everything, gave up early, or only read the conversation -->
+        <div
           v-if="bodySearchActive && bodySearchNotice"
-          class="shrink-0 border-b border-border bg-warning/10 px-3 py-1.5 text-[11px] text-muted-foreground"
+          class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-warning/10 px-3 py-1.5 text-[11px] text-muted-foreground"
         >
-          {{ bodySearchNotice }}
-        </p>
+          <span>{{ bodySearchNotice }}</span>
+          <button
+            v-if="canSearchEverything"
+            class="font-medium text-foreground underline underline-offset-2 disabled:opacity-50"
+            :disabled="bodySearching"
+            @click="runBodySearch({ everything: true })"
+          >
+            {{ bodySearching ? $t('sessions.searching') : $t('sessions.searchEverything') }}
+          </button>
+        </div>
 
         <div class="scroll-slim min-h-0 flex-1 overflow-y-auto p-2">
           <!-- first-load skeletons so the list never looks blank -->

@@ -171,8 +171,33 @@ export interface SessionSearchResult {
  * gave up after seven seconds" the same answer. That is a bad trade for a human and a worse one for
  * an agent, which will happily conclude the code it is looking for does not exist.
  */
+/** Which code path produced a search answer. The two have genuinely different reach, so no caller
+ *  is ever left guessing which one it got. */
+export type SearchPath =
+  /** The conversation index: complete and instant, but it covers what was SAID (human and
+   *  assistant turns matched by word and phrase), not tool output and not arbitrary substrings. */
+  | 'index'
+  /** The streaming scan: every byte of every transcript, substring or regex, bounded by a
+   *  wall-clock budget. Slower and reaches less of the store within that budget. */
+  | 'scan'
+
+/** State of the on-disk conversation index (server/src/search-index.ts). */
+export interface SearchIndexStatus {
+  exists: boolean
+  sizeBytes: number
+  /** Sessions currently held. */
+  sessions: number
+  builtAt: number | null
+  refreshing: boolean
+}
+
 export interface SessionSearchResponse {
   results: SessionSearchResult[]
+  /** Which path answered. 'index' is complete over conversation; 'scan' is bounded by budgetMs. */
+  searched: SearchPath
+  /** True when the index answered and therefore tool output was NOT searched. The caller should
+   *  offer the exhaustive scan rather than implying the answer covers everything on disk. */
+  conversationOnly: boolean
   /** The budget ran out: a transcript was abandoned mid-read, or whole files were never opened.
    *  A miss is NOT evidence of absence when this is true. */
   budgetExhausted: boolean

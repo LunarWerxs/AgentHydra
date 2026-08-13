@@ -6,6 +6,12 @@
 import safeRegex from 'safe-regex2'
 import { instanceSessionMap } from './instance-sessions'
 import { listOpenCodeSearchEvents } from './opencode-sessions'
+import {
+  isRefreshing,
+  refreshSearchIndex,
+  searchIndexCandidates,
+  searchIndexCoverage,
+} from './search-index'
 import { eventToTailEventsForSource, listTranscriptFiles, type TranscriptFile } from './transcript'
 import type { SessionSearchResponse, SessionSearchResult, SessionSource } from './types'
 
@@ -25,6 +31,15 @@ export interface SearchOptions {
   perFileLimit?: number
   /** Wall-clock budget for the whole search; returns partial results past this, never hangs. */
   budgetMs?: number
+  /**
+   * Which path to take.
+   *
+   * 'auto' (the default) uses the conversation index when it can answer and is warm, and the
+   * streaming scan otherwise. 'scan' forces the exhaustive path: every byte of every transcript,
+   * tool output included. That is the escape hatch for the index's two real limits, so it is a
+   * parameter rather than a hidden heuristic.
+   */
+  mode?: 'auto' | 'scan'
 }
 
 const DEFAULT_LIMIT = 50
@@ -226,11 +241,44 @@ async function pooledMap<T, R>(
 /** Nothing searched, nothing found — the shape a blank query answers with. */
 const EMPTY_RESPONSE: SessionSearchResponse = {
   results: [],
+  searched: 'scan',
+  conversationOnly: false,
   budgetExhausted: false,
   limitReached: false,
   filesSearched: 0,
   filesTotal: 0,
   budgetMs: 0,
+}
+
+/**
+ * How much of the store the index must already cover before it is allowed to answer.
+ *
+ * Below this the index would return a confident, complete-looking answer drawn from a fraction of
+ * the sessions, which is precisely the failure the budget flag exists to prevent. A cold or
+ * half-built index therefore stands aside and lets the scan answer while it finishes in the
+ * background.
+ */
+const INDEX_READY_RATIO = 0.98
+
+/** One pass of background indexing per search attempt, bounded so it never competes for long with
+ *  the search that triggered it. Successive searches walk the backlog down. */
+const INDEX_REFRESH_BUDGET_MS = 20_000
+
+function warmIndexInBackground(files: TranscriptFile[]) {
+  if (isRefreshing()) return
+  void refreshSearchIndex(files, { budgetMs: INDEX_REFRESH_BUDGET_MS })
+}
+
+/** Newest-active first, the order both paths return results in. */
+function sortByActivity(results: SessionSearchResult[]): SessionSearchResult[] {
+  const activity = new Map(
+    listTranscriptFiles().map((file) => [`${file.source}:${file.session_id}`, file.mtime_ms]),
+  )
+  return results.sort(
+    (a, b) =>
+      (activity.get(`${b.source}:${b.session_id}`) ?? 0) -
+      (activity.get(`${a.source}:${a.session_id}`) ?? 0),
+  )
 }
 
 /**
@@ -269,6 +317,51 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
   const found: SessionSearchResult[] = []
   const includeOpenCode = (!opts.source || opts.source === 'opencode') && !opts.instance
   if (includeOpenCode) found.push(...searchOpenCode(matcher, perFileLimit, limit))
+
+  // --- fast path: let the conversation index say WHICH sessions, then read only those ----------
+  //
+  // The index holds no text of its own, so snippets and match counts still come from the real
+  // transcripts. That keeps one source of truth for what a match looks like, and it is why the
+  // index is 12 MB rather than 12 MB plus a copy of everything it covers.
+  //
+  // Narrowing by the substring matcher afterwards is deliberate, not redundant: the index matches
+  // words case-insensitively, so it OVER-selects relative to a substring search, and running the
+  // real matcher over the candidates keeps the answer identical in shape to what a scan would say.
+  if ((opts.mode ?? 'auto') === 'auto' && files.length > 0) {
+    const coverage = searchIndexCoverage(files)
+    const ready = coverage.covered / files.length >= INDEX_READY_RATIO
+    if (!ready) warmIndexInBackground(files)
+    const candidates = ready
+      ? searchIndexCandidates(query, { regex: opts.regex, source: opts.source })
+      : null
+    if (candidates) {
+      const hits = files
+        .filter((f) => candidates.has(`${f.source}:${f.session_id}`))
+        .slice(0, Math.max(0, limit - found.length))
+      const outcomes = await pooledMap(hits, CONCURRENCY, (tf) =>
+        searchOneFile(tf, matcher, perFileLimit, deadline),
+      )
+      let ranOut = false
+      for (const o of outcomes) {
+        if (o.stoppedEarly) ranOut = true
+        if (o.hit) found.push(o.hit)
+      }
+      return {
+        results: sortByActivity(found).slice(0, limit),
+        searched: 'index',
+        // The honest caveat: complete over what was SAID, silent about tool output.
+        conversationOnly: true,
+        budgetExhausted: ranOut,
+        limitReached: candidates.size > hits.length,
+        // The index covered every session; `hits.length` is only how many transcripts had to be
+        // re-read for snippets. Reporting the smaller number here would tell an agent the search
+        // reached 5 of 1,359 sessions, which is the opposite of what happened.
+        filesSearched: files.length,
+        filesTotal: files.length,
+        budgetMs,
+      }
+    }
+  }
   // Process in newest-first batches so we can stop dispatching more work once `limit` is hit,
   // without giving up the pool's cross-file concurrency within each batch.
   const batchSize = CONCURRENCY * 3
@@ -302,19 +395,14 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
     }
   }
 
-  const activity = new Map(
-    listTranscriptFiles().map((file) => [`${file.source}:${file.session_id}`, file.mtime_ms]),
-  )
-  const sorted = found.sort(
-    (a, b) =>
-      (activity.get(`${b.source}:${b.session_id}`) ?? 0) -
-      (activity.get(`${a.source}:${a.session_id}`) ?? 0),
-  )
+  const sorted = sortByActivity(found)
   // Trimming to `limit` here is also a cap: OpenCode's rows are collected outside the file loop, so
   // the list can exceed the limit without the loop ever having noticed.
   if (sorted.length > limit) limitReached = true
   return {
     results: sorted.slice(0, limit),
+    searched: 'scan',
+    conversationOnly: false,
     // Either a file was abandoned part-way through, or whole batches were never opened because the
     // clock ran out. Both mean a miss is not evidence of absence. Files left unopened because the
     // LIMIT was hit are a different thing entirely, and are reported as `limitReached`.

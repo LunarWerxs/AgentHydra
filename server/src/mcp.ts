@@ -201,7 +201,7 @@ export const TOOLS: McpEngineTool[] = [
       // The completeness caveat is the load-bearing sentence. An agent that reads an empty result
       // as "this text is nowhere on the machine" will confidently rebuild work that already exists,
       // so the flag that says otherwise is named in the description, not just in the payload.
-      'Search the CONTENT of every local transcript (Claude, Codex, OpenCode) for text, or for a regular expression with regex=true. Returns the matching sessions newest-active first, each with a match count and snippets, plus how complete the search was. This streams every transcript, so it is far slower than list_sessions and runs under a wall-clock budget: ALWAYS check budgetExhausted on the result — when it is true the search gave up early and finding nothing proves nothing. limitReached means the hit list was capped, not that time ran out. Use list_sessions when you already know which session you want; use this to find one by something said inside it.',
+      'Search the CONTENT of local transcripts (Claude, Codex, OpenCode) for text, or for a regular expression with regex=true. Returns matching sessions newest-active first, each with a match count and snippets. READ THE `searched` FIELD ON THE RESULT. "index" means it came from the conversation index: instant and complete over what was SAID (human and assistant turns, matched by whole words and phrases), but it does NOT cover tool output such as file reads and command output, and does not match text inside a word — re-run with everything=true when a miss would matter. "scan" means it streamed the transcripts under a wall-clock budget; check budgetExhausted, because when that is true the search gave up early and finding nothing proves nothing. limitReached means the hit list was capped, not that time ran out. Use list_sessions when you already know which session you want; use this to find one by something said inside it.',
     inputSchema: S(
       {
         query: { type: 'string', description: 'Text to find, or a regex pattern if regex=true.' },
@@ -222,6 +222,11 @@ export const TOOLS: McpEngineTool[] = [
             "Scope to one Claude Desktop instance by its DIRECTORY NAME (list_instances -> name), or 'default' for the non-isolated install, or 'other' for plain CLI sessions. This one does NOT take an instance number.",
         },
         limit: { type: 'number', description: 'Max sessions to return (default 50, max 200).' },
+        everything: {
+          type: 'boolean',
+          description:
+            'Search every byte of every transcript, tool output included, instead of the fast conversation index. Slower (tens of seconds) and bounded by a time budget, but it is the only way to match text that appears inside a tool result or in the middle of a word. Use it when a normal search found nothing and you need to be sure.',
+        },
       },
       ['query'],
     ),
@@ -234,6 +239,7 @@ export const TOOLS: McpEngineTool[] = [
           source: a.source,
           instance: a.instance,
           limit: a.limit,
+          everything: a.everything ? '1' : undefined,
         })}`,
       ),
   },

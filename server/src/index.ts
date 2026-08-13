@@ -151,6 +151,7 @@ import {
   startResetWatch,
 } from './reset-watch'
 import { schedulerState, setSchedulerSettings } from './scheduler'
+import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { searchSessionBodies } from './session-search'
 import { sessionUsage } from './session-usage'
 import { getSession, listSessions, sessionMarkKey, warmSessionScanCache } from './sessions'
@@ -647,11 +648,15 @@ app.get('/api/sessions/search', async (c) => {
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
   const limit = boundedQueryInt(c.req.query('limit'), 50, 200)
+  // `everything=1` forces the exhaustive scan: every byte of every transcript, tool output
+  // included. The index answers faster and completely, but only over what was SAID, so the way
+  // past its two limits is an explicit parameter rather than a hidden heuristic.
+  const mode = c.req.query('everything') === '1' ? 'scan' : 'auto'
   try {
     // A blank query returns the same SHAPE as a real search rather than an empty array — a caller
     // that has to special-case "did I get results or a response object?" will get it wrong.
     return c.json(
-      await searchSessionBodies({ query, regex, caseSensitive, instance, source, limit }),
+      await searchSessionBodies({ query, regex, caseSensitive, instance, source, limit, mode }),
     )
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
@@ -839,6 +844,12 @@ app.get('/api/sessions/:id/usage', async (c) => {
   if (!tf) return c.json({ error: 'session not found' }, 404)
   return c.json(await sessionUsage(tf))
 })
+// The conversation index behind the fast search path. It holds no text of its own and rebuilds
+// itself from the transcripts, so deleting it costs nothing but the time to build it again — which
+// is exactly why the delete is offered rather than buried.
+app.get('/api/search-index', (c) => c.json(searchIndexStatus()))
+app.delete('/api/search-index', (c) => c.json({ ok: dropSearchIndex(), ...searchIndexStatus() }))
+
 // --- accounts ---------------------------------------------------------------
 app.get('/api/accounts', (c) => c.json(listAccounts()))
 app.post('/api/accounts', async (c) => {
