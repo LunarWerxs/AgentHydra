@@ -11,6 +11,7 @@ import {
   CircleSlash,
   ClipboardCopy,
   Clock,
+  Coins,
   Copy,
   Download,
   FileSymlink,
@@ -70,10 +71,11 @@ import type {
   SessionSource,
   SessionSourceScope,
   SessionSummary,
+  SessionUsage,
   TailResult,
 } from '@/lib/api'
 import * as api from '@/lib/api'
-import { baseName, shortId, timeAgo } from '@/lib/format'
+import { baseName, formatCompact, formatUsd, shortId, timeAgo } from '@/lib/format'
 import { displayName } from '@/lib/instance-appearance'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
@@ -446,6 +448,73 @@ function select(s: SessionSummary) {
   loadTail()
 }
 
+// --- what this session spent ------------------------------------------------
+// A separate, cheap request rather than a field on the tail: the tail is a bounded byte-window on
+// the END of the transcript, and a session's cost is the whole file. The daemon streams it and
+// caches on (mtime, size), so re-opening a finished session costs nothing.
+const usage = ref<SessionUsage | null>(null)
+
+async function loadUsage() {
+  const id = selectedId.value
+  const source = selectedSource.value
+  if (!id || !source) {
+    usage.value = null
+    return
+  }
+  try {
+    const u = await api.getSessionUsage(id, source)
+    if (selectedId.value !== id || selectedSource.value !== source) return // selection moved on
+    usage.value = u
+  } catch {
+    usage.value = null // a missing figure is silent; a wrong one would not be
+  }
+}
+// Watching the selection rather than calling from select() catches every way a session gets
+// opened — the list, a body-search hit, and the restored selection on mount.
+watch(
+  [selectedId, selectedSource],
+  () => {
+    usage.value = null
+    void loadUsage()
+  },
+  { immediate: true },
+)
+
+/** The header chip: "1.2M tokens · $4.21". A trailing "+" means some model in the session has no
+ *  published price, so the figure is a floor. */
+const usageSummary = computed(() => {
+  const u = usage.value
+  if (u?.status !== 'ok' || u.tokens.turns === 0) return null
+  const tokens = t('sessions.usageTokens', { n: formatCompact(u.tokens.total) })
+  if (u.costUsd === null) return tokens
+  const cost = formatUsd(u.costUsd)
+  return `${tokens} · ${u.unpricedModels.length ? `${cost}+` : cost}`
+})
+
+const usageDetail = computed(() => {
+  const u = usage.value
+  if (u?.status !== 'ok') return undefined
+  const parts = [
+    t('sessions.usageBreakdown', {
+      input: formatCompact(u.tokens.input),
+      output: formatCompact(u.tokens.output),
+      cacheRead: formatCompact(u.tokens.cacheRead),
+      cacheWrite: formatCompact(u.tokens.cacheCreation),
+      turns: u.tokens.turns,
+    }),
+  ]
+  if (u.unpricedModels.length) {
+    const models = u.unpricedModels.join(', ')
+    parts.push(
+      u.costUsd === null
+        ? t('sessions.usageNoPrice', { models })
+        : t('sessions.usageLowerBound', { models }),
+    )
+  }
+  parts.push(t('sessions.usageListPrice', { date: u.pricesAsOf }))
+  return parts.join(' ')
+})
+
 watch(showTools, () => loadTail())
 
 // --- live transcript: follow the selected session's queue run -----------------
@@ -461,7 +530,13 @@ let tailPollTimer: number | undefined
 watch(runningRunId, (id, oldId) => {
   window.clearInterval(tailPollTimer)
   if (id) tailPollTimer = window.setInterval(() => loadTail({ silent: true }), 4000)
-  if (!!id !== !!oldId && selectedId.value) loadTail({ silent: true })
+  if (!!id !== !!oldId && selectedId.value) {
+    loadTail({ silent: true })
+    // Cost moves only when the CLI writes turns, so refresh on the run's edges rather than on the
+    // 4-second tail poll — re-streaming a large transcript every tick to watch a number tick up is
+    // not worth it.
+    void loadUsage()
+  }
 })
 onBeforeUnmount(() => window.clearInterval(tailPollTimer))
 
@@ -1015,6 +1090,15 @@ function copy(text: string) {
                 <span class="inline-flex items-center gap-1">
                   <MessagesSquare class="size-3" />{{ tail?.events.length ?? 0 }} {{ $t('sessions.turnsShown') }}
                 </span>
+                <IconTooltip
+                  v-if="usageSummary"
+                  :label="$t('sessions.usageLabel')"
+                  :description="usageDetail"
+                >
+                  <span class="inline-flex items-center gap-1">
+                    <Coins class="size-3" />{{ usageSummary }}
+                  </span>
+                </IconTooltip>
               </div>
             </div>
             <div class="flex shrink-0 items-center gap-2">

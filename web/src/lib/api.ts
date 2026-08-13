@@ -30,6 +30,7 @@ import type {
   SessionSource,
   SessionSourceScope,
   SessionSummary,
+  SessionUsage,
   SyncStatus,
   TailResult,
   TranscriptSettings,
@@ -79,6 +80,8 @@ export type {
   SessionSource,
   SessionSourceScope,
   SessionSummary,
+  SessionUsage,
+  SessionUsageStatus,
   SyncStatus,
   TailEvent,
   TailResult,
@@ -174,6 +177,11 @@ export const copySessionFile = (id: string, source: SessionSource) =>
     `/api/sessions/${encodeURIComponent(id)}/copy-file${sourceQuery(source)}`,
     { method: 'POST' },
   )
+/** Token totals and a dollar cost for one session, computed on demand from its transcript.
+ *  Never throws for an unsupported provider — the result carries a `status` saying why it is
+ *  empty, which the UI shows instead of an unexplained zero. */
+export const getSessionUsage = (id: string, source: SessionSource) =>
+  j<SessionUsage>(`/api/sessions/${encodeURIComponent(id)}/usage${sourceQuery(source)}`)
 export const getTail = (
   id: string,
   source: SessionSource,

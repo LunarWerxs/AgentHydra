@@ -5,6 +5,30 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **An open session now shows what it cost.** Every assistant turn in a transcript records its own
+  token usage, and the daemon was already parsing those blocks, but only inside a quota lookback
+  window and only to derive a percentage denominator, so there was no token count and no dollar
+  figure anywhere in the product. The session header now carries both, computed on demand by
+  streaming that one file: no new table, no new column, nothing written to disk. Cache reads and
+  cache writes are priced separately, and cache writes are further split by TTL, because a one-hour
+  write costs twenty times a read; collapsing them into one "input" rate produces a number that
+  looks precise and means nothing. Prices ship bundled and dated (no network call, ever), and a
+  model with no published price is reported as unpriced rather than guessed at: its tokens still
+  count, and the cost is marked as a floor. Also on `GET /api/sessions/:id/usage`. Claude sessions
+  only, because Codex and OpenCode record their spend in their own shapes and a second parser is how
+  two numbers start disagreeing.
+
+### Fixed
+
+- **The README screenshot run works again.** Its fixture table had no entry for `/api/ui-prefs` or
+  `/api/notifications/events`, so those requests escaped to whatever daemon happened to be running
+  and the capture refused to keep the images. That refusal is correct: a fixture gap is how real
+  session data reaches a public screenshot. Both are stubbed now.
+
 ## [0.19.3] - 2026-08-11
 
 ### Fixed

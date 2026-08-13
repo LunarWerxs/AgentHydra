@@ -374,7 +374,55 @@ export interface TokenSpend {
   weighted: number
   /** Assistant turns counted. */
   turns: number
-  byModel: Record<string, { weighted: number; output: number; turns: number }>
+  byModel: Record<string, ModelSpend>
+}
+
+/** One model's share of a {@link TokenSpend}. */
+export interface ModelSpend {
+  weighted: number
+  output: number
+  turns: number
+  /** The raw counts, kept per model because a DOLLAR cost has to be computed at that model's own
+   *  published rates (server/src/pricing.ts) — `weighted` deliberately collapses the models into
+   *  one scale and cannot be turned back into money. */
+  input: number
+  cacheRead: number
+  /** Cache WRITES, split by TTL: a 1-hour write costs 2x base input where a 5-minute write costs
+   *  1.25x, so one combined figure cannot be priced correctly. Transcripts carry the split
+   *  (`usage.cache_creation`); when they don't, the whole write lands on 5m (the default TTL). */
+  cacheCreation5m: number
+  cacheCreation1h: number
+}
+
+/** Why a session has no usage figure. 'ok' is the only state that carries numbers. */
+export type SessionUsageStatus = 'ok' | 'source-unsupported' | 'unreadable'
+
+/**
+ * Tokens and dollars for ONE session, computed on demand by streaming that single transcript.
+ * Nothing is stored: see server/src/session-usage.ts.
+ */
+export interface SessionUsage {
+  session_id: string
+  source: SessionSource
+  status: SessionUsageStatus
+  tokens: {
+    input: number
+    output: number
+    cacheRead: number
+    cacheCreation: number
+    /** Plain sum of the four, i.e. every token the API charged for in this session. */
+    total: number
+    /** Assistant turns counted. */
+    turns: number
+  }
+  /** USD at published list prices, or null when no model in the session has a published price.
+   *  A non-null value alongside a non-empty `unpricedModels` is a LOWER BOUND. */
+  costUsd: number | null
+  pricedModels: string[]
+  /** Model ids that carried tokens but have no published price — never guessed at. */
+  unpricedModels: string[]
+  /** The day the bundled price table was last checked (ISO date), so a stale figure reads stale. */
+  pricesAsOf: string
 }
 
 /** How much to trust a token-derived number. */

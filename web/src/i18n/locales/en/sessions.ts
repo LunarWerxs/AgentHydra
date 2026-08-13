@@ -66,6 +66,15 @@ export default {
   copyTitle: 'Copy title',
   markDoneFailed: "Couldn't save the done mark",
   turnsShown: 'turns shown',
+  // --- tokens + cost for the open session ---
+  usageLabel: 'Tokens and cost',
+  usageTokens: '{n} tokens',
+  usageBreakdown:
+    'In {input} · out {output} · cache read {cacheRead} · cache write {cacheWrite}, over {turns} replies.',
+  usageListPrice:
+    'Priced at published list rates as of {date}. A subscription plan is not billed per token.',
+  usageLowerBound: 'No published price for {models}, so the real total is higher.',
+  usageNoPrice: 'No published price for {models}, so no cost is shown.',
   showToolActivity: 'Show tool activity',
   showToolActivityHint: 'Also shows tool_use / tool_result entries inline, not just replies',
   copyMessage: 'Copy message',

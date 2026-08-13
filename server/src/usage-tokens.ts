@@ -41,6 +41,13 @@ interface RawUsage {
   output_tokens?: number
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
+  /** Per-TTL breakdown of `cache_creation_input_tokens`. Only the dollar cost cares (a 1-hour
+   *  write is 2x base input, a 5-minute write 1.25x); the quota weighting below treats both the
+   *  same, which is why this never enters weighTurn. */
+  cache_creation?: {
+    ephemeral_5m_input_tokens?: number
+    ephemeral_1h_input_tokens?: number
+  }
 }
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
@@ -84,18 +91,10 @@ export function weighTurn(usage: RawUsage, model: string): number {
   return raw * modelMultiplier(model)
 }
 
-/**
- * Sum the token usage recorded in one transcript file for turns inside [since, now].
- *
- * Parses line-by-line and skips anything that isn't an assistant turn carrying a `usage` block; a
- * transcript also holds user turns, tool results, and queue-operation records. A malformed line is
- * skipped rather than aborting the file (transcripts are appended live and the last line can be a
- * partial write).
- *
- * Exported for the unit test.
- */
-export function sumTranscriptTokens(text: string, sinceMs: number): TokenSpend {
-  const spend: TokenSpend = {
+/** A fresh, zeroed spend. A factory rather than a shared constant because callers ACCUMULATE into
+ *  it — handing out one frozen object would have every caller adding to the same totals. */
+export function emptySpend(): TokenSpend {
+  return {
     input: 0,
     output: 0,
     cacheRead: 0,
@@ -105,57 +104,132 @@ export function sumTranscriptTokens(text: string, sinceMs: number): TokenSpend {
     byModel: {},
     turns: 0,
   }
-  for (const line of text.split('\n')) {
-    if (line?.charCodeAt(0) !== 123 /* '{' */) continue
-    // Cheap pre-filter: skip the ~90% of lines that cannot contribute, before paying for JSON.parse.
-    if (!line.includes('"usage"')) continue
+}
 
-    let rec: { type?: string; timestamp?: string; message?: { model?: string; usage?: RawUsage } }
-    try {
-      rec = JSON.parse(line)
-    } catch {
-      continue // partial trailing write, or a line we don't understand
-    }
-    // Only an ASSISTANT turn spends quota. A user turn or tool result can carry a `usage` echo, and
-    // counting those would double-count the same spend.
-    if (rec.type !== 'assistant') continue
-    const usage = rec.message?.usage
-    if (!usage) continue
-    const ts = rec.timestamp ? Date.parse(rec.timestamp) : Number.NaN
-    if (!Number.isFinite(ts) || ts < sinceMs) continue
-
-    const input = num(usage.input_tokens)
-    const output = num(usage.output_tokens)
-    const cacheRead = num(usage.cache_read_input_tokens)
-    const cacheCreation = num(usage.cache_creation_input_tokens)
-    const model = rec.message?.model ?? 'unknown'
-    const weighted = weighTurn(usage, model)
-
-    spend.input += input
-    spend.output += output
-    spend.cacheRead += cacheRead
-    spend.cacheCreation += cacheCreation
-    spend.raw += input + output + cacheRead + cacheCreation
-    spend.weighted += weighted
-    spend.turns += 1
-
-    const m = spend.byModel[model] ?? { weighted: 0, output: 0, turns: 0 }
-    m.weighted += weighted
-    m.output += output
-    m.turns += 1
-    spend.byModel[model] = m
+/**
+ * Split one turn's cache WRITE by TTL. Current Claude Code writes carry `usage.cache_creation`
+ * with the two buckets; older transcripts have only the combined `cache_creation_input_tokens`,
+ * and 5 minutes is the default TTL, so that is where an unlabelled write is attributed. The two
+ * always sum to the combined figure, which is what the top-level `cacheCreation` total reports.
+ */
+function splitCacheWrite(usage: RawUsage): { w5m: number; w1h: number } {
+  const total = num(usage.cache_creation_input_tokens)
+  const split = usage.cache_creation
+  if (split) {
+    const w5m = num(split.ephemeral_5m_input_tokens)
+    const w1h = num(split.ephemeral_1h_input_tokens)
+    if (w5m + w1h > 0) return { w5m, w1h }
   }
+  return { w5m: total, w1h: 0 }
+}
+
+/**
+ * Fold ONE transcript line into `spend`, if it is an assistant turn carrying a usage block inside
+ * the window. Returns that turn's timestamp when it counted a dated turn, else null.
+ *
+ * This is the single per-turn parser in the product: {@link sumTranscriptTokens} runs it over a
+ * string and session-usage.ts runs it over a stream, so a whole-session cost and a quota window can
+ * never disagree about what a turn spent.
+ *
+ * `sinceMs <= 0` means "no cutoff", which also lets an undated turn count — a whole-file sum wants
+ * every turn, and a missing timestamp is not a reason to drop real spend from a total that has no
+ * time window in the first place.
+ *
+ * A malformed line is skipped rather than aborting (transcripts are appended live, so the last
+ * line can be a partial write).
+ */
+export function accumulateUsageLine(
+  spend: TokenSpend,
+  line: string,
+  sinceMs: number,
+): number | null {
+  if (line?.charCodeAt(0) !== 123 /* '{' */) return null
+  // Cheap pre-filter: skip the ~90% of lines that cannot contribute, before paying for JSON.parse.
+  if (!line.includes('"usage"')) return null
+
+  let rec: { type?: string; timestamp?: string; message?: { model?: string; usage?: RawUsage } }
+  try {
+    rec = JSON.parse(line)
+  } catch {
+    return null // partial trailing write, or a line we don't understand
+  }
+  // Only an ASSISTANT turn spends quota. A user turn or tool result can carry a `usage` echo, and
+  // counting those would double-count the same spend.
+  if (rec.type !== 'assistant') return null
+  const usage = rec.message?.usage
+  if (!usage) return null
+  const ts = rec.timestamp ? Date.parse(rec.timestamp) : Number.NaN
+  const dated = Number.isFinite(ts)
+  if (sinceMs > 0 && (!dated || ts < sinceMs)) return null
+
+  const input = num(usage.input_tokens)
+  const output = num(usage.output_tokens)
+  const cacheRead = num(usage.cache_read_input_tokens)
+  const cacheCreation = num(usage.cache_creation_input_tokens)
+  const { w5m, w1h } = splitCacheWrite(usage)
+  const model = rec.message?.model ?? 'unknown'
+  const weighted = weighTurn(usage, model)
+
+  spend.input += input
+  spend.output += output
+  spend.cacheRead += cacheRead
+  spend.cacheCreation += cacheCreation
+  spend.raw += input + output + cacheRead + cacheCreation
+  spend.weighted += weighted
+  spend.turns += 1
+
+  const m = spend.byModel[model] ?? {
+    weighted: 0,
+    output: 0,
+    turns: 0,
+    input: 0,
+    cacheRead: 0,
+    cacheCreation5m: 0,
+    cacheCreation1h: 0,
+  }
+  m.weighted += weighted
+  m.output += output
+  m.turns += 1
+  m.input += input
+  m.cacheRead += cacheRead
+  m.cacheCreation5m += w5m
+  m.cacheCreation1h += w1h
+  spend.byModel[model] = m
+
+  return dated ? ts : null
+}
+
+/**
+ * Sum the token usage recorded in one transcript file for turns inside [since, now].
+ *
+ * Exported for the unit test.
+ */
+export function sumTranscriptTokens(text: string, sinceMs: number): TokenSpend {
+  const spend = emptySpend()
+  for (const line of text.split('\n')) accumulateUsageLine(spend, line, sinceMs)
   return spend
 }
 
 function mergeSpend(a: TokenSpend, b: TokenSpend): TokenSpend {
   const byModel = { ...a.byModel }
   for (const [model, m] of Object.entries(b.byModel)) {
-    const cur = byModel[model] ?? { weighted: 0, output: 0, turns: 0 }
+    const cur = byModel[model] ?? {
+      weighted: 0,
+      output: 0,
+      turns: 0,
+      input: 0,
+      cacheRead: 0,
+      cacheCreation5m: 0,
+      cacheCreation1h: 0,
+    }
     byModel[model] = {
       weighted: cur.weighted + m.weighted,
       output: cur.output + m.output,
       turns: cur.turns + m.turns,
+      input: cur.input + m.input,
+      cacheRead: cur.cacheRead + m.cacheRead,
+      cacheCreation5m: cur.cacheCreation5m + m.cacheCreation5m,
+      cacheCreation1h: cur.cacheCreation1h + m.cacheCreation1h,
     }
   }
   return {
@@ -168,17 +242,6 @@ function mergeSpend(a: TokenSpend, b: TokenSpend): TokenSpend {
     turns: a.turns + b.turns,
     byModel,
   }
-}
-
-const EMPTY: TokenSpend = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheCreation: 0,
-  raw: 0,
-  weighted: 0,
-  turns: 0,
-  byModel: {},
 }
 
 /** Every *.jsonl under a transcripts root whose mtime is at/after `sinceMs`. The mtime filter is what
@@ -219,7 +282,7 @@ function recentTranscripts(root: string, sinceMs: number): string[] {
  */
 export function tokensSince(since: Date, configDirs: string[] = [defaultConfigDir()]): TokenSpend {
   const sinceMs = since.getTime()
-  let spend = EMPTY
+  let spend = emptySpend()
   for (const dir of configDirs) {
     for (const file of recentTranscripts(projectsDir(dir), sinceMs)) {
       try {

@@ -164,19 +164,79 @@ describe('sumTranscriptTokens', () => {
     expect(spend.raw).toBeGreaterThan(spend.weighted) // cache-read-heavy raw sum dwarfs its weighted cost
   })
 
-  test('byModel breaks weighted/output/turns down per model', () => {
+  test('byModel breaks the counts down per model', () => {
     const spend = sumTranscriptTokens(jsonl, sinceMs)
     expect(Object.keys(spend.byModel).sort()).toEqual(['claude-opus-4', 'claude-sonnet-4'])
     expect(spend.byModel['claude-sonnet-4']).toEqual({
       weighted: 100 * 1 + 10 * 5,
       output: 10,
       turns: 1,
+      input: 100,
+      cacheRead: 0,
+      cacheCreation5m: 0,
+      cacheCreation1h: 0,
     })
     expect(spend.byModel['claude-opus-4']).toEqual({
       weighted: (10 * 1 + 5 * 5 + 100000 * 0.1) * 5,
       output: 5,
       turns: 1,
+      input: 10,
+      cacheRead: 100000,
+      cacheCreation5m: 0,
+      cacheCreation1h: 0,
     })
+  })
+
+  // The per-TTL split is the whole reason byModel carries raw counts: a 1-hour cache write costs
+  // 2x base input where a 5-minute one costs 1.25x, so a combined figure cannot be priced.
+  describe('cache-write TTL split', () => {
+    const withSplit = JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-07-14T03:00:00.000Z',
+      message: {
+        model: 'claude-sonnet-4',
+        usage: {
+          cache_creation_input_tokens: 1000,
+          cache_creation: { ephemeral_5m_input_tokens: 400, ephemeral_1h_input_tokens: 600 },
+        },
+      },
+    })
+    const withoutSplit = JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-07-14T03:00:00.000Z',
+      message: { model: 'claude-sonnet-4', usage: { cache_creation_input_tokens: 1000 } },
+    })
+
+    test('uses the per-TTL buckets when the transcript carries them', () => {
+      const m = sumTranscriptTokens(withSplit, sinceMs).byModel['claude-sonnet-4']
+      expect(m.cacheCreation5m).toBe(400)
+      expect(m.cacheCreation1h).toBe(600)
+    })
+
+    test('an older transcript without the split attributes the write to 5m (the default TTL)', () => {
+      const m = sumTranscriptTokens(withoutSplit, sinceMs).byModel['claude-sonnet-4']
+      expect(m.cacheCreation5m).toBe(1000)
+      expect(m.cacheCreation1h).toBe(0)
+    })
+
+    test('the split always sums to the reported cacheCreation total', () => {
+      for (const line of [withSplit, withoutSplit]) {
+        const spend = sumTranscriptTokens(line, sinceMs)
+        const m = spend.byModel['claude-sonnet-4']
+        expect(m.cacheCreation5m + m.cacheCreation1h).toBe(spend.cacheCreation)
+      }
+    })
+  })
+
+  // sinceMs <= 0 means "the whole file" — the mode session-usage.ts runs in.
+  test('no cutoff (sinceMs 0) counts every turn, including one with no timestamp', () => {
+    const undated = JSON.stringify({
+      type: 'assistant',
+      message: { model: 'claude-sonnet-4', usage: { input_tokens: 7, output_tokens: 3 } },
+    })
+    const spend = sumTranscriptTokens([jsonl, undated].join('\n'), 0)
+    expect(spend.turns).toBe(4) // both in-window turns + the before-window one + the undated one
+    expect(spend.input).toBe(100 + 10 + 9999 + 7)
   })
 
   test('malformed line, no-usage line, and queue-operation are silently skipped (no throw)', () => {

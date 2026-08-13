@@ -152,6 +152,7 @@ import {
 } from './reset-watch'
 import { schedulerState, setSchedulerSettings } from './scheduler'
 import { searchSessionBodies } from './session-search'
+import { sessionUsage } from './session-usage'
 import { getSession, listSessions, sessionMarkKey, warmSessionScanCache } from './sessions'
 import { skipSingleInstanceGuard } from './single-instance'
 import { findTranscript, tailTranscript } from './transcript'
@@ -800,6 +801,17 @@ app.get('/api/sessions/:id/tail', async (c) => {
       source,
     ),
   )
+})
+// What this one session spent: token totals and a dollar cost at published list prices, computed
+// on demand from the transcript itself (no table, nothing stored — see server/src/session-usage.ts).
+// Answers 200 with a `status` rather than an error for a source that records no per-turn usage, so
+// the UI can explain the gap instead of showing a zero it cannot justify.
+app.get('/api/sessions/:id/usage', async (c) => {
+  const rawSource = c.req.query('source')
+  const source = isSessionSource(rawSource) ? rawSource : undefined
+  const tf = findTranscript(c.req.param('id'), source)
+  if (!tf) return c.json({ error: 'session not found' }, 404)
+  return c.json(await sessionUsage(tf))
 })
 // Advanced BODY search (streams every transcript file, substring or regex); deliberately a
 // separate, slower, opt-in path so the fast metadata list above (GET /api/sessions, used by the

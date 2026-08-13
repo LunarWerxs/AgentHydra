@@ -298,6 +298,30 @@
         events: turns,
       }),
     ],
+    [
+      // Invented, but internally consistent: total is the sum of the four counts, and the dollar
+      // figure is what those tokens actually come to at Opus 5's published rates (input 5, output
+      // 25, cache read 0.5, 5-minute cache write 6.25, per million). A fixture that photographed
+      // arithmetic the product cannot reproduce would be a lie in a public screenshot.
+      /\/api\/sessions\/[^/]+\/usage/,
+      () => ({
+        session_id: sessions[0].session_id,
+        source: 'claude',
+        status: 'ok',
+        tokens: {
+          input: 41200,
+          output: 18600,
+          cacheRead: 3120000,
+          cacheCreation: 96400,
+          total: 3276200,
+          turns: 42,
+        },
+        costUsd: 2.83,
+        pricedModels: ['claude-opus-5'],
+        unpricedModels: [],
+        pricesAsOf: '2026-08-13',
+      }),
+    ],
     [/\/api\/sessions\/search/, () => []],
     [/\/api\/sessions/, () => sessions],
     [/\/api\/instances\/[^/]+\/account/, () => instances[0].account],
@@ -355,6 +379,11 @@
       }),
     ],
     [/\/api\/accounts/, () => []],
+    // Both of these were escaping to a live daemon (the escape assertion has been failing the run
+    // since these features landed). Empty is also the honest fixture: no mirrored UI preferences
+    // means the shots use the app's defaults, and no reset events means no notification banner.
+    [/\/api\/ui-prefs/, () => ({ prefs: {} })],
+    [/\/api\/notifications\/events/, () => []],
     [/\/api\/monitor/, () => ({ accounts: [], enabled: false })],
     [/\/api\/update/, () => ({ status: 'idle', distribution: 'compiled' })],
   ]

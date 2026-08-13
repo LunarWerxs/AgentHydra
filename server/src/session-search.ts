@@ -76,8 +76,11 @@ function buildMatcher(opts: SearchOptions): Matcher {
 
 /** Streams a file's lines with constant memory via Bun's native ReadableStream, decoding and
  *  splitting on '\n' manually (mirrors dispatch.ts's `for await (const chunk of proc.stdout)`
- *  pump idiom, different source, same shape). Never buffers the whole file into memory. */
-async function* streamLines(path: string): AsyncGenerator<string> {
+ *  pump idiom, different source, same shape). Never buffers the whole file into memory.
+ *
+ *  Exported because session-usage.ts needs the same constant-memory read over a single transcript
+ *  (the largest on a real machine is ~40 MB, which is not a thing to hold in the daemon's heap). */
+export async function* streamLines(path: string): AsyncGenerator<string> {
   const stream = Bun.file(path).stream()
   const decoder = new TextDecoder()
   let buf = ''
