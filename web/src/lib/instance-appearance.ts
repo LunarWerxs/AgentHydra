@@ -3,6 +3,15 @@
 // source of truth from the server package (server/src/core/shared.ts), which also validates
 // them; this module owns only the presentation — key -> Lucide component, key -> oklch value —
 // plus a deterministic default so an un-customized instance still gets a stable, distinct look.
+
+// The two VALUE constants come straight from where they are declared, not through lib/api's
+// re-export. api.ts is a barrel that also carries the whole DTO surface and every request helper,
+// and importing a runtime constant through it means this module cannot link until that whole graph
+// has evaluated. Under `bun test`, where files load concurrently, that window is real: this file
+// began failing on Linux with "export 'INSTANCE_ICON_KEYS' not found in '@/lib/api'" for a constant
+// api.ts does export, purely because another test file had api.ts mid-evaluation. Types still come
+// from the barrel — a type import is erased and cannot have an evaluation order.
+import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from '@agenthydra/server/types'
 import {
   Bot,
   Box,
@@ -22,14 +31,7 @@ import {
   Terminal,
   Zap,
 } from '@lucide/vue'
-import {
-  type CMAccount,
-  type CMInstance,
-  INSTANCE_COLOR_KEYS,
-  INSTANCE_ICON_KEYS,
-  type InstanceColorKey,
-  type InstanceIconKey,
-} from '@/lib/api'
+import type { CMAccount, CMInstance, InstanceColorKey, InstanceIconKey } from '@/lib/api'
 
 /** key -> Lucide component. Keys match INSTANCE_ICON_KEYS exactly (kept in lockstep). */
 const ICON_COMPONENTS: Record<InstanceIconKey, LucideIcon> = {
