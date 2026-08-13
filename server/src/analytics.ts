@@ -63,8 +63,13 @@ import { accumulateUsageLine, emptySpend, newUsageSeen } from './usage-tokens'
  * 6: One Claude API response is charged once. Claude Code writes a transcript record per CONTENT
  *    BLOCK and stamps the same complete usage object on each, so summing records charged a reply
  *    with two tool calls three times: 148.8B tokens reported here against a real 64.6B, 57% high.
+ * 7: Claude subagent transcripts are counted. A Task subagent writes its own file nested under the
+ *    session that spawned it and makes its own API calls; the index globbed one level deep, so
+ *    16,552 files holding 89.8B tokens were invisible against the top level's 64.5B. The freshness
+ *    check is (mtime, size) and neither moves when a session merely GAINS sibling files, so only a
+ *    version bump forces the recount.
  */
-export const ANALYTICS_VERSION = 6
+export const ANALYTICS_VERSION = 7
 
 /**
  * Gaps longer than this are not work, they are a lunch break with the window left open.
