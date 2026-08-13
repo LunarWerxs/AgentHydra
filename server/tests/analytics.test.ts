@@ -273,43 +273,50 @@ describe('a Codex conversation is more than one file', () => {
       })),
     ])
 
-  test('sibling rollouts are totalled, not ignored', async () => {
+  test('a conversation is the LARGEST of its rollouts, never the sum', async () => {
+    // THE BUG THIS PINS, which shipped before it was understood. Codex's `total_token_usage` is a
+    // session-wide counter and every execution thread replays the whole counter into its own file,
+    // so files are copies of one series rather than separate spend. Measured on a real conversation:
+    // the main rollout and three subagent rollouts all open at exactly the same totals, and three
+    // subagents that ran inside a nine-minute window each record 5,090 counter events reaching 552
+    // million tokens. Summing them turned 11.9B store-wide into 637B.
     const main = rollout('2026-08-10T10:00:00.000Z', [
       [100, 10],
       [300, 30],
     ])
-    const sub1 = rollout('2026-08-10T10:01:00.000Z', [[500, 50]])
-    const sub2 = rollout('2026-08-10T10:02:00.000Z', [[700, 70]])
+    const replay1 = rollout('2026-08-10T10:01:00.000Z', [
+      [100, 10],
+      [250, 25],
+    ])
+    const replay2 = rollout('2026-08-10T10:02:00.000Z', [[200, 20]])
 
     const alone = await scanSessionAnalytics(main, 'codex', 'sess')
     expect(alone.tokens['gpt-5.6-sol']?.input).toBe(300)
 
-    const together = await scanSessionAnalytics(main, 'codex', 'sess', [sub1, sub2])
-    // 300 + 500 + 700 — each file's own final cumulative, summed.
-    expect(together.tokens['gpt-5.6-sol']?.input).toBe(1500)
-    expect(together.tokens['gpt-5.6-sol']?.output).toBe(150)
+    const together = await scanSessionAnalytics(main, 'codex', 'sess', [replay1, replay2])
+    expect(together.tokens['gpt-5.6-sol']?.input).toBe(300)
+    expect(together.tokens['gpt-5.6-sol']?.output).toBe(30)
   })
 
-  test("a sibling's opening total is not read as a delta against the previous file", async () => {
-    // Both files END at a large cumulative. With one shared reader the second file's first event
-    // would look like a drop (a reset) or a vast jump; with a reader each, both are simply totals.
-    const a = rollout('2026-08-10T10:00:00.000Z', [[1_000_000, 1000]])
-    const b = rollout('2026-08-10T10:05:00.000Z', [[1_000_000, 1000]])
-    const both = await scanSessionAnalytics(a, 'codex', 'sess', [b])
-    expect(both.tokens['gpt-5.6-sol']?.input).toBe(2_000_000)
+  test('a sibling that reached further wins, because the counter is the conversation’s', async () => {
+    // Two of 109 real conversations end this way: the main rollout stopped being written before a
+    // subagent did, so the subagent holds the highest reading of the shared counter.
+    const short = rollout('2026-08-10T10:00:00.000Z', [[100, 10]])
+    const long = rollout('2026-08-10T10:05:00.000Z', [[900, 90]])
+    const both = await scanSessionAnalytics(short, 'codex', 'sess', [long])
+    expect(both.tokens['gpt-5.6-sol']?.input).toBe(900)
   })
 
-  test('an unreadable sibling does not lose the rest of the conversation', async () => {
+  test('an unreadable sibling does not lose the conversation', async () => {
     // Codex moves rollouts between sessions/ and archived_sessions/ while the daemon scans, so a
-    // file vanishing mid-read is expected rather than exceptional. Losing the whole conversation's
-    // totals over one missing file would be a far bigger error than the file itself.
+    // file vanishing mid-read is expected rather than exceptional.
     const main = rollout('2026-08-10T10:00:00.000Z', [[100, 10]])
-    const good = rollout('2026-08-10T10:01:00.000Z', [[200, 20]])
+    const other = rollout('2026-08-10T10:01:00.000Z', [[80, 8]])
     const a = await scanSessionAnalytics(main, 'codex', 'sess', [
       join(dir, 'does-not-exist.jsonl'),
-      good,
+      other,
     ])
-    expect(a.tokens['gpt-5.6-sol']?.input).toBe(300)
+    expect(a.tokens['gpt-5.6-sol']?.input).toBe(100)
   })
 })
 
@@ -361,14 +368,17 @@ describe('a Codex rollout that spends before it names its model', () => {
     expect(out.tokens['gpt-5.6-terra']?.input).toBe(400)
   })
 
-  test('a file that never names one borrows the model the CONVERSATION used', async () => {
-    const named = transcript([
-      ctx('2026-08-10T10:00:00.000Z', 'gpt-5.6-sol'),
-      tokenLine('2026-08-10T10:00:00.000Z', 1000, 100),
+  test('the fallback is the model the rest of the FILE used', async () => {
+    // Attribution is per rollout, because a conversation's totals come from one rollout: the file
+    // that reached furthest. A later turn naming the model settles the earlier unnamed ones.
+    const path = transcript([
+      tokenLine('2026-08-10T10:00:00.000Z', 100, 10),
+      ctx('2026-08-10T10:01:00.000Z', 'gpt-5.6-sol'),
+      tokenLine('2026-08-10T10:01:00.000Z', 1000, 100),
     ])
-    const silent = transcript([tokenLine('2026-08-10T10:01:00.000Z', 250, 25)])
-    const out = await scanSessionAnalytics(named, 'codex', 'sess', [silent])
-    expect(out.tokens['gpt-5.6-sol']?.input).toBe(1250)
+    const out = await scanSessionAnalytics(path, 'codex', 'sess')
+    expect(out.tokens['gpt-5.6-sol']?.input).toBe(1000)
+    expect(out.tokens.codex).toBeUndefined()
   })
 
   test('when NOTHING in the conversation names a model it stays unknown, not invented', async () => {

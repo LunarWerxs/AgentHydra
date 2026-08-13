@@ -58,21 +58,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   4,860 rollouts on the machine this was found on, 2,067 spend tokens before ever naming a model,
   and 331 billion tokens were landing under a placeholder id called `codex` that no price table
   could ever match. Those turns are now attributed to the model their own file names moments later,
-  falling back to the model the rest of the conversation used, and only staying unknown when nothing
-  anywhere in the conversation ever said.
+  falling back to the model the rest of that rollout used, and only staying unknown when nothing in
+  it ever said.
 
-- **Codex spend was reported at a fiftieth of the truth.** Codex writes one rollout file per
-  execution thread and identifies the owning chat separately, so a single conversation is routinely
-  hundreds of files: on the machine this was found on, 5,283 rollout files belong to 146
-  conversations, and 4,716 of them are sub-agent threads. The session list correctly shows one row
-  per conversation, and the totals were reading only that row's single file. Every file in a
-  conversation is now totalled, each with its own reader, because each carries its own running
-  token counter. Measured on that store: Codex went from 12.2 billion tokens to **637 billion**,
-  which makes it the largest provider there by volume, ahead of Claude.
+- **Codex spend was overstated by 53x, by a "fix" in this same unreleased cycle.** Codex writes one
+  rollout file per execution thread, and it looks exactly as though each file carries that thread's
+  own spend, so summing a conversation's files looks like the cure for an undercount. It is not.
+  `total_token_usage` is a SESSION-WIDE running total that every thread writes into its own file, so
+  each rollout replays the whole conversation's counter from the beginning.
 
-  A file that vanishes mid-scan is now skipped rather than discarding its whole conversation's
-  totals. At five thousand files, Codex moving one between its live and archived folders during a
-  scan is expected rather than exceptional.
+  Measured rather than reasoned: in one real conversation the main rollout and three sub-agent
+  rollouts all open at exactly the same totals, and three sub-agents that ran inside a nine-minute
+  window each record 5,090 counter events climbing to 552 million tokens. No nine-minute thread
+  makes five thousand API calls; they are one counter seen four times. Summing 679 files turned a
+  700-million-token conversation into 92.9 billion, and the store total from 11.9 billion into 637
+  billion, which wrongly made Codex look like the largest provider on that machine.
+
+  A conversation is now the LARGEST of its rollouts, never the sum. Across 109 real conversations
+  that is the main rollout 107 times; the two exceptions are conversations whose main rollout
+  stopped being written before a sub-agent did, and taking the maximum gets those right too. Because
+  the extra files are copies rather than spend, they are no longer read at all, which also removes
+  gigabytes of pointless I/O from every scan.
 
 - **The statistics were Claude-only.** Codex and OpenCode sessions reported zero tokens, which read
   as "you have not used them" rather than "we did not look". Both record their spend; they simply

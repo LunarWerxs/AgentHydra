@@ -55,8 +55,13 @@ import { accumulateUsageLine, emptySpend } from './usage-tokens'
  * 4: Codex turns that spend before their rollout names a model are attributed to that rollout's
  *    model instead of to a placeholder id. 2,067 of 4,860 rollouts here do this, and the 331B
  *    tokens involved were landing under a fake model called "codex" that no price table matches.
+ * 5: Version 3 was WRONG and this undoes it. Codex's `total_token_usage` is a session-wide counter
+ *    that every execution thread replays into its own rollout file, so summing a conversation's
+ *    files multiplies its spend by the number of threads. It reported 637B tokens where the store
+ *    holds 11.9B, a 53x overcount, and named Codex the largest provider on this machine when it is
+ *    the second. A conversation is now the LARGEST of its rollouts, never the sum.
  */
-export const ANALYTICS_VERSION = 4
+export const ANALYTICS_VERSION = 5
 
 /**
  * Gaps longer than this are not work, they are a lunch break with the window left open.
@@ -287,10 +292,58 @@ export async function scanSessionAnalytics(
  * `tool_result.is_error` block at all. Forcing one loop to serve both would be a function with two
  * unrelated halves and a flag.
  */
+/**
+ * A Codex conversation's totals: the LARGEST of its rollouts, never the sum of them.
+ *
+ * THE MISTAKE THIS EXISTS TO PREVENT, because it was made here and shipped. Codex writes one
+ * rollout file per execution thread, and it looks exactly like each file carries that thread's own
+ * spend — so summing them looks like the fix for an undercount. It is not. `total_token_usage` is a
+ * SESSION-WIDE running total that every thread writes into its own file, so each rollout replays
+ * the whole conversation's counter from the beginning.
+ *
+ * Measured, not reasoned: in one real conversation the main rollout and three subagent rollouts all
+ * open at exactly `18558 input / 11008 cached / 480 output`, and three subagents that ran inside a
+ * nine-minute window each record 5,090 counter events climbing to 552 MILLION tokens. No nine-minute
+ * thread makes five thousand API calls. They are one counter seen four times. Summing 679 files
+ * turned a 700M-token conversation into 92.9B, and the store total from 11.9B into 637B.
+ *
+ * So: read each file, keep the one that reached the highest total, discard the rest. Across 109
+ * conversations that is the main rollout 107 times; the two exceptions are conversations whose main
+ * rollout stopped being written before a subagent did, and taking the maximum gets those right too.
+ */
 async function scanCodexAnalytics(
   paths: string[],
   out: SessionAnalytics,
 ): Promise<SessionAnalytics> {
+  let best: SessionAnalytics | null = null
+  let bestTotal = -1
+  for (const path of paths) {
+    const one = emptyAnalytics()
+    // Per FILE. Codex moves rollouts between `sessions/` and `archived_sessions/` while the daemon
+    // is scanning, so one vanishing mid-read is expected rather than exceptional.
+    try {
+      await scanOneCodexRollout(path, one)
+    } catch {
+      continue
+    }
+    let total = 0
+    for (const s of Object.values(one.tokens))
+      total += s.input + s.cacheRead + s.cacheCreation5m + s.output
+    if (total > bestTotal) {
+      bestTotal = total
+      best = one
+    }
+  }
+  if (best) {
+    // providerCostUsd is set by the OpenCode path only and is null here; everything else on `out`
+    // is still the empty shell this was handed.
+    Object.assign(out, best, { providerCostUsd: out.providerCostUsd })
+  }
+  return out
+}
+
+async function scanOneCodexRollout(path: string, out: SessionAnalytics): Promise<SessionAnalytics> {
+  const paths = [path]
   let turn = -1
   // Turns that spent tokens before their rollout named a model (see CodexTurn.model). Held rather
   // than dropped or guessed: they are real spend, and the file usually names its model a few lines
@@ -308,105 +361,89 @@ async function scanCodexAnalytics(
     unattributed = []
   }
 
-  // Every file that belongs to this conversation, each with a FRESH reader: a rollout's token
-  // counter is its own running cumulative, so carrying one reader across files would read the next
-  // file's opening total as one enormous delta. `prevTs` restarts too, since a gap between two
-  // parallel threads is not idle time within either of them.
   for (const path of paths) {
     const reader = new CodexUsageReader()
     let prevTs: number | null = null
-    // Per FILE, not per session. A conversation here can own hundreds of rollouts and Codex
-    // moves them between `sessions/` and `archived_sessions/` while the daemon is scanning, so
-    // one file vanishing mid-read is expected. Letting that throw would discard every OTHER
-    // file's totals for the same conversation, a far larger error than the one missing file.
-    try {
-      for await (const raw of streamLines(path)) {
-        const line = raw.trim()
-        if (!line) continue
-        let ev: {
-          type?: string
-          timestamp?: string
-          payload?: { type?: string; name?: string; arguments?: unknown; call_id?: string }
-        }
-        try {
-          ev = JSON.parse(line)
-        } catch {
-          continue
-        }
+    for await (const raw of streamLines(path)) {
+      const line = raw.trim()
+      if (!line) continue
+      let ev: {
+        type?: string
+        timestamp?: string
+        payload?: { type?: string; name?: string; arguments?: unknown; call_id?: string }
+      }
+      try {
+        ev = JSON.parse(line)
+      } catch {
+        continue
+      }
 
-        const t = reader.push(ev)
-        if (t) {
-          // The day/hour/activity work below is model-independent, so an unnamed turn still lands
-          // on the charts at full weight — only its per-model row waits.
-          if (t.model === null) unattributed.push(t)
-          else {
-            attribute(t.model)
-            addTurn(out.tokens, t.model, t)
-          }
-          if (t.ts !== null) {
-            const day = dayKey(t.ts)
-            // Weighted so the day chart apportions a Codex session the same way it does a Claude one.
-            out.days[day] =
-              (out.days[day] ?? 0) +
-              t.input +
-              t.cacheRead * 0.1 +
-              t.cacheWrite * 1.25 +
-              t.output * 5
-            const hour = String(hourKey(t.ts))
-            out.hours[hour] = (out.hours[hour] ?? 0) + 1
-            if (out.firstTs === null || t.ts < out.firstTs) out.firstTs = t.ts
-            if (out.lastTs === null || t.ts > out.lastTs) out.lastTs = t.ts
-            if (prevTs !== null && t.ts > prevTs)
-              out.activeMs += Math.min(t.ts - prevTs, ACTIVE_GAP_CAP_MS)
-            prevTs = t.ts
-          }
+      const t = reader.push(ev)
+      if (t) {
+        // The day/hour/activity work below is model-independent, so an unnamed turn still lands
+        // on the charts at full weight — only its per-model row waits.
+        if (t.model === null) unattributed.push(t)
+        else {
+          attribute(t.model)
+          addTurn(out.tokens, t.model, t)
         }
+        if (t.ts !== null) {
+          const day = dayKey(t.ts)
+          // Weighted so the day chart apportions a Codex session the same way it does a Claude one.
+          out.days[day] =
+            (out.days[day] ?? 0) + t.input + t.cacheRead * 0.1 + t.cacheWrite * 1.25 + t.output * 5
+          const hour = String(hourKey(t.ts))
+          out.hours[hour] = (out.hours[hour] ?? 0) + 1
+          if (out.firstTs === null || t.ts < out.firstTs) out.firstTs = t.ts
+          if (out.lastTs === null || t.ts > out.lastTs) out.lastTs = t.ts
+          if (prevTs !== null && t.ts > prevTs)
+            out.activeMs += Math.min(t.ts - prevTs, ACTIVE_GAP_CAP_MS)
+          prevTs = t.ts
+        }
+      }
 
-        const payload = ev.payload
-        if (!payload) continue
-        // Codex logs a compaction as its own top-level event type rather than a flag on a turn.
-        if (ev.type === 'compacted') out.compactions++
-        if (ev.type !== 'response_item') continue
-        turn++
-        // Codex has TWO call shapes and both are tool use: `function_call` for a declared tool, and
-        // `custom_tool_call` for its sandbox (`exec`, `wait`). Counting only the first missed the two
-        // most-used tools in a real rollout entirely.
-        //
-        // NOTE ON EDITS: no edit is recorded for Codex, deliberately. Its file changes happen INSIDE
-        // the `exec` sandbox as free-form code rather than as a tool call with a path argument, so
-        // there is nothing structured to read. Guessing a path out of a code string would produce a
-        // feed that is wrong in ways nobody could check, which is worse than one that is empty.
-        if (
-          (payload.type === 'function_call' || payload.type === 'custom_tool_call') &&
-          typeof payload.name === 'string'
-        ) {
-          const name = payload.name || 'tool'
-          out.tools[name] = (out.tools[name] ?? 0) + 1
-          if (EDIT_TOOLS.has(name) || /apply_patch|edit_file|write_file/i.test(name)) {
-            let input: unknown = payload.arguments
-            if (typeof input === 'string') {
-              try {
-                input = JSON.parse(input)
-              } catch {
-                input = null
-              }
+      const payload = ev.payload
+      if (!payload) continue
+      // Codex logs a compaction as its own top-level event type rather than a flag on a turn.
+      if (ev.type === 'compacted') out.compactions++
+      if (ev.type !== 'response_item') continue
+      turn++
+      // Codex has TWO call shapes and both are tool use: `function_call` for a declared tool, and
+      // `custom_tool_call` for its sandbox (`exec`, `wait`). Counting only the first missed the two
+      // most-used tools in a real rollout entirely.
+      //
+      // NOTE ON EDITS: no edit is recorded for Codex, deliberately. Its file changes happen INSIDE
+      // the `exec` sandbox as free-form code rather than as a tool call with a path argument, so
+      // there is nothing structured to read. Guessing a path out of a code string would produce a
+      // feed that is wrong in ways nobody could check, which is worse than one that is empty.
+      if (
+        (payload.type === 'function_call' || payload.type === 'custom_tool_call') &&
+        typeof payload.name === 'string'
+      ) {
+        const name = payload.name || 'tool'
+        out.tools[name] = (out.tools[name] ?? 0) + 1
+        if (EDIT_TOOLS.has(name) || /apply_patch|edit_file|write_file/i.test(name)) {
+          let input: unknown = payload.arguments
+          if (typeof input === 'string') {
+            try {
+              input = JSON.parse(input)
+            } catch {
+              input = null
             }
-            const p = firstPath(input)
-            if (p) {
-              out.editCount++
-              if (out.edits.length < MAX_EDITS_PER_SESSION)
-                out.edits.push({ path: p, turn, ts: out.lastTs })
-            }
+          }
+          const p = firstPath(input)
+          if (p) {
+            out.editCount++
+            if (out.edits.length < MAX_EDITS_PER_SESSION)
+              out.edits.push({ path: p, turn, ts: out.lastTs })
           }
         }
       }
-    } catch {
-      // Unreadable or moved: skip this file, keep the conversation.
     }
   }
-  // Whatever this conversation's other files established, applied to the turns that never named a
-  // model themselves. `codex` only when NOTHING in the conversation ever did — a genuinely unknown
-  // model, reported as unpriced rather than dressed up as one we could bill.
+  // Whatever else this rollout established, applied to the turns that named no model themselves.
+  // `codex` only when NOTHING in the file ever did — a genuinely unknown model, reported as
+  // unpriced rather than dressed up as one we could bill.
   if (unattributed.length) attribute(dominantModel(out.tokens) ?? 'codex')
   return out
 }

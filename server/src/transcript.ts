@@ -42,13 +42,13 @@ export interface TranscriptFile {
   cwd?: string
   created_at?: number | null
   /**
-   * The OTHER files that belong to this same session, for providers that write more than one.
+   * The OTHER files carrying this same session id.
    *
-   * Codex writes one rollout per execution thread and identifies the user-owned chat by
-   * `payload.session_id`, so a single conversation can be hundreds of files. The list below keeps
-   * one ROW per conversation (see finishIndex) because that is what a session list is, but each of
-   * those discarded files carries its own token spend, and dropping them undercounted Codex usage
-   * by an order of magnitude. Anything totalling a session must read these as well as `path`.
+   * In practice one case: a rollout briefly visible in both the live and archived roots while a move
+   * settles. Deliberately NOT the conversation's subagent rollouts — those replay a session-wide
+   * token counter, so treating them as extra files to add multiplied Codex spend by 53x before this
+   * was understood. A total must take the LARGEST of these, never their sum; see
+   * server/src/analytics.ts.
    */
   siblingPaths?: string[]
   /**
@@ -441,16 +441,15 @@ function extraStoreRecords(): {
  *
  * The dedupe is what makes the session list a list of conversations rather than of files, and it
  * has to stay. What it must not do is destroy the fact that the others existed: Codex writes a
- * rollout per execution thread, so a conversation is routinely hundreds of files, each with its own
- * token counter. Discarding them silently made the analytics report a fraction of real Codex spend
- * (5,283 rollouts on this machine collapsed to 146 rows). They are carried on `siblingPaths`, which
- * only a total ever reads.
+ * rollout per execution thread, so a conversation is routinely hundreds of files. What those extra
+ * files are NOT is extra spend: Codex's token counter is session-wide and every thread replays the
+ * whole counter into its own file, so a total that adds them multiplies it (measured: 11.9B tokens
+ * reported as 637B). Subagent rollouts are therefore not carried here at all. `siblingPaths` exists
+ * for the genuine case — the same rollout appearing in both the live and archived roots while a move
+ * settles — and server/src/analytics.ts takes the LARGEST of them rather than the sum, so even that
+ * cannot double count.
  */
-function finishIndex(
-  files: TranscriptFile[],
-  at: number,
-  subagentPaths?: Map<string, string[]>,
-): TranscriptFile[] {
+function finishIndex(files: TranscriptFile[], at: number): TranscriptFile[] {
   const unique = new Map<string, TranscriptFile>()
   const siblings = new Map<string, string[]>()
   for (const file of files) {
@@ -464,10 +463,8 @@ function finishIndex(
   const result = [...unique.values()].map((file) => {
     const key = `${file.source}:${file.session_id}`
     // Only the OTHERS: `path` is already read by every caller, and listing it twice would double
-    // that file's tokens. Subagent rollouts join them, since they are the same conversation's spend.
+    // that file's tokens.
     const rest = (siblings.get(key) ?? []).filter((p) => p !== file.path)
-    if (file.source === 'codex')
-      for (const p of subagentPaths?.get(file.session_id) ?? []) if (p !== file.path) rest.push(p)
     return rest.length ? { ...file, siblingPaths: rest } : file
   })
   cache = { at, files: result }
@@ -495,7 +492,6 @@ function buildTranscriptIndex(): TranscriptFile[] {
   }
 
   const codexSessionIndex = readCodexSessionIndex()
-  const subagentPaths = new Map<string, string[]>()
   const addCodexRoot = (root: string, archived: boolean, tool = 'codex') => {
     const glob = new Bun.Glob(CODEX_ROLLOUT_GLOB)
     for (const rel of scanRootSync(glob, root)) {
@@ -515,10 +511,7 @@ function buildTranscriptIndex(): TranscriptFile[] {
       // parent rollout does not contain them. Dropping them outright made the analytics report a
       // fraction of real Codex spend: on this machine 4,716 of 4,860 archived rollouts are
       // subagents. See TranscriptFile.siblingPaths, which only a total ever reads.
-      if (identity.isSubagent) {
-        rememberSubagent(subagentPaths, identity.sessionId, path)
-        continue
-      }
+      if (identity.isSubagent) continue
       files.push(
         codexRecord(
           root,
@@ -539,21 +532,7 @@ function buildTranscriptIndex(): TranscriptFile[] {
 
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
-  return finishIndex(files, now, subagentPaths)
-}
-
-/** One conversation can own hundreds of subagent rollouts; capped so a runaway fan-out cannot put
- *  an unbounded array on an index row. The cap is generous enough to cover a real session (the
- *  largest here owns 444) and exists only as a ceiling. */
-const MAX_SUBAGENT_PATHS = 2000
-
-function rememberSubagent(map: Map<string, string[]>, sessionId: string, path: string): void {
-  const list = map.get(sessionId)
-  if (!list) {
-    map.set(sessionId, [path])
-    return
-  }
-  if (list.length < MAX_SUBAGENT_PATHS) list.push(path)
+  return finishIndex(files, now)
 }
 
 /**
@@ -590,7 +569,6 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   }
 
   const codexSessionIndex = readCodexSessionIndex()
-  const subagentPaths = new Map<string, string[]>()
   for (const { root, archived, tool } of [
     { root: CODEX_SESSIONS_ROOT, archived: false, tool: 'codex' },
     { root: CODEX_ARCHIVED_SESSIONS_ROOT, archived: true, tool: 'codex' },
@@ -602,8 +580,8 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
       try {
         const st = await statAsync(path)
         const identity = await readCodexRolloutIdentityAsync(path, codexFallbackId(rel))
-        // Same rule as the sync builder: not a row, but its tokens are not thrown away.
-        if (identity.isSubagent) return { subagentOf: identity.sessionId, path }
+        // Same rule as the sync builder.
+        if (identity.isSubagent) return null
         return codexRecord(
           root,
           rel,
@@ -618,16 +596,12 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
         return null
       }
     })
-    for (const record of records) {
-      if (!record) continue
-      if ('subagentOf' in record) rememberSubagent(subagentPaths, record.subagentOf, record.path)
-      else files.push(record)
-    }
+    for (const record of records) if (record) files.push(record)
   }
 
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
-  return finishIndex(files, now, subagentPaths)
+  return finishIndex(files, now)
 }
 
 let indexBuild: Promise<TranscriptFile[]> | null = null
