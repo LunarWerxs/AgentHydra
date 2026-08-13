@@ -82,7 +82,23 @@
     {
       role: 'assistant',
       kind: 'text',
-      text: 'Found it: the postcode field is validated with a regex that allows an empty match, so a blank value passes. I tightened the pattern, made the field required at the schema level rather than only in the UI, and added a case covering the empty and whitespace-only inputs.',
+      // Carries markdown on purpose: the transcript pane renders it now (web/src/lib/markdown.ts),
+      // and a shot of plain prose would photograph a product feature that is not there. Still
+      // entirely invented content.
+      text: [
+        'Found it: the postcode field is validated with a regex that allows an empty match, so a blank value passes.',
+        '',
+        '```ts',
+        'const POSTCODE = /^[A-Z]{1,2}[0-9][A-Z0-9]? ?[0-9][A-Z]{2}$/i',
+        '// was: /^[A-Z0-9 ]*$/ — an empty string matched',
+        '```',
+        '',
+        'Three changes:',
+        '',
+        '- tightened the pattern so a blank value cannot match',
+        '- made the field **required** at the schema level, not only in the UI',
+        '- added a case covering empty and whitespace-only inputs',
+      ].join('\n'),
       tool_name: null,
       timestamp: iso(8),
     },

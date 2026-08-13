@@ -203,3 +203,108 @@
     box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 45%, transparent);
   }
 }
+
+/* --- rendered transcript markdown (lib/markdown.ts) -------------------------------------------
+   Scoped under .md so it can only ever affect a rendered message body, never the app chrome. The
+   type scale stays close to the surrounding chat text: a transcript is a conversation being read
+   back, not a document, so headings mark structure without turning a reply into a web page. */
+.md {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.md .md-h {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.3;
+  font-size: 1em;
+}
+.md h1.md-h,
+.md h2.md-h {
+  font-size: 1.08em;
+}
+.md .md-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.md ul.md-list {
+  list-style: disc;
+}
+.md ol.md-list {
+  list-style: decimal;
+}
+.md .md-quote {
+  margin: 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--color-border);
+  color: var(--color-muted-foreground);
+}
+.md .md-hr {
+  margin: 0.25rem 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+.md .md-link {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md .md-code {
+  padding: 0.05em 0.3em;
+  border-radius: 0.25rem;
+  background: color-mix(in oklab, var(--color-foreground) 8%, transparent);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.92em;
+}
+.md .md-pre {
+  position: relative;
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--color-foreground) 6%, transparent);
+  border: 1px solid var(--color-border);
+  /* wide code scrolls inside its own box; the transcript column must never scroll sideways */
+  overflow-x: auto;
+}
+.md .md-block {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.86em;
+  line-height: 1.5;
+  white-space: pre;
+}
+.md .md-lang {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.5rem;
+  font-size: 0.68em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted-foreground);
+  user-select: none;
+}
+
+/* Syntax colours (lib/highlight.ts). Deliberately few: four token classes reading clearly on both
+   themes beats a rainbow that fights the surrounding UI. */
+.md .hl-keyword {
+  color: var(--color-primary);
+}
+.md .hl-string {
+  color: var(--color-success, #2f855a);
+}
+.md .hl-number {
+  color: var(--color-warning, #b7791f);
+}
+.md .hl-comment {
+  color: var(--color-muted-foreground);
+  font-style: italic;
+}

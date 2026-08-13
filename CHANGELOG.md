@@ -22,6 +22,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   only, because Codex and OpenCode record their spend in their own shapes and a second parser is how
   two numbers start disagreeing.
 
+- **Transcripts read as markdown, with highlighted code, and no new dependency.** Replies rendered
+  as one undifferentiated wall of plain text: no headings, no lists, no code blocks. They now render
+  properly, and fenced code is syntax-highlighted. A census of 150 real transcripts decided the
+  scope: of 682 code fences, 57% carry no language tag at all and five families (JS/TS, Python,
+  JSON, shell, plus untagged) cover 99%, so a grammar library would have been most of a megabyte
+  serving a 1% tail. The renderer and the highlighter are about 300 lines between them and add
+  nothing to `package.json`.
+
+  Transcript text is untrusted, so the safety property is stated plainly and tested: the source is
+  HTML-escaped ONCE, before any markdown is interpreted, which means every tag in the output was
+  written by the renderer and none can come from the transcript. There is no sanitiser to configure
+  and no gap between what a parser accepts and what a sanitiser strips. A model that writes a script
+  tag gets a visible script tag. Links are limited to http, https, mailto and in-page targets, so a
+  `javascript:` URL renders as plain text.
+
 - **You can see which overnight runs died, without opening any of them.** The daemon has always had
   ground truth on this: the detached runner reports the child's exit code and the run's status is
   finalized from it, so nothing is inferred from a transcript. It was only ever shown as an exit

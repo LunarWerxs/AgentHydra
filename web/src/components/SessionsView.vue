@@ -78,6 +78,7 @@ import type {
 import * as api from '@/lib/api'
 import { baseName, formatCompact, formatUsd, shortId, timeAgo } from '@/lib/format'
 import { displayName } from '@/lib/instance-appearance'
+import { looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
@@ -425,7 +426,14 @@ const LONG_LINES = 16
 const isLong = (text: string) => text.length > LONG_CHARS || text.split('\n').length > LONG_LINES
 
 const events = computed(() =>
-  (tail.value?.events ?? []).map((ev) => ({ ...ev, long: isLong(ev.text) })),
+  (tail.value?.events ?? []).map((ev) => ({
+    ...ev,
+    long: isLong(ev.text),
+    // Rendered here, once per message, rather than in the template: renderMarkdown escapes the text
+    // before it interprets anything, so the html below can never carry a tag the transcript wrote.
+    // Prose with no markdown in it keeps the cheaper plain-text path.
+    html: ev.kind === 'text' && looksLikeMarkdown(ev.text) ? renderMarkdown(ev.text) : null,
+  })),
 )
 
 const expandedMsgs = ref<Set<number>>(new Set())
@@ -1303,7 +1311,16 @@ function copy(text: string) {
                       <Copy v-else />
                     </Button>
                   </div>
+                  <!-- eslint-disable-next-line vue/no-v-html -- renderMarkdown escapes first, so
+                       every tag here was written by lib/markdown.ts, never by the transcript -->
                   <div
+                    v-if="ev.html"
+                    class="md break-words"
+                    :class="ev.long && !isExpanded(i) ? 'max-h-48 overflow-hidden' : ''"
+                    v-html="ev.html"
+                  ></div>
+                  <div
+                    v-else
                     class="whitespace-pre-wrap break-words"
                     :class="ev.long && !isExpanded(i) ? 'max-h-48 overflow-hidden' : ''"
                   >{{ ev.text }}</div>
@@ -1324,7 +1341,15 @@ function copy(text: string) {
                   class="min-w-0 max-w-[85%] rounded-2xl px-3.5 py-2 text-sm"
                   :class="ev.role === 'user' ? 'rounded-br-md bg-accent' : 'rounded-bl-md bg-muted/50'"
                 >
+                  <!-- eslint-disable-next-line vue/no-v-html -- see the note above -->
                   <div
+                    v-if="ev.html"
+                    class="md break-words"
+                    :class="ev.long && !isExpanded(i) ? 'max-h-56 overflow-hidden' : ''"
+                    v-html="ev.html"
+                  ></div>
+                  <div
+                    v-else
                     class="whitespace-pre-wrap break-words"
                     :class="ev.long && !isExpanded(i) ? 'max-h-56 overflow-hidden' : ''"
                   >{{ ev.text }}</div>
