@@ -19,9 +19,12 @@
 //      partner-operated with their OWN pricing: they simply fail to match, which is the right
 //      answer, not a bug to paper over with a prefix strip.
 //
-//   3. THE TABLE IS BUNDLED AND DATED. The daemon must work with no network, so there is no fetch
-//      here at all — `PRICES_AS_OF` ships with the build and is surfaced in the UI so a stale
-//      number is visibly stale rather than silently wrong.
+//   3. THE TABLE IS BUNDLED AND DATED, and it is the FLOOR rather than the whole story. The daemon
+//      must work with no network, so this module never fetches; what it does do is accept a
+//      downloaded catalog (see price-catalog.ts) that takes precedence when one is in force. The
+//      bundled table is what answers on a first run, an offline machine, or a failed download —
+//      and either way the effective date travels with the numbers into the UI, so a stale figure
+//      is visibly stale rather than silently wrong.
 //
 // NOT MODELLED (documented rather than approximated): Anthropic's fast mode re-prices Opus 5 at
 // 10/50, and transcripts do not record which turns used it; batch requests are half price and
@@ -33,6 +36,15 @@ export interface ModelPrice {
   output: number
   /** A launch/introductory rate with an expiry. Applied to turns dated before `until` (ISO). */
   intro?: { input: number; output: number; until: string }
+  /**
+   * Absolute cache rates, per million tokens, for providers that do not follow Anthropic's
+   * multiples. Left undefined the ratios below apply, which is correct for Anthropic and for every
+   * OpenAI model (both publish read = 0.1x); DeepSeek's cache read is under a hundredth of its
+   * input rate, so a downloaded catalog states these outright rather than deriving them.
+   */
+  cacheReadUsd?: number
+  cacheWrite5mUsd?: number
+  cacheWrite1hUsd?: number
 }
 
 /**
@@ -80,6 +92,66 @@ const PRICES: Record<string, ModelPrice> = {
   'claude-3-5-haiku': { input: 0.8, output: 4 },
   'claude-3-haiku': { input: 0.25, output: 1.25 },
   'claude-3-opus': { input: 15, output: 75 },
+
+  // --- OpenAI, as Codex writes the ids -----------------------------------------------------
+  //
+  // Codex records a bare model id (`gpt-5.6-sol`) in each rollout's `turn_context`. Cache rates
+  // follow the same shape as Anthropic's and are therefore derived: OpenAI bills a cached input
+  // token at 0.1x uncached, and — for GPT-5.6 and later only — a cache WRITE at 1.25x. Earlier
+  // generations create cache entries for free, which is `cacheWrite5mUsd: 0` rather than a missing
+  // entry, because "free" and "unknown" must not look the same. In practice Codex reports
+  // `cache_write_input_tokens: 0` on every turn observed here, so the write rate is defensive.
+  'gpt-5.6-sol': { input: 5, output: 30 },
+  'gpt-5.6-terra': { input: 2, output: 12 },
+  'gpt-5.6-luna': { input: 0.2, output: 1.2 },
+  'gpt-5.6-cyber': { input: 12.5, output: 75 },
+  'gpt-5.5': { input: 5, output: 30, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5.5-pro': { input: 30, output: 180, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5.4': { input: 2.5, output: 15, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5.4-mini': { input: 0.75, output: 4.5, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5.4-nano': { input: 0.2, output: 1.25, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5.3-codex': { input: 1.75, output: 14, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5.2': { input: 1.75, output: 14, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5.1': { input: 1.25, output: 10, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5.1-codex-mini': { input: 0.25, output: 2, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5': { input: 1.25, output: 10, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5-mini': { input: 0.25, output: 2, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+  'gpt-5-nano': { input: 0.05, output: 0.4, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+}
+
+/**
+ * A downloaded catalog, when one is in force. Consulted BEFORE the bundled table.
+ *
+ * Precedence is deliberate and one-directional: a fetched price is newer than a compiled-in one by
+ * construction, so it wins outright rather than being merged field-by-field with it. The bundled
+ * table keeps answering for anything the catalog does not carry, so adopting a catalog can only
+ * ever price MORE models, never fewer.
+ */
+let fetched: { prices: Record<string, ModelPrice>; asOf: string } | null = null
+
+/** Install a downloaded catalog. `fetchedAt` is epoch ms; only its date is surfaced. */
+export function setFetchedPrices(prices: Record<string, ModelPrice>, fetchedAt: number): void {
+  const asOf = new Date(fetchedAt).toISOString().slice(0, 10)
+  fetched = { prices, asOf }
+}
+
+/** Drop any downloaded catalog and fall back to the bundled table. Tests use this; so would a
+ *  future setting for an install that wants only what it shipped with. */
+export function clearFetchedPrices(): void {
+  fetched = null
+}
+
+/**
+ * The date the prices in force were last known good — the download date when a catalog is in
+ * force, the build's own constant otherwise. This is what the UI prints beside a dollar figure.
+ */
+export function pricesAsOf(): string {
+  return fetched?.asOf ?? PRICES_AS_OF
+}
+
+/** Where the prices in force came from, so the UI can say so rather than implying they are fresh. */
+export function priceSource(): 'catalog' | 'bundled' {
+  return fetched ? 'catalog' : 'bundled'
 }
 
 /** A model id as transcripts write it, reduced to a table key. Only two normalizations, both
@@ -87,6 +159,29 @@ const PRICES: Record<string, ModelPrice> = {
 const DATE_SUFFIX = /-\d{8}$/
 function canonical(model: string): string {
   return model.trim().toLowerCase().replace(DATE_SUFFIX, '')
+}
+
+/**
+ * The model behind a router's `provider/model` id, for the second lookup attempt only.
+ *
+ * OpenCode records what it routed to as `openai/gpt-5.5` or `deepseek/deepseek-v4-pro`, so an exact
+ * match against a table keyed on bare ids misses a model both sides plainly agree on. The exact key
+ * is ALWAYS tried first, so a provider that publishes its own rate for a routed model keeps it; this
+ * is the fallback, not the rule.
+ *
+ * It is a narrower move than it looks and deliberately not a general prefix strip: Bedrock and
+ * Vertex ids (`us.anthropic.claude-…-v1:0`, `claude-…@20250219`) use dots and at-signs, so they
+ * still fail to match and stay unpriced — which is correct, because those are partner-operated with
+ * their own pricing. What it will get wrong is a reseller charging a markup over the upstream id;
+ * that is a knowable underestimate, against a total absence of a figure.
+ */
+function routedModel(key: string): string {
+  const slash = key.lastIndexOf('/')
+  return slash < 0 ? key : key.slice(slash + 1)
+}
+
+function lookup(key: string): ModelPrice | undefined {
+  return fetched?.prices[key] ?? PRICES[key]
 }
 
 /** Every rate needed to price one model's tokens, in USD per million. */
@@ -113,7 +208,7 @@ export interface ResolvedPrice {
  */
 export function priceFor(model: string, at: number = Date.now()): ResolvedPrice | null {
   const key = canonical(model)
-  const entry = PRICES[key]
+  const entry = lookup(key) ?? lookup(routedModel(key))
   if (!entry) return null
   const intro = entry.intro && at < Date.parse(entry.intro.until) ? entry.intro : null
   const input = intro ? intro.input : entry.input
@@ -121,9 +216,12 @@ export function priceFor(model: string, at: number = Date.now()): ResolvedPrice 
     model: key,
     input,
     output: intro ? intro.output : entry.output,
-    cacheRead: input * CACHE_READ_RATIO,
-    cacheWrite5m: input * CACHE_WRITE_5M_RATIO,
-    cacheWrite1h: input * CACHE_WRITE_1H_RATIO,
+    // An absolute rate wins over the derived one where the source published it. `?? ` and not `||`:
+    // zero is a real, published rate (a provider that creates cache entries for free), and `||`
+    // would quietly replace it with the 1.25x premium.
+    cacheRead: entry.cacheReadUsd ?? input * CACHE_READ_RATIO,
+    cacheWrite5m: entry.cacheWrite5mUsd ?? input * CACHE_WRITE_5M_RATIO,
+    cacheWrite1h: entry.cacheWrite1hUsd ?? input * CACHE_WRITE_1H_RATIO,
   }
 }
 

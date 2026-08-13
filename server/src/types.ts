@@ -86,6 +86,9 @@ export function isSessionSource(v: unknown): v is SessionSource {
 export interface SessionSummary {
   session_id: string
   source: SessionSource
+  /** Which PRODUCT wrote it, as an agent-catalog.ts id ('claude-code', 'openclaude', 'traex', …).
+   *  `source` is only the FORMAT, and forks share one. */
+  tool: string
   title: string
   cwd: string
   project: string
@@ -131,6 +134,37 @@ export interface SessionSecretScan {
   /** Each one, redacted, with the turn it appeared in. Capped; `truncated` says when. */
   findings: Array<{ kind: string; redacted: string; turn: number; role: string }>
   truncated: boolean
+}
+
+/**
+ * One coding agent, as found on this machine (server/src/agent-catalog.ts).
+ *
+ * Defined here rather than beside the scanner for the same reason SyncStatus is: agent-catalog.ts
+ * imports node:fs, and nothing Bun-only may be pulled into the web app's type pass.
+ */
+export interface AgentPresence {
+  /** Catalog id — 'claude-code', 'openclaude', 'traex', … */
+  id: string
+  name: string
+  /** Who makes it. The axis the analytics provider filter offers. */
+  vendor: string
+  /** Absolute store roots that exist. Never empty: a tool with none is not reported at all. */
+  roots: string[]
+  /** Files under those roots, capped. */
+  files: number
+  /** The count hit the cap, so show it as "N+" rather than as an exact figure it is not. */
+  truncated: boolean
+  lastActivityAt: number | null
+  /**
+   * The reader that handles this tool's store, or null when we can find it but not read it.
+   *
+   * A null here is a real answer, not a placeholder: the tool is installed, we know where its
+   * conversations are, and nobody has written the parser. Saying so beats omitting it, which would
+   * read as "AgentHydra looked and found nothing".
+   */
+  format: SessionSource | null
+  /** Why it is unreadable, when there is a specific reason: 'encrypted', 'credits', 'opt-in'. */
+  note?: string
 }
 
 // --- the analytics tier (server/src/analytics.ts) ---------------------------
@@ -199,6 +233,10 @@ export interface SpendReport {
   byDay: SpendBucket[]
   byAccount: SpendBucket[]
   unpricedModels: string[]
+  /** The date the prices behind every dollar figure here were last known good. */
+  pricesAsOf: string
+  /** 'catalog' = downloaded rates; 'bundled' = the table this build shipped with. */
+  priceSource: 'catalog' | 'bundled'
   coverage: AnalyticsCoverage
 }
 
@@ -253,6 +291,7 @@ export interface RunCost {
   }
   costUsd: number | null
   unpricedModels: string[]
+  /** The date the prices behind every dollar figure here were last known good. */
   pricesAsOf: string
   status_reason: 'ok' | 'no-window' | 'source-unsupported' | 'unreadable'
 }
@@ -665,7 +704,8 @@ export interface SessionUsage {
   pricedModels: string[]
   /** Model ids that carried tokens but have no published price — never guessed at. */
   unpricedModels: string[]
-  /** The day the bundled price table was last checked (ISO date), so a stale figure reads stale. */
+  /** The day the prices in force were last known good (ISO date) — the download date when a
+   *  catalog is in force, this build's own constant otherwise. A stale figure must read stale. */
   pricesAsOf: string
 }
 

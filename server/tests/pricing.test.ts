@@ -5,15 +5,19 @@
 // at NOTHING rather than at a plausible-looking guess, and an introductory rate that follows the
 // date the tokens were actually spent.
 
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import {
   CACHE_READ_RATIO,
   CACHE_WRITE_1H_RATIO,
   CACHE_WRITE_5M_RATIO,
+  clearFetchedPrices,
   PRICES_AS_OF,
   type PriceableTokens,
   priceFor,
+  priceSource,
+  pricesAsOf,
   priceTokens,
+  setFetchedPrices,
 } from '../src/pricing'
 
 const NOW = Date.parse('2026-08-13T00:00:00.000Z')
@@ -155,5 +159,95 @@ describe('priceTokens', () => {
     )
     expect(priced.priced).toEqual(['claude-haiku-4-5'])
     expect(priced.costUsd).toBeCloseTo(10, 10)
+  })
+})
+
+describe('OpenAI models, which Codex writes as bare ids', () => {
+  test('the GPT-5.6 family prices, so Codex spend is not reported as unpriced', () => {
+    expect(priceFor('gpt-5.6-sol', NOW)).toMatchObject({ input: 5, output: 30 })
+    expect(priceFor('gpt-5.6-terra', NOW)).toMatchObject({ input: 2, output: 12 })
+    expect(priceFor('gpt-5.3-codex', NOW)).toMatchObject({ input: 1.75, output: 14 })
+  })
+
+  test('a cached input token is a tenth, the same shape Anthropic publishes', () => {
+    expect(priceFor('gpt-5.6-sol', NOW)?.cacheRead).toBeCloseTo(0.5, 10)
+  })
+
+  test('pre-5.6 models create cache entries for FREE, which is zero and not the 1.25x premium', () => {
+    // The distinction matters: `|| ` instead of `?? ` in the resolver would silently bill a free
+    // cache write at 1.25x the input rate.
+    expect(priceFor('gpt-5.3-codex', NOW)?.cacheWrite5m).toBe(0)
+    expect(priceFor('gpt-5.3-codex', NOW)?.cacheWrite1h).toBe(0)
+    // 5.6 and later DO charge for the write, at the standard multiple.
+    expect(priceFor('gpt-5.6-sol', NOW)?.cacheWrite5m).toBeCloseTo(6.25, 10)
+  })
+})
+
+describe('a downloaded catalog takes precedence over the bundled table', () => {
+  afterEach(() => clearFetchedPrices())
+
+  test('the bundled table answers when no catalog is in force', () => {
+    expect(priceSource()).toBe('bundled')
+    expect(pricesAsOf()).toBe(PRICES_AS_OF)
+  })
+
+  test('a fetched price overrides a bundled one, and reports its own date', () => {
+    setFetchedPrices(
+      { 'claude-opus-5': { input: 4, output: 20 } },
+      Date.parse('2026-08-12T09:30:00.000Z'),
+    )
+    expect(priceFor('claude-opus-5', NOW)).toMatchObject({ input: 4, output: 20 })
+    expect(priceSource()).toBe('catalog')
+    expect(pricesAsOf()).toBe('2026-08-12')
+  })
+
+  test('a model the catalog does not carry still prices from the bundled table', () => {
+    // Adopting a catalog can only ever price MORE models, never fewer — otherwise a catalog that
+    // dropped one id would turn a previously-priced session into an unpriced one.
+    setFetchedPrices({ 'gpt-5.6-sol': { input: 4, output: 20 } }, Date.parse('2026-08-12'))
+    expect(priceFor('claude-opus-5', NOW)).toMatchObject({ input: 5, output: 25 })
+  })
+
+  test('clearing it falls back, so an install can refuse downloaded prices', () => {
+    setFetchedPrices({ 'claude-opus-5': { input: 4, output: 20 } }, Date.parse('2026-08-12'))
+    clearFetchedPrices()
+    expect(priceFor('claude-opus-5', NOW)).toMatchObject({ input: 5, output: 25 })
+    expect(priceSource()).toBe('bundled')
+  })
+
+  test('an absolute cache rate is used verbatim, not re-derived from the input rate', () => {
+    // DeepSeek's cache read is under a hundredth of its input rate, not Anthropic's tenth.
+    setFetchedPrices(
+      { 'deepseek-v4-pro': { input: 0.435, output: 0.87, cacheReadUsd: 0.003625 } },
+      Date.parse('2026-08-12'),
+    )
+    expect(priceFor('deepseek-v4-pro', NOW)?.cacheRead).toBeCloseTo(0.003625, 10)
+  })
+})
+
+describe('a router’s provider/model id', () => {
+  test('falls back to the model behind it, so OpenCode spend is not all unpriced', () => {
+    // OpenCode records what it routed to, e.g. `openai/gpt-5.5`. Both sides plainly agree on the
+    // model; only the spelling differs.
+    expect(priceFor('openai/gpt-5.5', NOW)).toMatchObject({ input: 5, output: 30 })
+  })
+
+  test('the exact key still wins when the table carries one', () => {
+    setFetchedPrices(
+      {
+        'someproxy/gpt-5': { input: 9, output: 9 },
+        'gpt-5': { input: 1.25, output: 10 },
+      },
+      Date.parse('2026-08-12'),
+    )
+    expect(priceFor('someproxy/gpt-5', NOW)).toMatchObject({ input: 9 })
+    clearFetchedPrices()
+  })
+
+  test('Bedrock and Vertex ids stay unpriced — they are partner-operated with their own rates', () => {
+    // The fallback splits on `/` only. These use dots and at-signs, so they still miss, which is
+    // the right answer rather than a bug to paper over.
+    expect(priceFor('us.anthropic.claude-opus-5-v1:0', NOW)).toBeNull()
+    expect(priceFor('claude-opus-5@20260101', NOW)).toBeNull()
   })
 })

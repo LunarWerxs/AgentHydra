@@ -93,6 +93,15 @@ describe('Codex: a running total, read as deltas', () => {
     expect(t?.output).toBe(10)
   })
 
+  test('a turn before any turn_context reports NO model rather than a placeholder', () => {
+    // 2,067 of 4,860 real rollouts spend tokens before naming a model. A placeholder id here put
+    // 331B tokens under a fake model called "codex"; null lets the caller attribute them to the
+    // model the file names a few lines later.
+    const r = new CodexUsageReader()
+    const t = r.push(tokenCount('2026-08-10T10:00:00.000Z', { input_tokens: 10, output_tokens: 1 }))
+    expect(t?.model).toBeNull()
+  })
+
   test('the model comes from turn_context and follows a mid-session switch', () => {
     const r = new CodexUsageReader()
     r.push({ type: 'turn_context', payload: { model: 'gpt-5.6-sol' } })

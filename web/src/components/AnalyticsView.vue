@@ -12,6 +12,7 @@
 // says so rather than letting a dollar sign imply a bill.
 import {
   BarChart3,
+  Boxes,
   Coins,
   FileEdit,
   FolderGit2,
@@ -42,6 +43,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAnalyticsPrefs } from '@/composables/useAnalyticsPrefs'
 import type {
   ActivityReport,
+  AgentPresence,
   ConcurrencyPoint,
   EditEntry,
   SessionPeriod,
@@ -63,6 +65,18 @@ const spend = ref<SpendReport | null>(null)
 const activity = ref<ActivityReport | null>(null)
 const concurrency = ref<ConcurrencyPoint[]>([])
 const edits = ref<EditEntry[]>([])
+/** Tools found on this machine, readable or not. Independent of the period filter: an install is
+ *  not something that happened in the last 30 days. */
+const agentTools = ref<AgentPresence[]>([])
+
+/** Why a detected tool is not read. Written as a switch over literal keys rather than an
+ *  interpolated one so the i18n checker can see every string that is actually used. */
+function toolNoteLabel(note: string | undefined): string {
+  if (note === 'encrypted') return t('analytics.toolNoteEncrypted')
+  if (note === 'credits') return t('analytics.toolNoteCredits')
+  if (note === 'opt-in') return t('analytics.toolNoteOptIn')
+  return t('analytics.toolUnread')
+}
 const loading = ref(true)
 const refreshing = ref(false)
 
@@ -70,19 +84,22 @@ async function load() {
   loading.value = true
   const period = analyticsPeriod.value
   try {
-    // In parallel: four independent reads of the same warmed table, so serialising them would just
-    // add three round trips to a page that is otherwise instant.
-    const [s, a, c, e] = await Promise.all([
+    // In parallel: independent reads of the same warmed table, so serialising them would just add
+    // round trips to a page that is otherwise instant. The tool scan is the one that touches disk;
+    // it is capped and cached server-side, and its failure must not take the charts with it.
+    const [s, a, c, e, tools] = await Promise.all([
       api.getSpend(period),
       api.getActivity(period),
       api.getConcurrency(period, period === '24h' ? 60 : 180),
       api.getRecentEdits(120),
+      api.getAgentTools().catch(() => ({ tools: [] })),
     ])
     if (analyticsPeriod.value !== period) return // the window moved on while we were fetching
     spend.value = s
     activity.value = a
     concurrency.value = c.buckets
     edits.value = e.edits
+    agentTools.value = tools.tools
   } catch {
     spend.value = null
     activity.value = null
@@ -351,6 +368,16 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
               {{ spend.totalCostUsd === null ? '—' : formatUsd(spend.totalCostUsd)
               }}<span v-if="spend.unpricedModels.length">+</span>
             </p>
+            <!-- Where the rates came from and how old they are. A dollar total with no price date
+                 is a number nobody can audit, and "downloaded" versus "shipped with this build" is
+                 the difference between last week's rate card and this release's. -->
+            <p class="mt-0.5 text-[10px] text-muted-foreground">
+              {{
+                spend.priceSource === 'catalog'
+                  ? $t('analytics.pricesFetched', { date: spend.pricesAsOf })
+                  : $t('analytics.pricesBundled', { date: spend.pricesAsOf })
+              }}
+            </p>
           </div>
           <div class="rounded-lg border border-border p-3">
             <p class="text-[11px] text-muted-foreground">{{ $t('analytics.sessions') }}</p>
@@ -520,6 +547,43 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
             </p>
             <EditsFeed :project="project" :edits="list" />
           </div>
+        </section>
+
+        <!-- What ELSE is on this machine. Listed even where we cannot read it: silence would read
+             as "AgentHydra looked and found nothing", which is a different claim entirely. -->
+        <section v-if="agentTools.length" class="rounded-lg border border-border p-3">
+          <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
+            <Boxes class="size-3.5" />{{ $t('analytics.toolsFound') }}
+          </h3>
+          <p class="mb-2 text-[11px] text-muted-foreground">{{ $t('analytics.toolsFoundNote') }}</p>
+          <ul class="grid gap-1 sm:grid-cols-2">
+            <li
+              v-for="tool in agentTools"
+              :key="tool.id"
+              class="flex items-center gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-muted/50"
+              :title="tool.roots.join('\n')"
+            >
+              <span class="min-w-0 flex-1 truncate">
+                {{ tool.name }}
+                <span class="ml-1 text-[10px] text-muted-foreground">{{ tool.vendor }}</span>
+              </span>
+              <span class="shrink-0 tabular-nums text-muted-foreground">
+                {{ formatCompact(tool.files) }}<span v-if="tool.truncated">+</span>
+              </span>
+              <!-- A badge, not a colour: "we cannot read this" is a fact that has to be readable
+                   without seeing hue, and it needs its reason next to it. -->
+              <Badge
+                v-if="tool.format === null"
+                variant="outline"
+                class="shrink-0 text-[10px] font-normal"
+              >
+                {{ toolNoteLabel(tool.note) }}
+              </Badge>
+              <Badge v-else variant="secondary" class="shrink-0 text-[10px] font-normal">
+                {{ $t('analytics.toolRead') }}
+              </Badge>
+            </li>
+          </ul>
         </section>
       </template>
     </div>

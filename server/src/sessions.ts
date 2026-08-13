@@ -414,6 +414,7 @@ export async function listSessions(
     return {
       session_id: tf.session_id,
       source: tf.source,
+      tool: toolIdOf(tf),
       title: m.title,
       cwd: m.cwd,
       project: tf.project,
@@ -444,6 +445,19 @@ export async function listSessions(
   }
   out.sort((a, b) => b.last_activity_at - a.last_activity_at)
   return out
+}
+
+/**
+ * Which product wrote a session, as an agent-catalog.ts id.
+ *
+ * `source` names the FORMAT and several products share one — OpenClaude writes Claude Code's JSONL,
+ * TraeX writes Codex's rollouts, Kilo writes OpenCode's SQLite. Falling back to the store that owns
+ * the format keeps every pre-existing row answering exactly what it did before: a `claude` session
+ * with no tool recorded IS Claude Code.
+ */
+function toolIdOf(tf: TranscriptFile): string {
+  if (tf.tool) return tf.tool
+  return tf.source === 'claude' ? 'claude-code' : tf.source
 }
 
 export function sessionMarkKey(source: SessionSource, sessionId: string): string {
@@ -517,6 +531,7 @@ export async function getSession(
   return {
     session_id: tf.session_id,
     source: tf.source,
+    tool: toolIdOf(tf),
     title: m.title,
     cwd: m.cwd,
     project: tf.project,

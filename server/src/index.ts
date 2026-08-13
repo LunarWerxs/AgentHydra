@@ -7,6 +7,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { serveStatic } from 'hono/bun'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
+import { type AgentPresence, detectAgentTools } from './agent-catalog'
 import {
   activityReport,
   analyticsCoverage,
@@ -153,6 +154,7 @@ import {
 } from './notify-settings'
 import { openUi } from './open-ui'
 import { openPortableWindow } from './portable-window.mjs'
+import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import {
   acknowledgeResetEvents,
@@ -933,6 +935,16 @@ const analyticsPeriod = (c: { req: { query: (k: string) => string | undefined } 
   const period: SessionPeriod = isSessionPeriod(raw) ? raw : '30d'
   return periodCutoffMs(period)
 }
+let agentToolsCache: { at: number; tools: AgentPresence[] } | null = null
+const AGENT_TOOLS_TTL_MS = 60_000
+function cachedAgentTools(): AgentPresence[] {
+  const now = Date.now()
+  if (agentToolsCache && now - agentToolsCache.at < AGENT_TOOLS_TTL_MS) return agentToolsCache.tools
+  const tools = detectAgentTools()
+  agentToolsCache = { at: now, tools }
+  return tools
+}
+
 app.get('/api/analytics/spend', (c) => c.json(spendReport({ sinceMs: analyticsPeriod(c) })))
 app.get('/api/analytics/activity', (c) => c.json(activityReport({ sinceMs: analyticsPeriod(c) })))
 app.get('/api/analytics/concurrency', (c) =>
@@ -947,6 +959,13 @@ app.get('/api/analytics/edits', (c) =>
   c.json({ edits: recentEdits(boundedQueryInt(c.req.query('limit'), 200, 1000)) }),
 )
 app.get('/api/analytics', (c) => c.json(analyticsCoverage()))
+/**
+ * Which coding agents are installed on this machine (server/src/agent-catalog.ts).
+ *
+ * Cached for a minute: it is a bounded directory walk, the answer changes when someone installs a
+ * tool, and the UI asks for it on every visit to the analytics tab.
+ */
+app.get('/api/agent-tools', (c) => c.json({ tools: cachedAgentTools() }))
 // Recompute on demand. Bounded by the same wall-clock budget the warm uses, so a click cannot
 // wedge the daemon on a store with thousands of transcripts in it.
 app.post('/api/analytics/refresh', async (c) =>
@@ -2169,6 +2188,13 @@ const server = Bun.serve({
   fetch: app.fetch,
   idleTimeout: 255,
 })
+
+// --- prices (see server/src/price-catalog.ts) --------------------------------------------------
+// Synchronous cache read, then a deferred download if that cache is stale. Placed BEFORE the
+// analytics warm so a restart prices its first scan from last run's catalog rather than from the
+// build's table, and never awaited: a daemon that cannot reach the network still prices every
+// model it shipped knowing about.
+startPriceCatalog()
 
 // --- warm the sessions list (see server/src/sessions.ts warmSessionScanCache) ------------------
 // Deliberately AFTER Bun.serve: parsing transcripts is the slowest thing this daemon does, and the

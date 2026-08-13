@@ -7,7 +7,59 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Prices are downloaded rather than frozen into the build.** A hand-typed price table is correct
+  on the day it is written and decays from then on: providers cut prices, and every model missing
+  from the table was reported as unpriced. AgentHydra now pulls LiteLLM's public price catalogue
+  (about 3,600 models across OpenAI, Anthropic, DeepSeek, xAI, Google, Moonshot and the rest), caches
+  it beside the database, and re-checks it daily. The table shipped with the build is still there
+  and still answers on a first run, an offline machine, or a failed download; a downloaded price
+  simply wins when one is in force. Either way the analytics header now says which it is and how old
+  the rates are, because a dollar figure without its price date is a number nobody can audit.
+
+  Service-tier variants (batch, flex, priority, long-context bands) are deliberately ignored: a
+  stored transcript does not record which tier a request used, so picking one would be a guess
+  dressed as precision.
+
+- **OpenAI models are priced.** GPT-5.6 Sol/Terra/Luna/Cyber, the 5.5, 5.4, 5.3-codex, 5.2, 5.1 and
+  5 families, at published rates. Codex spend now carries a dollar figure instead of a token count,
+  and the cache rates are modelled properly: cached input at a tenth, and cache *writes* free
+  before GPT-5.6 and 1.25x from 5.6 on, which are genuinely different numbers rather than one
+  averaged one.
+
+- **A model routed as `provider/model` prices as the model behind it.** OpenCode records what it
+  routed to (`openai/gpt-5.5`, `deepseek/deepseek-v4-pro`), which missed a table keyed on bare ids
+  even where both sides plainly agreed. The exact id is still tried first. Bedrock and Vertex ids
+  still do not match, which is correct: those are partner-operated with their own pricing.
+
+- **Speculative support for the wider agent ecosystem.** Where a tool keeps its conversations is now
+  a table of about sixty entries rather than three constants, with paths compiled from the registry
+  in [agentsview](https://github.com/kenn-io/agentsview) (MIT), covering Windows, macOS and Linux.
+  Tools that write a format AgentHydra already reads are indexed for real, with full transcripts and
+  analytics: **OpenClaude** (Claude Code's JSONL), **TraeX** (byte-compatible Codex rollouts), and
+  **Kilo, MiMo Code and IcodeMate** (OpenCode's SQLite under other filenames). Sessions now record
+  which *product* wrote them, not only which format, so a fork is not mislabelled as its parent.
+
+  Everything else (Gemini CLI, Copilot, Cursor, Amp, Qwen, Zed, Warp, Goose and some forty more)
+  is **detected and listed** with its store location, file count and last activity, marked as not
+  yet readable, with the reason where there is one (Antigravity and Trae encrypt their conversations;
+  Copilot and the IDE integrations bill credits rather than tokens). Listing them is the point:
+  silence would read as "AgentHydra looked and found nothing", which is a different claim entirely.
+
+  These entries are speculative and bounded by construction. A path that does not exist costs one
+  filesystem check and produces nothing; a format claim that turns out to be wrong yields a store
+  that parses to zero sessions. Neither can affect the three stores that were already supported.
+
 ### Fixed
+
+- **A third of Codex spend was filed under a model that does not exist.** Codex announces the model
+  in one event and the token count in another, and does not guarantee the naming comes first: of
+  4,860 rollouts on the machine this was found on, 2,067 spend tokens before ever naming a model,
+  and 331 billion tokens were landing under a placeholder id called `codex` that no price table
+  could ever match. Those turns are now attributed to the model their own file names moments later,
+  falling back to the model the rest of the conversation used, and only staying unknown when nothing
+  anywhere in the conversation ever said.
 
 - **Codex spend was reported at a fiftieth of the truth.** Codex writes one rollout file per
   execution thread and identifies the owning chat separately, so a single conversation is routinely

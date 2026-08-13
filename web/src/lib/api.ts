@@ -1,6 +1,7 @@
 import type {
   Account,
   ActivityReport,
+  AgentPresence,
   AnalyticsCoverage,
   ArchivedScope,
   AuthType,
@@ -53,6 +54,7 @@ import type {
 export type {
   Account,
   ActivityReport,
+  AgentPresence,
   AnalyticsCoverage,
   ArchivedScope,
   AuthType,
@@ -165,6 +167,9 @@ export const getConcurrency = (period: SessionPeriod = '30d', bucketMinutes = 18
 export const getRecentEdits = (limit = 200) =>
   j<{ edits: EditEntry[] }>(`/api/analytics/edits?limit=${limit}`)
 export const getAnalyticsStatus = () => j<AnalyticsCoverage>('/api/analytics')
+/** Which coding agents are installed here — including ones whose conversations we cannot read yet.
+ *  Listing those is the point: silence would read as "AgentHydra looked and found nothing". */
+export const getAgentTools = () => j<{ tools: AgentPresence[] }>('/api/agent-tools')
 export const refreshAnalytics = () =>
   j<{ scanned: number; skipped: number; failed: number; budgetExhausted: boolean }>(
     '/api/analytics/refresh',

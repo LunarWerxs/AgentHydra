@@ -24,7 +24,7 @@
 
 import { db } from './db'
 import { readOpenCodeUsage } from './opencode-sessions'
-import { priceTokens } from './pricing'
+import { priceSource, pricesAsOf, priceTokens } from './pricing'
 import { streamLines } from './session-search'
 import { decodeProjectKey, listTranscriptFiles, type TranscriptFile } from './transcript'
 import type {
@@ -52,8 +52,11 @@ import { accumulateUsageLine, emptySpend } from './usage-tokens'
  *    execution thread and the transcript index keeps one ROW per conversation, so the totals were
  *    reading a single file out of hundreds. On this machine that was 5,283 rollouts collapsing to
  *    146, and the reported Codex spend was a fraction of the real figure.
+ * 4: Codex turns that spend before their rollout names a model are attributed to that rollout's
+ *    model instead of to a placeholder id. 2,067 of 4,860 rollouts here do this, and the 331B
+ *    tokens involved were landing under a fake model called "codex" that no price table matches.
  */
-export const ANALYTICS_VERSION = 3
+export const ANALYTICS_VERSION = 4
 
 /**
  * Gaps longer than this are not work, they are a lunch break with the window left open.
@@ -289,6 +292,22 @@ async function scanCodexAnalytics(
   out: SessionAnalytics,
 ): Promise<SessionAnalytics> {
   let turn = -1
+  // Turns that spent tokens before their rollout named a model (see CodexTurn.model). Held rather
+  // than dropped or guessed: they are real spend, and the file usually names its model a few lines
+  // later, at which point they are attributed to it retroactively. Anything still unattributed
+  // when the conversation ends falls back to the model the REST of the conversation used, which is
+  // a fact about this conversation rather than an invented id.
+  let unattributed: Array<{
+    input: number
+    cacheRead: number
+    cacheWrite: number
+    output: number
+  }> = []
+  const attribute = (model: string) => {
+    for (const t of unattributed) addTurn(out.tokens, model, t)
+    unattributed = []
+  }
+
   // Every file that belongs to this conversation, each with a FRESH reader: a rollout's token
   // counter is its own running cumulative, so carrying one reader across files would read the next
   // file's opening total as one enormous delta. `prevTs` restarts too, since a gap between two
@@ -317,7 +336,13 @@ async function scanCodexAnalytics(
 
         const t = reader.push(ev)
         if (t) {
-          addTurn(out.tokens, t.model, t)
+          // The day/hour/activity work below is model-independent, so an unnamed turn still lands
+          // on the charts at full weight — only its per-model row waits.
+          if (t.model === null) unattributed.push(t)
+          else {
+            attribute(t.model)
+            addTurn(out.tokens, t.model, t)
+          }
           if (t.ts !== null) {
             const day = dayKey(t.ts)
             // Weighted so the day chart apportions a Codex session the same way it does a Claude one.
@@ -379,7 +404,25 @@ async function scanCodexAnalytics(
       // Unreadable or moved: skip this file, keep the conversation.
     }
   }
+  // Whatever this conversation's other files established, applied to the turns that never named a
+  // model themselves. `codex` only when NOTHING in the conversation ever did — a genuinely unknown
+  // model, reported as unpriced rather than dressed up as one we could bill.
+  if (unattributed.length) attribute(dominantModel(out.tokens) ?? 'codex')
   return out
+}
+
+/** The model carrying the most weighted spend so far, or null when none has any. Weighted rather
+ *  than raw tokens so a model that only ever read cache cannot outvote the one doing the work. */
+function dominantModel(tokens: Record<string, ModelSpend>): string | null {
+  let best: string | null = null
+  let bestWeight = -1
+  for (const [model, spend] of Object.entries(tokens)) {
+    if (spend.weighted > bestWeight) {
+      best = model
+      bestWeight = spend.weighted
+    }
+  }
+  return best
 }
 
 // --- persistence -------------------------------------------------------------------------------
@@ -847,6 +890,11 @@ export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport
     byDay: [...byDay.values()].sort((a, b) => a.key.localeCompare(b.key)),
     byAccount: sortBuckets(byAccount),
     unpricedModels: [...unpriced].sort(),
+    // Where these dollars came from and how old that source is. A cost figure without its price
+    // date is a number nobody can audit, and "downloaded" versus "shipped with the build" is the
+    // difference between last week's rate card and this release's.
+    pricesAsOf: pricesAsOf(),
+    priceSource: priceSource(),
     coverage: analyticsCoverage(),
   }
 }

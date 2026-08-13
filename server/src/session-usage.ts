@@ -19,7 +19,7 @@
 // so a live session still reports fresh numbers with no invalidation logic of its own.
 
 import { statSync } from 'node:fs'
-import { PRICES_AS_OF, priceTokens } from './pricing'
+import { pricesAsOf, priceTokens } from './pricing'
 import { streamLines } from './session-search'
 import { findTranscript, type TranscriptFile } from './transcript'
 import type { RunCost, SessionUsage, SessionUsageStatus } from './types'
@@ -50,7 +50,7 @@ function blank(tf: TranscriptFile, status: SessionUsageStatus): SessionUsage {
     costUsd: null,
     pricedModels: [],
     unpricedModels: [],
-    pricesAsOf: PRICES_AS_OF,
+    pricesAsOf: pricesAsOf(),
   }
 }
 
@@ -102,7 +102,7 @@ export async function sessionUsage(tf: TranscriptFile): Promise<SessionUsage> {
     costUsd: priced.costUsd,
     pricedModels: priced.priced,
     unpricedModels: priced.unpriced,
-    pricesAsOf: PRICES_AS_OF,
+    pricesAsOf: pricesAsOf(),
   })
 }
 
@@ -139,7 +139,7 @@ export async function runCost(item: {
     tokens: blankTokens,
     costUsd: null,
     unpricedModels: [],
-    pricesAsOf: PRICES_AS_OF,
+    pricesAsOf: pricesAsOf(),
     status_reason: 'ok',
   }
 

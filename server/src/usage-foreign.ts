@@ -71,7 +71,17 @@ export function addTurn(
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 export interface CodexTurn {
-  model: string
+  /**
+   * Null until this rollout announces one.
+   *
+   * Codex emits `turn_context` (which names the model) and `token_count` (which carries the
+   * spend) as separate lines, and does NOT guarantee the first of them comes first: measured over
+   * 4,860 rollouts on one machine, 2,067 files spend tokens before ever naming a model, carrying
+   * 331 BILLION tokens between them. Defaulting those to a placeholder id made a third of all
+   * Codex spend land under a fake model called "codex" that no price table will ever match. Null
+   * says "not stated yet" so the caller can attribute it once the file does state it.
+   */
+  model: string | null
   input: number
   cacheRead: number
   cacheWrite: number
@@ -86,7 +96,7 @@ export interface CodexTurn {
  * separately in a `turn_context` event; a per-line pure function would have neither.
  */
 export class CodexUsageReader {
-  private model = 'codex'
+  private model: string | null = null
   private prev = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
 
   /** Feed one parsed JSONL event. Returns this turn's delta, or null when the line carries none. */

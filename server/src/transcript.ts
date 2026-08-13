@@ -1,6 +1,7 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { stat as statAsync } from 'node:fs/promises'
 import { basename, join } from 'node:path'
+import { extraRootsWithFormat } from './agent-catalog'
 import {
   CLAUDE_PROJECTS_ROOT,
   CODEX_ARCHIVED_SESSIONS_ROOT,
@@ -50,6 +51,15 @@ export interface TranscriptFile {
    * by an order of magnitude. Anything totalling a session must read these as well as `path`.
    */
   siblingPaths?: string[]
+  /**
+   * Which PRODUCT wrote this, as an agent-catalog.ts id.
+   *
+   * `source` is the FORMAT — which reader can parse the file — and several products share one.
+   * OpenClaude forked Claude Code and kept its JSONL, so its sessions are `source: 'claude'` and
+   * would otherwise be indistinguishable from Claude Code's on screen. This is the field that says
+   * which tool the user actually ran.
+   */
+  tool?: string
 }
 
 let cache: { at: number; files: TranscriptFile[] } | null = null
@@ -326,15 +336,22 @@ const CODEX_ROLLOUT_GLOB = '**/rollout-*.jsonl'
  *  so a huge store cannot open thousands of handles at once. */
 const INDEX_SCAN_WIDTH = 24
 
-function claudeRecord(rel: string, mtimeMs: number, sizeBytes: number): TranscriptFile {
+function claudeRecord(
+  rel: string,
+  mtimeMs: number,
+  sizeBytes: number,
+  root: string = CLAUDE_PROJECTS_ROOT,
+  tool = 'claude-code',
+): TranscriptFile {
   return {
     session_id: basename(rel).replace(/\.jsonl$/, ''),
     source: 'claude',
-    path: join(CLAUDE_PROJECTS_ROOT, rel),
+    path: join(root, rel),
     project: rel.split(/[\\/]/)[0],
     mtime_ms: mtimeMs,
     size_bytes: sizeBytes,
     archived: false,
+    tool,
   }
 }
 
@@ -353,24 +370,26 @@ function codexRecord(
   sizeBytes: number,
   identity: CodexRolloutIdentity,
   indexed: CodexSessionIndexEntry | undefined,
+  tool = 'codex',
 ): TranscriptFile {
   return {
     session_id: identity.sessionId,
     source: 'codex',
     path: join(root, rel),
-    project: 'codex',
+    project: tool,
     mtime_ms: Math.max(mtimeMs, indexed?.updatedAt ?? 0),
     size_bytes: sizeBytes,
     archived,
     title: indexed?.title,
+    tool,
   }
 }
 
-function openCodeRecords(): TranscriptFile[] {
-  return listOpenCodeSessions().map((session) => ({
+function openCodeRecords(dbPath: string = OPENCODE_DB_PATH, tool = 'opencode'): TranscriptFile[] {
+  return listOpenCodeSessions(dbPath).map((session) => ({
     session_id: session.session_id,
     source: 'opencode' as const,
-    path: OPENCODE_DB_PATH,
+    path: dbPath,
     project: session.project,
     mtime_ms: session.last_activity_at,
     size_bytes: session.size_bytes,
@@ -378,7 +397,41 @@ function openCodeRecords(): TranscriptFile[] {
     title: session.title,
     cwd: session.cwd,
     created_at: session.created_at,
+    tool,
   }))
+}
+
+/**
+ * The stores from the catalog that are NOT one of the three built-ins.
+ *
+ * Each is read with the reader its format names, because that is what "same format" means: an
+ * OpenClaude transcript is a Claude Code transcript, a TraeX rollout is a Codex rollout, and Kilo
+ * is OpenCode's SQLite under another filename. If one of those claims turns out to be wrong the
+ * store simply parses to nothing — the reader either finds records or it does not, and either way
+ * the three original stores are untouched.
+ */
+function extraStoreRecords(): {
+  claude: Array<{ root: string; tool: string }>
+  codex: Array<{ root: string; tool: string; archived: boolean }>
+  openCodeFiles: TranscriptFile[]
+} {
+  const claude = extraRootsWithFormat('claude').map((r) => ({ root: r.root, tool: r.tool.id }))
+  const codex = extraRootsWithFormat('codex').map((r) => ({
+    root: r.root,
+    tool: r.tool.id,
+    archived: r.archived,
+  }))
+  const openCodeFiles: TranscriptFile[] = []
+  for (const r of extraRootsWithFormat('opencode')) {
+    if (!r.tool.dbName) continue
+    try {
+      openCodeFiles.push(...openCodeRecords(join(r.root, r.tool.dbName), r.tool.id))
+    } catch {
+      // A store whose schema is not actually OpenCode's contributes nothing, which is the whole
+      // safety story for a speculative entry.
+    }
+  }
+  return { claude, codex, openCodeFiles }
 }
 
 /** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
@@ -424,20 +477,26 @@ function finishIndex(
 function buildTranscriptIndex(): TranscriptFile[] {
   const now = performance.now()
   const files: TranscriptFile[] = []
-  const claudeGlob = new Bun.Glob(CLAUDE_TRANSCRIPT_GLOB)
-  for (const rel of scanRootSync(claudeGlob, CLAUDE_PROJECTS_ROOT)) {
-    let st: ReturnType<typeof statSync>
-    try {
-      st = statSync(join(CLAUDE_PROJECTS_ROOT, rel))
-    } catch {
-      continue
+  const extra = extraStoreRecords()
+  for (const { root, tool } of [
+    { root: CLAUDE_PROJECTS_ROOT, tool: 'claude-code' },
+    ...extra.claude,
+  ]) {
+    const claudeGlob = new Bun.Glob(CLAUDE_TRANSCRIPT_GLOB)
+    for (const rel of scanRootSync(claudeGlob, root)) {
+      let st: ReturnType<typeof statSync>
+      try {
+        st = statSync(join(root, rel))
+      } catch {
+        continue
+      }
+      files.push(claudeRecord(rel, st.mtimeMs, st.size, root, tool))
     }
-    files.push(claudeRecord(rel, st.mtimeMs, st.size))
   }
 
   const codexSessionIndex = readCodexSessionIndex()
   const subagentPaths = new Map<string, string[]>()
-  const addCodexRoot = (root: string, archived: boolean) => {
+  const addCodexRoot = (root: string, archived: boolean, tool = 'codex') => {
     const glob = new Bun.Glob(CODEX_ROLLOUT_GLOB)
     for (const rel of scanRootSync(glob, root)) {
       const path = join(root, rel)
@@ -469,14 +528,17 @@ function buildTranscriptIndex(): TranscriptFile[] {
           st.size,
           identity,
           codexSessionIndex.get(identity.sessionId),
+          tool,
         ),
       )
     }
   }
   addCodexRoot(CODEX_SESSIONS_ROOT, false)
   addCodexRoot(CODEX_ARCHIVED_SESSIONS_ROOT, true)
+  for (const r of extra.codex) addCodexRoot(r.root, r.archived, r.tool)
 
   files.push(...openCodeRecords())
+  files.push(...extra.openCodeFiles)
   return finishIndex(files, now, subagentPaths)
 }
 
@@ -510,23 +572,30 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   const now = performance.now()
   const files: TranscriptFile[] = []
 
-  const claudeRels = await scanRootAsync(new Bun.Glob(CLAUDE_TRANSCRIPT_GLOB), CLAUDE_PROJECTS_ROOT)
-  const claudeStats = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
-    try {
-      const st = await statAsync(join(CLAUDE_PROJECTS_ROOT, rel))
-      return claudeRecord(rel, st.mtimeMs, st.size)
-    } catch {
-      return null
-    }
-  })
-  for (const record of claudeStats) if (record) files.push(record)
+  const extra = extraStoreRecords()
+  for (const { root, tool } of [
+    { root: CLAUDE_PROJECTS_ROOT, tool: 'claude-code' },
+    ...extra.claude,
+  ]) {
+    const claudeRels = await scanRootAsync(new Bun.Glob(CLAUDE_TRANSCRIPT_GLOB), root)
+    const claudeStats = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
+      try {
+        const st = await statAsync(join(root, rel))
+        return claudeRecord(rel, st.mtimeMs, st.size, root, tool)
+      } catch {
+        return null
+      }
+    })
+    for (const record of claudeStats) if (record) files.push(record)
+  }
 
   const codexSessionIndex = readCodexSessionIndex()
   const subagentPaths = new Map<string, string[]>()
-  for (const [root, archived] of [
-    [CODEX_SESSIONS_ROOT, false],
-    [CODEX_ARCHIVED_SESSIONS_ROOT, true],
-  ] as const) {
+  for (const { root, archived, tool } of [
+    { root: CODEX_SESSIONS_ROOT, archived: false, tool: 'codex' },
+    { root: CODEX_ARCHIVED_SESSIONS_ROOT, archived: true, tool: 'codex' },
+    ...extra.codex,
+  ]) {
     const rels = await scanRootAsync(new Bun.Glob(CODEX_ROLLOUT_GLOB), root)
     const records = await mapPool(rels, INDEX_SCAN_WIDTH, async (rel) => {
       const path = join(root, rel)
@@ -543,6 +612,7 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
           st.size,
           identity,
           codexSessionIndex.get(identity.sessionId),
+          tool,
         )
       } catch {
         return null
@@ -556,6 +626,7 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   }
 
   files.push(...openCodeRecords())
+  files.push(...extra.openCodeFiles)
   return finishIndex(files, now, subagentPaths)
 }
 

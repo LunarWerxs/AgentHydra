@@ -35,6 +35,16 @@ export default {
   costByProject: 'Cost by project',
   unpricedNote:
     'No published price for these, so their tokens are counted but their cost is not. Showing tokens instead of a dollar figure, because zero would be a claim that they were free.',
+  toolsFound: 'Coding tools on this machine',
+  toolsFoundNote:
+    'Where each one keeps its conversations, and whether AgentHydra can read them yet. Counts are files under the store, capped at 1,000.',
+  toolRead: 'read',
+  toolUnread: 'not read yet',
+  toolNoteEncrypted: 'encrypted',
+  toolNoteCredits: 'no token data',
+  toolNoteOptIn: 'set its env var',
+  pricesFetched: 'Rates downloaded {date}',
+  pricesBundled: 'Rates shipped with this build, {date}',
   costByAccount: 'Cost by account',
   accountNote:
     'Only work AgentHydra dispatched: every run records the account it used, so this is known rather than guessed.',

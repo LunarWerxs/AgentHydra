@@ -312,3 +312,78 @@ describe('a Codex conversation is more than one file', () => {
     expect(a.tokens['gpt-5.6-sol']?.input).toBe(300)
   })
 })
+
+describe('a Codex rollout that spends before it names its model', () => {
+  // THE BUG THIS PINS. `turn_context` (which names the model) and `token_count` (which carries the
+  // spend) are separate lines, and the naming one is NOT reliably first: 2,067 of 4,860 rollouts on
+  // the machine this was built against spend tokens beforehand, 331 BILLION of them. Those landed
+  // under a placeholder id — "codex" — which is not a model any price table will ever match, so a
+  // third of all Codex spend showed as unpriced.
+  const tokenLine = (at: string, input: number, output: number) => ({
+    type: 'event_msg',
+    timestamp: at,
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: { input_tokens: input, cached_input_tokens: 0, output_tokens: output },
+      },
+    },
+  })
+  const ctx = (at: string, model: string) => ({
+    type: 'turn_context',
+    timestamp: at,
+    payload: { model },
+  })
+
+  test('the spend is attributed to the model the file names LATER, not to a placeholder', async () => {
+    const path = transcript([
+      tokenLine('2026-08-10T10:00:00.000Z', 400, 40),
+      ctx('2026-08-10T10:01:00.000Z', 'gpt-5.6-sol'),
+      tokenLine('2026-08-10T10:01:00.000Z', 900, 90),
+    ])
+    const out = await scanSessionAnalytics(path, 'codex', 'sess')
+    expect(out.tokens['gpt-5.6-sol']?.input).toBe(900)
+    expect(out.tokens.codex).toBeUndefined()
+  })
+
+  test('a mid-file model switch does not retro-label the earlier turns', async () => {
+    // Only the turns BEFORE the first naming are ambiguous. Once a file has said what it is
+    // running, a later switch applies from that point on, exactly as it did before.
+    const path = transcript([
+      tokenLine('2026-08-10T10:00:00.000Z', 100, 10),
+      ctx('2026-08-10T10:01:00.000Z', 'gpt-5.6-sol'),
+      tokenLine('2026-08-10T10:01:00.000Z', 300, 30),
+      ctx('2026-08-10T10:02:00.000Z', 'gpt-5.6-terra'),
+      tokenLine('2026-08-10T10:02:00.000Z', 700, 70),
+    ])
+    const out = await scanSessionAnalytics(path, 'codex', 'sess')
+    expect(out.tokens['gpt-5.6-sol']?.input).toBe(300)
+    expect(out.tokens['gpt-5.6-terra']?.input).toBe(400)
+  })
+
+  test('a file that never names one borrows the model the CONVERSATION used', async () => {
+    const named = transcript([
+      ctx('2026-08-10T10:00:00.000Z', 'gpt-5.6-sol'),
+      tokenLine('2026-08-10T10:00:00.000Z', 1000, 100),
+    ])
+    const silent = transcript([tokenLine('2026-08-10T10:01:00.000Z', 250, 25)])
+    const out = await scanSessionAnalytics(named, 'codex', 'sess', [silent])
+    expect(out.tokens['gpt-5.6-sol']?.input).toBe(1250)
+  })
+
+  test('when NOTHING in the conversation names a model it stays unknown, not invented', async () => {
+    // The honest outcome: an id no price table matches, reported as unpriced. Better than picking
+    // a plausible model and printing a dollar figure nobody can check.
+    const path = transcript([tokenLine('2026-08-10T10:00:00.000Z', 500, 50)])
+    const out = await scanSessionAnalytics(path, 'codex', 'sess')
+    expect(out.tokens.codex?.input).toBe(500)
+  })
+
+  test('an unnamed turn still lands on the day and hour charts at full weight', async () => {
+    // The per-model row is what waits; the timeline is not model-dependent and must not thin out.
+    const path = transcript([tokenLine('2026-08-10T10:00:00.000Z', 500, 50)])
+    const out = await scanSessionAnalytics(path, 'codex', 'sess')
+    expect(Object.values(out.days).reduce((a, b) => a + b, 0)).toBeGreaterThan(0)
+    expect(Object.values(out.hours).reduce((a, b) => a + b, 0)).toBe(1)
+  })
+})
