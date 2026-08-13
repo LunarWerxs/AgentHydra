@@ -254,18 +254,48 @@ const toolBuckets = computed(() =>
 const toolRows = computed(() => toolBuckets.value.slice(0, 10))
 const toolMore = computed(() => toolBuckets.value.slice(10))
 
-const dayPoints = computed(() =>
-  (spend.value?.byDay ?? []).map((b) => ({
-    key: b.key,
-    // "12 Aug" rather than the ISO key: the axis has two labels on it and they are for orienting,
-    // not for reading a date off.
-    label: new Date(`${b.key}T00:00:00`).toLocaleDateString(undefined, {
-      day: 'numeric',
-      month: 'short',
-    }),
-    value: b.costUsd ?? 0,
-  })),
-)
+/**
+ * Cost over time, by day or by month.
+ *
+ * ROLLED UP TO MONTHS PAST A THRESHOLD, because a bar per day stops being a chart and becomes a
+ * texture: a year is 365 bars a couple of pixels wide, and nobody reads a single day out of that.
+ * The threshold is on the number of buckets rather than on the selected window, so a sparse "all
+ * time" over three weeks still shows its days and a dense one does not.
+ */
+const MAX_DAY_BARS = 70
+
+const groupedByMonth = computed(() => (spend.value?.byDay ?? []).length > MAX_DAY_BARS)
+
+const dayPoints = computed(() => {
+  const days = spend.value?.byDay ?? []
+  if (!groupedByMonth.value)
+    return days.map((b) => ({
+      key: b.key,
+      // "12 Aug" rather than the ISO key: the axis has two labels on it and they are for orienting,
+      // not for reading a date off.
+      label: new Date(`${b.key}T00:00:00`).toLocaleDateString(undefined, {
+        day: 'numeric',
+        month: 'short',
+      }),
+      value: b.costUsd ?? 0,
+    }))
+  // Summed, not averaged: the question a cost chart answers is "what did that month cost".
+  const months = new Map<string, number>()
+  for (const b of days) {
+    const month = b.key.slice(0, 7)
+    months.set(month, (months.get(month) ?? 0) + (b.costUsd ?? 0))
+  }
+  return [...months.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([key, value]) => ({
+      key,
+      label: new Date(`${key}-01T00:00:00`).toLocaleDateString(undefined, {
+        month: 'short',
+        year: '2-digit',
+      }),
+      value,
+    }))
+})
 
 const concurrencyPoints = computed(() =>
   concurrency.value.map((p) => ({ at: p.at, value: p.sessions })),
@@ -410,7 +440,9 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
 
         <section class="rounded-lg border border-border p-3">
           <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium">
-            <Coins class="size-3.5" />{{ $t('analytics.costByDay') }}
+            <Coins class="size-3.5" />{{
+              groupedByMonth ? $t('analytics.costByMonth') : $t('analytics.costByDay')
+            }}
           </h3>
           <TimeBars
             :points="dayPoints"
@@ -418,7 +450,7 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
             :axis-format="shortUsd"
             :value-label="$t('analytics.tipCost')"
             :share-label="$t('analytics.tipShareOfWindow')"
-            :peak-label="$t('analytics.tipBusiestDay')"
+            :peak-label="groupedByMonth ? $t('analytics.tipBusiestMonth') : $t('analytics.tipBusiestDay')"
           />
         </section>
 

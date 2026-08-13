@@ -74,12 +74,19 @@ export type QueueStatus =
   | 'canceled'
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan'
 
-/** A supported conversation store. Claude/Codex are JSONL; OpenCode is its shared SQLite DB. */
-export type SessionSource = 'claude' | 'codex' | 'opencode'
+/**
+ * A supported conversation store, named by the READER that understands it.
+ *
+ * Claude/Codex are JSONL and OpenCode is its shared SQLite DB. `foreign` is the fourth: one reader
+ * with a small adapter per tool (Grok, Kimi, VS Code Copilot, Copilot CLI, Zed), which share no
+ * format with each other but do share the one thing that matters here — a list of conversations
+ * that can be read, and no per-token usage to account for. See server/src/foreign-sessions.ts.
+ */
+export type SessionSource = 'claude' | 'codex' | 'opencode' | 'foreign'
 export type SessionSourceScope = 'all' | SessionSource
 
 export function isSessionSource(v: unknown): v is SessionSource {
-  return v === 'claude' || v === 'codex' || v === 'opencode'
+  return v === 'claude' || v === 'codex' || v === 'opencode' || v === 'foreign'
 }
 
 /** A session discovered in one of the supported local conversation stores. */

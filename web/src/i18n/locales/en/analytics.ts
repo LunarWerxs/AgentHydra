@@ -31,6 +31,7 @@ export default {
   providerDetail: '{sessions} session(s) · {cost}',
   // --- charts ---
   costByDay: 'Cost by day',
+  costByMonth: 'Cost by month',
   costByModel: 'Cost by model',
   costByProject: 'Cost by project',
   unpricedNote:
@@ -60,6 +61,7 @@ export default {
   tipHourTotal: '{hour}:00 total',
   tipCost: 'Cost',
   tipShareOfWindow: 'Share of window',
+  tipBusiestMonth: 'Busiest month',
   tipBusiestDay: 'Busiest day',
   tipSessions: 'Sessions',
   tipChange: 'Change',

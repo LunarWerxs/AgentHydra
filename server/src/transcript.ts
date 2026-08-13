@@ -9,6 +9,7 @@ import {
   CODEX_SESSIONS_ROOT,
   OPENCODE_DB_PATH,
 } from './config'
+import { listForeignSessions, readForeignSession } from './foreign-sessions'
 import { listOpenCodeSessions, readOpenCodeSession } from './opencode-sessions'
 import type { SessionSource, TailEvent, TailResult } from './types'
 
@@ -330,29 +331,102 @@ async function scanRootAsync(glob: Bun.Glob, cwd: string): Promise<string[]> {
   return out
 }
 
-const CLAUDE_TRANSCRIPT_GLOB = '*/*.jsonl'
+/**
+ * Every JSONL under a Claude store, not just the top level.
+ *
+ * WHY IT IS NOT ONE LEVEL DEEP ANY MORE. A Task-tool subagent gets its OWN transcript, at
+ * `<project>/<parent-session>/subagents/agent-<id>.jsonl` (one level deeper again for workflows),
+ * carrying its parent's session id and its own `usage` blocks. Those are separate API calls and
+ * separate money. Measured on this machine: 1,229 top-level transcripts hold 64.5 BILLION tokens
+ * and 16,552 subagent transcripts hold another 89.8 billion, so the old glob was showing 42% of
+ * real Claude spend and calling it the total.
+ *
+ * They are still not session ROWS — a subagent is an implementation detail of the turn that spawned
+ * it, and listing thousands of them would bury the conversations. They attach to their parent as
+ * siblings, which only a total ever reads. See claudeParentId.
+ */
+const CLAUDE_TRANSCRIPT_GLOB = '**/*.jsonl'
 const CODEX_ROLLOUT_GLOB = '**/rollout-*.jsonl'
 /** How many files the async build stats/reads at once. Wide enough to keep the disk busy, bounded
  *  so a huge store cannot open thousands of handles at once. */
 const INDEX_SCAN_WIDTH = 24
 
-function claudeRecord(
-  rel: string,
-  mtimeMs: number,
-  sizeBytes: number,
-  root: string = CLAUDE_PROJECTS_ROOT,
-  tool = 'claude-code',
-): TranscriptFile {
+/** One claude-format store to scan: where it is, how its files are laid out, and whose it is. */
+interface ClaudeStore {
+  root: string
+  tool: string
+  glob: string
+  idFrom: 'basename' | 'parent-dir'
+  idPrefix: string
+}
+
+/** `<project>/<session-id>.jsonl` — Claude Code's own layout, and every fork's. */
+const CLAUDE_STORE_DEFAULTS = {
+  glob: CLAUDE_TRANSCRIPT_GLOB,
+  idFrom: 'basename' as const,
+  idPrefix: '',
+}
+
+/**
+ * The session id in a matched path.
+ *
+ * Two rules because two layouts exist. Claude Code names the FILE after the session, so the
+ * basename is the id. Cowork writes every run to a fixed `audit.jsonl` inside a directory named
+ * after the session, so the id is that directory — reading the basename there would give every
+ * Cowork session the id "audit" and collapse the whole store into one row.
+ */
+function claudeSessionId(rel: string, store: ClaudeStore): string {
+  const parts = rel.split(/[\\/]/)
+  const raw =
+    store.idFrom === 'parent-dir'
+      ? (parts[parts.length - 2] ?? '')
+      : (parts[parts.length - 1] ?? '').replace(/\.jsonl$/, '')
+  return store.idPrefix && raw.startsWith(store.idPrefix) ? raw.slice(store.idPrefix.length) : raw
+}
+
+/**
+ * The session a nested transcript belongs to, or null when the path IS a session's own transcript.
+ *
+ * Claude Code nests a subagent under the session that spawned it, so the parent id is simply the
+ * directory below the project. Returning null for a two-segment path is what keeps a real session a
+ * row rather than a sibling of itself.
+ */
+export function claudeParentId(rel: string, store: ClaudeStore): string | null {
+  const parts = rel.split(/[\\/]/)
+  // `<project>/<session>.jsonl` for the default layout; a store with its own pattern (Cowork) is
+  // never nested, so its depth is whatever that pattern produced and always a session.
+  if (store.glob !== CLAUDE_TRANSCRIPT_GLOB || parts.length <= 2) return null
+  return parts[1] ?? null
+}
+
+function claudeRecord(rel: string, mtimeMs: number, sizeBytes: number, store: ClaudeStore) {
   return {
-    session_id: basename(rel).replace(/\.jsonl$/, ''),
-    source: 'claude',
-    path: join(root, rel),
-    project: rel.split(/[\\/]/)[0],
+    session_id: claudeSessionId(rel, store),
+    source: 'claude' as const,
+    path: join(store.root, rel),
+    project: rel.split(/[\\/]/)[0] ?? store.tool,
     mtime_ms: mtimeMs,
     size_bytes: sizeBytes,
     archived: false,
-    tool,
+    tool: store.tool,
   }
+}
+
+/** Every claude-format store on this machine: Claude Code's own, then the catalog's. */
+function claudeStores(): ClaudeStore[] {
+  const stores: ClaudeStore[] = [
+    { root: CLAUDE_PROJECTS_ROOT, tool: 'claude-code', ...CLAUDE_STORE_DEFAULTS },
+  ]
+  for (const r of extraRootsWithFormat('claude')) {
+    stores.push({
+      root: r.root,
+      tool: r.tool.id,
+      glob: r.tool.glob ?? CLAUDE_STORE_DEFAULTS.glob,
+      idFrom: r.tool.idFrom ?? CLAUDE_STORE_DEFAULTS.idFrom,
+      idPrefix: r.tool.idPrefix ?? CLAUDE_STORE_DEFAULTS.idPrefix,
+    })
+  }
+  return stores
 }
 
 /** The rollout uuid embedded in the filename — the identity fallback when the first record does
@@ -410,12 +484,33 @@ function openCodeRecords(dbPath: string = OPENCODE_DB_PATH, tool = 'opencode'): 
  * store simply parses to nothing — the reader either finds records or it does not, and either way
  * the three original stores are untouched.
  */
+/** Every foreign store's sessions, as index rows. One adapter per tool; see foreign-sessions.ts. */
+function foreignRecords(): TranscriptFile[] {
+  const out: TranscriptFile[] = []
+  for (const r of extraRootsWithFormat('foreign')) {
+    for (const s of listForeignSessions(r.tool.id, r.root)) {
+      out.push({
+        session_id: s.session_id,
+        source: 'foreign',
+        path: s.path,
+        project: s.project,
+        mtime_ms: s.last_activity_at,
+        size_bytes: s.size_bytes,
+        archived: s.archived,
+        title: s.title,
+        cwd: s.cwd,
+        created_at: s.created_at,
+        tool: r.tool.id,
+      })
+    }
+  }
+  return out
+}
+
 function extraStoreRecords(): {
-  claude: Array<{ root: string; tool: string }>
   codex: Array<{ root: string; tool: string; archived: boolean }>
   openCodeFiles: TranscriptFile[]
 } {
-  const claude = extraRootsWithFormat('claude').map((r) => ({ root: r.root, tool: r.tool.id }))
   const codex = extraRootsWithFormat('codex').map((r) => ({
     root: r.root,
     tool: r.tool.id,
@@ -431,7 +526,7 @@ function extraStoreRecords(): {
       // safety story for a speculative entry.
     }
   }
-  return { claude, codex, openCodeFiles }
+  return { codex, openCodeFiles }
 }
 
 /** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
@@ -449,7 +544,25 @@ function extraStoreRecords(): {
  * settles — and server/src/analytics.ts takes the LARGEST of them rather than the sum, so even that
  * cannot double count.
  */
-function finishIndex(files: TranscriptFile[], at: number): TranscriptFile[] {
+/** One session can spawn thousands of subagents; capped so a runaway fan-out cannot put an
+ *  unbounded array on an index row. */
+const MAX_CHILD_PATHS = 4000
+
+function rememberChild(map: Map<string, string[]>, sessionId: string, path: string): void {
+  const list = map.get(sessionId)
+  if (!list) {
+    map.set(sessionId, [path])
+    return
+  }
+  if (list.length < MAX_CHILD_PATHS) list.push(path)
+}
+
+function finishIndex(
+  files: TranscriptFile[],
+  at: number,
+  /** Claude subagent transcripts, by the session that spawned them. Their spend is the parent's. */
+  claudeChildren?: Map<string, string[]>,
+): TranscriptFile[] {
   const unique = new Map<string, TranscriptFile>()
   const siblings = new Map<string, string[]>()
   for (const file of files) {
@@ -465,6 +578,11 @@ function finishIndex(files: TranscriptFile[], at: number): TranscriptFile[] {
     // Only the OTHERS: `path` is already read by every caller, and listing it twice would double
     // that file's tokens.
     const rest = (siblings.get(key) ?? []).filter((p) => p !== file.path)
+    // A Claude session's subagent transcripts are separate API calls and separate money, so they
+    // join the files a total must read. Safe to ADD here, unlike Codex's rollouts, because every
+    // record carries its own request id and the usage parser charges a request once.
+    if (file.source === 'claude')
+      for (const p of claudeChildren?.get(file.session_id) ?? []) if (p !== file.path) rest.push(p)
     return rest.length ? { ...file, siblingPaths: rest } : file
   })
   cache = { at, files: result }
@@ -475,19 +593,21 @@ function buildTranscriptIndex(): TranscriptFile[] {
   const now = performance.now()
   const files: TranscriptFile[] = []
   const extra = extraStoreRecords()
-  for (const { root, tool } of [
-    { root: CLAUDE_PROJECTS_ROOT, tool: 'claude-code' },
-    ...extra.claude,
-  ]) {
-    const claudeGlob = new Bun.Glob(CLAUDE_TRANSCRIPT_GLOB)
-    for (const rel of scanRootSync(claudeGlob, root)) {
+  const claudeChildren = new Map<string, string[]>()
+  for (const store of claudeStores()) {
+    for (const rel of scanRootSync(new Bun.Glob(store.glob), store.root)) {
+      const parent = claudeParentId(rel, store)
+      if (parent) {
+        rememberChild(claudeChildren, parent, join(store.root, rel))
+        continue
+      }
       let st: ReturnType<typeof statSync>
       try {
-        st = statSync(join(root, rel))
+        st = statSync(join(store.root, rel))
       } catch {
         continue
       }
-      files.push(claudeRecord(rel, st.mtimeMs, st.size, root, tool))
+      files.push(claudeRecord(rel, st.mtimeMs, st.size, store))
     }
   }
 
@@ -532,7 +652,8 @@ function buildTranscriptIndex(): TranscriptFile[] {
 
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
-  return finishIndex(files, now)
+  files.push(...foreignRecords())
+  return finishIndex(files, now, claudeChildren)
 }
 
 /**
@@ -552,15 +673,19 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   const files: TranscriptFile[] = []
 
   const extra = extraStoreRecords()
-  for (const { root, tool } of [
-    { root: CLAUDE_PROJECTS_ROOT, tool: 'claude-code' },
-    ...extra.claude,
-  ]) {
-    const claudeRels = await scanRootAsync(new Bun.Glob(CLAUDE_TRANSCRIPT_GLOB), root)
-    const claudeStats = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
+  const claudeChildren = new Map<string, string[]>()
+  for (const store of claudeStores()) {
+    const claudeRels = await scanRootAsync(new Bun.Glob(store.glob), store.root)
+    const sessionRels: string[] = []
+    for (const rel of claudeRels) {
+      const parent = claudeParentId(rel, store)
+      if (parent) rememberChild(claudeChildren, parent, join(store.root, rel))
+      else sessionRels.push(rel)
+    }
+    const claudeStats = await mapPool(sessionRels, INDEX_SCAN_WIDTH, async (rel) => {
       try {
-        const st = await statAsync(join(root, rel))
-        return claudeRecord(rel, st.mtimeMs, st.size, root, tool)
+        const st = await statAsync(join(store.root, rel))
+        return claudeRecord(rel, st.mtimeMs, st.size, store)
       } catch {
         return null
       }
@@ -601,7 +726,8 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
 
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
-  return finishIndex(files, now)
+  files.push(...foreignRecords())
+  return finishIndex(files, now, claudeChildren)
 }
 
 let indexBuild: Promise<TranscriptFile[]> | null = null
@@ -955,6 +1081,20 @@ export async function tailTranscript(
       cwd: opts.cwd ?? '',
       events: [],
       error: 'transcript not found',
+    }
+  }
+  if (tf.source === 'foreign') {
+    // Each adapter returns the whole conversation; these stores are small enough that a windowed
+    // read would add a code path for no gain.
+    const events = readForeignSession(tf.tool ?? '', tf.path)
+      .filter(keep)
+      .slice(-limit)
+    return {
+      session_id: sessionId,
+      source: tf.source,
+      title: opts.title ?? tf.title ?? sessionId,
+      cwd: opts.cwd ?? tf.cwd ?? '',
+      events,
     }
   }
   if (tf.source === 'opencode') {

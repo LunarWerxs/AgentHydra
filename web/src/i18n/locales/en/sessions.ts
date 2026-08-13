@@ -35,6 +35,7 @@ export default {
   sourceAll: 'All sources',
   sourceClaude: 'Claude',
   sourceCodex: 'Codex',
+  sourceOther: 'Other tools',
   sourceOpenCode: 'OpenCode',
   readOnlySource: '{source} sessions are read-only here. Carry this one on in {source} itself.',
   filterInstance: 'Instance',

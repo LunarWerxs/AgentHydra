@@ -19,6 +19,7 @@
 // The HTML is produced by escaping first and assembling tags after, the same property the web
 // renderer holds (web/src/lib/markdown.ts): every tag in the output is one this file wrote.
 
+import { readForeignSession } from './foreign-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
 import { redactSecrets, scanSecrets } from './secrets'
 import { streamLines } from './session-search'
@@ -66,6 +67,10 @@ async function readAllEvents(
   sessionId: string,
   thinking = false,
 ): Promise<TailEvent[]> {
+  if (source === 'foreign') {
+    const tf = findTranscript(sessionId, 'foreign')
+    return tf ? readForeignSession(tf.tool ?? '', tf.path) : []
+  }
   if (source === 'opencode') return readOpenCodeSession(sessionId)?.events ?? []
   const events: TailEvent[] = []
   for await (const line of streamLines(path)) {

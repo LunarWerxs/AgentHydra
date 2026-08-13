@@ -64,6 +64,22 @@ export interface AgentTool {
   format: StoreFormat | null
   /** For `opencode`-format tools: the SQLite file inside the root. */
   dbName?: string
+  /**
+   * Transcript glob under the root, when the tool does not use its format's usual layout.
+   *
+   * Claude Code is `<project>/<session-id>.jsonl` and that is the default. Cowork writes the very
+   * same records, but one sandbox directory deep and under a fixed filename, so it needs its own
+   * pattern rather than its own parser.
+   */
+  glob?: string
+  /**
+   * Where the session id lives in a matched path. 'basename' (the default) is the filename without
+   * its extension; 'parent-dir' is the directory holding it, which is what a store using a fixed
+   * transcript filename needs.
+   */
+  idFrom?: 'basename' | 'parent-dir'
+  /** Stripped from the front of an extracted session id. Cowork's directories are `local_<uuid>`. */
+  idPrefix?: string
   /** Shown beside a detected-but-unreadable tool, so "why not?" has an answer. */
   note?: string
 }
@@ -112,6 +128,26 @@ export const AGENT_TOOLS: AgentTool[] = [
     dirs: ['.trae/cli/sessions', '.trae/cli/archived_sessions'],
     archivedDirs: ['.trae/cli/archived_sessions'],
     format: 'codex',
+  },
+  {
+    // Cowork runs Claude Code inside a sandbox and keeps the run's own transcript at
+    // `<outer>/<inner>/local_<id>/audit.jsonl`. The RECORDS are Claude Code's exactly: `type:
+    // assistant` with `message.model`, `message.id` and a full `usage` block, 6,972 of them on the
+    // machine this was written against. So it needs a path pattern, not a parser.
+    id: 'cowork',
+    name: 'Claude Cowork',
+    vendor: 'Anthropic',
+    envVar: 'COWORK_DIR',
+    dirs: [
+      'Library/Application Support/Claude/local-agent-mode-sessions',
+      '.config/Claude/local-agent-mode-sessions',
+      'AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/local-agent-mode-sessions',
+      'AppData/Roaming/Claude/local-agent-mode-sessions',
+    ],
+    format: 'claude',
+    glob: '*/*/local_*/audit.jsonl',
+    idFrom: 'parent-dir',
+    idPrefix: 'local_',
   },
   {
     id: 'opencode',
@@ -170,7 +206,7 @@ export const AGENT_TOOLS: AgentTool[] = [
     vendor: 'GitHub',
     envVar: 'COPILOT_DIR',
     dirs: ['.copilot'],
-    format: null,
+    format: 'foreign',
     note: 'credits',
   },
   {
@@ -211,7 +247,7 @@ export const AGENT_TOOLS: AgentTool[] = [
     vendor: 'Moonshot',
     envVar: 'KIMI_DIR',
     dirs: ['.kimi/sessions', '.kimi-code/sessions'],
-    format: null,
+    format: 'foreign',
   },
   {
     id: 'grok',
@@ -219,7 +255,7 @@ export const AGENT_TOOLS: AgentTool[] = [
     vendor: 'xAI',
     envVar: 'GROK_DIR',
     dirs: ['.grok/sessions'],
-    format: null,
+    format: 'foreign',
   },
   {
     id: 'deepseek-tui',
@@ -227,19 +263,6 @@ export const AGENT_TOOLS: AgentTool[] = [
     vendor: 'DeepSeek',
     envVar: 'DEEPSEEK_TUI_SESSIONS_DIR',
     dirs: ['.codewhale/sessions', '.deepseek/sessions'],
-    format: null,
-  },
-  {
-    id: 'cowork',
-    name: 'Claude Cowork',
-    vendor: 'Anthropic',
-    envVar: 'COWORK_DIR',
-    dirs: [
-      'Library/Application Support/Claude/local-agent-mode-sessions',
-      '.config/Claude/local-agent-mode-sessions',
-      'AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/local-agent-mode-sessions',
-      'AppData/Roaming/Claude/local-agent-mode-sessions',
-    ],
     format: null,
   },
   {
@@ -278,7 +301,7 @@ export const AGENT_TOOLS: AgentTool[] = [
       '.config/Code - Insiders/User',
       '.config/VSCodium/User',
     ],
-    format: null,
+    format: 'foreign',
     note: 'credits',
   },
   {
@@ -343,7 +366,7 @@ export const AGENT_TOOLS: AgentTool[] = [
     vendor: 'Zed Industries',
     envVar: 'ZED_DIR',
     dirs: ['Library/Application Support/Zed', '.local/share/zed', 'AppData/Local/Zed'],
-    format: null,
+    format: 'foreign',
   },
   {
     id: 'goose',

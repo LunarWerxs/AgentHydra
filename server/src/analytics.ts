@@ -201,6 +201,10 @@ export async function scanSessionAnalytics(
     }
     return out
   }
+  // Not one of these stores records what a turn cost — Copilot bills credits and never writes a
+  // token count, and Grok, Kimi and Zed simply do not persist one. So a foreign session is listed
+  // and readable and contributes nothing to the spend charts. A zero would claim it was free.
+  if (source === 'foreign') return out
   if (source === 'codex') return scanCodexAnalytics([path, ...siblingPaths], out)
 
   const spend = emptySpend()
@@ -212,7 +216,12 @@ export async function scanSessionAnalytics(
   let turn = -1
   let streak = 0
 
-  for await (const raw of streamLines(path)) {
+  // The session's own transcript FIRST, then every subagent it spawned. A Task subagent makes its
+  // own API calls into its own file, and those files hold 89.8B tokens against the top level's
+  // 64.5B on this machine — leaving them out reported 42% of real Claude spend as the total.
+  // Summing is safe here in a way it is not for Codex: every record carries its own request id and
+  // `seen` is shared across the files, so nothing can be charged twice.
+  for await (const raw of streamSessionLines(path, siblingPaths)) {
     const line = raw.trim()
     if (!line) continue
 
@@ -234,7 +243,8 @@ export async function scanSessionAnalytics(
     }
 
     // Everything below needs the parsed event. Skip lines that cannot carry one rather than
-    // parsing every line twice.
+    // parsing every line twice. A subagent's tool use IS the parent's work and counts; its edits
+    // are attributed to the parent's turn index, which is the only turn a reader can jump to.
     if (
       !line.includes('"tool_use"') &&
       !line.includes('"tool_result"') &&
@@ -287,6 +297,24 @@ export async function scanSessionAnalytics(
 
   out.tokens = spend.byModel
   return out
+}
+
+/**
+ * Every line of a session: its own transcript, then each of the extra files it owns.
+ *
+ * One generator rather than a loop per file so the scan body stays a single pass over "lines of
+ * this session". A file that vanished (Claude Code prunes old subagent transcripts) is skipped;
+ * losing the whole session over one missing child would be a far larger error than the child.
+ */
+async function* streamSessionLines(path: string, siblingPaths: string[]): AsyncGenerator<string> {
+  for await (const line of streamLines(path)) yield line
+  for (const extra of siblingPaths) {
+    try {
+      for await (const line of streamLines(extra)) yield line
+    } catch {
+      // gone between the index build and now
+    }
+  }
 }
 
 /**

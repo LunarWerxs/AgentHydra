@@ -33,6 +33,30 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   even where both sides plainly agreed. The exact id is still tried first. Bedrock and Vertex ids
   still do not match, which is correct: those are partner-operated with their own pricing.
 
+- **Five more tools are read, not just detected.** Each got an adapter built against real files
+  rather than a guessed schema:
+
+  **Claude Cowork** turned out to be the easiest and the biggest: it runs Claude Code inside a
+  sandbox and keeps the run's own transcript at `local_<id>/audit.jsonl`, and those records are
+  Claude Code's exactly, model id, message id and a full usage block included. So it needed a path
+  pattern, not a parser, and its sessions arrive with full transcripts, costs and analytics like any
+  other Claude session.
+
+  **Grok**, **Kimi**, **VS Code Copilot**, **Copilot CLI** and **Zed** share nothing with those
+  three stores or with each other, but they do share the one thing that matters: a list of
+  conversations that can be read, and no per-token usage to account for. They get one new reader
+  between them and a small adapter each. Their sessions are listed, readable, searchable and
+  exportable, and contribute nothing to the spend charts, because none of these tools records what
+  a turn cost. Copilot bills credits and never writes a token count at all. A zero there would be a
+  claim the work was free.
+
+  Copilot CLI is the honest exception even among those: it stores state and checkpoints but no
+  conversation, so its sessions carry everything the store does record (repository, branch, folder,
+  both timestamps) and open to its checkpoint list rather than to a transcript.
+
+  A session row now shows which PRODUCT wrote it rather than which format it happens to share, so a
+  Grok chat is labelled Grok and a Cowork run is not filed under Claude Code.
+
 - **Speculative support for the wider agent ecosystem.** Where a tool keeps its conversations is now
   a table of about sixty entries rather than three constants, with paths compiled from the registry
   in [agentsview](https://github.com/kenn-io/agentsview) (MIT), covering Windows, macOS and Linux.
@@ -64,6 +88,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   could ever match. Those turns are now attributed to the model their own file names moments later,
   falling back to the model the rest of that rollout used, and only staying unknown when nothing in
   it ever said.
+
+- **Claude spend was also UNDERSTATED, by more than half, and for a different reason.** A Task-tool
+  subagent gets its own transcript, nested under the session that spawned it, and makes its own API
+  calls with its own usage blocks. The index only ever globbed one level deep, so none of it was
+  counted. Measured here: 1,229 top-level transcripts hold 64.5 billion tokens and **16,552 subagent
+  transcripts hold another 89.8 billion**, so the totals were reporting 42% of real Claude spend.
+
+  Those files now attach to the session that spawned them and are read as part of it. They are still
+  not session rows: a subagent is an implementation detail of the turn behind it, and listing
+  thousands of them would bury the conversations. Summing them is safe in a way it explicitly is not
+  for Codex, because every Claude record carries its own request id and the duplicate check below is
+  shared across all of a session's files.
+
+- **A long window charts by month instead of by day.** Past seventy bars a day-by-day chart stops
+  being readable and becomes a texture. The rollup keys off how many buckets there actually are, so
+  a sparse "all time" still shows its days.
 
 - **Claude spend was overstated by 57%, since long before this cycle.** Claude Code does not write
   one transcript record per assistant reply. It writes one PER CONTENT BLOCK, and stamps the same

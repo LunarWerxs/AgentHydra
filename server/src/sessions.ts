@@ -1,4 +1,5 @@
 import { db } from './db'
+import { readForeignSession } from './foreign-sessions'
 import { sessionMetaMap } from './instance-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
 import {
@@ -149,8 +150,17 @@ function scanMeta(tf: TranscriptFile): Promise<ScannedMeta> {
 }
 
 async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> {
-  if (tf.source === 'opencode') {
-    const content = readOpenCodeSession(tf.session_id)
+  // Both of these carry their own title, cwd and timestamps on the index row, because their stores
+  // record them as fields rather than leaving them to be inferred from the conversation.
+  if (tf.source === 'opencode' || tf.source === 'foreign') {
+    const events =
+      tf.source === 'foreign'
+        ? readForeignSession(tf.tool ?? '', tf.path)
+        : (readOpenCodeSession(tf.session_id)?.events ?? [])
+    const content =
+      tf.source === 'foreign'
+        ? { events, messageCount: events.length }
+        : (readOpenCodeSession(tf.session_id) ?? { events, messageCount: 0 })
     const textEvents = (content?.events ?? []).filter((event) => event.kind === 'text')
     const first = textEvents[0]
     const last = textEvents.at(-1)

@@ -185,13 +185,42 @@ const SOURCE_LABEL: Record<SessionSourceScope, string> = {
   claude: 'sessions.sourceClaude',
   codex: 'sessions.sourceCodex',
   opencode: 'sessions.sourceOpenCode',
+  foreign: 'sessions.sourceOther',
 }
 const sourceFilterLabel = computed(() => t(SOURCE_LABEL[sessionSourceFilter.value]))
 const sourceLabel = (source: SessionSource) => t(SOURCE_LABEL[source])
+
+/**
+ * The badge text for one row.
+ *
+ * `source` names the READER, and the fourth one covers five different products, so a row from Grok
+ * and a row from Zed would both read "Other". The tool name is what the user recognises, so it wins
+ * wherever the session carries one.
+ */
+const TOOL_NAME: Record<string, string> = {
+  'claude-code': 'Claude',
+  openclaude: 'OpenClaude',
+  cowork: 'Cowork',
+  codex: 'Codex',
+  traex: 'TraeX',
+  opencode: 'OpenCode',
+  kilo: 'Kilo',
+  mimocode: 'MiMo',
+  icodemate: 'IcodeMate',
+  grok: 'Grok',
+  kimi: 'Kimi',
+  zed: 'Zed',
+  copilot: 'Copilot CLI',
+  'vscode-copilot': 'VS Code Copilot',
+}
+const rowSourceLabel = (s: { source: SessionSource; tool?: string }) =>
+  (s.tool && TOOL_NAME[s.tool]) || sourceLabel(s.source)
 const SOURCE_BADGE_CLASS: Record<SessionSource, string> = {
   claude: 'border-[#D97757]/40 bg-[#D97757]/10 text-[#B85D3D] dark:text-[#E9A287]',
   codex: 'border-[#10A37F]/40 bg-[#10A37F]/10 text-[#087D62] dark:text-[#65D4B3]',
   opencode: 'border-[#5B6EF5]/40 bg-[#5B6EF5]/10 text-[#4053D6] dark:text-[#9AA6FF]',
+  // Neutral on purpose: five products share this reader, so a single hue would imply one identity.
+  foreign: 'border-border bg-muted text-muted-foreground',
 }
 const sourceBadgeClass = (source: SessionSource) => SOURCE_BADGE_CLASS[source]
 const instanceFilterLabel = computed(() => {
@@ -1267,7 +1296,7 @@ function copy(text: string) {
                   variant="outline"
                   :class="['shrink-0 text-[10px]', sourceBadgeClass(r.source)]"
                 >
-                  {{ sourceLabel(r.source) }}
+                  {{ rowSourceLabel(r) }}
                 </Badge>
                 <span class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                   {{ $t('sessions.matchCount', { n: r.match_count }) }}
@@ -1350,7 +1379,7 @@ function copy(text: string) {
                       variant="outline"
                       :class="['shrink-0 text-[10px]', sourceBadgeClass(s.source)]"
                     >
-                      {{ sourceLabel(s.source) }}
+                      {{ rowSourceLabel(s) }}
                     </Badge>
                   </div>
                   <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
@@ -1466,7 +1495,7 @@ function copy(text: string) {
                   variant="outline"
                   :class="['text-[10px]', sourceBadgeClass(selected.source)]"
                 >
-                  {{ sourceLabel(selected.source) }}
+                  {{ rowSourceLabel(selected) }}
                 </Badge>
                 <span class="inline-flex items-center gap-1"><FolderGit2 class="size-3" />{{ selected.cwd }}</span>
                 <span class="inline-flex items-center gap-1">

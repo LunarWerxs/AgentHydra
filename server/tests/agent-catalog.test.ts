@@ -38,7 +38,7 @@ describe('the catalog as data', () => {
   test('a format claim is only ever one we have a reader for', () => {
     for (const t of AGENT_TOOLS) {
       if (t.format === null) continue
-      expect(['claude', 'codex', 'opencode']).toContain(t.format)
+      expect(['claude', 'codex', 'opencode', 'foreign']).toContain(t.format)
     }
   })
 
@@ -124,8 +124,8 @@ describe('detection', () => {
     const grok = found.find((t) => t.id === 'grok')
     expect(grok?.files).toBe(2)
     expect(grok?.lastActivityAt).toBeGreaterThan(0)
-    // Detected, not readable — and the UI must be able to say which.
-    expect(grok?.format).toBeNull()
+    // Grok has an adapter, so it reports the reader that handles it.
+    expect(grok?.format).toBe('foreign')
 
     // Nothing that is not on disk gets a row.
     expect(found.find((t) => t.id === 'qwen')).toBeUndefined()
@@ -133,5 +133,11 @@ describe('detection', () => {
 
   test('a readable tool reports the reader that handles it', () => {
     expect(detectAgentTools(home).find((t) => t.id === 'claude-code')?.format).toBe('claude')
+  })
+
+  test('a tool with no parser reports null, which the UI shows as "not read yet"', () => {
+    mkdirSync(join(home, '.qwen', 'projects'), { recursive: true })
+    writeFileSync(join(home, '.qwen', 'projects', 'a.jsonl'), '{}')
+    expect(detectAgentTools(home).find((t) => t.id === 'qwen')?.format).toBeNull()
   })
 })
