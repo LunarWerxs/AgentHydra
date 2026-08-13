@@ -10,6 +10,7 @@ import type {
   CMInstance,
   CodexAccount,
   CodexInstance,
+  DispatchedScope,
   EffortLevel,
   InstanceColorKey,
   InstanceIconKey,
@@ -28,6 +29,7 @@ import type {
   SearchIndexStatus,
   SessionPeriod,
   SessionSearchResponse,
+  SessionSecretScan,
   SessionSource,
   SessionSourceScope,
   SessionSummary,
@@ -57,6 +59,7 @@ export type {
   CodexAccountStatus,
   CodexAuthMode,
   CodexInstance,
+  DispatchedScope,
   EffortLevel,
   InstanceColorKey,
   InstanceIconKey,
@@ -81,6 +84,7 @@ export type {
   SessionPeriod,
   SessionSearchResponse,
   SessionSearchResult,
+  SessionSecretScan,
   SessionSource,
   SessionSourceScope,
   SessionSummary,
@@ -140,11 +144,13 @@ export const getSessions = (
   archived: ArchivedScope = 'hide',
   period: SessionPeriod = '24h',
   source: SessionSourceScope = 'all',
+  dispatched: DispatchedScope = 'all',
 ) =>
   j<SessionSummary[]>(
     `/api/sessions?limit=${limit}${instance ? `&instance=${encodeURIComponent(instance)}` : ''}` +
       `${archived === 'hide' ? '' : `&archived=${archived}`}&period=${period}` +
-      `${source === 'all' ? '' : `&source=${source}`}`,
+      `${source === 'all' ? '' : `&source=${source}`}` +
+      `${dispatched === 'all' ? '' : `&dispatched=${dispatched}`}`,
   )
 export const getSession = (id: string, source: SessionSource) =>
   j<SessionSummary>(`/api/sessions/${encodeURIComponent(id)}${sourceQuery(source)}`)
@@ -181,6 +187,27 @@ export const copySessionFile = (id: string, source: SessionSource) =>
     `/api/sessions/${encodeURIComponent(id)}/copy-file${sourceQuery(source)}`,
     { method: 'POST' },
   )
+/** Download URL for a readable export. A plain <a href> like sessionFileUrl above, so it carries
+ *  the API_BASE prefix; the daemon sets the filename via content-disposition. */
+export const sessionExportUrl = (
+  id: string,
+  source: SessionSource,
+  format: 'markdown' | 'html',
+  thinking = false,
+) =>
+  `${API_BASE}/api/sessions/${encodeURIComponent(id)}/export?source=${source}&format=${format}` +
+  `${thinking ? '&thinking=1' : ''}`
+/** Open a terminal sitting in this session (`claude --resume <id>`). Always returns the command
+ *  line, working launch or not, so the copy fallback is never unavailable. */
+export const resumeSessionInTerminal = (id: string, source: SessionSource) =>
+  j<{ ok: boolean; command: string; reason?: string }>(
+    `/api/sessions/${encodeURIComponent(id)}/resume-terminal${sourceQuery(source)}`,
+    { method: 'POST' },
+  )
+/** What credentials this session printed, as a count and a REDACTED list. There is no reveal
+ *  parameter on the daemon and there should not be one — see server/src/session-export.ts. */
+export const getSessionSecrets = (id: string, source: SessionSource) =>
+  j<SessionSecretScan>(`/api/sessions/${encodeURIComponent(id)}/secrets${sourceQuery(source)}`)
 /** Token totals and a dollar cost for one session, computed on demand from its transcript.
  *  Never throws for an unsupported provider — the result carries a `status` saying why it is
  *  empty, which the UI shows instead of an unexplained zero. */

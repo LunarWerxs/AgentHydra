@@ -151,3 +151,28 @@ export function formatUptime(startTime: string | null | undefined): string {
   if (minutes > 0) return `${minutes}m`
   return `${seconds}s`
 }
+
+/**
+ * How live a session is, from the timestamp the list already sorts on.
+ *
+ * WHY THRESHOLDS AND NOT A PROCESS CHECK. The only signal available for a session someone else's
+ * terminal is driving is when its transcript was last written, and a CLI writes a turn the moment
+ * it produces one. So "working" means a turn landed within the last couple of minutes, which is
+ * true of a session mid-reply and false of one waiting on a person. There is no way to tell a
+ * long-running tool call from an abandoned window, and pretending otherwise would put a green dot
+ * on a session nobody is in.
+ *
+ * The boundaries are deliberately wide apart, because the value of the dot is telling "someone is
+ * in this right now" from "this has been sitting for a week" — not minute-accurate.
+ */
+export type SessionActivity = 'working' | 'idle' | 'stale'
+
+const WORKING_MS = 2 * 60 * 1000
+const IDLE_MS = 60 * 60 * 1000
+
+export function sessionActivity(lastActivityAt: number, now = Date.now()): SessionActivity {
+  const age = now - lastActivityAt
+  if (age < WORKING_MS) return 'working'
+  if (age < IDLE_MS) return 'idle'
+  return 'stale'
+}

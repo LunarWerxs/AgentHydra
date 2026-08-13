@@ -9,6 +9,62 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **A session you can hand to someone.** The only export was the raw `.jsonl`, which is complete and
+  unreadable. Sessions now save as Markdown, or as one self-contained HTML file that opens in any
+  browser with nothing beside it. Both cover the WHOLE session rather than the window the viewer
+  shows, because a silently truncated document is worse than none: the reader has no way to know
+  what is missing. The raw file is still there, and is still the only lossless one.
+
+  Secrets in recognisable formats are replaced on the way out, and the document says so in its own
+  header rather than only in the code. That is the same guardrail the ChatGPT context pack has
+  always used, now shared between them instead of copied.
+
+- **What a session printed that it should not have.** A transcript keeps whatever scrolled past,
+  including the time a tool echoed a key. The session header now shows a count when there is one,
+  with a redacted list of what and where. It matches unmistakable formats only (private keys, AWS
+  key ids, provider tokens), so a count of zero is not a clean bill of health and the UI says that
+  too. There is no reveal button, and no endpoint that could serve one: the transcript is already
+  open one panel away, so revealing here would only add a second place credentials live.
+
+- **Reopen a finished session in a terminal.** You could type into a running session but not sit
+  back down in a finished one. The session header now runs `claude --resume` in a new terminal.
+  Where no terminal can be opened (an unusual Linux setup, a machine where the CLI is not on PATH),
+  the command lands on your clipboard instead, because a feature that fails silently on an odd setup
+  is worse than one that hands you the string.
+
+- **Which sessions AgentHydra queued, and which you drove by hand.** Known exactly rather than
+  guessed: every dispatch names the session id on the command line, so this is a fact the daemon
+  already had. Each row now says which it is, and the list can narrow to either. Narrowing is always
+  something you ask for; nothing is hidden on our initiative.
+
+- **A dot for how live each session is,** working / idle / stale, derived from the same timestamp the
+  list is already sorted by and sitting right next to it. It is a claim about file activity, not
+  about whether a person is present, which is the only thing a transcript can honestly support.
+
+- **Session shape: quick, standard, deep, marathon, automation.** Two sessions with similar titles
+  can be a two-minute question and a six-hour build. Shape is worked out from the message count and
+  the elapsed time together, taking whichever makes the session notable: thirty messages over six
+  hours is a long sitting, three hundred in ten minutes is a grind, and counting messages alone
+  would call the first one "quick". Also a filter.
+
+- **Keyboard shortcuts, and a `?` sheet that lists them.** There was no shared layer and no way to
+  discover a binding. The sheet is generated from what is actually registered, and a view's
+  shortcuts unregister when it unmounts, so it cannot list something that is not really there.
+  Ctrl/Cmd+F finds in the open session, Ctrl/Cmd+K jumps to the filter, Ctrl/Cmd+1 and +2 switch
+  tabs, Escape backs out one step.
+
+- **`--version --json`**, emitting a schema-versioned object with the version, the commit and the
+  build time. Auto-update is a `git pull`, so two machines can sit on the same version number and
+  different code; the commit is the field that tells them apart. Release binaries carry a stamp
+  applied at compile time (asking git at runtime would describe whatever checkout the exe was copied
+  into), and a source checkout answers from git, where that IS the build. Still no database
+  and still no port, so the fast path is intact.
+
+- **A one-line Windows install** that verifies what it downloaded. `install.ps1` detects the
+  architecture, fetches the release ZIP and its published SHA-256, and refuses to unpack anything on
+  a mismatch or a missing checksum entry. There is no skip switch, because a checksum you can opt
+  out of is decoration. It installs under `%LOCALAPPDATA%`, so it never asks for Administrator.
+
 - **A long session can now be read.** Two things were missing and they compound: there was no way to
   change what a transcript shows, and no way to find anything inside the one on screen.
 

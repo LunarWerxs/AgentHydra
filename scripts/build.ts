@@ -57,6 +57,33 @@ function importPath(fromFile: string, target: string): string {
   return rel.startsWith('.') ? rel : `./${rel}`
 }
 
+/**
+ * What this build is, stamped into the binary.
+ *
+ * The commit comes from CI's own environment first (`GITHUB_SHA`), because a release workflow may
+ * build from a detached checkout where the local git call is the less direct answer. Falling back
+ * to `git rev-parse` covers a local `bun run dist`. Either can fail — a source tarball with no git
+ * history is a legitimate way to build — and the field is simply omitted then, which build-info.ts
+ * reports as `null` rather than inventing a value.
+ */
+function buildStamp(): { commit?: string; builtAt?: string } {
+  const builtAt = new Date().toISOString()
+  const fromEnv = process.env.GITHUB_SHA?.trim()
+  if (fromEnv && /^[0-9a-f]{40}$/.test(fromEnv)) return { commit: fromEnv, builtAt }
+  try {
+    const proc = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], {
+      cwd: ROOT,
+      stdout: 'pipe',
+      stderr: 'ignore',
+    })
+    const sha = proc.exitCode === 0 ? proc.stdout.toString().trim() : ''
+    if (/^[0-9a-f]{40}$/.test(sha)) return { commit: sha, builtAt }
+  } catch {
+    // no git, or no repository — the commit is simply not known for this build
+  }
+  return { builtAt }
+}
+
 function writeReleaseEntrypoint(): string {
   rmSync(TMP, { recursive: true, force: true })
   mkdirSync(TMP, { recursive: true })
@@ -80,6 +107,11 @@ function writeReleaseEntrypoint(): string {
 ${routes.map(([route, asset]) => `  ${JSON.stringify(route)}: ${asset},`).join('\n')}
 });
 (globalThis as { __AGENTHYDRA_RELEASE_BUILD__?: boolean }).__AGENTHYDRA_RELEASE_BUILD__ = true;
+// Stamped here because a compiled binary can be copied anywhere: asking git at runtime would
+// describe whatever checkout the exe was dropped into, not the build. Read by
+// server/src/build-info.ts for \`--version --json\`.
+(globalThis as { __AGENTHYDRA_BUILD__?: { commit?: string; builtAt?: string } })
+  .__AGENTHYDRA_BUILD__ = ${JSON.stringify(buildStamp())};
 await import(${JSON.stringify(importPath(entry, join(ROOT, 'server', 'src', 'main.ts')))});
 `,
   )

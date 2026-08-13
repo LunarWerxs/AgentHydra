@@ -115,7 +115,18 @@ retires its lightweight daemon automatically after a short reconnect grace perio
 
 ## Install
 
-**Download** your OS build from [Releases](https://github.com/LunarWerxs/AgentHydra/releases).
+**On Windows, one line.** It installs under `%LOCALAPPDATA%` (no Administrator), and it verifies the
+download against the release's published SHA-256 before unpacking anything, with no way to skip
+that step, because a checksum you can opt out of is decoration:
+
+```powershell
+irm https://raw.githubusercontent.com/LunarWerxs/AgentHydra/main/install.ps1 | iex
+```
+
+It takes the ZIP, so you get the tray icon, and it makes a Start Menu shortcut. Read the script
+first if you like; that is a reasonable thing to do with any `irm … | iex`.
+
+**Or download** your OS build from [Releases](https://github.com/LunarWerxs/AgentHydra/releases).
 On Windows, run the versioned `AgentHydra-…-windows-x64.exe` directly; it is an icon-bearing GUI
 executable with the web app embedded and no console window. Linux and macOS builds remain
 one-executable archives. No Bun is needed.

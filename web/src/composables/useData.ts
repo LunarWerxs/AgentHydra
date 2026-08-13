@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import type {
   Account,
   ArchivedScope,
+  DispatchedScope,
   QueueItem,
   SchedulerState,
   SessionPeriod,
@@ -10,6 +11,7 @@ import type {
   SessionSummary,
 } from '@/lib/api'
 import * as api from '@/lib/api'
+import { SHAPE_SCOPES, type ShapeScope } from '@/lib/session-shape'
 import { registerSharedPref } from './useSharedPrefs'
 
 const sessions = ref<SessionSummary[]>([])
@@ -35,6 +37,14 @@ const sessionArchivedScope = useStorage<ArchivedScope>(
 const sessionPeriod = useStorage<SessionPeriod>('agenthydra.sessions.period', '24h')
 // Provider scope for the unified local conversation list.
 const sessionSourceFilter = useStorage<SessionSourceScope>('agenthydra.sessions.source', 'all')
+// Work AgentHydra queued vs work driven by hand. 'all' by default and never narrowed on our own
+// initiative — same rule the `done` mark carries: this list may be narrowed on request, never
+// pruned behind the user's back. Applied server-side before the cap, like the scopes above.
+const sessionDispatchedScope = useStorage<DispatchedScope>('agenthydra.sessions.dispatched', 'all')
+// Session SHAPE (lib/session-shape.ts). Unlike the scopes above this one is applied in the browser,
+// because it is a classification of rows already fetched rather than a question the daemon could
+// answer more cheaply — the two inputs are on every row already.
+const sessionShapeScope = useStorage<ShapeScope>('agenthydra.sessions.shape', 'all')
 
 // All three are ALSO mirrored through the daemon (composables/useSharedPrefs.ts): the daemon hops
 // to another port whenever its preferred one is busy, and a browser scopes localStorage per origin
@@ -44,9 +54,12 @@ const sessionSourceFilter = useStorage<SessionSourceScope>('agenthydra.sessions.
 const ARCHIVED_SCOPES: readonly ArchivedScope[] = ['hide', 'include', 'only']
 const SESSION_PERIODS: readonly SessionPeriod[] = ['24h', '7d', '30d', 'all']
 const SESSION_SOURCES: readonly SessionSourceScope[] = ['all', 'claude', 'codex', 'opencode']
+const DISPATCHED_SCOPES: readonly DispatchedScope[] = ['all', 'queued', 'manual']
 registerSharedPref('agenthydra.sessions.archivedScope', sessionArchivedScope, ARCHIVED_SCOPES)
 registerSharedPref('agenthydra.sessions.period', sessionPeriod, SESSION_PERIODS)
 registerSharedPref('agenthydra.sessions.source', sessionSourceFilter, SESSION_SOURCES)
+registerSharedPref('agenthydra.sessions.dispatched', sessionDispatchedScope, DISPATCHED_SCOPES)
+registerSharedPref('agenthydra.sessions.shape', sessionShapeScope, SHAPE_SCOPES)
 // true once the first queue fetch has settled — gates the queue's first-load skeletons
 const queueLoaded = ref(false)
 const lastError = ref<string | null>(null)
@@ -67,6 +80,7 @@ async function refreshSessions() {
       sessionArchivedScope.value,
       sessionPeriod.value,
       sessionSourceFilter.value,
+      sessionDispatchedScope.value,
     ),
   )
   if (r) sessions.value = r
@@ -122,6 +136,8 @@ export function useData() {
     sessionArchivedScope,
     sessionPeriod,
     sessionSourceFilter,
+    sessionDispatchedScope,
+    sessionShapeScope,
     queueLoaded,
     lastError,
     refreshSessions,

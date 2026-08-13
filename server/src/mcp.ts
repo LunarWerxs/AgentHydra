@@ -172,7 +172,10 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'list_sessions',
     description:
-      'List local Claude, Codex, and OpenCode sessions, most recently active first. Each row carries its source.',
+      'List local Claude, Codex, and OpenCode sessions, most recently active first. Each row carries ' +
+      'its source and a `dispatched` flag: true means AgentHydra queued that work, false means a ' +
+      'person drove it by hand. That is known exactly (every dispatch names the session id on the ' +
+      'command line), not guessed at. Use dispatched=queued/manual to narrow to one or the other.',
     inputSchema: S({
       limit: { type: 'number', description: 'Max sessions to return (default 200).' },
       source: {
@@ -180,8 +183,14 @@ export const TOOLS: McpEngineTool[] = [
         enum: ['claude', 'codex', 'opencode'],
         description: 'Optional provider filter.',
       },
+      dispatched: {
+        type: 'string',
+        enum: ['all', 'queued', 'manual'],
+        description: 'Narrow to work AgentHydra queued, or to work driven by hand. Default all.',
+      },
     }),
-    run: (a) => api(`/api/sessions${qs({ limit: a.limit, source: a.source })}`),
+    run: (a) =>
+      api(`/api/sessions${qs({ limit: a.limit, source: a.source, dispatched: a.dispatched })}`),
   },
   {
     name: 'get_session',
@@ -274,6 +283,49 @@ export const TOOLS: McpEngineTool[] = [
           source: a.source,
         })}`,
       ),
+  },
+
+  {
+    name: 'export_session',
+    description:
+      'Render a WHOLE session as readable Markdown (or self-contained HTML), not the tail window. ' +
+      'Secrets in recognisable formats are replaced before the text is returned. Use this to hand a ' +
+      'session to a person, or to read one end to end; use tail_session when the recent turns are ' +
+      'enough, because a long session exported in full is very large.',
+    inputSchema: S(
+      {
+        id: { type: 'string' },
+        format: { type: 'string', enum: ['markdown', 'html'], description: 'Default markdown.' },
+        thinking: { type: 'boolean', description: "Include the model's reasoning blocks." },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode'] },
+      },
+      ['id'],
+    ),
+    run: (a) =>
+      api(
+        `/api/sessions/${encodeURIComponent(str(a.id))}/export${qs({
+          format: a.format,
+          thinking: a.thinking ? '1' : undefined,
+          source: a.source,
+        })}`,
+      ),
+  },
+  {
+    name: 'scan_session_secrets',
+    description:
+      'Count the credentials a session printed into its transcript, with a REDACTED list of what ' +
+      'and where. Never returns a secret, by design. Matches unmistakable formats only (private ' +
+      'keys, AWS key ids, provider tokens): a count of zero means none of those were found, not ' +
+      'that the session is clean.',
+    inputSchema: S(
+      {
+        id: { type: 'string' },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode'] },
+      },
+      ['id'],
+    ),
+    run: (a) =>
+      api(`/api/sessions/${encodeURIComponent(str(a.id))}/secrets${qs({ source: a.source })}`),
   },
 
   // --- queue --------------------------------------------------------------------

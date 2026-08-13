@@ -57,7 +57,10 @@
     project: projKey(p),
     git_branch: source === 'opencode' ? null : branch,
     message_count: count,
-    created_at: ago(mins + 240),
+    // Span varies per row on purpose: every session sharing one duration made every shape chip
+    // read "Marathon" in the screenshot, which is a fixture artefact that looked like a bug in the
+    // classifier. The multiplier spreads them across quick/standard/deep instead.
+    created_at: ago(mins + 4 + i * 55),
     last_activity_at: ago(mins),
     last_role: 'assistant',
     last_text_preview: 'Updated the module and re-ran the suite; everything passes locally.',
@@ -67,6 +70,10 @@
     instance: source === 'claude' ? instance : null,
     archived: false,
     done: i === 7,
+    // Two rows carry the "queued here" marker so the shape chip in the screenshot shows both the
+    // automation case and the ordinary one. Real dispatched-ness comes from a queue row (see
+    // server/src/sessions.ts); here it is simply stated.
+    dispatched: i === 3 || i === 6,
   }))
   /** The queue only ever holds `claude` runs, so its rows may only point at Claude sessions. */
   const claudeSessions = sessions.filter((s) => s.source === 'claude')
@@ -312,6 +319,19 @@
         title: sessions[0].title,
         cwd: sessions[0].cwd,
         events: turns,
+      }),
+    ],
+    [
+      // No secrets in the demo transcript, which is the honest fixture: the chip only appears when
+      // there is something to report, so a screenshot showing one would advertise a state the
+      // sample session is not in.
+      /\/api\/sessions\/[^/]+\/secrets/,
+      () => ({
+        session_id: sessions[0].session_id,
+        source: 'claude',
+        count: 0,
+        findings: [],
+        truncated: false,
       }),
     ],
     [

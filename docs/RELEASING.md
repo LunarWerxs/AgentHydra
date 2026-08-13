@@ -48,6 +48,27 @@ every instance with auto-update enabled will fast-forward to it on its next chec
    **If a tag does end up on a red commit,** do not move a published tag. Fix the failure, bump to
    the next patch version, and release that immutable version instead.
 
+## The install script depends on SHA256SUMS.txt
+
+`install.ps1` (repo root) is the documented one-liner install for Windows. It downloads the
+`AgentHydra-<version>-windows-x64.zip` asset, downloads `SHA256SUMS.txt` from the SAME release, and
+refuses to install on a mismatch or a missing entry. There is no skip switch, on purpose.
+
+That makes the checksum file a **release contract, not a nicety**: the `Build checksums` step in
+`release.yml` (`sha256sum out/* > out/SHA256SUMS.txt`) and its inclusion in the upload list must
+both survive any edit to the release job. Drop either one and the installer stops working for
+everyone on the next release, with a refusal rather than a silent downgrade in safety — which is the
+right failure, but still a broken install path.
+
+Two shapes to keep intact if the workflow is ever restructured:
+
+* The ZIP is what gets installed, not the bare `.exe`. Only the ZIP carries `misc/` (the tray
+  toolkit); a bundle without it can only run console-style, which is exactly the regression 0.11.2
+  shipped.
+* `sha256sum` writes `<hash>  out/<name>`, so the path field carries the `out/` prefix. The
+  installer matches on the file's LEAF name for that reason; moving the build output to another
+  directory is fine, renaming the assets is not.
+
 ## When a push doesn't trigger anything
 
 GitHub's standard mitigation for an Actions incident is to **throttle webhook triggers**, which

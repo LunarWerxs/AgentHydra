@@ -18,6 +18,7 @@ import QueueView from '@/components/QueueView.vue'
 import SchedulerStatus from '@/components/SchedulerStatus.vue'
 import SessionsView from '@/components/SessionsView.vue'
 import SettingsView from '@/components/SettingsView.vue'
+import ShortcutSheet from '@/components/ShortcutSheet.vue'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -32,6 +33,7 @@ import { useData } from '@/composables/useData'
 import { useNotifications } from '@/composables/useNotifications'
 import { usePanels } from '@/composables/usePanels'
 import { SHELL_BASE_MAX, SHELL_WIDE_MAX, useShellWidth } from '@/composables/useShellWidth'
+import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
@@ -59,6 +61,33 @@ const { startPolling: startNotificationPolling } = useNotifications()
 // port, which is a different browser origin and therefore a different localStorage. Owned by
 // composables/useUiPrefs.ts, which is where every mirrored layout preference lives.
 const { view } = useUiPrefs()
+
+// The shell's own bindings — global, so they are on every view and lead the `?` sheet. Registered
+// here rather than in each view because that is what makes them true everywhere.
+useShortcuts([
+  {
+    keys: '?',
+    labelKey: 'app.shortcutShowSheet',
+    groupKey: 'app.shortcutGroupApp',
+    run: openShortcutSheet,
+  },
+  {
+    keys: 'mod+1',
+    labelKey: 'app.shortcutSessions',
+    groupKey: 'app.shortcutGroupApp',
+    run: () => {
+      view.value = 'sessions'
+    },
+  },
+  {
+    keys: 'mod+2',
+    labelKey: 'app.shortcutInstances',
+    groupKey: 'app.shortcutGroupApp',
+    run: () => {
+      view.value = 'instances'
+    },
+  },
+])
 
 // settings + queue share the right edge; usePanels keeps them mutually exclusive
 const { settingsOpen, queueOpen } = usePanels()
@@ -340,6 +369,7 @@ onUnmounted(stopAvailabilityPolling)
          controls at all. The kit's wrapper (components/ui/sonner/Sonner.vue) already ships the
          close glyph and pins it top-right, so this is switching on a control that was built and
          never enabled, not adding one. -->
+    <ShortcutSheet />
     <Toaster close-button />
   </div>
   </TooltipProvider>

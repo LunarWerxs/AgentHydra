@@ -13,6 +13,7 @@ import {
 } from './transcript'
 import type {
   ArchivedScope,
+  DispatchedScope,
   QueueStatus,
   SessionSource,
   SessionSourceScope,
@@ -369,8 +370,12 @@ export async function listSessions(
   archived: ArchivedScope = 'hide',
   sinceMs: number | null = null,
   source: SessionSourceScope = 'all',
+  dispatched: DispatchedScope = 'all',
 ): Promise<SessionSummary[]> {
   const mmap = sessionMetaMap()
+  // Read up here rather than beside dmap below, because the `dispatched` scope filters on it and
+  // that has to happen before the newest-N cap.
+  const qmap = queueStatusMap()
   // Async on purpose: this handler is already async, and on a cold cache the sync builder blocks
   // the whole daemon for the length of a full store sweep. ensureTranscriptIndex also coalesces
   // with the boot warm-up, so the first request after launch joins that build instead of racing it.
@@ -388,8 +393,14 @@ export async function listSessions(
     files = files.filter((f) => (f.archived || !!mmap.get(f.session_id)?.archived) === want)
   }
   if (sinceMs !== null) files = files.filter((f) => f.mtime_ms >= sinceMs)
+  // Before the cap, for the same reason `instance` and `archived` are: a handful of queued runs
+  // among thousands of hand-driven transcripts would never crack the newest-200, so a filter applied
+  // afterwards would answer "you have never queued anything" on a machine that queues nightly.
+  if (dispatched !== 'all') {
+    const want = dispatched === 'queued'
+    files = files.filter((f) => (f.source === 'claude' && qmap.has(f.session_id)) === want)
+  }
   files = files.sort((a, b) => b.mtime_ms - a.mtime_ms)
-  const qmap = queueStatusMap()
   const dmap = doneMarkMap()
 
   const toSummary = async (tf: TranscriptFile): Promise<SessionSummary | null> => {
@@ -418,6 +429,7 @@ export async function listSessions(
       instance: tf.source === 'claude' ? (mmap.get(tf.session_id)?.instance ?? null) : null,
       archived: tf.archived || (mmap.get(tf.session_id)?.archived ?? false),
       done: dmap.get(sessionMarkKey(tf.source, tf.session_id)) ?? false,
+      dispatched: tf.source === 'claude' && qmap.has(tf.session_id),
     }
   }
 
@@ -520,5 +532,6 @@ export async function getSession(
     instance: tf.source === 'claude' ? (meta?.instance ?? null) : null,
     archived: tf.archived || (meta?.archived ?? false),
     done: dmap.get(sessionMarkKey(tf.source, sessionId)) ?? false,
+    dispatched: tf.source === 'claude' && qmap.has(tf.session_id),
   }
 }

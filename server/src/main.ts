@@ -9,7 +9,7 @@
 //
 // Modes:
 //   (none)                        → the daemon (./index.ts — serves the UI + API)
-//   --version | -v                → print the app version and exit
+//   --version | -v                → print the app version and exit (add --json for build metadata)
 //   --instances | --instance-mode → the lightweight instance launcher (./instance-mode.ts)
 //   --mcp                         → the MCP stdio server (./mcp.ts)
 //   __dispatch_runner <specPath>  → the detached per-run supervisor (./dispatch-runner.ts)
@@ -21,8 +21,16 @@
 const [mode, ...rest] = process.argv.slice(2)
 
 if (mode === '--version' || mode === '-v') {
-  const { VERSION } = await import('./config')
-  console.log(VERSION)
+  // --json prints a schema-versioned object instead of the bare version, for scripts and CI. Still
+  // no database and still no port: it imports one module that reads a bundled constant, and at most
+  // shells out to `git rev-parse` when running from a checkout. See ./build-info.ts.
+  if (rest.includes('--json')) {
+    const { buildInfo } = await import('./build-info')
+    console.log(JSON.stringify(buildInfo()))
+  } else {
+    const { VERSION } = await import('./config')
+    console.log(VERSION)
+  }
   process.exit(0)
 } else if (mode === '--instances' || mode === '--instance-mode') {
   await import('./instance-mode')

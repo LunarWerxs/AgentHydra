@@ -152,6 +152,8 @@ import {
 } from './reset-watch'
 import { schedulerState, setSchedulerSettings } from './scheduler'
 import { dropSearchIndex, searchIndexStatus } from './search-index'
+import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
+import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
 import { sessionUsage } from './session-usage'
 import { getSession, listSessions, sessionMarkKey, warmSessionScanCache } from './sessions'
@@ -162,6 +164,7 @@ import {
   type Account,
   AMBIENT_RUN_AS,
   type ArchivedScope,
+  isDispatchedScope,
   isSessionPeriod,
   isSessionSource,
   type MonitorView,
@@ -622,6 +625,10 @@ app.get('/api/sessions', async (c) => {
   const period: SessionPeriod = isSessionPeriod(rawPeriod) ? rawPeriod : '24h'
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : 'all'
+  // Unrecognized narrows to nothing, so this one falls back to 'all' as well: never let a bad
+  // parameter hide sessions.
+  const rawDispatched = c.req.query('dispatched')
+  const dispatched = isDispatchedScope(rawDispatched) ? rawDispatched : 'all'
   return c.json(
     await listSessions(
       boundedQueryInt(limit, 200, 500),
@@ -629,6 +636,7 @@ app.get('/api/sessions', async (c) => {
       scope,
       periodCutoffMs(period),
       source,
+      dispatched,
     ),
   )
 })
@@ -706,6 +714,48 @@ app.get('/api/sessions/:id/file', async (c) => {
       'content-disposition': contentDispositionAttachment(filename),
     },
   })
+})
+// A readable export: Markdown, or one self-contained HTML file. Reads the WHOLE transcript, not the
+// tail window the viewer shows, because a silently truncated document is worse than none. Secrets
+// in recognisable formats are replaced on the way out and the document says so — this path exists
+// to produce something you send somewhere. See server/src/session-export.ts.
+app.get('/api/sessions/:id/export', async (c) => {
+  const rawSource = c.req.query('source')
+  const source = isSessionSource(rawSource) ? rawSource : undefined
+  const format: ExportFormat = c.req.query('format') === 'html' ? 'html' : 'markdown'
+  const thinking = c.req.query('thinking') === '1' || c.req.query('thinking') === 'true'
+  const result = await exportSession(c.req.param('id'), format, source, { thinking })
+  if (!result) return c.json({ error: 'session not found' }, 404)
+  return new Response(result.body, {
+    headers: {
+      'content-type': result.contentType,
+      'content-disposition': contentDispositionAttachment(result.filename),
+      // What the export left out, for a caller that wants to say so without parsing the document.
+      'x-agenthydra-redacted': String(result.redacted),
+    },
+  })
+})
+// Reopen a finished session in a real terminal (`claude --resume <id>`), and hand back the command
+// line either way so "copy the command" works even where no terminal could be opened. See
+// server/src/session-resume.ts.
+app.post('/api/sessions/:id/resume-terminal', async (c) => {
+  const id = c.req.param('id')
+  const rawSource = c.req.query('source')
+  const source = isSessionSource(rawSource) ? rawSource : undefined
+  const tf = findTranscript(id, source)
+  if (!tf) return c.json({ error: 'session not found' }, 404)
+  const session = await getSession(id, tf.source)
+  return c.json(resumeSessionInTerminal(id, tf.source, session?.cwd || null))
+})
+// What secrets this session printed, as a count and a redacted list. There is deliberately no
+// reveal parameter: the transcript is already open in the viewer on this machine, so this endpoint
+// can only add a way to lose credentials, never a way to see something otherwise unreachable.
+app.get('/api/sessions/:id/secrets', async (c) => {
+  const rawSource = c.req.query('source')
+  const source = isSessionSource(rawSource) ? rawSource : undefined
+  const scan = await scanSessionSecrets(c.req.param('id'), source)
+  if (!scan) return c.json({ error: 'session not found' }, 404)
+  return c.json(scan)
 })
 // Return the original transcript's absolute location so the SPA can copy it as plain text.
 // Resolve it here rather than reconstructing it in the browser: project-folder encoding is lossy,

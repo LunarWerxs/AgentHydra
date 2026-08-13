@@ -23,8 +23,9 @@
 //     server/src/dispatch.ts's WMI runner launch and server/src/detached-spawn.mjs's header.
 //
 // DELIBERATELY NOT FLAGGED:
-//   · server/src/core/cli-instances.ts: every spawn there (`cmd /k`, x-terminal-emulator) is an
-//     INTENTIONAL user-facing terminal window; hiding it would defeat the feature.
+//   · server/src/core/cli-instances.ts and server/src/session-resume.ts: every spawn there
+//     (`cmd /k`, x-terminal-emulator) is an INTENTIONAL user-facing terminal window; hiding it
+//     would defeat the feature.
 //   · server/src/core/crypto/keys.mac.ts, keys.linux.ts: non-Windows; console-window allocation is
 //     a win32-only concept.
 //   · Any spawn whose argv is NOT a literal array containing a known console-program name (e.g. a
@@ -96,6 +97,9 @@ const EXTS = ['.ts', '.mjs']
 // Relative (posix-style) paths this check deliberately never scans; see header for WHY each one.
 const SKIP_FILES = new Set([
   'server/src/core/cli-instances.ts',
+  // Same category as the line above: `cmd /k claude --resume …` opens a terminal the user asked
+  // for and is going to type into. windowsHide there would hide the entire feature.
+  'server/src/session-resume.ts',
   'server/src/core/crypto/keys.mac.ts',
   'server/src/core/crypto/keys.linux.ts',
 ])

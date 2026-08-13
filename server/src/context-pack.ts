@@ -1,5 +1,8 @@
 import { type Dirent, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path'
+// The secret patterns moved to ./secrets so the transcript export and the session scan share them
+// with this file rather than keeping a second copy that drifts.
+import { containsHighConfidenceSecret } from './secrets'
 import type { ChatGptContextPack } from './types'
 
 const MAX_CANDIDATES = 5000
@@ -26,13 +29,6 @@ const SKIP_DIRECTORIES = new Set([
   'vendor',
   'venv',
 ])
-
-const HIGH_CONFIDENCE_SECRET_PATTERNS = [
-  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
-  /\bAKIA[0-9A-Z]{16}\b/,
-  /\b(?:sk|rk)-[A-Za-z0-9_-]{20,}\b/,
-  /\bgh[pousr]_[A-Za-z0-9]{30,}\b/,
-]
 
 interface Candidate {
   absolutePath: string
@@ -75,10 +71,6 @@ function looksBinary(buffer: Buffer): boolean {
     if (byte < 9 || (byte > 13 && byte < 32)) controls++
   }
   return sample.length > 0 && controls / sample.length > 0.05
-}
-
-function containsHighConfidenceSecret(text: string): boolean {
-  return HIGH_CONFIDENCE_SECRET_PATTERNS.some((pattern) => pattern.test(text))
 }
 
 function scorePath(relativePath: string, taskWords: Set<string>): number {

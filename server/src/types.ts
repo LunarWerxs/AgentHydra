@@ -107,11 +107,47 @@ export interface SessionSummary {
   archived: boolean
   /** The user's own mark, stored in our `session_marks` table. Mark only: never filters a list. */
   done: boolean
+  /**
+   * AgentHydra queued work into this session, so it is ours rather than something typed by hand.
+   *
+   * Known exactly, not inferred: every dispatch passes the session id on the command line
+   * (`--session-id` for a new chat, `--resume` for an existing one), so a `queue_items` row for
+   * that id IS the fact. Nothing heuristic goes into it.
+   */
+  dispatched: boolean
+}
+
+/**
+ * What credentials a session printed into its own transcript (server/src/session-export.ts).
+ *
+ * `findings` is always redacted and there is no unredacted form of this type anywhere: the count is
+ * meant to make you go and rotate a key, not to be a second place the key lives.
+ */
+export interface SessionSecretScan {
+  session_id: string
+  source: SessionSource
+  /** How many recognisable secrets are in the transcript. */
+  count: number
+  /** Each one, redacted, with the turn it appeared in. Capped; `truncated` says when. */
+  findings: Array<{ kind: string; redacted: string; turn: number; role: string }>
+  truncated: boolean
 }
 
 /** How a session list treats provider archive state. 'hide' is the default because archived is the
  *  large majority of a real store, so including it buries live work; 'only' makes old work findable. */
 export type ArchivedScope = 'hide' | 'include' | 'only'
+
+/**
+ * How a session list treats work AgentHydra queued.
+ *
+ * 'all' is the default and stays the default: this narrows a list on request, and is never applied
+ * on its own initiative — the same rule `session_marks` carries.
+ */
+export type DispatchedScope = 'all' | 'queued' | 'manual'
+
+export function isDispatchedScope(v: unknown): v is DispatchedScope {
+  return v === 'all' || v === 'queued' || v === 'manual'
+}
 
 /** How far back a session list reaches, by last activity. '24h' is the default: the list is a
  *  "what am I working on" surface, and a store holding months of transcripts answers that question

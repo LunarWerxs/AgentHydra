@@ -19,8 +19,12 @@ import {
   Copy,
   Download,
   FileSymlink,
+  FileText,
   FolderGit2,
   GitBranch,
+  Globe,
+  Hourglass,
+  KeyRound,
   ListTodo,
   MessagesSquare,
   MoreHorizontal,
@@ -29,6 +33,7 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  SquareTerminal,
   UserRound,
   Wrench,
   X,
@@ -57,6 +62,13 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -76,12 +88,15 @@ import { Switch } from '@/components/ui/switch'
 import { useData } from '@/composables/useData'
 import { useInstances } from '@/composables/useInstances'
 import { useShellWidth } from '@/composables/useShellWidth'
+import { useShortcuts } from '@/composables/useShortcuts'
 import { clampWidth, SIDEBAR_DEFAULT, useUiPrefs } from '@/composables/useUiPrefs'
 import type {
   ArchivedScope,
+  DispatchedScope,
   SessionPeriod,
   SessionSearchResponse,
   SessionSearchResult,
+  SessionSecretScan,
   SessionSource,
   SessionSourceScope,
   SessionSummary,
@@ -90,9 +105,18 @@ import type {
 } from '@/lib/api'
 import * as api from '@/lib/api'
 import { highlightHtml } from '@/lib/find'
-import { baseName, formatCompact, formatUsd, shortId, timeAgo } from '@/lib/format'
+import {
+  baseName,
+  formatCompact,
+  formatUsd,
+  type SessionActivity,
+  sessionActivity,
+  shortId,
+  timeAgo,
+} from '@/lib/format'
 import { displayName } from '@/lib/instance-appearance'
 import { escapeHtml, looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
+import { type SessionShape, type ShapeScope, sessionShape } from '@/lib/session-shape'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
@@ -105,6 +129,8 @@ const {
   sessionArchivedScope,
   sessionPeriod,
   sessionSourceFilter,
+  sessionDispatchedScope,
+  sessionShapeScope,
 } = useData()
 const { t } = useI18n()
 
@@ -127,7 +153,9 @@ const instanceLabelFor = (folder: string) =>
 // toggle belongs to a different view entirely.
 onMounted(() => void refreshInstances({ silent: true }))
 // Every scope is applied server-side, so any of them changing needs a refetch, not a re-filter.
-watch([sessionInstanceFilter, sessionArchivedScope, sessionPeriod], () => refreshSessions())
+watch([sessionInstanceFilter, sessionArchivedScope, sessionPeriod, sessionDispatchedScope], () =>
+  refreshSessions(),
+)
 watch(sessionSourceFilter, (source) => {
   // Desktop-instance metadata belongs to Claude sessions only. Clear a stale instance scope when
   // switching providers so "Codex" or "OpenCode" cannot appear empty for an invisible old filter.
@@ -146,6 +174,8 @@ const filtersActive = computed(
     !!sessionInstanceFilter.value ||
     sessionArchivedScope.value !== 'include' ||
     sessionSourceFilter.value !== 'all' ||
+    sessionDispatchedScope.value !== 'all' ||
+    sessionShapeScope.value !== 'all' ||
     // Only a WIDENED window counts. 24h is the default, so flagging it would light the trigger up
     // permanently and the signal would stop meaning anything.
     sessionPeriod.value !== '24h',
@@ -184,6 +214,40 @@ const PERIOD_LABEL: Record<SessionPeriod, string> = {
   all: 'sessions.periodAll',
 }
 const periodLabel = computed(() => t(PERIOD_LABEL[sessionPeriod.value]))
+const DISPATCHED_LABEL: Record<DispatchedScope, string> = {
+  all: 'sessions.dispatchedAll',
+  queued: 'sessions.dispatchedQueued',
+  manual: 'sessions.dispatchedManual',
+}
+const dispatchedScopeLabel = computed(() => t(DISPATCHED_LABEL[sessionDispatchedScope.value]))
+const SHAPE_LABEL: Record<ShapeScope, string> = {
+  all: 'sessions.shapeAll',
+  quick: 'sessions.shapeQuick',
+  standard: 'sessions.shapeStandard',
+  deep: 'sessions.shapeDeep',
+  marathon: 'sessions.shapeMarathon',
+  automation: 'sessions.shapeAutomation',
+}
+const shapeScopeLabel = computed(() => t(SHAPE_LABEL[sessionShapeScope.value]))
+const shapeLabel = (shape: SessionShape) => t(SHAPE_LABEL[shape])
+
+/** Working / idle / stale, from the same timestamp the list is already sorted by. A session we are
+ *  actively running is 'working' regardless of the clock: the queue knows, so it does not have to
+ *  be inferred from a file write that may be seconds away. */
+// Reads the clock at render time, exactly as timeAgo() beside it does: the list refetches every 12
+// seconds, so the dot and the "3m ago" it sits next to always move together.
+const activityOf = (s: SessionSummary): SessionActivity =>
+  s.queue_status === 'running' ? 'working' : sessionActivity(s.last_activity_at)
+const ACTIVITY_CLASS: Record<SessionActivity, string> = {
+  working: 'bg-success',
+  idle: 'bg-warning',
+  stale: 'bg-muted-foreground/40',
+}
+const ACTIVITY_LABEL: Record<SessionActivity, string> = {
+  working: 'sessions.activityWorking',
+  idle: 'sessions.activityIdle',
+  stale: 'sessions.activityStale',
+}
 
 // --- "done" marks: seen it / handled it, without hiding it ---------------------
 // Persisted server-side (sqlite) rather than in localStorage: these are the user's own judgements
@@ -296,8 +360,14 @@ const asideStyle = computed(() => ({
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase()
-  if (!q) return sessions.value
-  return sessions.value.filter(
+  const shape = sessionShapeScope.value
+  let rows = sessions.value
+  // Applied in the browser, unlike the scopes the daemon owns, so it narrows the window that was
+  // fetched rather than reaching further back. Said plainly in the menu, because "no marathons in
+  // the last 24 hours" and "no marathons" are different answers.
+  if (shape !== 'all') rows = rows.filter((s) => sessionShape(s) === shape)
+  if (!q) return rows
+  return rows.filter(
     (s) =>
       s.title.toLowerCase().includes(q) ||
       s.cwd.toLowerCase().includes(q) ||
@@ -470,6 +540,8 @@ const findIndex = ref(0)
 // A template ref on <Input> yields the COMPONENT, not the element — the kit's Input is a
 // single-root wrapper, so the <input> is reached through $el.
 const findInput = ref<ComponentPublicInstance | null>(null)
+/** The sidebar's own filter box, so Ctrl/Cmd+K can put the caret in it. */
+const searchInput = ref<ComponentPublicInstance | null>(null)
 function focusFindInput() {
   const el = findInput.value?.$el
   if (el instanceof HTMLInputElement) el.focus()
@@ -518,19 +590,41 @@ watch(findQuery, () => {
 })
 // Closing the session closes the bar with it; a match count against a transcript you can no longer
 // see is just a wrong number on screen.
-watch(selectedId, () => closeFind())
+watch(selectedId, () => {
+  closeFind()
+  secretsOpen.value = false
+})
 
-/** Ctrl/Cmd+F takes over the browser's own find, which is the right trade: the browser can only
- *  search the turns currently in the DOM anyway, and cannot show a count that means anything here. */
-function onWindowKeydown(e: KeyboardEvent) {
-  if (!selectedId.value) return
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-    e.preventDefault()
-    openFind()
-  }
-}
-onMounted(() => window.addEventListener('keydown', onWindowKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown))
+// This view's own bindings, registered through the shared layer (composables/useShortcuts.ts) so
+// they appear in the `?` sheet and disappear from it when the view unmounts.
+//
+// Ctrl/Cmd+F takes over the browser's own find, which is the right trade: the browser can only
+// search the turns currently in the DOM anyway, and cannot show a count that means anything here.
+useShortcuts([
+  {
+    keys: 'mod+f',
+    labelKey: 'sessions.shortcutFind',
+    groupKey: 'sessions.shortcutGroup',
+    run: () => {
+      if (selectedId.value) openFind()
+    },
+  },
+  {
+    keys: 'mod+k',
+    labelKey: 'sessions.shortcutFilter',
+    groupKey: 'sessions.shortcutGroup',
+    run: () => searchInput.value?.$el?.focus?.(),
+  },
+  {
+    keys: 'escape',
+    labelKey: 'sessions.shortcutEscape',
+    groupKey: 'sessions.shortcutGroup',
+    run: () => {
+      if (findOpen.value) closeFind()
+      else if (selectedId.value) selectedId.value = null
+    },
+  },
+])
 
 const expandedMsgs = ref<Set<number>>(new Set())
 const isExpanded = (i: number) => expandedMsgs.value.has(i)
@@ -654,6 +748,70 @@ const usageDetail = computed(() => {
   parts.push(t('sessions.usageListPrice', { date: u.pricesAsOf }))
   return parts.join(' ')
 })
+
+// --- reopen in a terminal ----------------------------------------------------
+// The command comes back whether or not the terminal opened, so a machine we cannot open a window
+// on still gets something usable rather than a failure toast and nothing else.
+const resuming = ref(false)
+
+async function resumeInTerminal(s: SessionSummary) {
+  resuming.value = true
+  try {
+    const r = await api.resumeSessionInTerminal(s.session_id, s.source)
+    if (r.ok) {
+      toast.success(t('sessions.resumeOpened'))
+      return
+    }
+    await navigator.clipboard?.writeText(r.command).catch(() => {})
+    toast.info(
+      r.reason === 'source-unsupported'
+        ? t('sessions.resumeUnsupported')
+        : t('sessions.resumeCopied'),
+      { description: r.command },
+    )
+  } catch {
+    toast.error(t('sessions.resumeFailed'))
+  } finally {
+    resuming.value = false
+  }
+}
+
+// --- credentials this session printed ----------------------------------------
+// Same shape as the cost readout above: one cheap request per opened session, streamed server-side,
+// never stored. The result is ALWAYS redacted — the daemon has no unredacted form of it, on purpose
+// (server/src/session-export.ts).
+const secrets = ref<SessionSecretScan | null>(null)
+const secretsOpen = ref(false)
+
+/** Deliberately the same wording the export and the context pack use: a guardrail, not a
+ *  guarantee. Overstating it is how a scan like this does harm. */
+const secretsDetail = computed(() =>
+  secrets.value ? t('sessions.secretsHint', { n: secrets.value.count }) : undefined,
+)
+
+async function loadSecrets() {
+  const id = selectedId.value
+  const source = selectedSource.value
+  if (!id || !source) {
+    secrets.value = null
+    return
+  }
+  try {
+    const r = await api.getSessionSecrets(id, source)
+    if (selectedId.value !== id || selectedSource.value !== source) return
+    secrets.value = r
+  } catch {
+    secrets.value = null
+  }
+}
+watch(
+  [selectedId, selectedSource],
+  () => {
+    secrets.value = null
+    void loadSecrets()
+  },
+  { immediate: true },
+)
 
 // The three display controls the daemon applies (compact is purely visual, so it is not here).
 watch([showTools, showThinking, humanOnly], () => loadTail())
@@ -784,6 +942,7 @@ function copy(text: string) {
           <div class="relative flex-1">
             <Search class="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
+              ref="searchInput"
               v-model="search"
               :placeholder="$t('sessions.searchPlaceholder')"
               class="pl-8 pr-8"
@@ -924,6 +1083,53 @@ function copy(text: string) {
                         <DropdownMenuRadioItem v-for="i in namedInstances" :key="i.name" :value="i.name">{{ i.label }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="other">{{ $t('sessions.instanceOther') }}</DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+
+                  <!-- work we queued vs work you drove by hand. Known exactly rather than inferred:
+                       every dispatch names the session id on the command line, so a queue row for
+                       that id IS the fact. Never applied on our own initiative — 'all' is the
+                       default and stays it. -->
+                  <DropdownMenuSub :disabled="sessionSourceFilter === 'codex' || sessionSourceFilter === 'opencode'">
+                    <DropdownMenuSubTrigger>
+                      <ListTodo />
+                      {{ $t('sessions.dispatched') }}
+                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                        {{ dispatchedScopeLabel }}
+                      </span>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent class="w-52">
+                      <DropdownMenuRadioGroup v-model="sessionDispatchedScope">
+                        <DropdownMenuRadioItem value="all">{{ $t('sessions.dispatchedAll') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="queued">{{ $t('sessions.dispatchedQueued') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="manual">{{ $t('sessions.dispatchedManual') }}</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+
+                  <!-- shape: derived in the browser from the two numbers already on every row, so
+                       unlike the scopes around it this one narrows what was FETCHED rather than
+                       reaching further back. The note in the submenu says so. -->
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <Hourglass />
+                      {{ $t('sessions.shape') }}
+                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                        {{ shapeScopeLabel }}
+                      </span>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent class="w-60">
+                      <DropdownMenuRadioGroup v-model="sessionShapeScope">
+                        <DropdownMenuRadioItem value="all">{{ $t('sessions.shapeAll') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="quick">{{ $t('sessions.shapeQuick') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="standard">{{ $t('sessions.shapeStandard') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="deep">{{ $t('sessions.shapeDeep') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="marathon">{{ $t('sessions.shapeMarathon') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="automation">{{ $t('sessions.shapeAutomation') }}</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                      <p class="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+                        {{ $t('sessions.shapeNote') }}
+                      </p>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
 
@@ -1151,7 +1357,20 @@ function copy(text: string) {
                     <span class="inline-flex items-center gap-1"><FolderGit2 class="size-3" />{{ baseName(s.cwd) }}</span>
                     <span v-if="s.git_branch" class="inline-flex items-center gap-1"><GitBranch class="size-3" />{{ s.git_branch }}</span>
                     <span class="inline-flex items-center gap-1"><MessagesSquare class="size-3" />{{ s.message_count }}</span>
-                    <span class="inline-flex items-center gap-1"><Clock class="size-3" />{{ timeAgo(s.last_activity_at) }}</span>
+                    <!-- the dot rides the timestamp it is derived from, so "green" and "2m ago" are
+                         obviously the same fact rather than two claims to reconcile -->
+                    <span class="inline-flex items-center gap-1">
+                      <span
+                        class="size-1.5 shrink-0 rounded-full"
+                        :class="ACTIVITY_CLASS[activityOf(s)]"
+                        :title="$t(ACTIVITY_LABEL[activityOf(s)])"
+                      ></span>
+                      <Clock class="size-3" />{{ timeAgo(s.last_activity_at) }}
+                    </span>
+                    <span class="inline-flex items-center gap-1">
+                      <ListTodo v-if="s.dispatched" class="size-3" />
+                      <Hourglass v-else class="size-3" />{{ shapeLabel(sessionShape(s)) }}
+                    </span>
                     <span v-if="s.instance" class="inline-flex items-center gap-1">
                       <Boxes class="size-3" />{{ s.instance === 'default' ? $t('sessions.instanceDefault') : instanceLabelFor(s.instance) }}
                     </span>
@@ -1262,6 +1481,21 @@ function copy(text: string) {
                     <Coins class="size-3" />{{ usageSummary }}
                   </span>
                 </IconTooltip>
+                <!-- only ever shown when there is something to say. A permanent "0 secrets" badge
+                     would read as a clean bill of health, which this scan cannot give. -->
+                <IconTooltip
+                  v-if="secrets && secrets.count > 0"
+                  :label="$t('sessions.secretsLabel')"
+                  :description="secretsDetail"
+                >
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 text-warning"
+                    @click="secretsOpen = true"
+                  >
+                    <KeyRound class="size-3" />{{ $t('sessions.secretsCount', { n: secrets.count }) }}
+                  </button>
+                </IconTooltip>
               </div>
             </div>
             <div class="flex shrink-0 items-center gap-2">
@@ -1349,21 +1583,53 @@ function copy(text: string) {
                   <FileSymlink />
                 </Button>
               </IconTooltip>
+              <!-- one download button, three formats. The raw .jsonl is still here because it is the
+                   only lossless one; the two readable exports are what you hand to a person. Menu
+                   root INSIDE IconTooltip, per scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
               <IconTooltip
                 v-if="selected.source !== 'opencode'"
                 :label="$t('sessions.saveCopy')"
                 :description="$t('sessions.saveCopyHint')"
               >
-                <Button
-                  as="a"
-                  variant="outline"
-                  size="sm"
-                  :href="api.sessionFileUrl(selected.session_id, selected.source)"
-                  :download="safeTranscriptFilename(selected.title, selected.session_id)"
-                  :aria-label="$t('sessions.saveCopy')"
-                >
-                  <Download />
-                </Button>
+                <span class="inline-flex">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger as-child>
+                      <Button variant="outline" size="sm" :aria-label="$t('sessions.saveCopy')">
+                        <Download />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" class="w-72">
+                      <DropdownMenuItem as-child>
+                        <a
+                          :href="api.sessionExportUrl(selected.session_id, selected.source, 'markdown')"
+                          download
+                        >
+                          <FileText />{{ $t('sessions.exportMarkdown') }}
+                        </a>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem as-child>
+                        <a
+                          :href="api.sessionExportUrl(selected.session_id, selected.source, 'html')"
+                          download
+                        >
+                          <Globe />{{ $t('sessions.exportHtml') }}
+                        </a>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem as-child>
+                        <a
+                          :href="api.sessionFileUrl(selected.session_id, selected.source)"
+                          :download="safeTranscriptFilename(selected.title, selected.session_id)"
+                        >
+                          <FileSymlink />{{ $t('sessions.exportRaw') }}
+                        </a>
+                      </DropdownMenuItem>
+                      <p class="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+                        {{ $t('sessions.exportNote') }}
+                      </p>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </span>
               </IconTooltip>
               <IconTooltip
                 v-if="selected.source !== 'opencode'"
@@ -1392,6 +1658,21 @@ function copy(text: string) {
                   @click="copyFileLocation(selected)"
                 >
                   <Copy />
+                </Button>
+              </IconTooltip>
+              <IconTooltip
+                v-if="selected.source === 'claude'"
+                :label="$t('sessions.resumeTerminal')"
+                :description="$t('sessions.resumeTerminalHint')"
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="resuming"
+                  :aria-label="$t('sessions.resumeTerminal')"
+                  @click="resumeInTerminal(selected)"
+                >
+                  <SquareTerminal />
                 </Button>
               </IconTooltip>
               <IconTooltip :label="$t('sessions.copySessionId')">
@@ -1616,5 +1897,33 @@ function copy(text: string) {
         </div>
       </div>
     </section>
+
+    <!-- the findings, redacted. There is no reveal control, and the daemon has no endpoint that
+         could serve one: the transcript is already open one panel away, so revealing here would only
+         add a second place credentials live. -->
+    <Dialog v-model:open="secretsOpen">
+      <DialogContent class="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{{ $t('sessions.secretsTitle') }}</DialogTitle>
+          <DialogDescription>{{ $t('sessions.secretsCaveat') }}</DialogDescription>
+        </DialogHeader>
+        <ul class="scroll-slim max-h-80 space-y-1 overflow-y-auto text-xs">
+          <li
+            v-for="(f, i) in secrets?.findings ?? []"
+            :key="i"
+            class="flex items-center gap-2 rounded border border-border px-2 py-1.5"
+          >
+            <Badge variant="outline" class="shrink-0 text-[10px]">{{ f.kind }}</Badge>
+            <span class="min-w-0 flex-1 truncate font-mono">{{ f.redacted }}</span>
+            <span class="shrink-0 text-muted-foreground">
+              {{ $t('sessions.secretsTurn', { n: f.turn + 1 }) }}
+            </span>
+          </li>
+        </ul>
+        <p v-if="secrets?.truncated" class="text-xs text-muted-foreground">
+          {{ $t('sessions.secretsTruncated', { n: secrets.count }) }}
+        </p>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
