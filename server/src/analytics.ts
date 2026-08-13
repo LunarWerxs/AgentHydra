@@ -728,12 +728,33 @@ export async function refreshAnalytics(
 
 let warming: Promise<void> | null = null
 
-/** Warm in the background, once at a time. Never awaited by a request. */
+/** A pause between chunks, so a long warm leaves the disk to whatever the user is actually doing.
+ *  Long enough to be polite, short enough that a full store still finishes within an hour. */
+const WARM_CHUNK_GAP_MS = 3_000
+
+/**
+ * Warm in the background until the store is actually covered, one bounded chunk at a time.
+ *
+ * WHY IT LOOPS. This used to be a single 120-second burst, which covered a whole store back when
+ * the scan read 1,229 Claude transcripts. It now also reads their 16,579 subagent transcripts, so
+ * one burst reaches about a third of the store and then stops — leaving the analytics tab showing
+ * a partial answer with no indication that anything would ever finish it, and a Rescan button the
+ * user is expected to keep pressing.
+ *
+ * Chunked rather than one unbounded pass so a slow store cannot hold the daemon's I/O for an hour
+ * without interruption, and it stops the moment a chunk makes no progress, which is the honest end
+ * condition: either everything is scanned, or the remainder is failing and hammering it will not
+ * help.
+ */
 export function warmAnalyticsInBackground(budgetMs = 120_000): void {
   if (warming) return
   warming = (async () => {
     try {
-      await refreshAnalytics(listTranscriptFiles(), { budgetMs })
+      for (;;) {
+        const r = await refreshAnalytics(listTranscriptFiles(), { budgetMs })
+        if (!r.budgetExhausted || r.scanned === 0) break
+        await new Promise((resolve) => setTimeout(resolve, WARM_CHUNK_GAP_MS))
+      }
     } catch {
       // Analytics are an addition; the rest of the daemon does not depend on them.
     } finally {

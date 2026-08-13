@@ -7,7 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-13
+
 ### Added
+
+- **The background warm now finishes.** It was a single 120-second burst, which covered a whole
+  store back when the scan read 1,229 Claude transcripts; now that it also reads their 16,579
+  subagent transcripts, one burst reaches about a third of the store and stops. That left the
+  analytics tab showing a partial answer with no sign anything would ever complete it, and a Rescan
+  button the user was expected to keep pressing. It now runs in bounded chunks with a pause between
+  them until the store is covered, and stops the moment a chunk makes no progress.
 
 - **`bun run audit`: prove the numbers against the store.** Three counting errors shipped in one
   day and every one of them passed a green test suite, which is the part worth fixing. A unit test
