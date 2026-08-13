@@ -48,8 +48,12 @@ import { accumulateUsageLine, emptySpend } from './usage-tokens'
  *    (mtime, size) — neither of which moves when the PARSER changes — so every one of those
  *    sessions would have kept its empty row forever. Caught by shipping it: the live daemon
  *    reported one Codex session where the store has 136.
+ * 3: Every rollout in a Codex conversation, not just the newest. Codex writes one file per
+ *    execution thread and the transcript index keeps one ROW per conversation, so the totals were
+ *    reading a single file out of hundreds. On this machine that was 5,283 rollouts collapsing to
+ *    146, and the reported Codex spend was a fraction of the real figure.
  */
-export const ANALYTICS_VERSION = 2
+export const ANALYTICS_VERSION = 3
 
 /**
  * Gaps longer than this are not work, they are a lunch break with the window left open.
@@ -157,6 +161,10 @@ export async function scanSessionAnalytics(
   path: string,
   source: SessionSource,
   sessionId?: string,
+  /** Other files belonging to the same session. Codex writes one rollout per execution thread and
+   *  each carries its own token counter, so a total that reads only `path` reports a fraction of
+   *  the truth. See TranscriptFile.siblingPaths. */
+  siblingPaths: string[] = [],
 ): Promise<SessionAnalytics> {
   const out = emptyAnalytics()
   // OpenCode has already totalled its own session: the numbers are columns on its row, not events
@@ -182,7 +190,7 @@ export async function scanSessionAnalytics(
     }
     return out
   }
-  if (source === 'codex') return scanCodexAnalytics(path, out)
+  if (source === 'codex') return scanCodexAnalytics([path, ...siblingPaths], out)
 
   const spend = emptySpend()
   let lastWeighted = 0
@@ -276,79 +284,99 @@ export async function scanSessionAnalytics(
  * `tool_result.is_error` block at all. Forcing one loop to serve both would be a function with two
  * unrelated halves and a flag.
  */
-async function scanCodexAnalytics(path: string, out: SessionAnalytics): Promise<SessionAnalytics> {
-  const reader = new CodexUsageReader()
-  let prevTs: number | null = null
+async function scanCodexAnalytics(
+  paths: string[],
+  out: SessionAnalytics,
+): Promise<SessionAnalytics> {
   let turn = -1
-
-  for await (const raw of streamLines(path)) {
-    const line = raw.trim()
-    if (!line) continue
-    let ev: {
-      type?: string
-      timestamp?: string
-      payload?: { type?: string; name?: string; arguments?: unknown; call_id?: string }
-    }
+  // Every file that belongs to this conversation, each with a FRESH reader: a rollout's token
+  // counter is its own running cumulative, so carrying one reader across files would read the next
+  // file's opening total as one enormous delta. `prevTs` restarts too, since a gap between two
+  // parallel threads is not idle time within either of them.
+  for (const path of paths) {
+    const reader = new CodexUsageReader()
+    let prevTs: number | null = null
+    // Per FILE, not per session. A conversation here can own hundreds of rollouts and Codex
+    // moves them between `sessions/` and `archived_sessions/` while the daemon is scanning, so
+    // one file vanishing mid-read is expected. Letting that throw would discard every OTHER
+    // file's totals for the same conversation, a far larger error than the one missing file.
     try {
-      ev = JSON.parse(line)
-    } catch {
-      continue
-    }
+      for await (const raw of streamLines(path)) {
+        const line = raw.trim()
+        if (!line) continue
+        let ev: {
+          type?: string
+          timestamp?: string
+          payload?: { type?: string; name?: string; arguments?: unknown; call_id?: string }
+        }
+        try {
+          ev = JSON.parse(line)
+        } catch {
+          continue
+        }
 
-    const t = reader.push(ev)
-    if (t) {
-      addTurn(out.tokens, t.model, t)
-      if (t.ts !== null) {
-        const day = dayKey(t.ts)
-        // Weighted so the day chart apportions a Codex session the same way it does a Claude one.
-        out.days[day] =
-          (out.days[day] ?? 0) + t.input + t.cacheRead * 0.1 + t.cacheWrite * 1.25 + t.output * 5
-        const hour = String(hourKey(t.ts))
-        out.hours[hour] = (out.hours[hour] ?? 0) + 1
-        if (out.firstTs === null) out.firstTs = t.ts
-        out.lastTs = t.ts
-        if (prevTs !== null && t.ts > prevTs)
-          out.activeMs += Math.min(t.ts - prevTs, ACTIVE_GAP_CAP_MS)
-        prevTs = t.ts
-      }
-    }
-
-    const payload = ev.payload
-    if (!payload) continue
-    // Codex logs a compaction as its own top-level event type rather than a flag on a turn.
-    if (ev.type === 'compacted') out.compactions++
-    if (ev.type !== 'response_item') continue
-    turn++
-    // Codex has TWO call shapes and both are tool use: `function_call` for a declared tool, and
-    // `custom_tool_call` for its sandbox (`exec`, `wait`). Counting only the first missed the two
-    // most-used tools in a real rollout entirely.
-    //
-    // NOTE ON EDITS: no edit is recorded for Codex, deliberately. Its file changes happen INSIDE
-    // the `exec` sandbox as free-form code rather than as a tool call with a path argument, so
-    // there is nothing structured to read. Guessing a path out of a code string would produce a
-    // feed that is wrong in ways nobody could check, which is worse than one that is empty.
-    if (
-      (payload.type === 'function_call' || payload.type === 'custom_tool_call') &&
-      typeof payload.name === 'string'
-    ) {
-      const name = payload.name || 'tool'
-      out.tools[name] = (out.tools[name] ?? 0) + 1
-      if (EDIT_TOOLS.has(name) || /apply_patch|edit_file|write_file/i.test(name)) {
-        let input: unknown = payload.arguments
-        if (typeof input === 'string') {
-          try {
-            input = JSON.parse(input)
-          } catch {
-            input = null
+        const t = reader.push(ev)
+        if (t) {
+          addTurn(out.tokens, t.model, t)
+          if (t.ts !== null) {
+            const day = dayKey(t.ts)
+            // Weighted so the day chart apportions a Codex session the same way it does a Claude one.
+            out.days[day] =
+              (out.days[day] ?? 0) +
+              t.input +
+              t.cacheRead * 0.1 +
+              t.cacheWrite * 1.25 +
+              t.output * 5
+            const hour = String(hourKey(t.ts))
+            out.hours[hour] = (out.hours[hour] ?? 0) + 1
+            if (out.firstTs === null || t.ts < out.firstTs) out.firstTs = t.ts
+            if (out.lastTs === null || t.ts > out.lastTs) out.lastTs = t.ts
+            if (prevTs !== null && t.ts > prevTs)
+              out.activeMs += Math.min(t.ts - prevTs, ACTIVE_GAP_CAP_MS)
+            prevTs = t.ts
           }
         }
-        const p = firstPath(input)
-        if (p) {
-          out.editCount++
-          if (out.edits.length < MAX_EDITS_PER_SESSION)
-            out.edits.push({ path: p, turn, ts: out.lastTs })
+
+        const payload = ev.payload
+        if (!payload) continue
+        // Codex logs a compaction as its own top-level event type rather than a flag on a turn.
+        if (ev.type === 'compacted') out.compactions++
+        if (ev.type !== 'response_item') continue
+        turn++
+        // Codex has TWO call shapes and both are tool use: `function_call` for a declared tool, and
+        // `custom_tool_call` for its sandbox (`exec`, `wait`). Counting only the first missed the two
+        // most-used tools in a real rollout entirely.
+        //
+        // NOTE ON EDITS: no edit is recorded for Codex, deliberately. Its file changes happen INSIDE
+        // the `exec` sandbox as free-form code rather than as a tool call with a path argument, so
+        // there is nothing structured to read. Guessing a path out of a code string would produce a
+        // feed that is wrong in ways nobody could check, which is worse than one that is empty.
+        if (
+          (payload.type === 'function_call' || payload.type === 'custom_tool_call') &&
+          typeof payload.name === 'string'
+        ) {
+          const name = payload.name || 'tool'
+          out.tools[name] = (out.tools[name] ?? 0) + 1
+          if (EDIT_TOOLS.has(name) || /apply_patch|edit_file|write_file/i.test(name)) {
+            let input: unknown = payload.arguments
+            if (typeof input === 'string') {
+              try {
+                input = JSON.parse(input)
+              } catch {
+                input = null
+              }
+            }
+            const p = firstPath(input)
+            if (p) {
+              out.editCount++
+              if (out.edits.length < MAX_EDITS_PER_SESSION)
+                out.edits.push({ path: p, turn, ts: out.lastTs })
+            }
+          }
         }
       }
+    } catch {
+      // Unreadable or moved: skip this file, keep the conversation.
     }
   }
   return out
@@ -557,7 +585,7 @@ export async function refreshAnalytics(
         continue
       }
       try {
-        const a = await scanSessionAnalytics(tf.path, tf.source, tf.session_id)
+        const a = await scanSessionAnalytics(tf.path, tf.source, tf.session_id, tf.siblingPaths)
         persist(tf, a)
         scanned++
       } catch (err) {

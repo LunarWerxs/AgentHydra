@@ -244,3 +244,71 @@ describe('the placeholder row can never be mistaken for a parsed session', () =>
     expect(a?.analytics_mtime_ms).toBe(tf.mtime_ms)
   })
 })
+
+describe('a Codex conversation is more than one file', () => {
+  // THE BUG THIS PINS. Codex writes one rollout per execution thread and identifies the owning chat
+  // by session_id, so a conversation is routinely hundreds of files — 4,716 of the 4,860 archived
+  // rollouts on the machine this was built against are subagent threads. The session LIST correctly
+  // shows one row per conversation, and the totals were reading only that row's single file, so
+  // Codex spend was reported at a fraction of the truth: 12.2B tokens against a real 637.7B.
+  //
+  // Each file carries its OWN running cumulative, which is why every one needs a fresh reader:
+  // continuing one across files would read the next file's opening total as one enormous delta.
+  const rollout = (at: string, totals: Array<[number, number]>) =>
+    transcript([
+      { type: 'turn_context', timestamp: at, payload: { model: 'gpt-5.6-sol' } },
+      ...totals.map(([input, output]) => ({
+        type: 'event_msg',
+        timestamp: at,
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              input_tokens: input,
+              cached_input_tokens: 0,
+              output_tokens: output,
+            },
+          },
+        },
+      })),
+    ])
+
+  test('sibling rollouts are totalled, not ignored', async () => {
+    const main = rollout('2026-08-10T10:00:00.000Z', [
+      [100, 10],
+      [300, 30],
+    ])
+    const sub1 = rollout('2026-08-10T10:01:00.000Z', [[500, 50]])
+    const sub2 = rollout('2026-08-10T10:02:00.000Z', [[700, 70]])
+
+    const alone = await scanSessionAnalytics(main, 'codex', 'sess')
+    expect(alone.tokens['gpt-5.6-sol']?.input).toBe(300)
+
+    const together = await scanSessionAnalytics(main, 'codex', 'sess', [sub1, sub2])
+    // 300 + 500 + 700 — each file's own final cumulative, summed.
+    expect(together.tokens['gpt-5.6-sol']?.input).toBe(1500)
+    expect(together.tokens['gpt-5.6-sol']?.output).toBe(150)
+  })
+
+  test("a sibling's opening total is not read as a delta against the previous file", async () => {
+    // Both files END at a large cumulative. With one shared reader the second file's first event
+    // would look like a drop (a reset) or a vast jump; with a reader each, both are simply totals.
+    const a = rollout('2026-08-10T10:00:00.000Z', [[1_000_000, 1000]])
+    const b = rollout('2026-08-10T10:05:00.000Z', [[1_000_000, 1000]])
+    const both = await scanSessionAnalytics(a, 'codex', 'sess', [b])
+    expect(both.tokens['gpt-5.6-sol']?.input).toBe(2_000_000)
+  })
+
+  test('an unreadable sibling does not lose the rest of the conversation', async () => {
+    // Codex moves rollouts between sessions/ and archived_sessions/ while the daemon scans, so a
+    // file vanishing mid-read is expected rather than exceptional. Losing the whole conversation's
+    // totals over one missing file would be a far bigger error than the file itself.
+    const main = rollout('2026-08-10T10:00:00.000Z', [[100, 10]])
+    const good = rollout('2026-08-10T10:01:00.000Z', [[200, 20]])
+    const a = await scanSessionAnalytics(main, 'codex', 'sess', [
+      join(dir, 'does-not-exist.jsonl'),
+      good,
+    ])
+    expect(a.tokens['gpt-5.6-sol']?.input).toBe(300)
+  })
+})

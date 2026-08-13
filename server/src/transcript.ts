@@ -40,6 +40,16 @@ export interface TranscriptFile {
   title?: string
   cwd?: string
   created_at?: number | null
+  /**
+   * The OTHER files that belong to this same session, for providers that write more than one.
+   *
+   * Codex writes one rollout per execution thread and identifies the user-owned chat by
+   * `payload.session_id`, so a single conversation can be hundreds of files. The list below keeps
+   * one ROW per conversation (see finishIndex) because that is what a session list is, but each of
+   * those discarded files carries its own token spend, and dropping them undercounted Codex usage
+   * by an order of magnitude. Anything totalling a session must read these as well as `path`.
+   */
+  siblingPaths?: string[]
 }
 
 let cache: { at: number; files: TranscriptFile[] } | null = null
@@ -373,14 +383,40 @@ function openCodeRecords(): TranscriptFile[] {
 
 /** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
  *  settle. Source + id is the identity; newest wins, matching findTranscript's old behavior. */
-function finishIndex(files: TranscriptFile[], at: number): TranscriptFile[] {
+/**
+ * One row per session, keeping the newest file as its face — and REMEMBERING the rest.
+ *
+ * The dedupe is what makes the session list a list of conversations rather than of files, and it
+ * has to stay. What it must not do is destroy the fact that the others existed: Codex writes a
+ * rollout per execution thread, so a conversation is routinely hundreds of files, each with its own
+ * token counter. Discarding them silently made the analytics report a fraction of real Codex spend
+ * (5,283 rollouts on this machine collapsed to 146 rows). They are carried on `siblingPaths`, which
+ * only a total ever reads.
+ */
+function finishIndex(
+  files: TranscriptFile[],
+  at: number,
+  subagentPaths?: Map<string, string[]>,
+): TranscriptFile[] {
   const unique = new Map<string, TranscriptFile>()
+  const siblings = new Map<string, string[]>()
   for (const file of files) {
     const key = `${file.source}:${file.session_id}`
+    const paths = siblings.get(key)
+    if (paths) paths.push(file.path)
+    else siblings.set(key, [file.path])
     const previous = unique.get(key)
     if (!previous || file.mtime_ms >= previous.mtime_ms) unique.set(key, file)
   }
-  const result = [...unique.values()]
+  const result = [...unique.values()].map((file) => {
+    const key = `${file.source}:${file.session_id}`
+    // Only the OTHERS: `path` is already read by every caller, and listing it twice would double
+    // that file's tokens. Subagent rollouts join them, since they are the same conversation's spend.
+    const rest = (siblings.get(key) ?? []).filter((p) => p !== file.path)
+    if (file.source === 'codex')
+      for (const p of subagentPaths?.get(file.session_id) ?? []) if (p !== file.path) rest.push(p)
+    return rest.length ? { ...file, siblingPaths: rest } : file
+  })
   cache = { at, files: result }
   return result
 }
@@ -400,6 +436,7 @@ function buildTranscriptIndex(): TranscriptFile[] {
   }
 
   const codexSessionIndex = readCodexSessionIndex()
+  const subagentPaths = new Map<string, string[]>()
   const addCodexRoot = (root: string, archived: boolean) => {
     const glob = new Bun.Glob(CODEX_ROLLOUT_GLOB)
     for (const rel of scanRootSync(glob, root)) {
@@ -411,10 +448,18 @@ function buildTranscriptIndex(): TranscriptFile[] {
         continue
       }
       const identity = readCodexRolloutIdentity(path, codexFallbackId(rel))
-      // Subagents are implementation detail of their parent chat. Their visible user history is a
-      // forked copy of that chat, so merging them would duplicate turns; the top-level rollout is
+      // Subagents are an implementation detail of their parent chat. Their visible user history is
+      // a forked copy of that chat, so merging them would duplicate turns; the top-level rollout is
       // the complete user-facing conversation and is the only row Codex itself exposes.
-      if (identity.isSubagent) continue
+      //
+      // They are REMEMBERED rather than discarded, because a subagent burns its own tokens and the
+      // parent rollout does not contain them. Dropping them outright made the analytics report a
+      // fraction of real Codex spend: on this machine 4,716 of 4,860 archived rollouts are
+      // subagents. See TranscriptFile.siblingPaths, which only a total ever reads.
+      if (identity.isSubagent) {
+        rememberSubagent(subagentPaths, identity.sessionId, path)
+        continue
+      }
       files.push(
         codexRecord(
           root,
@@ -432,7 +477,21 @@ function buildTranscriptIndex(): TranscriptFile[] {
   addCodexRoot(CODEX_ARCHIVED_SESSIONS_ROOT, true)
 
   files.push(...openCodeRecords())
-  return finishIndex(files, now)
+  return finishIndex(files, now, subagentPaths)
+}
+
+/** One conversation can own hundreds of subagent rollouts; capped so a runaway fan-out cannot put
+ *  an unbounded array on an index row. The cap is generous enough to cover a real session (the
+ *  largest here owns 444) and exists only as a ceiling. */
+const MAX_SUBAGENT_PATHS = 2000
+
+function rememberSubagent(map: Map<string, string[]>, sessionId: string, path: string): void {
+  const list = map.get(sessionId)
+  if (!list) {
+    map.set(sessionId, [path])
+    return
+  }
+  if (list.length < MAX_SUBAGENT_PATHS) list.push(path)
 }
 
 /**
@@ -463,6 +522,7 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   for (const record of claudeStats) if (record) files.push(record)
 
   const codexSessionIndex = readCodexSessionIndex()
+  const subagentPaths = new Map<string, string[]>()
   for (const [root, archived] of [
     [CODEX_SESSIONS_ROOT, false],
     [CODEX_ARCHIVED_SESSIONS_ROOT, true],
@@ -473,7 +533,8 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
       try {
         const st = await statAsync(path)
         const identity = await readCodexRolloutIdentityAsync(path, codexFallbackId(rel))
-        if (identity.isSubagent) return null
+        // Same rule as the sync builder: not a row, but its tokens are not thrown away.
+        if (identity.isSubagent) return { subagentOf: identity.sessionId, path }
         return codexRecord(
           root,
           rel,
@@ -487,11 +548,15 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
         return null
       }
     })
-    for (const record of records) if (record) files.push(record)
+    for (const record of records) {
+      if (!record) continue
+      if ('subagentOf' in record) rememberSubagent(subagentPaths, record.subagentOf, record.path)
+      else files.push(record)
+    }
   }
 
   files.push(...openCodeRecords())
-  return finishIndex(files, now)
+  return finishIndex(files, now, subagentPaths)
 }
 
 let indexBuild: Promise<TranscriptFile[]> | null = null

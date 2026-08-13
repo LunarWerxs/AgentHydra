@@ -9,6 +9,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Codex spend was reported at a fiftieth of the truth.** Codex writes one rollout file per
+  execution thread and identifies the owning chat separately, so a single conversation is routinely
+  hundreds of files: on the machine this was found on, 5,283 rollout files belong to 146
+  conversations, and 4,716 of them are sub-agent threads. The session list correctly shows one row
+  per conversation, and the totals were reading only that row's single file. Every file in a
+  conversation is now totalled, each with its own reader, because each carries its own running
+  token counter. Measured on that store: Codex went from 12.2 billion tokens to **637 billion**,
+  which makes it the largest provider there by volume, ahead of Claude.
+
+  A file that vanishes mid-scan is now skipped rather than discarding its whole conversation's
+  totals. At five thousand files, Codex moving one between its live and archived folders during a
+  scan is expected rather than exceptional.
+
 - **The statistics were Claude-only.** Codex and OpenCode sessions reported zero tokens, which read
   as "you have not used them" rather than "we did not look". Both record their spend; they simply
   record it in shapes the Claude parser does not understand. On this machine that was **12.2 billion
