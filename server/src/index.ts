@@ -8,6 +8,16 @@ import { serveStatic } from 'hono/bun'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
 import {
+  activityReport,
+  analyticsCoverage,
+  concurrencyReport,
+  dropAnalytics,
+  recentEdits,
+  refreshAnalytics,
+  spendReport,
+  warmAnalyticsInBackground,
+} from './analytics'
+import {
   autoUpdateEnabled,
   getAutoUpdateIntervalSecs,
   lastUpdateCheck,
@@ -155,10 +165,10 @@ import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
 import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
-import { sessionUsage } from './session-usage'
+import { runCost, sessionUsage } from './session-usage'
 import { getSession, listSessions, sessionMarkKey, warmSessionScanCache } from './sessions'
 import { skipSingleInstanceGuard } from './single-instance'
-import { findTranscript, tailTranscript } from './transcript'
+import { findTranscript, listTranscriptFiles, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
 import {
   type Account,
@@ -913,6 +923,53 @@ app.get('/api/sessions/:id/usage', async (c) => {
 // is exactly why the delete is offered rather than buried.
 app.get('/api/search-index', (c) => c.json(searchIndexStatus()))
 app.delete('/api/search-index', (c) => c.json({ ok: dropSearchIndex(), ...searchIndexStatus() }))
+
+// --- analytics ---------------------------------------------------------------
+// Read-only aggregates over per-session TOTALS the background warm computed (server/src/
+// analytics.ts). Every one of them reports its own coverage, because a chart drawn from a
+// half-warmed store and a chart drawn from a complete one look identical and mean different things.
+const analyticsPeriod = (c: { req: { query: (k: string) => string | undefined } }) => {
+  const raw = c.req.query('period')
+  const period: SessionPeriod = isSessionPeriod(raw) ? raw : '30d'
+  return periodCutoffMs(period)
+}
+app.get('/api/analytics/spend', (c) => c.json(spendReport({ sinceMs: analyticsPeriod(c) })))
+app.get('/api/analytics/activity', (c) => c.json(activityReport({ sinceMs: analyticsPeriod(c) })))
+app.get('/api/analytics/concurrency', (c) =>
+  c.json({
+    buckets: concurrencyReport({
+      sinceMs: analyticsPeriod(c),
+      bucketMs: boundedQueryInt(c.req.query('bucketMinutes'), 60, 1440) * 60_000,
+    }),
+  }),
+)
+app.get('/api/analytics/edits', (c) =>
+  c.json({ edits: recentEdits(boundedQueryInt(c.req.query('limit'), 200, 1000)) }),
+)
+app.get('/api/analytics', (c) => c.json(analyticsCoverage()))
+// Recompute on demand. Bounded by the same wall-clock budget the warm uses, so a click cannot
+// wedge the daemon on a store with thousands of transcripts in it.
+app.post('/api/analytics/refresh', async (c) =>
+  c.json(
+    await refreshAnalytics(listTranscriptFiles(), {
+      budgetMs: boundedQueryInt(c.req.query('budgetMs'), 30_000, 120_000),
+    }),
+  ),
+)
+app.delete('/api/analytics', (c) => c.json({ ok: dropAnalytics(), ...analyticsCoverage() }))
+/**
+ * Cost of ONE queued run.
+ *
+ * Not stored, and deliberately: a run is a time window on a session that already has per-turn usage
+ * in its transcript, so the honest number is the one computed by re-reading that window. Storing it
+ * would add a second figure that can disagree with the session's own.
+ */
+app.get('/api/queue/:id/cost', async (c) => {
+  const id = c.req.param('id')
+  const item = db.query<QueueItem, [string]>('select * from queue_items where id = ?').get(id)
+  if (!item) return c.json({ error: 'run not found' }, 404)
+  return c.json(await runCost(coerceQueueItem(item)))
+})
 
 // --- accounts ---------------------------------------------------------------
 app.get('/api/accounts', (c) => c.json(listAccounts()))
@@ -2120,9 +2177,14 @@ const server = Bun.serve({
 // here takes the daemon down in the worst possible shape — the port reads as claimed, then nothing
 // ever serves it. Warming is purely an optimization (the list still builds on demand), so any
 // failure must degrade to a cold first request, never to a dead process.
-warmSessionScanCache().catch((error) => {
-  console.error('[agenthydra] session-scan warm failed; the list will build on demand:', error)
-})
+warmSessionScanCache()
+  .catch((error) => {
+    console.error('[agenthydra] session-scan warm failed; the list will build on demand:', error)
+  })
+  // Analytics AFTER the list warm, not alongside it. Both read the same transcripts, and the list
+  // is what the user is waiting for; racing them would slow the visible thing to speed up a tab
+  // nobody has opened yet. Fire-and-forget by design (see warmAnalyticsInBackground).
+  .finally(() => warmAnalyticsInBackground())
 
 if (releaseDoubleClick && !noAutoOpen()) {
   const url = `http://127.0.0.1:${server.port}/`

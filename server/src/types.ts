@@ -133,6 +133,95 @@ export interface SessionSecretScan {
   truncated: boolean
 }
 
+// --- the analytics tier (server/src/analytics.ts) ---------------------------
+// DTOs only; the runtime module imports them back, same discipline as SyncStatus above.
+
+/** How much of the store the background scan has reached. Every report carries it, because a chart
+ *  from a half-warmed store looks identical to one from a complete store and means less. */
+export interface AnalyticsCoverage {
+  sessions: number
+  total: number
+  refreshing: boolean
+  bytes: number
+}
+
+export interface SpendBucket {
+  key: string
+  weighted: number
+  costUsd: number | null
+  sessions: number
+  turns: number
+}
+
+export interface SpendReport {
+  from: string | null
+  to: string | null
+  totalCostUsd: number | null
+  totalWeighted: number
+  sessions: number
+  byModel: SpendBucket[]
+  byProject: SpendBucket[]
+  byDay: SpendBucket[]
+  byAccount: SpendBucket[]
+  unpricedModels: string[]
+  coverage: AnalyticsCoverage
+}
+
+export interface SessionHealthRow {
+  session_id: string
+  source: SessionSource
+  project: string
+  toolErrors: number
+  toolErrorStreak: number
+  edits: number
+  compactions: number
+}
+
+export interface ActivityReport {
+  /** 168 slots, Sunday 00:00 first. */
+  hours: number[]
+  tools: Array<{ key: string; count: number }>
+  /** Engaged time, not wall clock: inter-turn gaps with each one capped. */
+  agentMinutes: number
+  health: SessionHealthRow[]
+  coverage: AnalyticsCoverage
+}
+
+export interface ConcurrencyPoint {
+  at: number
+  sessions: number
+}
+
+export interface EditEntry {
+  session_id: string
+  source: SessionSource
+  project: string
+  path: string
+  turn: number
+  ts: number | null
+}
+
+/** What one queued run cost, computed from the turns inside its own window. Never stored. */
+export interface RunCost {
+  id: string
+  session_id: string
+  status: string
+  startedAt: string | null
+  finishedAt: string | null
+  tokens: {
+    input: number
+    output: number
+    cacheRead: number
+    cacheCreation: number
+    total: number
+    turns: number
+  }
+  costUsd: number | null
+  unpricedModels: string[]
+  pricesAsOf: string
+  status_reason: 'ok' | 'no-window' | 'source-unsupported' | 'unreadable'
+}
+
 /** How a session list treats provider archive state. 'hide' is the default because archived is the
  *  large majority of a real store, so including it buries live work; 'only' makes old work findable. */
 export type ArchivedScope = 'hide' | 'include' | 'only'

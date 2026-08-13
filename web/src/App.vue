@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  BarChart3,
   Boxes,
   ListChecks,
   MessagesSquare,
@@ -12,6 +13,7 @@ import {
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import AnalyticsView from '@/components/AnalyticsView.vue'
 import InstancesView from '@/components/InstancesView.vue'
 import QueueBuilder from '@/components/QueueBuilder.vue'
 import QueueView from '@/components/QueueView.vue'
@@ -87,6 +89,14 @@ useShortcuts([
       view.value = 'instances'
     },
   },
+  {
+    keys: 'mod+3',
+    labelKey: 'app.shortcutAnalytics',
+    groupKey: 'app.shortcutGroupApp',
+    run: () => {
+      view.value = 'analytics'
+    },
+  },
 ])
 
 // settings + queue share the right edge; usePanels keeps them mutually exclusive
@@ -150,6 +160,7 @@ async function onShutdown() {
 const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
   { id: 'sessions', labelKey: 'app.tabSessions', icon: MessagesSquare },
   { id: 'instances', labelKey: 'app.tabInstances', icon: Boxes },
+  { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
 ]
 
 const runningCount = computed(() => queue.value.filter((q) => q.status === 'running').length)
@@ -299,6 +310,7 @@ onUnmounted(stopAvailabilityPolling)
       >
         <Transition name="view-fade" mode="out-in">
           <SessionsView v-if="view === 'sessions'" />
+          <AnalyticsView v-else-if="view === 'analytics'" />
           <InstancesView v-else />
         </Transition>
       </main>

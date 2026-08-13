@@ -1,5 +1,7 @@
 import type {
   Account,
+  ActivityReport,
+  AnalyticsCoverage,
   ArchivedScope,
   AuthType,
   ChatGptContextPack,
@@ -10,7 +12,9 @@ import type {
   CMInstance,
   CodexAccount,
   CodexInstance,
+  ConcurrencyPoint,
   DispatchedScope,
+  EditEntry,
   EffortLevel,
   InstanceColorKey,
   InstanceIconKey,
@@ -24,6 +28,7 @@ import type {
   ProviderSettings,
   QueueItem,
   ResetEvent,
+  RunCost,
   RunEvent,
   SchedulerState,
   SearchIndexStatus,
@@ -34,6 +39,7 @@ import type {
   SessionSourceScope,
   SessionSummary,
   SessionUsage,
+  SpendReport,
   SyncStatus,
   TailResult,
   TranscriptSettings,
@@ -46,6 +52,8 @@ import type {
 
 export type {
   Account,
+  ActivityReport,
+  AnalyticsCoverage,
   ArchivedScope,
   AuthType,
   ChatGptContextPack,
@@ -59,7 +67,9 @@ export type {
   CodexAccountStatus,
   CodexAuthMode,
   CodexInstance,
+  ConcurrencyPoint,
   DispatchedScope,
+  EditEntry,
   EffortLevel,
   InstanceColorKey,
   InstanceIconKey,
@@ -90,6 +100,8 @@ export type {
   SessionSummary,
   SessionUsage,
   SessionUsageStatus,
+  SpendBucket,
+  SpendReport,
   SyncStatus,
   TailEvent,
   TailResult,
@@ -136,6 +148,30 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return res.json() as Promise<T>
 }
+
+// --- analytics ---------------------------------------------------------------
+// Read-only aggregates over the per-session totals the daemon warms in the background. Every one
+// carries a `coverage` block; the view shows it rather than drawing a chart that quietly describes
+// half the store.
+export const getSpend = (period: SessionPeriod = '30d') =>
+  j<SpendReport>(`/api/analytics/spend?period=${period}`)
+export const getActivity = (period: SessionPeriod = '30d') =>
+  j<ActivityReport>(`/api/analytics/activity?period=${period}`)
+export const getConcurrency = (period: SessionPeriod = '30d', bucketMinutes = 180) =>
+  j<{ buckets: ConcurrencyPoint[] }>(
+    `/api/analytics/concurrency?period=${period}&bucketMinutes=${bucketMinutes}`,
+  )
+export const getRecentEdits = (limit = 200) =>
+  j<{ edits: EditEntry[] }>(`/api/analytics/edits?limit=${limit}`)
+export const getAnalyticsStatus = () => j<AnalyticsCoverage>('/api/analytics')
+export const refreshAnalytics = () =>
+  j<{ scanned: number; skipped: number; budgetExhausted: boolean }>('/api/analytics/refresh', {
+    method: 'POST',
+  })
+export const deleteAnalytics = () =>
+  j<AnalyticsCoverage & { ok: boolean }>('/api/analytics', { method: 'DELETE' })
+/** What one queued run cost. Computed on demand, never stored — see server/src/session-usage.ts. */
+export const getRunCost = (id: string) => j<RunCost>(`/api/queue/${encodeURIComponent(id)}/cost`)
 
 // --- sessions ---------------------------------------------------------------
 export const getSessions = (

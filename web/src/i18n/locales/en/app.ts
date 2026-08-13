@@ -17,4 +17,6 @@ export default {
   shortcutShowSheet: 'Show this list',
   shortcutSessions: 'Go to Sessions',
   shortcutInstances: 'Go to Instances',
+  shortcutAnalytics: 'Go to Analytics',
+  tabAnalytics: 'Analytics',
 }

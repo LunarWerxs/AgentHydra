@@ -81,6 +81,19 @@ Two things make this survive contact with reality:
   the window resets, gated on your weekly usage so it does not spend everything the moment it can.
   This is off unless you turn it on.
 
+## See where the time and the money went
+
+![The analytics view: headline cost, session and agent-hour tiles above a cost-by-day bar chart, cost broken down by model, project and account, and an hour-of-week grid showing when the work happens](.github/screenshots/analytics.png)
+
+Cost by day, by model, by project, and by the account that ran it. When in the week you actually
+work. How many sessions were going at once. Which tools get used, which files changed recently, and
+which sessions are worth a second look because a tool kept failing or the context was compacted.
+
+All of it comes from totals worked out while the session list is being built, so it costs about half
+a megabyte for a store of 1,400 sessions and no message text is kept. Costs are published list
+prices: a subscription plan is not billed per token, so read them as what the same work would cost
+on the API. `AgentHydra.exe --spend --json` prints the same numbers for a script.
+
 ## Manage isolated instances
 
 ![The instances view: four isolated Claude Desktop instances, each with its account, plan, remaining weekly quota, live memory and uptime](.github/screenshots/instances.png)

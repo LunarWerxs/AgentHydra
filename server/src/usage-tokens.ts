@@ -210,7 +210,9 @@ export function sumTranscriptTokens(text: string, sinceMs: number): TokenSpend {
   return spend
 }
 
-function mergeSpend(a: TokenSpend, b: TokenSpend): TokenSpend {
+/** Add b into a fresh total. Exported for server/src/session-usage.ts's per-run windowing, which
+ *  accumulates one turn at a time so it can drop the ones outside the run's window. */
+export function mergeSpend(a: TokenSpend, b: TokenSpend): TokenSpend {
   const byModel = { ...a.byModel }
   for (const [model, m] of Object.entries(b.byModel)) {
     const cur = byModel[model] ?? {

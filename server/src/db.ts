@@ -170,6 +170,60 @@ create index if not exists idx_session_scan_cache_path on session_scan_cache(pat
     db.exec('alter table queue_items add column retry_attempts integer not null default 0')
 }
 {
+  // --- the analytics tier (server/src/analytics.ts) --------------------------------------------
+  // Per-session TOTALS, on the row that already describes this exact file revision, so a transcript
+  // that gains a turn invalidates its numbers along with its title and there is no second notion of
+  // staleness to keep in step. All nullable: a row written by the list scanner simply has no
+  // analytics yet, which is what the background warm looks for.
+  //
+  // Deliberately NOT message text. Every column here is a number, or JSON whose keys are tool
+  // names, model ids and dates. About 600 bytes a session — a couple of megabytes at five thousand
+  // sessions — which is the entire reason this was allowed where a full-text index was not.
+  const cols = db
+    .query<{ name: string }, []>('pragma table_info(session_scan_cache)')
+    .all()
+    .map((c) => c.name)
+  const add = (name: string, decl: string) => {
+    if (!cols.includes(name)) db.exec(`alter table session_scan_cache add column ${name} ${decl}`)
+  }
+  add('analytics_at', 'integer')
+  add('analytics_version', 'integer')
+  // Denormalised from the transcript index so an aggregate never has to re-glob the store to know
+  // which session, provider or project a row belongs to.
+  add('session_id', 'text')
+  add('source', 'text')
+  add('project', 'text')
+  add('tokens_json', 'text')
+  add('days_json', 'text')
+  add('hours_json', 'text')
+  add('tools_json', 'text')
+  add('tool_errors', 'integer')
+  add('tool_error_streak', 'integer')
+  add('edit_count', 'integer')
+  add('compactions', 'integer')
+  add('active_ms', 'integer')
+  add('first_ts', 'integer')
+  add('last_ts', 'integer')
+}
+
+// The recent-edits feed. Its own table, and the only unbounded-per-session list in the tier, so it
+// carries a GLOBAL row cap (analytics.ts pruneEdits) rather than growing with the store.
+db.exec(`
+create table if not exists session_edits (
+  id         integer primary key autoincrement,
+  cache_key  text not null,
+  session_id text not null,
+  source     text not null,
+  project    text not null,
+  path       text not null,
+  turn       integer not null,
+  ts         integer
+);
+create index if not exists idx_session_edits_key on session_edits(cache_key);
+create index if not exists idx_session_edits_ts on session_edits(ts desc);
+`)
+
+{
   const cols = db
     .query<{ name: string }, []>('pragma table_info(monitor_state)')
     .all()

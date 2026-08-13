@@ -26,8 +26,8 @@ import { registerSharedPref } from './useSharedPrefs'
 // update, a restart, a stray F5), and landing back on Sessions every time undid whatever you were
 // in the middle of looking at.
 
-export type AppView = 'sessions' | 'instances'
-export const APP_VIEWS: readonly AppView[] = ['sessions', 'instances']
+export type AppView = 'sessions' | 'instances' | 'analytics'
+export const APP_VIEWS: readonly AppView[] = ['sessions', 'instances', 'analytics']
 
 /** Validated on read, not trusted: a stale or hand-edited value must fall back rather than render
  *  a tab that no longer exists. The same set is handed to the mirror, which has to make the same

@@ -9,6 +9,34 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **An Analytics tab: where the time and the money went.** The scanner that builds the session list
+  already opens every transcript and reads every line, works out a title, and throws the rest away.
+  It now keeps the totals: tokens per model, a sparse day and hour histogram, tool counts, and four
+  counters. On a real 1,435-session store that is **556 KB**, a fraction of a percent of the
+  transcripts it describes. It is emphatically not a full-text index: not one word of a message is
+  stored, and every value is a number or a key that came from a tool name, a model id or a date.
+
+  The tab answers cost by day, by model, by project and by dispatching account; when in the week the
+  work actually happens; how many sessions were running at once; the tool mix; which files have been
+  edited lately; and which sessions are worth a second look because a tool failed repeatedly, the
+  edits churned, or the context was compacted. There is also `--spend --json` for scripts, and
+  `get_spend` / `get_activity` / `get_recent_edits` / `get_run_cost` over MCP.
+
+  **Cost per queued run is the one AgentsView structurally cannot do.** It did not dispatch the work,
+  so it cannot tell which turns belong to which run. AgentHydra recorded the session id and the exact
+  instants the run started and finished, so a run's cost is simply that session's own per-turn usage
+  restricted to that window. It is computed on demand and never stored, which is what makes it
+  impossible for it to drift from the session's own total.
+
+  Two honest limits, both stated in the app rather than only in the code. The costs are published
+  list prices, and a subscription plan is not billed per token, so they answer "what would this have
+  cost on the API". And "agent hours" is engaged time (the gaps between turns, each capped), not
+  wall clock, because a session left open over lunch is not six hours of work.
+
+  No charting library was added. The charts are hand-written SVG, and the palette is a validated one:
+  the kit's own chart colours fail a colourblind-safety check in light mode, with two of its five
+  slots indistinguishable even to full-colour vision.
+
 - **A session you can hand to someone.** The only export was the raw `.jsonl`, which is complete and
   unreadable. Sessions now save as Markdown, or as one self-contained HTML file that opens in any
   browser with nothing beside it. Both cover the WHOLE session rather than the window the viewer

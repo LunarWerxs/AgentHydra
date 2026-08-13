@@ -328,6 +328,55 @@ export const TOOLS: McpEngineTool[] = [
       api(`/api/sessions/${encodeURIComponent(str(a.id))}/secrets${qs({ source: a.source })}`),
   },
 
+  // --- analytics ----------------------------------------------------------------
+  {
+    name: 'get_spend',
+    description:
+      'Token and dollar totals across sessions, broken down by model, project, day and dispatching ' +
+      'account. Read `coverage`: the totals come from a background scan, so sessions/total tells ' +
+      'you how much of the store it has reached, and a chart drawn from a half-warmed store is not ' +
+      'wrong so much as partial. Costs use published list prices; a subscription plan is not billed ' +
+      'per token. `unpricedModels` means those tokens counted but their money did not, so the ' +
+      'total is a floor.',
+    inputSchema: S({
+      period: {
+        type: 'string',
+        enum: ['24h', '7d', '30d', 'all'],
+        description: 'How far back to total. Default 30d.',
+      },
+    }),
+    run: (a) => api(`/api/analytics/spend${qs({ period: a.period })}`),
+  },
+  {
+    name: 'get_activity',
+    description:
+      'When work happens and what it uses: an hour-of-week histogram, the tool mix, total ' +
+      'agent-minutes (engaged time, not wall clock), and the sessions whose health signals stand ' +
+      'out (long tool-failure streaks, heavy edit churn, repeated compaction).',
+    inputSchema: S({
+      period: { type: 'string', enum: ['24h', '7d', '30d', 'all'], description: 'Default 30d.' },
+    }),
+    run: (a) => api(`/api/analytics/activity${qs({ period: a.period })}`),
+  },
+  {
+    name: 'get_recent_edits',
+    description:
+      'Files changed across recent sessions, newest first, each with the session and the turn that ' +
+      'changed it so you can open the transcript at that point. Paths only, never diffs.',
+    inputSchema: S({ limit: { type: 'number', description: 'Max entries (default 200).' } }),
+    run: (a) => api(`/api/analytics/edits${qs({ limit: a.limit })}`),
+  },
+  {
+    name: 'get_run_cost',
+    description:
+      'What ONE queued run cost, computed from the transcript turns inside that run’s own start ' +
+      'and finish instants. Nothing is stored, so this can never disagree with the session total. ' +
+      'AgentsView cannot answer this at all: it did not dispatch the work and so cannot tell which ' +
+      'turns belong to which run.',
+    inputSchema: S({ id: { type: 'string', description: 'Queue item id.' } }, ['id']),
+    run: (a) => api(`/api/queue/${encodeURIComponent(str(a.id))}/cost`),
+  },
+
   // --- queue --------------------------------------------------------------------
   {
     name: 'list_queue',

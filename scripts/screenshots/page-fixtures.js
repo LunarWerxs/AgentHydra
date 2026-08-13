@@ -321,6 +321,151 @@
         events: turns,
       }),
     ],
+    // --- analytics ------------------------------------------------------------------------------
+    // Invented but internally consistent, the same rule the usage fixture follows: the per-model
+    // costs sum to the headline, the per-day series sums to the same figure, and coverage is
+    // complete so the screenshot never shows a half-warmed caveat as if it were the normal state.
+    [
+      /\/api\/analytics\/spend/,
+      () => {
+        const byModel = [
+          {
+            key: 'claude-opus-5',
+            weighted: 812_000_000,
+            costUsd: 214.4,
+            sessions: 21,
+            turns: 1840,
+          },
+          {
+            key: 'claude-sonnet-5',
+            weighted: 402_000_000,
+            costUsd: 61.2,
+            sessions: 14,
+            turns: 1210,
+          },
+          { key: 'claude-haiku-4-5', weighted: 96_000_000, costUsd: 8.1, sessions: 6, turns: 430 },
+        ]
+        const total = byModel.reduce((n, m) => n + m.costUsd, 0)
+        const days = 21
+        const shape = (i) => 0.5 + Math.sin(i / 2.2) * 0.35 + (i % 7 === 0 ? -0.3 : 0)
+        const raw = Array.from({ length: days }, (_, i) => Math.max(0.05, shape(i)))
+        const sum = raw.reduce((n, v) => n + v, 0)
+        const byDay = raw.map((v, i) => ({
+          key: new Date(Date.now() - (days - 1 - i) * 86_400_000).toISOString().slice(0, 10),
+          weighted: Math.round((v / sum) * 1_310_000_000),
+          costUsd: Number(((v / sum) * total).toFixed(2)),
+          sessions: 2,
+          turns: 60,
+        }))
+        return {
+          from: byDay[0].key,
+          to: byDay[byDay.length - 1].key,
+          totalCostUsd: total,
+          totalWeighted: 1_310_000_000,
+          sessions: 41,
+          byModel,
+          byProject: [
+            {
+              key: proj('acme-storefront'),
+              weighted: 690_000_000,
+              costUsd: 148.7,
+              sessions: 18,
+              turns: 0,
+            },
+            {
+              key: proj('atlas-api'),
+              weighted: 430_000_000,
+              costUsd: 96.3,
+              sessions: 15,
+              turns: 0,
+            },
+            { key: proj('pico-cli'), weighted: 190_000_000, costUsd: 38.7, sessions: 8, turns: 0 },
+          ],
+          byDay,
+          byAccount: [
+            { key: 'Alex Rivera', weighted: 740_000_000, costUsd: 162.4, sessions: 22, turns: 0 },
+            { key: 'Sam Chen', weighted: 570_000_000, costUsd: 121.3, sessions: 19, turns: 0 },
+          ],
+          unpricedModels: [],
+          coverage: { sessions: 41, total: 41, refreshing: false, bytes: 24_800 },
+        }
+      },
+    ],
+    [
+      /\/api\/analytics\/activity/,
+      () => ({
+        // A working week: quiet overnight, busiest mid-afternoon, light at the weekend.
+        hours: Array.from({ length: 168 }, (_, i) => {
+          const day = Math.floor(i / 24)
+          const hour = i % 24
+          if (hour < 8 || hour > 21) return 0
+          const weekday = day >= 1 && day <= 5 ? 1 : 0.25
+          return Math.round(weekday * (14 - Math.abs(15 - hour) * 1.6) * 4)
+        }),
+        tools: [
+          { key: 'Bash', count: 1840 },
+          { key: 'Edit', count: 960 },
+          { key: 'Read', count: 720 },
+          { key: 'Grep', count: 410 },
+          { key: 'Write', count: 260 },
+          { key: 'Glob', count: 150 },
+        ],
+        agentMinutes: 5820,
+        health: [
+          {
+            session_id: sessions[2].session_id,
+            source: 'claude',
+            project: proj('acme-storefront'),
+            toolErrors: 14,
+            toolErrorStreak: 5,
+            edits: 62,
+            compactions: 1,
+          },
+          {
+            session_id: sessions[4].session_id,
+            source: 'claude',
+            project: proj('atlas-api'),
+            toolErrors: 9,
+            toolErrorStreak: 3,
+            edits: 21,
+            compactions: 0,
+          },
+        ],
+        coverage: { sessions: 41, total: 41, refreshing: false, bytes: 24_800 },
+      }),
+    ],
+    [
+      /\/api\/analytics\/concurrency/,
+      () => ({
+        buckets: Array.from({ length: 56 }, (_, i) => ({
+          at: Date.now() - (56 - i) * 3 * 3_600_000,
+          sessions: Math.max(0, Math.round(3 + Math.sin(i / 4) * 2.4 + (i % 8 === 0 ? 2 : 0))),
+        })),
+      }),
+    ],
+    [
+      /\/api\/analytics\/edits/,
+      () => ({
+        edits: [
+          ['acme-storefront', 'src/checkout/postcode.ts'],
+          ['acme-storefront', 'src/checkout/postcode.test.ts'],
+          ['acme-storefront', 'src/theme/tokens.css'],
+          ['atlas-api', 'internal/ratelimit/backoff.go'],
+          ['atlas-api', 'internal/audit/retention.go'],
+          ['pico-cli', 'cmd/help.go'],
+        ].map(([p, rel], i) => ({
+          session_id: sessions[i % sessions.length].session_id,
+          source: 'claude',
+          project: proj(p),
+          // Windows separators, because the projects these fixtures describe are Windows paths and
+          // the feed shows them verbatim.
+          path: [proj(p), ...rel.split('/')].join('\\'),
+          turn: 40 + i * 7,
+          ts: Date.now() - i * 900_000,
+        })),
+      }),
+    ],
+    [/\/api\/analytics$/, () => ({ sessions: 41, total: 41, refreshing: false, bytes: 24_800 })],
     [
       // No secrets in the demo transcript, which is the honest fixture: the chip only appears when
       // there is something to report, so a screenshot showing one would advertise a state the

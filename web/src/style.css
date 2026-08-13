@@ -341,3 +341,38 @@
 .transcript-compact .md-pre {
   padding: 0.4rem 0.5rem;
 }
+
+/* --- chart palette (used by the Analytics view) ------------------------------------------------
+   NOT the kit's own --chart-1..5. That set fails a colourblind-safety check in light mode: its
+   slots 4 and 5 (#ffb900 and #fe9a00) sit ΔE 7.4 apart for NORMAL vision and 5.6 under deuteranopia,
+   which is two series a reader cannot tell apart, and two of the five also fall below 3:1 against a
+   white surface. kit-base.css is vendored from the shared kit and `bun run check:kit` fails on any
+   drift, so the fix belongs here rather than there.
+
+   These six were re-stepped at the same hues and validated: lightness band, chroma floor, adjacent
+   CVD separation (deutan/protan/tritan), normal-vision separation, and contrast against the real
+   surface — all pass in both modes. Light steps are validated against #ffffff, dark against the
+   dark card #171717, because a dark palette is a different set of steps, not an inverted one.
+
+   Assigned in FIXED ORDER and keyed by the entity (model id), never by rank: filtering the chart
+   must not repaint the series that survive. */
+:root {
+  --viz-1: #e8590c;
+  --viz-2: #099268;
+  --viz-3: #3b5bdb;
+  --viz-4: #c2255c;
+  --viz-5: #7048e8;
+  --viz-6: #6d6a00;
+  /* Sequential ramp for the hour-of-week grid: ONE hue, light to dark. A heatmap is magnitude, and
+     magnitude never gets a rainbow. */
+  --viz-seq: #3b5bdb;
+}
+.dark {
+  --viz-1: #dd5409;
+  --viz-2: #0b9e71;
+  --viz-3: #5379fd;
+  --viz-4: #f20d6e;
+  --viz-5: #8566fd;
+  --viz-6: #8f8b0e;
+  --viz-seq: #5379fd;
+}

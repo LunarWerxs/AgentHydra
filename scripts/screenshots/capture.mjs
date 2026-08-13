@@ -103,6 +103,16 @@ const SHOTS = [
     expect: `document.querySelectorAll('table').length === 3 && /Max 20/.test(document.body.innerText) && /CODEX_HOME/.test(document.body.innerText)`,
   },
   {
+    name: 'analytics',
+    viewport: [1180, 900],
+    steps: [{ eval: clickIn('nav', 'Analytics'), wait: 3500 }],
+    // The four headline tiles, at least three charts drawn, and the hour grid's full 168 cells.
+    // Asserting on the CHARTS rather than on any text: the point of this shot is that the view
+    // draws, and a fixture change that emptied the reports would otherwise photograph an empty
+    // page with a perfectly correct heading on it.
+    expect: `/Cost by day/.test(document.body.innerText) && document.querySelectorAll('svg[role="img"]').length >= 2 && document.querySelectorAll('[title*=":00 ·"]').length === 168`,
+  },
+  {
     name: 'queue',
     viewport: [1500, 840],
     // Over Sessions, not Instances: the drawer pushes the shell and clips the instances table's
