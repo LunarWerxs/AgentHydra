@@ -54,6 +54,14 @@ export async function handleRpc(msg, ctx) {
         protocolVersion,
         capabilities: { tools: {} },
         serverInfo: ctx.serverInfo,
+        // `instructions` is the MCP handshake's one channel for STANDING guidance: the client
+        // shows it to the model once per session, before any tool is called. That is the only
+        // place an app can say "here is how to use me" without a human typing it into every
+        // prompt, and without paying for it again on every tool result. Omitted entirely when the
+        // app supplies none, since an empty string is a field the client still has to render.
+        ...(typeof ctx.instructions === "string" && ctx.instructions.trim()
+          ? { instructions: ctx.instructions }
+          : {}),
       });
     }
 

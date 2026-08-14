@@ -1609,10 +1609,28 @@ app.get('/api/usage/budget', async (c) => {
             const snapshot = await checkUsageForAccount(resolved.id)
             return { snapshot, cached: false, key: `acct:${resolved.id}`, reason: 'ok' as const }
           })()
-        : null
+        : // A bare credential dir — the plain `~/.claude` login, or any CLAUDE_CONFIG_DIR that has
+          // been /login'd. Without this branch the ONE account that belongs to no instance and no
+          // dispatch row (the everyday default login) could get a percentage from /api/usage but
+          // never a burn rate, which is the number that actually decides whether to keep going.
+          configDirs?.length
+          ? await (async () => {
+              const cd = configDirs[0] as string
+              const snapshot = await checkUsage({ configDir: cd, account: cd })
+              return {
+                snapshot,
+                cached: false,
+                key: `dir:${cd}`,
+                reason: isNoData(snapshot) ? ('check_failed' as const) : ('ok' as const),
+              }
+            })()
+          : null
   if (!result)
     return c.json(
-      { error: 'pass instance (its number), dir (a desktop instance) or account (id or label)' },
+      {
+        error:
+          'pass instance (its number), dir (a desktop instance), account (id or label) or configDir (a logged-in Claude config dir)',
+      },
       400,
     )
 

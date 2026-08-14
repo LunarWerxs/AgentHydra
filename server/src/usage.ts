@@ -151,6 +151,48 @@ export function usageAdvice(snap: UsageSnapshot): UsageAdvice {
   }
 }
 
+/** Context the caller knows and a snapshot cannot: whether WHOSE quota this is was ever settled. */
+export interface NextStepOpts {
+  /** True when the identification behind this reading is assumed, contradictory, or missing. */
+  identityUncertain?: boolean
+  /** How to name the account in a reply, e.g. `instance #11 (Pro)`. Null when unknown. */
+  instanceLabel?: string | null
+}
+
+/**
+ * ONE line telling the caller what to DO next. Attached to every usage tool result.
+ *
+ * `usageAdvice` above already describes the SITUATION; this is the instruction. They are separate
+ * because an agent reading a nested `advice` object has to decide for itself what a severity
+ * implies, and the decision that matters (save your work before you are cut off) is exactly the
+ * one it will skip when it is busy. Putting a verb at the top level of every response is the
+ * cheapest way to make the right move the obvious one.
+ *
+ * Deliberately ONE line: guidance that runs long stops being read, and this rides on every call.
+ * Pure + tested; ordered by urgency, so the most expensive mistake is always the sentence shown.
+ */
+export function nextStep(advice: UsageAdvice, opts: NextStepOpts = {}): string {
+  const who = opts.instanceLabel
+    ? ` Report this as ${opts.instanceLabel}, never as a bare percentage.`
+    : ''
+  // An unconfirmed identity is said FIRST and always: a correct number attributed to the wrong
+  // account is worse than no number, because it gets acted on.
+  const attribution = opts.identityUncertain
+    ? ' WHOSE quota this is could not be confirmed — say so rather than naming an account.'
+    : who
+
+  if (advice.shouldOffload) {
+    return `SAVE YOUR WORK NOW: write your context, findings and next steps to a file before doing anything else, then wind down. Do not start a fan-out.${attribution}`
+  }
+  if (advice.severity === 'unknown') {
+    return `Treat remaining quota as UNKNOWN — this is not "plenty left". Do not start a fan-out or a long task on an unverified read; retry the check or ask which account to use.${attribution}`
+  }
+  if (!advice.safeToFanOut) {
+    return `Wind down: finish what you are on, keep a written checkpoint, and shrink or postpone any fan-out.${attribution}`
+  }
+  return `Fine to continue, including a fan-out — but gate it on CURRENT + PROJECTED cost, since a fan-out cannot be recalled once launched and solo work can be stopped at any tool call.${attribution}`
+}
+
 const MONTHS: Record<string, number> = {
   jan: 0,
   feb: 1,

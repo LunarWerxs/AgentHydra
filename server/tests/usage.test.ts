@@ -3,10 +3,11 @@
 // Fixture is a real `claude -p "/usage"` block captured 2026-07-14 (numbers only, no secrets).
 
 import { describe, expect, test } from 'bun:test'
-import type { UsageSnapshot } from '../src/types'
+import type { UsageAdvice, UsageSnapshot } from '../src/types'
 import {
   bindingWeeklyPct,
   isNoData,
+  nextStep,
   parseResetTime,
   parseUsageOutput,
   resetTimeIso,
@@ -233,5 +234,67 @@ describe('usageAdvice', () => {
     expect(advice.severity).toBe('normal')
     expect(advice.shouldOffload).toBe(false)
     expect(advice.safeToFanOut).toBe(true)
+  })
+})
+
+describe('nextStep — the one-line instruction attached to every usage result', () => {
+  const advice = (over: Partial<UsageAdvice> = {}): UsageAdvice => ({
+    severity: 'normal',
+    bindingPct: 10,
+    shouldOffload: false,
+    safeToFanOut: true,
+    advice: '',
+    ...over,
+  })
+
+  test('offloading outranks everything: save the work before any other consideration', () => {
+    const step = nextStep(
+      advice({ severity: 'critical', shouldOffload: true, safeToFanOut: false }),
+    )
+    expect(step).toContain('SAVE YOUR WORK NOW')
+    expect(step).toContain('Do not start a fan-out')
+  })
+
+  test('an unreadable check says UNKNOWN, and explicitly denies that it means headroom', () => {
+    const step = nextStep(advice({ severity: 'unknown', safeToFanOut: false, bindingPct: null }))
+    expect(step).toContain('UNKNOWN')
+    expect(step).toContain('not "plenty left"')
+  })
+
+  test('a warning winds down rather than stopping', () => {
+    expect(nextStep(advice({ severity: 'warning', safeToFanOut: false }))).toContain('Wind down')
+  })
+
+  test('normal still gates a fan-out on projected cost, not just current', () => {
+    const step = nextStep(advice())
+    expect(step).toContain('CURRENT + PROJECTED')
+    expect(step).toContain('cannot be recalled')
+  })
+
+  test('a known account is named, so a percentage is never reported bare', () => {
+    expect(nextStep(advice(), { instanceLabel: 'instance #11 (Pro)' })).toContain(
+      'Report this as instance #11 (Pro)',
+    )
+  })
+
+  test('an unconfirmed identity suppresses the account name entirely', () => {
+    // Naming the wrong account is worse than naming none: a confident wrong number gets acted on.
+    const step = nextStep(advice(), {
+      instanceLabel: 'instance #11 (Pro)',
+      identityUncertain: true,
+    })
+    expect(step).not.toContain('instance #11')
+    expect(step).toContain('could not be confirmed')
+  })
+
+  test('every branch is one line, because guidance that runs long stops being read', () => {
+    for (const a of [
+      advice({ shouldOffload: true }),
+      advice({ severity: 'unknown', safeToFanOut: false }),
+      advice({ severity: 'warning', safeToFanOut: false }),
+      advice(),
+    ]) {
+      expect(nextStep(a, { instanceLabel: 'instance #1' })).not.toContain('\n')
+    }
   })
 })

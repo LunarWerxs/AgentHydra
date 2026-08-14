@@ -379,3 +379,132 @@ const claudeProcessCache = createScanCache<CMProcessInfo[]>(
 export function invalidateClaudeProcessCache(): void {
   claudeProcessCache.invalidate()
 }
+
+// ----------------------------------------------------------------------------
+// Ancestry walk — "which process launched me?" (core/self-identity.ts).
+// ----------------------------------------------------------------------------
+
+/** One ancestor of the current process. */
+export interface AncestorProcess {
+  pid: number
+  name: string | null
+  executablePath: string | null
+  commandLine: string | null
+}
+
+/** Hard cap on how far up the tree to walk. Twelve is far more than any real
+ *  agent → MCP-server chain (observed: 3) and bounds the cost of a pid-reuse cycle. */
+const MAX_ANCESTRY_DEPTH = 12
+
+/**
+ * The chain of parent processes above `startPid`, NEAREST PARENT FIRST.
+ *
+ * WHY THIS EXISTS: a stdio MCP server spawned by Claude Code gets a REDUCED environment — no
+ * `CLAUDE_CODE_EXECPATH`, no `CLAUDE_CONFIG_DIR` — so env alone cannot say which Claude Desktop
+ * instance it belongs to. The answer is sitting in plain sight one and two hops up the tree: the
+ * parent is `<instanceDir>/claude-code/<ver>/claude.exe` and the grandparent is the Electron host
+ * carrying `--user-data-dir=<instanceDir>`.
+ *
+ * ONE spawn, not one per hop: the Windows path does the whole walk inside PowerShell, the unix
+ * path takes a single `ps` snapshot and walks it in memory. Never throws — every failure
+ * (PowerShell absent, permission denied, malformed output, timeout) resolves to null, which
+ * callers must treat as "could not enumerate", never as "no ancestors".
+ */
+export async function processAncestry(startPid = process.pid): Promise<AncestorProcess[] | null> {
+  try {
+    return process.platform === 'win32'
+      ? await windowsAncestry(startPid)
+      : await unixAncestry(startPid)
+  } catch {
+    return null
+  }
+}
+
+async function windowsAncestry(startPid: number): Promise<AncestorProcess[] | null> {
+  // The loop lives in PowerShell so the whole chain costs ONE spawn (~300ms) instead of one per
+  // hop. `$out` is forced to an array with @() — ConvertTo-Json serializes a single-element array
+  // as a bare object otherwise, and the parse below would have to guess.
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$p = ${startPid}`,
+    '$out = @()',
+    '$seen = @{}',
+    `for ($i = 0; $i -lt ${MAX_ANCESTRY_DEPTH}; $i++) {`,
+    '  if (-not $p -or $seen.ContainsKey($p)) { break }',
+    '  $seen[$p] = $true',
+    '  $proc = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$p"',
+    '  if (-not $proc) { break }',
+    '  $parent = $proc.ParentProcessId',
+    '  if ($i -gt 0) {',
+    '    $out += [pscustomobject]@{ ProcessId = $proc.ProcessId; Name = $proc.Name; ' +
+      'ExecutablePath = $proc.ExecutablePath; CommandLine = $proc.CommandLine }',
+    '  }',
+    '  $p = $parent',
+    '}',
+    'ConvertTo-Json -InputObject @($out) -Compress -Depth 3',
+  ].join('; ')
+
+  const stdout = await runCaptureStdout([
+    'powershell',
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    script,
+  ])
+  if (stdout === null) return null
+
+  const trimmed = stdout.trim()
+  if (!trimmed || trimmed === '[]') return []
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    const records = Array.isArray(parsed) ? parsed : [parsed]
+    return records
+      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
+      .map((r) => ({
+        pid: typeof r.ProcessId === 'number' ? r.ProcessId : Number(r.ProcessId),
+        name: typeof r.Name === 'string' ? r.Name : null,
+        executablePath: typeof r.ExecutablePath === 'string' ? r.ExecutablePath : null,
+        commandLine: typeof r.CommandLine === 'string' ? r.CommandLine : null,
+      }))
+      .filter((r) => Number.isFinite(r.pid))
+  } catch {
+    return null
+  }
+}
+
+async function unixAncestry(startPid: number): Promise<AncestorProcess[] | null> {
+  // One snapshot of every process, then walk the pid→ppid map in memory. `ps` has no ancestry
+  // mode, and a per-hop `ps -p <pid>` would be a spawn each.
+  const stdout = await runCaptureStdout(['ps', '-eo', 'pid=,ppid=,command='])
+  if (stdout === null) return null
+
+  const byPid = new Map<number, { ppid: number; command: string }>()
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    if (!m) continue
+    byPid.set(Number.parseInt(m[1]!, 10), {
+      ppid: Number.parseInt(m[2]!, 10),
+      command: m[3]!.trim(),
+    })
+  }
+
+  const out: AncestorProcess[] = []
+  const seen = new Set<number>([startPid])
+  let pid = byPid.get(startPid)?.ppid
+  for (let i = 0; i < MAX_ANCESTRY_DEPTH && pid && !seen.has(pid); i++) {
+    seen.add(pid)
+    const row = byPid.get(pid)
+    if (!row) break
+    // `command` is the full argv; argv[0] is the executable path on both macOS and Linux.
+    const exe = row.command.split(/\s+/)[0] ?? null
+    out.push({
+      pid,
+      name: exe ? (exe.split('/').pop() ?? null) : null,
+      executablePath: exe,
+      commandLine: row.command,
+    })
+    pid = row.ppid
+  }
+  return out
+}

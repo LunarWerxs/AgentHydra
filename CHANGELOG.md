@@ -7,6 +7,85 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **An agent can now tell which of your accounts it is spending.** `whoami` read one environment
+  variable, `CLAUDE_CONFIG_DIR`, and fell back to the default `~/.claude` login when it was unset.
+  That is right for a CLI instance and wrong for **every Claude Desktop session**, which sets no
+  such variable at all: the account is chosen by the Electron host's `--user-data-dir`. So a Desktop
+  agent reported `instance: null` and the default login while actually spending a different
+  account's quota, and `check_my_usage` then read that default login's `.credentials.json` and came
+  back `check_failed` with every percentage null. An agent asking "how much do I have left?" got no
+  answer, about the wrong account.
+
+  Identification is now layered and stops at the first signal that lands: `CODEX_HOME` →
+  `CLAUDE_CONFIG_DIR` → `CLAUDE_CODE_EXECPATH` → the instance folder holding this session's
+  `claude-code-sessions/**/<hostSessionId>.json` → the parent `claude.exe`'s image path → the
+  grandparent Electron host's `--user-data-dir`. `CLAUDE_CONFIG_DIR` deliberately outranks the
+  desktop signals, because when it is set that is the credential `claude` uses, even in a terminal
+  opened from inside a Desktop instance.
+
+  **The obvious fixes are all wrong, and each was tried first.** Identifying by the session's own
+  transcript fails because a Desktop-instance session still writes to the DEFAULT
+  `~/.claude/projects/…`: that proves where a session LOGS, not which account PAYS. Reading
+  `~/.claude.json`'s `oauthAccount.emailAddress` fails because it is the machine's default login,
+  not the running session's credential; it looks authoritative and is not. And reading
+  `CLAUDE_CODE_EXECPATH` alone fails **only where it matters**: a stdio MCP server gets a reduced
+  environment without it, so that detector passes every shell test and then does nothing in
+  production. Hence the session-file and process-ancestry layers, and hence the regression test
+  built on the exact environment an MCP server really sees.
+
+  Nothing is asserted without proof. Every answer carries `confidence` (`exact` when a signal named
+  the credential store, `assumed` when it is the default login by elimination, `none` when this is
+  not Claude Code at all), the `method` that won, the literal `clues` that produced it (an env
+  value, a file path, a pid), and everything `ruledOut` and why. A `warning` appears only when the
+  answer is uncertain or when two signals disagree, so its absence is itself the signal that a
+  number can be quoted without a hedge. Collapsing "I could not tell" into "it is the default
+  login" is precisely how the original bug reported a confident wrong account.
+
+- **`check_my_usage` reads the desktop credential store.** A desktop instance keeps its token in
+  Electron safeStorage, not in a `.credentials.json`, so the old `configDir` read could not open it
+  even when pointed at the right folder. The self-check now routes through the instance number and
+  its full credential chain (own token → linked CLI login → dispatch account), which is the same
+  path `/api/usage?instance=N` already used. An unmanaged desktop user-data dir is answered
+  in-process for the same reason.
+
+### Added
+
+- **AgentHydra now ships its own operating rules to every agent, so a human never has to type
+  them.** Two channels, because they reach different moments:
+
+  The MCP `initialize` handshake returns `instructions` (the shared engine gained an optional
+  passthrough, so every sibling app can do this too). The client shows that block to the model once
+  per session, **before it calls anything**. That timing is the entire point: a tool description is
+  only read once the model has already decided to call that tool, which is useless for the two
+  behaviours that matter, checking quota BEFORE the expensive thing and saving your work BEFORE
+  being cut off. Neither is discoverable from a tool list. It is deliberately short, and a test
+  caps its length: it rides in context on every request of the session, so each line is rent, and a
+  guidance block that grows a line at a time ends up skimmed instead of read.
+
+  And every usage or identity answer now carries a `nextStep`: ONE line naming the single action to
+  take, ordered by urgency so the most expensive mistake is always the sentence shown. `advice`
+  already described the situation; this is the instruction, at the top level, because an agent
+  reading a nested object has to decide for itself what a severity implies and the decision it
+  skips when busy is exactly the one that costs the task. When the account could not be confirmed
+  the line suppresses the account name entirely rather than guessing: a confident wrong
+  attribution gets acted on, a missing one gets questioned.
+
+- **`usage_budget {}` with no arguments budgets the caller.** It used to throw unless you named an
+  instance, dir or account, which meant the one caller who most needs a burn rate, an agent deciding
+  whether it can finish, had to already know its own instance number, and a Desktop session had no
+  way to learn it. The response carries an `identity` block naming the account it measured.
+
+- **`/api/usage/budget?configDir=…`.** The plain `~/.claude` login belongs to no instance and no
+  dispatch account, so it could get a percentage from `/api/usage` but never a burn rate, which is
+  the number that actually decides whether to keep working.
+
+- **Rate-limit `tier` on every instance row** (`Pro`, `Max 5×`, `Max 20×`), beside the existing
+  `plan`. They answer different questions and can disagree: `plan` is what the subscription is
+  called (an org seat reads "Team"), `tier` is what the quota is. Headroom differs by roughly 20×
+  between Pro and Max 20×, so pacing cannot be read off the plan name.
+
 ## [0.22.0] - 2026-08-13
 
 ### Fixed

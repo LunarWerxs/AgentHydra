@@ -19,15 +19,17 @@
 // Codex), resolve_instance (confirm which account a reference means before spending its quota) and
 // whoami (which numbered instance THIS process is). The legacy `dir` / `id` parameters all still
 // work exactly as before; the number is purely additive.
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+//
+// SELF-IDENTIFICATION runs HERE, not on the daemon — see the block above `detectSelf` and
+// core/self-identity.ts. `whoami`, `check_my_usage` and a bare `usage_budget` all share it, so an
+// agent can answer "whose quota am I spending?" without being told, including from a Claude
+// Desktop session, which sets no CLAUDE_CONFIG_DIR at all.
 import { appEnv, IS_COMPILED, PORT, VERSION } from './config'
+import type { SelfIdentityDetection } from './core/self-identity'
 import { readInstanceInfo } from './instance'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 import { runMcpStdio } from './mcp-stdio.mjs'
-
-/** Where a plain `claude` login (no CLAUDE_CONFIG_DIR override) keeps its credentials. */
-const defaultClaudeConfigDir = (): string => join(homedir(), '.claude')
+import type { UsageAdvice, UsageSnapshot } from './types'
 
 // Resolve the base URL per call: an explicit AGENTHYDRA_URL/AGENTHYDRA_PORT always wins, else
 // follow the port the daemon ACTUALLY bound (~/.agenthydra/runtime.json), so an auto-hopped port
@@ -119,9 +121,220 @@ interface ResolvedInstanceRow {
   name: string
   email: string | null
   plan: string | null
+  /** Rate-limit tier — `Pro` / `Max 5×` / `Max 20×`. What the quota IS, as opposed to `plan`,
+   *  which is what the subscription is called. The two disagree on org seats. */
+  tier: string | null
   configDir: string
   loggedIn: boolean
   isRunning: boolean | null
+}
+
+// --- self-identification ------------------------------------------------------
+//
+// This is the part that has to run HERE, in the MCP server process, and not on the daemon: the
+// whole method is reading this process's own environment and walking up to the `claude.exe` that
+// spawned it. See core/self-identity.ts for what it looks at and why each signal is needed. The
+// daemon is only asked the cheap, stateless question afterwards ("which instance owns this dir?").
+
+/** The detection half is memoized: which instance a process belongs to CANNOT change while that
+ *  process lives, and the ancestry fallback costs a PowerShell spawn. The dir→instance lookup is
+ *  deliberately NOT cached — the fleet's account/plan data can change under us, and it is one
+ *  loopback request. */
+let selfDetectionCache: Promise<SelfIdentityDetection> | null = null
+
+async function detectSelf(fresh = false): Promise<SelfIdentityDetection> {
+  if (fresh || !selfDetectionCache) {
+    selfDetectionCache = (async () => {
+      const { detectSelfIdentity } = await import('./core/self-identity')
+      return detectSelfIdentity()
+    })()
+  }
+  try {
+    return await selfDetectionCache
+  } catch (e) {
+    selfDetectionCache = null // a failed probe must not be remembered as the answer
+    throw e
+  }
+}
+
+/** Identity as the tools report it: the instance (when it is a managed one), the evidence, and an
+ *  explicit warning whenever the answer is anything less than proven. */
+interface SelfIdentityPayload {
+  instance: ResolvedInstanceRow | null
+  configDir: string | null
+  kind: SelfIdentityDetection['kind']
+  method: SelfIdentityDetection['method']
+  confidence: SelfIdentityDetection['confidence']
+  clues: SelfIdentityDetection['clues']
+  ruledOut: string[]
+  summary: string
+  /** Present ONLY when the identification is uncertain or contradictory. Its absence is the
+   *  signal that the number below can be quoted without a hedge. */
+  warning?: string
+}
+
+async function selfIdentity(fresh = false): Promise<SelfIdentityPayload> {
+  const { describeSelfIdentity } = await import('./core/self-identity')
+  const detection = await detectSelf(fresh)
+
+  let instance: ResolvedInstanceRow | null = null
+  if (detection.configDir) {
+    // A failed identity lookup may only ever cost the LABEL, never the detection — so this is
+    // swallowed rather than thrown. The dir is still correct and still usable for a usage read.
+    try {
+      instance = (await apiOrLocal(
+        `/api/instance-numbers/whoami${qs({ configDir: detection.configDir })}`,
+        async () => {
+          const { instanceForConfigDir } = await import('./core/instance-ref')
+          return await instanceForConfigDir(detection.configDir as string)
+        },
+      )) as ResolvedInstanceRow | null
+    } catch {
+      instance = null
+    }
+  }
+
+  const warnings: string[] = []
+  if (detection.conflict) {
+    warnings.push(
+      'CONFLICT: two independent signals named different credential directories. The highest-priority one was used; do not spend quota on this identification without confirming it with the human.',
+    )
+  }
+  if (detection.confidence === 'assumed') {
+    warnings.push(
+      'ASSUMED, not proven: no instance signal matched, so this fell back to the default ~/.claude login by elimination. If a human told you an instance number, THEIRS IS THE AUTHORITATIVE ANSWER — believe it over this.',
+    )
+  }
+  if (detection.confidence === 'none') {
+    warnings.push(
+      'UNIDENTIFIED: this process does not look like it is running under Claude Code at all. Treat any quota reading as unattributed.',
+    )
+  }
+  if (!instance && detection.confidence === 'exact' && detection.kind === 'desktop') {
+    warnings.push(
+      `This is a Claude Desktop user-data dir that AgentHydra does not manage (${detection.configDir}), so it has no instance number. Its quota can still be read.`,
+    )
+  }
+
+  return {
+    instance,
+    configDir: detection.configDir,
+    kind: detection.kind,
+    method: detection.method,
+    confidence: detection.confidence,
+    clues: detection.clues,
+    ruledOut: detection.ruledOut,
+    summary: describeSelfIdentity(detection, instance),
+    ...(warnings.length ? { warning: warnings.join(' ') } : {}),
+  }
+}
+
+/** Enough of an instance row to name it in a sentence. Both the fleet rows and the slimmer
+ *  `instance` echo that `/api/usage` attaches satisfy this. */
+type NameableInstance = {
+  num?: number
+  name?: string
+  plan?: string | null
+  tier?: string | null
+} | null
+
+/** `instance #12 (Joel · Max 20×)` — the phrase an agent should use instead of a bare percentage.
+ *  Prefers `tier` over `plan`: the tier is what the quota IS. */
+function instanceLabel(i: NameableInstance): string | null {
+  if (!i?.num) return null
+  const what = i.tier ?? i.plan ?? null
+  return `instance #${i.num}${i.name ? ` (${i.name}${what ? ` · ${what}` : ''})` : what ? ` (${what})` : ''}`
+}
+
+/**
+ * Attach the one-line `nextStep` instruction to a usage result.
+ *
+ * Every usage tool goes through here so the guidance is identical wherever it appears, and so a
+ * response that reached us without an `advice` block (an older daemon, a cached row) still gets
+ * one derived from its own snapshot rather than silently losing the instruction.
+ */
+async function withNextStep(result: unknown, self?: SelfIdentityPayload | null): Promise<unknown> {
+  if (result === null || typeof result !== 'object') return result
+  const r = result as Record<string, unknown>
+  const { nextStep, usageAdvice } = await import('./usage')
+  const advice =
+    (r.advice as UsageAdvice | undefined) ??
+    (r.snapshot ? usageAdvice(r.snapshot as UsageSnapshot) : null)
+  if (!advice) return result
+  return {
+    ...r,
+    advice,
+    nextStep: nextStep(advice, {
+      // `self` is only passed when the target was worked out rather than named by the caller —
+      // a caller who passed `instance: 7` has no attribution problem to warn about.
+      identityUncertain: self ? self.confidence !== 'exact' || !!self.warning : false,
+      instanceLabel: instanceLabel((r.instance as NameableInstance) ?? self?.instance ?? null),
+    }),
+  }
+}
+
+/** Daemon-offline usage read for one identified instance, mirroring `/api/usage?instance=N`'s
+ *  routing. Codex is the one family that cannot be answered here (its quota is an OpenAI API call
+ *  the offline path deliberately does not make), so it says so instead of returning a silent null. */
+async function localUsageForInstance(row: ResolvedInstanceRow): Promise<unknown> {
+  const { usageAdvice, parseUsageOutput } = await import('./usage')
+  if (row.kind === 'codex') {
+    const snapshot = parseUsageOutput('', row.name)
+    return {
+      snapshot,
+      cached: false,
+      key: row.ref,
+      reason: 'check_failed',
+      advice: usageAdvice(snapshot),
+      daemon: `offline (answered locally) — instance #${row.num} is a Codex instance, whose quota comes from the OpenAI API; start AgentHydra and retry.`,
+    }
+  }
+  const { checkUsageForCliInstance, checkUsageForDesktop } = await import('./usage-service')
+  const result =
+    row.kind === 'desktop'
+      ? await checkUsageForDesktop(row.handle)
+      : await checkUsageForCliInstance(row.handle)
+  if (!result) {
+    const snapshot = parseUsageOutput('', row.name)
+    return {
+      snapshot,
+      cached: false,
+      key: row.ref,
+      reason: 'check_failed',
+      advice: usageAdvice(snapshot),
+      daemon: 'offline (answered locally)',
+    }
+  }
+  return {
+    ...result,
+    advice: result.advice ?? usageAdvice(result.snapshot),
+    daemon: 'offline (answered locally)',
+  }
+}
+
+/** Usage for a Claude DESKTOP user-data dir that is not a numbered instance. Always answered
+ *  in-process: the desktop credential is Electron safeStorage, which the `configDir` REST route
+ *  (a CLI `.credentials.json` reader) cannot open. */
+async function localUsageForDesktopDir(dir: string): Promise<unknown> {
+  const { checkUsageForDesktop } = await import('./usage-service')
+  const { usageAdvice } = await import('./usage')
+  const result = await checkUsageForDesktop(dir)
+  return { ...result, advice: result.advice ?? usageAdvice(result.snapshot) }
+}
+
+/** Daemon-offline usage read for a bare CLI credential dir — the plain `~/.claude` login, or an
+ *  explicit CLAUDE_CONFIG_DIR. */
+async function localUsageForConfigDir(configDir: string): Promise<unknown> {
+  const { checkUsage, usageAdvice, isNoData } = await import('./usage')
+  const snapshot = await checkUsage({ configDir, account: configDir })
+  return {
+    snapshot,
+    cached: false,
+    key: `dir:${configDir}`,
+    reason: isNoData(snapshot) ? 'check_failed' : 'ok',
+    advice: usageAdvice(snapshot),
+    daemon: 'offline (answered locally)',
+  }
 }
 
 /** Resolve an `instance` argument to one real instance, or throw with the daemon's own reason
@@ -533,24 +746,27 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'whoami',
     description:
-      'WHICH INSTANCE AM I? Identifies the instance THIS process is running as, by matching its own CLAUDE_CONFIG_DIR (or CODEX_HOME) against the fleet — returning the permanent number, kind, account email and plan. Call this when a human refers to you by number, or before check_my_usage, so you can state WHOSE quota you are about to report. A plain `claude` session on the default ~/.claude login belongs to no managed instance and correctly comes back as instance: null.',
-    inputSchema: S(),
-    run: async () => {
-      const configDir =
-        process.env.CODEX_HOME || process.env.CLAUDE_CONFIG_DIR || defaultClaudeConfigDir()
-      const instance = await apiOrLocal(
-        `/api/instance-numbers/whoami${qs({ configDir })}`,
-        async () => {
-          const { instanceForConfigDir } = await import('./core/instance-ref')
-          return await instanceForConfigDir(configDir)
-        },
-      )
+      "WHICH INSTANCE AM I? Identifies the instance THIS process is actually running as — permanent number, kind, account email, plan and raw rate-limit tier — and shows its WORKING. It does NOT just read one env var: a Claude Desktop session sets no CLAUDE_CONFIG_DIR, so identification walks CODEX_HOME → CLAUDE_CONFIG_DIR → CLAUDE_CODE_EXECPATH → the instance folder holding this session's own claude-code-sessions file → the parent `claude.exe` process and the Electron host's --user-data-dir. Read `confidence`: 'exact' means a signal named the credential store and you may quote the number; 'assumed' means it fell back to the default ~/.claude login by ELIMINATION and must be hedged. `clues` is the literal proof, `ruledOut` says what was checked and came up empty. TWO THINGS THAT LOOK AUTHORITATIVE AND LIE, so never identify yourself from them: your transcript's location (a Desktop-instance session still writes to the DEFAULT ~/.claude/projects) and ~/.claude.json's oauthAccount email (the machine's default login, not the credential this session bills to). If a human tells you an instance number, THAT beats all of this.",
+    inputSchema: S({
+      fresh: {
+        type: 'boolean',
+        description:
+          'Re-run the detection instead of reusing this process’s cached answer. Rarely needed — an identity cannot change while a process lives.',
+      },
+    }),
+    run: async (a) => {
+      const self = await selfIdentity(a.fresh === true)
       return {
-        configDir,
-        instance,
-        note: instance
+        ...self,
+        note: self.instance
           ? undefined
-          : 'This process is not running as a managed instance — it uses the default login, which has no instance number. check_my_usage still works and reports that login.',
+          : self.confidence === 'exact'
+            ? 'Identified a credential directory that belongs to no managed instance, so there is no number to quote. check_my_usage still reads the right account.'
+            : 'This process is not running as a managed instance — check_my_usage will report the default login, and will say so.',
+        nextStep:
+          self.confidence === 'exact'
+            ? `Use ${instanceLabel(self.instance) ?? 'this account'} whenever you report quota, and call check_my_usage {} before any heavy or long work.`
+            : 'Identification is NOT settled, so do not name an account. Ask the human which instance you are (their answer overrules this detection), and treat any quota reading as unattributed until they say.',
       }
     },
   },
@@ -597,60 +813,63 @@ export const TOOLS: McpEngineTool[] = [
         description: 'A CLAUDE_CONFIG_DIR that has been logged in once via `claude` → /login.',
       },
     }),
-    run: (a) => {
+    run: async (a) => {
       const instance = a.instance != null ? str(a.instance).trim() : ''
-      if (instance) return api(`/api/usage${qs({ instance, refresh: '1' })}`)
+      if (instance) return withNextStep(await api(`/api/usage${qs({ instance, refresh: '1' })}`))
       const account = a.account != null ? str(a.account) : ''
       const configDir =
         a.configDir != null ? str(a.configDir) : (process.env.CLAUDE_CONFIG_DIR ?? '')
       if (!account && !configDir)
         throw new Error(
-          'pass `instance` (its number — see list_instance_numbers), `account`, or `configDir` (or set CLAUDE_CONFIG_DIR in this process for a self-check)',
+          'pass `instance` (its number — see list_instance_numbers), `account`, or `configDir` (or use check_my_usage, which works out which account THIS process bills to on its own)',
         )
-      return api(
-        `/api/usage${qs({ account: account || undefined, configDir: configDir || undefined, refresh: '1' })}`,
+      return withNextStep(
+        await api(
+          `/api/usage${qs({ account: account || undefined, configDir: configDir || undefined, refresh: '1' })}`,
+        ),
       )
     },
   },
   {
     name: 'check_my_usage',
     description:
-      'Self-check: read YOUR OWN remaining Claude quota, right now, in ~300ms. Returns the session (5h) %, the weekly all-models % (the BINDING cap), an `advice` verdict with `shouldOffload` / `safeToFanOut` flags, and `instance` — WHICH numbered instance you are, so you can report "instance #7 is at 82% weekly" instead of an unattributed percentage. CALL THIS when you are doing long or heavy work: if `shouldOffload` is true you are close to being cut off mid-task, and you should WRITE YOUR WORKING CONTEXT, FINDINGS, AND NEXT STEPS TO A FILE BEFORE CONTINUING, so the work survives. Also call it before a big multi-agent fan-out. Reads whichever config this process is using (CLAUDE_CONFIG_DIR if set, else the default ~/.claude login); `instance` is null when that is the default login, which belongs to no managed instance.',
+      'Self-check: read YOUR OWN remaining Claude quota, right now, in ~300ms. Returns the session (5h) %, the weekly all-models % (the BINDING cap), an `advice` verdict with `shouldOffload` / `safeToFanOut` flags, and `identity` — WHICH numbered instance you are, on WHAT plan/tier, and HOW that was established, so you can report "instance #11 (Pro) is at 82% weekly" instead of an unattributed percentage. It identifies itself the same way whoami does (env → session file → parent process), so it reports the right account for a Claude DESKTOP session too, not just a CLI instance that sets CLAUDE_CONFIG_DIR. CALL THIS when you are doing long or heavy work: if `shouldOffload` is true you are close to being cut off mid-task, and you should WRITE YOUR WORKING CONTEXT, FINDINGS, AND NEXT STEPS TO A FILE BEFORE CONTINUING, so the work survives. Also call it before a big multi-agent fan-out — and gate on CURRENT + PROJECTED cost, because a fan-out cannot be recalled once launched while solo work can be stopped at any tool call. If `identity.warning` is present, the percentages are real but WHOSE they are is not settled: say so rather than quoting a bare number.',
     inputSchema: S(),
     run: async () => {
-      // A CLI instance sets CLAUDE_CONFIG_DIR; a NORMAL Claude Code session does not — it uses the
-      // default ~/.claude. Falling back to that is what makes this work for the everyday case (the
-      // session the user is actually talking to) instead of erroring out on it.
-      const configDir = process.env.CLAUDE_CONFIG_DIR || defaultClaudeConfigDir()
-      // Works with the app CLOSED: a self-check needs only the config dir's own token + one HTTPS GET.
-      const usage = await apiOrLocal(`/api/usage${qs({ configDir, refresh: '1' })}`, async () => {
-        const { checkUsage, usageAdvice, isNoData } = await import('./usage')
-        const snapshot = await checkUsage({ configDir, account: configDir })
-        return {
-          snapshot,
-          cached: false,
-          key: `dir:${configDir}`,
-          reason: isNoData(snapshot) ? 'check_failed' : 'ok',
-          advice: usageAdvice(snapshot),
-          daemon: 'offline (answered locally)',
-        }
-      })
-      // Attach the identity separately rather than routing the whole check through `instance`: the
-      // reading itself must keep working with the daemon down and with no instance at all, so a
-      // failed identity lookup can only ever cost the label, never the quota numbers.
-      let instance: ResolvedInstanceRow | null = null
-      try {
-        instance = (await apiOrLocal(
-          `/api/instance-numbers/whoami${qs({ configDir })}`,
-          async () => {
-            const { instanceForConfigDir } = await import('./core/instance-ref')
-            return await instanceForConfigDir(configDir)
-          },
-        )) as ResolvedInstanceRow | null
-      } catch {
-        instance = null
-      }
-      return { ...(usage as Record<string, unknown>), configDir, instance }
+      const self = await selfIdentity()
+
+      // Prefer the INSTANCE route. It matters: a desktop instance's credential lives in Electron
+      // safeStorage, not in a `.credentials.json`, so reading it by configDir alone returns
+      // check_failed — which is exactly what a Desktop session used to get back. Routing by number
+      // takes the full credential chain (own token → linked CLI login → dispatch account).
+      const usage = self.instance
+        ? await apiOrLocal(`/api/usage${qs({ instance: self.instance.num, refresh: '1' })}`, () =>
+            localUsageForInstance(self.instance as ResolvedInstanceRow),
+          )
+        : !self.configDir
+          ? { snapshot: null, reason: 'check_failed' }
+          : self.kind === 'desktop'
+            ? // An UNMANAGED desktop user-data dir. Answered in-process rather than through
+              // /api/usage?configDir=, which reads a CLI `.credentials.json` a desktop dir does
+              // not have — the exact mismatch that made a Desktop session's self-check fail.
+              // There is no REST route for an arbitrary desktop dir, and this needs none: the
+              // safeStorage token is a local file and the quota endpoint is one HTTPS GET.
+              await localUsageForDesktopDir(self.configDir)
+            : // The plain `~/.claude` login (or a CLI config dir).
+              await apiOrLocal(`/api/usage${qs({ configDir: self.configDir, refresh: '1' })}`, () =>
+                localUsageForConfigDir(self.configDir as string),
+              )
+
+      return await withNextStep(
+        {
+          ...(usage as Record<string, unknown>),
+          identity: self,
+          // Kept at the top level for every existing caller written against the old shape.
+          configDir: self.configDir,
+          instance: self.instance,
+        },
+        self,
+      )
     },
   },
   {
@@ -658,8 +877,8 @@ export const TOOLS: McpEngineTool[] = [
     description:
       "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. Checks are concurrent and cost no quota.",
     inputSchema: S(),
-    run: () =>
-      apiOrLocal('/api/usage/survey', async () => {
+    run: async () => {
+      const survey = (await apiOrLocal('/api/usage/survey', async () => {
         const { surveyUsage } = await import('./usage-service')
         const { usageAdvice } = await import('./usage')
         const rows = await surveyUsage()
@@ -667,12 +886,20 @@ export const TOOLS: McpEngineTool[] = [
           rows: rows.map((r) => ({ ...r, advice: usageAdvice(r.result.snapshot) })),
           daemon: 'offline (answered locally)',
         }
-      }),
+      })) as Record<string, unknown>
+      return {
+        ...survey,
+        // A survey has no single advice to branch on, so the instruction is about what to DO with
+        // a list: pick by the binding cap, and quote the number so the human can check the choice.
+        nextStep:
+          'Route heavy work to the row with the lowest WEEKLY (all models) %, not the lowest session %, and name it by its `num` when you say where you sent it. A row whose advice.severity is "unknown" was not read successfully; that is not headroom.',
+      }
+    },
   },
   {
     name: 'usage_budget',
     description:
-      "QUANTIFY the quota: turn a vague '98% used' into numbers you can actually plan with. Returns (a) `forecast` — the burn rate in %/HOUR, the hours of headroom left at that rate, and `exhaustsBeforeReset`, THE field that decides things: if false, the cap will NOT bite before it resets and you can work freely no matter how alarming the % looks; if true, you have `headroomHours` before you are cut off. And (b) `budget` — an estimated TOKEN headroom, derived by measuring (tokens counted from your Claude Code transcripts) / (percent burned), because Anthropic publishes no token or dollar quota. ALWAYS read `budget.caveat` and `budget.confidence`: the token figure only counts Claude Code on THIS machine, so if the account is also used from the desktop app or elsewhere it is an OPTIMISTIC UPPER BOUND. Use this before committing to a long task or a big fan-out. Pass `instance` (its permanent number — the only form that works for Desktop, CLI and Codex alike, and it echoes back which account answered); `dir` and `account` remain for the older desktop/dispatch paths. Add `configDir` to count a specific CLI config dir's transcripts.",
+      "QUANTIFY the quota: turn a vague '98% used' into numbers you can actually plan with. Returns (a) `forecast` — the burn rate in %/HOUR, the hours of headroom left at that rate, and `exhaustsBeforeReset`, THE field that decides things: if false, the cap will NOT bite before it resets and you can work freely no matter how alarming the % looks; if true, you have `headroomHours` before you are cut off. And (b) `budget` — an estimated TOKEN headroom, derived by measuring (tokens counted from your Claude Code transcripts) / (percent burned), because Anthropic publishes no token or dollar quota. ALWAYS read `budget.caveat` and `budget.confidence`: the token figure only counts Claude Code on THIS machine, so if the account is also used from the desktop app or elsewhere it is an OPTIMISTIC UPPER BOUND. Use this before committing to a long task or a big fan-out. CALL IT WITH NO ARGUMENTS to budget YOURSELF — it identifies which instance this process is (same detection as whoami, so a Claude Desktop session works too) and returns an `identity` block naming the account it measured. Pass `instance` (its permanent number — the only form that works for Desktop, CLI and Codex alike, and it echoes back which account answered) to budget a different one; `dir` and `account` remain for the older desktop/dispatch paths. Add `configDir` to count a specific CLI config dir's transcripts.",
     inputSchema: S({
       instance: INSTANCE_PARAM,
       dir: { type: 'string', description: 'Desktop instance dir (from list_instances).' },
@@ -684,7 +911,7 @@ export const TOOLS: McpEngineTool[] = [
           "Claude config dirs whose transcripts count as this account's spend. Defaults to the plain ~/.claude login (or, when `instance` is a CLI instance, that instance's own config dir).",
       },
     }),
-    run: (a) => {
+    run: async (a) => {
       const params = new URLSearchParams()
       if (a.instance != null && str(a.instance).trim())
         params.set('instance', str(a.instance).trim())
@@ -692,48 +919,87 @@ export const TOOLS: McpEngineTool[] = [
       if (a.account != null) params.set('account', str(a.account))
       const dirs = (Array.isArray(a.configDir) ? a.configDir : []).map(str)
       for (const d of dirs) params.append('configDir', d)
-      if (!params.has('instance') && !params.has('dir') && !params.has('account'))
-        throw new Error(
-          'pass `instance` (its number — works for Desktop, CLI and Codex), `dir` (a desktop instance) or `account` (id or label)',
-        )
-      return apiOrLocal(`/api/usage/budget?${params.toString()}`, async () => {
-        // Offline path: `instance` and `dir` both work — the number registry and the instance
-        // stores are plain JSON files, readable with the app closed. Only `account` cannot be
-        // answered here: it resolves a dispatch account out of the daemon's sqlite, and racing
-        // the daemon for that DB is not worth the complexity.
-        const { resolveInstance, resolveInstanceError } = await import('./core/instance-ref')
-        const hit = params.has('instance') ? await resolveInstance(params.get('instance')) : null
-        if (params.has('instance') && !hit)
-          throw new Error(await resolveInstanceError(params.get('instance')))
-        if (!hit && !a.dir)
+
+      // NO TARGET GIVEN → budget MYSELF. This used to throw, which meant the one caller who most
+      // needs a burn rate (an agent deciding whether it can finish) had to know its own instance
+      // number first — and a Desktop session had no way to learn it.
+      let self: SelfIdentityPayload | null = null
+      if (!params.has('instance') && !params.has('dir') && !params.has('account')) {
+        self = await selfIdentity()
+        if (self.instance) params.set('instance', String(self.instance.num))
+        else if (self.kind === 'desktop' && self.configDir) params.set('dir', self.configDir)
+        // The plain ~/.claude login: no instance number, no desktop dir. `configDir` is both the
+        // credential to read AND the transcripts to count, which is exactly what the budget route's
+        // configDir branch does.
+        else if (self.configDir) params.append('configDir', self.configDir)
+        else
           throw new Error(
-            'the AgentHydra daemon is not running; usage_budget can answer offline for `instance` or `dir` but not for `account`. Start the app, or pass `instance`.',
+            `could not identify which account this process runs as (${self.summary}). Pass \`instance\` (its number — see list_instance_numbers), \`dir\` or \`account\`.`,
           )
-        if (hit?.kind === 'codex')
-          throw new Error(
-            `instance #${hit.num} is a Codex instance; its quota comes from the OpenAI API, which this offline path does not call. Start the app and retry.`,
-          )
-        const { checkUsageForCliInstance, checkUsageForDesktop } = await import('./usage-service')
-        const { buildUsageBudget, budgetSummary } = await import('./usage-budget')
-        const { usageAdvice } = await import('./usage')
-        const result =
-          hit?.kind === 'cli'
-            ? await checkUsageForCliInstance(hit.handle)
-            : await checkUsageForDesktop(hit?.kind === 'desktop' ? hit.handle : str(a.dir))
-        if (!result) throw new Error(`instance #${hit?.num} could not be checked`)
-        const budget = buildUsageBudget(result.snapshot, result.key, {
-          configDirs: dirs.length ? dirs : hit?.kind === 'cli' ? [hit.configDir] : undefined,
-        })
-        return {
-          snapshot: result.snapshot,
-          reason: result.reason,
-          advice: usageAdvice(result.snapshot),
-          budget,
-          summary: budgetSummary(budget, result.snapshot.weekAll?.pct ?? null),
-          ...(hit ? { instance: { num: hit.num, kind: hit.kind, name: hit.name } } : {}),
-          daemon: 'offline (answered locally)',
-        }
-      })
+      }
+
+      const withSelf = (r: unknown) =>
+        withNextStep(self ? { ...(r as Record<string, unknown>), identity: self } : r, self)
+
+      // Read the TARGET back off `params`, not off `a` — self-identification may have filled it in.
+      const spendDirs = params.getAll('configDir')
+      const dirParam = params.get('dir')
+
+      return withSelf(
+        await apiOrLocal(`/api/usage/budget?${params.toString()}`, async () => {
+          // Offline path: `instance`, `dir` and `configDir` all work — the number registry, the
+          // instance stores and a CLI login's credentials are plain files, readable with the app
+          // closed. Only `account` cannot be answered here: it resolves a dispatch account out of
+          // the daemon's sqlite, and racing the daemon for that DB is not worth the complexity.
+          const { resolveInstance, resolveInstanceError } = await import('./core/instance-ref')
+          const hit = params.has('instance') ? await resolveInstance(params.get('instance')) : null
+          if (params.has('instance') && !hit)
+            throw new Error(await resolveInstanceError(params.get('instance')))
+          if (!hit && !dirParam && spendDirs.length === 0)
+            throw new Error(
+              'the AgentHydra daemon is not running; usage_budget can answer offline for `instance`, `dir` or `configDir` but not for `account`. Start the app, or pass `instance`.',
+            )
+          if (hit?.kind === 'codex')
+            throw new Error(
+              `instance #${hit.num} is a Codex instance; its quota comes from the OpenAI API, which this offline path does not call. Start the app and retry.`,
+            )
+          const { checkUsageForCliInstance, checkUsageForDesktop } = await import('./usage-service')
+          const { buildUsageBudget, budgetSummary } = await import('./usage-budget')
+          const { checkUsage, isNoData, usageAdvice } = await import('./usage')
+          const result =
+            hit?.kind === 'cli'
+              ? await checkUsageForCliInstance(hit.handle)
+              : hit?.kind === 'desktop' || dirParam
+                ? await checkUsageForDesktop(hit?.handle ?? (dirParam as string))
+                : await (async () => {
+                    const cd = spendDirs[0] as string
+                    const snapshot = await checkUsage({ configDir: cd, account: cd })
+                    return {
+                      snapshot,
+                      cached: false,
+                      key: `dir:${cd}`,
+                      reason: isNoData(snapshot) ? ('check_failed' as const) : ('ok' as const),
+                    }
+                  })()
+          if (!result) throw new Error(`instance #${hit?.num} could not be checked`)
+          const budget = buildUsageBudget(result.snapshot, result.key, {
+            configDirs: spendDirs.length
+              ? spendDirs
+              : hit?.kind === 'cli'
+                ? [hit.configDir]
+                : undefined,
+          })
+          return {
+            snapshot: result.snapshot,
+            reason: result.reason,
+            advice: usageAdvice(result.snapshot),
+            budget,
+            summary: budgetSummary(budget, result.snapshot.weekAll?.pct ?? null),
+            ...(hit ? { instance: { num: hit.num, kind: hit.kind, name: hit.name } } : {}),
+            daemon: 'offline (answered locally)',
+          }
+        }),
+      )
     },
   },
 
@@ -929,9 +1195,50 @@ export const TOOLS: McpEngineTool[] = [
 
 export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
 
+/**
+ * STANDING INSTRUCTIONS, handed to the model in the MCP `initialize` handshake, before it calls
+ * anything.
+ *
+ * WHY THIS EXISTS. A tool description is only read once the model has already decided to call that
+ * tool, which is useless for the behaviour that matters here: checking your quota BEFORE the
+ * expensive thing, and saving your work BEFORE you are cut off. Neither is discoverable from a
+ * tool list. Without this block those rules had to be typed into a human's prompt every session,
+ * and the one session where nobody typed them is the session that runs out of quota mid-task.
+ *
+ * WHY IT IS THIS SHORT. It is in context for the entire session, on every request, so every line
+ * is rent. Rules only, no explanation, no API shapes (docs/AI_USAGE_SELFCHECK.md holds the
+ * reasoning). If a line would not change what an agent DOES, it does not belong here.
+ */
+export const SERVER_INSTRUCTIONS = `AgentHydra manages every Claude/Codex account on this machine and knows what each has left.
+
+CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted. You do not need to be told which account you
+are: check_my_usage {} works it out and reads THAT account (~300ms, costs no quota, works with the
+app closed). Do it before any multi-agent fan-out, long task, or work you would hate to lose.
+
+Then act on what comes back:
+- advice.shouldOffload true -> WRITE YOUR CONTEXT, FINDINGS AND NEXT STEPS TO A FILE NOW, before
+  anything else. An agent that runs out mid-task dies holding everything it had not saved.
+- advice.safeToFanOut false -> shrink or postpone the fan-out. Gate on CURRENT + PROJECTED cost,
+  not current alone: a fan-out cannot be recalled once launched, solo work can be stopped at any
+  tool call.
+- A percentage decides nothing on its own. usage_budget {} turns it into a burn rate and
+  exhaustsBeforeReset, which is the field to branch on.
+- The weekly (all-models) % is the binding cap, except on Pro, where the 5-hour window usually
+  binds first, so a low weekly number there is not the reassurance it looks like. Switching model
+  does not dodge the shared weekly bucket.
+- severity 'unknown' or a failed read is NOT "plenty left". Never fan out on an unverified read.
+
+NEVER QUOTE AN UNATTRIBUTED PERCENTAGE. Every usage answer carries identity: name the instance.
+If identity.warning is present, the numbers are real but whose they are is not settled, so say so.
+A human who tells you your instance number OVERRULES the detection: do not argue them out of it
+using a config file, because the config files on this machine are exactly what lie about it.
+
+list_usage {} surveys every account at once. Route heavy work to one with headroom, by its number.
+Mutating tools say MUTATES: in their description; never run /login for a human.`
+
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {
-  return runMcpStdio({ serverInfo: SERVER_INFO, tools: TOOLS })
+  return runMcpStdio({ serverInfo: SERVER_INFO, tools: TOOLS, instructions: SERVER_INSTRUCTIONS })
 }
 
 // Only run the stdio loop when this file is the entry point (`bun run mcp`), not when a test

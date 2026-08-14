@@ -196,9 +196,9 @@ The whole API is exposed over MCP, so any MCP-speaking client can inspect sessio
 Claude queue, scheduler, and instance managers directly. Setup and the full tool list are in
 [docs/REFERENCE.md](docs/REFERENCE.md).
 
-Agents can also read their own remaining quota before fanning out work, which is the difference
-between pacing a big job and hitting a wall halfway through it:
-[docs/AI_USAGE_SELFCHECK.md](docs/AI_USAGE_SELFCHECK.md).
+Agents can also work out **which** of your accounts they are running as (`whoami`) and read that
+account's remaining quota before fanning out work, which is the difference between pacing a big job
+and hitting a wall halfway through it: [docs/AI_USAGE_SELFCHECK.md](docs/AI_USAGE_SELFCHECK.md).
 
 ## More
 

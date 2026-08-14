@@ -5,29 +5,122 @@ Claude subscription quota right now, without asking the human. The fast path
 is a direct read of the same endpoint the CLI's own `/usage` screen uses, no
 `claude` process spawn, no boot of the ~250 MB Bun-compiled binary.
 
+**You do not have to read this file to get the rules.** AgentHydra ships them
+itself, in two places, so nobody has to type them into a prompt:
+
+- **The MCP `initialize` handshake** returns `SERVER_INSTRUCTIONS` (server/src/mcp.ts).
+  Your client shows it to you once per session, before you call anything. That
+  is the only channel that can reach you *before* the expensive decision, which
+  is the whole point: a tool description is read only after you have already
+  decided to call that tool.
+- **Every usage answer carries a `nextStep`**: one line naming the single action
+  to take given what just came back. It is one line on purpose, and it is
+  ordered by urgency, so the most expensive mistake is always the sentence you
+  see.
+
+This document is the reasoning behind those rules. Read it when you want to know
+*why*; the rules themselves arrive on their own.
+
 ## How
 
-- **Call `check_my_usage {}` first.** It is a self-check: it reads your own
-  `CLAUDE_CONFIG_DIR`, falling back to the default `~/.claude` login when
-  that is unset, so it works for a normal Claude Code session too, not only
-  a dedicated CLI instance. It takes about 300ms and costs no quota (reading
-  usage is not an inference call; nothing is billed). It returns an `advice`
-  verdict alongside the raw percentages, see the next section, that verdict
-  is the part you actually need to act on.
+- **Call `check_my_usage {}` first.** It is a self-check: it works out which
+  instance you are (see "Knowing whose quota you just read", below) and reads
+  THAT account. It takes about 300ms and costs no quota (reading usage is not
+  an inference call; nothing is billed). It returns an `advice` verdict
+  alongside the raw percentages, see the next section, that verdict is the
+  part you actually need to act on, plus an `identity` block naming the
+  account it measured.
 - Call `check_usage { account?, configDir? }` to check a different saved
   account or config dir instead of your own.
 - Call `list_usage {}` to survey every managed instance (desktop and CLI) in
   one shot, each with its own `advice` verdict. Use it to answer "which of
   my accounts has headroom?" before routing heavy work, or to find the one
   about to hit its weekly cap.
-- Call `usage_budget { dir }` when you need a **quantity** rather than a
+- Call `usage_budget {}` when you need a **quantity** rather than a
   percentage: how fast the cap is being eaten, how long you have, and roughly
-  how many more assistant turns fit. See "quantifying it" below.
+  how many more assistant turns fit. With no arguments it budgets YOU (same
+  identification as `whoami`); pass `instance` to budget a different account.
+  See "quantifying it" below.
+- Call `whoami {}` to learn WHICH instance you are before quoting any of these
+  numbers at a human. See the next section.
 - All of these are reads. None of them consume quota. They also work with the
   AgentHydra app **closed**: the tokens are files on disk, the quota endpoint
   is one HTTPS GET, and the transcripts are local, so the MCP server answers
   in-process when the daemon is not running. (The queue and dispatch tools do
   need the daemon, and will say so.)
+
+## Knowing WHOSE quota you just read
+
+A percentage with no account attached is not a reading, it is a rumour. On a
+machine running several logins, "98% used" is only actionable once you can say
+*which* 98%. `whoami {}` answers that, and `check_my_usage {}` embeds the same
+answer in its `identity` block.
+
+**Call `whoami` before quoting a number to a human.** It returns the permanent
+instance number, the account email, the plan, the rate-limit tier (`Pro`,
+`Max 5×`, `Max 20×`), and, this is the part to read, HOW it worked that out:
+
+```
+confidence: 'exact'   a signal named the credential store. Quote the number.
+confidence: 'assumed' nothing named it; this is the default ~/.claude login
+                      BY ELIMINATION. Say "probably", or ask.
+confidence: 'none'    not running under Claude Code. Any reading is unattributed.
+method:               which signal won
+clues:                the literal proof: an env value, a file path, a pid
+ruledOut:             every signal checked and why it produced nothing
+warning:              present ONLY when the answer is uncertain or contradictory
+```
+
+### Why it is not just one env var
+
+A **CLI instance** sets `CLAUDE_CONFIG_DIR` and is trivial to identify. A
+**Claude Desktop instance does not set it at all**: the account is selected by
+the Electron host's `--user-data-dir`. So identification is layered, cheapest
+first, and stops at the first signal that lands:
+
+| signal | what it reads |
+|---|---|
+| `codex-home-env` | `CODEX_HOME` |
+| `claude-config-dir-env` | `CLAUDE_CONFIG_DIR` |
+| `execpath-env` | `CLAUDE_CODE_EXECPATH` → `<instanceDir>/claude-code/<ver>/claude.exe` |
+| `host-session-file` | `CLAUDE_CODE_HOST_SESSION_ID` → the instance folder holding `claude-code-sessions/**/<id>.json` |
+| `ancestor-execpath` | the parent `claude.exe`'s image path |
+| `ancestor-user-data-dir` | the grandparent Electron host's `--user-data-dir` |
+
+Only the last two spawn anything (one PowerShell / `ps` call), and they only run
+when everything cheaper came up empty.
+
+`CLAUDE_CONFIG_DIR` deliberately outranks every desktop signal: when it is set,
+that is the credential `claude` uses, even for a terminal opened from inside a
+Desktop instance.
+
+### THREE THINGS THAT LOOK AUTHORITATIVE AND ARE WRONG
+
+Each of these was tried during a real investigation and each produced a
+confident wrong answer. Do not identify yourself from any of them:
+
+1. **Your transcript's location.** A Desktop-instance session still writes to
+   the DEFAULT `~/.claude/projects/<cwd-key>/<sessionId>.jsonl`. That proves
+   where the session LOGS, not which account PAYS.
+2. **`~/.claude.json`'s `oauthAccount.emailAddress`.** That is the default login
+   sitting on the machine, not the credential the running session bills to.
+3. **Searching chat history for your own session id.** It resolves to the same
+   default config dir as (1), for the same reason, and costs far more.
+
+### The human outranks all of it
+
+If a person tells you which instance you are, **that is the answer**. Do not
+talk yourself out of it because a config file disagrees. A config file is
+exactly what trap (2) is. Detection exists so you are not helpless when nobody
+tells you; it does not overrule someone who does.
+
+### Tier matters as much as percentage
+
+`Pro`, `Max 5×` and `Max 20×` are the same percentages over very different
+buckets, and on Pro the 5-hour session window usually binds long before the
+weekly does, so a low weekly number is not the reassurance it looks like.
+AgentHydra does not guess a burn rate from the tier name; use `usage_budget`,
+which measures the actual rate for this account (see below).
 
 ## Quantifying it: a percentage alone cannot be acted on
 

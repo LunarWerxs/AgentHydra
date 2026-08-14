@@ -24,6 +24,12 @@ import { listCodexInstances } from './codex-instances'
 import { type InstanceKind, instanceRef, refForNumber } from './instance-numbers'
 import { listInstances } from './instances'
 import { normalizeInstancePath } from './paths'
+import {
+  describeSelfIdentity,
+  detectSelfIdentity,
+  type SelfIdentityDeps,
+  type SelfIdentityDetection,
+} from './self-identity'
 
 /** One instance, flattened to the fields any caller needs to act on or display it. */
 export interface ResolvedInstance {
@@ -40,6 +46,17 @@ export interface ResolvedInstance {
   /** The account this instance is signed into, when it is known without a network call. */
   email: string | null
   plan: string | null
+  /**
+   * The RATE-LIMIT tier, as a display label (`Pro`, `Max 5×`, `Max 20×` — core/shared.ts
+   * prettyTier), or the raw string when unrecognized.
+   *
+   * Surfaced NEXT TO `plan` rather than folded into it because they answer different questions and
+   * can disagree: `plan` is what the subscription is CALLED (an org seat reads "Team"), while this
+   * is what the quota actually IS. An agent pacing itself needs the second one — headroom differs
+   * by roughly 20× between Pro and Max 20×, so "how fast may I burn" cannot be read off the plan
+   * name alone.
+   */
+  tier: string | null
   /** Where its credentials live: the desktop user-data dir, the CLAUDE_CONFIG_DIR, or CODEX_HOME.
    *  This is what a usage check ultimately reads. */
   configDir: string
@@ -75,6 +92,7 @@ export async function listAllInstances(): Promise<ResolvedInstance[]> {
       name: inst.label ?? inst.account?.name ?? inst.name,
       email: inst.account?.email ?? null,
       plan: inst.account?.planLabel ?? null,
+      tier: inst.account?.rateLimitTier ?? null,
       configDir: inst.dir,
       // `loginUuid` is config.json's lastKnownAccountUuid, read on every list — present means a
       // login is on file, which is the cheapest honest answer available without touching a token.
@@ -99,6 +117,7 @@ export async function listAllInstances(): Promise<ResolvedInstance[]> {
       name: inst.name,
       email: linked?.account?.email ?? null,
       plan: linked?.account?.planLabel ?? null,
+      tier: linked?.account?.rateLimitTier ?? null,
       configDir: inst.configDir,
       loggedIn: inst.loggedIn,
       isRunning: null,
@@ -114,6 +133,8 @@ export async function listAllInstances(): Promise<ResolvedInstance[]> {
       name: inst.name,
       email: inst.account?.email ?? null,
       plan: inst.account?.planLabel ?? null,
+      // Codex accounts are OpenAI-side; there is no Claude rate-limit tier to report.
+      tier: null,
       configDir: inst.codexHome,
       loggedIn: inst.loggedIn,
       isRunning: inst.isDesktopRunning,
@@ -138,6 +159,31 @@ export async function instanceForConfigDir(configDir: string): Promise<ResolvedI
   return (
     (await listAllInstances()).find((r) => normalizeInstancePath(r.configDir) === wanted) ?? null
   )
+}
+
+/** What {@link identifySelf} answers: WHO the calling process is, plus the proof. */
+export interface SelfIdentityResult {
+  /** The managed instance this process belongs to, or null (unmanaged dir / default login). */
+  instance: ResolvedInstance | null
+  /** How that was established, with every signal that agreed or was ruled out. */
+  detection: SelfIdentityDetection
+  /** One sentence to quote back at a human. */
+  summary: string
+}
+
+/**
+ * WHICH INSTANCE AM I? — the full answer, evidence included.
+ *
+ * MUST RUN IN THE AGENT'S OWN PROCESS TREE (the MCP server, a hook, a spawned tool), NOT in the
+ * AgentHydra daemon: the whole method is reading this process's environment and walking up to the
+ * `claude.exe` that launched it. Called on the daemon it would faithfully identify the daemon,
+ * which is exactly the wrong answer delivered with total confidence. That is why the MCP layer
+ * detects locally and only asks the daemon for the cheap dir→instance lookup.
+ */
+export async function identifySelf(deps?: SelfIdentityDeps): Promise<SelfIdentityResult> {
+  const detection = await detectSelfIdentity(deps)
+  const instance = detection.configDir ? await instanceForConfigDir(detection.configDir) : null
+  return { instance, detection, summary: describeSelfIdentity(detection, instance) }
 }
 
 /** Parse `7`, `"7"` or `"#7"` into a number. Null for anything else — including `"7claude"`, which

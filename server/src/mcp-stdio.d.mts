@@ -16,6 +16,10 @@ export interface McpEngineTool {
 export interface McpServerContext {
   serverInfo: { name: string; version: string };
   tools: McpEngineTool[];
+  /** Standing guidance returned in the `initialize` handshake. The client shows it to the model
+   *  once per session, before any tool call, so an app can ship its own operating rules instead of
+   *  relying on a human to repeat them. Keep it SHORT: it is in context for the whole session. */
+  instructions?: string;
 }
 
 /** A JSON-RPC -32700 parse-error response (id null) for a transport to emit on malformed input. */

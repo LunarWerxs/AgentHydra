@@ -50,8 +50,35 @@ dispatch, composing replies, and rate-limit auto-resume remain Claude-only.
 `check_usage { account?, configDir? }` and `check_my_usage {}` let any MCP-speaking agent read an
 account's remaining Claude subscription quota without asking a human. Pass `account` (a saved
 dispatch account id or label) or `configDir` (a `CLAUDE_CONFIG_DIR` that's been `/login`'d once);
-`check_my_usage` is a shorthand self-check of the calling process's own `CLAUDE_CONFIG_DIR`. Both
-report the session (5h) %, the weekly (all-models) %, and any per-model weekly %.
+`check_my_usage` is a self-check that works out which account the calling process actually bills to.
+Both report the session (5h) %, the weekly (all-models) %, and any per-model weekly %.
+
+### Built-in guidance
+
+The MCP `initialize` handshake returns an `instructions` block (`SERVER_INSTRUCTIONS` in
+`server/src/mcp.ts`), which clients show the model once per session before any tool call, and every
+usage or identity answer carries a one-line `nextStep`. Between them an agent gets AgentHydra's
+operating rules (check your quota unprompted before heavy work, save state when `shouldOffload` is
+true, gate a fan-out on current + projected cost, never quote an unattributed percentage) without a
+human typing any of it. The handshake block is length-capped by a test, because it sits in context
+for the whole session.
+
+### Self-identification
+
+`whoami {}` answers "which instance am I?" and shows its working: the permanent number, account
+email, plan and rate-limit tier, plus a `confidence` (`exact` / `assumed` / `none`), the `method`
+that won, the literal `clues`, and everything `ruledOut`. `check_my_usage` and a no-argument
+`usage_budget` embed the same answer as an `identity` block, so a quota reading is never
+unattributed.
+
+It is not one env var. A Claude **CLI** instance sets `CLAUDE_CONFIG_DIR`; a Claude **Desktop**
+instance sets none, because the account is chosen by the Electron host's `--user-data-dir`. So
+detection layers `CODEX_HOME` → `CLAUDE_CONFIG_DIR` → `CLAUDE_CODE_EXECPATH` → the instance folder
+holding this session's `claude-code-sessions` file → the parent `claude.exe`'s image path → the
+Electron host's `--user-data-dir`, stopping at the first hit and only spawning a process scan when
+everything cheaper came up empty. It runs in the MCP server process, never on the daemon, which
+would faithfully identify the daemon. See [AI_USAGE_SELFCHECK.md](AI_USAGE_SELFCHECK.md) for the
+three signals that look authoritative and are wrong.
 
 **The weekly (all-models) % is the binding cap.** A fresh session % is a red herring when weekly is
 near 100, and switching the flagship model doesn't dodge the shared weekly bucket. An agent should

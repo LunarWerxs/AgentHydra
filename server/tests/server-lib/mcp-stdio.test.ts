@@ -19,6 +19,7 @@ type RpcResponse = {
   result?: {
     protocolVersion?: string;
     serverInfo?: unknown;
+    instructions?: string;
     tools?: Array<{ name: string; description: string; inputSchema: unknown }>;
     content?: Array<{ type: string; text: string }>;
     isError?: boolean;
@@ -60,6 +61,23 @@ test("initialize echoes the client protocolVersion and advertises tools + server
 test("initialize falls back to the engine's protocol version when the client omits one", async () => {
   const res = await handleRpc({ jsonrpc: "2.0", id: 1, method: "initialize" }, ctx);
   expect(rpc(res)?.result?.protocolVersion).toBe("2024-11-05");
+});
+
+test("initialize carries the app's standing instructions when it supplies any", async () => {
+  const res = await handleRpc({ jsonrpc: "2.0", id: 1, method: "initialize" }, {
+    ...ctx,
+    instructions: "Check your quota before fanning out.",
+  });
+  expect(rpc(res)?.result?.instructions).toBe("Check your quota before fanning out.");
+});
+
+test("initialize omits `instructions` entirely when there are none", async () => {
+  // Absent, not empty: an empty string is still a field the client has to render, and a blank
+  // guidance block reads as "this server has nothing to say" rather than "it did not opt in".
+  for (const instructions of [undefined, "", "   "]) {
+    const res = await handleRpc({ jsonrpc: "2.0", id: 1, method: "initialize" }, { ...ctx, instructions });
+    expect(rpc(res)?.result).not.toHaveProperty("instructions");
+  }
 });
 
 test("ping returns an empty result", async () => {
