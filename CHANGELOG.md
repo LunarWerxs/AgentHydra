@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-08-13
+
 ### Fixed
 
 - **An agent can now tell which of your accounts it is spending.** `whoami` read one environment
