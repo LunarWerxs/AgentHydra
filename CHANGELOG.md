@@ -7,6 +7,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bun run dist` said `EACCES: permission denied` when the real problem was that AgentHydra was
+  running.** Windows cannot unlink a running executable, so wiping `dist/` fails whenever a
+  previously built AgentHydra is still up, which is the normal state on a machine where the app is
+  installed from this checkout. The error named a permission and a directory, so it sent you
+  looking at ACLs and elevation; the actual fix is to quit one process. The wipe now goes file by
+  file (one lock cannot take the whole clear down with it) and, when something is locked, names the
+  offending process and its pid, plus the `--outfile` escape hatch for building without touching
+  the running app. Verified against a real lock, not a simulated one: a running `dist/AgentHydra.exe`
+  now produces `pid 85060  D:\...\dist\AgentHydra.exe` and the command to end it.
+
 ## [0.23.0] - 2026-08-13
 
 ### Fixed

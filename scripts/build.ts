@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 /**
  * Build one self-contained AgentHydra executable. The generated compile-only entrypoint embeds
@@ -118,13 +119,81 @@ await import(${JSON.stringify(importPath(entry, join(ROOT, 'server', 'src', 'mai
   return entry
 }
 
+/**
+ * Empty `dist/` before a build, and when Windows refuses, say WHY instead of throwing EACCES.
+ *
+ * The refusal is not a permissions problem and the error text is actively misleading: Windows
+ * cannot unlink a running executable, so `dist/AgentHydra.exe` is locked exactly when a previously
+ * built AgentHydra is still running, which is the normal state on a machine where the app is
+ * installed from this checkout. `EACCES: permission denied, rm 'dist'` sends you looking at ACLs
+ * and elevation. Naming the process (with its pid, so it can be ended) turns a five-minute
+ * detour into one obvious action.
+ *
+ * The directory is emptied item by item rather than removed and recreated, so one locked file
+ * cannot take the whole wipe down with it, and the surviving lock is reported precisely.
+ */
+function clearDistDir(dir: string): void {
+  if (!existsSync(dir)) return
+  const locked: string[] = []
+  for (const name of readdirSync(dir)) {
+    try {
+      rmSync(join(dir, name), { recursive: true, force: true })
+    } catch {
+      locked.push(name)
+    }
+  }
+  if (locked.length === 0) return
+
+  const holders = describeLockHolders(dir)
+  throw new Error(
+    `cannot clear ${dir}: ${locked.join(', ')} ${locked.length === 1 ? 'is' : 'are'} locked.\n` +
+      (holders.length
+        ? `A previously built AgentHydra is still running from this folder:\n${holders
+            .map((h) => `  pid ${h.pid}  ${h.path}`)
+            .join('\n')}\n` +
+          `Quit it (or: taskkill /PID ${holders[0]?.pid} /F), then build again.\n`
+        : 'Something still has a file in it open. Quit any AgentHydra started from this folder, then build again.\n') +
+      `Or build somewhere else and leave the running app alone:\n` +
+      `  bun run dist -- --outfile=<path>`,
+  )
+}
+
+/** Processes running an executable from `dir`, so the message can name the thing to close. Windows
+ *  only (it is the only OS that locks a running image); best-effort, and an empty list just means
+ *  the message falls back to a generic phrasing. */
+function describeLockHolders(dir: string): Array<{ pid: number; path: string }> {
+  if (process.platform !== 'win32') return []
+  try {
+    const out = execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Get-CimInstance Win32_Process | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress',
+      ],
+      { encoding: 'utf8', timeout: 15_000, windowsHide: true },
+    )
+    const rows: unknown = JSON.parse(out)
+    const wanted = resolve(dir).toLowerCase()
+    return (Array.isArray(rows) ? rows : [rows])
+      .filter((r): r is { ProcessId: number; ExecutablePath: string } => {
+        const p = (r as { ExecutablePath?: unknown })?.ExecutablePath
+        return typeof p === 'string' && resolve(p).toLowerCase().startsWith(`${wanted}\\`)
+      })
+      .map((r) => ({ pid: r.ProcessId, path: r.ExecutablePath }))
+  } catch {
+    return []
+  }
+}
+
 const target = option('--target')
 const targetFlag = target ? `bun-${target}` : undefined
 const windowsTarget = target ? target.startsWith('windows-') : process.platform === 'win32'
 const defaultName = windowsTarget ? 'AgentHydra.exe' : 'agenthydra'
 const requestedOutfile = option('--outfile')
 const outBin = resolve(requestedOutfile ?? join(ROOT, 'dist', defaultName))
-if (!requestedOutfile) rmSync(join(ROOT, 'dist'), { recursive: true, force: true })
+if (!requestedOutfile) clearDistDir(join(ROOT, 'dist'))
 mkdirSync(dirname(outBin), { recursive: true })
 
 if (!process.argv.includes('--skip-web')) {
