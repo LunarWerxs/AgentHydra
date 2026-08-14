@@ -1,0 +1,95 @@
+import { expect, test } from 'bun:test'
+import { collapseSubagents } from '../src/sessions'
+import type { TranscriptFile } from '../src/transcript'
+
+function file(
+  session_id: string,
+  parentId: string | null = null,
+  over: Partial<TranscriptFile> = {},
+): TranscriptFile {
+  return {
+    session_id,
+    source: 'opencode',
+    path: 'C:/store/opencode.db',
+    project: 'p1',
+    mtime_ms: 1000,
+    size_bytes: 10,
+    archived: false,
+    parentId,
+    ...over,
+  }
+}
+
+const ids = (files: TranscriptFile[]) => files.map((f) => f.session_id)
+
+test('a subagent whose parent is present is not a row, and counts on its parent', () => {
+  const { rows, counts } = collapseSubagents([file('parent'), file('child', 'parent')])
+  expect(ids(rows)).toEqual(['parent'])
+  expect(counts.get('opencode:parent')).toBe(1)
+})
+
+test('a subagent whose parent is absent stays a row', () => {
+  // Nothing may be silently unowned — either it belongs to a session or it IS one. A parent deleted
+  // or pruned out of the store must not take its subagents off the screen with it.
+  const { rows, counts } = collapseSubagents([file('orphan', 'gone')])
+  expect(ids(rows)).toEqual(['orphan'])
+  expect(counts.size).toBe(0)
+})
+
+test('nesting deeper than one level collapses to its root and counts there', () => {
+  const { rows, counts } = collapseSubagents([
+    file('root'),
+    file('mid', 'root'),
+    file('leaf', 'mid'),
+  ])
+  expect(ids(rows)).toEqual(['root'])
+  // Both of them, on the row the user can actually see — crediting the immediate parent would put
+  // the leaf's count on a row that is not in the list.
+  expect(counts.get('opencode:root')).toBe(2)
+})
+
+test('parentage is matched within a source, never across', () => {
+  // A bare id colliding between two stores must not let one store's session hide another's.
+  const { rows } = collapseSubagents([
+    file('shared', null, { source: 'claude', path: 'a.jsonl' }),
+    file('child', 'shared'),
+  ])
+  expect(ids(rows)).toEqual(['shared', 'child'])
+})
+
+test('a chain that never reaches a top-level session keeps every row', () => {
+  // Corrupt parentage must not delete conversations from the list. Each of these sees a parent that
+  // exists, so a single "does my parent exist" test would drop all of them and the user would watch
+  // sessions disappear with nothing anywhere reporting why.
+  expect(ids(collapseSubagents([file('loner', 'loner')]).rows)).toEqual(['loner'])
+  expect(ids(collapseSubagents([file('a', 'b'), file('b', 'a')]).rows)).toEqual(['a', 'b'])
+  expect(ids(collapseSubagents([file('x', 'y'), file('y', 'z'), file('z', 'x')]).rows)).toEqual([
+    'x',
+    'y',
+    'z',
+  ])
+})
+
+test('a subagent hanging off a cycle is kept, because a cycle owns nothing', () => {
+  const { rows, counts } = collapseSubagents([file('a', 'b'), file('b', 'a'), file('leaf', 'a')])
+  expect(ids(rows)).toEqual(['a', 'b', 'leaf'])
+  expect(counts.size).toBe(0)
+})
+
+test('siblings all count on the one parent', () => {
+  const { rows, counts } = collapseSubagents([
+    file('parent'),
+    file('c1', 'parent'),
+    file('c2', 'parent'),
+    file('c3', 'parent'),
+  ])
+  expect(ids(rows)).toEqual(['parent'])
+  expect(counts.get('opencode:parent')).toBe(3)
+})
+
+test('an index with no parentage at all is returned untouched', () => {
+  const input = [file('a'), file('b')]
+  const { rows, counts } = collapseSubagents(input)
+  expect(rows).toBe(input)
+  expect(counts.size).toBe(0)
+})

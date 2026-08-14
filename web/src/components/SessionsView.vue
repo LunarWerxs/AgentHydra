@@ -22,6 +22,7 @@ import {
   FileText,
   FolderGit2,
   GitBranch,
+  GitFork,
   Globe,
   Hourglass,
   KeyRound,
@@ -1402,6 +1403,15 @@ function copy(text: string) {
                     </span>
                     <span v-if="s.instance" class="inline-flex items-center gap-1">
                       <Boxes class="size-3" />{{ s.instance === 'default' ? $t('sessions.instanceDefault') : instanceLabelFor(s.instance) }}
+                    </span>
+                    <!-- this row stands for a fan-out: the subagents are sessions in the provider's
+                         own store, folded in here rather than listed as conversations of their own -->
+                    <span
+                      v-if="s.subagent_count > 0"
+                      class="inline-flex items-center gap-1"
+                      :title="$t('sessions.subagentsHint', { count: s.subagent_count })"
+                    >
+                      <GitFork class="size-3" />{{ $t('sessions.subagents', { count: s.subagent_count }) }}
                     </span>
                     <!-- only meaningful while archived rows are being shown at all -->
                     <span

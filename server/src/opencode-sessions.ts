@@ -13,6 +13,16 @@ export interface OpenCodeSessionRecord {
   last_activity_at: number
   archived: boolean
   size_bytes: number
+  /**
+   * The session that spawned this one, or null when it is a top-level conversation.
+   *
+   * OpenCode gives a subagent its own session row — `agent` reads `general`/`investigator`/`explore`
+   * rather than `build` — so a machine that fans out has as many child rows as real conversations
+   * (47 top-level against 41 children when this was written). They are a real session with their own
+   * messages, models and tokens, so they stay in the index; what they are not is a row in a list of
+   * conversations the user held. See listSessions in server/src/sessions.ts.
+   */
+  parent_id: string | null
 }
 
 interface SessionRow {
@@ -23,6 +33,7 @@ interface SessionRow {
   time_created: number | null
   time_updated: number | null
   time_archived: number | null
+  parent_id: string | null
   size_bytes: number
 }
 
@@ -44,6 +55,27 @@ function openDb(path = OPENCODE_DB_PATH): Database | null {
     return new Database(path, { readonly: true })
   } catch {
     return null
+  }
+}
+
+/**
+ * Whether a column exists, asked rather than assumed.
+ *
+ * `session.parent_id` arrived partway through OpenCode's life, and the stores that share this format
+ * (Kilo writes the same SQLite under another filename) lag it by their own release cadence. Naming
+ * the column unconditionally would throw inside the one try/catch that guards the whole listing, and
+ * that catch returns an empty array — so a store one version behind would report that the user has
+ * no sessions at all rather than no subagents. Cheap enough to ask on every call: sqlite answers
+ * `pragma table_info` from the schema it already has parsed.
+ */
+function hasColumn(db: Database, table: string, column: string): boolean {
+  try {
+    return db
+      .query<{ name: string }, []>(`pragma table_info(${table})`)
+      .all()
+      .some((c) => c.name === column)
+  } catch {
+    return false
   }
 }
 
@@ -141,11 +173,12 @@ export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRe
   const db = openDb(path)
   if (!db) return []
   try {
+    const parentId = hasColumn(db, 'session', 'parent_id') ? 's.parent_id' : 'null as parent_id'
     const rows = db
       .query<SessionRow, []>(
         `select
            s.id, s.project_id, s.directory, s.title, s.time_created, s.time_updated,
-           s.time_archived,
+           s.time_archived, ${parentId},
            coalesce((select sum(length(m.data)) from message m where m.session_id = s.id), 0) +
            coalesce((select sum(length(p.data)) from part p where p.session_id = s.id), 0)
              as size_bytes
@@ -161,6 +194,9 @@ export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRe
       last_activity_at: row.time_updated ?? row.time_created ?? 0,
       archived: row.time_archived !== null,
       size_bytes: Number(row.size_bytes) || 0,
+      // Empty string is not a parent: an older store that writes '' rather than NULL would otherwise
+      // make every session the child of a session that does not exist.
+      parent_id: row.parent_id || null,
     }))
   } catch {
     return []

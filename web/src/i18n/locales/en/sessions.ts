@@ -42,6 +42,11 @@ export default {
   instanceAll: 'All instances',
   instanceDefault: 'Default',
   instanceOther: 'CLI / other',
+  // Shown on a session that fanned out. The subagents are sessions in the provider's own store, but
+  // not conversations the user held, so they are folded into this row rather than listed beside it.
+  subagents: '{count} subagents',
+  subagentsHint:
+    'Spawned {count} subagent sessions. They are folded into this row rather than listed separately; their tokens are still counted.',
   // --- list options (the ⋯ menu) ---
   listOptions: 'List options',
   listOptionsHint: 'Filters and view toggles for the session list',

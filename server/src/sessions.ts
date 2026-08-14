@@ -353,6 +353,78 @@ function doneMarkMap(): Map<string, boolean> {
 }
 
 /**
+ * Drop the rows that are somebody else's subagent.
+ *
+ * A subagent is an implementation detail of the turn that spawned it, not a conversation the user
+ * held — the same verdict Claude and Codex already reach in server/src/transcript.ts, reached one
+ * layer later for OpenCode because there the subagent is a row in the same table rather than a
+ * nested file. Without this, a machine that fans out reads as one that never stops starting new
+ * chats: a six-way review filled the sidebar with seven near-identical rows, one real and six
+ * `(@investigator subagent)`.
+ *
+ * It filters the LIST, never the index. The child rows stay indexed so analytics keeps charging
+ * their tokens and so opening or exporting one by id still resolves — see TranscriptFile.parentId.
+ *
+ * A child whose parent is NOT in the index stays a row, on the same rule promoteOrphans applies to
+ * Claude's nested transcripts: nothing may be silently unowned — either it belongs to a session or
+ * it IS one. That is what keeps a subagent visible when its parent was deleted or pruned, rather
+ * than leaving it in the store with nothing anywhere pointing at it. Membership is keyed by source
+ * as well as id, so a bare id colliding across two stores cannot hide a session from a list.
+ *
+ * SO IT WALKS THE CHAIN RATHER THAN ASKING ONE QUESTION. "Does my parent exist" is the right test
+ * only for a tree, and nothing in a SQLite column guarantees one. A row claiming itself as its own
+ * parent, or two rows claiming each other, would each see a parent that exists and every one of them
+ * would drop — the sessions would not merely be nested, they would be GONE from the list, which is
+ * the one outcome this function may never produce. A chain that does not end at a real top-level
+ * session is not ownership, so the row is kept and the user sees it.
+ */
+export function collapseSubagents(files: TranscriptFile[]): {
+  rows: TranscriptFile[]
+  /** `source:session_id` of a surviving row -> how many subagents it owns, through the whole chain. */
+  counts: Map<string, number>
+} {
+  // A store that records no parentage at all is every store but OpenCode, so leave early rather than
+  // build an index of every session on the machine for nothing.
+  if (!files.some((f) => f.parentId)) return { rows: files, counts: new Map() }
+  const key = (source: string, id: string) => `${source}:${id}`
+  // Keyed by source as well as id: two stores can hand out the same bare id, and one of them must
+  // not be able to hide the other's session.
+  const byId = new Map(files.map((f) => [key(f.source, f.session_id), f]))
+
+  /** The top-level session this row belongs to, or null when it is one itself — or owned by nothing
+   *  real, which is the same answer as far as this list is concerned. */
+  const ownerOf = (file: TranscriptFile): TranscriptFile | null => {
+    const seen = new Set<string>([key(file.source, file.session_id)])
+    let parent = file.parentId ? byId.get(key(file.source, file.parentId)) : undefined
+    while (parent) {
+      // Already on this path: the parentage is a cycle and owns nothing. Keep the row.
+      if (seen.has(key(parent.source, parent.session_id))) return null
+      // Reached a session nobody spawned. Everything below it really is a subagent.
+      if (!parent.parentId) return parent
+      seen.add(key(parent.source, parent.session_id))
+      parent = byId.get(key(parent.source, parent.parentId))
+    }
+    // The chain ran off the end of the index: the owner was deleted or pruned. Keep the row.
+    return null
+  }
+
+  const rows: TranscriptFile[] = []
+  const counts = new Map<string, number>()
+  for (const f of files) {
+    const owner = f.parentId ? ownerOf(f) : null
+    if (!owner) {
+      rows.push(f)
+      continue
+    }
+    // Credited to the ROOT rather than to the immediate parent, so a chain two deep still counts on
+    // the row the user can actually see.
+    const k = key(owner.source, owner.session_id)
+    counts.set(k, (counts.get(k) ?? 0) + 1)
+  }
+  return { rows, counts }
+}
+
+/**
  * List the newest transcripts, optionally scoped to one instance BEFORE the cap:
  * `instance` = an instance dir name, "default" (non-isolated install), or "other"
  * (unmapped, i.e. plain CLI). Filtering first matters — with thousands of transcripts
@@ -366,6 +438,8 @@ function doneMarkMap(): Map<string, boolean> {
  *
  * `sinceMs` is the same idea one step further: an epoch cutoff on last activity, applied to the
  * cheap mtime index before anything is parsed. Null means no cutoff.
+ *
+ * A subagent that another session spawned is not a row here at all; see withoutOwnedSubagents.
  *
  * Transcripts with no substantive turn are dropped unconditionally (no scope opts back into them).
  * They are not short sessions, they are CLI scaffolding — a `/usage` probe writes a caveat, a
@@ -390,6 +464,11 @@ export async function listSessions(
   // the whole daemon for the length of a full store sweep. ensureTranscriptIndex also coalesces
   // with the boot warm-up, so the first request after launch joins that build instead of racing it.
   let files = await ensureTranscriptIndex()
+  // Before every other filter, and on the WHOLE index: whether a subagent's parent exists is a fact
+  // about the store, and deciding it against an already-filtered list would promote a child to a row
+  // merely because the current scope hid its parent.
+  const collapsed = collapseSubagents(files)
+  files = collapsed.rows
   if (source !== 'all') files = files.filter((file) => file.source === source)
   if (instance) {
     files = files.filter((f) =>
@@ -441,6 +520,7 @@ export async function listSessions(
       archived: tf.archived || (mmap.get(tf.session_id)?.archived ?? false),
       done: dmap.get(sessionMarkKey(tf.source, tf.session_id)) ?? false,
       dispatched: tf.source === 'claude' && qmap.has(tf.session_id),
+      subagent_count: collapsed.counts.get(`${tf.source}:${tf.session_id}`) ?? 0,
     }
   }
 
@@ -558,5 +638,10 @@ export async function getSession(
     archived: tf.archived || (meta?.archived ?? false),
     done: dmap.get(sessionMarkKey(tf.source, sessionId)) ?? false,
     dispatched: tf.source === 'claude' && qmap.has(tf.session_id),
+    // Asked of the whole index rather than tracked per row, because this route can be handed a
+    // subagent's own id — reached from a search hit — and that row is not in the collapsed list at
+    // all. It answers 0 for itself, which is true: a subagent spawned nothing.
+    subagent_count:
+      collapseSubagents(listTranscriptFiles()).counts.get(`${tf.source}:${tf.session_id}`) ?? 0,
   }
 }

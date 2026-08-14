@@ -7,6 +7,40 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-13
+
+### Fixed
+
+- **OpenCode subagents are no longer listed as separate conversations.** OpenCode is the one store
+  that keeps a subagent as a row in the same `session` table as a real chat, told apart only by a
+  `parent_id` column this repo never read. So a single six-way review filled the sidebar with seven
+  near-identical rows, one conversation and six `(@investigator subagent)`, and on the machine this
+  was found on, 45 of 92 OpenCode sessions were subagents. Claude and Codex already reach this
+  verdict in `server/src/transcript.ts`; OpenCode now reaches it one layer later, in the list
+  builder, for the reason below.
+
+  **The obvious fix would have deleted money.** Those child rows carry their own tokens, 1.74M of
+  them, about a sixth of all OpenCode spend, against models the parent never ran (21 of 45 children
+  used a different model). The analytics scan walks every index row by id, so dropping subagents
+  from the index would have silently removed that spend from every total, and `findTranscript`
+  would have stopped resolving them for the open, export and delete routes. They stay indexed and
+  are filtered only where the list of *conversations* is built, so totals and lookups are untouched.
+
+  Two edges are handled rather than assumed away. A store without the column (an older OpenCode, or
+  Kilo, which writes this same SQLite) would have thrown into the one `catch` that guards the
+  listing and returned an empty array, reporting **no sessions at all** rather than no subagents; a
+  `pragma` probe asks before naming the column. And parentage that does not form a tree (a row
+  claiming itself, or two rows claiming each other) would have seen an existing parent on every side
+  and hidden all of them, so ownership is resolved by walking the chain to a real top-level session:
+  anything else keeps its row, on the existing rule that nothing may be silently unowned.
+
+### Added
+
+- **A session row says when it stands for a fan-out.** Rows that spawned subagents now carry a
+  `5 subagents` chip. Hiding 45 rows with nothing on screen to account for them is how a fix reads
+  as data loss, and the count is credited to the top-level session rather than to the immediate
+  parent, so a chain two deep still reports on the row a reader can actually see.
+
 ## [0.21.0] - 2026-08-13
 
 ### Added

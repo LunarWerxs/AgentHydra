@@ -61,6 +61,19 @@ export interface TranscriptFile {
    * which tool the user actually ran.
    */
   tool?: string
+  /**
+   * The session that spawned this one, when the store records a subagent as a session of its own.
+   *
+   * Set by the OpenCode reader, which is the only store that keeps its subagents as sibling rows in
+   * the same table rather than as nested files: Claude's are folded into the parent by
+   * {@link claudeParentId} and Codex's are dropped by `isSubagent` before they ever reach the index.
+   *
+   * A row carrying this stays in the index ON PURPOSE. It is a real session — its own messages, its
+   * own model, its own tokens (1.74M of them on this machine, a sixth of all OpenCode spend), and
+   * analytics reads it by id like any other, so dropping it here would delete that money from every
+   * total. It is filtered out one layer up, where the list of CONVERSATIONS is built.
+   */
+  parentId?: string | null
 }
 
 let cache: { at: number; files: TranscriptFile[] } | null = null
@@ -531,6 +544,7 @@ function openCodeRecords(dbPath: string = OPENCODE_DB_PATH, tool = 'opencode'): 
     title: session.title,
     cwd: session.cwd,
     created_at: session.created_at,
+    parentId: session.parent_id,
     tool,
   }))
 }

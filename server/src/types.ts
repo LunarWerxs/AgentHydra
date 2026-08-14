@@ -118,6 +118,16 @@ export interface SessionSummary {
   /** The user's own mark, stored in our `session_marks` table. Mark only: never filters a list. */
   done: boolean
   /**
+   * How many subagent sessions this one spawned, counted through the whole chain below it.
+   *
+   * Only OpenCode reports any: it is the one store that keeps a subagent as a session row of its
+   * own, so those rows are hidden from this list and folded into their parent's count instead (see
+   * collapseSubagents in server/src/sessions.ts). Carried so the row can SAY it stands for a fan-out
+   * — 45 of this machine's 92 OpenCode sessions are subagents, and hiding that many with nothing on
+   * screen to account for them is how a fix reads as data loss.
+   */
+  subagent_count: number
+  /**
    * AgentHydra queued work into this session, so it is ours rather than something typed by hand.
    *
    * Known exactly, not inferred: every dispatch passes the session id on the command line
