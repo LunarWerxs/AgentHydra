@@ -7,6 +7,36 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-08-15
+
+### Added
+
+- **One conversation is now one row, however many files Claude Code split it into.** Three rows
+  titled "rQubit T10-M06 v1 piece hash parity" with 823, 1071 and 3179 messages were not three
+  chats and were not subagents. They were one conversation that ran out of context twice: 881
+  message uuids appear in more than one of those files, 96.4% of the smallest. When Claude Code
+  compacts a session it does not keep writing to the same transcript, it opens a NEW file with a
+  NEW session id, replays a summary of what came before, and carries on; resuming a compacted
+  session does it again. Every one of those files is a legitimate transcript with its own id, so an
+  index keyed on session id, which is the only key the store offers, saw three conversations and
+  listed three rows. On this machine 94 of 1,208 conversations are continuations, so this was never
+  a one-off.
+
+  What links them is a `logicalParentUuid` on the continuation's opening record, naming the message
+  in the previous transcript it was compacted from. That target is an ordinary message sitting
+  anywhere in the parent (82% of the way through, in the case above), not a header, so resolving it
+  means reading candidate transcripts. That work happens BETWEEN sweeps, never inside one, and its
+  answers are written to disk: a transcript's history cannot change once written, so each link is
+  resolved at most once ever. The search tries candidates in order of how close their last-write
+  time is to the continuation's, because a compaction is immediately followed by the continuation
+  that replaces it, so the parent is almost always the first file opened.
+
+  The row that survives is the LAST in the chain, because that is where the conversation actually
+  is: clicking it opens what you were doing, not the truncated original. Superseded transcripts stay
+  in the index exactly as subagents do, so nothing that counts tokens or money loses sight of them,
+  and a transcript whose successor is missing is kept rather than hidden, because it is then the
+  only surviving evidence that the conversation happened.
+
 ## [0.23.1] - 2026-08-14
 
 ### Fixed
