@@ -378,6 +378,64 @@ function doneMarkMap(): Map<string, boolean> {
  * the one outcome this function may never produce. A chain that does not end at a real top-level
  * session is not ownership, so the row is kept and the user sees it.
  */
+/**
+ * One conversation, one row, however many transcripts a compaction split it into.
+ *
+ * Claude Code does not keep writing to a session it has compacted: it opens a new file with a new
+ * session id, replays a summary, and carries on. Three files titled the same thing, 823 / 1071 /
+ * 3179 messages, sharing 881 message uuids between them, are ONE chat that ran out of context twice
+ * — and every one of them was showing up as its own row.
+ *
+ * The row that survives is the LAST one in the chain, because that is where the conversation
+ * actually is now: clicking it should open what you were doing, not the truncated original. The
+ * superseded transcripts stay in the index, exactly as subagents do, so nothing that counts spend
+ * loses sight of them.
+ */
+export function collapseContinuations(files: TranscriptFile[]): {
+  rows: TranscriptFile[]
+  /**
+   * Surviving session id -> the ids it absorbed.
+   *
+   * Load-bearing, not bookkeeping. Everything else about a session is keyed on its session id —
+   * which instance it belongs to, whether a queue run dispatched it, whether it is archived — and a
+   * compaction moves the conversation to an id NONE of those tables has ever heard of. A queue row
+   * records the id it dispatched and never changes it, so after a mid-run compaction the queue knows
+   * only the predecessor while the list shows only the successor. Filter on either alone and an
+   * actively running conversation disappears from the "queued" view entirely.
+   */
+  absorbed: Map<string, string[]>
+} {
+  if (!files.some((f) => f.supersededBy)) return { rows: files, absorbed: new Map() }
+  const byId = new Map(files.filter((f) => f.source === 'claude').map((f) => [f.session_id, f]))
+  const absorbed = new Map<string, string[]>()
+  const rows = files.filter((file) => {
+    if (!file.supersededBy) return true
+    // Walk to the end of the chain rather than one hop: a conversation compacted twice is A -> B ->
+    // C, and hiding A only because B exists would still leave two rows.
+    const seen = new Set<string>([file.session_id])
+    let next = byId.get(file.supersededBy)
+    while (next) {
+      // A cycle cannot be resolved into a newest member, so keep the row rather than drop every
+      // member of the loop and lose the conversation entirely.
+      if (seen.has(next.session_id)) return true
+      seen.add(next.session_id)
+      if (!next.supersededBy) {
+        // Credited to the END of the chain, which is the row that will be on screen, so a two-hop
+        // conversation still hands its whole history's ids to the one row representing it.
+        const list = absorbed.get(next.session_id)
+        if (list) list.push(file.session_id)
+        else absorbed.set(next.session_id, [file.session_id])
+        return false
+      }
+      next = byId.get(next.supersededBy)
+    }
+    // The successor is not in the index (deleted, or pruned by an earlier filter). This transcript is
+    // the only surviving evidence of the conversation, so it stays.
+    return true
+  })
+  return { rows, absorbed }
+}
+
 export function collapseSubagents(files: TranscriptFile[]): {
   rows: TranscriptFile[]
   /** `source:session_id` of a surviving row -> how many subagents it owns, through the whole chain. */
@@ -467,19 +525,40 @@ export async function listSessions(
   // Before every other filter, and on the WHOLE index: whether a subagent's parent exists is a fact
   // about the store, and deciding it against an already-filtered list would promote a child to a row
   // merely because the current scope hid its parent.
+  // Before the subagent collapse and on the WHOLE index, for the same reason that one runs early:
+  // whether a conversation was continued is a fact about the store, and deciding it against an
+  // already-filtered list would put a superseded transcript back on screen merely because the
+  // current scope hid the session that replaced it.
+  const continued = collapseContinuations(files)
+  files = continued.rows
+  /**
+   * Every session id this row speaks for: its own, plus any transcript it absorbed by continuing it.
+   *
+   * A compaction moves a conversation to an id that the queue table, the instance map and the
+   * archive flag have never seen, because they all recorded the id that existed when the run
+   * started. Asking those tables about the surviving id alone answers "no" for a conversation they
+   * know perfectly well under its previous name, which for the dispatched filter means an actively
+   * running queued job vanishing from the queued view entirely.
+   */
+  const idsOf = (f: TranscriptFile): string[] => {
+    const extra = continued.absorbed.get(f.session_id)
+    return extra ? [f.session_id, ...extra] : [f.session_id]
+  }
   const collapsed = collapseSubagents(files)
   files = collapsed.rows
   if (source !== 'all') files = files.filter((file) => file.source === source)
   if (instance) {
     files = files.filter((f) =>
       instance === 'other'
-        ? f.source === 'claude' && !mmap.has(f.session_id)
-        : f.source === 'claude' && mmap.get(f.session_id)?.instance === instance,
+        ? f.source === 'claude' && !idsOf(f).some((id) => mmap.has(id))
+        : f.source === 'claude' && idsOf(f).some((id) => mmap.get(id)?.instance === instance),
     )
   }
   if (archived !== 'include') {
     const want = archived === 'only'
-    files = files.filter((f) => (f.archived || !!mmap.get(f.session_id)?.archived) === want)
+    files = files.filter(
+      (f) => (f.archived || idsOf(f).some((id) => !!mmap.get(id)?.archived)) === want,
+    )
   }
   if (sinceMs !== null) files = files.filter((f) => f.mtime_ms >= sinceMs)
   // Before the cap, for the same reason `instance` and `archived` are: a handful of queued runs
@@ -487,7 +566,9 @@ export async function listSessions(
   // afterwards would answer "you have never queued anything" on a machine that queues nightly.
   if (dispatched !== 'all') {
     const want = dispatched === 'queued'
-    files = files.filter((f) => (f.source === 'claude' && qmap.has(f.session_id)) === want)
+    files = files.filter(
+      (f) => (f.source === 'claude' && idsOf(f).some((id) => qmap.has(id))) === want,
+    )
   }
   files = files.sort((a, b) => b.mtime_ms - a.mtime_ms)
   const dmap = doneMarkMap()

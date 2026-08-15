@@ -16,6 +16,13 @@ import {
   readForeignSession,
 } from './foreign-sessions'
 import { listOpenCodeSessions, readOpenCodeSession } from './opencode-sessions'
+import {
+  type ContinuationLink,
+  pruneContinuationHeadCache,
+  readContinuationLink,
+  resolveContinuations,
+  supersededSessions,
+} from './session-continuations'
 import type { SessionSource, TailEvent, TailResult } from './types'
 
 // --- cwd folder-name encoding (forward only; reverse is lossy) --------------
@@ -79,6 +86,19 @@ export interface TranscriptFile {
    * total. It is filtered out one layer up, where the list of CONVERSATIONS is built.
    */
   parentId?: string | null
+  /**
+   * The session that CONTINUED this one, when a compaction moved the conversation into a new file.
+   *
+   * Claude Code does not keep writing to a transcript it has compacted: it opens a new file with a
+   * new session id and carries on, so one conversation becomes two, three, four transcripts that an
+   * index keyed on session id has no way to tell apart from separate chats. This is that link, and
+   * the session list uses it to show the conversation once. See server/src/session-continuations.ts.
+   *
+   * The row stays in the index. It is a real transcript holding real turns and real spend, and
+   * analytics reads it by id like any other; it is folded together only where CONVERSATIONS are
+   * listed, which is the same treatment subagents get.
+   */
+  supersededBy?: string
 }
 
 let cache: { at: number; files: TranscriptFile[] } | null = null
@@ -797,6 +817,17 @@ function finishIndex(
       for (const p of claudeChildren?.get(file.session_id) ?? []) if (p !== file.path) rest.push(p)
     return rest.length ? { ...file, siblingPaths: rest } : file
   })
+  // A map lookup and nothing else. Working out WHICH session continued which means reading whole
+  // transcripts, so that happens between sweeps (see resolveContinuations); this only applies what
+  // is already known.
+  const superseded = supersededSessions()
+  if (superseded.size)
+    for (let i = 0; i < result.length; i++) {
+      const file = result[i] as TranscriptFile
+      if (file.source !== 'claude') continue
+      const by = superseded.get(file.session_id)
+      if (by && by !== file.session_id) result[i] = { ...file, supersededBy: by }
+    }
   // Stamped on COMPLETION, not on the timestamp the sweep started with. A sweep of a large store
   // runs for seconds, so a start-stamped snapshot is born older than any sane TTL and every caller
   // that checks freshness immediately asks for another sweep — the rebuild-forever loop this
@@ -893,6 +924,7 @@ function buildTranscriptIndex(): TranscriptFile[] {
  */
 async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   const files: TranscriptFile[] = []
+  const continuations: ContinuationLink[] = []
 
   const extra = extraStoreRecords()
   const claudeChildren = new Map<string, string[]>()
@@ -913,12 +945,34 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
         return null
       }
     })
+    const tops: Array<{ record: TranscriptFile; mtimeMs: number; size: number }> = []
     for (const f of scanned) {
       if (!f) continue
       const parent = claudeParentId(f.rel, store)
-      if (parent) pendingChildren.push({ parentId: parent, ...f, store })
-      else files.push(claudeRecord(f.rel, f.mtimeMs, f.size, store))
+      if (parent) {
+        pendingChildren.push({ parentId: parent, ...f, store })
+        continue
+      }
+      const record = claudeRecord(f.rel, f.mtimeMs, f.size, store)
+      files.push(record)
+      tops.push({ record, mtimeMs: f.mtimeMs, size: f.size })
     }
+    // Through the same bounded pool as the stat scan, not one await at a time: this is a head read
+    // per top-level transcript (~1,200 of them here) and it runs on every sweep. Cached against
+    // mtime+size, so after the first pass it is a map lookup.
+    const links = await mapPool(tops, INDEX_SCAN_WIDTH, async (t) => ({
+      record: t.record,
+      mtimeMs: t.mtimeMs,
+      link: await readContinuationLink(t.record.path, t.mtimeMs, t.size),
+    }))
+    for (const l of links)
+      if (l?.link)
+        continuations.push({
+          sessionId: l.record.session_id,
+          logicalParentUuid: l.link,
+          path: l.record.path,
+          mtimeMs: l.mtimeMs,
+        })
   }
   promoteOrphans(files, claudeChildren, pendingChildren)
 
@@ -958,7 +1012,16 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   // The async listing, which yields while it parses. Everything above this line already yields;
   // this was the last synchronous block in the sweep, and the largest.
   files.push(...(await foreignRecordsAsync()))
-  return finishIndex(files, claudeChildren)
+  const built = finishIndex(files, claudeChildren)
+  // The head cache tracks the store, not everything ever seen: a deleted transcript should not keep
+  // its slot for the life of the daemon.
+  pruneContinuationHeadCache(new Set(files.filter((f) => f.source === 'claude').map((f) => f.path)))
+  // Deliberately NOT awaited. Working out which session continued which means reading whole
+  // transcripts, which is the one thing this sweep must never do inline; the answers land in the
+  // memo and the NEXT sweep applies them. A newly compacted conversation therefore merges a few
+  // seconds after it first appears rather than instantly, which is the right way round.
+  void resolveContinuations(continuations)
+  return built
 }
 
 /**
