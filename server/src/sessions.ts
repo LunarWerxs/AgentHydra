@@ -6,9 +6,9 @@ import {
   decodeProjectKey,
   ensureTranscriptIndex,
   eventToTailEventsForSource,
+  findTranscriptAsync,
   isCommandWrapperText,
   listTranscriptFiles,
-  listTranscriptFilesAfterMiss,
   type TranscriptFile,
   unwrapTaggedText,
 } from './transcript'
@@ -608,11 +608,12 @@ export async function getSession(
   sessionId: string,
   source?: SessionSource,
 ): Promise<SessionSummary | null> {
-  // Same stale-snapshot caveat as findTranscript: only a MISS can be wrong, so re-sweep before
-  // reporting one.
-  const match = (files: ReturnType<typeof listTranscriptFiles>) =>
-    files.find((f) => f.session_id === sessionId && (!source || f.source === source))
-  const tf = match(listTranscriptFiles()) ?? match(listTranscriptFilesAfterMiss())
+  // findTranscriptAsync, not the sync pair this used to call: only a MISS can be wrong, and the
+  // sync miss path cannot WAIT for the sweep it starts (it would have to be the blocking builder).
+  // This function is already async and is what answers "show me this session", including for a run
+  // dispatched a moment ago whose transcript is newer than the snapshot — precisely the case that
+  // has to wait rather than report nothing.
+  const tf = await findTranscriptAsync(sessionId, source)
   if (!tf) return null
   const m = await scanMeta(tf)
   const qmap = queueStatusMap()

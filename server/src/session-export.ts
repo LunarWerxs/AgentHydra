@@ -23,7 +23,7 @@ import { readForeignSession } from './foreign-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
 import { redactSecrets, scanSecrets } from './secrets'
 import { streamLines } from './session-search'
-import { eventToTailEventsForSource, findTranscript } from './transcript'
+import { eventToTailEventsForSource, findTranscriptAsync } from './transcript'
 import type { SessionSecretScan, SessionSource, TailEvent } from './types'
 
 export type ExportFormat = 'markdown' | 'html'
@@ -68,7 +68,7 @@ async function readAllEvents(
   thinking = false,
 ): Promise<TailEvent[]> {
   if (source === 'foreign') {
-    const tf = findTranscript(sessionId, 'foreign')
+    const tf = await findTranscriptAsync(sessionId, 'foreign')
     return tf ? readForeignSession(tf.tool ?? '', tf.path) : []
   }
   if (source === 'opencode') return readOpenCodeSession(sessionId)?.events ?? []
@@ -230,7 +230,7 @@ export async function exportSession(
   source?: SessionSource,
   meta: { title?: string; cwd?: string; thinking?: boolean } = {},
 ): Promise<SessionExport | null> {
-  const tf = findTranscript(sessionId, source)
+  const tf = await findTranscriptAsync(sessionId, source)
   if (!tf) return null
 
   // Reasoning is left out unless asked for, matching the viewer: it is the bulkiest part of a
@@ -284,7 +284,7 @@ export async function scanSessionSecrets(
   sessionId: string,
   source?: SessionSource,
 ): Promise<SessionSecretScan | null> {
-  const tf = findTranscript(sessionId, source)
+  const tf = await findTranscriptAsync(sessionId, source)
   if (!tf) return null
   const events = await readAllEvents(tf.path, tf.source, sessionId)
   const findings: SessionSecretScan['findings'] = []

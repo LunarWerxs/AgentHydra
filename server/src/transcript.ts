@@ -9,7 +9,12 @@ import {
   CODEX_SESSIONS_ROOT,
   OPENCODE_DB_PATH,
 } from './config'
-import { listForeignSessions, readForeignSession } from './foreign-sessions'
+import {
+  type ForeignSession,
+  listForeignSessions,
+  listForeignSessionsAsync,
+  readForeignSession,
+} from './foreign-sessions'
 import { listOpenCodeSessions, readOpenCodeSession } from './opencode-sessions'
 import type { SessionSource, TailEvent, TailResult } from './types'
 
@@ -77,7 +82,26 @@ export interface TranscriptFile {
 }
 
 let cache: { at: number; files: TranscriptFile[] } | null = null
-const TTL_MS = 2000
+/**
+ * How long a snapshot is trusted before a background sweep is started.
+ *
+ * This has to be LONGER THAN A SWEEP TAKES, or the snapshot is already stale when it lands and the
+ * next request starts another one — the daemon then rebuilds forever. That is not hypothetical: at
+ * the old 2 s, against a store of ~23,000 transcripts where a sweep measures ~9 s, the index was
+ * being rebuilt continuously and each rebuild blocked the event loop, so `/api/health` — a route
+ * that reads nothing — answered in 6.6 s. Opening a chat took 16-23 s regardless of its size,
+ * because the wait was the queue, not the file.
+ *
+ * Two other things keep that from coming back: {@link finishIndex} stamps the snapshot when the
+ * sweep FINISHES (stamping the start is what made a 2 s window unsatisfiable), and background
+ * revalidation goes through {@link startIndexBuild}, which is async and never blocks a request.
+ *
+ * There is a ceiling as well as a floor, and it is the web app's 12 s session-list poll. Set this
+ * ABOVE that interval and the poll which notices the snapshot is stale lands only every OTHER tick,
+ * so a new or renamed session waits two full cycles to appear rather than one. Ten seconds sits
+ * between the two bounds: ~10x a warm sweep, and just under the poll that consumes it.
+ */
+const TTL_MS = 10_000
 
 export interface CodexRolloutIdentity {
   sessionId: string
@@ -257,17 +281,71 @@ async function mapPool<T, R>(items: T[], width: number, fn: (item: T) => Promise
   return out
 }
 
-let refreshing = false
+/**
+ * The one in-flight sweep, shared by every path that can start one.
+ *
+ * ONE guard, not two. The sync and async builders used to keep separate ones (`refreshing` here and
+ * `indexBuild` down by ensureTranscriptIndex), which did not see each other — so a background
+ * revalidate and a request-driven build could sweep the same store at the same time, each paying
+ * the other's cost on top of its own.
+ */
+let indexBuild: Promise<TranscriptFile[]> | null = null
+
+/**
+ * Start a sweep unless one is already running, and hand back whichever is now in flight.
+ *
+ * Never rejects: a sweep that fails leaves the previous snapshot in place and the next caller tries
+ * again, which is the same bargain the old catch made.
+ */
+function startIndexBuild(): Promise<TranscriptFile[]> {
+  if (!indexBuild) {
+    indexBuild = buildTranscriptIndexAsync()
+      .catch(() => cache?.files ?? [])
+      .finally(() => {
+        indexBuild = null
+      })
+  }
+  return indexBuild
+}
+
+let freshBuild: Promise<TranscriptFile[]> | null = null
+
+/**
+ * A sweep guaranteed to have STARTED after this call, for a caller that needs to know what is on
+ * disk right now.
+ *
+ * {@link startIndexBuild} cannot answer that. It coalesces onto whatever is already running, which
+ * is exactly right for "the snapshot is getting old" and exactly WRONG for a miss: a sweep that
+ * began before the transcript was written enumerated a filesystem the new file was not in, so
+ * joining it returns the same miss and then stamps the snapshot fresh for another full TTL. A
+ * just-dispatched run would read as "transcript not found" long past the one sweep the miss path is
+ * meant to cost.
+ *
+ * So this WAITS OUT any in-flight sweep and then starts its own. Concurrent callers still share one
+ * — the point is that the sweep began after they asked, not that each gets a private one.
+ */
+function startFreshIndexBuild(): Promise<TranscriptFile[]> {
+  if (freshBuild) return freshBuild
+  const running = indexBuild
+  freshBuild = (running ? running.then(noop, noop) : Promise.resolve())
+    .then(() => startIndexBuild())
+    .finally(() => {
+      freshBuild = null
+    })
+  return freshBuild
+}
+
+function noop(): void {}
 
 /**
  * The store's file index: every transcript's id, mtime and size.
  *
  * Served stale-while-revalidate, because building it is the one cost in this app that scales with
  * how much history you have KEPT rather than with what you asked to see: it globs the whole store
- * and stats every file (measured: 145 ms warm / 414 ms cold for 1,255 transcripts, and it grows
- * linearly from there). Paying that inside a request put a folder-sized tax on every poll. Callers
- * now get the last snapshot immediately and a fresh sweep runs just after, so request latency
- * tracks the number of rows asked for, not the size of ~/.claude.
+ * and stats every file (measured: 145 ms warm / 414 ms cold for 1,255 transcripts, and ~9 s at
+ * 23,000). Paying that inside a request put a folder-sized tax on every poll. Callers now get the
+ * last snapshot immediately and a fresh sweep runs just after, so request latency tracks the number
+ * of rows asked for, not the size of ~/.claude.
  *
  * `force` is for the two callers that cannot tolerate a stale answer — looking up a session that
  * ISN'T in the snapshot, which is exactly what a just-created transcript looks like.
@@ -275,20 +353,11 @@ let refreshing = false
 export function listTranscriptFiles(force = false): TranscriptFile[] {
   const now = performance.now()
   if (!force && cache) {
-    if (now - cache.at >= TTL_MS && !refreshing) {
-      refreshing = true
-      // setTimeout, not an inline call: this must land on its own turn of the loop rather than
-      // inside whichever request happened to notice the snapshot was stale.
-      setTimeout(() => {
-        try {
-          buildTranscriptIndex()
-        } catch {
-          // Keep serving the previous snapshot; the next tick tries again.
-        } finally {
-          refreshing = false
-        }
-      }, 0)
-    }
+    // The ASYNC builder, and this is the whole point. Revalidating through the SYNC one — which is
+    // what the setTimeout here used to do — held the event loop for the entire sweep, so the
+    // "background" refresh was really a full stop for every request in flight. Measured: an
+    // /api/health that reads nothing answered in 6.6 s while one of these ran.
+    if (now - cache.at >= TTL_MS) void startIndexBuild()
     return cache.files
   }
   return buildTranscriptIndex()
@@ -297,16 +366,54 @@ export function listTranscriptFiles(force = false): TranscriptFile[] {
 let lastMissSweepAt = Number.NEGATIVE_INFINITY
 
 /**
- * The index as seen after a fresh sweep, for a caller that just failed to find a session in the
- * snapshot. Throttled to one sweep per TTL: a transcript created moments ago is worth re-globbing
- * the store for, but a session id that simply does not exist (a deleted transcript the UI is still
- * polling) must not buy a full folder scan on every single request.
+ * How long after one miss-driven sweep before another may start.
+ *
+ * Separate from TTL_MS on purpose. This throttle exists for the id that will NEVER be found — a
+ * deleted transcript the UI is still polling every 4 s — and its job is to stop that poll buying a
+ * sweep apiece. It is deliberately shorter than TTL_MS because the sweep it gates is now async and
+ * coalesced, so the cost of being wrong is CPU rather than a frozen daemon.
+ */
+const MISS_SWEEP_MS = 5_000
+
+/** Whether a fresh miss-driven sweep is allowed to start, recording the decision when it is. */
+function claimMissSweep(): boolean {
+  const now = performance.now()
+  if (cache && now - lastMissSweepAt < MISS_SWEEP_MS) return false
+  lastMissSweepAt = now
+  return true
+}
+
+/**
+ * The index as seen after a miss, for a SYNCHRONOUS caller.
+ *
+ * It does NOT sweep. It cannot: the only sweep available to a sync function is the blocking one,
+ * and this is the path a poll for a not-yet-indexed session takes every few seconds — which is how
+ * the daemon used to freeze for the length of a whole-store scan several times a minute. So it
+ * starts an async sweep and answers from the snapshot it has. A caller that genuinely needs the
+ * just-created transcript in THIS call should be async and use {@link findTranscriptAsync}, which
+ * can wait for that sweep without stopping the loop for everyone else.
  */
 export function listTranscriptFilesAfterMiss(): TranscriptFile[] {
-  const now = performance.now()
-  if (cache && now - lastMissSweepAt < TTL_MS) return cache.files
-  lastMissSweepAt = now
-  return listTranscriptFiles(true)
+  if (claimMissSweep()) void startFreshIndexBuild()
+  return cache?.files ?? buildTranscriptIndex()
+}
+
+/**
+ * The index as seen after a miss, for a caller that can wait — and every caller that can, should.
+ *
+ * This is the honest version of the contract the sync one used to claim: a transcript created
+ * moments ago really is worth re-globbing the store for, and awaiting the async builder gets that
+ * answer without holding the event loop while it happens.
+ *
+ * A sweep ALREADY UNDER WAY is joined whether or not the throttle would allow a new one. It costs
+ * nothing to await something that is running regardless, and refusing would answer "not found" for
+ * a session the sweep two milliseconds from finishing is about to reveal. The throttle exists to
+ * stop a poll for a session that will never exist from STARTING sweeps, which is a different thing.
+ */
+async function ensureTranscriptIndexAfterMiss(): Promise<TranscriptFile[]> {
+  if (freshBuild) return freshBuild
+  if (!claimMissSweep()) return cache?.files ?? []
+  return startFreshIndexBuild()
 }
 
 /**
@@ -558,6 +665,38 @@ function openCodeRecords(dbPath: string = OPENCODE_DB_PATH, tool = 'opencode'): 
  * store simply parses to nothing — the reader either finds records or it does not, and either way
  * the three original stores are untouched.
  */
+function foreignRow(s: ForeignSession, toolId: string): TranscriptFile {
+  return {
+    session_id: s.session_id,
+    source: 'foreign',
+    path: s.path,
+    project: s.project,
+    mtime_ms: s.last_activity_at,
+    size_bytes: s.size_bytes,
+    archived: s.archived,
+    title: s.title,
+    cwd: s.cwd,
+    created_at: s.created_at,
+    tool: toolId,
+  }
+}
+
+/**
+ * Every foreign store's sessions, without holding the event loop.
+ *
+ * The sync version below is still right for a sync caller, but this is the one the whole-store
+ * sweep uses. A VS Code store has to be JSON-parsed in full to be listed at all, which measured
+ * 5.2 s cold — a single unbroken block inside the "async" builder, which froze the daemon for about
+ * six seconds on the first sweep after launch until the adapter learned to yield.
+ */
+async function foreignRecordsAsync(): Promise<TranscriptFile[]> {
+  const out: TranscriptFile[] = []
+  for (const r of extraRootsWithFormat('foreign'))
+    for (const s of await listForeignSessionsAsync(r.tool.id, r.root))
+      out.push(foreignRow(s, r.tool.id))
+  return out
+}
+
 /** Every foreign store's sessions, as index rows. One adapter per tool; see foreign-sessions.ts. */
 function foreignRecords(): TranscriptFile[] {
   const out: TranscriptFile[] = []
@@ -633,7 +772,6 @@ function rememberChild(map: Map<string, string[]>, sessionId: string, path: stri
 
 function finishIndex(
   files: TranscriptFile[],
-  at: number,
   /** Claude subagent transcripts, by the session that spawned them. Their spend is the parent's. */
   claudeChildren?: Map<string, string[]>,
 ): TranscriptFile[] {
@@ -659,12 +797,15 @@ function finishIndex(
       for (const p of claudeChildren?.get(file.session_id) ?? []) if (p !== file.path) rest.push(p)
     return rest.length ? { ...file, siblingPaths: rest } : file
   })
-  cache = { at, files: result }
+  // Stamped on COMPLETION, not on the timestamp the sweep started with. A sweep of a large store
+  // runs for seconds, so a start-stamped snapshot is born older than any sane TTL and every caller
+  // that checks freshness immediately asks for another sweep — the rebuild-forever loop this
+  // module used to sit in. The age of a snapshot is how long ago it became TRUE, which is now.
+  cache = { at: performance.now(), files: result }
   return result
 }
 
 function buildTranscriptIndex(): TranscriptFile[] {
-  const now = performance.now()
   const files: TranscriptFile[] = []
   const extra = extraStoreRecords()
   const claudeChildren = new Map<string, string[]>()
@@ -735,7 +876,7 @@ function buildTranscriptIndex(): TranscriptFile[] {
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
   files.push(...foreignRecords())
-  return finishIndex(files, now, claudeChildren)
+  return finishIndex(files, claudeChildren)
 }
 
 /**
@@ -751,7 +892,6 @@ function buildTranscriptIndex(): TranscriptFile[] {
  * Correctness is identical: same globs, same records, same dedupe, same cache slot.
  */
 async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
-  const now = performance.now()
   const files: TranscriptFile[] = []
 
   const extra = extraStoreRecords()
@@ -815,11 +955,11 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
 
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
-  files.push(...foreignRecords())
-  return finishIndex(files, now, claudeChildren)
+  // The async listing, which yields while it parses. Everything above this line already yields;
+  // this was the last synchronous block in the sweep, and the largest.
+  files.push(...(await foreignRecordsAsync()))
+  return finishIndex(files, claudeChildren)
 }
-
-let indexBuild: Promise<TranscriptFile[]> | null = null
 
 /**
  * The async, request-safe way to get the index — prefer this over {@link listTranscriptFiles} in
@@ -833,28 +973,45 @@ let indexBuild: Promise<TranscriptFile[]> | null = null
 export async function ensureTranscriptIndex(force = false): Promise<TranscriptFile[]> {
   const now = performance.now()
   if (!force && cache && now - cache.at < TTL_MS) return cache.files
-  if (!indexBuild) {
-    indexBuild = buildTranscriptIndexAsync()
-      .catch(() => cache?.files ?? [])
-      .finally(() => {
-        indexBuild = null
-      })
-  }
-  const build = indexBuild
+  const build = startIndexBuild()
   if (!force && cache) return cache.files
   return build
 }
 
+const pickSession = (sessionId: string, source?: SessionSource) => (files: TranscriptFile[]) =>
+  files.filter((f) => f.session_id === sessionId && (!source || f.source === source))
+
+/** newest wins if a session id appears under multiple project folders */
+const newestOf = (matches: TranscriptFile[]): TranscriptFile | null =>
+  matches.length === 0 ? null : matches.reduce((a, b) => (b.mtime_ms > a.mtime_ms ? b : a))
+
 export function findTranscript(sessionId: string, source?: SessionSource): TranscriptFile | null {
-  const pick = (files: TranscriptFile[]) =>
-    files.filter((f) => f.session_id === sessionId && (!source || f.source === source))
+  const pick = pickSession(sessionId, source)
   // A miss is the one answer the snapshot can get wrong — a transcript created seconds ago is
-  // absent from it — and it is also the cheap case, so re-sweep before believing it.
+  // absent from it — so a sweep is started. This cannot WAIT for it (see
+  // listTranscriptFilesAfterMiss), which is why an async caller should prefer findTranscriptAsync.
   let matches = pick(listTranscriptFiles())
   if (matches.length === 0) matches = pick(listTranscriptFilesAfterMiss())
-  if (matches.length === 0) return null
-  // newest wins if a session id appears under multiple project folders
-  return matches.reduce((a, b) => (b.mtime_ms > a.mtime_ms ? b : a))
+  return newestOf(matches)
+}
+
+/**
+ * findTranscript for a caller that is already async — which is nearly all of them, and all the hot
+ * ones.
+ *
+ * The difference is what a MISS costs. The sync version can only start a sweep and answer from the
+ * snapshot it already had, so a session created moments ago reads as absent until some later poll.
+ * This one waits for the sweep, and waiting is free here: the async builder yields, so the daemon
+ * keeps answering everything else while it runs.
+ */
+export async function findTranscriptAsync(
+  sessionId: string,
+  source?: SessionSource,
+): Promise<TranscriptFile | null> {
+  const pick = pickSession(sessionId, source)
+  let matches = pick(await ensureTranscriptIndex())
+  if (matches.length === 0) matches = pick(await ensureTranscriptIndexAfterMiss())
+  return newestOf(matches)
 }
 
 // --- byte-tail reader --------------------------------------------------------
@@ -1161,7 +1318,10 @@ export async function tailTranscript(
   const limit = opts.limit ?? 40
   const keep = tailKeeper(opts)
   const filter: TailFilter = { thinking: opts.thinking ?? false }
-  const tf = findTranscript(sessionId, source)
+  // Async: this is the endpoint the open chat polls every 4 s, and the one a just-dispatched run
+  // hits before its transcript exists. The sync lookup would answer "not found" until some later
+  // poll — or, before the sweep became async, freeze the daemon while it looked.
+  const tf = await findTranscriptAsync(sessionId, source)
   if (!tf) {
     return {
       session_id: sessionId,

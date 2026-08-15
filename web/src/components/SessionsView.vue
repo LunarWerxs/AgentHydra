@@ -678,14 +678,23 @@ function copyMessage(i: number, text: string) {
 
 const chatEl = ref<HTMLElement | null>(null)
 
+// How many /tail reads are outstanding. The poll below fires every 4 s whether or not the last one
+// came back, and on a big store a read can take longer than that — so without this the polls stack
+// into a queue of identical requests, each one delaying the next, and the reader watches a spinner
+// that is waiting on answers nobody will look at. A skipped silent tick loses nothing: another is 4 s
+// behind it asking the same question. Only the SILENT path yields; a click is intent and always runs.
+let tailInFlight = 0
+
 async function loadTail(opts: { silent?: boolean } = {}) {
   const id = selectedId.value
   const source = selectedSource.value
   if (!id || !source) return
+  if (opts.silent && tailInFlight > 0) return
   // measured BEFORE the fetch: whether the reader was already at the conversation's end
   const el = chatEl.value
   const nearBottom = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 120
   if (!opts.silent) tailLoading.value = true
+  tailInFlight++
   try {
     const r = await api.getTail(id, source, {
       limit: 40,
@@ -696,10 +705,16 @@ async function loadTail(opts: { silent?: boolean } = {}) {
     if (selectedId.value !== id || selectedSource.value !== source) return
     tail.value = r
   } catch {
-    if (!opts.silent) tail.value = null
+    // Same staleness test the success path makes. A read that fails AFTER the reader moved on
+    // belongs to a conversation nobody is looking at any more, and blanking on its behalf would
+    // clear the chat they ARE looking at.
+    if (!opts.silent && selectedId.value === id && selectedSource.value === source)
+      tail.value = null
   } finally {
+    tailInFlight--
     if (!opts.silent) tailLoading.value = false
   }
+  if (selectedId.value !== id || selectedSource.value !== source) return
   if (!opts.silent) expandedMsgs.value = new Set()
   // chat convention: land at the bottom; silent refreshes only stick if already there
   await nextTick()

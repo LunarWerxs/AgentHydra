@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { OPENCODE_DB_PATH } from './config'
 import type { TailEvent } from './types'
 import type { OpenCodeUsageRow } from './usage-foreign'
@@ -169,7 +169,41 @@ export function openCodePartsToTailEvents(
   return out
 }
 
+/**
+ * The last listing per database, valid only while the store's bytes are unchanged.
+ *
+ * The query below sizes each session with two correlated subqueries, so it walks the whole `message`
+ * and `part` tables once PER SESSION — it is the store, not the session count, that sets the cost.
+ * Measured at 939 ms for 110 sessions, paid on every whole-store sweep even though a database nobody
+ * has written to cannot have a different answer. Callers must treat the result as read-only.
+ */
+const openCodeListCache = new Map<string, { stamp: string; rows: OpenCodeSessionRecord[] }>()
+
+/**
+ * Identity of a SQLite store as bytes on disk.
+ *
+ * The `-wal` file counts as much as the database itself: with write-ahead logging on — which is how
+ * OpenCode ships — a new session lands in the log first and the main file's mtime can sit perfectly
+ * still while the store has moved on. Stamping only the `.db` would serve a stale list until
+ * something happened to checkpoint it.
+ */
+function openCodeDbStamp(path: string): string {
+  let out = ''
+  for (const p of [path, `${path}-wal`]) {
+    try {
+      const st = statSync(p)
+      out += `${st.mtimeMs}:${st.size};`
+    } catch {
+      out += 'x;'
+    }
+  }
+  return out
+}
+
 export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRecord[] {
+  const stamp = openCodeDbStamp(path)
+  const hit = openCodeListCache.get(path)
+  if (hit?.stamp === stamp) return hit.rows
   const db = openDb(path)
   if (!db) return []
   try {
@@ -185,7 +219,7 @@ export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRe
          from session s`,
       )
       .all()
-    return rows.map((row) => ({
+    const records = rows.map((row) => ({
       session_id: row.id,
       project: row.project_id || 'opencode',
       cwd: row.directory || '',
@@ -198,6 +232,8 @@ export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRe
       // make every session the child of a session that does not exist.
       parent_id: row.parent_id || null,
     }))
+    openCodeListCache.set(path, { stamp, rows: records })
+    return records
   } catch {
     return []
   } finally {

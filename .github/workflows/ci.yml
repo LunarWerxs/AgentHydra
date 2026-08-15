@@ -98,6 +98,14 @@ jobs:
       - name: Guardrail (subprocess tests must set an explicit timeout)
         run: bun scripts/checks/spawn-test-without-timeout.mjs
 
+      # Fails if the transcript index can be born stale. It used to stamp its snapshot with a
+      # timestamp captured BEFORE a ~9.5s sweep and keep it for TTL_MS=2000, so the snapshot was
+      # never once fresh and every request scheduled another sweep — synchronously, inside a
+      # setTimeout, which holds Bun's event loop. /api/health took 6.6s and opening any chat took
+      # 16-23s regardless of its size. All three facets are checked; see the check's header.
+      - name: Guardrail (transcript index must not be born stale)
+        run: bun scripts/checks/transcript-index-born-stale.mjs
+
       - name: Build (web SPA)
         run: bun run build
 

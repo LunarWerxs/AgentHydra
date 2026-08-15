@@ -193,6 +193,60 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
        })`,
     ],
   },
+  'transcript-index-born-stale.mjs': {
+    broken: [
+      // Direction A: a snapshot lifetime shorter than the sweep that fills it. 2000 is the literal
+      // value that shipped: a sweep took ~9.5s, so the freshness test could never once be true and
+      // the daemon rebuilt the index for as long as it ran.
+      `const TTL_MS = 2000`,
+      // Direction B: the timestamp threaded in from before the work, in the SHORTHAND spelling the
+      // real code used. `at` here is a parameter captured at the top of the builder, so the snapshot
+      // is born ~9.5s old — the defect itself, and the one a colon-only pattern reads as clean.
+      `function finishIndex(files, at) {
+         cache = { at, files }
+         return files
+       }`,
+      // Direction B again, spelled out: same defect, named variable, no shorthand to hide behind.
+      `cache = { at: startedAt, files: result }`,
+      // Direction C: the "background" refresh that blocks. A sync sweep holds the event loop for its
+      // whole duration, so deferring it by a turn changes nothing — /api/health measured 6.6s.
+      `setTimeout(() => {
+         try {
+           buildTranscriptIndex()
+         } finally {
+           refreshing = false
+         }
+       }, 0)`,
+    ],
+    fixed: [
+      // The shape the module ships today: a lifetime longer than a sweep, stamped at the moment the
+      // snapshot became true, revalidated through the async coalesced builder.
+      `const TTL_MS = 15_000
+       function finishIndex(files) {
+         cache = { at: performance.now(), files: result }
+         return result
+       }
+       export function listTranscriptFiles(force = false) {
+         if (!force && cache) {
+           if (performance.now() - cache.at >= TTL_MS) void startIndexBuild()
+           return cache.files
+         }
+         return buildTranscriptIndex()
+       }`,
+      // A setTimeout that defers something which is not a sweep is not this bug.
+      `setTimeout(() => { refreshing = false }, 0)`,
+      // Precision, the half that keeps the check usable: this module's own header narrates the exact
+      // broken shapes above, in prose and in a fenced example. A comment cannot rebuild an index,
+      // and spawn-console-window.mjs already shipped once reading a sentence as a call.
+      `
+      // with \`const TTL_MS = 2000\`, so the snapshot was stale on arrival:
+      //     cache = { at, files }
+      //     setTimeout(() => buildTranscriptIndex(), 0)
+      /* const TTL_MS = 2000 */
+      export const audit = { id: 'transcript-index-born-stale' }
+      `,
+    ],
+  },
   'wmi-commandline-query-self-match.mjs': {
     broken: [
       // The needle lives inside the LIKE pattern of the querying powershell's OWN command line, so

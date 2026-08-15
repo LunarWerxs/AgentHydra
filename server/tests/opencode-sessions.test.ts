@@ -128,3 +128,49 @@ test('a subagent session carries the id of the session that spawned it', () => {
   // reads it by id; only the conversation list drops it. See withoutOwnedSubagents in sessions.ts.
   expect(byId.size).toBe(3)
 })
+
+// Sizing a session costs two correlated subqueries, so this listing walks the whole `message` and
+// `part` tables once PER SESSION — the store sets the cost, not the session count. Measured at
+// 939 ms for 110 sessions, and a whole-store sweep runs on a timer, so a database nobody has
+// written to must not be re-queried. These pin that the shortcut is taken and that it lets go.
+test('an unchanged OpenCode store is listed from the last query, and a written one is not', () => {
+  const path = join(CONFIG_DIR, `opencode-${crypto.randomUUID()}.db`)
+  const db = new Database(path)
+  db.exec(`
+    create table session (
+      id text primary key, project_id text, directory text, title text,
+      time_created integer, time_updated integer, time_archived integer
+    );
+    create table message (
+      id text primary key, session_id text, time_created integer, data text
+    );
+    create table part (
+      id text primary key, message_id text, session_id text, time_created integer, data text
+    );
+  `)
+  const insert = db.query('insert into session values (?, ?, ?, ?, ?, ?, ?)')
+  insert.run('ses_one', 'p1', 'D:work', 'First', 1000, 2000, null)
+  db.close()
+
+  const first = listOpenCodeSessions(path)
+  expect(first.map((s) => s.session_id)).toEqual(['ses_one'])
+
+  // Re-listed with nothing touched: same answer, and the same ARRAY, which is what proves the
+  // query did not run again rather than merely returning an equal result.
+  expect(listOpenCodeSessions(path)).toBe(first)
+
+  // A real write. The stamp covers the -wal file as well as the database, which is the whole
+  // reason this is detected at all: OpenCode ships with write-ahead logging on, so a new session
+  // lands in the log while the .db file's mtime sits perfectly still.
+  const again = new Database(path)
+  again
+    .query('insert into session values (?, ?, ?, ?, ?, ?, ?)')
+    .run('ses_two', 'p1', 'D:work', 'Second', 3000, 4000, null)
+  again.close()
+
+  expect(
+    listOpenCodeSessions(path)
+      .map((s) => s.session_id)
+      .sort(),
+  ).toEqual(['ses_one', 'ses_two'])
+})

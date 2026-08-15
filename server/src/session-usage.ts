@@ -21,7 +21,7 @@
 import { statSync } from 'node:fs'
 import { pricesAsOf, priceTokens } from './pricing'
 import { streamLines } from './session-search'
-import { findTranscript, type TranscriptFile } from './transcript'
+import { findTranscriptAsync, type TranscriptFile } from './transcript'
 import type { RunCost, SessionUsage, SessionUsageStatus } from './types'
 import { accumulateUsageLine, emptySpend, mergeSpend, newUsageSeen } from './usage-tokens'
 
@@ -150,7 +150,7 @@ export async function runCost(item: {
   const to = item.finished_at ? Date.parse(item.finished_at) : Number.POSITIVE_INFINITY
   const until = Number.isFinite(to) ? to : Number.POSITIVE_INFINITY
 
-  const tf = findTranscript(item.session_id, 'claude')
+  const tf = await findTranscriptAsync(item.session_id, 'claude')
   if (!tf) return { ...base, status_reason: 'unreadable' }
   if (tf.source !== 'claude') return { ...base, status_reason: 'source-unsupported' }
 

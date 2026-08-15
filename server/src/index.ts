@@ -170,7 +170,7 @@ import { searchSessionBodies } from './session-search'
 import { runCost, sessionUsage } from './session-usage'
 import { getSession, listSessions, sessionMarkKey, warmSessionScanCache } from './sessions'
 import { skipSingleInstanceGuard } from './single-instance'
-import { findTranscript, listTranscriptFiles, tailTranscript } from './transcript'
+import { findTranscriptAsync, listTranscriptFiles, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
 import {
   type Account,
@@ -711,7 +711,7 @@ app.get('/api/sessions/:id/file', async (c) => {
   const id = c.req.param('id')
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
-  const tf = findTranscript(id, source)
+  const tf = await findTranscriptAsync(id, source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
   if (tf.source === 'opencode')
     return c.json(
@@ -763,7 +763,7 @@ app.post('/api/sessions/:id/resume-terminal', async (c) => {
   const id = c.req.param('id')
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
-  const tf = findTranscript(id, source)
+  const tf = await findTranscriptAsync(id, source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
   const session = await getSession(id, tf.source)
   return c.json(resumeSessionInTerminal(id, tf.source, session?.cwd || null))
@@ -781,10 +781,10 @@ app.get('/api/sessions/:id/secrets', async (c) => {
 // Return the original transcript's absolute location so the SPA can copy it as plain text.
 // Resolve it here rather than reconstructing it in the browser: project-folder encoding is lossy,
 // and findTranscript also handles the rare case where the same session id exists in two folders.
-app.get('/api/sessions/:id/file-location', (c) => {
+app.get('/api/sessions/:id/file-location', async (c) => {
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
-  const tf = findTranscript(c.req.param('id'), source)
+  const tf = await findTranscriptAsync(c.req.param('id'), source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
   if (tf.source === 'opencode')
     return c.json({ error: 'OpenCode sessions are stored in a shared database' }, 409)
@@ -794,10 +794,10 @@ app.get('/api/sessions/:id/file-location', (c) => {
 // the file opens on the machine the daemon runs on). .jsonl has no OS file association, so handing
 // this to the bare default handler would pop Windows' "Pick an app" dialog instead of opening -
 // buildTranscriptOpenArgv names an editor explicitly so that never happens (transcript-open.ts).
-app.post('/api/sessions/:id/open-file', (c) => {
+app.post('/api/sessions/:id/open-file', async (c) => {
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
-  const tf = findTranscript(c.req.param('id'), source)
+  const tf = await findTranscriptAsync(c.req.param('id'), source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
   if (tf.source === 'opencode')
     return c.json({ error: 'OpenCode sessions are stored in a shared database' }, 409)
@@ -833,7 +833,7 @@ app.post('/api/sessions/:id/copy-file', async (c) => {
   const id = c.req.param('id')
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
-  const tf = findTranscript(id, source)
+  const tf = await findTranscriptAsync(id, source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
   if (tf.source === 'opencode')
     return c.json({ error: 'OpenCode sessions are stored in a shared database' }, 409)
@@ -916,7 +916,7 @@ app.get('/api/sessions/:id/tail', async (c) => {
 app.get('/api/sessions/:id/usage', async (c) => {
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
-  const tf = findTranscript(c.req.param('id'), source)
+  const tf = await findTranscriptAsync(c.req.param('id'), source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
   return c.json(await sessionUsage(tf))
 })

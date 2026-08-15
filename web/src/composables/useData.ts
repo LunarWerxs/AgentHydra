@@ -71,20 +71,50 @@ function guard<T>(p: Promise<T>): Promise<T | undefined> {
   })
 }
 
+// A slow store can make /api/sessions take longer than the interval that asks for it. Without a
+// guard the timer keeps firing anyway and the requests stack up, so the server answers a queue of
+// identical questions whose results are all thrown away except the last.
+//
+// COALESCED, not dropped, and the difference matters: every filter control calls this too, so a
+// refresh that arrives mid-flight can be a user changing the instance or the period — discarding
+// that would leave the list showing the OLD filter with no way back but waiting for the next tick.
+// So a request that arrives during one is remembered and re-run once, which reads the filter refs
+// afresh and therefore answers with whatever the user last chose.
+let sessionsInFlight = false
+let sessionsRefreshQueued = false
+
 async function refreshSessions() {
+  if (sessionsInFlight) {
+    sessionsRefreshQueued = true
+    return
+  }
+  sessionsInFlight = true
   sessionsLoading.value = true
-  const r = await guard(
-    api.getSessions(
-      200,
-      sessionInstanceFilter.value,
-      sessionArchivedScope.value,
-      sessionPeriod.value,
-      sessionSourceFilter.value,
-      sessionDispatchedScope.value,
-    ),
-  )
-  if (r) sessions.value = r
-  sessionsLoading.value = false
+  // try/finally, because guard() only catches a REJECTED promise. If api.getSessions throws
+  // synchronously — a bad filter value, a URL that fails to build — it never returns a promise for
+  // guard to attach to, so the throw escapes past every line below and the flag stays true for the
+  // life of the page. Nothing would ever refresh the session list again, and the list would sit
+  // there looking merely stale rather than broken.
+  try {
+    const r = await guard(
+      api.getSessions(
+        200,
+        sessionInstanceFilter.value,
+        sessionArchivedScope.value,
+        sessionPeriod.value,
+        sessionSourceFilter.value,
+        sessionDispatchedScope.value,
+      ),
+    )
+    if (r) sessions.value = r
+  } finally {
+    sessionsLoading.value = false
+    sessionsInFlight = false
+  }
+  if (sessionsRefreshQueued) {
+    sessionsRefreshQueued = false
+    await refreshSessions()
+  }
 }
 async function refreshQueue() {
   const r = await guard(api.getQueue())

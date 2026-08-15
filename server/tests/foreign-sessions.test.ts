@@ -6,10 +6,14 @@
 // of these tools records one.
 
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { listForeignSessions, readForeignSession } from '../src/foreign-sessions'
+import {
+  listForeignSessions,
+  listForeignSessionsAsync,
+  readForeignSession,
+} from '../src/foreign-sessions'
 
 const root = mkdtempSync(join(tmpdir(), 'agenthydra-foreign-'))
 const write = (path: string, body: string) => {
@@ -158,6 +162,116 @@ describe('VS Code Copilot', () => {
   test('a chat with no requests is not a session', () => {
     write(join(chats, 'empty.json'), JSON.stringify({ sessionId: 'x', requests: [] }))
     expect(listForeignSessions('vscode-copilot', store)).toHaveLength(1)
+  })
+})
+
+// Listing this store means JSON.parse-ing every chat document, because the title and timestamps
+// live nowhere else — there is no index file to read instead. That measured 5.2 SECONDS for 355
+// chats and was the largest single slice of a whole-store sweep, which runs on a timer. So the
+// listing is remembered per file and re-read only when the bytes move. These tests pin the three
+// ways that can go wrong: serving a stale answer, evicting a sibling store, and keeping a ghost.
+describe('VS Code Copilot listing cache', () => {
+  const store = join(root, 'vscode-cached')
+  const chats = join(store, 'workspaceStorage', 'ws-one', 'chatSessions')
+  const chat = join(chats, 'a.json')
+  const doc = (question: string) =>
+    JSON.stringify({
+      sessionId: 'a',
+      creationDate: 1749765800000,
+      lastMessageDate: 1749765900000,
+      requests: [{ timestamp: 1749765802920, message: { text: question }, response: [] }],
+    })
+
+  test('an untouched chat is served from the last parse', () => {
+    // Pinned to an exact instant BEFORE the listing that fills the cache, and set again from the
+    // same value afterwards. Restoring a previously-read mtime instead would not work: statSync
+    // reports fractional milliseconds that utimesSync cannot write back, so the file would look
+    // edited for a reason that has nothing to do with the cache.
+    const pinned = new Date(1749765900000)
+    write(chat, doc('first question here'))
+    utimesSync(chat, pinned, pinned)
+    expect(listForeignSessions('vscode-copilot', store)[0]?.title).toBe('first question here')
+
+    // A DIFFERENT question of exactly the same length, at exactly the same mtime. Nothing the
+    // filesystem reports has changed — so the cache must answer, and the proof that it did is
+    // that the superseded title is the one that comes back.
+    const before = statSync(chat)
+    writeFileSync(chat, doc('SECOND question her'))
+    utimesSync(chat, pinned, pinned)
+    expect(statSync(chat).size).toBe(before.size)
+    expect(statSync(chat).mtimeMs).toBe(before.mtimeMs)
+
+    expect(listForeignSessions('vscode-copilot', store)[0]?.title).toBe('first question here')
+  })
+
+  test('a real edit is picked up', () => {
+    writeFileSync(chat, doc('a properly different question entirely'))
+    expect(listForeignSessions('vscode-copilot', store)[0]?.title).toBe(
+      'a properly different question entirely',
+    )
+  })
+
+  test('listing another VS Code flavour does not evict this store', () => {
+    // ONE cache serves every flavour on the machine — Code, Code - Insiders, VSCodium — and each is
+    // listed by its own call with its own root. A sweep of one is no evidence at all about
+    // another's files, so the prune has to be scoped to the root being listed. Unscoped, every
+    // sweep would throw away the other two stores and re-parse them from nothing, which is the
+    // whole cost this cache exists to avoid.
+    const other = join(root, 'vscode-insiders')
+    write(join(other, 'workspaceStorage', 'ws-two', 'chatSessions', 'b.json'), doc('over here'))
+    expect(listForeignSessions('vscode-copilot', other)).toHaveLength(1)
+
+    expect(listForeignSessions('vscode-copilot', store)[0]?.title).toBe(
+      'a properly different question entirely',
+    )
+  })
+
+  test('a deleted chat leaves the listing', () => {
+    rmSync(chat)
+    expect(listForeignSessions('vscode-copilot', store)).toEqual([])
+  })
+})
+
+// The sync and async listings drain ONE generator, and that generator emits a placeholder for every
+// file it looks at rather than only for the ones that become sessions — otherwise the async drain,
+// which spends its yields per file examined, would run an unbroken block through any stretch of
+// empty or unreadable chats and freeze the daemon exactly as it did before it was made async. The
+// placeholders must never reach a caller, and the two listings must never disagree.
+describe('VS Code Copilot sync and async listings agree', () => {
+  const store = join(root, 'vscode-async')
+  const chats = join(store, 'workspaceStorage', 'ws-mixed', 'chatSessions')
+  const real = (id: string, question: string) =>
+    JSON.stringify({
+      sessionId: id,
+      creationDate: 1749765800000,
+      lastMessageDate: 1749765900000,
+      requests: [{ timestamp: 1749765802920, message: { text: question }, response: [] }],
+    })
+
+  // Deliberately mostly junk: empty chats, an unparseable one, two real ones. Every junk file is a
+  // file the generator examines and discards, which is the case the placeholder exists for.
+  write(join(chats, '01-real.json'), real('01', 'the first real question'))
+  for (let i = 2; i <= 40; i++)
+    write(join(chats, `${String(i).padStart(2, '0')}-empty.json`), JSON.stringify({ requests: [] }))
+  write(join(chats, '41-broken.json'), '{ this is not json')
+  write(join(chats, '42-real.json'), real('42', 'the second real question'))
+
+  test('both return the same real sessions, and no placeholders escape', async () => {
+    const sync = listForeignSessions('vscode-copilot', store)
+    const async_ = await listForeignSessionsAsync('vscode-copilot', store)
+
+    expect(sync.map((s) => s.session_id).sort()).toEqual(['01', '42'])
+    expect(async_.map((s) => s.session_id).sort()).toEqual(['01', '42'])
+    // A placeholder that leaked would arrive as a null entry, or as a row with no id.
+    expect(async_.every((s) => s && typeof s.session_id === 'string' && s.session_id)).toBe(true)
+    expect(async_.map((s) => s.title).sort()).toEqual(sync.map((s) => s.title).sort())
+  })
+
+  test('the async listing survives a store that yields nothing but junk', async () => {
+    const junk = join(root, 'vscode-junk')
+    const only = join(junk, 'workspaceStorage', 'ws-junk', 'chatSessions')
+    for (let i = 0; i < 40; i++) write(join(only, `${i}.json`), JSON.stringify({ requests: [] }))
+    expect(await listForeignSessionsAsync('vscode-copilot', junk)).toEqual([])
   })
 })
 

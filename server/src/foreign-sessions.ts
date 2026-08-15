@@ -38,6 +38,15 @@ export interface ForeignSession {
 
 interface Adapter {
   list(root: string): ForeignSession[]
+  /**
+   * The same listing for a caller that can wait, and therefore must not be blocked.
+   *
+   * Optional, because most of these stores are a handful of small files and reading them is over
+   * before yielding would have cost anything. It exists for the one that is not: a VS Code store
+   * has to be JSON-parsed in full, which measured 5.2 s cold — inside the whole-store sweep, which
+   * is async exactly so the daemon can keep answering while it runs.
+   */
+  listAsync?(root: string): Promise<ForeignSession[]>
   read(path: string): TailEvent[]
 }
 
@@ -281,37 +290,124 @@ function vsCodeResponseText(part: Record<string, unknown>): { text: string; tool
   return { text: '', tool: null }
 }
 
-const vscodeCopilot: Adapter = {
-  list(root) {
-    const out: ForeignSession[] = []
-    const storage = join(root, 'workspaceStorage')
-    for (const hash of dirs(storage)) {
-      const chats = join(storage, hash, 'chatSessions')
-      let names: string[]
+/**
+ * Listed chats, keyed by path, valid only while the file is byte-for-byte the one that was parsed.
+ *
+ * Listing a VS Code store means JSON.parse-ing every chat document, because that is the only place
+ * the title and timestamps live — there is no index file to read instead. That is not free at any
+ * real size: 355 chats measured 5.2 SECONDS, which was the single largest slice of a whole-store
+ * sweep, and the sweep runs on a timer. A chat that has not been touched since the last sweep will
+ * parse to exactly what it parsed to last time, so this keeps that answer and re-reads only what
+ * actually changed. Two stats replace a full parse; the same trade the Codex identity cache makes.
+ */
+const vsCodeChatCache = new Map<string, { stamp: string; session: ForeignSession | null }>()
+
+/**
+ * The listing, one chat at a time.
+ *
+ * A generator rather than a loop so the two callers can share it exactly: {@link Adapter.list}
+ * drains it in one go, and the async path drains it a chunk at a time, handing the event loop back
+ * in between. The cache bookkeeping and the prune live here, once, so the two cannot drift — and
+ * the prune sits in a `finally` so it still runs when a caller stops draining early.
+ */
+function* vsCodeChats(root: string): Generator<ForeignSession | null> {
+  const storage = join(root, 'workspaceStorage')
+  const seen = new Set<string>()
+  try {
+    yield* vsCodeChatsUnder(storage, seen)
+  } finally {
+    // Deleted chats must not keep their slot forever. Scoped to the paths under THIS root, because
+    // one cache serves every VS Code flavour on the machine (Code, Insiders, VSCodium) and each is
+    // listed by its own call — a sweep of one is no evidence at all about another's files.
+    for (const path of vsCodeChatCache.keys())
+      if (path.startsWith(storage) && !seen.has(path)) vsCodeChatCache.delete(path)
+  }
+}
+
+function* vsCodeChatsUnder(storage: string, seen: Set<string>): Generator<ForeignSession | null> {
+  for (const hash of dirs(storage)) {
+    const chats = join(storage, hash, 'chatSessions')
+    let names: string[]
+    try {
+      names = readdirSync(chats).filter((n) => n.endsWith('.json'))
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      const path = join(chats, name)
+      seen.add(path)
+      // mtime AND size: mtime alone can repeat within a filesystem's timestamp granularity, and
+      // an edit that keeps the byte count is exactly the case a coarse clock hides.
+      let stamp: string
+      let size = 0
       try {
-        names = readdirSync(chats).filter((n) => n.endsWith('.json'))
+        const st = statSync(path)
+        size = st.size
+        stamp = `${st.mtimeMs}:${st.size}`
       } catch {
+        yield null
         continue
       }
-      for (const name of names) {
-        const path = join(chats, name)
-        const doc = readJson<VsCodeChat>(path)
-        if (!doc?.requests?.length) continue
-        const first = doc.requests[0]?.message?.text ?? ''
-        out.push({
-          session_id: doc.sessionId || name.replace(/\.json$/, ''),
-          path,
-          title: titleFromText(first, 'Copilot chat'),
-          cwd: '',
-          // VS Code identifies a workspace by an opaque hash, so that is the honest grouping key —
-          // inventing a folder name from it would be a guess the user cannot check.
-          project: hash,
-          created_at: doc.creationDate ?? null,
-          last_activity_at: doc.lastMessageDate ?? doc.creationDate ?? mtimeOf(path),
-          size_bytes: sizeOf(path),
-          archived: false,
-        })
+      const hit = vsCodeChatCache.get(path)
+      if (hit?.stamp === stamp) {
+        yield hit.session
+        continue
       }
+      const doc = readJson<VsCodeChat>(path)
+      // A read that FAILED is not remembered. readJson answers null for a locked or half-written
+      // file exactly as it does for a malformed one, and VS Code is usually running while this
+      // sweep happens — so caching that null would drop a perfectly good chat out of the list
+      // until something happened to edit it again. An empty chat is a real, stable answer and IS
+      // remembered, so it is not re-parsed every sweep.
+      if (!doc) {
+        yield null
+        continue
+      }
+      if (!doc.requests?.length) {
+        vsCodeChatCache.set(path, { stamp, session: null })
+        yield null
+        continue
+      }
+      const first = doc.requests[0]?.message?.text ?? ''
+      const session: ForeignSession = {
+        session_id: doc.sessionId || name.replace(/\.json$/, ''),
+        path,
+        title: titleFromText(first, 'Copilot chat'),
+        cwd: '',
+        // VS Code identifies a workspace by an opaque hash, so that is the honest grouping key —
+        // inventing a folder name from it would be a guess the user cannot check.
+        project: hash,
+        created_at: doc.creationDate ?? null,
+        last_activity_at: doc.lastMessageDate ?? doc.creationDate ?? mtimeOf(path),
+        size_bytes: size,
+        archived: false,
+      }
+      vsCodeChatCache.set(path, { stamp, session })
+      yield session
+    }
+  }
+}
+
+const vscodeCopilot: Adapter = {
+  list: (root) => [...vsCodeChats(root)].filter((s): s is ForeignSession => s !== null),
+  /**
+   * The same listing, handing the loop back every so often.
+   *
+   * The whole-store sweep is async precisely so the daemon keeps answering while it runs, and a
+   * synchronous call inside it defeats that no matter what wraps it. Parsing this store cold
+   * measured 5.2 s in one unbroken block — long enough that the FIRST sweep after launch, when
+   * nothing is cached yet, froze the daemon for about six seconds while it ran.
+   */
+  async listAsync(root) {
+    const out: ForeignSession[] = []
+    let examined = 0
+    for (const session of vsCodeChats(root)) {
+      if (session) out.push(session)
+      // Counted per FILE LOOKED AT, not per session returned. A chat that is empty, unreadable, or
+      // cached-as-empty still costs a stat and often a full parse while contributing no row, so
+      // budgeting by results would let an arbitrarily long run of them execute with no await in it
+      // at all — which on a profile full of abandoned chat panels is the whole freeze, back again.
+      if (++examined % 32 === 0) await new Promise((r) => setTimeout(r, 0))
     }
     return out
   },
@@ -535,6 +631,26 @@ export function listForeignSessions(toolId: string, root: string): ForeignSessio
     return foreignAdapter(toolId)?.list(root) ?? []
   } catch {
     // A store whose layout has moved on contributes nothing. It must never take the index with it.
+    return []
+  }
+}
+
+/**
+ * listForeignSessions for the async index sweep, which must not hold the event loop.
+ *
+ * Falls back to the sync listing for every adapter that has not needed an async one — that is the
+ * correct answer for a store small enough that reading it never blocks anything.
+ */
+export async function listForeignSessionsAsync(
+  toolId: string,
+  root: string,
+): Promise<ForeignSession[]> {
+  try {
+    const adapter = foreignAdapter(toolId)
+    if (!adapter) return []
+    return adapter.listAsync ? await adapter.listAsync(root) : adapter.list(root)
+  } catch {
+    // Same bargain as the sync listing: a store whose layout has moved on contributes nothing.
     return []
   }
 }
