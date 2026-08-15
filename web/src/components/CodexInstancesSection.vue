@@ -431,7 +431,7 @@ onUnmounted(stopPolling)
                     <EllipsisVertical />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" class="w-52">
+                <DropdownMenuContent align="end" class="max-w-52">
                   <!-- Which instance this menu belongs to, by number — see InstancesView. -->
                   <DropdownMenuLabel class="flex items-center justify-between gap-2 py-1">
                     <span class="font-mono text-xs">{{

@@ -342,7 +342,7 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
           <DropdownMenuTrigger as-child>
             <Button variant="outline" size="sm">{{ periodLabel }}</Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" class="w-48">
+          <DropdownMenuContent align="end" class="max-w-48">
             <DropdownMenuRadioGroup v-model="analyticsPeriod">
               <DropdownMenuRadioItem value="24h">{{ $t('sessions.period24h') }}</DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="7d">{{ $t('sessions.period7d') }}</DropdownMenuRadioItem>
@@ -357,7 +357,7 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
               {{ vendorFilter === 'all' ? $t('analytics.allVendors') : vendorLabel(vendorFilter) }}
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" class="w-52">
+          <DropdownMenuContent align="end" class="max-w-52">
             <DropdownMenuRadioGroup v-model="vendorFilter">
               <DropdownMenuRadioItem value="all">{{ $t('analytics.allVendors') }}</DropdownMenuRadioItem>
               <DropdownMenuRadioItem v-for="v in vendors" :key="v.key" :value="v.key">

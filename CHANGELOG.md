@@ -7,7 +7,47 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dropdown menus are as wide as their widest item, not as wide as the button that opened them.**
+  The kit's `DropdownMenuContent` pinned its width to `--reka-dropdown-menu-trigger-width`, so a
+  menu hanging off an icon button was ~30px wide, i.e. clamped to the `min-w-32` floor, and every
+  label wrapped onto two or three lines. Nobody noticed because each usage site passed a fixed
+  `w-52`/`w-56`/`w-72` that overrode it, which is the other half of the same bug: fifteen hand-picked
+  widths that pad short menus out and go stale the moment the labels change. The binding is gone
+  (`SelectContent` keeps its own on purpose, because a select panel really should match its field),
+  and every usage site's `w-N` became `max-w-N`, so no menu can be wider than it is today and
+  anything shorter shrinks. The transcript ⋯ menu went 274px → 203px, list options 224px → 212px,
+  the instance filter submenu 320px → 209px, with nothing wrapping. Same fix ContextMenuContent
+  received for the same reason; it lives in `lunarwerx-ui`, so the other kit apps pick it up on
+  their next sync.
+
 ### Changed
+
+- **An open chat's toolbar is four buttons instead of nine, and the composer's run settings are
+  icons until you change one.** The header row above a transcript had grown to find, display, open,
+  save, copy-file, copy-path, reopen-in-terminal, session-id and close. It shares a wrapping flex
+  with the session title and its metadata, so on any narrow pane that row of icons pushed the
+  title's own line out of the way, and nine unlabelled glyphs is a row you read rather than aim at.
+  Find, copy-the-path and copy-the-session-id stay out, because those are the ones you reach for
+  mid-read or paste into another tool; close stays out because a close button belongs nowhere else.
+  Everything else moved into a ⋯ menu, the same treatment the session list's own toolbar already
+  had. The display toggles keep their trigger's "something is hidden" state on the ⋯ button, so a
+  filtered transcript still says so while collapsed. Menu rows carry no explanatory second line:
+  the labels are full sentences already, and a menu that explains every row is one you read rather
+  than aim at. The path button did stop sharing the clipboard glyph with the session-id button next
+  to it, since two identical glyphs side by side are indistinguishable at icon size.
+
+  In the composer, model, effort and permissions are overrides on top of what the chat is already
+  running with, and the common case is that none of them are set, so three chips reading
+  "Model · Effort · Permissions" spent the row's width naming dimensions rather than stating facts.
+  Each is now an icon while it sits at the default and grows a label only once you override it, with
+  a rich tooltip carrying the name and what it does. The row reads as "what did I change". Account
+  and working directory name a fact rather than an override, so they keep their labels wherever
+  there is room. The whole row is a container query, not a viewport one, because the sessions
+  sidebar is drag-resizable and a wide window can still leave this box narrow: at 392px every label
+  drops and the row is nine icons on one line. The queue builder, where a new chat is started and
+  nothing is inherited, keeps its full labels.
 
 - The kit drift-check is now reachable as `check:local`, a name a pre-push runner can look for. It
   is the one gate GitHub structurally cannot run, since it compares this app's synced copies against

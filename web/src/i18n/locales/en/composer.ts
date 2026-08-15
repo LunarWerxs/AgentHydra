@@ -8,14 +8,23 @@ export default {
   busyHintManual:
     'This session is busy, so your message will queue behind the current run. The scheduler is off, so it waits until you press Run.',
   send: 'Send',
+  sendHint: 'Start this message now. Enter sends, Shift+Enter adds a line.',
   queue: 'Queue',
   queueForLater: 'Queue for later — pick a time',
   queueNow: 'Queue now',
   queueMoreHint: 'Other queue options',
   clearOption: 'Default',
+  // Each chip is an OVERRIDE for this one message; left alone, the session keeps whatever it was
+  // already running with. The hints say so, because an icon on its own cannot.
   chipModel: 'Model',
+  chipModelHint:
+    'Which model answers this message. Left alone, it stays on whatever this chat is already using.',
   chipEffort: 'Effort',
+  chipEffortHint:
+    "How much reasoning to spend on this message. Left alone, it stays on the session's own setting.",
   chipPermission: 'Permissions',
+  chipPermissionHint:
+    "How much this run may do without stopping to ask. Left alone, it stays on the session's own mode.",
   chipAccount: 'Account',
   chipAccountHint:
     'Which login this message runs under. By default it uses the desktop instance this chat belongs to, so it stays on the same account the conversation was already using.',

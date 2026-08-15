@@ -1157,7 +1157,7 @@ onUnmounted(() => {
                   </DropdownMenuTrigger>
                   <!-- w-56: without it the menu inherits the tiny kebab trigger's width and
                        "Create desktop shortcut" wraps/clips; a fixed width fits it on one line -->
-                  <DropdownMenuContent align="end" class="w-56">
+                  <DropdownMenuContent align="end" class="max-w-56">
                     <!-- The menu leads with WHICH instance it belongs to, by number. On a table of
                          fourteen near-identically named rows, an open kebab menu is otherwise
                          detached from the row it came from — and "Delete" is the wrong item to be

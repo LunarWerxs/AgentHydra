@@ -14,19 +14,24 @@ export default {
   composeToSelected: 'Message the {n} selected session(s) below',
   selectSessionsHint: 'Tap sessions in the list to pick message targets',
   copySessionId: 'Copy session id',
+  copySessionIdHint:
+    'Copies the full id as text — what you paste into claude --resume or a bug report',
   id: 'ID',
-  openFile: 'Open the session file',
-  openFileHint: 'Opens the raw .jsonl transcript on this machine with the OS default app',
+  // --- the ⋯ menu on an open transcript ---
+  // Items in here carry no explanatory second line. The labels are full sentences already, and a
+  // menu that explains every row is a menu you read instead of aim at.
+  chatOptions: 'More actions',
+  chatOptionsHint: 'What the transcript shows, plus the session file and terminal actions',
+  displayControlsActive: 'Part of this transcript is hidden by a display filter',
+  fileActions: 'Session file',
+  openFile: 'Open session file',
   openFileFailed: "Couldn't open the session file",
-  saveCopy: 'Save a copy of the session file',
-  saveCopyHint: 'Downloads the raw .jsonl transcript file, named after the session',
-  copyFile: 'Copy the session file to the clipboard',
-  copyFileHint:
-    'Puts the .jsonl file itself on the clipboard; paste it into a folder, a chat or an email',
+  saveCopy: 'Save copy of session file',
+  copyFile: 'Copy session file to clipboard',
   copyFileDone: 'Copied {name} to the clipboard; paste it anywhere that takes a file',
   copyFileFailed: "Couldn't copy the session file to the clipboard",
   copyFileUnsupported: 'Copying a file to the clipboard needs Windows or macOS',
-  copyFileLocation: 'Copy the session file location to the clipboard',
+  copyFileLocation: 'Copy session file location to clipboard',
   copyFileLocationHint: 'Copies the full path to the original .jsonl session file as text',
   copyFileLocationDone: 'Copied the session file location to the clipboard',
   copyFileLocationFailed: "Couldn't copy the session file location to the clipboard",
@@ -93,7 +98,6 @@ export default {
   shortcutEscape: 'Close the find bar, then the session',
   // --- reopen in a terminal ---
   resumeTerminal: 'Reopen in a terminal',
-  resumeTerminalHint: 'Runs claude --resume for this session in a new terminal window',
   resumeOpened: 'Opened a terminal for this session.',
   resumeCopied: "Couldn't open a terminal, so the command is on your clipboard.",
   resumeUnsupported: 'Only Claude sessions can be resumed. The command is on your clipboard.',
@@ -102,7 +106,6 @@ export default {
   exportMarkdown: 'Save as Markdown',
   exportHtml: 'Save as a web page',
   exportRaw: 'Save the raw .jsonl',
-  exportNote: 'Markdown and web page cover the whole session and redact recognisable secrets.',
   // --- credentials the session printed ---
   secretsLabel: 'Credentials in this transcript',
   secretsCount: '{n} secret(s)',
@@ -124,13 +127,13 @@ export default {
   activityIdle: 'Idle — active within the hour',
   activityStale: 'Stale — nothing for over an hour',
   // --- what the transcript shows ---
+  // A section heading inside the ⋯ menu now, not a button — the four toggles under it are their own
+  // explanation, so it needs no hint. displayControlsActive is what the collapsed trigger says.
   displayControls: 'Display',
-  displayControlsHint: 'Choose what the transcript shows and how densely',
   showToolActivity: 'Show tool activity',
   showThinking: 'Show reasoning',
   humanOnly: 'Only what I typed',
   compactLayout: 'Compact layout',
-  displayControlsNote: 'The turn window is applied after these, so filtering reaches back further.',
   thinkingLabel: 'Reasoning',
   // --- find within the open session ---
   findInSession: 'Find in session',

@@ -26,6 +26,7 @@ import {
   Globe,
   Hourglass,
   KeyRound,
+  Link,
   ListTodo,
   MessagesSquare,
   MoreHorizontal,
@@ -74,6 +75,7 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -1073,7 +1075,7 @@ function copy(text: string) {
                     <MoreHorizontal />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" class="w-56">
+                <DropdownMenuContent align="end" class="max-w-56">
                   <DropdownMenuItem @select="refreshSessions">
                     <RefreshCw :class="sessionsLoading ? 'animate-spin' : ''" />
                     {{ $t('sessions.refresh') }}
@@ -1101,7 +1103,7 @@ function copy(text: string) {
                         {{ sourceFilterLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="w-52">
+                    <DropdownMenuSubContent class="max-w-52">
                       <DropdownMenuRadioGroup v-model="sessionSourceFilter">
                         <DropdownMenuRadioItem value="all">{{ $t('sessions.sourceAll') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="claude">{{ $t('sessions.sourceClaude') }}</DropdownMenuRadioItem>
@@ -1121,7 +1123,7 @@ function copy(text: string) {
                         {{ instanceFilterLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="w-80">
+                    <DropdownMenuSubContent class="max-w-80">
                       <DropdownMenuRadioGroup v-model="sessionInstanceFilter">
                         <DropdownMenuRadioItem value="">{{ $t('sessions.instanceAll') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="default">{{ $t('sessions.instanceDefault') }}</DropdownMenuRadioItem>
@@ -1143,7 +1145,7 @@ function copy(text: string) {
                         {{ dispatchedScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="w-52">
+                    <DropdownMenuSubContent class="max-w-52">
                       <DropdownMenuRadioGroup v-model="sessionDispatchedScope">
                         <DropdownMenuRadioItem value="all">{{ $t('sessions.dispatchedAll') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="queued">{{ $t('sessions.dispatchedQueued') }}</DropdownMenuRadioItem>
@@ -1163,7 +1165,7 @@ function copy(text: string) {
                         {{ shapeScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="w-60">
+                    <DropdownMenuSubContent class="max-w-60">
                       <DropdownMenuRadioGroup v-model="sessionShapeScope">
                         <DropdownMenuRadioItem value="all">{{ $t('sessions.shapeAll') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="quick">{{ $t('sessions.shapeQuick') }}</DropdownMenuRadioItem>
@@ -1188,7 +1190,7 @@ function copy(text: string) {
                         {{ archivedScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="w-52">
+                    <DropdownMenuSubContent class="max-w-52">
                       <DropdownMenuRadioGroup v-model="sessionArchivedScope">
                         <DropdownMenuRadioItem value="hide">{{ $t('sessions.archivedHide') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="include">{{ $t('sessions.archivedInclude') }}</DropdownMenuRadioItem>
@@ -1208,7 +1210,7 @@ function copy(text: string) {
                         {{ periodLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="w-52">
+                    <DropdownMenuSubContent class="max-w-52">
                       <DropdownMenuRadioGroup v-model="sessionPeriod">
                         <DropdownMenuRadioItem value="24h">{{ $t('sessions.period24h') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="7d">{{ $t('sessions.period7d') }}</DropdownMenuRadioItem>
@@ -1438,7 +1440,7 @@ function copy(text: string) {
                   </div>
                 </button>
               </ContextMenuTrigger>
-              <ContextMenuContent class="w-52">
+              <ContextMenuContent class="max-w-52">
                 <ContextMenuItem @select="toggleDone(s)">
                   <CircleCheck v-if="!s.done" />
                   <CircleSlash v-else />
@@ -1552,7 +1554,13 @@ function copy(text: string) {
                 </IconTooltip>
               </div>
             </div>
-            <div class="flex shrink-0 items-center gap-2">
+            <!-- Four standalone controls, everything else behind ⋯ — the same treatment the list
+                 toolbar got, for the same reason: this row had grown to nine icon buttons and, being
+                 in a wrapping flex beside the title, it stole a line from the metadata on any narrow
+                 window. What stays out is what you reach for mid-read (find), plus the two copies
+                 you hand to another tool (path, session id), plus close. The rest are
+                 once-per-session acts and cost one extra click. -->
+            <div class="flex shrink-0 items-center gap-1.5">
               <IconTooltip
                 :label="$t('sessions.findInSession')"
                 :description="$t('sessions.findInSessionHint')"
@@ -1566,12 +1574,38 @@ function copy(text: string) {
                   <Search />
                 </Button>
               </IconTooltip>
-              <!-- What the transcript shows. The DropdownMenu root MUST live INSIDE IconTooltip's
-                   slot, wrapped in an element the tooltip can anchor to — see
-                   scripts/checks/reka-popper-root-inside-tooltip.mjs for what happens otherwise. -->
+              <!-- Link, not Copy: it sits next to the copy-session-id button, and two identical
+                   clipboard glyphs side by side are indistinguishable at icon size. -->
               <IconTooltip
-                :label="$t('sessions.displayControls')"
-                :description="$t('sessions.displayControlsHint')"
+                v-if="selected.source !== 'opencode'"
+                :label="$t('sessions.copyFileLocation')"
+                :description="$t('sessions.copyFileLocationHint')"
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :aria-label="$t('sessions.copyFileLocation')"
+                  @click="copyFileLocation(selected)"
+                >
+                  <Link />
+                </Button>
+              </IconTooltip>
+              <IconTooltip
+                :label="$t('sessions.copySessionId')"
+                :description="$t('sessions.copySessionIdHint')"
+              >
+                <Button variant="outline" size="sm" @click="copy(selected.session_id)">
+                  <Copy /> {{ $t('sessions.id') }}
+                </Button>
+              </IconTooltip>
+              <!-- Display toggles + every file action. The DropdownMenu root MUST live INSIDE
+                   IconTooltip's slot, wrapped in an element the tooltip can anchor to — see
+                   scripts/checks/reka-popper-root-inside-tooltip.mjs for what happens otherwise.
+                   The trigger goes `secondary` while a display filter is on, so a transcript that
+                   is hiding turns still says so from the collapsed toolbar. -->
+              <IconTooltip
+                :label="$t('sessions.chatOptions')"
+                :description="displayFiltered ? $t('sessions.displayControlsActive') : $t('sessions.chatOptionsHint')"
               >
                 <span class="inline-flex">
                   <DropdownMenu>
@@ -1579,12 +1613,15 @@ function copy(text: string) {
                       <Button
                         :variant="displayFiltered ? 'secondary' : 'outline'"
                         size="sm"
-                        :aria-label="$t('sessions.displayControls')"
+                        :aria-label="$t('sessions.chatOptions')"
                       >
-                        <SlidersHorizontal />
+                        <MoreHorizontal />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" class="w-72">
+                    <DropdownMenuContent align="end" class="max-w-72">
+                      <DropdownMenuLabel class="flex items-center gap-2">
+                        <SlidersHorizontal class="size-3.5" />{{ $t('sessions.displayControls') }}
+                      </DropdownMenuLabel>
                       <DropdownMenuCheckboxItem
                         :model-value="humanOnly"
                         @select.prevent
@@ -1608,7 +1645,6 @@ function copy(text: string) {
                       >
                         <Brain class="size-3.5" />{{ $t('sessions.showThinking') }}
                       </DropdownMenuCheckboxItem>
-                      <DropdownMenuSeparator />
                       <DropdownMenuCheckboxItem
                         :model-value="compactTranscript"
                         @select.prevent
@@ -1616,123 +1652,64 @@ function copy(text: string) {
                       >
                         <AlignJustify class="size-3.5" />{{ $t('sessions.compactLayout') }}
                       </DropdownMenuCheckboxItem>
-                      <p class="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
-                        {{ $t('sessions.displayControlsNote') }}
-                      </p>
+
+                      <template v-if="selected.source !== 'opencode'">
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel class="flex items-center gap-2">
+                          <FileSymlink class="size-3.5" />{{ $t('sessions.fileActions') }}
+                        </DropdownMenuLabel>
+                        <DropdownMenuItem @select="openFile(selected)">
+                          <FileSymlink />{{ $t('sessions.openFile') }}
+                        </DropdownMenuItem>
+                        <!-- one entry, three formats. The raw .jsonl is still here because it is
+                             the only lossless one; the two readable exports are what you hand to a
+                             person. -->
+                        <DropdownMenuSub>
+                          <DropdownMenuSubTrigger>
+                            <Download class="size-3.5" />{{ $t('sessions.saveCopy') }}
+                          </DropdownMenuSubTrigger>
+                          <DropdownMenuSubContent>
+                            <DropdownMenuItem as-child>
+                              <a
+                                :href="api.sessionExportUrl(selected.session_id, selected.source, 'markdown')"
+                                download
+                              >
+                                <FileText />{{ $t('sessions.exportMarkdown') }}
+                              </a>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem as-child>
+                              <a
+                                :href="api.sessionExportUrl(selected.session_id, selected.source, 'html')"
+                                download
+                              >
+                                <Globe />{{ $t('sessions.exportHtml') }}
+                              </a>
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem as-child>
+                              <a
+                                :href="api.sessionFileUrl(selected.session_id, selected.source)"
+                                :download="safeTranscriptFilename(selected.title, selected.session_id)"
+                              >
+                                <FileSymlink />{{ $t('sessions.exportRaw') }}
+                              </a>
+                            </DropdownMenuItem>
+                          </DropdownMenuSubContent>
+                        </DropdownMenuSub>
+                        <DropdownMenuItem :disabled="copyingFile" @select="copyFile(selected)">
+                          <ClipboardCopy />{{ $t('sessions.copyFile') }}
+                        </DropdownMenuItem>
+                      </template>
+
+                      <template v-if="selected.source === 'claude'">
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem :disabled="resuming" @select="resumeInTerminal(selected)">
+                          <SquareTerminal />{{ $t('sessions.resumeTerminal') }}
+                        </DropdownMenuItem>
+                      </template>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </span>
-              </IconTooltip>
-              <IconTooltip
-                v-if="selected.source !== 'opencode'"
-                :label="$t('sessions.openFile')"
-                :description="$t('sessions.openFileHint')"
-              >
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :aria-label="$t('sessions.openFile')"
-                  @click="openFile(selected)"
-                >
-                  <FileSymlink />
-                </Button>
-              </IconTooltip>
-              <!-- one download button, three formats. The raw .jsonl is still here because it is the
-                   only lossless one; the two readable exports are what you hand to a person. Menu
-                   root INSIDE IconTooltip, per scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
-              <IconTooltip
-                v-if="selected.source !== 'opencode'"
-                :label="$t('sessions.saveCopy')"
-                :description="$t('sessions.saveCopyHint')"
-              >
-                <span class="inline-flex">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger as-child>
-                      <Button variant="outline" size="sm" :aria-label="$t('sessions.saveCopy')">
-                        <Download />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" class="w-72">
-                      <DropdownMenuItem as-child>
-                        <a
-                          :href="api.sessionExportUrl(selected.session_id, selected.source, 'markdown')"
-                          download
-                        >
-                          <FileText />{{ $t('sessions.exportMarkdown') }}
-                        </a>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem as-child>
-                        <a
-                          :href="api.sessionExportUrl(selected.session_id, selected.source, 'html')"
-                          download
-                        >
-                          <Globe />{{ $t('sessions.exportHtml') }}
-                        </a>
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem as-child>
-                        <a
-                          :href="api.sessionFileUrl(selected.session_id, selected.source)"
-                          :download="safeTranscriptFilename(selected.title, selected.session_id)"
-                        >
-                          <FileSymlink />{{ $t('sessions.exportRaw') }}
-                        </a>
-                      </DropdownMenuItem>
-                      <p class="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
-                        {{ $t('sessions.exportNote') }}
-                      </p>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </span>
-              </IconTooltip>
-              <IconTooltip
-                v-if="selected.source !== 'opencode'"
-                :label="$t('sessions.copyFile')"
-                :description="$t('sessions.copyFileHint')"
-              >
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :disabled="copyingFile"
-                  :aria-label="$t('sessions.copyFile')"
-                  @click="copyFile(selected)"
-                >
-                  <ClipboardCopy />
-                </Button>
-              </IconTooltip>
-              <IconTooltip
-                v-if="selected.source !== 'opencode'"
-                :label="$t('sessions.copyFileLocation')"
-                :description="$t('sessions.copyFileLocationHint')"
-              >
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :aria-label="$t('sessions.copyFileLocation')"
-                  @click="copyFileLocation(selected)"
-                >
-                  <Copy />
-                </Button>
-              </IconTooltip>
-              <IconTooltip
-                v-if="selected.source === 'claude'"
-                :label="$t('sessions.resumeTerminal')"
-                :description="$t('sessions.resumeTerminalHint')"
-              >
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :disabled="resuming"
-                  :aria-label="$t('sessions.resumeTerminal')"
-                  @click="resumeInTerminal(selected)"
-                >
-                  <SquareTerminal />
-                </Button>
-              </IconTooltip>
-              <IconTooltip :label="$t('sessions.copySessionId')">
-                <Button variant="outline" size="sm" @click="copy(selected.session_id)">
-                  <Copy /> {{ $t('sessions.id') }}
-                </Button>
               </IconTooltip>
               <!-- close the open transcript (back to the pick-a-session state); the queue
                    drawer moved to the single purple button in the app header -->

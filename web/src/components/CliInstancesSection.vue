@@ -664,7 +664,7 @@ onUnmounted(stopPolling)
                       <EllipsisVertical />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" class="w-56">
+                  <DropdownMenuContent align="end" class="max-w-56">
                     <!-- Which instance this menu belongs to, by number — see the desktop table's
                          menu for why an open kebab needs to say so. -->
                     <DropdownMenuLabel class="flex items-center justify-between gap-2 py-1">

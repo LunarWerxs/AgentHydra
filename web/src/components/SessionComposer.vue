@@ -36,6 +36,7 @@ import { usePanels } from '@/composables/usePanels'
 import * as api from '@/lib/api'
 import { baseName, EFFORTS, MODELS, PERMISSION_MODES } from '@/lib/format'
 import { displayName } from '@/lib/instance-appearance'
+import IconTooltip from '@/shell/IconTooltip.vue'
 
 export interface ComposerTarget {
   session_id: string
@@ -334,100 +335,181 @@ async function handoffToChatGpt() {
           @keydown="onKeydown"
         />
 
-        <!-- option chips (left) + actions (right), Claude-composer style -->
-        <div class="flex flex-wrap items-center gap-1 px-2 pb-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger as-child>
-              <Button variant="ghost" size="xs" :class="model ? 'text-foreground' : 'text-muted-foreground'">
-                <Cpu /> {{ chipLabel(model, MODELS, $t('composer.chipModel')) }}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuRadioGroup v-model="model">
-                <DropdownMenuRadioItem value="">{{ $t('composer.clearOption') }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem v-for="o in MODELS.filter((o) => o.value)" :key="o.value" :value="o.value">
-                  {{ o.label }}
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        <!-- Option chips (left) + actions (right), Claude-composer style.
+             This composer only ever CONTINUES an existing session (createFor sends new_chat:false),
+             so the run settings are overrides on top of what the chat already uses, and the common
+             case is that none of them are set. A row of chips reading "Model · Effort ·
+             Permissions" therefore spent its width naming dimensions rather than stating facts, and
+             on a narrow pane it wrapped onto a second line. Each one is now an icon while it is at
+             the default and only grows a label once you actually override it, so the row reads as
+             "what did I change", with the rich tooltip carrying the name and the explanation. The
+             new-chat surface (the queue builder) keeps its full labels — there, nothing is inherited
+             and every dimension is a decision you are making.
+             `@container/composer` so the compaction follows the PANE, not the viewport: the
+             sessions sidebar is drag-resizable, so a wide window can still leave this box narrow. -->
+        <div class="@container/composer flex flex-wrap items-center gap-1 px-2 pb-2">
+          <!-- Every popper root sits INSIDE its IconTooltip, wrapped in a plain element for the
+               tooltip to anchor to — see scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
+          <IconTooltip :label="$t('composer.chipModel')" :description="$t('composer.chipModelHint')">
+            <span class="inline-flex">
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <Button
+                    variant="ghost"
+                    :size="model ? 'xs' : 'icon-xs'"
+                    :class="model ? 'text-foreground' : 'text-muted-foreground'"
+                    :aria-label="$t('composer.chipModel')"
+                  >
+                    <Cpu />
+                    <span v-if="model">{{ chipLabel(model, MODELS, $t('composer.chipModel')) }}</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuRadioGroup v-model="model">
+                    <DropdownMenuRadioItem value="">{{ $t('composer.clearOption') }}</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem v-for="o in MODELS.filter((o) => o.value)" :key="o.value" :value="o.value">
+                      {{ o.label }}
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
+          </IconTooltip>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger as-child>
-              <Button variant="ghost" size="xs" :class="effort ? 'text-foreground' : 'text-muted-foreground'">
-                <Gauge /> {{ chipLabel(effort, EFFORTS, $t('composer.chipEffort')) }}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuRadioGroup v-model="effort">
-                <DropdownMenuRadioItem value="">{{ $t('composer.clearOption') }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem v-for="o in EFFORTS.filter((o) => o.value)" :key="o.value" :value="o.value">
-                  {{ o.label }}
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <IconTooltip :label="$t('composer.chipEffort')" :description="$t('composer.chipEffortHint')">
+            <span class="inline-flex">
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <Button
+                    variant="ghost"
+                    :size="effort ? 'xs' : 'icon-xs'"
+                    :class="effort ? 'text-foreground' : 'text-muted-foreground'"
+                    :aria-label="$t('composer.chipEffort')"
+                  >
+                    <Gauge />
+                    <span v-if="effort">{{ chipLabel(effort, EFFORTS, $t('composer.chipEffort')) }}</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuRadioGroup v-model="effort">
+                    <DropdownMenuRadioItem value="">{{ $t('composer.clearOption') }}</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem v-for="o in EFFORTS.filter((o) => o.value)" :key="o.value" :value="o.value">
+                      {{ o.label }}
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
+          </IconTooltip>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger as-child>
-              <Button variant="ghost" size="xs" :class="permission ? 'text-foreground' : 'text-muted-foreground'">
-                <ShieldCheck /> {{ chipLabel(permission, PERMISSION_MODES, $t('composer.chipPermission')) }}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuRadioGroup v-model="permission">
-                <DropdownMenuRadioItem value="">{{ $t('composer.clearOption') }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem v-for="o in PERMISSION_MODES.filter((o) => o.value)" :key="o.value" :value="o.value">
-                  {{ o.label }}
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <IconTooltip :label="$t('composer.chipPermission')" :description="$t('composer.chipPermissionHint')">
+            <span class="inline-flex">
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <Button
+                    variant="ghost"
+                    :size="permission ? 'xs' : 'icon-xs'"
+                    :class="permission ? 'text-foreground' : 'text-muted-foreground'"
+                    :aria-label="$t('composer.chipPermission')"
+                  >
+                    <ShieldCheck />
+                    <span v-if="permission">{{ chipLabel(permission, PERMISSION_MODES, $t('composer.chipPermission')) }}</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuRadioGroup v-model="permission">
+                    <DropdownMenuRadioItem value="">{{ $t('composer.clearOption') }}</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem v-for="o in PERMISSION_MODES.filter((o) => o.value)" :key="o.value" :value="o.value">
+                      {{ o.label }}
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
+          </IconTooltip>
 
           <!-- Run-as. Always shown (not gated on legacy accounts existing): which account a resume
                goes out under is the difference between it working and hitting someone else's wall,
-               so it has to be visible and changeable even when every login is an instance. -->
-          <DropdownMenu>
-            <DropdownMenuTrigger as-child>
-              <Button variant="ghost" size="xs" :class="runAs ? 'text-foreground' : 'text-muted-foreground'" :title="$t('composer.chipAccountHint')">
-                <UserCircle2 />
-                {{ runAs ? chipLabel(runAs, accountOptions, $t('composer.chipAccount')) : (autoInstanceLabel ?? $t('composer.chipAccount')) }}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" class="max-h-80 overflow-y-auto">
-              <DropdownMenuRadioGroup v-model="runAs">
-                <DropdownMenuRadioItem v-for="o in accountOptions" :key="o.value" :value="o.value">
-                  {{ o.label }}
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+               so it has to be visible and changeable even when every login is an instance. Unlike
+               the three above it names a FACT rather than an override, so it keeps its label
+               wherever there is room and only drops to the icon on a genuinely narrow pane. -->
+          <IconTooltip :label="$t('composer.chipAccount')" :description="$t('composer.chipAccountHint')">
+            <span class="inline-flex">
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    class="max-w-40"
+                    :class="runAs ? 'text-foreground' : 'text-muted-foreground'"
+                    :aria-label="$t('composer.chipAccount')"
+                  >
+                    <UserCircle2 />
+                    <span class="hidden truncate @lg/composer:inline">
+                      {{ runAs ? chipLabel(runAs, accountOptions, $t('composer.chipAccount')) : (autoInstanceLabel ?? $t('composer.chipAccount')) }}
+                    </span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" class="max-h-80 overflow-y-auto">
+                  <DropdownMenuRadioGroup v-model="runAs">
+                    <DropdownMenuRadioItem v-for="o in accountOptions" :key="o.value" :value="o.value">
+                      {{ o.label }}
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
+          </IconTooltip>
 
           <!-- cwd override: single target only (multi always uses each session's own dir) -->
-          <Popover v-if="single">
-            <PopoverTrigger as-child>
-              <Button variant="ghost" size="xs" :class="cwdOverride.trim() ? 'text-foreground' : 'text-muted-foreground'">
-                <FolderGit2 /> {{ baseName(cwdOverride.trim() || single.cwd) }}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="start" class="w-96 space-y-1.5 p-3">
-              <label class="text-xs font-medium text-muted-foreground">{{ $t('composer.cwdPopoverLabel') }}</label>
-              <Input v-model="cwdOverride" :placeholder="single.cwd" class="font-mono text-xs" />
-              <p class="text-[11px] text-muted-foreground">{{ $t('composer.cwdPopoverHint') }}</p>
-            </PopoverContent>
-          </Popover>
+          <IconTooltip
+            v-if="single"
+            :label="$t('composer.cwdPopoverLabel')"
+            :description="cwdOverride.trim() || single.cwd"
+          >
+            <span class="inline-flex">
+              <Popover>
+                <PopoverTrigger as-child>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    class="max-w-40"
+                    :class="cwdOverride.trim() ? 'text-foreground' : 'text-muted-foreground'"
+                    :aria-label="$t('composer.cwdPopoverLabel')"
+                  >
+                    <FolderGit2 />
+                    <span class="hidden truncate @lg/composer:inline">{{ baseName(cwdOverride.trim() || single.cwd) }}</span>
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" class="w-96 space-y-1.5 p-3">
+                  <label class="text-xs font-medium text-muted-foreground">{{ $t('composer.cwdPopoverLabel') }}</label>
+                  <Input v-model="cwdOverride" :placeholder="single.cwd" class="font-mono text-xs" />
+                  <p class="text-[11px] text-muted-foreground">{{ $t('composer.cwdPopoverHint') }}</p>
+                </PopoverContent>
+              </Popover>
+            </span>
+          </IconTooltip>
 
+          <!-- Action labels drop before the chips do: Send and Queue keep their position and their
+               icons, so losing the word costs nothing, whereas a chip with no label AND no value
+               would say nothing at all. -->
           <div class="ml-auto flex items-center gap-1">
-            <Button
+            <IconTooltip
               v-if="chatGptHandoffEnabled && single"
-              variant="outline"
-              size="sm"
-              :disabled="!canHandoff"
-              :title="$t('composer.chatGptHandoffHint')"
-              @click="handoffToChatGpt"
+              :label="$t('composer.chatGptHandoff')"
+              :description="$t('composer.chatGptHandoffHint')"
             >
-              <ExternalLink /> {{ $t('composer.chatGptHandoff') }}
-            </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="!canHandoff"
+                :aria-label="$t('composer.chatGptHandoff')"
+                @click="handoffToChatGpt"
+              >
+                <ExternalLink />
+                <span class="hidden @md/composer:inline">{{ $t('composer.chatGptHandoff') }}</span>
+              </Button>
+            </IconTooltip>
 
             <!-- Queue: a SPLIT button, and which half is which is the point. "Queue" used to fire
                  immediately while the schedule popover hid behind a separate calendar icon, so
@@ -436,49 +518,64 @@ async function handoffToChatGpt() {
                  picker (the deliberate act), and the instant one is a menu item behind the chevron
                  (the shortcut). Same two actions, ranked. -->
             <div class="flex items-center">
-              <Popover v-model:open="scheduleOpen">
-                <PopoverTrigger as-child>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    class="rounded-r-none border-r-0"
-                    :disabled="!canSend"
-                    :title="$t('composer.queueForLater')"
-                  >
-                    <CalendarClock /> {{ $t('composer.queue') }}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="end" class="w-64 p-3">
-                  <!-- The panel itself is shared with the queue builder (SchedulePanel.vue); this
-                       surface's job is only to say what a picked time MEANS here: queue the message
-                       currently in the box for then. -->
-                  <SchedulePanel @pick="submit('queue', $event)" @close="scheduleOpen = false" />
-                </PopoverContent>
-              </Popover>
+              <IconTooltip
+                :label="$t('composer.queue')"
+                :description="$t('composer.queueForLater')"
+              >
+                <span class="inline-flex">
+                  <Popover v-model:open="scheduleOpen">
+                    <PopoverTrigger as-child>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        class="rounded-r-none border-r-0"
+                        :disabled="!canSend"
+                        :aria-label="$t('composer.queueForLater')"
+                      >
+                        <CalendarClock />
+                        <span class="hidden @md/composer:inline">{{ $t('composer.queue') }}</span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" class="w-64 p-3">
+                      <!-- The panel itself is shared with the queue builder (SchedulePanel.vue);
+                           this surface's job is only to say what a picked time MEANS here: queue the
+                           message currently in the box for then. -->
+                      <SchedulePanel @pick="submit('queue', $event)" @close="scheduleOpen = false" />
+                    </PopoverContent>
+                  </Popover>
+                </span>
+              </IconTooltip>
 
-              <DropdownMenu>
-                <DropdownMenuTrigger as-child>
-                  <Button
-                    variant="outline"
-                    size="icon-sm"
-                    class="rounded-l-none border-l"
-                    :disabled="!canSend"
-                    :title="$t('composer.queueMoreHint')"
-                  >
-                    <ChevronDown />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem :disabled="!canSend" @select="submit('queue')">
-                    <ListPlus /> {{ $t('composer.queueNow') }}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <IconTooltip :label="$t('composer.queueMoreHint')">
+                <span class="inline-flex">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger as-child>
+                      <Button
+                        variant="outline"
+                        size="icon-sm"
+                        class="rounded-l-none border-l"
+                        :disabled="!canSend"
+                        :aria-label="$t('composer.queueMoreHint')"
+                      >
+                        <ChevronDown />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem :disabled="!canSend" @select="submit('queue')">
+                        <ListPlus /> {{ $t('composer.queueNow') }}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </span>
+              </IconTooltip>
             </div>
 
-            <Button size="sm" :disabled="!canSend" :title="$t('composer.send')" @click="submit('now')">
-              <SendHorizonal /> {{ $t('composer.send') }}
-            </Button>
+            <IconTooltip :label="$t('composer.send')" :description="$t('composer.sendHint')">
+              <Button size="sm" :disabled="!canSend" :aria-label="$t('composer.send')" @click="submit('now')">
+                <SendHorizonal />
+                <span class="hidden @md/composer:inline">{{ $t('composer.send') }}</span>
+              </Button>
+            </IconTooltip>
           </div>
         </div>
       </div>

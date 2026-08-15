@@ -342,7 +342,7 @@ onUnmounted(stopAvailabilityPolling)
                 <component :is="themeIcon" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" class="w-44">
+            <DropdownMenuContent align="end" class="max-w-44">
               <DropdownMenuRadioGroup
                 :model-value="themeMode"
                 @update:model-value="(v) => setTheme(v as ThemeMode)"
