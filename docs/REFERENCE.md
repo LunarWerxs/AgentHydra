@@ -252,6 +252,13 @@ the individual checks instead:
 - `bun test`: includes the Windows-gated tray launcher guard and instance/crypto tests.
 - `bun run typecheck`: web (`vue-tsc`) + server (`tsc`).
 
+`bun run check:local` is the owner-only half on its own: today it is just `check:kit`, split out under a
+name a pre-push runner can look for. It exists because the kit check is the one gate CI *structurally*
+cannot run, comparing this app's synced copies against a private sibling repo that a public repo's
+workflow can never check out. Before it had a name, a pre-commit hook was its only enforcement, and
+that hook is skipped by `--no-verify` and silently does nothing on any machine without the sibling
+checkout. External contributors should not run it; nothing in CI depends on it.
+
 CI runs these across `[ubuntu-latest, windows-latest]`, so a green local run on one OS clears one
 leg of two.
 

@@ -7,6 +7,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Changed
+
+- The kit drift-check is now reachable as `check:local`, a name a pre-push runner can look for. It
+  is the one gate GitHub structurally cannot run, since it compares this app's synced copies against
+  a private sibling repo a public workflow can never check out, so its only enforcement was a
+  pre-commit hook that `--no-verify` skips and that silently does nothing on a machine without the
+  sibling checkout. Developer-facing only; nothing about the app changes.
+
 ## [0.24.0] - 2026-08-15
 
 ### Added

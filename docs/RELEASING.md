@@ -13,10 +13,14 @@ every instance with auto-update enabled will fast-forward to it on its next chec
 2. **Update the changelog.** Move the relevant `[Unreleased]` entries in `CHANGELOG.md` into a new
    `## [X.Y.Z] - YYYY-MM-DD` heading, following the existing Keep a Changelog format already used
    in that file.
-3. **Run local CI before pushing**, mirroring what CI runs: `bun install --frozen-lockfile`,
-   `bun run typecheck`, `bun run check`, `bun run build`, `bun test`, `bun run dist`, and
-   `bun run scripts/smoke-release.ts dist/AgentHydra.exe`. Don't rely on pushing to find
-   out one of these fails.
+3. **Run local CI before pushing.** `.github/workflows/ci.yml` is the authoritative list; the
+   commands below are a convenience copy and the workflow wins if the two ever disagree. Check
+   the workflow rather than trusting this line when a step has been added recently.
+   `bun install --frozen-lockfile`, `bun run typecheck`, `bun run check`, `bun run build`,
+   `bun test`, `bun run dist`, and `bun run scripts/smoke-release.ts dist/AgentHydra.exe`.
+   Don't rely on pushing to find out one of these fails.
+
+   Maintainers: also `bun run check:local`, which CI cannot run at all (see REFERENCE.md).
 
    A local pass is one leg of a two-leg matrix. CI runs `[ubuntu-latest, windows-latest]`, so a
    green run on Windows says nothing about Linux. Anything OS-shaped (path handling, filesystem
@@ -57,7 +61,7 @@ refuses to install on a mismatch or a missing entry. There is no skip switch, on
 That makes the checksum file a **release contract, not a nicety**: the `Build checksums` step in
 `release.yml` (`sha256sum out/* > out/SHA256SUMS.txt`) and its inclusion in the upload list must
 both survive any edit to the release job. Drop either one and the installer stops working for
-everyone on the next release, with a refusal rather than a silent downgrade in safety — which is the
+everyone on the next release, with a refusal rather than a silent downgrade in safety, which is the
 right failure, but still a broken install path.
 
 Two shapes to keep intact if the workflow is ever restructured:
