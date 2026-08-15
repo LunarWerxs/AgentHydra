@@ -7,7 +7,51 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-08-14
+
 ### Fixed
+
+- **Opening a chat took 16 to 23 seconds, and how big the chat was had nothing to do with it.** A
+  672 KB conversation was as slow as a 12.6 MB one, which is the tell: the wait was never the file,
+  it was the queue in front of it. AgentHydra keeps an index of every transcript on the machine,
+  23,000 files and 8.9 GB on the machine this was found on, and building it takes seconds. The
+  index stamped itself with a clock reading taken **before** that build and then trusted it for two
+  seconds, so a snapshot was already ~9 s old the instant it was stored and could never once be
+  considered fresh. Every request therefore scheduled another rebuild, forever. Worse, the rebuild
+  that was described as running in the background used the **synchronous** builder, which holds
+  Bun's event loop for its entire duration, so `/api/health`, a route that reads nothing at all,
+  answered in 6.6 seconds. The daemon spent essentially all of its time rebuilding an index it
+  could never keep, and every request queued behind that.
+
+  A snapshot is now stamped when the sweep **finishes**, which is when it actually became true, and
+  is trusted for 10 s: comfortably longer than a sweep, and deliberately just under the 12 s
+  session-list poll, because a lifetime longer than the poll consuming it leaves the list a full
+  cycle behind. Revalidation goes through the async builder, and the sync and async paths now share
+  one in-flight guard instead of two that could not see each other. A lookup for a session that is
+  not in the snapshot (a chat created moments ago, or a deleted one the UI is still polling) no
+  longer buys a blocking whole-store scan: the routes that can wait now await a sweep that yields.
+
+  Two stores were re-read from scratch on every sweep and are now kept against file mtime and size:
+  VS Code Copilot, whose chats have to be JSON-parsed in full because that is the only place their
+  titles live (5.2 s for 355 chats, the single largest slice), and OpenCode, whose listing sizes
+  each session with a subquery that walks the whole message table once per row (939 ms). The VS Code
+  reader also yields while it parses, so the first sweep after launch cannot freeze the app.
+
+  Measured on the same machine, same three chats: opening a chat 16,540-23,211 ms → 1-5 ms; a warm
+  sweep ~9,500 ms → ~1,050 ms; the worst event-loop stall in steady state ~9,000 ms and continuous →
+  64 ms; the stall on the first cold sweep after launch 6,490 ms → 1,523 ms. A CI guardrail now
+  fails the build if the index is stamped before its own sweep, if its lifetime drops below the time
+  a sweep takes, if it exceeds the poll that consumes it, or if revalidation goes back to the
+  blocking builder.
+
+- **The chat pane and the session list could stack up requests against a slow server.** Neither poll
+  checked whether its previous request had come back, so a server that answered slower than the
+  interval asking it accumulated a queue of identical questions whose answers were all discarded but
+  the last. The newest, the only one that mattered, waited behind every stale one. Both now
+  hold off while a request is outstanding. The session list **coalesces** rather than skips, because
+  every filter control calls the same refresh: dropping one would leave the list showing the old
+  filter until the next tick. A chat read that fails after you have already clicked away no longer
+  blanks the conversation you moved to.
 
 - **`bun run dist` said `EACCES: permission denied` when the real problem was that AgentHydra was
   running.** Windows cannot unlink a running executable, so wiping `dist/` fails whenever a
