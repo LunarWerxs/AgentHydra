@@ -5,6 +5,27 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.2] - 2026-08-15
+
+### Fixed
+
+- **Quitting from the tray icon while an update is installing no longer leaves you with no app at
+  all.** Applying an update starts the replacement daemon and shuts the old one down 800ms later.
+  For that fraction of a second the replacement was a CHILD of the daemon on its way out, and the
+  tray's Quit does not stop one process, it force-kills a whole process tree. A Quit landing in
+  that window therefore killed the outgoing daemon and the incoming one together. Neither
+  `detached: true` nor `.unref()` removes a child from its parent's tree on Windows, which is
+  exactly why the shared launch helper the browser and editor launches already went through
+  exists; the relaunch simply never used it. Measured directly: with the old spawn the replacement
+  dies to a tray-style tree-kill, with the new one it survives.
+- **The relaunch now survives Windows throwing away the environment.** That launch helper hands the
+  process off to Windows' own process-creation service, which does not pass on environment
+  variables, and the port and the "you are the replacement" signal were both environment
+  variables. Left as they were, the replacement would have concluded it was an ordinary second
+  copy, seen the outgoing daemon still answering, and exited, which is the zero-daemons failure
+  again by a different route. Both now travel as command-line arguments, which that service does
+  deliver, with the environment kept as a fallback for macOS and Linux.
+
 ## [0.24.1] - 2026-08-15
 
 ### Fixed
