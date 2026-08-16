@@ -147,7 +147,23 @@ export const RUN_LOG_DIR = appEnv('RUN_LOG_DIR')?.trim() || join(DATA_DIR, 'run-
  */
 export const CLIPBOARD_DIR = join(DATA_DIR, 'clipboard')
 
-export const PORT = Number(process.env.PORT ?? 7787)
+/**
+ * `--port <n>` on the command line, or null when absent/malformed.
+ *
+ * It beats the environment (below) for one reason: the auto-update relaunch is handed to WMI
+ * Win32_Process.Create on win32, which does NOT inherit our environment block, so the port the
+ * predecessor is actually serving on can only reach the successor as an argument. Handing over the
+ * PREFERRED port instead would make the successor wait out its full 8s on a socket nobody is
+ * releasing and then bind a port the user's open tab is not on.
+ */
+function argvPort(argv: readonly string[] = process.argv): number | null {
+  const at = argv.indexOf('--port')
+  const raw = at === -1 ? undefined : argv[at + 1]
+  const n = raw === undefined ? Number.NaN : Number(raw)
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : null
+}
+
+export const PORT = argvPort() ?? Number(process.env.PORT ?? 7787)
 
 /** Preferred port for the disposable instance-only daemon. It intentionally differs from the
  * full manager's port so opening the full app later never has to evict or upgrade quick mode.

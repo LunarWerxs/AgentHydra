@@ -111,6 +111,7 @@ import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from './core/shared'
 import { createInstanceShortcut } from './core/shortcut'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { coerceQueueItem, db, getSetting, runOutcome, setSetting } from './db'
+import { buildDetachedSpawn } from './detached-spawn.mjs'
 import {
   activeCount,
   cancelItem,
@@ -156,6 +157,7 @@ import { openUi } from './open-ui'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
+import { buildRelaunchArgv } from './relaunch-argv.mjs'
 import {
   acknowledgeResetEvents,
   listResetEvents,
@@ -169,7 +171,7 @@ import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
 import { runCost, sessionUsage } from './session-usage'
 import { getSession, listSessions, sessionMarkKey, warmSessionScanCache } from './sessions'
-import { skipSingleInstanceGuard } from './single-instance'
+import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
 import { findTranscriptAsync, listTranscriptFiles, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
 import {
@@ -2028,7 +2030,7 @@ async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
 const releaseDoubleClick =
   (globalThis as { __AGENTHYDRA_RELEASE_BUILD__?: boolean }).__AGENTHYDRA_RELEASE_BUILD__ ===
     true &&
-  process.env.AGENTHYDRA_RELAUNCH !== '1' &&
+  !isRelaunchSuccessor() &&
   !appEnv('SHUTDOWN_TOKEN')
 
 if (!skipSingleInstanceGuard()) {
@@ -2054,7 +2056,7 @@ if (!skipSingleInstanceGuard()) {
 // A daemon relaunched by the auto-updater (AGENTHYDRA_RELAUNCH=1) waits for its predecessor to
 // free the preferred port BEFORE probing/binding, so it rebinds the SAME port (an open browser
 // tab's SSE then reconnects seamlessly instead of the daemon hopping to a port the tab can't reach).
-if (process.env.AGENTHYDRA_RELAUNCH === '1') await waitForPortFree(PORT, 8000)
+if (isRelaunchSuccessor()) await waitForPortFree(PORT, 8000)
 // Probe the SAME interface the server binds (HOST); the wildcard probe misses a
 // squatter that holds only 127.0.0.1 (e.g. wrangler dev's workerd on 8787).
 // A tray "Restart"/"Rebuild & Restart" spawns the successor while the predecessor is still
@@ -2102,14 +2104,25 @@ initConnections()
 function relaunchDaemon(): boolean {
   try {
     // In a compiled binary process.argv is ['bun', '<virtual embedded path>', ...realArgs] — a
-    // placeholder pair, NOT respawnable. process.execPath + (real script in source mode) + the
-    // real args (argv.slice(2)) is the one shape that relaunches correctly in both modes.
-    const relaunchArgs = IS_COMPILED
-      ? process.argv.slice(2)
-      : [process.argv[1]!, ...process.argv.slice(2)]
-    const child = spawn(process.execPath, relaunchArgs, {
+    // placeholder pair, NOT respawnable. The shared kit builder handles that, pins the port we are
+    // actually SERVING on (never the preferred one), and keeps the argv a fixed point so it cannot
+    // grow by two tokens on every update. No `command` here: main.ts's daemon mode takes no verb.
+    const relaunchArgv = buildRelaunchArgv(process.argv, {
+      execPath: process.execPath,
+      isCompiled: IS_COMPILED,
+      boundPort,
+      relaunchFlag: RELAUNCH_FLAG,
+    })
+    // Through buildDetachedSpawn, not a plain spawn. `detached: true` is NOT a process-tree escape
+    // on Windows — the shared primitive's own header says so, and that is the reason it exists.
+    // Left as a plain spawn the successor stays inside THIS process's tree for the whole ~800ms
+    // handoff, so a tray Quit (`taskkill /T /F`) landing in that window kills the outgoing daemon
+    // AND its replacement, leaving the user with none. That hand-off is also why the relaunch
+    // signal and the port ride as FLAGS above: WMI does not carry our environment block.
+    const plan = buildDetachedSpawn(process.platform, relaunchArgv)
+    const child = spawn(plan.argv[0] as string, plan.argv.slice(1), {
       cwd: process.cwd(),
-      detached: true,
+      detached: plan.detached,
       stdio: 'ignore',
       windowsHide: true,
       // boundPort, NOT PORT. PORT is the port this daemon PREFERRED (config/env); boundPort is the
