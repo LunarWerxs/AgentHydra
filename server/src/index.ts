@@ -2112,7 +2112,15 @@ function relaunchDaemon(): boolean {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
-      env: { ...process.env, AGENTHYDRA_RELAUNCH: '1', PORT: String(PORT) },
+      // boundPort, NOT PORT. PORT is the port this daemon PREFERRED (config/env); boundPort is the
+      // one it is actually serving on, and they diverge for every daemon that has ever hopped. The
+      // successor uses this value for BOTH of its jobs, so handing it the preferred port breaks both:
+      // waitForPortFree() waits out its full 8s on a port the predecessor never held (nothing is
+      // going to release it), and findFreePort() then binds that port instead of the one the user's
+      // open tab is on — so a healthy daemon moves out from under the tab and its SSE stream dies.
+      // Passing boundPort makes the wait apply to the socket actually being released and keeps the
+      // daemon on ONE port across updates, which is the whole point of the handoff.
+      env: { ...process.env, AGENTHYDRA_RELAUNCH: '1', PORT: String(boundPort) },
     })
     child.unref()
   } catch (e) {
