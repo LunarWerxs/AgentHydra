@@ -281,6 +281,27 @@ jobs:
             echo "::error::CHANGELOG.md has no release section for ${GITHUB_REF_NAME}"
             exit 1
           fi
+          # Which Windows download? The two Windows assets sit side by side with nothing at the
+          # download point telling them apart, and the .exe is the bigger, more obvious, more "just
+          # download the app" choice — and it is the one that CANNOT show a tray icon, because the
+          # icon is drawn by misc/lunarwerx-tray.exe and a single file carries no misc/ folder. That
+          # costs real users, who reasonably read a missing icon as a bug. Renaming the assets is
+          # NOT the fix: the updater matches its archive by name (`-<target>.zip`), so a rename
+          # silently breaks self-update for every install already out there. Saying it here is free
+          # and lands exactly where the choice is made.
+          cat >> RELEASE_NOTES.md <<'NOTE'
+
+          ---
+
+          ### Which Windows download?
+
+          | file | tray icon | notes |
+          | --- | --- | --- |
+          | `...-windows-x64.zip` | **yes** | The executable plus the `misc\` tray toolkit. Run `misc\Create-Shortcut.ps1` once, then launch from the shortcut it creates. |
+          | `...-windows-x64.exe` | no | One portable file, nothing to unpack. There is no `misc\` folder in a single file, so no tray icon can appear whatever the in-app setting says. |
+
+          Both self-update. Everything else is identical.
+          NOTE
 
       - uses: actions/download-artifact@v8
         with:
