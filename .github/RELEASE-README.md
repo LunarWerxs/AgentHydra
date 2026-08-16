@@ -38,6 +38,12 @@ with `--mcp` as its arg (no Bun needed), e.g. `{ "command": "C:\\path\\to\\Agent
 
 ## Updating
 
-Packaged builds don't self-update (that's a source-checkout feature); download the next release
-from <https://github.com/LunarWerxs/AgentHydra/releases>. Your data (`~/.agenthydra/`) carries
-over unchanged.
+Packaged builds DO self-update. AgentHydra checks GitHub for a newer release on a timer and tells
+you when one exists; it installs it only if you switched on unattended auto-update in Settings,
+which is off by default because restarting the daemon out from under whoever is using it is a
+thing you opt into. An install verifies the published SHA-256 before swapping the executable, and
+the daemon then restarts itself onto the new build.
+
+You can always update by hand instead: download the next release from
+<https://github.com/LunarWerxs/AgentHydra/releases>. Either way your data (`~/.agenthydra/`)
+carries over unchanged.
