@@ -5,10 +5,24 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.24.1] - 2026-08-15
 
 ### Fixed
 
+- **An update no longer moves the daemon to a different port and kills the tab you had open.** The
+  auto-update relaunch handed its successor `PORT`, the port this daemon *preferred*, rather than
+  the port it was actually serving on. Those are the same number only until something else takes the
+  preferred port once; from then on every update aimed the successor at the wrong one, and the
+  successor uses that value for both of its jobs. So it waited out its full 8-second handoff timeout
+  on a socket its predecessor never held and nobody was going to release, and then bound the
+  preferred port instead of the one your browser was talking to, so the open dashboard's event
+  stream died against a daemon that was otherwise perfectly healthy. That is the "localhost keeps
+  breaking and I have to restart it by hand" report: the runtime pointer follows the new port, the
+  window does not, and relaunching the executable just finds the new daemon answering and exits
+  without opening anything. In one field log all eleven auto-update relaunches moved off the
+  configured port, ten of them after burning the full 13 seconds of both port waits. The successor
+  is now given the bound port, so the wait applies to the socket actually being released and the
+  daemon holds one address across updates.
 - **Dropdown menus are as wide as their widest item, not as wide as the button that opened them.**
   The kit's `DropdownMenuContent` pinned its width to `--reka-dropdown-menu-trigger-width`, so a
   menu hanging off an icon button was ~30px wide, i.e. clamped to the `min-w-32` floor, and every
