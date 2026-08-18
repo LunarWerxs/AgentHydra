@@ -19,25 +19,44 @@
 
 import { useStorage } from '@vueuse/core'
 import { watch } from 'vue'
+import {
+  APP_VIEW_KEY,
+  APP_VIEWS,
+  type AppView,
+  createTabView,
+  parseAppView,
+  tabStorage,
+} from '@/lib/app-view'
 import { registerSharedPref } from './useSharedPrefs'
+
+export { APP_VIEWS, type AppView } from '@/lib/app-view'
 
 // --- which tab you were on --------------------------------------------------------------------
 // The app is a long-lived tray window that gets reloaded for all sorts of incidental reasons (an
 // update, a restart, a stray F5), and landing back on Sessions every time undid whatever you were
 // in the middle of looking at.
+//
+// Unlike everything else in this file it is NOT one value shared by every window — two windows on
+// two different tabs is a normal way to use the app, and this used to be impossible. The rule, and
+// why the two storages differ, is in lib/app-view.ts; here it is only wired up.
 
-export type AppView = 'sessions' | 'instances' | 'analytics'
-export const APP_VIEWS: readonly AppView[] = ['sessions', 'instances', 'analytics']
-
-/** Validated on read, not trusted: a stale or hand-edited value must fall back rather than render
- *  a tab that no longer exists. The same set is handed to the mirror, which has to make the same
- *  guarantee about what the daemon's store gives back. */
-const view = useStorage<AppView>('agenthydra.app.view', 'sessions', undefined, {
+/** Where a BRAND-NEW window opens: localStorage, mirrored through the daemon. Written by every
+ *  window, read by none after first paint. Validated on read, not trusted — a stale or hand-edited
+ *  value must fall back rather than render a tab that no longer exists, and the same set is handed
+ *  to the mirror, which has to make the same guarantee about what the daemon's store gives back. */
+const storedView = useStorage<AppView>(APP_VIEW_KEY, 'sessions', undefined, {
+  // No cross-window listener. That listener IS the bug: same origin, so a click in one window was
+  // pushed into the other one live. This key is a memory for next time, not a channel between
+  // windows, and the daemon mirror below is how it reaches a window on a different port.
+  listenToStorageChanges: false,
   serializer: {
-    read: (raw) => (APP_VIEWS.includes(raw as AppView) ? (raw as AppView) : 'sessions'),
+    read: (raw) => parseAppView(raw) ?? 'sessions',
     write: (v) => v,
   },
 })
+
+/** Where THIS window is, which is what the shell's tabs bind to. */
+const view = createTabView(storedView, tabStorage())
 
 // --- Instances: which tables are expanded -------------------------------------------------------
 // Someone who runs only CLI logins collapses the other table once and expects it to stay that way.
@@ -78,7 +97,7 @@ watch(sidebarWidth, (w) => {
 })
 
 // Mirrored through the daemon, at module scope, for the reasons in the header.
-registerSharedPref('agenthydra.app.view', view, APP_VIEWS)
+registerSharedPref(APP_VIEW_KEY, storedView, APP_VIEWS)
 registerSharedPref('agenthydra.instances.desktopOpen', desktopOpen)
 registerSharedPref('agenthydra.instances.cliOpen', cliOpen)
 registerSharedPref('agenthydra.instances.codexOpen', codexOpen)

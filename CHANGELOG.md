@@ -5,6 +5,25 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Two windows of AgentHydra can now be on two different tabs.** Opening a second window to watch
+  Sessions beside Instances did not work: clicking a tab in one window moved the other window to
+  the same tab, live. Which tab you were on was a single `localStorage` key, and the storage helper
+  behind it listens for the browser's cross-window `storage` event by default — two windows of the
+  app are the same origin, so every click was broadcast to the other one. That key was doing two
+  different jobs at once, and they have been split. Which tab THIS window is showing now lives in
+  `sessionStorage`, the one storage scoped the way people expect: it survives a reload (an update,
+  a restart, a stray F5 — the reason the tab was ever remembered), the browser copies it into a
+  duplicated tab so the duplicate opens on what you were looking at, and from that moment the two
+  windows are independent, because sessionStorage has no cross-window event to leak through. Which
+  tab a BRAND-NEW window opens on is still the shared, daemon-mirrored preference, so a first
+  launch — or a launch on a hopped port with an empty localStorage — still lands where you left
+  off. A window that has been somewhere is never relocated by anything but its own user, and a
+  click made while that shared value is still being fetched now beats the answer it is racing.
+
 ## [0.24.2] - 2026-08-15
 
 ### Fixed
