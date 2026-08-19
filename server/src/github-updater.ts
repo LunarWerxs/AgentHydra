@@ -41,9 +41,11 @@ const RELEASES_PAGE = `https://github.com/${REPO}/releases`
  *  former direct `api.github.com` call here means the periodic check that already ran adds zero
  *  extra network traffic. See README.md "Update check" for the user-facing disclosure. */
 const STUDIO_LATEST_API = 'https://studio.connections.icu/v1/app/agenthydra/latest'
-/** Fallback used only when pinging is disabled (see {@link pingOptedOut}): the plain GitHub API,
- *  carrying no install id and no version/os telemetry, so opting out still leaves update-checking
- *  itself working. */
+/** The plain GitHub API, carrying no install id and no version/os telemetry. Serves two jobs:
+ *  the PRIVACY path (pinging disabled, see {@link pingOptedOut}, so opting out still leaves
+ *  update-checking working) and, since 2026-08, the RESILIENCE path — {@link fetchLatestRelease}
+ *  retries here whenever the Studio proxy fails, so a proxy outage or a moved path can never
+ *  strand an install the way YTSort's renamed update URL did. */
 const GITHUB_LATEST_API = `https://api.github.com/repos/${REPO}/releases/latest`
 
 // ── anonymous install ping ──────────────────────────────────────────────────────────────────
@@ -117,10 +119,56 @@ export function buildLatestReleaseRequest(): { url: string; headers: Record<stri
 
 /** Fire the request built above. Bounded to 5s so a slow/unreachable endpoint never turns an
  *  update check into a hang — every caller already wraps this in try/catch and treats a failure
- *  as "no answer", exactly as before this ping existed. */
-function fetchLatestRelease(): Promise<Response> {
+ *  as "no answer", exactly as before this ping existed.
+ *
+ *  On a Studio failure this retries against {@link GITHUB_LATEST_API}. Note that constant was
+ *  already here but only for the PRIVACY path (ping opted out); it was never a failure path, so
+ *  until now a broken proxy stranded this install exactly like any other single-endpoint app.
+ *
+ *  Why it matters (YTSort, 2026-08): a shipped artifact whose only update URL later stopped
+ *  resolving left every install silently polling a dead link for six months, with no signal to
+ *  the users or the maintainer. GitHub's own API is the right backstop because it is the one
+ *  URL here a rename cannot orphan — GitHub redirects both owner and repo renames.
+ *
+ *  `viaFallback` exists so the caller does NOT mark the install-count ping reported for a
+ *  response Studio never served: that would burn this install's one-time `new=1` on a request
+ *  the analytics side never saw. */
+async function fetchLatestRelease(): Promise<{ res: Response; viaFallback: boolean }> {
   const { url, headers } = buildLatestReleaseRequest()
-  return fetch(url, { headers, signal: AbortSignal.timeout(5000) })
+  let res: Response | null = null
+  let primaryError: unknown = null
+  try {
+    res = await fetch(url, { headers, signal: AbortSignal.timeout(5000) })
+  } catch (e) {
+    primaryError = e
+  }
+  if (res?.ok) return { res, viaFallback: false }
+  // Already talking to GitHub (ping opted out) — there is no second opinion left to ask for.
+  if (url === GITHUB_LATEST_API) {
+    if (res) return { res, viaFallback: false }
+    throw primaryError
+  }
+  let fallback: Response
+  try {
+    fallback = await fetch(GITHUB_LATEST_API, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': `${SERVICE_NAME}/${VERSION}`,
+      },
+      signal: AbortSignal.timeout(5000),
+    })
+  } catch (e) {
+    if (primaryError) throw primaryError
+    if (res) return { res, viaFallback: false }
+    throw e
+  }
+  // Backstop unhappy too: hand back the PRIMARY's response so the reason an operator reads
+  // names the endpoint that actually broke rather than the one standing in for it.
+  if (!fallback.ok) {
+    if (res) return { res, viaFallback: false }
+    throw primaryError
+  }
+  return { res: fallback, viaFallback: true }
 }
 
 /** This binary's release target string (matches the release-asset naming: windows-x64, linux-arm64…). */
@@ -196,7 +244,7 @@ export async function checkForUpdate(opts: { fresh?: boolean } = {}): Promise<Up
 
   let release: GhRelease
   try {
-    const res = await fetchLatestRelease()
+    const { res, viaFallback } = await fetchLatestRelease()
     if (!res.ok) {
       return baseStatus({
         ok: false,
@@ -208,7 +256,8 @@ export async function checkForUpdate(opts: { fresh?: boolean } = {}): Promise<Up
     }
     // The ping succeeded (the server answered) — record it before touching the body, so a
     // malformed/unexpected JSON payload still counts as "this install was heard from".
-    if (!pingOptedOut()) markPingReported()
+    // Not for a fallback response: Studio never served it, so it never saw the ping either.
+    if (!pingOptedOut() && !viaFallback) markPingReported()
     release = (await res.json()) as GhRelease
   } catch (e) {
     return baseStatus({
@@ -378,7 +427,7 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
   // resends `new=1` — one "first ping" signal per install, no matter how many requests it takes.
   let asset: GhAsset | null = null
   try {
-    const res = await fetchLatestRelease()
+    const { res } = await fetchLatestRelease()
     if (res.ok) asset = assetForThisPlatform(((await res.json()) as GhRelease).assets ?? [])
   } catch {
     asset = null

@@ -3,6 +3,7 @@ import { getSetting, setSetting } from '../src/db'
 import {
   assetForThisPlatform,
   buildLatestReleaseRequest,
+  checkForUpdate,
   coarseOsTag,
   currentTarget,
   formatWindowsTag,
@@ -143,5 +144,81 @@ describe('anonymous install ping', () => {
     const { url, headers } = buildLatestReleaseRequest()
     expect(url).toBe('https://api.github.com/repos/LunarWerxs/agenthydra/releases/latest')
     expect(headers['X-Install-Id']).toBeUndefined()
+  })
+})
+
+/**
+ * The update check must survive its PRIMARY endpoint going away.
+ *
+ * GITHUB_LATEST_API existed here long before this suite, but only on the privacy path (ping
+ * opted out). It was never a failure path, so a broken Studio proxy stranded this install
+ * exactly like any single-endpoint app: polling a dead URL forever with nothing surfaced to the
+ * user or the maintainer. That is the YTSort failure (2026-08), and these lock the fix.
+ *
+ * NODE_ENV/CI are overridden deliberately: under `bun test` pingOptedOut() is true, which makes
+ * GitHub the PRIMARY request and would make a "fell back to GitHub" assertion pass for entirely
+ * the wrong reason.
+ */
+describe('update check falls back when the Studio proxy fails', () => {
+  const savedCi = process.env.CI
+  const savedNodeEnv = process.env.NODE_ENV
+  const savedFetch = globalThis.fetch
+
+  afterEach(() => {
+    if (savedCi === undefined) delete process.env.CI
+    else process.env.CI = savedCi
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = savedNodeEnv
+    globalThis.fetch = savedFetch
+    setSetting('app_install_id', '')
+    setSetting('app_ping_reported', '0')
+  })
+
+  function optIn() {
+    delete process.env.CI
+    process.env.NODE_ENV = 'production'
+  }
+
+  test('a dead Studio proxy falls through to GitHub instead of stranding the install', async () => {
+    optIn()
+    const seen: string[] = []
+    // `input: unknown` rather than RequestInfo: the server tsconfig has no DOM lib, so that
+    // global type does not exist here.
+    globalThis.fetch = (async (input: unknown) => {
+      const url =
+        typeof input === 'string' ? input : String((input as { url?: string })?.url ?? input)
+      seen.push(url)
+      if (url.includes('studio.connections.icu')) return new Response('gone', { status: 503 })
+      return new Response(JSON.stringify({ tag_name: 'v999.0.0', assets: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof fetch
+
+    const status = await checkForUpdate({ fresh: true })
+    expect(seen.some((u) => u.includes('studio.connections.icu'))).toBe(true)
+    expect(seen.some((u) => u.includes('api.github.com'))).toBe(true)
+    expect(status.updateAvailable).toBe(true)
+  })
+
+  test('a fallback response never marks the install-count ping reported', async () => {
+    optIn()
+    setSetting('app_ping_reported', '0')
+    // `input: unknown` rather than RequestInfo: the server tsconfig has no DOM lib, so that
+    // global type does not exist here.
+    globalThis.fetch = (async (input: unknown) => {
+      const url =
+        typeof input === 'string' ? input : String((input as { url?: string })?.url ?? input)
+      if (url.includes('studio.connections.icu')) return new Response('gone', { status: 503 })
+      return new Response(JSON.stringify({ tag_name: 'v999.0.0', assets: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof fetch
+
+    await checkForUpdate({ fresh: true })
+    // Studio never served that response, so it never saw the ping. Marking it reported would
+    // burn this install's one-time `new=1` on a request the analytics side never received.
+    expect(getSetting('app_ping_reported')).not.toBe('1')
   })
 })
