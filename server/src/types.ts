@@ -165,6 +165,22 @@ export interface SessionSummary {
   /** For `title_source: 'envelope'`, the tag whose name= attribute became the title (e.g.
    *  "scheduled-task"). Null for every other source. This is the field that names the culprit. */
   title_tag: string | null
+  /**
+   * How many transcripts on disk are THIS conversation, and which of them this row is.
+   *
+   * One chat routinely ends up in several files: interrupt it and resume, and the CLI opens a new
+   * transcript that replays the history and carries on. Both files are real and neither contains
+   * the other — measured across 36 such pairs here, every single older copy held turns the newer
+   * one does not, and they were the user's own words, typically the last thing said before the
+   * interrupt ("See you soon.", "skip domains4sale.uk,, do the rest"). So they are NOT folded away;
+   * hiding one would delete something the person actually typed. They are labelled instead, so two
+   * rows with the same title read as one conversation in two parts rather than as a mystery.
+   *
+   * `copy_count` is 1 for the ordinary case. Copies are numbered oldest first, so copy 1 is where
+   * the conversation started.
+   */
+  copy_index: number
+  copy_count: number
 }
 
 /**

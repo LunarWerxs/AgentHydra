@@ -5,6 +5,31 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-08-20
+
+### Added
+
+- **A conversation stored as several transcripts now says so, instead of looking like several
+  chats.** Interrupt a session and resume it and the CLI does not keep writing to the same file: it
+  opens a new transcript, replays the history and carries on. One conversation therefore becomes
+  two or three rows with the same title, different message counts, and no visible relationship —
+  which is what "why is this here twice?" looks like from the outside. Those rows now carry a
+  "part 1 of 2" chip explaining that they are one conversation split by an interruption.
+
+  **They are labelled rather than folded, and that was a measurement rather than a preference.**
+  Hiding all but the fullest copy is the obvious fix and it is wrong. Across all 36 duplicate
+  transcripts on a real store, EVERY older copy held turns the newer one did not — and they were
+  not bookkeeping, they were things the user had typed, usually the last thing said before the
+  interruption ("See you soon.", "skip domains4sale.uk,, do the rest"), which the resumed file
+  never carried over. Not one of the 36 could have been absorbed without deleting somebody's words,
+  so nothing is hidden.
+
+  The grouping key is the first message's uuid, captured on the scan that already reads every
+  record. A uuid is unique, so two transcripts whose first message is the same message necessarily
+  share that history — no content comparison, no reading a second file, and no reliance on the
+  title, which genuinely different chats routinely share. Copies are numbered oldest first, so the
+  numbering reads chronologically and the message count grows with it.
+
 ## [0.25.2] - 2026-08-20
 
 ### Fixed

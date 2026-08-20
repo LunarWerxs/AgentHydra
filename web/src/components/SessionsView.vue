@@ -27,6 +27,7 @@ import {
   Globe,
   Hourglass,
   KeyRound,
+  Layers,
   Link,
   ListTodo,
   MessagesSquare,
@@ -1530,6 +1531,16 @@ function copy(text: string) {
                       :title="s.instance ? undefined : $t('sessions.instanceUnknownHint')"
                     >
                       <Boxes class="size-3" />{{ s.instance ? (s.instance === 'default' ? $t('sessions.instanceDefault') : instanceLabelFor(s.instance)) : $t('sessions.instanceUnknown') }}
+                    </span>
+                    <!-- one conversation, several transcripts. Deliberately a label and not a
+                         fold: every older copy measured held turns the newer one did not, and they
+                         were things the user typed, so hiding one would lose them. -->
+                    <span
+                      v-if="s.copy_count > 1"
+                      class="inline-flex items-center gap-1"
+                      :title="$t('sessions.copyHint', { n: s.copy_count })"
+                    >
+                      <Layers class="size-3" />{{ $t('sessions.copyOf', { i: s.copy_index, n: s.copy_count }) }}
                     </span>
                     <!-- this row stands for a fan-out: the subagents are sessions in the provider's
                          own store, folded in here rather than listed as conversations of their own -->

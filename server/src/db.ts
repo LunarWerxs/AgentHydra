@@ -221,6 +221,10 @@ create index if not exists idx_session_scan_cache_path on session_scan_cache(pat
   // Where the row's title came from, so the UI can answer "why is this thread called that?".
   add('title_source', 'text')
   add('title_tag', 'text')
+  // The uuid of this transcript's first message: the identity of the CONVERSATION rather than of
+  // the file, so the several transcripts one interrupted-and-resumed chat leaves behind can be
+  // recognised as each other without reading them again.
+  add('thread_key', 'text')
   // THE REASON THE THREE COLUMNS ABOVE ARE SAFE TO ADD. A cached row is trusted on mtime+size
   // alone, so every row written before a scanner learns a new field would answer that field with
   // NULL forever — and a NULL limit_notice is indistinguishable from "this session never hit a

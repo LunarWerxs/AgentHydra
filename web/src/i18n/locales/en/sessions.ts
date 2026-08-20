@@ -46,6 +46,10 @@ export default {
   filterInstance: 'Instance',
   instanceAll: 'All instances',
   instanceDefault: 'Default',
+  // --- one conversation, several transcripts ---
+  copyOf: 'part {i} of {n}',
+  copyHint:
+    'This conversation is stored as {n} separate transcripts, usually because it was interrupted and resumed. They are all listed because each one holds turns the others do not — often the last thing you said before the interruption.',
   instanceUnknown: 'Unknown account',
   instanceUnknownHint:
     'Claude Desktop kept no record of which account ran this session, so AgentHydra cannot say. It is not hiding one.',

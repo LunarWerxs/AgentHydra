@@ -35,8 +35,9 @@ import type {
  * and they re-parse once, exactly like a transcript that changed on disk.
  *
  * 1 → the original scan. 2 → adds limit_stop (usage-wall detection) and title provenance.
+ * 3 → adds thread_key, the first message's uuid, which identifies the CONVERSATION.
  */
-const SCAN_VERSION = 2
+const SCAN_VERSION = 3
 
 function toEpoch(ts: unknown): number | null {
   if (typeof ts !== 'string') return null
@@ -68,6 +69,10 @@ interface ScannedMeta {
   /** Which of the four title sources won, and (for an envelope) the tag that supplied the name. */
   title_source: TitleSource
   title_tag: string | null
+  /** The uuid of the first message in this transcript. Two transcripts that open with the same
+   *  message are the same conversation — see SessionSummary.copy_count. Null when the file has no
+   *  message uuid at all (the store does not write them, or the transcript is empty). */
+  thread_key: string | null
 }
 
 // One entry per transcript. Keeping mtime in the value (instead of in the Map key) makes an active
@@ -79,7 +84,8 @@ const metaCache = new Map<string, { mtimeMs: number; meta: ScannedMeta }>()
 //
 // The persisted shape is FLAT where ScannedMeta is nested: sqlite has no object column, so
 // `limit_stop` is stored as its three parts and reassembled on read.
-interface ScanCacheRow extends Omit<ScannedMeta, 'limit_stop' | 'title_source' | 'title_tag'> {
+interface ScanCacheRow
+  extends Omit<ScannedMeta, 'limit_stop' | 'title_source' | 'title_tag' | 'thread_key'> {
   mtime_ms: number
   size_bytes: number
   limit_notice: string | null
@@ -87,20 +93,21 @@ interface ScanCacheRow extends Omit<ScannedMeta, 'limit_stop' | 'title_source' |
   limit_at: number | null
   title_source: string | null
   title_tag: string | null
+  thread_key: string | null
   scan_version: number | null
 }
 const selectScan = db.query<ScanCacheRow, [string]>(
   'select mtime_ms, size_bytes, title, cwd, git_branch, message_count, created_at, ' +
     'last_activity_at, last_role, last_text_preview, substantive_turns, ' +
-    'limit_notice, limit_pending, limit_at, title_source, title_tag, scan_version ' +
+    'limit_notice, limit_pending, limit_at, title_source, title_tag, thread_key, scan_version ' +
     'from session_scan_cache where cache_key = ?',
 )
 const upsertScan = db.query(
   'insert into session_scan_cache (cache_key, path, mtime_ms, size_bytes, title, cwd, git_branch, ' +
     'message_count, created_at, last_activity_at, last_role, last_text_preview, ' +
     'substantive_turns, limit_notice, limit_pending, limit_at, title_source, title_tag, ' +
-    'scan_version, scanned_at) ' +
-    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'thread_key, scan_version, scanned_at) ' +
+    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'on conflict(cache_key) do update set path = excluded.path, mtime_ms = excluded.mtime_ms, ' +
     'size_bytes = excluded.size_bytes, title = excluded.title, cwd = excluded.cwd, ' +
     'git_branch = excluded.git_branch, message_count = excluded.message_count, ' +
@@ -109,6 +116,7 @@ const upsertScan = db.query(
     'substantive_turns = excluded.substantive_turns, limit_notice = excluded.limit_notice, ' +
     'limit_pending = excluded.limit_pending, limit_at = excluded.limit_at, ' +
     'title_source = excluded.title_source, title_tag = excluded.title_tag, ' +
+    'thread_key = excluded.thread_key, ' +
     'scan_version = excluded.scan_version, scanned_at = excluded.scanned_at',
 )
 
@@ -126,6 +134,20 @@ const selectLimitedKeys = db.query<{ cache_key: string }, [number]>(
 )
 const selectScannedKeys = db.query<{ cache_key: string }, [number]>(
   'select cache_key from session_scan_cache where scan_version >= ?',
+)
+
+/**
+ * cache key -> the conversation it belongs to, for every transcript already scanned.
+ *
+ * Read as one query rather than per row because the answer is needed BEFORE the newest-N cap: a
+ * conversation's other copies are ordinary rows that may or may not be inside the current window,
+ * and a count taken over the page alone would tell a row it is the only copy whenever its twin
+ * happened to fall outside. Rows not yet scanned simply have no key and are left ungrouped, which
+ * reads as "one copy" — the same answer they gave before this existed.
+ */
+const selectThreadKeys = db.query<{ cache_key: string; thread_key: string }, [number]>(
+  'select cache_key, thread_key from session_scan_cache ' +
+    'where thread_key is not null and scan_version >= ?',
 )
 
 function cacheKey(tf: TranscriptFile): string {
@@ -158,6 +180,7 @@ function readScanCache(tf: TranscriptFile, key: string): ScannedMeta | null {
       : null,
     title_source: (row.title_source as TitleSource | null) ?? 'message',
     title_tag: row.title_tag ?? null,
+    thread_key: row.thread_key ?? null,
   }
 }
 
@@ -183,6 +206,7 @@ function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): Scann
       meta.limit_stop?.at ?? null,
       meta.title_source,
       meta.title_tag,
+      meta.thread_key,
       SCAN_VERSION,
       Date.now(),
     )
@@ -251,6 +275,9 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
       limit_stop: null,
       title_source: titleSource,
       title_tag: null,
+      // These stores keep one row per conversation, so a transcript never has a second copy and
+      // its own id is a perfectly good conversation identity.
+      thread_key: tf.session_id,
     }
     return rememberScan(tf, key, meta)
   }
@@ -287,6 +314,19 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
    * exactly like a provider that never hits limits.
    */
   const limits = tf.source === 'claude' ? createLimitStopTracker() : null
+  /**
+   * The uuid of this transcript's FIRST message — the conversation's identity, not the file's.
+   *
+   * Interrupt a chat and resume it and the CLI opens a new transcript, replays the history and
+   * carries on, so one conversation ends up as two or three files with different session ids and
+   * the same opening message. That first uuid is the cheapest exact way to recognise them as each
+   * other, and it costs nothing here because this loop is already reading every record.
+   *
+   * The first uuid rather than a whole-file comparison on purpose: a uuid is unique, so two files
+   * whose first message is the same message necessarily share that history. Comparing every uuid
+   * would answer the same question after reading two files instead of none.
+   */
+  let threadKey: string | null = null
 
   // Walked by index rather than `text.split('\n')`: on a 12 MB transcript that split materialises
   // ~100k line strings and holds every one of them alive for the whole loop, roughly doubling the
@@ -325,6 +365,7 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
     // assistant record and a terminal `result` is not a message at all, so anything that reads only
     // what the UI would show is blind to exactly the records this needs.
     limits?.observe(ev, toEpoch(ev.timestamp))
+    if (!threadKey && typeof ev.uuid === 'string' && ev.uuid) threadKey = ev.uuid
 
     const role = ev.message?.role ?? ev.type
     const tes = eventToTailEventsForSource(tf.source, ev)
@@ -393,6 +434,7 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
     limit_stop: limits?.verdict() ?? null,
     title_source: titleSource,
     title_tag: titleSource === 'envelope' ? turn.tag : null,
+    thread_key: threadKey,
   }
   return rememberScan(tf, key, meta)
 }
@@ -795,6 +837,8 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
       limit_stop: m.limit_stop,
       title_source: m.title_source,
       title_tag: m.title_tag,
+      copy_index: 1,
+      copy_count: 1,
     }
   }
 
@@ -814,7 +858,57 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
     for (const s of scanned) if (s) out.push(s)
   }
   out.sort((a, b) => b.last_activity_at - a.last_activity_at)
+  labelCopies(out, files)
   return offset > 0 ? out.slice(offset) : out
+}
+
+/**
+ * Tell each row how many transcripts its conversation has, and which one this is.
+ *
+ * WHY THIS IS NOT A FOLD. Interrupt a chat and resume it and the CLI opens a fresh transcript,
+ * replays the history and carries on, so one conversation becomes two or three files that look
+ * like unrelated chats with the same title. The obvious fix is to hide all but the fullest, and it
+ * is wrong: measured across 36 such pairs on a real store, EVERY older copy held turns the newer
+ * one did not, and they were the user's own words — usually the last thing said before the
+ * interrupt ("See you soon.", "skip domains4sale.uk,, do the rest"), which the resumed file never
+ * carried over. Not one of the 36 was safely absorbable. So nothing is hidden; the rows are
+ * labelled, and the reader can see that two rows are one conversation in two parts.
+ *
+ * RUNS AFTER THE PARSES, and that ordering is the whole reason it works: thread_key comes from the
+ * scan, so reading the table before the batch loop answers nothing on a cold cache and every row
+ * would call itself the only copy on the first list after an upgrade. By here, every row that was
+ * returned has been scanned and written.
+ */
+function labelCopies(rows: SessionSummary[], files: TranscriptFile[]): void {
+  const threadOf = new Map<string, string>()
+  for (const row of selectThreadKeys.all(SCAN_VERSION)) threadOf.set(row.cache_key, row.thread_key)
+  // Grouped over every candidate transcript, not just the returned page: a conversation's other
+  // copy is an ordinary row that may fall outside the current window, and counting the page alone
+  // would tell a row it is unique whenever its twin happened not to be on screen.
+  const groups = new Map<string, TranscriptFile[]>()
+  for (const f of files) {
+    const key = threadOf.get(cacheKey(f))
+    if (!key) continue
+    const at = groups.get(key)
+    if (at) at.push(f)
+    else groups.set(key, [f])
+  }
+  // Numbered OLDEST FIRST, so copy 1 is where the conversation started and the numbering reads
+  // chronologically. Size was the first attempt and it is not the same ordering: a transcript with
+  // fewer turns but fatter tool output is the larger file, which had copy 1 of "File path analysis"
+  // holding 225 turns while copy 2 held 246. Last-written is a fact about the conversation; bytes
+  // are a fact about the disk.
+  for (const group of groups.values()) group.sort((a, b) => a.mtime_ms - b.mtime_ms)
+  for (const row of rows) {
+    const key = threadOf.get(`${row.source}:${row.session_id}:${row.transcript_path}`)
+    const group = key ? groups.get(key) : undefined
+    if (!group || group.length < 2) continue
+    const at = group.findIndex(
+      (f) => f.session_id === row.session_id && f.path === row.transcript_path,
+    )
+    row.copy_index = at === -1 ? 1 : at + 1
+    row.copy_count = group.length
+  }
 }
 
 /**
@@ -994,5 +1088,9 @@ export async function getSession(
     limit_stop: m.limit_stop,
     title_source: m.title_source,
     title_tag: m.title_tag,
+    // This route answers about ONE session and never builds the group, so it does not claim to
+    // know about other copies. The list is where that count comes from.
+    copy_index: 1,
+    copy_count: 1,
   }
 }
