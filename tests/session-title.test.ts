@@ -14,7 +14,11 @@
 // must be unwrapped, not dropped.
 
 import { expect, test } from 'bun:test'
-import { isCommandWrapperText, unwrapTaggedText } from '../server/src/transcript'
+import {
+  describeTaggedText,
+  isCommandWrapperText,
+  unwrapTaggedText,
+} from '../server/src/transcript'
 
 // --- command plumbing, to be ignored -----------------------------------------
 
@@ -82,4 +86,58 @@ test('ordinary text passes through untouched', () => {
 
 test('unwrapping does not swallow a body that itself contains tags', () => {
   expect(unwrapTaggedText('<outer>keep <b>this</b> text</outer>')).toBe('keep <b>this</b> text')
+})
+
+// --- WHERE a title came from -------------------------------------------------
+//
+// The owner reported threads showing up called "Watcher" when no account, instance or project of
+// his was named that, and there was no way to ask the app where the string had come from. Only one
+// of the title sources can invent a label like that: an envelope whose `name` attribute is chosen
+// by whatever WROTE the envelope — a scheduler, a hook, a harness — rather than by the user or by
+// the assistant. describeTaggedText reports that case so the row can say so, and these tests pin
+// the distinction, because "it came from a wrapper" and "it is the first thing you said" look
+// identical once they are both just a string in a list.
+
+test('an envelope name is reported as an envelope, and names the tag', () => {
+  const d = describeTaggedText('<scheduled-task name="nightly-sweep">do the thing</scheduled-task>')
+  expect(d).toEqual({ label: 'nightly-sweep', envelope: true, tag: 'scheduled-task' })
+})
+
+test('a tag the app has never heard of is reported just the same', () => {
+  // Deliberately NOT an allowlist. A wrapper this code does not recognise is exactly the case that
+  // needs explaining, so an unknown tag must still be unwrapped AND still be attributable.
+  const d = describeTaggedText('<agent name="Watcher">watch the deploy</agent>')
+  expect(d).toEqual({ label: 'Watcher', envelope: true, tag: 'agent' })
+})
+
+test('a tag whose BODY became the label is not an envelope', () => {
+  // The body is the user's own words wearing punctuation. Nobody chose "the actual prompt" as a
+  // name, so marking the row "this label came from somewhere else" would be a lie.
+  expect(describeTaggedText('<wrapper>the actual prompt</wrapper>')).toEqual({
+    label: 'the actual prompt',
+    envelope: false,
+    tag: null,
+  })
+})
+
+test('ordinary text carries no provenance at all', () => {
+  expect(describeTaggedText('Fix the queue clear button')).toEqual({
+    label: 'Fix the queue clear button',
+    envelope: false,
+    tag: null,
+  })
+})
+
+test('the old one-string helper still answers exactly what it used to', () => {
+  // unwrapTaggedText is now describeTaggedText().label. Every case above the divider still passes,
+  // and this pins the two to each other so a future edit cannot fix one and forget the other.
+  for (const raw of [
+    '<scheduled-task name="nightly-sweep">x</scheduled-task>',
+    '<wrapper>the actual prompt</wrapper>',
+    '<wrapper></wrapper>',
+    'Fix the queue clear button',
+    '',
+  ]) {
+    expect(unwrapTaggedText(raw)).toBe(describeTaggedText(raw).label)
+  }
 })

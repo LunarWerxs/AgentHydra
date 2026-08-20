@@ -5,6 +5,73 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-08-20
+
+### Added
+
+- **The sessions a usage limit killed are now a list you can pull up.** AgentHydra could already
+  tell that a conversation had died at a quota wall — that is how the auto-resume monitor decides
+  what to restart — but the only place that verdict surfaced was the monitor's own to-do list,
+  which hides anything already resolved. So "which of my chats got cut off, and which are still
+  sitting there?" had no answer. It does now: **List options -> Usage limits** narrows the session
+  list to the conversations a wall stopped, or to the ones *still* stopped at one, and every row
+  carries a badge with the provider's own notice on hover ("You've hit your weekly limit · resets
+  3am"). On the machine this was written against that is 79 sessions, 40 of them still parked.
+  Over MCP the same thing is `list_rate_limited_sessions`, plus a `rateLimited` scope on
+  `list_sessions` and a `limit_stop` field on every session row.
+
+  The judgment behind it was not re-implemented for the list. It was lifted out of the monitor's
+  tail-reader into one shared accumulator, so the badge and the auto-resume queue physically cannot
+  disagree, and it keeps that reader's hard-won evidence rule: only the CLI's own error report
+  counts, never model prose or tool output, because the loose version marked every run that merely
+  TALKED about rate limits. A transient 529 is still not a usage limit. Claude only — Codex and
+  OpenCode record an error, but not in a form worth trusting, and a false badge is worse than a
+  missing one.
+
+  It costs nothing to compute. The list scanner already JSON-parses every record of every
+  transcript to work out a title and a message count; the verdict rides along on that pass and is
+  persisted with it, so the filter is a SQLite query rather than a thousand file reads. Cached
+  scans now carry a version stamp, because a row written before the scanner learned this would
+  answer "was this rate limited?" with NULL forever — and a NULL there reads as "no", which would
+  have shipped as an empty list on a machine full of stopped sessions.
+
+- **An MCP client can finally read ALL the local chat history, rather than the last day of it.**
+  `list_sessions` had no time parameter and the route it calls defaults to 24 hours, so an agent
+  asked to go through "all my chat histories" issued the only call available to it and got one
+  day — 19 rows out of 1,231 here — with nothing to indicate anything had been withheld. The tool
+  now takes `period`, explicit `since`/`until` bounds, `offset` for paging past the 500-row
+  ceiling, `project`, `instance` and `archived`, and its description states the 24-hour default in
+  its first sentence, because a parameter only helps a client that knows it needs one. `foreign`
+  joined the `source` enum as well, so the conversations from Cursor, Windsurf, Zed, Copilot CLI
+  and the rest are addressable rather than invisible.
+
+  New `list_projects` is the index of the index: every folder that has conversations in it, with a
+  session count and a per-provider breakdown, read from the transcript index rather than from any
+  transcript. A thousand sessions collapse to a few dozen rows, which is small enough to hand to an
+  agent whole — and it is how a client finds out what "all" contains before querying it.
+
+### Fixed
+
+- **Searching conversation bodies now finds the ones from Cursor, Windsurf, Zed, Copilot and the
+  rest.** Body search streams each transcript line by line and JSON-parses every line — right for
+  Claude and Codex, and wrong for the fourth reader, whose stores are directories of JSON, one big
+  JSON document, or a database. Not a line of those parses as a record, so every one was skipped and
+  the file reported zero matches. These rows were already in the sweep, so the miss was silent: the
+  session was listed, searched, and declared clean. Measured on a real store before the fix, a
+  9-line Copilot workspace yielded 0 parseable lines and 0 usable events; after it, one ordinary
+  word turned up 11 of these sessions. Search now asks each store's own adapter, exactly as the
+  transcript view and the exporter already did. A confident zero is the worst answer a search can
+  give, because it is the one that makes the caller stop looking.
+
+- **Every session now says where its title came from.** Threads were turning up under names their
+  owner did not recognise, and there was no way to ask the app which of the four title sources had
+  produced one. Rows carry `title_source` (`custom` / `ai` / `store` / `envelope` / `message` /
+  `id`) and the UI puts it on the title's tooltip. The case worth naming is `envelope`: when the
+  first turn arrives wrapped in a pseudo-tag carrying a `name` attribute — `<scheduled-task
+  name="nightly-sweep">` — that name becomes the title, so the string was chosen by whatever wrote
+  the wrapper (a scheduler, a hook, a harness) and may match nothing the user has ever named. Those
+  rows now print the tag beside the title instead of leaving an unattributable label sitting there.
+
 ## [0.24.3] - 2026-08-18
 
 ### Fixed

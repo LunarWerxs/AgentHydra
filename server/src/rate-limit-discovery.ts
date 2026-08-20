@@ -20,7 +20,7 @@
 // dispatches anything itself.
 
 import { instanceSessionMap } from './instance-sessions'
-import { classifyLimit, isApiErrorEvent } from './rate-limit-signal'
+import { createLimitStopTracker } from './rate-limit-signal'
 import { getSession } from './sessions'
 import { listTranscriptFiles } from './transcript'
 import type { QueueItem } from './types'
@@ -61,62 +61,26 @@ export interface RateLimitVerdict {
  * scan. There is no cleanup to run and no state to reconcile: pending-ness is a pure function of
  * the file, recomputed every pass. A resume that wrote literally zero bytes does not occur.
  *
- * Exported for tests — the whole judgment is here, and it is pure.
+ * Exported for tests. The judgment is pure; it just no longer lives here — see
+ * createLimitStopTracker in rate-limit-signal.ts, which the sessions list shares.
  */
 export function classifyRateLimitTail(jsonl: string): RateLimitVerdict | null {
-  const lines = jsonl.split('\n')
-  let notice: string | null = null
-  let pending = true
-  for (const raw of lines) {
+  // The judgment itself lives in rate-limit-signal.ts, because the sessions list applies the SAME
+  // verdict from its own whole-transcript parse. Two implementations of "did this stop at a wall"
+  // would eventually disagree, and the visible form of that disagreement is a row badged
+  // "stopped by a usage limit" that the monitor then refuses to resume.
+  const tracker = createLimitStopTracker()
+  for (const raw of jsonl.split('\n')) {
     const line = raw.trim()
     if (!line) continue
-    let ev: any
     try {
-      ev = JSON.parse(line)
+      tracker.observe(JSON.parse(line))
     } catch {
       // A tail slice almost always begins mid-line; that fragment is not evidence of anything.
-      continue
     }
-    const type = ev?.type
-    if (type !== 'user' && type !== 'assistant' && type !== 'result') continue
-
-    // Only the CLI's own report counts — never model prose, tool inputs, or tool results (a run
-    // that merely TALKS about rate limits is not rate-limited). Same rule dispatch.ts applies live.
-    const trusted = isApiErrorEvent(ev) || (type === 'result' && ev?.is_error === true)
-    const text = eventText(ev)
-    // QUOTA only. A session stopped by a transient 529 is NOT a discovery subject: its wall cleared
-    // seconds later, so parking it against the next 5-hour reset would be exactly the conflation
-    // this whole split exists to kill. Our own runs retry a 529 in-process (dispatch.ts); a
-    // terminal session that hit one and was left sitting is an abandoned session, not a queue.
-    if (trusted && classifyLimit(text) === 'quota') {
-      notice = compact(text)
-      pending = true // a later notice supersedes an earlier one and re-opens the stop
-      continue
-    }
-    // Anything else conversational after the notice means work resumed. The CLI's own resume
-    // bookkeeping counts here on purpose: it only ever appears BECAUSE something resumed.
-    if (notice) pending = false
   }
-  if (!notice) return null
-  return { notice, pending }
-}
-
-function eventText(ev: any): string {
-  const content = ev?.message?.content
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    return content
-      .map((b) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : ''))
-      .filter(Boolean)
-      .join(' ')
-  }
-  if (typeof ev?.result === 'string') return ev.result
-  return ''
-}
-
-function compact(s: string): string {
-  const t = s.replace(/\s+/g, ' ').trim()
-  return t.length > 200 ? `${t.slice(0, 200)}…` : t
+  const stop = tracker.verdict()
+  return stop ? { notice: stop.notice, pending: stop.pending } : null
 }
 
 async function readTail(path: string, maxBytes: number): Promise<string> {

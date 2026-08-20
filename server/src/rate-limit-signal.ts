@@ -94,3 +94,93 @@ export function classifyLimit(text: string): LimitKind | null {
 export function isApiErrorEvent(ev: any): boolean {
   return ev?.isApiErrorMessage === true || ev?.message?.model === '<synthetic>'
 }
+
+/**
+ * A conversation that stopped at a QUOTA wall, in the shape a session row can display.
+ *
+ * `pending` is the load-bearing half: a session that hit a limit and was later resumed is a
+ * historical fact, whereas one still sitting at the wall is work waiting to be finished. The list
+ * shows both and says which, because "this got rate limited at some point" and "this is stuck right
+ * now" are different questions and only the second one is actionable.
+ */
+export interface LimitStop {
+  /** The CLI's own notice, verbatim and compacted, e.g. "You've hit your weekly limit · resets 3am". */
+  notice: string
+  /** Nothing real followed the notice — the session is still stopped at it. */
+  pending: boolean
+  /** When the wall was hit (epoch ms), or null when the event carried no usable timestamp. */
+  at: number | null
+}
+
+/** Accumulates one verdict from a stream of transcript events. */
+export interface LimitStopTracker {
+  /** Feed one parsed JSONL record, in file order. Anything irrelevant is ignored. */
+  observe(ev: unknown, at?: number | null): void
+  /** The verdict so far, or null if no trusted quota notice was ever seen. */
+  verdict(): LimitStop | null
+}
+
+/**
+ * THE quota-stop judgment, as a streaming accumulator — one implementation, two callers.
+ *
+ * rate-limit-discovery.ts owns the 256 KB-tail path that feeds the auto-resume monitor;
+ * sessions.ts folds the same judgment into the whole-transcript parse it already runs for every
+ * row, which costs nothing extra because that loop is already JSON.parse-ing every line. Both must
+ * agree to the letter — a list that badges a session "stopped by a usage limit" while the monitor
+ * declines to resume it is a bug report waiting to happen — so neither of them reimplements this.
+ *
+ * The rules, unchanged from the tail classifier that shipped first:
+ *  - only `user` / `assistant` / `result` records are looked at at all;
+ *  - a notice counts only when {@link isApiErrorEvent} vouches for it, or it is an errored terminal
+ *    `result` — model prose and tool output are NEVER evidence (see the 2026-07-15 false-positive
+ *    class documented above);
+ *  - QUOTA only: a transient 529 cleared on its own and is not a stop;
+ *  - a later notice supersedes an earlier one and re-opens the stop;
+ *  - anything conversational after a notice means work resumed, so the stop stops being pending.
+ *    The CLI's own resume bookkeeping counts on purpose: it only ever appears BECAUSE something
+ *    resumed.
+ */
+export function createLimitStopTracker(): LimitStopTracker {
+  let notice: string | null = null
+  let pending = true
+  let at: number | null = null
+  return {
+    observe(raw: unknown, ts: number | null = null): void {
+      const ev = raw as any
+      const type = ev?.type
+      if (type !== 'user' && type !== 'assistant' && type !== 'result') return
+      const trusted = isApiErrorEvent(ev) || (type === 'result' && ev?.is_error === true)
+      if (trusted && classifyLimit(limitEventText(ev)) === 'quota') {
+        notice = compactNotice(limitEventText(ev))
+        pending = true
+        at = ts
+        return
+      }
+      if (notice) pending = false
+    },
+    verdict(): LimitStop | null {
+      return notice ? { notice, pending, at } : null
+    },
+  }
+}
+
+/** The text a record carries, for the patterns to be tested against. Shared by both callers so a
+ *  record shape that one of them learned to read is never invisible to the other. */
+export function limitEventText(ev: any): string {
+  const content = ev?.message?.content
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : ''))
+      .filter(Boolean)
+      .join(' ')
+  }
+  if (typeof ev?.result === 'string') return ev.result
+  return ''
+}
+
+/** One line, and short enough to sit in a table cell or a tooltip. */
+export function compactNotice(s: string): string {
+  const t = s.replace(/\s+/g, ' ').trim()
+  return t.length > 200 ? `${t.slice(0, 200)}…` : t
+}

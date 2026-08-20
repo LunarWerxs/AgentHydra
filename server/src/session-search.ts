@@ -4,6 +4,7 @@
 // its own module so the fast/simple metadata list path (sessions.ts, GET /api/sessions) stays
 // completely untouched; this is a separate, slower, opt-in code path.
 import safeRegex from 'safe-regex2'
+import { readForeignSession } from './foreign-sessions'
 import { instanceSessionMap } from './instance-sessions'
 import { listOpenCodeSearchEvents } from './opencode-sessions'
 import {
@@ -140,6 +141,41 @@ export async function searchOneFile(
   const snippets: string[] = []
   let cwd = ''
   let stoppedEarly = false
+
+  // A foreign store is not JSONL, and streaming it line by line found NOTHING — every line failed
+  // JSON.parse and was skipped, so a Cursor or Zed conversation containing the query reported a
+  // confident zero. Those rows were already in this sweep (only OpenCode is excluded above), so the
+  // miss was silent: the session was listed, searched, and declared clean. Ask its adapter instead,
+  // exactly as the transcript view and the exporter already do.
+  if (tf.source === 'foreign') {
+    try {
+      for (const ev of readForeignSession(tf.tool ?? '', tf.path)) {
+        const idx = matcher(ev.text)
+        if (idx === -1) continue
+        matchCount++
+        if (snippets.length < perFileLimit) snippets.push(snippetAround(ev.text, idx, SNIPPET_LEN))
+      }
+    } catch {
+      return { hit: null, stoppedEarly: false }
+    }
+    // No deadline check: an adapter reads a whole conversation in one call, so there is no
+    // part-way point to stop at and nothing to under-report. `stoppedEarly` stays false because it
+    // means "this file's count is an undercount", which here it never is.
+    return matchCount === 0
+      ? { hit: null, stoppedEarly: false }
+      : {
+          stoppedEarly: false,
+          hit: {
+            session_id: tf.session_id,
+            source: tf.source,
+            cwd: tf.cwd || tf.project,
+            project: tf.project,
+            match_count: matchCount,
+            truncated: snippets.length < matchCount,
+            snippets,
+          },
+        }
+  }
 
   try {
     for await (const rawLine of streamLines(tf.path)) {

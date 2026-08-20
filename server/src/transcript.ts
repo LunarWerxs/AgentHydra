@@ -1236,15 +1236,36 @@ export function isCommandWrapperText(text: string): boolean {
  * body text. Anything that isn't a wrapped turn passes through untouched.
  */
 export function unwrapTaggedText(text: string): string {
+  return describeTaggedText(text).label
+}
+
+/**
+ * {@link unwrapTaggedText}, but it also reports WHAT it did — which envelope it opened, if any.
+ *
+ * The label on its own cannot explain a surprising title. A `name` attribute is chosen by whatever
+ * wrote the envelope, and that may be a scheduler, a hook or a harness the user never named: the
+ * owner hit exactly this, reporting threads titled "Watcher" when no account, instance or project
+ * of his was called that, and there was no way to ask the app where the string had come from.
+ * `tag` is that answer, and the session list carries it to the UI as SessionSummary.title_tag.
+ *
+ * `envelope` is true ONLY when the name attribute won. A tag whose BODY became the label is not
+ * carrying an externally chosen name — it is punctuation around the user's own words — so that
+ * case is reported as ordinary message text and gets no "where did this come from?" affordance.
+ */
+export function describeTaggedText(text: string): {
+  label: string
+  envelope: boolean
+  tag: string | null
+} {
   const open = text.match(/^\s*<([a-z][\w-]*)\b([^>]*)>/i)
-  if (!open) return text
+  if (!open) return { label: text, envelope: false, tag: null }
   const name = open[2].match(/\bname\s*=\s*"([^"]+)"/i)?.[1]
-  if (name?.trim()) return name.trim()
+  if (name?.trim()) return { label: name.trim(), envelope: true, tag: open[1].toLowerCase() }
   const body = text
     .slice(open[0].length)
     .replace(new RegExp(`</${open[1]}\\s*>\\s*$`, 'i'), '')
     .trim()
-  return body || text
+  return { label: body || text, envelope: false, tag: null }
 }
 
 /** What a caller wants kept out of the raw stream. Every field defaults to the historical

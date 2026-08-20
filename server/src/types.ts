@@ -4,6 +4,13 @@
 // (see the Codex re-export block further down).
 import type { CodexAccount } from './core/codex-account'
 
+// SessionSummary.limit_stop is this exact shape. It is DEFINED in rate-limit-signal.ts because the
+// detector and the DTO must never drift, and that module is a zero-import leaf, so pulling it in
+// here costs the web app's vue-tsc pass nothing.
+import type { LimitStop } from './rate-limit-signal'
+
+export type { LimitStop }
+
 /** "Sync my settings with Connections" DTO, defined HERE (not re-exported from
  * ./connections.ts) because that module imports Bun-only runtime files (db.ts), which
  * must never be pulled into the web app's vue-tsc pass; ./connections.ts imports it back.
@@ -135,6 +142,70 @@ export interface SessionSummary {
    * that id IS the fact. Nothing heuristic goes into it.
    */
   dispatched: boolean
+  /**
+   * Set when this conversation's own provider reported a QUOTA wall inside it — "You've hit your
+   * weekly limit · resets 3am". Null means no trusted notice was found, which is not the same as
+   * "never rate limited": only the CLI's own report counts as evidence, never model prose or tool
+   * output, because matching the patterns against anything else marked every run that merely TALKED
+   * about limits (see rate-limit-signal.ts).
+   *
+   * Claude only, today. Codex and OpenCode record an error but not one this detector is willing to
+   * trust, and a false badge here is worse than a missing one.
+   */
+  limit_stop: LimitStop | null
+  /**
+   * WHERE this row's `title` came from — the answer to "why is this thread called that?".
+   *
+   * A title is derived from four different places and only one of them is a label a person chose,
+   * so a surprising title is otherwise unattributable: the owner reported threads showing up named
+   * "Watcher" with no account, instance or project by that name, and there was no way to ask the
+   * app where the string came from. Now there is. See TITLE_SOURCES in server/src/sessions.ts.
+   */
+  title_source: TitleSource
+  /** For `title_source: 'envelope'`, the tag whose name= attribute became the title (e.g.
+   *  "scheduled-task"). Null for every other source. This is the field that names the culprit. */
+  title_tag: string | null
+}
+
+/**
+ * The four places a session title can come from, worst-understood last.
+ *
+ *  · 'custom'    — a `custom-title` record: the saved title the writing app displays. Deliberately
+ *                  NOT described as "a name you typed", because it cannot be told apart from one
+ *                  the app generated — 453 of the newest 500 sessions on the machine this was
+ *                  written against carry one, which no person sat and typed. What IS known is that
+ *                  it is a deliberate label rather than an inference from the conversation.
+ *  · 'ai'        — an `ai-title` record: the model summarising the conversation. A session can
+ *                  carry both, with different text; the custom one wins because it is the one its
+ *                  own app shows.
+ *  · 'store'     — the provider handed us a title as a field (OpenCode's `session.title`, Codex
+ *                  Desktop's `thread_name`, a foreign adapter's own label).
+ *  · 'envelope'  — the first turn arrived wrapped in a pseudo-tag carrying a name attribute, e.g.
+ *                  `<scheduled-task name="nightly-sweep">`, and THAT name became the title. This is
+ *                  the surprising one: the string is chosen by whatever wrote the envelope, which
+ *                  may be a scheduler, a hook or a harness the user never named.
+ *  · 'message'   — the first thing said in the conversation, trimmed.
+ *  · 'id'        — nothing else was available, so the session id stands in.
+ */
+export type TitleSource = 'custom' | 'ai' | 'store' | 'envelope' | 'message' | 'id'
+
+/**
+ * One folder that has conversations in it, across every store (server/src/sessions.ts listProjects).
+ *
+ * The index of the index. A session list only ever answers newest-N, so a caller asked about "all
+ * my chat histories" has no way to learn what exists before querying it; a thousand sessions
+ * collapse to a few dozen of these, which is small enough to read whole.
+ */
+export interface ProjectSummary {
+  /** The working directory, decoded from the provider's project key when it has to be. */
+  cwd: string
+  /** The provider's own key for it, kept because that is what `project` on a session row holds. */
+  project: string
+  sessions: number
+  /** How many of those came from each store, so "this repo is half Codex" is visible at a glance. */
+  by_source: Record<SessionSource, number>
+  first_activity_at: number
+  last_activity_at: number
 }
 
 /**
@@ -323,6 +394,20 @@ export type ArchivedScope = 'hide' | 'include' | 'only'
  * 'all' is the default and stays the default: this narrows a list on request, and is never applied
  * on its own initiative — the same rule `session_marks` carries.
  */
+/**
+ * How a session list treats conversations that hit a usage wall.
+ *
+ * 'all' is the default and stays the default, exactly as DispatchedScope does: this narrows a list
+ * on request and is never applied on the app's own initiative. 'only' answers "what did I lose to
+ * a limit?"; 'pending' narrows that further to the ones still sitting at the wall right now, which
+ * is the actionable half — the rest already got resumed and are history.
+ */
+export type RateLimitScope = 'all' | 'only' | 'pending'
+
+export function isRateLimitScope(v: unknown): v is RateLimitScope {
+  return v === 'all' || v === 'only' || v === 'pending'
+}
+
 export type DispatchedScope = 'all' | 'queued' | 'manual'
 
 export function isDispatchedScope(v: unknown): v is DispatchedScope {

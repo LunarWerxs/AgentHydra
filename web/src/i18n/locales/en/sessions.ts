@@ -91,6 +91,25 @@ export default {
   dispatchedAll: 'All sessions',
   dispatchedQueued: 'Only what I queued',
   dispatchedManual: 'Only what I drove by hand',
+  // --- conversations a usage/quota wall cut off ---
+  rateLimited: 'Usage limits',
+  rateLimitedAll: 'All sessions',
+  rateLimitedOnly: 'Only ones a usage limit stopped',
+  rateLimitedPending: 'Only ones still stopped right now',
+  rateLimitedNote:
+    'Claude sessions only, and only when the CLI itself reported the wall — a chat that merely talked about rate limits is not counted.',
+  rateLimitedBadge: 'Usage limit',
+  rateLimitedBadgePending: 'Still at the limit',
+  rateLimitedHint: 'This session stopped here: {notice}',
+  rateLimitedHintResumed: 'This session hit a usage limit and was resumed afterwards: {notice}',
+  // --- where a row's title came from ---
+  titleFrom: 'Title from',
+  titleFromCustom: 'a saved title on the session — a rename, or the app naming it',
+  titleFromAi: 'the assistant summarising the conversation',
+  titleFromStore: 'the app that wrote this session',
+  titleFromEnvelope: 'a <{tag} name="…"> wrapper around the first message, not from you',
+  titleFromMessage: 'the first thing said in the conversation',
+  titleFromId: 'nothing else was available, so this is the session id',
   // --- keyboard ---
   shortcutGroup: 'Sessions',
   shortcutFind: 'Find in the open session',

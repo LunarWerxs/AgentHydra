@@ -170,7 +170,13 @@ import { type ExportFormat, exportSession, scanSessionSecrets } from './session-
 import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
 import { runCost, sessionUsage } from './session-usage'
-import { getSession, listSessions, sessionMarkKey, warmSessionScanCache } from './sessions'
+import {
+  getSession,
+  listProjects,
+  listSessions,
+  sessionMarkKey,
+  warmSessionScanCache,
+} from './sessions'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
 import { findTranscriptAsync, listTranscriptFiles, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
@@ -179,6 +185,7 @@ import {
   AMBIENT_RUN_AS,
   type ArchivedScope,
   isDispatchedScope,
+  isRateLimitScope,
   isSessionPeriod,
   isSessionSource,
   type MonitorView,
@@ -296,11 +303,28 @@ function maskSecret(secret: string): string {
   return `${secret.slice(0, 4)}…${secret.slice(-4)}`
 }
 
-function boundedQueryInt(raw: string | undefined, fallback: number, max: number): number {
+/** `min` defaults to 1 because every caller but the paging offset is a count, and a count of zero
+ *  is a caller asking for nothing. An offset of zero is page one, so it passes min = 0. */
+function boundedQueryInt(raw: string | undefined, fallback: number, max: number, min = 1): number {
   if (raw === undefined) return fallback
   const parsed = Number(raw)
   if (!Number.isFinite(parsed)) return fallback
-  return Math.min(max, Math.max(1, Math.trunc(parsed)))
+  return Math.min(max, Math.max(min, Math.trunc(parsed)))
+}
+
+/**
+ * A point in time from a query string: epoch milliseconds, or anything Date can parse (ISO-8601).
+ *
+ * Both forms, because the two callers want different ones — a UI computes a number, and a person
+ * or an agent writing a URL by hand writes "2026-08-01". Anything unparseable returns null, which
+ * every caller reads as "no bound", so a typo widens the answer rather than silently emptying it.
+ */
+function queryEpoch(raw: string | undefined): number | null {
+  if (!raw) return null
+  const asNumber = Number(raw)
+  if (Number.isFinite(asNumber) && raw.trim() !== '') return asNumber
+  const parsed = Date.parse(raw)
+  return Number.isNaN(parsed) ? null : parsed
 }
 
 function listAccounts(): Account[] {
@@ -643,17 +667,35 @@ app.get('/api/sessions', async (c) => {
   // parameter hide sessions.
   const rawDispatched = c.req.query('dispatched')
   const dispatched = isDispatchedScope(rawDispatched) ? rawDispatched : 'all'
+  // Same defensive read once more: an unrecognized value must never narrow the list.
+  const rawRateLimited = c.req.query('ratelimited')
+  const rateLimited = isRateLimitScope(rawRateLimited) ? rawRateLimited : 'all'
+  // An explicit `since` OUTRANKS `period`, and `until` has no period equivalent at all. The canned
+  // windows exist because the UI wants three buttons; a caller reconstructing a past week (an MCP
+  // client asked to summarise last month, say) needs real bounds, and telling it to fetch 'all' and
+  // filter client-side is how a 1,200-session store gets streamed to answer a 20-row question.
+  const since = queryEpoch(c.req.query('since'))
+  const until = queryEpoch(c.req.query('until'))
   return c.json(
-    await listSessions(
-      boundedQueryInt(limit, 200, 500),
-      instance || undefined,
-      scope,
-      periodCutoffMs(period),
+    await listSessions({
+      limit: boundedQueryInt(limit, 200, 500),
+      offset: boundedQueryInt(c.req.query('offset'), 0, 100_000, 0),
+      instance: instance || undefined,
+      archived: scope,
+      sinceMs: since ?? periodCutoffMs(period),
+      untilMs: until,
       source,
       dispatched,
-    ),
+      rateLimited,
+      project: c.req.query('project') || undefined,
+    }),
   )
 })
+// Every folder that has conversations in it, from the index alone (no transcript reads). This is
+// how a client that was told "search all my chat histories" finds out what "all" is: the session
+// list only ever answers newest-N, so without this there is no way to learn that a project exists
+// before asking about it. MUST STAY ABOVE `/api/sessions/:id` for the reason spelled out below.
+app.get('/api/sessions/projects', async (c) => c.json(await listProjects()))
 // Advanced BODY search (streams every transcript file, substring or regex); deliberately a
 // separate, slower, opt-in path so the fast metadata list above (GET /api/sessions, used by the
 // default client-side filter) is never touched by this. See server/src/session-search.ts.

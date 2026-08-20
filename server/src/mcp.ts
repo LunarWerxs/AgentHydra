@@ -385,25 +385,147 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'list_sessions',
     description:
-      'List local Claude, Codex, and OpenCode sessions, most recently active first. Each row carries ' +
-      'its source and a `dispatched` flag: true means AgentHydra queued that work, false means a ' +
-      'person drove it by hand. That is known exactly (every dispatch names the session id on the ' +
-      'command line), not guessed at. Use dispatched=queued/manual to narrow to one or the other.',
+      // THE DEFAULT WINDOW IS NAMED IN THE FIRST SENTENCE, and that is the whole reason this
+      // description was rewritten. The route defaults to period=24h, this tool had no period
+      // parameter at all, and so an agent asked to go through "all my chat histories" got one day
+      // of them and no indication that anything had been withheld — a silent wrong answer, which
+      // is the worst kind an API can give. Say the default, and give it the knob to change it.
+      'List local Claude, Codex, OpenCode and other local-agent sessions, most recently active ' +
+      'first. DEFAULTS TO THE LAST 24 HOURS: pass period="all" (or an explicit since/until) or you ' +
+      'are seeing one day of a store that may hold years. Each row carries its source and a ' +
+      '`dispatched` flag: true means AgentHydra queued that work, false means a person drove it by ' +
+      'hand. That is known exactly (every dispatch names the session id on the command line), not ' +
+      'guessed at. Rows also carry `limit_stop` (non-null when the session hit a usage/quota wall — ' +
+      'see list_rate_limited_sessions) and `title_source`/`title_tag`, which say where the row got ' +
+      'its title from. Start at list_projects to learn what folders exist, then scope with project= ' +
+      'and page with offset= rather than raising limit.',
     inputSchema: S({
-      limit: { type: 'number', description: 'Max sessions to return (default 200).' },
+      limit: { type: 'number', description: 'Max sessions to return (default 200, max 500).' },
+      offset: {
+        type: 'number',
+        description:
+          'Skip this many rows first — the paging cursor. Pages are contiguous: offset=500 with ' +
+          'limit=500 is exactly page 2 of the same ordering.',
+      },
+      period: {
+        type: 'string',
+        enum: ['24h', '7d', '30d', 'all'],
+        description:
+          'How far back to reach, by last activity. DEFAULT "24h". Use "all" for the whole store.',
+      },
+      since: {
+        type: 'string',
+        description:
+          'Lower bound on last activity — epoch milliseconds or an ISO date ("2026-08-01"). ' +
+          'Overrides period when both are given.',
+      },
+      until: {
+        type: 'string',
+        description:
+          'Upper bound on last activity, same formats. With since, this is an arbitrary date range.',
+      },
+      project: {
+        type: 'string',
+        description:
+          'Case-insensitive substring of the working directory or project key, e.g. "agenthydra". ' +
+          'Use list_projects to see what is available.',
+      },
       source: {
         type: 'string',
-        enum: ['claude', 'codex', 'opencode'],
-        description: 'Optional provider filter.',
+        enum: ['claude', 'codex', 'opencode', 'foreign'],
+        description:
+          'Optional provider filter. "foreign" is the shared reader for the other local agents ' +
+          '(Cursor, Windsurf, Zed, Copilot CLI and the rest) — omit it to get every store at once.',
+      },
+      instance: {
+        type: 'string',
+        description:
+          'Scope to one Claude Desktop instance by its DIRECTORY NAME (list_instances -> name), ' +
+          "'default' for the non-isolated install, or 'other' for plain CLI sessions. Claude only.",
+      },
+      archived: {
+        type: 'string',
+        enum: ['hide', 'include', 'only'],
+        description:
+          'Provider archive state. Default "hide" — archived is the majority of a real store, so ' +
+          'including it buries live work. Pass "include" when the question is genuinely historical.',
       },
       dispatched: {
         type: 'string',
         enum: ['all', 'queued', 'manual'],
         description: 'Narrow to work AgentHydra queued, or to work driven by hand. Default all.',
       },
+      rateLimited: {
+        type: 'string',
+        enum: ['all', 'only', 'pending'],
+        description:
+          'Narrow to sessions that hit a usage/quota wall ("only"), or to the ones still stopped ' +
+          'at one right now ("pending"). Default all.',
+      },
     }),
     run: (a) =>
-      api(`/api/sessions${qs({ limit: a.limit, source: a.source, dispatched: a.dispatched })}`),
+      api(
+        `/api/sessions${qs({
+          limit: a.limit,
+          offset: a.offset,
+          period: a.period,
+          since: a.since,
+          until: a.until,
+          project: a.project,
+          source: a.source,
+          instance: a.instance,
+          archived: a.archived,
+          dispatched: a.dispatched,
+          ratelimited: a.rateLimited,
+        })}`,
+      ),
+  },
+  {
+    name: 'list_projects',
+    description:
+      'Every folder that has local agent conversations in it, newest activity first, with a ' +
+      'session count and a per-provider breakdown. This is the index of the index: the session ' +
+      'list only ever answers newest-N, so this is how you find out what "all my chat histories" ' +
+      'actually contains before querying it. Cheap — it reads the transcript index, never a ' +
+      'transcript. Feed a `cwd` back in as list_sessions(project=…).',
+    inputSchema: S({}),
+    run: () => api('/api/sessions/projects'),
+  },
+  {
+    name: 'list_rate_limited_sessions',
+    description:
+      'Conversations that were cut off by a usage/quota wall — "You\'ve hit your weekly limit · ' +
+      'resets 3am" — newest first. `pending: true` on a row means nothing followed the notice, so ' +
+      'that session is STILL stopped there and is the actionable half; pending:false means it was ' +
+      "resumed later and is history. Detection trusts only the CLI's own error report, never model " +
+      'prose or tool output, so a session that merely discussed rate limits is not listed. Claude ' +
+      'sessions only: Codex and OpenCode record an error, but not in a form worth trusting, and a ' +
+      'false claim here would be worse than a missing one. Defaults to the WHOLE store, not 24h, ' +
+      'because this question is almost always historical.',
+    inputSchema: S({
+      limit: { type: 'number', description: 'Max sessions to return (default 200, max 500).' },
+      pendingOnly: {
+        type: 'boolean',
+        description:
+          'Only sessions still sitting at the wall right now. Default false (all of them).',
+      },
+      period: {
+        type: 'string',
+        enum: ['24h', '7d', '30d', 'all'],
+        description: 'How far back to reach. DEFAULT "all" for this tool.',
+      },
+      project: { type: 'string', description: 'Case-insensitive cwd/project substring filter.' },
+    }),
+    run: (a) =>
+      api(
+        `/api/sessions${qs({
+          limit: a.limit,
+          period: a.period ?? 'all',
+          project: a.project,
+          archived: 'include',
+          ratelimited: a.pendingOnly ? 'pending' : 'only',
+        })}`,
+      ),
   },
   {
     name: 'get_session',
@@ -411,7 +533,7 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
       },
       ['id'],
     ),
@@ -435,8 +557,10 @@ export const TOOLS: McpEngineTool[] = [
         caseSensitive: { type: 'boolean', description: 'Match case exactly (default false).' },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode'],
-          description: 'Optional provider filter.',
+          enum: ['claude', 'codex', 'opencode', 'foreign'],
+          description:
+            "Optional provider filter. 'foreign' is the shared reader for the other local agents " +
+            '(Cursor, Windsurf, Zed, Copilot CLI and the rest); omit it to search every store.',
         },
         instance: {
           type: 'string',
@@ -482,7 +606,7 @@ export const TOOLS: McpEngineTool[] = [
           type: 'boolean',
           description: 'Only the user turns. Overrides textOnly. Use this to skim a long session.',
         },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
       },
       ['id'],
     ),
@@ -510,7 +634,7 @@ export const TOOLS: McpEngineTool[] = [
         id: { type: 'string' },
         format: { type: 'string', enum: ['markdown', 'html'], description: 'Default markdown.' },
         thinking: { type: 'boolean', description: "Include the model's reasoning blocks." },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
       },
       ['id'],
     ),
@@ -533,7 +657,7 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
       },
       ['id'],
     ),

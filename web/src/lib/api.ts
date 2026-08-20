@@ -26,8 +26,10 @@ import type {
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
+  ProjectSummary,
   ProviderSettings,
   QueueItem,
+  RateLimitScope,
   ResetEvent,
   RunCost,
   RunEvent,
@@ -84,9 +86,11 @@ export type {
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
+  ProjectSummary,
   ProviderSettings,
   QueueItem,
   QueueStatus,
+  RateLimitScope,
   ResetEvent,
   ResetKind,
   RunEvent,
@@ -107,6 +111,7 @@ export type {
   SyncStatus,
   TailEvent,
   TailResult,
+  TitleSource,
   TokenBreakdown,
   TranscriptSettings,
   UpdateApplyResult,
@@ -190,13 +195,17 @@ export const getSessions = (
   period: SessionPeriod = '24h',
   source: SessionSourceScope = 'all',
   dispatched: DispatchedScope = 'all',
+  rateLimited: RateLimitScope = 'all',
 ) =>
   j<SessionSummary[]>(
     `/api/sessions?limit=${limit}${instance ? `&instance=${encodeURIComponent(instance)}` : ''}` +
       `${archived === 'hide' ? '' : `&archived=${archived}`}&period=${period}` +
       `${source === 'all' ? '' : `&source=${source}`}` +
-      `${dispatched === 'all' ? '' : `&dispatched=${dispatched}`}`,
+      `${dispatched === 'all' ? '' : `&dispatched=${dispatched}`}` +
+      `${rateLimited === 'all' ? '' : `&ratelimited=${rateLimited}`}`,
   )
+/** Every folder with conversations in it, for a "where has work happened" overview. */
+export const getSessionProjects = () => j<ProjectSummary[]>('/api/sessions/projects')
 export const getSession = (id: string, source: SessionSource) =>
   j<SessionSummary>(`/api/sessions/${encodeURIComponent(id)}${sourceQuery(source)}`)
 /** Set the user's own "done" mark on a session (distinct from Claude Desktop's read-only

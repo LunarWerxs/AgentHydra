@@ -212,6 +212,21 @@ create index if not exists idx_session_scan_cache_path on session_scan_cache(pat
   add('active_ms', 'integer')
   add('first_ts', 'integer')
   add('last_ts', 'integer')
+  // The list scanner's own verdict on whether this conversation stopped at a usage wall, folded
+  // into the parse it already runs (server/src/sessions.ts). Cached rather than recomputed because
+  // the alternative is re-reading up to 12 MB per session per list.
+  add('limit_notice', 'text')
+  add('limit_pending', 'integer')
+  add('limit_at', 'integer')
+  // Where the row's title came from, so the UI can answer "why is this thread called that?".
+  add('title_source', 'text')
+  add('title_tag', 'text')
+  // THE REASON THE THREE COLUMNS ABOVE ARE SAFE TO ADD. A cached row is trusted on mtime+size
+  // alone, so every row written before a scanner learns a new field would answer that field with
+  // NULL forever — and a NULL limit_notice is indistinguishable from "this session never hit a
+  // wall", which is a silent wrong answer rather than a missing one. The stamp makes an old row a
+  // cache MISS instead: bump SCAN_VERSION in sessions.ts whenever parseMeta learns something new.
+  add('scan_version', 'integer')
 }
 
 // The recent-edits feed. Its own table, and the only unbounded-per-session list in the tier, so it

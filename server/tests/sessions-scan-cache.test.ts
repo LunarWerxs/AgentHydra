@@ -70,7 +70,7 @@ function child<T>(body: string): T {
 /** listSessions() in a cold process, reduced to the one row we care about. */
 function listOne(id: string): Record<string, unknown> | null {
   return child(`const { listSessions } = await import(${SESSIONS});
-    const s = (await listSessions(50)).find((x) => x.session_id === ${JSON.stringify(id)});
+    const s = (await listSessions({ limit: 50 })).find((x) => x.session_id === ${JSON.stringify(id)});
     console.log(JSON.stringify(s ?? null));`)
 }
 

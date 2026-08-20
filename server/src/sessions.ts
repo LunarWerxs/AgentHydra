@@ -2,24 +2,41 @@ import { db } from './db'
 import { readForeignSession } from './foreign-sessions'
 import { sessionMetaMap } from './instance-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
+import { createLimitStopTracker, type LimitStop } from './rate-limit-signal'
 import {
   decodeProjectKey,
+  describeTaggedText,
   ensureTranscriptIndex,
   eventToTailEventsForSource,
   findTranscriptAsync,
   isCommandWrapperText,
   listTranscriptFiles,
   type TranscriptFile,
-  unwrapTaggedText,
 } from './transcript'
 import type {
   ArchivedScope,
   DispatchedScope,
+  ProjectSummary,
   QueueStatus,
+  RateLimitScope,
   SessionSource,
   SessionSourceScope,
   SessionSummary,
+  TitleSource,
 } from './types'
+
+/**
+ * Bump whenever parseMeta learns to extract something new.
+ *
+ * A cached scan is trusted on mtime+size alone, so without this stamp every row written by an
+ * older scanner would answer a newly added field with NULL forever — and for `limit_stop` a NULL
+ * is not "unknown", it reads as "this session never hit a usage wall". That is a silent wrong
+ * answer, which is worse than a slow one: bumping this turns those rows into ordinary cache misses
+ * and they re-parse once, exactly like a transcript that changed on disk.
+ *
+ * 1 → the original scan. 2 → adds limit_stop (usage-wall detection) and title provenance.
+ */
+const SCAN_VERSION = 2
 
 function toEpoch(ts: unknown): number | null {
   if (typeof ts !== 'string') return null
@@ -44,6 +61,13 @@ interface ScannedMeta {
   /** Turns that are neither CLI bookkeeping nor command plumbing — see transcript.hasSubstance.
    *  Zero means the transcript only ever held scaffolding, so there is nothing to list. */
   substantive_turns: number
+  /** The provider's own report that this conversation hit a QUOTA wall, or null. See
+   *  createLimitStopTracker in rate-limit-signal.ts — the judgment is shared with the auto-resume
+   *  monitor rather than re-implemented here. */
+  limit_stop: LimitStop | null
+  /** Which of the four title sources won, and (for an envelope) the tag that supplied the name. */
+  title_source: TitleSource
+  title_tag: string | null
 }
 
 // One entry per transcript. Keeping mtime in the value (instead of in the Map key) makes an active
@@ -52,25 +76,56 @@ const metaCache = new Map<string, { mtimeMs: number; meta: ScannedMeta }>()
 
 // L2 behind that map: the same parse, persisted (see the session_scan_cache comment in db.ts). The
 // in-memory map alone meant every daemon restart re-parsed the whole visible list before answering.
-interface ScanCacheRow extends ScannedMeta {
+//
+// The persisted shape is FLAT where ScannedMeta is nested: sqlite has no object column, so
+// `limit_stop` is stored as its three parts and reassembled on read.
+interface ScanCacheRow extends Omit<ScannedMeta, 'limit_stop' | 'title_source' | 'title_tag'> {
   mtime_ms: number
   size_bytes: number
+  limit_notice: string | null
+  limit_pending: number | null
+  limit_at: number | null
+  title_source: string | null
+  title_tag: string | null
+  scan_version: number | null
 }
 const selectScan = db.query<ScanCacheRow, [string]>(
   'select mtime_ms, size_bytes, title, cwd, git_branch, message_count, created_at, ' +
-    'last_activity_at, last_role, last_text_preview, substantive_turns ' +
+    'last_activity_at, last_role, last_text_preview, substantive_turns, ' +
+    'limit_notice, limit_pending, limit_at, title_source, title_tag, scan_version ' +
     'from session_scan_cache where cache_key = ?',
 )
 const upsertScan = db.query(
   'insert into session_scan_cache (cache_key, path, mtime_ms, size_bytes, title, cwd, git_branch, ' +
     'message_count, created_at, last_activity_at, last_role, last_text_preview, ' +
-    'substantive_turns, scanned_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'substantive_turns, limit_notice, limit_pending, limit_at, title_source, title_tag, ' +
+    'scan_version, scanned_at) ' +
+    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'on conflict(cache_key) do update set path = excluded.path, mtime_ms = excluded.mtime_ms, ' +
     'size_bytes = excluded.size_bytes, title = excluded.title, cwd = excluded.cwd, ' +
     'git_branch = excluded.git_branch, message_count = excluded.message_count, ' +
     'created_at = excluded.created_at, last_activity_at = excluded.last_activity_at, ' +
     'last_role = excluded.last_role, last_text_preview = excluded.last_text_preview, ' +
-    'substantive_turns = excluded.substantive_turns, scanned_at = excluded.scanned_at',
+    'substantive_turns = excluded.substantive_turns, limit_notice = excluded.limit_notice, ' +
+    'limit_pending = excluded.limit_pending, limit_at = excluded.limit_at, ' +
+    'title_source = excluded.title_source, title_tag = excluded.title_tag, ' +
+    'scan_version = excluded.scan_version, scanned_at = excluded.scanned_at',
+)
+
+/**
+ * Every session the cache ALREADY knows stopped at a usage wall, as cache keys.
+ *
+ * This is what makes the "stopped by a usage limit" scope affordable. The verdict needs a parse, so
+ * it cannot join the cheap mtime-index filters that run before the newest-N cap — but a parse that
+ * already happened is a sqlite row, and after the boot warm-up that is nearly the whole store. So
+ * the scope pre-filters to (known-limited ∪ never-scanned) and lets the ordinary parse settle the
+ * unscanned remainder, instead of re-reading a thousand transcripts to find nine.
+ */
+const selectLimitedKeys = db.query<{ cache_key: string }, [number]>(
+  'select cache_key from session_scan_cache where limit_notice is not null and scan_version >= ?',
+)
+const selectScannedKeys = db.query<{ cache_key: string }, [number]>(
+  'select cache_key from session_scan_cache where scan_version >= ?',
 )
 
 function cacheKey(tf: TranscriptFile): string {
@@ -85,6 +140,9 @@ function cacheKey(tf: TranscriptFile): string {
 function readScanCache(tf: TranscriptFile, key: string): ScannedMeta | null {
   const row = selectScan.get(key)
   if (!row || row.mtime_ms !== tf.mtime_ms || row.size_bytes !== tf.size_bytes) return null
+  // A row this scanner is older than cannot answer the fields it never learned to fill, and its
+  // NULLs would read as real answers rather than as absences. Treat it as a miss — see SCAN_VERSION.
+  if ((row.scan_version ?? 1) < SCAN_VERSION) return null
   return {
     title: row.title,
     cwd: row.cwd,
@@ -95,6 +153,11 @@ function readScanCache(tf: TranscriptFile, key: string): ScannedMeta | null {
     last_role: row.last_role,
     last_text_preview: row.last_text_preview,
     substantive_turns: row.substantive_turns,
+    limit_stop: row.limit_notice
+      ? { notice: row.limit_notice, pending: !!row.limit_pending, at: row.limit_at ?? null }
+      : null,
+    title_source: (row.title_source as TitleSource | null) ?? 'message',
+    title_tag: row.title_tag ?? null,
   }
 }
 
@@ -115,6 +178,12 @@ function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): Scann
       meta.last_role,
       meta.last_text_preview,
       meta.substantive_turns,
+      meta.limit_stop?.notice ?? null,
+      meta.limit_stop ? (meta.limit_stop.pending ? 1 : 0) : null,
+      meta.limit_stop?.at ?? null,
+      meta.title_source,
+      meta.title_tag,
+      SCAN_VERSION,
       Date.now(),
     )
   } catch {
@@ -164,6 +233,9 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
     const textEvents = (content?.events ?? []).filter((event) => event.kind === 'text')
     const first = textEvents[0]
     const last = textEvents.at(-1)
+    // These stores hand us a title as a FIELD, so there is no envelope to unwrap and no ambiguity
+    // about provenance: it is the provider's own label, or the first thing said, or the id.
+    const titleSource: TitleSource = tf.title ? 'store' : first?.text ? 'message' : 'id'
     const meta: ScannedMeta = {
       title: oneLine(tf.title || first?.text || tf.session_id, 120),
       cwd: tf.cwd || '',
@@ -174,6 +246,11 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
       last_role: last?.role ?? null,
       last_text_preview: last ? oneLine(last.text) : null,
       substantive_turns: textEvents.length,
+      // Neither store records a usage wall in a form this detector is willing to trust. An absence
+      // is the truth; a false badge here would be worse than a missing one.
+      limit_stop: null,
+      title_source: titleSource,
+      title_tag: null,
     }
     return rememberScan(tf, key, meta)
   }
@@ -195,6 +272,21 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
   let lastRole: 'user' | 'assistant' | null = null
   let lastPreview: string | null = null
   let substantive = 0
+  /**
+   * "Did this conversation stop at a usage wall?", answered on the way past.
+   *
+   * This loop already JSON.parse-es every record of the transcript, so the verdict costs one extra
+   * function call per line and no extra I/O — which is the whole reason the sessions list can offer
+   * a "stopped by a usage limit" filter at all. rate-limit-discovery.ts answers the same question
+   * from a 256 KB tail for the auto-resume monitor; both call the SAME tracker so the badge and the
+   * monitor can never disagree.
+   *
+   * Claude only. The tracker's evidence gate keys on `isApiErrorMessage` / `<synthetic>`, which are
+   * Claude Code's own markers, so a Codex rollout would simply never trip it — but say so out loud
+   * rather than relying on that, because a detector that silently no-ops on a provider looks
+   * exactly like a provider that never hits limits.
+   */
+  const limits = tf.source === 'claude' ? createLimitStopTracker() : null
 
   // Walked by index rather than `text.split('\n')`: on a 12 MB transcript that split materialises
   // ~100k line strings and holds every one of them alive for the whole loop, roughly doubling the
@@ -229,6 +321,10 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
     if (typeof ev.cwd === 'string' && !cwd) cwd = ev.cwd
     if (typeof ev.payload?.cwd === 'string' && !cwd) cwd = ev.payload.cwd
     if (typeof ev.gitBranch === 'string' && ev.gitBranch) gitBranch = ev.gitBranch
+    // Before the display filtering below, and deliberately: the wall notice is a `<synthetic>`
+    // assistant record and a terminal `result` is not a message at all, so anything that reads only
+    // what the UI would show is blind to exactly the records this needs.
+    limits?.observe(ev, toEpoch(ev.timestamp))
 
     const role = ev.message?.role ?? ev.type
     const tes = eventToTailEventsForSource(tf.source, ev)
@@ -267,10 +363,23 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
     }
   }
 
-  // unwrapTaggedText only touches the two derived-from-a-turn sources: an explicit custom/AI title
-  // is already a label and must never be second-guessed.
-  const derived = unwrapTaggedText(lastPrompt || firstUser || '')
-  const title = oneLine(customTitle || aiTitle || tf.title || derived || tf.session_id, 120)
+  // describeTaggedText (formerly unwrapTaggedText) only touches the two derived-from-a-turn
+  // sources: an explicit custom/AI title is already a label and must never be second-guessed.
+  const turn = describeTaggedText(lastPrompt || firstUser || '')
+  const title = oneLine(customTitle || aiTitle || tf.title || turn.label || tf.session_id, 120)
+  // Same precedence as the line above, kept in step with it: whichever term won, names itself.
+  // This is what lets a row explain a title nobody recognises instead of just displaying it.
+  const titleSource: TitleSource = customTitle
+    ? 'custom'
+    : aiTitle
+      ? 'ai'
+      : tf.title
+        ? 'store'
+        : turn.label
+          ? turn.envelope
+            ? 'envelope'
+            : 'message'
+          : 'id'
   const meta: ScannedMeta = {
     title,
     cwd: cwd || decodeProjectKey(tf.project),
@@ -281,6 +390,9 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
     last_role: lastRole,
     last_text_preview: lastPreview,
     substantive_turns: substantive,
+    limit_stop: limits?.verdict() ?? null,
+    title_source: titleSource,
+    title_tag: titleSource === 'envelope' ? turn.tag : null,
   }
   return rememberScan(tf, key, meta)
 }
@@ -506,14 +618,40 @@ export function collapseSubagents(files: TranscriptFile[]): {
  * batches and keeps pulling until it has `limit` real sessions, rather than capping first and
  * returning a short list full of holes.
  */
-export async function listSessions(
-  limit = 200,
-  instance?: string,
-  archived: ArchivedScope = 'hide',
-  sinceMs: number | null = null,
-  source: SessionSourceScope = 'all',
-  dispatched: DispatchedScope = 'all',
-): Promise<SessionSummary[]> {
+export interface ListSessionsOptions {
+  /** How many REAL rows to return. Stubs dropped after the parse do not count against it. */
+  limit?: number
+  /** How many real rows to skip first — the paging cursor. See the note at the batching loop for
+   *  why this cannot be applied to the index instead. */
+  offset?: number
+  /** An instance dir name, "default" (non-isolated install), or "other" (plain CLI). Claude only. */
+  instance?: string
+  archived?: ArchivedScope
+  /** Epoch cutoff on last activity, or null for no cutoff. */
+  sinceMs?: number | null
+  /** Upper epoch bound on last activity, for a caller asking about a past window rather than a
+   *  trailing one. Null means "up to now". */
+  untilMs?: number | null
+  source?: SessionSourceScope
+  dispatched?: DispatchedScope
+  rateLimited?: RateLimitScope
+  /** Case-insensitive substring of the working directory or the provider's project key. */
+  project?: string
+}
+
+export async function listSessions(opts: ListSessionsOptions = {}): Promise<SessionSummary[]> {
+  const {
+    limit = 200,
+    offset = 0,
+    instance,
+    archived = 'hide',
+    sinceMs = null,
+    untilMs = null,
+    source = 'all',
+    dispatched = 'all',
+    rateLimited = 'all',
+    project,
+  } = opts
   const mmap = sessionMetaMap()
   // Read up here rather than beside dmap below, because the `dispatched` scope filters on it and
   // that has to happen before the newest-N cap.
@@ -561,6 +699,10 @@ export async function listSessions(
     )
   }
   if (sinceMs !== null) files = files.filter((f) => f.mtime_ms >= sinceMs)
+  // No re-check after the parse, unlike sinceMs below: mtime is an UPPER bound on real activity
+  // (a file is never written before its last turn), so an mtime inside the window guarantees the
+  // displayed timestamp is too. The sinceMs direction is the one where the superset can lie.
+  if (untilMs !== null) files = files.filter((f) => f.mtime_ms <= untilMs)
   // Before the cap, for the same reason `instance` and `archived` are: a handful of queued runs
   // among thousands of hand-driven transcripts would never crack the newest-200, so a filter applied
   // afterwards would answer "you have never queued anything" on a machine that queues nightly.
@@ -569,6 +711,34 @@ export async function listSessions(
     files = files.filter(
       (f) => (f.source === 'claude' && idsOf(f).some((id) => qmap.has(id))) === want,
     )
+  }
+  // A folder scope, for a caller that wants one repository's history rather than one instance's.
+  // Matched against BOTH the working directory and the provider's project key, because the two
+  // stores disagree about which they record: Claude writes an encoded project key and a cwd, the
+  // foreign adapters often have only one of them.
+  if (project) {
+    const needle = project.toLowerCase()
+    files = files.filter(
+      (f) =>
+        (f.cwd ?? '').toLowerCase().includes(needle) ||
+        decodeProjectKey(f.project).toLowerCase().includes(needle) ||
+        f.project.toLowerCase().includes(needle),
+    )
+  }
+  // Same before-the-cap rule again, and this one needs a trick to obey it: the verdict comes from a
+  // PARSE, not from the mtime index, so it cannot simply be a filter here. What it can be is a
+  // narrowing — drop the rows the cache already proved are NOT limited, keep the ones it proved are
+  // plus everything it has never seen, and let toSummary settle the remainder exactly. After the
+  // boot warm-up the unscanned set is nearly empty, so this turns "re-read a thousand transcripts
+  // to find nine" into one sqlite query. It is conservative in the safe direction: an unscanned row
+  // is always kept, so the scope can be slow but never wrong.
+  if (rateLimited !== 'all') {
+    const limited = new Set(selectLimitedKeys.all(SCAN_VERSION).map((r) => r.cache_key))
+    const scanned = new Set(selectScannedKeys.all(SCAN_VERSION).map((r) => r.cache_key))
+    files = files.filter((f) => {
+      const key = cacheKey(f)
+      return limited.has(key) || !scanned.has(key)
+    })
   }
   files = files.sort((a, b) => b.mtime_ms - a.mtime_ms)
   const dmap = doneMarkMap()
@@ -581,6 +751,13 @@ export async function listSessions(
     // without gaining a timestamped turn, which put rows reading "2d ago" inside a "Last 24 hours"
     // window. Re-check against the timestamp the row actually DISPLAYS, now that it is parsed.
     if (sinceMs !== null && m.last_activity_at < sinceMs) return null
+    // The exact half of the usage-wall scope. The pre-filter above only narrowed the candidates;
+    // this is the verdict, and it runs on the same parsed row the badge is rendered from, so the
+    // filter and the badge cannot disagree.
+    if (rateLimited !== 'all') {
+      if (!m.limit_stop) return null
+      if (rateLimited === 'pending' && !m.limit_stop.pending) return null
+    }
     return {
       session_id: tf.session_id,
       source: tf.source,
@@ -602,20 +779,29 @@ export async function listSessions(
       done: dmap.get(sessionMarkKey(tf.source, tf.session_id)) ?? false,
       dispatched: tf.source === 'claude' && qmap.has(tf.session_id),
       subagent_count: collapsed.counts.get(`${tf.source}:${tf.session_id}`) ?? 0,
+      limit_stop: m.limit_stop,
+      title_source: m.title_source,
+      title_tag: m.title_tag,
     }
   }
 
   // Batched so a run of stubs costs extra parses only when it actually occurs: a store with no
   // scaffolding in it parses exactly `limit` files, the same as before.
+  //
+  // `offset` is paid for in the same currency as the cap, i.e. in REAL rows: a page is only a page
+  // if page 2 starts where page 1 stopped, and stubs are dropped after the parse, so skipping N
+  // index entries would skip an unknown number of rows and silently lose sessions between pages.
+  // Fetching offset+limit and slicing is the only way to keep the pages contiguous.
+  const wanted = offset + limit
   const out: SessionSummary[] = []
-  for (let cursor = 0; cursor < files.length && out.length < limit; ) {
-    const batch = files.slice(cursor, cursor + (limit - out.length))
+  for (let cursor = 0; cursor < files.length && out.length < wanted; ) {
+    const batch = files.slice(cursor, cursor + (wanted - out.length))
     cursor += batch.length
     const scanned = await mapPooled(batch, SCAN_CONCURRENCY, toSummary)
     for (const s of scanned) if (s) out.push(s)
   }
   out.sort((a, b) => b.last_activity_at - a.last_activity_at)
-  return out
+  return offset > 0 ? out.slice(offset) : out
 }
 
 /**
@@ -633,6 +819,43 @@ function toolIdOf(tf: TranscriptFile): string {
 
 export function sessionMarkKey(source: SessionSource, sessionId: string): string {
   return source === 'claude' ? sessionId : `${source}:${sessionId}`
+}
+
+/**
+ * Every folder that has conversations in it, newest first.
+ *
+ * THE POINT: a client that has been asked to search "all my chat histories" cannot start, because
+ * the only listing surface is newest-N sessions and there is no way to learn what exists. This is
+ * the index of the index — 1,231 sessions on this machine collapse to a few dozen folders, which
+ * is small enough to hand to an agent whole and specific enough to then scope a real query with
+ * (`project=` on the session list, `instance=` on search).
+ *
+ * Built from the transcript INDEX alone: project, cwd, source and mtime are all index columns, so
+ * this costs no transcript reads at all no matter how large the store is.
+ */
+export async function listProjects(): Promise<ProjectSummary[]> {
+  const files = await ensureTranscriptIndex()
+  const byCwd = new Map<string, ProjectSummary>()
+  for (const f of files) {
+    const cwd = f.cwd || decodeProjectKey(f.project)
+    let row = byCwd.get(cwd)
+    if (!row) {
+      row = {
+        cwd,
+        project: f.project,
+        sessions: 0,
+        by_source: { claude: 0, codex: 0, opencode: 0, foreign: 0 },
+        first_activity_at: f.mtime_ms,
+        last_activity_at: f.mtime_ms,
+      }
+      byCwd.set(cwd, row)
+    }
+    row.sessions++
+    row.by_source[f.source]++
+    if (f.mtime_ms < row.first_activity_at) row.first_activity_at = f.mtime_ms
+    if (f.mtime_ms > row.last_activity_at) row.last_activity_at = f.mtime_ms
+  }
+  return [...byCwd.values()].sort((a, b) => b.last_activity_at - a.last_activity_at)
 }
 
 /**
@@ -725,5 +948,8 @@ export async function getSession(
     // all. It answers 0 for itself, which is true: a subagent spawned nothing.
     subagent_count:
       collapseSubagents(listTranscriptFiles()).counts.get(`${tf.source}:${tf.session_id}`) ?? 0,
+    limit_stop: m.limit_stop,
+    title_source: m.title_source,
+    title_tag: m.title_tag,
   }
 }

@@ -11,6 +11,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  CircleAlert,
   CircleCheck,
   CircleSlash,
   ClipboardCopy,
@@ -96,6 +97,7 @@ import { clampWidth, SIDEBAR_DEFAULT, useUiPrefs } from '@/composables/useUiPref
 import type {
   ArchivedScope,
   DispatchedScope,
+  RateLimitScope,
   SessionPeriod,
   SessionSearchResponse,
   SessionSearchResult,
@@ -105,6 +107,7 @@ import type {
   SessionSummary,
   SessionUsage,
   TailResult,
+  TitleSource,
 } from '@/lib/api'
 import * as api from '@/lib/api'
 import { highlightHtml } from '@/lib/find'
@@ -133,6 +136,7 @@ const {
   sessionPeriod,
   sessionSourceFilter,
   sessionDispatchedScope,
+  sessionRateLimitScope,
   sessionShapeScope,
 } = useData()
 const { t } = useI18n()
@@ -156,8 +160,15 @@ const instanceLabelFor = (folder: string) =>
 // toggle belongs to a different view entirely.
 onMounted(() => void refreshInstances({ silent: true }))
 // Every scope is applied server-side, so any of them changing needs a refetch, not a re-filter.
-watch([sessionInstanceFilter, sessionArchivedScope, sessionPeriod, sessionDispatchedScope], () =>
-  refreshSessions(),
+watch(
+  [
+    sessionInstanceFilter,
+    sessionArchivedScope,
+    sessionPeriod,
+    sessionDispatchedScope,
+    sessionRateLimitScope,
+  ],
+  () => refreshSessions(),
 )
 watch(sessionSourceFilter, (source) => {
   // Desktop-instance metadata belongs to Claude sessions only. Clear a stale instance scope when
@@ -178,6 +189,7 @@ const filtersActive = computed(
     sessionArchivedScope.value !== 'include' ||
     sessionSourceFilter.value !== 'all' ||
     sessionDispatchedScope.value !== 'all' ||
+    sessionRateLimitScope.value !== 'all' ||
     sessionShapeScope.value !== 'all' ||
     // Only a WIDENED window counts. 24h is the default, so flagging it would light the trigger up
     // permanently and the signal would stop meaning anything.
@@ -191,6 +203,42 @@ const SOURCE_LABEL: Record<SessionSourceScope, string> = {
   foreign: 'sessions.sourceOther',
 }
 const sourceFilterLabel = computed(() => t(SOURCE_LABEL[sessionSourceFilter.value]))
+const RATE_LIMIT_LABEL: Record<RateLimitScope, string> = {
+  all: 'sessions.rateLimitedAll',
+  only: 'sessions.rateLimitedOnly',
+  pending: 'sessions.rateLimitedPending',
+}
+const rateLimitScopeLabel = computed(() => t(RATE_LIMIT_LABEL[sessionRateLimitScope.value]))
+
+/**
+ * Why this row is called what it is called.
+ *
+ * A title has four possible origins and only one of them is a name a person chose, so a title
+ * nobody recognises is otherwise a dead end — which is exactly what happened when threads started
+ * showing up named "Watcher" and no account, instance or project was called that. The awkward case
+ * is 'envelope': the first message arrived wrapped in a pseudo-tag carrying a name attribute, and
+ * that name became the title, so the string was chosen by whatever wrote the wrapper (a scheduler,
+ * a hook, a harness) and may match nothing the user has ever named.
+ */
+const TITLE_SOURCE_LABEL: Record<TitleSource, string> = {
+  custom: 'sessions.titleFromCustom',
+  ai: 'sessions.titleFromAi',
+  store: 'sessions.titleFromStore',
+  envelope: 'sessions.titleFromEnvelope',
+  message: 'sessions.titleFromMessage',
+  id: 'sessions.titleFromId',
+}
+const titleOriginOf = (s: SessionSummary) =>
+  `${t('sessions.titleFrom')}: ${t(TITLE_SOURCE_LABEL[s.title_source], { tag: s.title_tag ?? '?' })}`
+/** Only the surprising origin earns a marker on the row. Everything else is explicable on sight and
+ *  a badge on every row would be noise that hides the one case worth noticing. */
+const titleIsUnattributed = (s: SessionSummary) => s.title_source === 'envelope'
+const limitTooltipOf = (s: SessionSummary) =>
+  s.limit_stop
+    ? t(s.limit_stop.pending ? 'sessions.rateLimitedHint' : 'sessions.rateLimitedHintResumed', {
+        notice: s.limit_stop.notice,
+      })
+    : ''
 const sourceLabel = (source: SessionSource) => t(SOURCE_LABEL[source])
 
 /**
@@ -1154,6 +1202,29 @@ function copy(text: string) {
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
 
+                  <!-- sessions a usage wall cut off. Server-side like the scopes above it, but
+                       the verdict comes from the transcript parse rather than the mtime index, so
+                       the first use after an upgrade is slow while the scan cache refills. -->
+                  <DropdownMenuSub :disabled="sessionSourceFilter === 'codex' || sessionSourceFilter === 'opencode'">
+                    <DropdownMenuSubTrigger>
+                      <CircleAlert />
+                      {{ $t('sessions.rateLimited') }}
+                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                        {{ rateLimitScopeLabel }}
+                      </span>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent class="max-w-64">
+                      <DropdownMenuRadioGroup v-model="sessionRateLimitScope">
+                        <DropdownMenuRadioItem value="all">{{ $t('sessions.rateLimitedAll') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="only">{{ $t('sessions.rateLimitedOnly') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="pending">{{ $t('sessions.rateLimitedPending') }}</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                      <p class="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+                        {{ $t('sessions.rateLimitedNote') }}
+                      </p>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+
                   <!-- shape: derived in the browser from the two numbers already on every row, so
                        unlike the scopes around it this one narrows what was FETCHED rather than
                        reaching further back. The note in the submenu says so. -->
@@ -1391,7 +1462,30 @@ function copy(text: string) {
                     <span
                       class="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-snug"
                       :class="s.done ? 'line-through decoration-muted-foreground/40' : ''"
-                    >{{ s.title }}</span>
+                      :title="titleOriginOf(s)"
+                    >{{ s.title }}<!--
+                      A title nobody chose gets a mark, and only that case: the string came out of a
+                      wrapper around the first message, so it may match nothing the user has named.
+                      --><span
+                        v-if="titleIsUnattributed(s)"
+                        class="ml-1 align-middle text-[10px] font-normal text-muted-foreground/70"
+                      >&lt;{{ s.title_tag }}&gt;</span></span>
+                    <!-- the wall this conversation died at. `pending` is the actionable half —
+                         nothing followed the notice, so it is still sitting there — and it is the
+                         only one loud enough to earn the warning colour. -->
+                    <Badge
+                      v-if="s.limit_stop"
+                      variant="outline"
+                      :title="limitTooltipOf(s)"
+                      :class="[
+                        'shrink-0 text-[10px]',
+                        s.limit_stop.pending
+                          ? 'border-warning/50 bg-warning/10 text-warning'
+                          : 'border-border text-muted-foreground',
+                      ]"
+                    >
+                      {{ s.limit_stop.pending ? $t('sessions.rateLimitedBadgePending') : $t('sessions.rateLimitedBadge') }}
+                    </Badge>
                     <StatusBadge v-if="s.queue_status" :status="s.queue_status" />
                     <Badge
                       variant="outline"

@@ -34,16 +34,65 @@ URL) or `AGENTHYDRA_PORT`.
 }
 ```
 
-Tools cover sessions (list / get / tail across Claude, Codex, and OpenCode), the queue (list / add /
+Tools cover sessions (list / get / tail / search / export across Claude, Codex, OpenCode and the
+foreign readers), project discovery (`list_projects`), chats a usage limit cut off
+(`list_rate_limited_sessions`), the queue (list / add /
 update / run / cancel / events), accounts (secrets always masked), the scheduler (get / set),
 Claude Desktop instances (list / launch / quit), Claude CLI instances, and Codex CLI/Desktop
 instances (list / create / CLI launch / login helper / desktop open / focus / quit), usage-check
 (`check_usage`, `check_my_usage`), and the auto-resume monitor (get / set), plus an update check.
 Mutating tools say `MUTATES:` in their description; there is deliberately no shutdown tool.
 
-`list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`, or
-`opencode`; every returned session is source-tagged. Session viewing/search is unified, but queue
-dispatch, composing replies, and rate-limit auto-resume remain Claude-only.
+`list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
+`opencode` or `foreign` (the shared reader for Cursor, Windsurf, Zed, Copilot CLI and the rest);
+every returned session is source-tagged. Session viewing/search is unified, but queue dispatch,
+composing replies, and rate-limit auto-resume remain Claude-only.
+
+### Reading ALL the history, not just today's
+
+`list_sessions` defaults to the **last 24 hours**, because the list it powers answers "what am I
+working on". An agent told to go through "all my chat histories" therefore has to say so, and the
+tool description says the default out loud so it knows to:
+
+- `period: "24h" | "7d" | "30d" | "all"`, or explicit `since` / `until` bounds (epoch ms or an ISO
+  date) for a real date range.
+- `offset`, for paging past the 500-row ceiling. Pages are contiguous — `offset: 500, limit: 500` is
+  exactly page 2 of the same ordering — because the offset is counted in returned rows rather than
+  in index entries, which would skip an unknown number of them.
+- `project`, a case-insensitive substring of the working directory or project key.
+- `list_projects {}` — every folder that has conversations in it, with a session count and a
+  per-provider breakdown. Read from the transcript index, never a transcript, so it is cheap. This
+  is the index of the index: start here to find out what "all" contains, then scope a real query.
+
+### Chats a usage limit cut off
+
+`list_rate_limited_sessions { pendingOnly?, period?, project?, limit? }` lists the conversations a
+quota wall ended — "You've hit your weekly limit · resets 3am". Every session row also carries the
+same verdict as `limit_stop`, and `rateLimited: "only" | "pending"` narrows `list_sessions` the same
+way; the web UI exposes it as **List options -> Usage limits**.
+
+`pending: true` means nothing followed the notice, so that session is *still* stopped there — the
+actionable half. `pending: false` means it was resumed afterwards and is history. Pending-ness is a
+pure function of the file, recomputed on every scan: the CLI cannot resume a session that died on an
+API error without appending its own bookkeeping, so any resume flips it on its own.
+
+Detection trusts only the CLI's own error report (`isApiErrorMessage` / a `<synthetic>` assistant
+turn / an errored terminal `result`), never model prose or tool output, so a session that merely
+*discussed* rate limits is not listed. It is Claude-only: Codex and OpenCode record an error, but not
+in a form worth trusting, and a false claim here would be worse than a missing one. The judgment
+lives in one place (`createLimitStopTracker` in `server/src/rate-limit-signal.ts`) and is shared with
+the auto-resume monitor, so the badge and the resume queue cannot disagree.
+
+### Why a thread is called what it is called
+
+Every session row carries `title_source` — `custom` (a saved title the writing app displays), `ai`
+(the model's own summary), `store` (the provider handed us one as a field), `envelope`, `message`
+(the first thing said) or `id`. `envelope` is the one worth knowing about: the first turn arrived
+wrapped in a pseudo-tag carrying a `name` attribute — `<scheduled-task name="nightly-sweep">` — and
+that name became the title, so the string was chosen by whatever wrote the wrapper (a scheduler, a
+hook, a harness) and may match nothing you have ever named. `title_tag` names that tag, and the web
+UI prints it beside the title. This exists because threads turned up under a name their owner did
+not recognise and there was no way to ask the app where the label had come from.
 
 ### Usage-check
 
