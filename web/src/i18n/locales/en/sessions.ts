@@ -34,6 +34,8 @@ export default {
   copyFileLocation: 'Copy session file location to clipboard',
   copyFileLocationHint: 'Copies the full path to the original .jsonl session file as text',
   copyFileLocationDone: 'Copied the session file location to the clipboard',
+  copyFileLocationDoneRich:
+    'Copied the prompt, the session name and its file location to the clipboard',
   copyFileLocationFailed: "Couldn't copy the session file location to the clipboard",
   closeChat: 'Close this chat',
   filterSource: 'Source',
@@ -114,10 +116,8 @@ export default {
   rateLimitedPending: 'Only ones still stopped right now',
   rateLimitedNote:
     'Claude sessions only, and only when the CLI itself reported the wall — a chat that merely talked about rate limits is not counted.',
-  rateLimitedBadge: 'Usage limit',
   rateLimitedBadgePending: 'Still at the limit',
   rateLimitedHint: 'This session stopped here: {notice}',
-  rateLimitedHintResumed: 'This session hit a usage limit and was resumed afterwards: {notice}',
   // --- where a row's title came from ---
   titleFrom: 'Title from',
   titleFromCustom: 'a saved title on the session — a rename, or the app naming it',

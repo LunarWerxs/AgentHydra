@@ -4,6 +4,7 @@ import {
   BellRing,
   CalendarClock,
   ChevronDown,
+  ClipboardCopy,
   Cloud,
   CloudCheck,
   CloudCog,
@@ -41,10 +42,12 @@ import { useAppSettings } from '@/composables/useAppSettings'
 import { useData } from '@/composables/useData'
 import { useMonitor } from '@/composables/useMonitor'
 import { usePanels } from '@/composables/usePanels'
+import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import type { MonitorStateName, SearchIndexStatus, SyncStatus } from '@/lib/api'
 import * as api from '@/lib/api'
 import { type BadgeVariant, baseName, formatBytes } from '@/lib/format'
+import { composeSessionPathClipboard } from '@/lib/session-clipboard'
 import { useTheme } from '@/lib/theme'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
@@ -367,6 +370,22 @@ async function removeSearchIndex() {
     deletingSearchIndex.value = false
   }
 }
+
+// "Copy session file location" used to put a bare path on the clipboard. These decide what else
+// goes with it; both default on, and with both off the result is byte-for-byte what it always was.
+const { copyPathIncludeName, copyPathIncludePrompt, copyPathPrompt } = useUiPrefs()
+const copyPathOpen = ref(false)
+/** Shown live in the settings row, because the only honest way to describe a clipboard format is
+ *  to display it. */
+const copyPathPreview = computed(() =>
+  composeSessionPathClipboard({
+    path: 'C:\\Users\\you\\.claude\\projects\\my-repo\\a1b2c3d4.jsonl',
+    title: 'Postal server connection setup',
+    includeName: copyPathIncludeName.value,
+    includePrompt: copyPathIncludePrompt.value,
+    prompt: copyPathPrompt.value,
+  }),
+)
 
 async function saveTranscriptEditor() {
   if (!(await updateAppSettings({ transcriptEditor: transcriptEditor.value.trim() })))
@@ -818,6 +837,51 @@ defineExpose({ save })
               </Button>
             </div>
           </ExpandTransition>
+          <!-- Copying a session's file location. The preview is the control that matters: a
+               clipboard format described in prose is a format nobody can picture. -->
+          <SettingsRow
+            :icon="ClipboardCopy"
+            :label="$t('settings.copyPathLabel')"
+            clickable
+            @click="copyPathOpen = !copyPathOpen"
+          >
+            <template #info>
+              <InfoHint :text="$t('settings.copyPathHint')" />
+            </template>
+            <template #control>
+              <ChevronDown
+                class="size-4 transition-transform duration-200"
+                :class="copyPathOpen ? 'rotate-180' : ''"
+              />
+            </template>
+          </SettingsRow>
+          <ExpandTransition :open="copyPathOpen">
+            <div class="space-y-3 px-3.5 pb-3.5 pt-1">
+              <label class="flex items-center justify-between gap-3 text-sm">
+                {{ $t('settings.copyPathIncludeNameLabel') }}
+                <Switch v-model="copyPathIncludeName" />
+              </label>
+              <label class="flex items-center justify-between gap-3 text-sm">
+                {{ $t('settings.copyPathIncludePromptLabel') }}
+                <Switch v-model="copyPathIncludePrompt" />
+              </label>
+              <Input
+                v-model="copyPathPrompt"
+                type="text"
+                :disabled="!copyPathIncludePrompt"
+                :placeholder="$t('settings.copyPathPromptPlaceholder')"
+                :aria-label="$t('settings.copyPathPromptLabel')"
+                class="w-full text-xs"
+              />
+              <div>
+                <p class="mb-1 text-[11px] text-muted-foreground">
+                  {{ $t('settings.copyPathPreviewLabel') }}
+                </p>
+                <pre class="overflow-x-auto rounded border border-border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">{{ copyPathPreview }}</pre>
+              </div>
+            </div>
+          </ExpandTransition>
+
           <!-- The search index is the one file AgentHydra puts on disk that the user did not ask
                for, so it says how big it is and offers to remove it. It rebuilds itself from the
                transcripts, which is why deleting is a plain button and not a confirmation dance. -->

@@ -81,6 +81,21 @@ const compactTranscript = useStorage('agenthydra.sessions.compact', false)
 /** Case sensitivity for the opt-in body search. */
 const advancedCaseSensitive = useStorage('agenthydra.sessions.advancedCaseSensitive', false)
 
+// --- "Copy session file location": what actually lands on the clipboard -------------------------
+//
+// The bare path is what this action always copied, and on its own it is not much use for the thing
+// people do next, which is hand the session to another agent and ask it to carry on. These two add
+// the missing halves of that: what the conversation was CALLED, and the sentence to start with.
+// Both default ON — a setting you have to go and find is a setting that does nothing — and turning
+// both off restores the original path-only behaviour exactly.
+
+/** Put the session's title on the clipboard above the path. */
+const copyPathIncludeName = useStorage('agenthydra.sessions.copyPathIncludeName', true)
+/** Put a prompt on the clipboard, so the paste is something you can send rather than a file path. */
+const copyPathIncludePrompt = useStorage('agenthydra.sessions.copyPathIncludePrompt', true)
+/** The prompt itself. Free text, so it carries no allowed-value list when it is registered below. */
+const copyPathPrompt = useStorage('agenthydra.sessions.copyPathPrompt', 'Resume where we left off')
+
 export const SIDEBAR_MIN = 240
 export const SIDEBAR_MAX = 560
 export const SIDEBAR_DEFAULT = 340
@@ -107,6 +122,9 @@ registerSharedPref('agenthydra.sessions.humanOnly', humanOnly)
 registerSharedPref('agenthydra.sessions.compact', compactTranscript)
 registerSharedPref('agenthydra.sessions.advancedCaseSensitive', advancedCaseSensitive)
 registerSharedPref('agenthydra.sessions.sidebarWidth', sidebarWidth)
+registerSharedPref('agenthydra.sessions.copyPathIncludeName', copyPathIncludeName)
+registerSharedPref('agenthydra.sessions.copyPathIncludePrompt', copyPathIncludePrompt)
+registerSharedPref('agenthydra.sessions.copyPathPrompt', copyPathPrompt)
 
 /** The shared, persisted layout state. Singletons — every caller gets the same refs. */
 export function useUiPrefs() {
@@ -121,5 +139,8 @@ export function useUiPrefs() {
     compactTranscript,
     advancedCaseSensitive,
     sidebarWidth,
+    copyPathIncludeName,
+    copyPathIncludePrompt,
+    copyPathPrompt,
   }
 }

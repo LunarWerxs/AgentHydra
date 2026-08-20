@@ -31,6 +31,15 @@ export default {
   hideTrayIconHint:
     'Removes the AgentHydra icon from the notification area. AgentHydra keeps running in the background - launch the shortcut again to reopen the UI, or come back here to turn the icon back on. Only applies when AgentHydra was started from its tray shortcut: the icon comes from that launcher, so if you ran the executable directly there is no icon for this to affect.',
   hideTrayIconToastFailed: 'Failed to save hide tray icon setting.',
+  // --- what "copy session file location" puts on the clipboard ---
+  copyPathLabel: 'Copying a session file location',
+  copyPathHint:
+    'What lands on the clipboard when you copy a session file location. With both off it is just the path, exactly as before.',
+  copyPathIncludeNameLabel: 'Include the session name',
+  copyPathIncludePromptLabel: 'Include a prompt',
+  copyPathPromptLabel: 'The prompt',
+  copyPathPromptPlaceholder: 'Resume where we left off',
+  copyPathPreviewLabel: 'What gets copied',
   transcriptEditorLabel: 'Transcript editor',
   transcriptEditorHint:
     'Absolute path to the editor "Open the session file" opens .jsonl transcripts with. Empty auto-detects VS Code, Cursor, Notepad++ or Sublime Text (in that order), falling back to Notepad - never the OS "pick an app" dialog.',

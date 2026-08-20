@@ -5,6 +5,34 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0] - 2026-08-20
+
+### Added
+
+- **"Copy session file location" can now put a prompt and the session's name on the clipboard too.**
+  The bare path is a fact about the disk, and it is not the thing people do next with it: they hand
+  the session to another agent and ask it to carry on, which needs what the conversation was CALLED
+  and a sentence to open with. Both are switches under Settings -> Appearance -> Advanced, both
+  default on, and the prompt is editable (pre-filled "Resume where we left off"). A live preview in
+  the settings row shows exactly what will land on the clipboard, because a clipboard format
+  described in prose is one nobody can picture.
+
+  Turning both off gives back the bare path, byte for byte — a test pins that, because this action
+  shipped long before the settings did and a path with anything appended stops working the moment
+  it is pasted into a terminal. An empty prompt adds nothing rather than a leading blank line, and
+  an untitled session contributes no blank line either.
+
+### Fixed
+
+- **The usage-limit badge now disappears when the session is no longer stuck at the limit.** It was
+  shown for any session that had EVER hit a wall, which meant a chat that hit one in the morning and
+  was finished in the afternoon still wore it — and a badge that never clears stops meaning "this
+  one needs you", which is the only thing it is for. It now appears only while the wall is still the
+  last thing in the transcript, which is exactly the `pending` verdict the detector already
+  computed. Self-clearing, too: resuming a session appends to its file, the scan re-runs, and the
+  badge goes on its own. "Ever hit a limit" is still reachable, as a filter, where a historical
+  question belongs.
+
 ## [0.27.0] - 2026-08-20
 
 ### Added

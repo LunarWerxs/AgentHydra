@@ -124,6 +124,7 @@ import {
 } from '@/lib/format'
 import { displayName } from '@/lib/instance-appearance'
 import { escapeHtml, looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
+import { composeSessionPathClipboard } from '@/lib/session-clipboard'
 import { type SessionShape, type ShapeScope, sessionShape } from '@/lib/session-shape'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
@@ -235,12 +236,9 @@ const titleOriginOf = (s: SessionSummary) =>
 /** Only the surprising origin earns a marker on the row. Everything else is explicable on sight and
  *  a badge on every row would be noise that hides the one case worth noticing. */
 const titleIsUnattributed = (s: SessionSummary) => s.title_source === 'envelope'
+/** Only ever rendered on a still-stopped session, so there is one wording rather than two. */
 const limitTooltipOf = (s: SessionSummary) =>
-  s.limit_stop
-    ? t(s.limit_stop.pending ? 'sessions.rateLimitedHint' : 'sessions.rateLimitedHintResumed', {
-        notice: s.limit_stop.notice,
-      })
-    : ''
+  s.limit_stop ? t('sessions.rateLimitedHint', { notice: s.limit_stop.notice }) : ''
 const sourceLabel = (source: SessionSource) => t(SOURCE_LABEL[source])
 
 /**
@@ -416,8 +414,19 @@ async function copyFile(session: SessionSummary) {
 async function copyFileLocation(session: SessionSummary) {
   try {
     const { path } = await api.getSessionFileLocation(session.session_id, session.source)
-    await navigator.clipboard.writeText(path)
-    toast.success(t('sessions.copyFileLocationDone'))
+    const text = composeSessionPathClipboard({
+      path,
+      title: session.title,
+      includeName: copyPathIncludeName.value,
+      includePrompt: copyPathIncludePrompt.value,
+      prompt: copyPathPrompt.value,
+    })
+    await navigator.clipboard.writeText(text)
+    // Says WHAT was copied rather than that something was: the clipboard can now hold three lines
+    // where it used to hold one, and a paste into a terminal is a surprise worth pre-empting.
+    toast.success(
+      text === path ? t('sessions.copyFileLocationDone') : t('sessions.copyFileLocationDoneRich'),
+    )
   } catch {
     toast.error(t('sessions.copyFileLocationFailed'))
   }
@@ -438,6 +447,9 @@ const {
   compactTranscript,
   sidebarWidth,
   advancedCaseSensitive,
+  copyPathIncludeName,
+  copyPathIncludePrompt,
+  copyPathPrompt,
 } = useUiPrefs()
 
 // --- sidebar: persisted drag-resize + animated collapse, auto-collapsing when narrow ---
@@ -1508,18 +1520,18 @@ function copy(text: string) {
                     <!-- the wall this conversation died at. `pending` is the actionable half —
                          nothing followed the notice, so it is still sitting there — and it is the
                          only one loud enough to earn the warning colour. -->
+                    <!-- ONLY while the wall is still the bottom of the transcript. A session that
+                         hit a limit in the past and carried on is not rate limited, and a badge
+                         that stays on forever stops meaning "this one needs you" — which is the
+                         only thing it is for. `pending` is exactly that: nothing followed the
+                         notice. Ever-hit is still reachable, as a filter. -->
                     <Badge
-                      v-if="s.limit_stop"
+                      v-if="s.limit_stop?.pending"
                       variant="outline"
                       :title="limitTooltipOf(s)"
-                      :class="[
-                        'shrink-0 text-[10px]',
-                        s.limit_stop.pending
-                          ? 'border-warning/50 bg-warning/10 text-warning'
-                          : 'border-border text-muted-foreground',
-                      ]"
+                      class="shrink-0 border-warning/50 bg-warning/10 text-[10px] text-warning"
                     >
-                      {{ s.limit_stop.pending ? $t('sessions.rateLimitedBadgePending') : $t('sessions.rateLimitedBadge') }}
+                      {{ $t('sessions.rateLimitedBadgePending') }}
                     </Badge>
                     <StatusBadge v-if="s.queue_status" :status="s.queue_status" />
                     <Badge
