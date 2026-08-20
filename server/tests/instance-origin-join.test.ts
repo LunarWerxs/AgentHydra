@@ -129,6 +129,23 @@ test(
   'a large gap does not — that is a different conversation in the same folder',
   () => {
     expect(resolve('D:\\PublicProjects', CREATED + 90_000)).toBeNull()
+    expect(resolve('D:\\PublicProjects', CREATED + 10 * 60_000)).toBeNull()
+  },
+  SPAWNS_A_CHILD_BUN,
+)
+
+test(
+  'the window sits exactly where it was measured to be safe',
+  () => {
+    // ORIGIN_SKEW_MS is 60s because that is the top of the measured plateau: correct on 305 known
+    // sessions with zero wrong answers, with the first ambiguity at 120s and the first WRONG answer
+    // at 240s. Pinned in both directions so widening it has to be a decision someone makes on
+    // purpose, with the cross-check re-run, rather than a number that drifts.
+    expect(resolve('D:\\PublicProjects', CREATED + 59_000)).toEqual({
+      instance: 'work',
+      archived: false,
+    })
+    expect(resolve('D:\\PublicProjects', CREATED + 61_000)).toBeNull()
   },
   SPAWNS_A_CHILD_BUN,
 )

@@ -5,6 +5,34 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.2] - 2026-08-20
+
+### Fixed
+
+- **Most of the "Unknown account" rows turned out to be a second copy of a chat already in the
+  list, and they can now be named.** Reading all 64 of them settled what they actually were: none
+  was a subagent, three were continuations of a compacted chat, and 27 were the same conversation
+  stored twice — same folder, same minute, and 93-100% of the smaller transcript's messages present
+  in the larger, checked by message id rather than by title. Claude Desktop keeps its record
+  pointing at one copy, so the other copy has no id to be found by, and that is the one that showed
+  up with nothing against it.
+
+  The origin join added in 0.25.1 was already the right instrument; its window was just far too
+  narrow. Desktop stamps a chat's creation time when it opens the chat, while the CLI stamps its
+  first turn only once the model has answered, and on a cold start that gap is seconds, not
+  milliseconds. Widening it from 2s to 60s takes the unattributed rows from 64 to 13.
+
+  60s is measured, not chosen for feeling right. Every candidate width was run against the ~300
+  sessions Desktop DOES link by id, asking not "how many does this recover" but "does it ever
+  contradict an account we already know": 60s is correct on 305 of them with zero wrong answers and
+  zero ambiguous origins, the first ambiguity appears at 120s, and the first wrong answer at 240s.
+  The constant carries that table, and a test pins the boundary in both directions so widening it
+  has to be a deliberate decision with the cross-check re-run.
+
+  Three of the twin pairs share a title and share no messages at all — different conversations that
+  happen to be called the same thing. That is exactly why this join keys on where and when a
+  conversation began and never on what it is called.
+
 ## [0.25.1] - 2026-08-20
 
 ### Fixed

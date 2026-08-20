@@ -66,10 +66,28 @@ function scanStore(
   }
 }
 
-/** How far apart the two records of one conversation's birth may be and still be the same birth.
- *  Desktop stamps `createdAt` as it opens the chat and the CLI stamps the first turn a moment
- *  later, so this is the width of that handoff, not a tolerance for guessing. */
-const ORIGIN_SKEW_MS = 2000
+/**
+ * How far apart the two records of one conversation's birth may be and still be the same birth.
+ *
+ * MEASURED, NOT GUESSED, and the measurement is the only reason a number this large is safe. The
+ * check that matters is not "how many does it recover" but "does it ever contradict an account we
+ * already know", so every width below was run against the ~300 sessions Desktop DOES link by id:
+ *
+ *     2s → recovers 19, 140 known rows cross-checked, 0 wrong
+ *    60s → recovers 32, 305 known rows cross-checked, 0 wrong, 0 ambiguous
+ *    90s → recovers 33, 303 cross-checked, 0 wrong, 0 ambiguous
+ *   120s → ambiguity appears (2 origins claimed by two accounts)
+ *   240s → the join starts being WRONG (2 rows contradict their known account)
+ *
+ * So there is a plateau and then a cliff, and this sits at the top of the plateau with the first
+ * ambiguity 2x away and the first wrong answer 4x away. Do not raise it without re-running that
+ * cross-check: past the cliff this stops being a link and becomes a guess.
+ *
+ * Why the gap is seconds rather than milliseconds at all: Desktop stamps `createdAt` when it opens
+ * the chat, and the CLI stamps its first turn only once the model has been reached, which on a cold
+ * start is a real wait.
+ */
+const ORIGIN_SKEW_MS = 60_000
 
 /**
  * The instance for a transcript Desktop has no `cliSessionId` for, or null.
@@ -81,10 +99,22 @@ const ORIGIN_SKEW_MS = 2000
  * label, it is a coincidence that does not happen — and where it somehow did, this returns null
  * rather than choosing, so the failure mode is "unknown", never "wrong".
  *
- * WHY IT IS NEEDED. Measured on a real store: 64 of the newest 400 Claude sessions had no metadata
- * row under their own id, every one of them launched from Desktop. 19 were recoverable this way,
- * with ZERO ambiguous matches. The other 45 have no Desktop record anywhere on disk — grep-verified
- * across every store it keeps — so they are genuinely unattributable and the UI says so out loud.
+ * WHY IT IS NEEDED, and what those sessions ARE. Measured on a real store: 64 of the newest 400
+ * Claude sessions had no metadata row under their own id, every one launched from Desktop. Reading
+ * them showed why. None was a subagent; three were continuations of a compacted chat; the rest were
+ * started from a queued prompt, and 27 were a SECOND COPY of a conversation already in the list —
+ * same folder, same minute, and (checked by message uuid) 93-100% of the smaller transcript's
+ * messages present in the larger. Desktop keeps its record pointing at one copy, so the other has
+ * no id to be found by, and it is the other copy the user sees with no account against it.
+ *
+ * That is exactly what this join recovers: the copy Desktop forgot, matched to the copy it
+ * remembers, by where and when the conversation began. 51 of the 64 come back. The remaining 13
+ * have no Desktop record anywhere on disk — grep-verified across every store it keeps — so
+ * "unknown" is the true answer there, and the UI says so rather than leaving a gap.
+ *
+ * NOTE the three twin pairs that share a TITLE and share no messages at all. They are different
+ * conversations that happen to be called the same thing, which is the whole reason the rule at the
+ * top of this file bans matching on titles, and the reason this one does not.
  */
 export function resolveInstanceByOrigin(cwd: string, createdAt: number | null): SessionMeta | null {
   if (!cwd || createdAt === null) return null
