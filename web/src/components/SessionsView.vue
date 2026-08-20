@@ -99,6 +99,7 @@ import type {
   ArchivedScope,
   DispatchedScope,
   RateLimitScope,
+  SessionEnding,
   SessionPeriod,
   SessionSearchResponse,
   SessionSearchResult,
@@ -312,6 +313,36 @@ const SHAPE_LABEL: Record<ShapeScope, string> = {
 const shapeScopeLabel = computed(() => t(SHAPE_LABEL[sessionShapeScope.value]))
 const shapeLabel = (shape: SessionShape) => t(SHAPE_LABEL[shape])
 /** "Marathon" is a size, and nothing on the row said so. Spell it out on hover. */
+/**
+ * The "part 1 of 2" chip, carrying WHY there is more than one.
+ *
+ * The reason is on the row rather than only in the tooltip because the question this answers —
+ * "why is this conversation here twice?" — is asked by looking, not by hovering. A part that was
+ * superseded names what ended it; the newest part has nothing to explain, so it stays short.
+ */
+const ENDING_LABEL: Record<SessionEnding, string> = {
+  interrupted: 'sessions.endedInterrupted',
+  'usage-limit': 'sessions.endedUsageLimit',
+  overload: 'sessions.endedOverload',
+  refused: 'sessions.endedRefused',
+  error: 'sessions.endedError',
+  complete: 'sessions.endedComplete',
+}
+const isLatestCopy = (s: SessionSummary) => s.copy_index >= s.copy_count
+const copyChipOf = (s: SessionSummary) => {
+  const label = t('sessions.copyOf', { i: s.copy_index, n: s.copy_count })
+  if (isLatestCopy(s) || !s.ended_because) return label
+  return `${label} · ${t(ENDING_LABEL[s.ended_because])}`
+}
+const copyWhyOf = (s: SessionSummary) =>
+  isLatestCopy(s) || !s.ended_because
+    ? t('sessions.copyLatest', { i: s.copy_index, n: s.copy_count })
+    : t('sessions.copyWhy', {
+        i: s.copy_index,
+        n: s.copy_count,
+        why: t(ENDING_LABEL[s.ended_because]),
+      })
+
 const shapeTitleOf = (s: SessionSummary) =>
   `${t('sessions.shape')}: ${shapeLabel(sessionShape(s))} — ${t('sessions.shapeHint')}`
 
@@ -1538,9 +1569,9 @@ function copy(text: string) {
                     <span
                       v-if="s.copy_count > 1"
                       class="inline-flex items-center gap-1"
-                      :title="$t('sessions.copyHint', { n: s.copy_count })"
+                      :title="copyWhyOf(s)"
                     >
-                      <Layers class="size-3" />{{ $t('sessions.copyOf', { i: s.copy_index, n: s.copy_count }) }}
+                      <Layers class="size-3" />{{ copyChipOf(s) }}
                     </span>
                     <!-- this row stands for a fan-out: the subagents are sessions in the provider's
                          own store, folded in here rather than listed as conversations of their own -->

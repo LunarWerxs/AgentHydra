@@ -8,8 +8,10 @@ import type { CodexAccount } from './core/codex-account'
 // detector and the DTO must never drift, and that module is a zero-import leaf, so pulling it in
 // here costs the web app's vue-tsc pass nothing.
 import type { LimitStop } from './rate-limit-signal'
+// Same reasoning: session-ending.ts imports only that leaf, so this stays free of Bun runtime.
+import type { SessionEnding } from './session-ending'
 
-export type { LimitStop }
+export type { LimitStop, SessionEnding }
 
 /** "Sync my settings with Connections" DTO, defined HERE (not re-exported from
  * ./connections.ts) because that module imports Bun-only runtime files (db.ts), which
@@ -181,6 +183,18 @@ export interface SessionSummary {
    */
   copy_index: number
   copy_count: number
+  /**
+   * What ended this transcript — the answer to "why is this conversation in several pieces?".
+   *
+   * It is the last thing that happened in the file, and for a part that has a later copy it is
+   * literally the cause of that copy existing. Measured on a real store, the superseded parts ended
+   * 18x on the user pressing stop, 6x on a safety filter refusing the message, 3x on an ordinary
+   * turn later picked back up, and 2x on a server overload. Never a mystery — the cause is written
+   * in the file; the list simply had no way to say it.
+   *
+   * Claude only, for the same reason limit_stop is: the markers are the Claude CLI's own.
+   */
+  ended_because: SessionEnding | null
 }
 
 /**

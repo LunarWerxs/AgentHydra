@@ -5,6 +5,30 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-08-20
+
+### Added
+
+- **A split conversation now says WHY it split, on the row.** 0.26.0 labelled the parts and guessed
+  at the cause in a tooltip ("usually because it was interrupted and resumed"), which was a guess
+  wearing the clothes of a fact. The cause is not a guess: it is the last thing that happened in the
+  file, and it is written there. Across the 30 multi-transcript conversations on this machine the
+  superseded parts ended 18x on the user pressing stop, 6x on a safety filter refusing the message,
+  3x on an ordinary turn that was picked up again later, and 2x on a server overload (529).
+
+  So the chip carries it: **"part 1 of 2 · you stopped it"**, or "· server was overloaded", or "· a
+  safety filter refused it". The last part says nothing extra, because it has nothing to explain.
+  The full sentence is on hover. The reason is on the row rather than only in the tooltip because
+  the question it answers is asked by LOOKING, not by hovering.
+
+  The reason rides the scan that already reads every record, so it costs no extra I/O, and it goes
+  through the same evidence gate as the usage-limit badge: only the CLI's own report counts. A
+  conversation that merely discusses being overloaded did not end that way. The interrupt marker in
+  particular is anchored and accepted only on a user turn, because the runtime writes it as the
+  whole content of one — an assistant repeating the phrase is quoting it, and a row claiming "you
+  stopped it" when nobody did would spend the credibility of every other reason next to it. That
+  distinction is a test, and it caught the loose first version.
+
 ## [0.26.0] - 2026-08-20
 
 ### Added

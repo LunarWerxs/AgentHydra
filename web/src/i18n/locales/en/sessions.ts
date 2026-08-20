@@ -48,8 +48,17 @@ export default {
   instanceDefault: 'Default',
   // --- one conversation, several transcripts ---
   copyOf: 'part {i} of {n}',
-  copyHint:
-    'This conversation is stored as {n} separate transcripts, usually because it was interrupted and resumed. They are all listed because each one holds turns the others do not — often the last thing you said before the interruption.',
+  // The short form, shown on the row itself, so the reason is visible without hovering.
+  endedInterrupted: 'you stopped it',
+  endedUsageLimit: 'hit a usage limit',
+  endedOverload: 'server was overloaded',
+  endedRefused: 'a safety filter refused it',
+  endedError: 'it hit an error',
+  endedComplete: 'picked up again later',
+  copyWhy:
+    'Part {i} of {n}. This part ended because {why}, and the conversation carried on in a new transcript — that is why it is here more than once. Every part is listed, because each one holds turns the others do not, often the last thing you said before it stopped.',
+  copyLatest:
+    'Part {i} of {n}, the most recent. The earlier parts are listed too, because each one holds turns this one does not — the conversation moved to a new transcript each time it was stopped or cut off.',
   instanceUnknown: 'Unknown account',
   instanceUnknownHint:
     'Claude Desktop kept no record of which account ran this session, so AgentHydra cannot say. It is not hiding one.',

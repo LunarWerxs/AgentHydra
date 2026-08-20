@@ -3,6 +3,7 @@ import { readForeignSession } from './foreign-sessions'
 import { resolveInstanceByOrigin, type SessionMeta, sessionMetaMap } from './instance-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
 import { createLimitStopTracker, type LimitStop } from './rate-limit-signal'
+import { classifyEnding, type SessionEnding } from './session-ending'
 import {
   decodeProjectKey,
   describeTaggedText,
@@ -36,13 +37,28 @@ import type {
  *
  * 1 → the original scan. 2 → adds limit_stop (usage-wall detection) and title provenance.
  * 3 → adds thread_key, the first message's uuid, which identifies the CONVERSATION.
+ * 4 → adds ended_because, why the transcript stopped.
  */
-const SCAN_VERSION = 3
+const SCAN_VERSION = 4
 
 function toEpoch(ts: unknown): number | null {
   if (typeof ts !== 'string') return null
   const n = Date.parse(ts)
   return Number.isNaN(n) ? null : n
+}
+
+/** The text a record carries, for the ending classifier. Mirrors limitEventText, kept local so a
+ *  change to one cannot silently change what the other reads. */
+function endingText(ev: any): string {
+  const content = ev?.message?.content
+  if (typeof content === 'string') return content
+  if (Array.isArray(content))
+    return content
+      .map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : ''))
+      .filter(Boolean)
+      .join(' ')
+  if (typeof ev?.result === 'string') return ev.result
+  return ''
 }
 
 function oneLine(s: string, n = 140): string {
@@ -73,6 +89,9 @@ interface ScannedMeta {
    *  message are the same conversation — see SessionSummary.copy_count. Null when the file has no
    *  message uuid at all (the store does not write them, or the transcript is empty). */
   thread_key: string | null
+  /** What ended this transcript. See session-ending.ts. Null for the stores whose records carry no
+   *  such markers, and for a transcript with nothing meaningful in it. */
+  ended_because: SessionEnding | null
 }
 
 // One entry per transcript. Keeping mtime in the value (instead of in the Map key) makes an active
@@ -85,7 +104,10 @@ const metaCache = new Map<string, { mtimeMs: number; meta: ScannedMeta }>()
 // The persisted shape is FLAT where ScannedMeta is nested: sqlite has no object column, so
 // `limit_stop` is stored as its three parts and reassembled on read.
 interface ScanCacheRow
-  extends Omit<ScannedMeta, 'limit_stop' | 'title_source' | 'title_tag' | 'thread_key'> {
+  extends Omit<
+    ScannedMeta,
+    'limit_stop' | 'title_source' | 'title_tag' | 'thread_key' | 'ended_because'
+  > {
   mtime_ms: number
   size_bytes: number
   limit_notice: string | null
@@ -94,20 +116,22 @@ interface ScanCacheRow
   title_source: string | null
   title_tag: string | null
   thread_key: string | null
+  ended_because: string | null
   scan_version: number | null
 }
 const selectScan = db.query<ScanCacheRow, [string]>(
   'select mtime_ms, size_bytes, title, cwd, git_branch, message_count, created_at, ' +
     'last_activity_at, last_role, last_text_preview, substantive_turns, ' +
-    'limit_notice, limit_pending, limit_at, title_source, title_tag, thread_key, scan_version ' +
+    'limit_notice, limit_pending, limit_at, title_source, title_tag, thread_key, ' +
+    'ended_because, scan_version ' +
     'from session_scan_cache where cache_key = ?',
 )
 const upsertScan = db.query(
   'insert into session_scan_cache (cache_key, path, mtime_ms, size_bytes, title, cwd, git_branch, ' +
     'message_count, created_at, last_activity_at, last_role, last_text_preview, ' +
     'substantive_turns, limit_notice, limit_pending, limit_at, title_source, title_tag, ' +
-    'thread_key, scan_version, scanned_at) ' +
-    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'thread_key, ended_because, scan_version, scanned_at) ' +
+    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'on conflict(cache_key) do update set path = excluded.path, mtime_ms = excluded.mtime_ms, ' +
     'size_bytes = excluded.size_bytes, title = excluded.title, cwd = excluded.cwd, ' +
     'git_branch = excluded.git_branch, message_count = excluded.message_count, ' +
@@ -116,7 +140,7 @@ const upsertScan = db.query(
     'substantive_turns = excluded.substantive_turns, limit_notice = excluded.limit_notice, ' +
     'limit_pending = excluded.limit_pending, limit_at = excluded.limit_at, ' +
     'title_source = excluded.title_source, title_tag = excluded.title_tag, ' +
-    'thread_key = excluded.thread_key, ' +
+    'thread_key = excluded.thread_key, ended_because = excluded.ended_because, ' +
     'scan_version = excluded.scan_version, scanned_at = excluded.scanned_at',
 )
 
@@ -181,6 +205,7 @@ function readScanCache(tf: TranscriptFile, key: string): ScannedMeta | null {
     title_source: (row.title_source as TitleSource | null) ?? 'message',
     title_tag: row.title_tag ?? null,
     thread_key: row.thread_key ?? null,
+    ended_because: (row.ended_because as SessionEnding | null) ?? null,
   }
 }
 
@@ -207,6 +232,7 @@ function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): Scann
       meta.title_source,
       meta.title_tag,
       meta.thread_key,
+      meta.ended_because,
       SCAN_VERSION,
       Date.now(),
     )
@@ -278,6 +304,8 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
       // These stores keep one row per conversation, so a transcript never has a second copy and
       // its own id is a perfectly good conversation identity.
       thread_key: tf.session_id,
+      // Neither store records how a session stopped in a form worth trusting.
+      ended_because: null,
     }
     return rememberScan(tf, key, meta)
   }
@@ -327,6 +355,9 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
    * would answer the same question after reading two files instead of none.
    */
   let threadKey: string | null = null
+  /** Why this transcript stopped — the last meaningful record wins, because that is the one that
+   *  ended it. See session-ending.ts for what the answers mean and how often each occurs. */
+  let ending: SessionEnding | null = null
 
   // Walked by index rather than `text.split('\n')`: on a 12 MB transcript that split materialises
   // ~100k line strings and holds every one of them alive for the whole loop, roughly doubling the
@@ -366,6 +397,7 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
     // what the UI would show is blind to exactly the records this needs.
     limits?.observe(ev, toEpoch(ev.timestamp))
     if (!threadKey && typeof ev.uuid === 'string' && ev.uuid) threadKey = ev.uuid
+    if (tf.source === 'claude') ending = classifyEnding(ev, endingText(ev)) ?? ending
 
     const role = ev.message?.role ?? ev.type
     const tes = eventToTailEventsForSource(tf.source, ev)
@@ -435,6 +467,7 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
     title_source: titleSource,
     title_tag: titleSource === 'envelope' ? turn.tag : null,
     thread_key: threadKey,
+    ended_because: ending,
   }
   return rememberScan(tf, key, meta)
 }
@@ -839,6 +872,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
       title_tag: m.title_tag,
       copy_index: 1,
       copy_count: 1,
+      ended_because: m.ended_because,
     }
   }
 
@@ -1092,5 +1126,6 @@ export async function getSession(
     // know about other copies. The list is where that count comes from.
     copy_index: 1,
     copy_count: 1,
+    ended_because: m.ended_because,
   }
 }

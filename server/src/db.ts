@@ -225,6 +225,8 @@ create index if not exists idx_session_scan_cache_path on session_scan_cache(pat
   // the file, so the several transcripts one interrupted-and-resumed chat leaves behind can be
   // recognised as each other without reading them again.
   add('thread_key', 'text')
+  // Why the transcript stopped: interrupted / usage-limit / overload / refused / error / complete.
+  add('ended_because', 'text')
   // THE REASON THE THREE COLUMNS ABOVE ARE SAFE TO ADD. A cached row is trusted on mtime+size
   // alone, so every row written before a scanner learns a new field would answer that field with
   // NULL forever — and a NULL limit_notice is indistinguishable from "this session never hit a

@@ -97,6 +97,7 @@ export type {
   SchedulerState,
   SearchIndexStatus,
   SearchPath,
+  SessionEnding,
   SessionPeriod,
   SessionSearchResponse,
   SessionSearchResult,
