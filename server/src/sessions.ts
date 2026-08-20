@@ -1,6 +1,6 @@
 import { db } from './db'
 import { readForeignSession } from './foreign-sessions'
-import { sessionMetaMap } from './instance-sessions'
+import { resolveInstanceByOrigin, type SessionMeta, sessionMetaMap } from './instance-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
 import { createLimitStopTracker, type LimitStop } from './rate-limit-signal'
 import {
@@ -686,11 +686,19 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   files = collapsed.rows
   if (source !== 'all') files = files.filter((file) => file.source === source)
   if (instance) {
-    files = files.filter((f) =>
-      instance === 'other'
-        ? f.source === 'claude' && !idsOf(f).some((id) => mmap.has(id))
-        : f.source === 'claude' && idsOf(f).some((id) => mmap.get(id)?.instance === instance),
-    )
+    // A row whose id Desktop does not know is a CANDIDATE, not a miss: resolveInstanceByOrigin may
+    // still place it once the parse supplies its cwd and start time. So this pre-filter keeps those
+    // and toSummary settles them exactly, the same shape the usage-wall scope uses below and for
+    // the same reason — a scope that runs before the cap cannot see anything only a parse knows,
+    // and being conservative here costs a few parses where guessing would cost correctness.
+    files = files.filter((f) => {
+      if (f.source !== 'claude') return false
+      const known = idsOf(f)
+        .map((id) => mmap.get(id))
+        .find(Boolean)
+      if (!known) return true
+      return instance === 'other' ? false : known.instance === instance
+    })
   }
   if (archived !== 'include') {
     const want = archived === 'only'
@@ -758,6 +766,11 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
       if (!m.limit_stop) return null
       if (rateLimited === 'pending' && !m.limit_stop.pending) return null
     }
+    // Desktop's own id link first; the origin join only for rows it has never heard of. Resolved
+    // ONCE here and used for both the chip and the filter below, so the two cannot disagree.
+    const desk = deskMetaFor(tf, m, idsOf(tf), mmap)
+    if (instance && (instance === 'other') !== (desk === null)) return null
+    if (instance && desk && desk.instance !== instance) return null
     return {
       session_id: tf.session_id,
       source: tf.source,
@@ -774,8 +787,8 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
       size_bytes: tf.size_bytes,
       transcript_path: tf.path,
       queue_status: tf.source === 'claude' ? (qmap.get(tf.session_id) ?? null) : null,
-      instance: tf.source === 'claude' ? (mmap.get(tf.session_id)?.instance ?? null) : null,
-      archived: tf.archived || (mmap.get(tf.session_id)?.archived ?? false),
+      instance: desk?.instance ?? null,
+      archived: tf.archived || (desk?.archived ?? false),
       done: dmap.get(sessionMarkKey(tf.source, tf.session_id)) ?? false,
       dispatched: tf.source === 'claude' && qmap.has(tf.session_id),
       subagent_count: collapsed.counts.get(`${tf.source}:${tf.session_id}`) ?? 0,
@@ -819,6 +832,35 @@ function toolIdOf(tf: TranscriptFile): string {
 
 export function sessionMarkKey(source: SessionSource, sessionId: string): string {
   return source === 'claude' ? sessionId : `${source}:${sessionId}`
+}
+
+/**
+ * Which Claude Desktop instance ran this conversation, by every route we have, in order of strength.
+ *
+ *  1. Desktop's own `cliSessionId` link, for THIS id.
+ *  2. The same link for any id this row absorbed by continuing it. A compaction moves a conversation
+ *     to an id Desktop never recorded, so asking about the surviving id alone answers "no" for a
+ *     conversation it knows perfectly well under the name it had when the run started.
+ *  3. The origin join — same working directory, same creation instant — which is the only thing
+ *     left for a transcript Desktop wrote no metadata row for at all. Unique or nothing; see
+ *     resolveInstanceByOrigin.
+ *
+ * Null means genuinely unknown, and the UI says so rather than rendering an empty space: on a real
+ * store 45 of 400 sessions have no Desktop record anywhere on disk, and a blank gap there reads as
+ * a missing feature instead of a missing fact.
+ */
+function deskMetaFor(
+  tf: TranscriptFile,
+  meta: ScannedMeta,
+  ids: string[],
+  mmap: Map<string, SessionMeta>,
+): SessionMeta | null {
+  if (tf.source !== 'claude') return null
+  for (const id of ids) {
+    const hit = mmap.get(id)
+    if (hit) return hit
+  }
+  return resolveInstanceByOrigin(meta.cwd, meta.created_at)
 }
 
 /**
@@ -922,7 +964,8 @@ export async function getSession(
   const m = await scanMeta(tf)
   const qmap = queueStatusMap()
   const dmap = doneMarkMap()
-  const meta = sessionMetaMap().get(tf.session_id)
+  // Same resolution the list uses, so a row does not change its account when you click it.
+  const meta = deskMetaFor(tf, m, [tf.session_id], sessionMetaMap())
   return {
     session_id: tf.session_id,
     source: tf.source,

@@ -310,6 +310,9 @@ const SHAPE_LABEL: Record<ShapeScope, string> = {
 }
 const shapeScopeLabel = computed(() => t(SHAPE_LABEL[sessionShapeScope.value]))
 const shapeLabel = (shape: SessionShape) => t(SHAPE_LABEL[shape])
+/** "Marathon" is a size, and nothing on the row said so. Spell it out on hover. */
+const shapeTitleOf = (s: SessionSummary) =>
+  `${t('sessions.shape')}: ${shapeLabel(sessionShape(s))} — ${t('sessions.shapeHint')}`
 
 /** Working / idle / stale, from the same timestamp the list is already sorted by. A session we are
  *  actively running is 'working' regardless of the clock: the queue knows, so it does not have to
@@ -1508,12 +1511,25 @@ function copy(text: string) {
                       ></span>
                       <Clock class="size-3" />{{ timeAgo(s.last_activity_at) }}
                     </span>
-                    <span class="inline-flex items-center gap-1">
+                    <!-- SIZE, not a name. It sat unlabelled next to the account chip, so on a row
+                         whose account was unknown "Marathon" was the last word on the line and read
+                         as one. The tooltip says what it is; the always-present chip below stops it
+                         being last. -->
+                    <span class="inline-flex items-center gap-1" :title="shapeTitleOf(s)">
                       <ListTodo v-if="s.dispatched" class="size-3" />
                       <Hourglass v-else class="size-3" />{{ shapeLabel(sessionShape(s)) }}
                     </span>
-                    <span v-if="s.instance" class="inline-flex items-center gap-1">
-                      <Boxes class="size-3" />{{ s.instance === 'default' ? $t('sessions.instanceDefault') : instanceLabelFor(s.instance) }}
+                    <!-- Always rendered for a Claude session, even when the answer is "we don't
+                         know". A blank space where the account goes reads as a rendering gap; the
+                         truth is that Claude Desktop wrote no record of which account ran it, and
+                         only saying so distinguishes the two. -->
+                    <span
+                      v-if="s.source === 'claude'"
+                      class="inline-flex items-center gap-1"
+                      :class="s.instance ? '' : 'text-muted-foreground/60'"
+                      :title="s.instance ? undefined : $t('sessions.instanceUnknownHint')"
+                    >
+                      <Boxes class="size-3" />{{ s.instance ? (s.instance === 'default' ? $t('sessions.instanceDefault') : instanceLabelFor(s.instance)) : $t('sessions.instanceUnknown') }}
                     </span>
                     <!-- this row stands for a fan-out: the subagents are sessions in the provider's
                          own store, folded in here rather than listed as conversations of their own -->

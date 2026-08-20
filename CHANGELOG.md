@@ -5,6 +5,34 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.1] - 2026-08-20
+
+### Fixed
+
+- **A session with no account no longer looks like a session whose account we forgot to draw.** The
+  chip naming which Claude instance ran a conversation was simply omitted when we did not know, and
+  an omitted chip is invisible: on a real store that was 64 of the newest 400 sessions, all of them
+  launched from Desktop, showing nothing at all where the account belongs. Worse, the chip before it
+  is the session's SIZE, so on those rows "Marathon" became the last word on the line and read like
+  somebody's name. The account chip is now always present for a Claude session, saying "Unknown
+  account" with a tooltip explaining that Claude Desktop kept no record rather than that AgentHydra
+  is hiding one — and the size chip explains on hover that it is a size, from message count and
+  elapsed time, and not a name.
+
+- **19 of those 64 turned out to be knowable after all.** Desktop links its metadata to a transcript
+  by session id, and for these it had written no such row. It had, however, written down the same
+  conversation's working directory and creation instant. Matching on those two — and ONLY where the
+  answer is unique, never where two accounts could both claim it — recovers the account without
+  going near the title match this module has always refused, because two chats in one project are
+  routinely called the same thing while a folder plus a millisecond timestamp is not a coincidence
+  that happens. The remaining 45 have no Desktop record anywhere on disk, verified by searching
+  every store it keeps, so "unknown" there is the true answer and not a gap.
+
+- **The instance filter and the instance chip can no longer disagree.** They were answering from
+  different places: the filter looked through every id a row speaks for, while the chip asked only
+  about the surviving one. Both now go through a single resolver, so a row the filter returns always
+  displays the account it was filtered by.
+
 ## [0.25.0] - 2026-08-20
 
 ### Added

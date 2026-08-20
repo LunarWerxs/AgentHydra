@@ -46,6 +46,9 @@ export default {
   filterInstance: 'Instance',
   instanceAll: 'All instances',
   instanceDefault: 'Default',
+  instanceUnknown: 'Unknown account',
+  instanceUnknownHint:
+    'Claude Desktop kept no record of which account ran this session, so AgentHydra cannot say. It is not hiding one.',
   instanceOther: 'CLI / other',
   // Shown on a session that fanned out. The subagents are sessions in the provider's own store, but
   // not conversations the user held, so they are folded into this row rather than listed beside it.
@@ -142,6 +145,7 @@ export default {
   shapeMarathon: 'Marathon',
   shapeAutomation: 'Automation',
   shapeNote: 'Narrows the sessions already loaded, not the window they came from.',
+  shapeHint: 'how big the session was, from its message count and how long it ran. Not a name.',
   activityWorking: 'Working — a turn landed in the last couple of minutes',
   activityIdle: 'Idle — active within the hour',
   activityStale: 'Stale — nothing for over an hour',
