@@ -28,6 +28,12 @@ function scratchDir(prefix: string): string {
   return d;
 }
 
+// 30s, stated here because this hook deletes NINE full git repos from the temp dir and a
+// recursive delete of a git tree is thousands of small files - I/O time, not assertion time. On
+// a loaded machine it crosses bun's 5s default, and bun reports a hook timeout as
+// `(fail) (unnamed)` with no file and no hook name, which is the least actionable red a suite
+// can print. Hooks DO honour setDefaultTimeout() as well (measured on bun 1.4.0), but this file
+// is kit-synced into apps that may not set one, so it carries its own.
 afterEach(() => {
   for (const d of dirs.splice(0)) {
     try {
@@ -36,7 +42,7 @@ afterEach(() => {
       /* best-effort temp cleanup */
     }
   }
-});
+}, 30_000);
 
 async function remoteRepo(): Promise<string> {
   const dir = scratchDir("ue-remote-");
