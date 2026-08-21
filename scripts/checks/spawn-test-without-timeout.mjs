@@ -55,6 +55,12 @@ const ID = 'subprocess-test-without-explicit-timeout'
 const SPAWN_CALL =
   /(?<![\w.$])(?:Bun\.spawnSync|Bun\.spawn|Bun\.\$|(?:[A-Za-z_$][\w$]*\.)?(?:spawnSync|execFileSync|execSync|execFile)|spawn)\s*\(|\$`/
 
+// A file that sets its own default timeout. `useSuiteTimeout()` is RepoYeti's one-line wrapper
+// around it (tests/helpers/timeouts.ts); the bare call is accepted too so a repo can adopt this
+// without a helper. Both must be called from the TEST FILE - the same call in a bunfig preload
+// silently applies to only the first file of a multi-file run.
+const FILE_DEFAULT = /(?<![\w.$])(?:setDefaultTimeout|useSuiteTimeout)\s*\(/
+
 // `test(`, `it(`, and the modifier forms. `.if`/`.skipIf` are CURRIED — test.if(cond)(name, fn, ms)
 // — which is handled at the call site below, not here.
 const TEST_HEAD = /(?<![\w.$])(?:test|it)(?:\.(?:skipIf|todoIf|if|only|failing|each|skip|todo))?\s*\(/g
@@ -343,6 +349,7 @@ export const audit = {
   async run(ctx) {
     const root = ctx?.root ?? process.cwd()
     const findings = []
+    let filesWithOwnDefault = 0
 
     // A repo-wide allowance settles it for every test at once; there is no 5s default left to
     // inherit, so per-test annotations would be ceremony rather than protection.
@@ -367,6 +374,16 @@ export const audit = {
         continue
       }
       if (!SPAWN_CALL.test(text)) continue // cheap reject before the call-span scan
+      // A FILE-LEVEL DEFAULT SETTLES THAT FILE, and this is the form the rule now wants.
+      // `setDefaultTimeout()` called at the top of a test file is scoped to that file and holds
+      // for the whole run however many files are in it (measured on bun 1.4.0 - the same call
+      // from the bunfig preload does NOT, and a `timeout` key in bunfig is ignored outright).
+      // So one line per spawning file beats 260 per-test annotations saying the same thing, and
+      // unlike a --timeout flag it travels with the code instead of with the command line.
+      if (FILE_DEFAULT.test(text)) {
+        filesWithOwnDefault += 1
+        continue
+      }
       for (const hit of findViolations(text)) {
         findings.push({
           id: ID,
@@ -402,7 +419,11 @@ export const audit = {
       ? `Found ${findings.length} subprocess test(s)/hook(s) on the 5s default:\n${findings
           .map((f) => `- ${f.file}:${f.line}`)
           .join('\n')}`
-      : 'Every test that spawns a subprocess sets an explicit timeout. ✓'
+      : `Every test that spawns a subprocess has a stated timeout` +
+        (filesWithOwnDefault > 0
+          ? ` (${filesWithOwnDefault} file(s) via a file-level default, the rest per test)`
+          : '') +
+        '. ✓'
 
     return { failed, findings, report }
   },
