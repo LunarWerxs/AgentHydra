@@ -304,7 +304,7 @@ export function findViolations(text) {
 const lineAt = (text, index) => text.slice(0, index).split('\n').length
 
 /** A repo-wide timeout, if this project sets one: `bun test --timeout 20000` in package.json's test
- *  script, or `timeout = N` under bunfig.toml's [test]. Returns the ms value, or null.
+ *  script - the ONLY form bun actually honours. Returns the ms value, or null.
  *
  *  This exists because the per-test third argument is NOT the only way to state a timeout, and
  *  assuming it was made this check wrong in the most embarrassing direction: pointed at RepoYeti,
@@ -320,13 +320,14 @@ export function globalTimeoutMs(root) {
     const m = typeof script === 'string' && script.match(/--timeout[=\s]+(\d+)/)
     if (m) return Number(m[1])
   } catch {}
-  try {
-    const bunfig = readFileSync(join(root, 'bunfig.toml'), 'utf8')
-    // Only under a [test] table; a timeout elsewhere in bunfig means something else entirely.
-    const testTable = bunfig.split(/^\s*\[/m).find((s) => s.startsWith('test]'))
-    const m = testTable?.match(/^\s*timeout\s*=\s*(\d+)/m)
-    if (m) return Number(m[1])
-  } catch {}
+  // NO bunfig FALLBACK, DELIBERATELY. This used to also accept a `timeout` key under bunfig's
+  // [test] table, and that was a FALSE STAND-DOWN: bun 1.4.0 ignores that key entirely (measured
+  // 2026-08-21 in RepoYeti - a 6s test still dies at the 5s default with it set). A repo that
+  // wrote it there would silently switch this whole check off while getting none of the
+  // protection it thought it had bought, which is strictly worse than never having the fallback.
+  // `setDefaultTimeout()` in a preload is out for the same reason and is subtler: it applies when
+  // ONE file runs and silently does not when a second file joins the same invocation. The CLI
+  // flag is the only mechanism that actually holds, so it is the only one this check will believe.
   return null
 }
 

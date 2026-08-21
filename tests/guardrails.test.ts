@@ -368,13 +368,20 @@ describe('spawn-test-without-timeout.mjs — repo-wide timeout stand-down', () =
     expect(res.report).toContain('20000')
   })
 
-  test('a [test] timeout in bunfig.toml also stands it down', async () => {
+  test('a [test] timeout in bunfig.toml does NOT stand it down - bun ignores that key', async () => {
+    // This used to assert the opposite, and the opposite was a false stand-down. Bun 1.4.0 IGNORES
+    // `timeout` under [test] entirely (measured 2026-08-21 in RepoYeti: a 6s test still dies at the
+    // 5s default with it set), so believing it would switch this whole check off while the repo got
+    // none of the protection it thought it had bought - a guardrail reporting clean because it was
+    // told to stop looking. `setDefaultTimeout()` in a preload is out for the same reason and is
+    // subtler: it applies when ONE file runs and silently stops the moment a second file joins the
+    // invocation. The CLI flag is the only form that actually holds.
     const { globalTimeoutMs } = await load()
     const root = withRoot({
       'package.json': JSON.stringify({ scripts: { test: 'bun test' } }),
       'bunfig.toml': '[install]\nregistry = "x"\n\n[test]\ntimeout = 15000\n',
     })
-    expect(globalTimeoutMs(root)).toBe(15000)
+    expect(globalTimeoutMs(root)).toBeNull()
   })
 
   test('no repo-wide timeout means the per-test rule still applies (this repo)', async () => {
