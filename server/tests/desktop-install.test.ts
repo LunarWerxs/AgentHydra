@@ -270,7 +270,10 @@ describe('resolveLaunchBinary — win32 stable-stub-first ordering', () => {
         const resolved = await resolveLaunchBinary()
         expect(resolved).toBe(join(anthropicDir, 'claude.exe'))
       } finally {
-        process.env.LOCALAPPDATA = savedLad
+        // Restore with the delete-idiom: a bare assignment of `undefined` stores the STRING
+        // "undefined" (Node semantics, and Bun's from 1.4), poisoning the var for later tests.
+        if (savedLad === undefined) delete process.env.LOCALAPPDATA
+        else process.env.LOCALAPPDATA = savedLad
       }
     },
   )
@@ -290,7 +293,10 @@ describe('resolveLaunchBinary — win32 stable-stub-first ordering', () => {
         const resolved = await resolveLaunchBinary()
         expect(resolved).toBe(join(anthropicDir, 'app-1.2.3', 'Claude.exe'))
       } finally {
-        process.env.LOCALAPPDATA = savedLad
+        // Restore with the delete-idiom: a bare assignment of `undefined` stores the STRING
+        // "undefined" (Node semantics, and Bun's from 1.4), poisoning the var for later tests.
+        if (savedLad === undefined) delete process.env.LOCALAPPDATA
+        else process.env.LOCALAPPDATA = savedLad
       }
     },
   )
@@ -361,7 +367,10 @@ describe('openInstance — no-binary failure message', () => {
         expect(result.ok).toBe(false)
         expect(result.message ?? '').toContain('MSIX')
       } finally {
-        process.env.LOCALAPPDATA = savedLad
+        // Restore with the delete-idiom: a bare assignment of `undefined` stores the STRING
+        // "undefined" (Node semantics, and Bun's from 1.4), poisoning the var for later tests.
+        if (savedLad === undefined) delete process.env.LOCALAPPDATA
+        else process.env.LOCALAPPDATA = savedLad
       }
     },
   )
