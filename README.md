@@ -35,9 +35,11 @@ different accounts, Claude Code and Codex terminals across repos, or OpenCode CL
 shows all of that local history at once. You alt-tab to remember which account is which, whether a
 session is still going, and what you asked it to do.
 
-AgentHydra is one local daemon that reads what is already on your machine and puts it in a single
-browser tab. It is not a Claude client and it does not replace one. It is the dashboard the CLI and
-the desktop app do not come with.
+AgentHydra is a local dashboard for AI coding agents that brings your Claude Code, Codex, and
+OpenCode session history into one browser tab, lets you queue and schedule Claude Code runs, tracks
+cost and usage across models and projects, and manages isolated Claude Desktop and Codex Desktop
+accounts, all without a cloud service or account signup. It is not a Claude client and does not
+replace one: it is the dashboard the CLI and the desktop app do not come with.
 
 ## Every session, in one list
 
@@ -126,6 +128,26 @@ The quick daemon uses its own port and runtime pointer, so the full manager can 
 conflict. If the full manager is already running, the launcher reuses it. Closing the quick window
 retires its lightweight daemon automatically after a short reconnect grace period.
 
+## How it compares
+
+Most tools in this space either read what your AI CLIs have already done, or spin up new isolated
+sessions for you to run. AgentHydra is the first kind.
+
+**[Claude Squad](https://github.com/smtg-ai/claude-squad)** and **[Conductor](https://www.conductor.build)**
+both launch new Claude Code (and Codex) sessions for you, each in its own git worktree so tasks do
+not collide: Claude Squad in a terminal TUI, Conductor in a macOS-only app. AgentHydra does not
+create worktrees or start sessions on its own; it reads the Claude Code, Codex, and OpenCode session
+history, queue, and account state your existing setup already writes, then adds a run queue with a
+scheduler, cost and usage analytics, and multi-account instance management on top, from a browser
+tab on Windows, macOS, or Linux.
+
+Claude Code's own [worktree support](https://code.claude.com/docs/en/worktrees) covers running
+several sessions from one repo without any extra tool. AgentHydra sits a layer above that: it shows
+every session across every project and provider at once, however you started it.
+
+If what you want is an editor with AI built in, AgentHydra is not that either. Cursor and Windsurf
+are IDEs; AgentHydra is a dashboard over the CLIs and desktop apps you already have.
+
 ## Install
 
 **On Windows, one line.** It installs under `%LOCALAPPDATA%` (no Administrator), and it verifies the
@@ -204,6 +226,51 @@ and hitting a wall halfway through it: [docs/AI_USAGE_SELFCHECK.md](docs/AI_USAG
 
 [Reference](docs/REFERENCE.md) covers configuration, the MCP tools, auto-update, the stack, the repo
 layout and how to run the checks.
+
+## FAQ
+
+**Is AgentHydra free?**
+Yes. It is open source under the MIT license, free to download and run, with no account or
+subscription for AgentHydra itself. You still need your own Claude Code, Codex, or OpenCode setup,
+since AgentHydra manages sessions for those tools rather than providing the underlying AI.
+
+**Does it work offline?**
+Mostly. AgentHydra runs as a local daemon reading session data already on your machine, with no
+cloud service and nothing to sign up for. The one thing that reaches out on its own is a periodic
+update check; set `AGENTHYDRA_NO_PING=1` and that check goes straight to GitHub's API instead.
+
+**Is my data sent anywhere?**
+No session content leaves your machine. The periodic update check sends the app version, a coarse
+OS tag, and a random per-install id, never a hostname, username, file path, account, or email. The
+server derives an approximate location and network ASN from that request. `AGENTHYDRA_NO_PING=1`
+turns it off.
+
+**What are the system requirements?**
+Bun is only needed if you run from source; packaged builds need nothing extra. You need the `claude`
+CLI and/or Claude Desktop for Claude features, with Codex Desktop/CLI and OpenCode optional. The
+tray launcher and full Windows instance management need the classic Squirrel-installer build of
+Claude Desktop, not the newer MSIX package.
+
+**How is it different from Claude Squad or Conductor?**
+Claude Squad and Conductor both start new, isolated Claude Code (and Codex) sessions in fresh git
+worktrees. AgentHydra does not create sessions or worktrees; it reads the history, queue, and
+account state your existing Claude Code, Codex, and OpenCode setup already writes, and adds a
+scheduler, cost analytics, and instance management on top. See [How it compares](#how-it-compares).
+
+**Which AI tools does it support?**
+Claude Code, Codex, and OpenCode sessions are read directly and shown together in the session list.
+Queueing runs, composing replies, the scheduler, and rate-limit auto-resume are Claude-only; Codex
+and OpenCode are read-only. Claude Desktop and Codex Desktop instances are managed separately from
+the Instances view.
+
+**Can I try it without risking my Claude quota?**
+Yes. Set `AGENTHYDRA_FAKE=1` and dispatch uses a harmless stand-in for the `claude` CLI, so nothing
+touches your quota or your repos. The scheduler stays off by default either way. Note that instance
+actions (open, quit, create, delete) still act on real Claude Desktop instances.
+
+Made by [LunarWerx Studios](https://lunarwerx.com). Also see
+[RepoYeti](https://repoyeti.com), [DevWebUI](https://devwebui.lunarwerx.com), and
+[SageThumbs](https://sagethumbs.lunarwerx.com).
 
 ## License
 
