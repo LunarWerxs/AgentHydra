@@ -15,6 +15,7 @@ import {
   buildTerminalLaunchPlan,
   bundledClaudeExe,
   importSessionToDesktop,
+  sweepUntitledDesktopChats,
 } from '../src/session-launch'
 
 test('windows: powershell reads the prompt file raw, window survives exit', () => {
@@ -92,6 +93,41 @@ test('applyDesktopChatTitle writes the same field pair the app itself writes', (
   expect(meta.title).toBe('My Real Title')
   expect(meta.titleSource).toBe('tool')
   expect(applyDesktopChatTitle(profile, 'sess-nope', 'x')).toBe('not-found')
+})
+
+test('the title janitor names untitled chats, respects real names, skips generic candidates', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-janitor-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  writeFileSync(
+    join(store, 'local_sid-untitled.json'),
+    JSON.stringify({ cliSessionId: 'sid-untitled' }),
+  )
+  writeFileSync(
+    join(store, 'local_sid-generic.json'),
+    JSON.stringify({ cliSessionId: 'sid-generic', title: 'General coding session' }),
+  )
+  writeFileSync(
+    join(store, 'local_sid-named.json'),
+    JSON.stringify({ cliSessionId: 'sid-named', title: 'My hand-picked name' }),
+  )
+  writeFileSync(
+    join(store, 'local_sid-nocandidate.json'),
+    JSON.stringify({ cliSessionId: 'sid-nocandidate' }),
+  )
+  const titles: Record<string, string | null> = {
+    'sid-untitled': 'Ship the parser rewrite',
+    'sid-generic': 'PyOverdrive batch 15 (shape sweep)',
+    'sid-named': 'Should never be used',
+    'sid-nocandidate': 'Untitled',
+  }
+  const fixed = sweepUntitledDesktopChats((sid) => titles[sid] ?? null, [profile])
+  expect(fixed).toBe(2)
+  const read = (n: string) => JSON.parse(readFileSync(join(store, n), 'utf8'))
+  expect(read('local_sid-untitled.json').title).toBe('Ship the parser rewrite')
+  expect(read('local_sid-generic.json').title).toBe('PyOverdrive batch 15 (shape sweep)')
+  expect(read('local_sid-named.json').title).toBe('My hand-picked name')
+  expect(read('local_sid-nocandidate.json').title).toBeUndefined()
 })
 
 test('archiveDesktopChat flips the metadata flag by filename across profiles', async () => {

@@ -228,12 +228,23 @@ onMounted(async () => {
             <InfoHint :text="$t('orchestrator.openMinPlanHint')" />
           </template>
           <template #control>
-            <Input
-              v-model="form.openMinPlan"
-              class="w-28"
+            <Select
+              :model-value="view?.settings.openMinPlan"
               :disabled="view?.settings.openInstances !== 'when-exhausted'"
-              @change="save({ openMinPlan: form.openMinPlan })"
-            />
+              @update:model-value="(v) => save({ openMinPlan: v as string })"
+            >
+              <SelectTrigger class="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <!-- Anthropic's literal plan-tier names (substring-matched against the account
+                   label), not prose -->
+              <!-- i18n-ignore -->
+              <SelectContent>
+                <SelectItem value="Max 20">Max 20×</SelectItem>
+                <SelectItem value="Max 5">Max 5×</SelectItem>
+                <SelectItem value="Pro">Pro</SelectItem>
+              </SelectContent>
+            </Select>
           </template>
         </SettingsRow>
 

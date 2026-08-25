@@ -208,6 +208,15 @@ monitor is off and the session matters, one status line for the owner. Ack, cool
 - A session in the live registry (the feed gives it a `peerName`) gets SendMessage ONLY. NEVER
   queue a `--resume` against a live session: that puts two writers on one transcript under an
   open renderer.
+- **The deaf-chat revive.** An imported chat the owner never clicked is live-but-deaf: your
+  SendMessage queues into a void. The tell: you nudged it, and next wake the same item is back
+  with `detail.quietSecs` still growing - the transcript never moved. Revive it with
+  `POST /api/sessions/<id>/migrate {"instance_ref": "<its OWN instance ref>", "prompt":
+  "<your nudge verbatim>"}` - that kills the passive process, runs your message as a real
+  turn on its own account, and lands the chat back in the same desktop app, awake. One revive
+  per chat per day; if it comes back deaf again, one status line for the owner.
+- The reviewer's own instance is NOT special: threads living in the same instance as you are
+  orchestrated exactly like every other thread. The only session you skip is your own.
 - New work goes through launch-terminal (visible, orchestratable) or the queue (headless),
   always `instance_ref`-pinned to a deliberately chosen RUNNING instance.
 - Know where things show up, and say so: a desktop import lands a finished session as a real

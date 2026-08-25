@@ -5,6 +5,22 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The title janitor: thread names are managed continuously, not fixed once.** Plumbing-created
+  desktop chats (imports, migrations) land "Untitled" or with a generic AI name; every ~10
+  minutes the watcher now hands the scanner's real title to any desktop entry that has none.
+  A person's rename always outranks it, and generic candidates are never written.
+- **The deaf-chat revive.** An imported chat the owner never clicked is live-but-deaf to peer
+  messages. `POST /api/sessions/:id/migrate` now takes an optional `prompt`, so the reviewer
+  revives such a chat by same-instance re-dispatch: the nudge runs as a real turn on its own
+  account and the chat lands back imported, awake. The rubric detects deafness by a nudge that
+  produces no transcript movement.
+- **Minimum plan is a dropdown** (Max 20× / Max 5× / Pro) in the Orchestrator settings instead
+  of a free-text box.
+
 ## [0.30.0] - 2026-08-25
 
 ### Added

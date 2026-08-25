@@ -53,6 +53,7 @@ import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { instanceRefForSession } from './instance-sessions'
 import { classifyEnding, type SessionEnding } from './session-ending'
+import { sweepUntitledDesktopChats } from './session-launch'
 import type {
   AttentionItem,
   OrchestratorInstance,
@@ -1040,6 +1041,33 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   state.attention = withContinuity(visible)
   state.lastTickAt = nowIso
   state.lastTickMs = deps.nowMs() - started
+
+  // -- the title janitor (every ~10 min) --------------------------------------
+  // Plumbing-created desktop chats (imports, migrations) land "Untitled" or with a generic AI
+  // name; the owner's requirement is standing name management, not one-time fixes. The scanner
+  // already derives real titles for every transcript — hand them to any desktop entry that has
+  // none. Only in the real pass (default deps), never in tests driving injected deps.
+  if (deps === defaultDeps && started - lastTitleSweepMs > 10 * 60_000) {
+    lastTitleSweepMs = started
+    try {
+      const fixed = sweepUntitledDesktopChats(scannerTitleFor)
+      if (fixed > 0) console.log(`[agenthydra] title janitor named ${fixed} desktop chat(s)`)
+    } catch (err) {
+      console.error('[agenthydra] title janitor failed:', err)
+    }
+  }
+}
+
+let lastTitleSweepMs = 0
+
+/** The scanner's best title for a transcript (session_scan_cache), or null. */
+function scannerTitleFor(cliSessionId: string): string | null {
+  const row = db
+    .query<{ title: string }, [string]>(
+      "select title from session_scan_cache where cache_key like 'claude:' || ? || ':%' order by mtime_ms desc limit 1",
+    )
+    .get(cliSessionId)
+  return row?.title ?? null
 }
 
 function fmtQuiet(secs: number): string {

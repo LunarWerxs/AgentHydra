@@ -332,6 +332,76 @@ export async function archiveDesktopChat(
   return { ok: true, hits }
 }
 
+/**
+ * The title janitor: give every desktop chat that has NO real name the best title the scanner
+ * knows for it. "Untitled" / "General coding session" happens whenever a chat is created by
+ * plumbing (imports, migrations) rather than by a person — the desktop derives nothing at
+ * import time, and generic bootstrap turns earn generic AI titles. The owner's requirement is
+ * standing, not one-time: names are MANAGED, continuously. Runs from the watcher tick.
+ *
+ * Never overwrites an existing non-empty title (a person's rename outranks everything), and
+ * writes only when the scanner has something better than an id or a generic label. Metadata
+ * writes show in a RUNNING app after its next restart — the standing caveat.
+ */
+export function sweepUntitledDesktopChats(
+  lookupTitle: (cliSessionId: string) => string | null,
+  roots?: string[],
+): number {
+  const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
+  const searchRoots = roots ?? [
+    join(appData, 'Claude'),
+    ...((): string[] => {
+      const root = join(homedir(), '.claude-instances')
+      try {
+        return readdirSync(root, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => join(root, d.name))
+      } catch {
+        return []
+      }
+    })(),
+  ]
+  const GENERIC = /^(untitled|general coding session|new (chat|session))$/i
+  let fixed = 0
+  for (const profile of searchRoots) {
+    const store = join(profile, 'claude-code-sessions')
+    if (!existsSync(store)) continue
+    try {
+      for (const org of readdirSync(store, { withFileTypes: true })) {
+        if (!org.isDirectory()) continue
+        for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+          if (!user.isDirectory()) continue
+          const dir = join(store, org.name, user.name)
+          for (const f of readdirSync(dir)) {
+            if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+            const path = join(dir, f)
+            try {
+              const meta = JSON.parse(readFileSync(path, 'utf8'))
+              const current = typeof meta.title === 'string' ? meta.title.trim() : ''
+              if (current && !GENERIC.test(current)) continue
+              const sid =
+                typeof meta.cliSessionId === 'string' && meta.cliSessionId
+                  ? meta.cliSessionId
+                  : f.slice('local_'.length, -'.json'.length)
+              const better = lookupTitle(sid)?.trim()
+              if (!better || GENERIC.test(better) || better === sid) continue
+              meta.title = better
+              meta.titleSource = 'tool'
+              writeFileSync(path, JSON.stringify(meta))
+              fixed++
+            } catch {
+              // one unreadable metadata file must not stop the sweep
+            }
+          }
+        }
+      }
+    } catch {
+      // an unreadable store just contributes nothing
+    }
+  }
+  return fixed
+}
+
 export async function importSessionToDesktop(opts: {
   sessionId: string
   instanceDir: string

@@ -2083,6 +2083,14 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''
   if (!ref.startsWith('desktop:'))
     return c.json({ ok: false, error: "instance_ref ('desktop:<dir>') is required" }, 400)
+  // Optional prompt override. The same-instance variant of this endpoint is the REVIVE path for
+  // an imported chat the owner never clicked (live-but-deaf to peer messages, measured): kill
+  // its passive process, run the caller's message as the resume turn, land it back imported —
+  // the nudge gets delivered through the front door instead of queueing into a void.
+  const prompt =
+    typeof body.prompt === 'string' && body.prompt.trim()
+      ? body.prompt.trim().slice(0, 8000)
+      : MIGRATION_PROMPT
   const s = await getSession(sessionId, 'claude')
   if (!s) return c.json({ ok: false, error: 'session not found' }, 404)
 
@@ -2120,7 +2128,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     sessionId,
     `Migrate: ${s.title}`.slice(0, 200),
     s.cwd,
-    MIGRATION_PROMPT,
+    prompt,
     null,
     null,
     null,
