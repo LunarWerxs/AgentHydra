@@ -428,6 +428,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   orch_reset_soon_mins: '120',
   orch_spike_pct: '5',
   orch_dirty_mins: '60',
+  orch_stale_task_mins: '120',
   orch_nudge_cooldown_mins: '15',
   // Launching closed instances is OFF by default (owner directive 2026-08-25): sessions on
   // accounts that are not currently open are simply not resumable. The 'when-exhausted' mode,

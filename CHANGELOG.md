@@ -5,6 +5,19 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] - 2026-08-25
+
+### Added
+
+- **Dead background tasks no longer excuse a chat forever.** A session that looks "waiting on
+  background tasks" used to be skipped indefinitely by the reviewer; sessions were found sitting
+  9-12 hours on tasks whose output had stopped. The watcher now reads each session's task-output
+  mtimes: transcript AND task outputs both silent past `staleTaskMins` (default 120) flags the
+  chat as stuck on dead tasks, and the /orchestrate rubric sends an intervention ("check the
+  tasks, kill or restart, continue; do not go back to waiting") instead of deferring. Task
+  files carry no liveness metadata, so this is deliberately a silence judgment - a wedged-alive
+  task after two silent hours deserves the same poke.
+
 ## [0.29.0] - 2026-08-25
 
 ### Added

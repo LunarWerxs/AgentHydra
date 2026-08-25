@@ -42,7 +42,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 // Text imports: bundled into compiled builds, so a packaged AgentHydra can still install the
 // commands on a machine that has no checkout and no docs/ directory.
@@ -87,6 +87,7 @@ export function getOrchestratorSettings(): OrchestratorSettings {
     resetSoonMins: num('orch_reset_soon_mins', 120, 0, 24 * 60),
     spikePct: num('orch_spike_pct', 5, 1, 100),
     dirtyMins: num('orch_dirty_mins', 60, 1, 7 * 24 * 60),
+    staleTaskMins: num('orch_stale_task_mins', 120, 10, 24 * 60),
     nudgeCooldownMins: num('orch_nudge_cooldown_mins', 15, 1, 24 * 60),
     openInstances:
       getSetting('orch_open_instances') === 'when-exhausted' ? 'when-exhausted' : 'never',
@@ -124,6 +125,7 @@ export function setOrchestratorSettings(
   clamp('orch_reset_soon_mins', patch.resetSoonMins, 0, 24 * 60)
   clamp('orch_spike_pct', patch.spikePct, 1, 100)
   clamp('orch_dirty_mins', patch.dirtyMins, 1, 7 * 24 * 60)
+  clamp('orch_stale_task_mins', patch.staleTaskMins, 10, 24 * 60)
   clamp('orch_nudge_cooldown_mins', patch.nudgeCooldownMins, 1, 24 * 60)
   if (patch.openInstances === 'never' || patch.openInstances === 'when-exhausted')
     setSetting('orch_open_instances', patch.openInstances)
@@ -690,12 +692,37 @@ export function buildInstanceRows(
 
 // --- the pass ---------------------------------------------------------------
 
+/**
+ * Newest background-task output mtime for a session (`<tmp>/claude/<projectKey>/<sessionId>/
+ * tasks/*.output`), or null when the session has no task dir. Background tasks leave no
+ * liveness metadata on disk — only output files — so "dead" is a silence judgment: a session
+ * that is waiting on tasks while BOTH its transcript and its task outputs have been silent
+ * past the threshold is stuck on dead work (measured 2026-08-25: sessions sat "waiting" 9-12
+ * hours on tasks whose output had stopped, and the wait rubric skipped them forever).
+ */
+function taskActivityMtime(cwd: string, sessionId: string): number | null {
+  try {
+    const dir = join(tmpdir(), 'claude', projectKeyForCwd(cwd), sessionId, 'tasks')
+    let newest: number | null = null
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.output')) continue
+      const m = statSync(join(dir, f)).mtimeMs
+      if (newest === null || m > newest) newest = m
+    }
+    return newest
+  } catch {
+    return null
+  }
+}
+
 export interface OrchestratorDeps {
   nowMs: () => number
   claudeHome: () => string
   registry: (claudeHome: string) => LiveSession[]
   tailInfo: (path: string) => TailInfo
   mtimeMs: (path: string) => number | null
+  /** See taskActivityMtime. Null = the session has no background-task outputs at all. */
+  taskActivity: (cwd: string, sessionId: string) => number | null
   git: (cwd: string) => Promise<GitInfo | null>
   usage: () => Record<string, UsageSnapshot>
   instanceRef: (sessionId: string) => string | null
@@ -714,6 +741,7 @@ const defaultDeps: OrchestratorDeps = {
       return null
     }
   },
+  taskActivity: taskActivityMtime,
   git: gitInfoFor,
   usage: allCachedUsage,
   instanceRef: instanceRefForSession,
@@ -868,13 +896,32 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       })
     } else {
       const handoffDue = typeof tail.ctxTokens === 'number' && tail.ctxTokens >= s.ctxHandoffTokens
+      // "Waiting on a background task" only excuses a session while the task shows signs of
+      // life. Transcript AND task outputs both silent past the threshold means the tasks are
+      // dead (or their completion never woke the session) — flagged so the reviewer intervenes
+      // instead of waiting forever (measured: sessions sat "waiting" 9-12h on silent tasks).
+      const taskMtime = deps.taskActivity(sess.cwd, sess.sessionId)
+      const taskAgeSec = taskMtime === null ? null : Math.round((started - taskMtime) / 1000)
+      const staleSecs = s.staleTaskMins * 60
+      const staleTasks =
+        tail.midTurn && quietSecs >= staleSecs && (taskAgeSec === null || taskAgeSec >= staleSecs)
+      detail.taskNewestAgeSec = taskAgeSec
+      detail.staleTasks = staleTasks
       items.push({
         ...base,
         key: `idle:${sess.sessionId}`,
         kind: handoffDue ? 'handoff_due' : 'idle_pending',
         summary: `${sess.name} idle ${fmtQuiet(quietSecs)}${
           tail.recapDetected ? ' with a recap' : ''
-        }${tail.midTurn ? ' (tail ends mid-tool: likely a background task)' : ''}${
+        }${
+          staleTasks
+            ? ` — WAITING ON DEAD BACKGROUND TASKS (task output silent ${
+                taskAgeSec === null ? fmtQuiet(quietSecs) : fmtQuiet(taskAgeSec)
+              }); intervene`
+            : tail.midTurn
+              ? ' (tail ends mid-tool: likely a background task)'
+              : ''
+        }${
           handoffDue ? ` at ${Math.round((tail.ctxTokens ?? 0) / 1000)}k context — hand off` : ''
         }`,
         detail,

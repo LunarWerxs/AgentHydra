@@ -1139,6 +1139,9 @@ export interface OrchestratorSettings {
   spikePct: number
   /** Continuous dirty minutes before a repo is flagged. */
   dirtyMins: number
+  /** A "waiting on background tasks" session whose transcript AND task outputs have both been
+   *  silent this long is flagged as stuck-on-dead-tasks (intervene, don't wait forever). */
+  staleTaskMins: number
   /** Default ack cooldown for session-scoped items. */
   nudgeCooldownMins: number
   /** Whether the reviewer may LAUNCH a closed desktop instance. 'never' (default): only

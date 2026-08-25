@@ -1942,6 +1942,7 @@ app.post('/api/orchestrator', async (c) => {
     'resetSoonMins',
     'spikePct',
     'dirtyMins',
+    'staleTaskMins',
     'nudgeCooldownMins',
   ] as const) {
     if (typeof body[k] === 'number') patch[k] = body[k]

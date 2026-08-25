@@ -458,6 +458,7 @@ function fakeDeps(over: Partial<OrchestratorDeps> & { tail?: TailInfo; mtime?: n
     usage: () => ({}),
     instanceRef: () => null,
     desktopInstances: async () => [],
+    taskActivity: () => null,
     ...over,
   }
   return { deps }
@@ -520,6 +521,55 @@ test('an acked item is suppressed, and re-arms when the transcript moves after t
   expect(orchestratorView().attention.some((i: AttentionItem) => i.key === 'idle:sess-1')).toBe(
     true,
   )
+})
+
+test('dead background tasks: silent waiting flags for intervention; live tasks do not', async () => {
+  const waitingTail: TailInfo = {
+    ending: 'complete',
+    lastAssistantText: 'Kicked off the sweep in the background.',
+    ctxTokens: 100_000,
+    midTurn: true,
+    recapDetected: false,
+    handoffDetected: false,
+    chips: [],
+    lastHumanText: null,
+    lastHumanAt: null,
+    unreadable: false,
+  }
+  // Clocks sit 4h ahead of the other tests, with the transcript mtime AFTER any earlier ack on
+  // this session id, so cooldown suppression from previous tests cannot shadow these items.
+  const base = Date.now() + 4 * 3600 * 1000
+  // Transcript quiet 3h, newest task output 3h old (past the 120min default): DEAD.
+  const { deps: dead } = fakeDeps({
+    tail: waitingTail,
+    nowMs: () => base,
+    mtime: base - 3 * 3600 * 1000,
+    taskActivity: () => base - 3 * 3600 * 1000,
+  })
+  await runOrchestratorOnce(dead)
+  let item = orchestratorView().attention.find((i: AttentionItem) => i.key === 'idle:sess-1')
+  expect(item?.detail?.staleTasks).toBe(true)
+  expect(item?.summary).toContain('DEAD BACKGROUND TASKS')
+  // Same quiet transcript but a task wrote output 5 minutes ago: alive, leave it be.
+  const { deps: alive } = fakeDeps({
+    tail: waitingTail,
+    nowMs: () => base,
+    mtime: base - 3 * 3600 * 1000,
+    taskActivity: () => base - 5 * 60_000,
+  })
+  await runOrchestratorOnce(alive)
+  item = orchestratorView().attention.find((i: AttentionItem) => i.key === 'idle:sess-1')
+  expect(item?.detail?.staleTasks).toBe(false)
+  expect(item?.summary).toContain('likely a background task')
+  // No task dir at all + waiting + silent: also dead (the wait excuse has no evidence).
+  const { deps: noDir } = fakeDeps({
+    tail: waitingTail,
+    nowMs: () => base,
+    mtime: base - 3 * 3600 * 1000,
+  })
+  await runOrchestratorOnce(noDir)
+  item = orchestratorView().attention.find((i: AttentionItem) => i.key === 'idle:sess-1')
+  expect(item?.detail?.staleTasks).toBe(true)
 })
 
 test('branch and dirty hygiene: off-main flags immediately; dirty flags after dirtyMins', async () => {

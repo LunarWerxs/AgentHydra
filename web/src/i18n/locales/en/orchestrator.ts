@@ -39,5 +39,6 @@ export default {
   resetSoonLabel: 'Reset-soon window (min)',
   spikeLabel: 'Spike (weekly Δ%)',
   dirtyLabel: 'Dirty repo after (min)',
+  staleTaskLabel: 'Dead tasks after (min)',
   cooldownLabel: 'Nudge cooldown (min)',
 }

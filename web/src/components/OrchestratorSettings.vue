@@ -43,6 +43,7 @@ const form = reactive({
   resetSoonMins: 0,
   spikePct: 0,
   dirtyMins: 0,
+  staleTaskMins: 0,
   nudgeCooldownMins: 0,
 })
 
@@ -61,6 +62,7 @@ function adopt(v: OrchestratorView) {
   form.resetSoonMins = v.settings.resetSoonMins
   form.spikePct = v.settings.spikePct
   form.dirtyMins = v.settings.dirtyMins
+  form.staleTaskMins = v.settings.staleTaskMins
   form.nudgeCooldownMins = v.settings.nudgeCooldownMins
 }
 
@@ -85,6 +87,7 @@ function saveNumbers() {
     resetSoonMins: Number(form.resetSoonMins),
     spikePct: Number(form.spikePct),
     dirtyMins: Number(form.dirtyMins),
+    staleTaskMins: Number(form.staleTaskMins),
     nudgeCooldownMins: Number(form.nudgeCooldownMins),
   })
 }
@@ -292,6 +295,10 @@ onMounted(async () => {
             <div class="space-y-1.5">
               <label class="text-xs font-medium text-muted-foreground">{{ $t('orchestrator.dirtyLabel') }}</label>
               <Input v-model="form.dirtyMins" type="number" @change="saveNumbers" />
+            </div>
+            <div class="space-y-1.5">
+              <label class="text-xs font-medium text-muted-foreground">{{ $t('orchestrator.staleTaskLabel') }}</label>
+              <Input v-model="form.staleTaskMins" type="number" @change="saveNumbers" />
             </div>
             <div class="space-y-1.5">
               <label class="text-xs font-medium text-muted-foreground">{{ $t('orchestrator.cooldownLabel') }}</label>

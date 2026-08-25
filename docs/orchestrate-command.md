@@ -108,8 +108,15 @@ gets the standing answer, acked `standing-answer`.
 ## The rubric
 
 **`idle_pending`** - a live chat finished and is waiting.
-- `detail.midTurn` true, or the tail shows a background task/workflow still running -> it is
-  waiting on work, not on you. Ack `waiting-on-task`, cooldown 30.
+- `detail.staleTasks` true -> its background tasks are DEAD (transcript and task outputs both
+  silent past the threshold; the summary says how long). Do NOT keep waiting. SendMessage:
+  "[orchestrator] You have been waiting on background tasks that have produced nothing for
+  <duration> - they are almost certainly dead or their completion never woke you. Check their
+  status and output files now, kill or restart what is needed, and continue the work. If their
+  results are unrecoverable, redo that work directly. Do not go back to waiting." Ack
+  `stale-task-nudge`, cooldown 60.
+- `detail.midTurn` true (and NOT staleTasks), or the tail shows a background task/workflow
+  still alive -> it is waiting on work, not on you. Ack `waiting-on-task`, cooldown 30.
 - `detail.lastHumanAt` within 30 minutes -> the human is driving that chat. Keep out. Ack
   `human-active`, cooldown 30. (Exception: the human's last message clearly hands control back,
   e.g. "keep going".)

@@ -1332,6 +1332,7 @@ export const TOOLS: McpEngineTool[] = [
       resetSoonMins: { type: 'number' },
       spikePct: { type: 'number' },
       dirtyMins: { type: 'number' },
+      staleTaskMins: { type: 'number' },
       nudgeCooldownMins: { type: 'number' },
       openInstances: { type: 'string', enum: ['never', 'when-exhausted'] },
       openMinPlan: { type: 'string' },

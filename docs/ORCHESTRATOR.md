@@ -183,6 +183,7 @@ Turning it off is the reverse in either order; each half degrades safely without
 | `resetSoonMins` | 120 | within this of a reset, a high band is a dump target instead |
 | `spikePct` | 5 | weekly jump between reads that flags a spike |
 | `dirtyMins` | 60 | continuous dirty time before a repo is flagged |
+| `staleTaskMins` | 120 | a "waiting on background tasks" chat whose transcript AND task outputs have both been silent this long is flagged as stuck on dead tasks (the reviewer intervenes instead of waiting forever) |
 | `nudgeCooldownMins` | 15 | default ack cooldown for session items |
 | `openInstances` | `never` | whether the reviewer may LAUNCH a closed instance; `when-exhausted` allows it only once every running instance is out of headroom |
 | `openMinPlan` | `Max 20` | minimum plan an auto-opened instance must have |
