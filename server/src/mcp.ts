@@ -1362,6 +1362,18 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(),
     run: () => api('/api/orchestrator/check', { method: 'POST' }),
   },
+  {
+    name: 'orchestrator_install_command',
+    description:
+      "MUTATES: install the shipped /orchestrate reviewer command into this machine's ~/.claude/commands (the command file the interactive reviewer chat runs). A copy the user edited is reported as 'differs' and left alone unless force is true. Enabling the orchestrator also installs it when absent.",
+    inputSchema: S({ force: { type: 'boolean' } }),
+    run: (a) =>
+      api('/api/orchestrator/install-command', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(a),
+      }),
+  },
 
   // --- self-update ------------------------------------------------------------------
   {

@@ -157,6 +157,7 @@ import { openUi } from './open-ui'
 import {
   ackAttention,
   getOrchestratorSettings,
+  installOrchestrateCommand,
   orchestratorView,
   runOrchestratorOnce,
   setOrchestratorSettings,
@@ -1939,9 +1940,27 @@ app.post('/api/orchestrator', async (c) => {
     if (typeof body[k] === 'number') patch[k] = body[k]
   }
   setOrchestratorSettings(patch)
-  // Flipping it on should produce a feed now, not a tick-interval from now.
-  if (patch.enabled === true) await runOrchestratorOnce().catch(() => {})
+  // Flipping it on should produce a feed now, not a tick-interval from now — and a machine that
+  // has never had the reviewer command gets it installed (an existing copy is never touched here).
+  if (patch.enabled === true) {
+    await runOrchestratorOnce().catch(() => {})
+    try {
+      installOrchestrateCommand(false)
+    } catch (err) {
+      console.error('[agenthydra] /orchestrate command install failed:', err)
+    }
+  }
   return c.json(orchestratorView())
+})
+// Install (or with {"force": true}, refresh) the /orchestrate reviewer command into
+// ~/.claude/commands — for a new machine, or after an AgentHydra update changed the command.
+app.post('/api/orchestrator/install-command', async (c) => {
+  const body = await jsonBody(c)
+  try {
+    return c.json({ ok: true, ...installOrchestrateCommand(body.force === true) })
+  } catch (err) {
+    return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
+  }
 })
 app.post('/api/orchestrator/ack', async (c) => {
   const body = await jsonBody(c)

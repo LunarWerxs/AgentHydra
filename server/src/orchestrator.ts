@@ -34,14 +34,19 @@
 import {
   closeSync,
   existsSync,
+  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
   readSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+// Text import: bundled into compiled builds, so a packaged AgentHydra can still install the
+// command on a machine that has no checkout and no docs/ directory.
+import ORCHESTRATE_COMMAND from '../../docs/orchestrate-command.md' with { type: 'text' }
 import { db, getSetting, setSetting } from './db'
 import { instanceRefForSession } from './instance-sessions'
 import { classifyEnding, type SessionEnding } from './session-ending'
@@ -442,7 +447,7 @@ async function gitInfoFor(cwd: string): Promise<GitInfo | null> {
     windowsHide: true,
   })
   const killer = setTimeout(() => proc.kill(), 10_000)
-  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+  const [out, code] = await Promise.all([Bun.readableStreamToText(proc.stdout), proc.exited])
   clearTimeout(killer)
   if (code !== 0) {
     // Not a work tree (or git absent). Cached for the process lifetime: a directory does not
@@ -450,7 +455,7 @@ async function gitInfoFor(cwd: string): Promise<GitInfo | null> {
     notARepo.add(cwd)
     return null
   }
-  const lines = out.split('\n').filter((l) => l.length > 0)
+  const lines = out.split('\n').filter((l: string) => l.length > 0)
   const head = lines[0] ?? ''
   const detached = /^## HEAD \(no branch\)/.test(head)
   const branch = detached ? null : (head.match(/^## ([^.\s]+)/)?.[1] ?? null)
@@ -895,4 +900,43 @@ export function stopOrchestrator(): void {
     clearInterval(timer)
     timer = null
   }
+}
+
+// --- shipping the /orchestrate command --------------------------------------
+// The reviewer half is a Claude command file, and a feature the user has to go find a file for
+// is not shipped. The daemon carries the command's text (see the top-of-file text import) and
+// writes it into ~/.claude/commands itself: on first enable when it is absent, or on the
+// explicit install endpoint. A copy the user has edited is never overwritten without force —
+// their edits are the newer intent, not drift to correct.
+
+export type CommandInstallOutcome = 'installed' | 'up-to-date' | 'differs' | 'updated'
+
+/** Pure decision: what should happen given what is on disk. Exported for tests. */
+export function commandInstallOutcome(
+  existing: string | null,
+  shipped: string,
+  force: boolean,
+): CommandInstallOutcome {
+  if (existing === null) return 'installed'
+  if (existing === shipped) return 'up-to-date'
+  return force ? 'updated' : 'differs'
+}
+
+export function installOrchestrateCommand(
+  force = false,
+  commandsDir: string = join(homedir(), '.claude', 'commands'),
+): { outcome: CommandInstallOutcome; path: string } {
+  const path = join(commandsDir, 'orchestrate.md')
+  let existing: string | null = null
+  try {
+    existing = readFileSync(path, 'utf8')
+  } catch {
+    existing = null
+  }
+  const outcome = commandInstallOutcome(existing, ORCHESTRATE_COMMAND, force)
+  if (outcome === 'installed' || outcome === 'updated') {
+    mkdirSync(commandsDir, { recursive: true })
+    writeFileSync(path, ORCHESTRATE_COMMAND)
+  }
+  return { outcome, path }
 }

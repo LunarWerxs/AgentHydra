@@ -19,7 +19,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   (`get_orchestrator`, `set_orchestrator`, `orchestrator_ack`, `orchestrator_check`). The
   judgment half is an interactive reviewer chat running the shipped `/orchestrate` command
   (`docs/orchestrate-command.md`), because peer messaging is only available to interactive
-  sessions - measured, and written into the docs.
+  sessions - measured, and written into the docs. The command file ships inside the daemon
+  (bundled into compiled builds): enabling the orchestrator installs it to
+  `~/.claude/commands/` when absent, and `POST /api/orchestrator/install-command` (or the
+  `orchestrator_install_command` MCP tool) installs or force-refreshes it on any machine; an
+  edited copy is never overwritten without force.
 
 ### Fixed
 

@@ -6,11 +6,16 @@
 // test pins one classification the reviewer depends on, against synthetic transcript records in
 // the CLI's own shapes (captured from a real store on 2026-08-25, CLI v2.1.237).
 import { expect, test } from 'bun:test'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   ackAttention,
   bandForPct,
+  commandInstallOutcome,
   computeUsageItems,
   getOrchestratorSettings,
+  installOrchestrateCommand,
   isInjectedUserText,
   type LiveSession,
   type OrchestratorDeps,
@@ -267,6 +272,29 @@ test('settings round-trip and clamp', () => {
   expect(s.tickSecs).toBe(30) // clamped up to the floor
   expect(s.dirtyMins).toBe(7 * 24 * 60) // clamped down to the ceiling
   setOrchestratorSettings({ enabled: false, tickSecs: 60, dirtyMins: 60 })
+})
+
+// --- shipping the /orchestrate command --------------------------------------
+
+test('command install decision: write when absent, keep an edited copy unless forced', () => {
+  expect(commandInstallOutcome(null, 'shipped', false)).toBe('installed')
+  expect(commandInstallOutcome('shipped', 'shipped', false)).toBe('up-to-date')
+  expect(commandInstallOutcome('user edited', 'shipped', false)).toBe('differs')
+  expect(commandInstallOutcome('user edited', 'shipped', true)).toBe('updated')
+})
+
+test('installOrchestrateCommand writes the bundled command and respects edits', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-cmd-'))
+  const first = installOrchestrateCommand(false, dir)
+  expect(first.outcome).toBe('installed')
+  const written = readFileSync(first.path, 'utf8')
+  expect(written).toContain('/orchestrate - the reviewer loop')
+  expect(installOrchestrateCommand(false, dir).outcome).toBe('up-to-date')
+  writeFileSync(first.path, `${written}\nlocal tweak`)
+  expect(installOrchestrateCommand(false, dir).outcome).toBe('differs')
+  expect(readFileSync(first.path, 'utf8')).toContain('local tweak')
+  expect(installOrchestrateCommand(true, dir).outcome).toBe('updated')
+  expect(readFileSync(first.path, 'utf8')).toBe(written)
 })
 
 // --- the pass, with injected deps -------------------------------------------

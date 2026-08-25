@@ -91,8 +91,23 @@ Same four verbs over MCP: `get_orchestrator`, `set_orchestrator`, `orchestrator_
 ## The reviewer (`/orchestrate`)
 
 An interactive chat - desktop or terminal - because only interactive sessions carry the peer
-tools. Open a chat on a **low-usage account**, model **Sonnet**, and start the loop. The
-command file ships with AgentHydra's docs and installs to `~/.claude/commands/orchestrate.md`.
+tools. Open a chat on a **low-usage account**, model **Sonnet**, and start the loop. A plain
+`claude` in a terminal works exactly as well as a desktop chat: any interactive session joins
+the live registry and gets the peer tools (use a logged-in CLI instance's `CLAUDE_CONFIG_DIR`
+to pick which account pays for it).
+
+**The command ships inside AgentHydra itself.** The daemon carries the file's text (bundled
+into compiled builds too) and writes `~/.claude/commands/orchestrate.md` on its own the first
+time you enable the orchestrator, so a fresh machine needs no manual copy. To (re)install
+explicitly - a new machine, or after an update changed the command:
+
+```
+POST /api/orchestrator/install-command            installs when absent; reports 'differs' if you edited yours
+POST /api/orchestrator/install-command {"force": true}   overwrite your copy with the shipped one
+```
+
+(also the `orchestrator_install_command` MCP tool). A copy you have edited is never silently
+overwritten - your edits are newer intent, not drift.
 
 What the loop does, per wake:
 
