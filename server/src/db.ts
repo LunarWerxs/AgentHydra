@@ -430,7 +430,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   orch_open_instances: 'never',
   orch_open_min_plan: 'Max 20',
   orch_reviewer_reserve_pct: '75',
-  orch_handoff_surface: 'terminal',
+  orch_handoff_surface: 'desktop',
 }
 
 export function getSetting(key: string): string {

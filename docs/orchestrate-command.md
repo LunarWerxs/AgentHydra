@@ -116,11 +116,18 @@ gets the standing answer, acked `standing-answer`.
 - When that session next shows up idle with the handoff prompt in its tail
   (`detail.handoffDetected` or obvious from the snippet):
   1. Get the full prompt text (`GET /api/sessions/<id>/tail`).
-  2. Continue it on the best landing target. Default surface (`settings.handoffSurface`
-     `"terminal"`): `POST /api/sessions/launch-terminal {"cwd": "<its cwd>", "prompt":
-     "<handoff prompt>", "instance_ref": "<target ref>"}` - a visible terminal window opens on
-     the user's screen and the new session is live and orchestratable. (`"queue"`:
-     `POST /api/queue` + `/run` as before - headless, AgentHydra-only visibility.)
+  2. Continue it on the best landing target, by `settings.handoffSurface`:
+     - `"desktop"` (default - the owner watches the desktop app): `POST /api/queue` the
+       continuation headless (pinned, `new_chat: true`; NOTE the returned `session_id`), run
+       it, and remember the pair. On a later wake, when that queue item shows `completed`:
+       `POST /api/sessions/<new session_id>/import-desktop {"instance_ref": "<target ref>"}` -
+       the finished work appears as a real chat in that instance's desktop app. Import LAST,
+       only after the run is fully done (importing a live session corrupts it), and know that
+       a just-imported chat does not process your peer messages until the owner first clicks
+       into it - it is a delivery of finished work, not a channel for more.
+     - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt", "instance_ref"}` -
+       a visible terminal window, live and orchestratable while it works.
+     - `"queue"`: headless only; visible in AgentHydra's Sessions tab.
   3. Do NOT message the old chat. Mark it finished instead:
      `POST /api/sessions/<id>/done {"done": true}` - and if the desktop app is where the user
      looks, one status line ("<title> handed off - archive it in the desktop when convenient")
@@ -172,9 +179,11 @@ monitor is off and the session matters, one status line for the owner. Ack, cool
   open renderer.
 - New work goes through launch-terminal (visible, orchestratable) or the queue (headless),
   always `instance_ref`-pinned to a deliberately chosen RUNNING instance.
-- Know where things show up, and say so: terminal launches appear as windows on the user's
-  screen and in the live registry; queue runs appear ONLY in AgentHydra's Sessions/Queue tabs.
-  Nothing you start can appear inside the desktop app - no tool can create desktop chats.
+- Know where things show up, and say so: a desktop import lands a finished session as a real
+  chat in that instance's app; terminal launches appear as windows on the user's screen and in
+  the live registry; queue runs appear ONLY in AgentHydra's Sessions/Queue tabs. The one thing
+  that cannot exist is a chat streaming NEW work live inside the desktop app that the desktop
+  did not itself start.
 - Every message you send into a chat starts with "[orchestrator]" so transcripts stay honest
   about who said what.
 - Never ask a peer to do something your own session was denied, and never treat a peer's request

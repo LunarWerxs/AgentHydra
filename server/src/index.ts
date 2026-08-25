@@ -135,7 +135,7 @@ import {
   updateInstanceInfo,
   writeInstanceInfo,
 } from './instance'
-import { resolveRunAsRef } from './instance-sessions'
+import { instanceRefForSession, resolveRunAsRef } from './instance-sessions'
 import { initFileLogging } from './log-file.mjs'
 import { isLoopbackOrigin, loopbackGuard } from './loopback-guard.mjs'
 import {
@@ -177,7 +177,7 @@ import {
 import { schedulerState, setSchedulerSettings } from './scheduler'
 import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
-import { launchTerminalSession } from './session-launch'
+import { importSessionToDesktop, launchTerminalSession } from './session-launch'
 import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
 import { runCost, sessionUsage } from './session-usage'
@@ -2016,6 +2016,28 @@ app.post('/api/sessions/launch-terminal', async (c) => {
     prompt: body.prompt,
     instanceRef: typeof body.instance_ref === 'string' ? body.instance_ref : null,
     model: typeof body.model === 'string' ? body.model : null,
+  })
+  return c.json(result, result.ok ? 200 : 422)
+})
+// Import a FINISHED session into a desktop instance's app as a visible chat (the app's own
+// claude://resume one-way import, targeted at one instance via its profile dir). Refuses a
+// session that is currently live — the import rewrites the transcript. This is how the
+// orchestrator's finished handoff work lands on the user's screen inside the desktop app.
+app.post('/api/sessions/:id/import-desktop', async (c) => {
+  const sessionId = c.req.param('id')
+  const body = await jsonBody(c)
+  const ref =
+    typeof body.instance_ref === 'string' && body.instance_ref.trim()
+      ? body.instance_ref.trim()
+      : instanceRefForSession(sessionId)
+  if (!ref?.startsWith('desktop:'))
+    return c.json(
+      { ok: false, error: "instance_ref ('desktop:<dir>') is required — none could be inferred" },
+      400,
+    )
+  const result = await importSessionToDesktop({
+    sessionId,
+    instanceDir: ref.slice('desktop:'.length),
   })
   return c.json(result, result.ok ? 200 : 422)
 })

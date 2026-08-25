@@ -8,7 +8,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildTerminalLaunchPlan, bundledClaudeExe } from '../src/session-launch'
+import { buildImportPlan, buildTerminalLaunchPlan, bundledClaudeExe } from '../src/session-launch'
 
 test('windows: powershell reads the prompt file raw, window survives exit', () => {
   const plan = buildTerminalLaunchPlan(
@@ -28,6 +28,23 @@ test('windows: single quotes in paths are doubled for powershell, not left to br
   const plan = buildTerminalLaunchPlan('win32', "C:\\o'brien\\claude.exe", 'C:\\tmp\\p.txt', null)
   expect(plan.argv[plan.argv.length - 1]).toContain("C:\\o''brien\\claude.exe")
   expect(plan.argv[plan.argv.length - 1]).not.toContain('--model')
+})
+
+test('the desktop import plan targets one instance via its profile dir', () => {
+  const win = buildImportPlan(
+    'win32',
+    'C:\\LA\\AnthropicClaude\\claude.exe',
+    'c:\\users\\x\\.claude-instances\\work',
+    'abc-123',
+  )
+  expect(win).toEqual([
+    'C:\\LA\\AnthropicClaude\\claude.exe',
+    '--user-data-dir=c:\\users\\x\\.claude-instances\\work',
+    'claude://resume?session=abc-123',
+  ])
+  // darwin: resolveLaunchBinary returns the 'Claude' marker, which must go through `open -na`.
+  const mac = buildImportPlan('darwin', 'Claude', '/Users/x/instances/work', 'abc-123')
+  expect(mac.slice(0, 4)).toEqual(['open', '-na', 'Claude', '--args'])
 })
 
 test('bundledClaudeExe picks the numerically newest version, not the lexicographic one', () => {

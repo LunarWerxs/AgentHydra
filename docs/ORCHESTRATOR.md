@@ -73,6 +73,8 @@ POST /api/orchestrator/check      run one pass now
 POST /api/orchestrator/hold       { session_id, held } - park/unpark one thread (/delayo, /resumeo)
 POST /api/sessions/launch-terminal  { cwd, prompt, instance_ref?, model? } - open a VISIBLE
                                   terminal running a new interactive session on that account
+POST /api/sessions/:id/import-desktop  { instance_ref? } - import a FINISHED session into that
+                                  instance's desktop app as a visible chat
 ```
 
 **Parking a thread**: type `/delayo` in any chat and the orchestrator stops prompting it -
@@ -168,18 +170,24 @@ Turning it off is the reverse in either order; each half degrades safely without
 | `openInstances` | `never` | whether the reviewer may LAUNCH a closed instance; `when-exhausted` allows it only once every running instance is out of headroom |
 | `openMinPlan` | `Max 20` | minimum plan an auto-opened instance must have |
 | `reviewerReservePct` | 75 | the reviewer's own account stays under this weekly % so it can always keep orchestrating |
-| `handoffSurface` | `terminal` | where handoff continuations run: a visible terminal session (orchestratable, on-screen) or the headless queue |
+| `handoffSurface` | `desktop` | where handoff continuations land: `desktop` (headless run, then imported into the desktop app as a visible chat), `terminal` (watchable live window), or `queue` (headless only) |
 
 ## Where new sessions show up (and where they cannot)
 
+- A **desktop import** (`POST /api/sessions/:id/import-desktop`, the default handoff surface)
+  lands a FINISHED session as a real chat in the target instance's desktop app - the app's own
+  `claude://resume` one-way import, aimed at one instance via its profile dir. Verified live:
+  the chat appears in the sidebar, fully rendered, on the right account. Two hard rules: never
+  import a session that is still running (the import rewrites the transcript under an active
+  writer), and a just-imported chat does not process orchestrator messages until you first
+  click into it - import delivers finished work; it is not a steering channel.
 - A **terminal launch** appears as a real window on your screen, joins the live registry, and
-  is orchestratable like any chat. This is the default handoff surface.
+  is orchestratable while it works - the surface for watching a continuation live.
 - A **queue run** is headless: it exists only in AgentHydra's Sessions/Queue tabs (live-tail
   there). It never appears in the desktop app and the orchestrator cannot nudge it mid-run.
-- **Nothing can create a chat inside the desktop app itself** - there is no stable external
-  interface for that, and the desktop's own archive flag is read-only from outside too (which
-  is why a handed-off chat gets AgentHydra's done-mark and a status line asking you to archive
-  it in the desktop when convenient).
+- The desktop's own archive flag is read-only from outside (which is why a handed-off chat
+  gets AgentHydra's done-mark and a status line asking you to archive it in the desktop when
+  convenient).
 
 ## Limitations, stated out loud
 

@@ -92,7 +92,10 @@ export function getOrchestratorSettings(): OrchestratorSettings {
       getSetting('orch_open_instances') === 'when-exhausted' ? 'when-exhausted' : 'never',
     openMinPlan: getSetting('orch_open_min_plan') || 'Max 20',
     reviewerReservePct: num('orch_reviewer_reserve_pct', 75, 1, 100),
-    handoffSurface: getSetting('orch_handoff_surface') === 'queue' ? 'queue' : 'terminal',
+    handoffSurface: ((): OrchestratorSettings['handoffSurface'] => {
+      const hs = getSetting('orch_handoff_surface')
+      return hs === 'queue' || hs === 'terminal' ? hs : 'desktop'
+    })(),
   }
 }
 
@@ -120,7 +123,11 @@ export function setOrchestratorSettings(
   if (typeof patch.openMinPlan === 'string' && patch.openMinPlan.trim())
     setSetting('orch_open_min_plan', patch.openMinPlan.trim().slice(0, 40))
   clamp('orch_reviewer_reserve_pct', patch.reviewerReservePct, 1, 100)
-  if (patch.handoffSurface === 'terminal' || patch.handoffSurface === 'queue')
+  if (
+    patch.handoffSurface === 'terminal' ||
+    patch.handoffSurface === 'queue' ||
+    patch.handoffSurface === 'desktop'
+  )
     setSetting('orch_handoff_surface', patch.handoffSurface)
   return getOrchestratorSettings()
 }

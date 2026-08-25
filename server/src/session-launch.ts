@@ -28,12 +28,13 @@
 // never a secret, and is left for the OS temp cleaner (deleting it too early would race the
 // terminal still starting up).
 
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveClaudeExe } from './config'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
+import { resolveLaunchBinary } from './core/paths'
 
 /**
  * The newest CLI the pinned desktop instance itself bundles
@@ -183,5 +184,81 @@ export async function launchTerminalSession(opts: {
       reason: err instanceof Error ? err.message : 'spawn-failed',
       command: plan.command,
     }
+  }
+}
+
+// --- importing a finished session INTO the desktop app -----------------------
+// `claude://resume?session=<id>` is the desktop app's own one-way import: it renders the
+// session as a real chat in the app's sidebar. Verified live 2026-08-25 on an isolated
+// instance: invoking the instance's binary with its --user-data-dir plus the URL makes
+// Electron's single-instance lock forward the link to the RUNNING app, which imports and
+// shows the chat (on the right account, since the profile dir picks the account).
+//
+// TWO HARD RULES, both from REFERENCE.md's warning and one measurement:
+//   · NEVER import a session that is currently LIVE (an alive-pid registry entry): the import
+//     rewrites the transcript under an active writer.
+//   · A freshly imported chat registers a live session process but does NOT drain queued peer
+//     messages until a human first interacts with it (measured). So finish all headless work
+//     FIRST and import LAST — import is how finished work lands on the user's screen, not a
+//     channel for driving further work.
+
+/** Pure and platform-parameterised, like the launch plan above. `binary` is the desktop
+ *  binary ('Claude' is the darwin open -na marker resolveLaunchBinary returns). */
+export function buildImportPlan(
+  platform: NodeJS.Platform,
+  binary: string,
+  instanceDir: string,
+  sessionId: string,
+): string[] {
+  const url = `claude://resume?session=${sessionId}`
+  const dataDir = `--user-data-dir=${instanceDir}`
+  if (platform === 'darwin' && binary === 'Claude')
+    return ['open', '-na', 'Claude', '--args', dataDir, url]
+  return [binary, dataDir, url]
+}
+
+/** True when the live registry holds this session with a pid that is still running. */
+function sessionIsLive(sessionId: string): boolean {
+  try {
+    const dir = join(homedir(), '.claude', 'sessions')
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.json')) continue
+      try {
+        const reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
+        if (reg?.sessionId !== sessionId || typeof reg?.pid !== 'number') continue
+        try {
+          process.kill(reg.pid, 0)
+          return true
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === 'EPERM') return true
+        }
+      } catch {
+        // one unreadable entry says nothing about the others
+      }
+    }
+  } catch {
+    // no registry dir — nothing can be live
+  }
+  return false
+}
+
+export async function importSessionToDesktop(opts: {
+  sessionId: string
+  instanceDir: string
+  isLive?: (sessionId: string) => boolean
+}): Promise<{ ok: boolean; reason?: string }> {
+  if ((opts.isLive ?? sessionIsLive)(opts.sessionId))
+    return { ok: false, reason: 'session-live: refusing to import under an active writer' }
+  if (!existsSync(opts.instanceDir)) return { ok: false, reason: 'instance-dir-not-found' }
+  const binary = await resolveLaunchBinary()
+  if (!binary) return { ok: false, reason: 'desktop-binary-not-found' }
+  const argv = buildImportPlan(process.platform, binary, opts.instanceDir, opts.sessionId)
+  try {
+    // A GUI hand-off spawn: windowsHide deliberately absent (this file is exempt from the
+    // console-window guard for exactly this class of spawn).
+    Bun.spawn(argv, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : 'spawn-failed' }
   }
 }

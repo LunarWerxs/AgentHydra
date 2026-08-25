@@ -1144,9 +1144,11 @@ export interface OrchestratorSettings {
   /** The reviewer's own account stays under this weekly % so it can always keep orchestrating;
    *  above it, it stops accepting handoff landings for itself. */
   reviewerReservePct: number
-  /** Where handoff continuations run: 'terminal' (default) opens a visible interactive
-   *  terminal session (orchestratable, on-screen); 'queue' uses the headless dispatch queue. */
-  handoffSurface: 'terminal' | 'queue'
+  /** Where handoff continuations land. 'desktop' (default): run headless, then import the
+   *  finished work into the owning instance's desktop app as a visible chat. 'terminal':
+   *  open a visible interactive terminal session (watchable live, orchestratable). 'queue':
+   *  headless only, visible in AgentHydra's Sessions tab. */
+  handoffSurface: 'desktop' | 'terminal' | 'queue'
 }
 
 /** One desktop instance as the orchestrator routing logic sees it: is it OPEN right now, and

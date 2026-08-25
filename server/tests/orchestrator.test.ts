@@ -342,6 +342,7 @@ test('new settings round-trip: open-instances mode, min plan, reserve, handoff s
   const back = setOrchestratorSettings({ openInstances: 'never', handoffSurface: 'terminal' })
   expect(back.openInstances).toBe('never')
   expect(back.handoffSurface).toBe('terminal')
+  expect(setOrchestratorSettings({ handoffSurface: 'desktop' }).handoffSurface).toBe('desktop')
 })
 
 // --- shipping the /orchestrate command --------------------------------------
