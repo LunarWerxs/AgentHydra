@@ -17,6 +17,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   tasks, kill or restart, continue; do not go back to waiting") instead of deferring. Task
   files carry no liveness metadata, so this is deliberately a silence judgment - a wedged-alive
   task after two silent hours deserves the same poke.
+- **A limit-migrated chat now lands in the borrowed account's desktop app.** Migrate-on-limit
+  moved a 5-hour-walled run onto another account and it kept working, but headlessly: nothing
+  imported it, so the owner never saw it anywhere. The migrated resume now carries the same
+  `import_to`/`import_title` the "Migrate to another account" menu route uses, so `finalize()`
+  delivers the completed run into that instance's app as a visible chat. A same-account
+  auto-resume still imports nothing (its chat is already where it belongs, and transcripts are
+  shared), and unlike the menu route this one does not archive the old entries first - it fires
+  unattended, and archive-then-failed-import would leave the thread visible in no app at all.
+  Chat titles are peeled back to the thread's own name, so a third stop no longer reads
+  "Migrated resume: Auto-resume: Ship the parser".
 
 ## [0.29.0] - 2026-08-25
 

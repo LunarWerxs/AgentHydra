@@ -94,6 +94,24 @@ routing table the reviewer uses: running, fresh reading, weekly under the hard b
 under the high band. In the app, every Claude chat's menu also has **Migrate to another
 account**, a flyout of running instances that runs the full migration pipeline on click.
 
+The migrated resume carries `import_to`/`import_title`, so when the borrowed-account run
+completes, `finalize()` lands it in that instance's desktop app as a visible chat under the
+thread's own name - the same delivery the menu route uses. Without it a limit-migration
+finished headless and the owner never saw it anywhere, which was the one gap left in the
+migrate story. Three deliberate choices behind it:
+
+- **Only a migration imports.** A same-account auto-resume writes no import fields: that chat is
+  already in the app it belongs to, and transcripts are shared across instances
+  (`~/.claude/projects`), so a second entry would just duplicate the same thread.
+- **It does not archive the old desktop entries**, though the menu route does. That route is
+  user-initiated and settles in seconds; this one fires unattended and a migrated run can be
+  long, so the target instance may have closed by the time it finishes (the import refuses to
+  boot a closed instance, by design). Archive-then-fail would leave the thread visible in no app
+  at all, which is strictly worse than the duplicate entry.
+- **The title is the thread's, not the plumbing's.** Queue titles nest across stops ("Migrated
+  resume: Auto-resume: Ship the parser"); `baseTitle()` in monitor.ts peels those prefixes off
+  for both the imported chat's name and the queue row itself.
+
 **Parking a thread**: type `/delayo` in any chat and the orchestrator stops prompting it -
 no resumes, no handoffs, no hygiene nudges - until you type `/resumeo` there. The watcher
 drops a held thread's items entirely and the feed's `holds` list shows what is parked, so a

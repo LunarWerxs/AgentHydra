@@ -365,6 +365,26 @@ export function monitorStatus(): MonitorStatusRow[] {
 /** Enqueue a resume of the rate-limited item's session, scheduled for `notBefore`. When
  *  `instanceRefOverride` is set (migrate-on-limit), the resume runs on THAT account instead of
  *  the original pin — the whole point being that the original just hit its 5-hour wall. */
+/**
+ * The thread's own name, with any resume/migration prefix this monitor (or the migrate route)
+ * previously stapled on peeled back off.
+ *
+ * Queue titles NEST: a resume of a resume of a run reads "Migrated resume: Auto-resume: Ship the
+ * parser". That is merely ugly on the queue row, but the same string becomes the chat's title in
+ * the owner's desktop sidebar once a migrated run is imported, and there it has to be the thread's
+ * name rather than a record of the plumbing that moved it. Stripping is idempotent and never
+ * returns empty — a title that is nothing BUT prefixes keeps its original text.
+ */
+export function baseTitle(title: string): string {
+  let t = (title ?? '').trim()
+  for (;;) {
+    const next = t.replace(/^(?:Auto-resume|Migrated resume|Migrate):\s*/, '').trim()
+    if (next === t) break
+    t = next
+  }
+  return t || (title ?? '').trim()
+}
+
 function enqueueResume(item: QueueItem, notBefore: string, instanceRefOverride?: string): string {
   const id = crypto.randomUUID()
   const prompt = getMonitorSettings().resumePrompt
@@ -372,14 +392,15 @@ function enqueueResume(item: QueueItem, notBefore: string, instanceRefOverride?:
     .query<{ m: number | null }, []>('select max(position) as m from queue_items')
     .get()
   const position = (posRow?.m ?? 0) + 1
+  const name = baseTitle(item.title)
   db.query(
     `insert into queue_items
-       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, ?, ?)`,
+       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at, import_to, import_title)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, ?, ?, ?, ?)`,
   ).run(
     id,
     item.session_id,
-    `${instanceRefOverride ? 'Migrated resume' : 'Auto-resume'}: ${item.title}`.slice(0, 200),
+    `${instanceRefOverride ? 'Migrated resume' : 'Auto-resume'}: ${name}`.slice(0, 200),
     item.cwd,
     prompt,
     item.model ?? null,
@@ -394,6 +415,23 @@ function enqueueResume(item: QueueItem, notBefore: string, instanceRefOverride?:
     position,
     notBefore,
     Date.now(),
+    // A MIGRATED resume runs on a BORROWED account, so without this it finishes headless and lands
+    // nowhere the owner looks — the one gap left in the migrate story. finalize() in dispatch.ts
+    // imports a completed run carrying import_to into that instance's desktop app, exactly as the
+    // "Migrate to another account" menu item does, so the borrowed run ends up visible on the
+    // account that can actually keep driving it (the original one is still behind its 5-hour wall).
+    //
+    // A same-account auto-resume deliberately imports NOTHING: that chat already sits in the app it
+    // belongs to, and importing would add a duplicate entry pointing at the same transcript.
+    //
+    // Unlike the menu route this does NOT archive the old desktop entries first. That route is
+    // user-initiated and settles in seconds; this one fires unattended and a migrated run can be
+    // long, so the target instance may have been closed by the time it finishes (the import refuses
+    // to boot a closed instance, by design). Archive-then-fail would leave the thread visible in no
+    // app at all — strictly worse than the duplicate entry not archiving can leave behind, and
+    // transcripts are shared across instances so the original entry keeps showing the real thread.
+    instanceRefOverride ?? null,
+    instanceRefOverride ? name.slice(0, 200) : null,
   )
   return id
 }
