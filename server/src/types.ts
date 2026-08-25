@@ -1108,3 +1108,76 @@ export interface MonitorView {
   /** account_id → enabled (absent = follows the global switch). */
   accounts: Record<string, boolean>
 }
+
+// --- orchestrator (docs/ORCHESTRATOR.md) -----------------------------------------------------
+
+export interface OrchestratorSettings {
+  /** Master switch (OFF by default — the watcher reads disk on a timer while on). */
+  enabled: boolean
+  /** Pass interval, seconds (30–600). */
+  tickSecs: number
+  /** Quiet seconds before a live chat counts as pending input. */
+  idleQuietSecs: number
+  /** Context tokens at which a pending chat should hand off to a fresh thread instead. */
+  ctxHandoffTokens: number
+  /** Weekly-usage bands: ok < soft ≤ elevated < warn ≤ high < hard ≤ critical. */
+  softPct: number
+  warnPct: number
+  hardPct: number
+  /** 5-hour session band reported alongside the weekly verdict. */
+  sessionHighPct: number
+  /** Within this many minutes of a weekly reset, a high band is a dump target, not a problem. */
+  resetSoonMins: number
+  /** Weekly % jump between two reads that flags a spike. */
+  spikePct: number
+  /** Continuous dirty minutes before a repo is flagged. */
+  dirtyMins: number
+  /** Default ack cooldown for session-scoped items. */
+  nudgeCooldownMins: number
+}
+
+export type AttentionKind =
+  | 'idle_pending'
+  | 'handoff_due'
+  | 'interrupted'
+  | 'errored'
+  | 'usage_alert'
+  | 'repo_dirty'
+  | 'branch_off_main'
+  | 'chip'
+  | 'limit_stopped'
+
+/** One thing the watcher thinks needs a judgment call. The payload carries enough to judge
+ *  from (tail snippet, numbers), so the reviewer never has to open the transcript itself. */
+export interface AttentionItem {
+  /** Stable key for ack/cooldown ("idle:<sessionId>", "usage:<instanceKey>", …). */
+  key: string
+  kind: AttentionKind
+  /** Live-session linkage, when the item is about one session. */
+  sessionId?: string
+  /** Peer-messaging address from the live registry (SendMessage target). */
+  peerName?: string
+  cwd?: string
+  /** Owning instance ref ('desktop:<dir>' | 'cli:<id>') when resolvable. */
+  instanceRef?: string
+  /** Short human line: what tripped this. */
+  summary: string
+  /** Last assistant text (tail), when the item is about one session. */
+  tailSnippet?: string
+  detail?: Record<string, unknown>
+  firstSeenAt: string
+  /** Consecutive passes this item has been live. */
+  seenCount: number
+}
+
+export interface OrchestratorView {
+  settings: OrchestratorSettings
+  attention: AttentionItem[]
+  meta: {
+    lastTickAt: string | null
+    lastTickMs: number | null
+    liveSessions: number
+    /** Age of the newest usage-cache reading, seconds (null = no cache yet). */
+    usageAgeSecs: number | null
+  }
+}

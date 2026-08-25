@@ -154,6 +154,14 @@ import {
   setNotificationSettings,
 } from './notify-settings'
 import { openUi } from './open-ui'
+import {
+  ackAttention,
+  getOrchestratorSettings,
+  orchestratorView,
+  runOrchestratorOnce,
+  setOrchestratorSettings,
+  startOrchestrator,
+} from './orchestrator'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
@@ -1907,6 +1915,51 @@ app.post('/api/monitor/check', async (c) => {
   return c.json({ ok: true, ...monitorView() })
 })
 
+// --- orchestrator (docs/ORCHESTRATOR.md) ------------------------------------
+// The attention watcher: settings + the current feed. The judgment half (the /orchestrate
+// reviewer session) consumes GET, acts over peer messaging or the queue, then POSTs an ack.
+app.get('/api/orchestrator', (c) => c.json(orchestratorView()))
+app.post('/api/orchestrator', async (c) => {
+  const body = await jsonBody(c)
+  const patch: Record<string, unknown> = {}
+  if (typeof body.enabled === 'boolean') patch.enabled = body.enabled
+  for (const k of [
+    'tickSecs',
+    'idleQuietSecs',
+    'ctxHandoffTokens',
+    'softPct',
+    'warnPct',
+    'hardPct',
+    'sessionHighPct',
+    'resetSoonMins',
+    'spikePct',
+    'dirtyMins',
+    'nudgeCooldownMins',
+  ] as const) {
+    if (typeof body[k] === 'number') patch[k] = body[k]
+  }
+  setOrchestratorSettings(patch)
+  // Flipping it on should produce a feed now, not a tick-interval from now.
+  if (patch.enabled === true) await runOrchestratorOnce().catch(() => {})
+  return c.json(orchestratorView())
+})
+app.post('/api/orchestrator/ack', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.key !== 'string' || !body.key.trim() || typeof body.action !== 'string')
+    return c.json({ error: 'key and action are required' }, 400)
+  ackAttention(
+    body.key,
+    body.action,
+    typeof body.cooldownMins === 'number' ? body.cooldownMins : undefined,
+  )
+  return c.json({ ok: true, settings: getOrchestratorSettings() })
+})
+// Force one watcher pass now.
+app.post('/api/orchestrator/check', async (c) => {
+  await runOrchestratorOnce()
+  return c.json({ ok: true, ...orchestratorView() })
+})
+
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------
 app.post('/api/portable-window', async (c) => {
   // readInstanceInfo() is populated at boot (writeInstanceInfo below) before the server starts
@@ -2229,6 +2282,12 @@ startRetrySweep()
 // sweep above, not here), gates each on the weekly cap via checkUsage, and schedules a
 // `claude --resume` for just after the 5-hour reset.
 startMonitor()
+
+// --- orchestrator watcher loop (opt-in; OFF by default; see docs/ORCHESTRATOR.md) -------------
+// Same posture as the monitor: the loop always runs, each tick is a no-op unless `orch_enabled`
+// is set. Reads the live-session registry, transcript tails, git status and the usage cache;
+// never messages, dispatches, or probes anything.
+startOrchestrator()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

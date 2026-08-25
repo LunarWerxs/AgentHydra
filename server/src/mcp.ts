@@ -1308,6 +1308,61 @@ export const TOOLS: McpEngineTool[] = [
       api('/api/monitor', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(a) }),
   },
 
+  // --- orchestrator (docs/ORCHESTRATOR.md) --------------------------------------
+  {
+    name: 'get_orchestrator',
+    description:
+      'Get the orchestrator watcher: settings and the current attention feed — live chats idle and pending input (with the recap tail to judge from), chats due a context handoff, usage band/spike alerts per account, long-dirty repos, off-main branches, and offered task chips. This is the feed the /orchestrate reviewer session acts on.',
+    inputSchema: S(),
+    run: () => api('/api/orchestrator'),
+  },
+  {
+    name: 'set_orchestrator',
+    description:
+      'MUTATES: update orchestrator watcher settings (enabled, tickSecs, idleQuietSecs, ctxHandoffTokens, softPct/warnPct/hardPct, sessionHighPct, resetSoonMins, spikePct, dirtyMins, nudgeCooldownMins). OFF by default. The watcher only reads local state; it never messages sessions or spends quota.',
+    inputSchema: S({
+      enabled: { type: 'boolean' },
+      tickSecs: { type: 'number' },
+      idleQuietSecs: { type: 'number' },
+      ctxHandoffTokens: { type: 'number' },
+      softPct: { type: 'number' },
+      warnPct: { type: 'number' },
+      hardPct: { type: 'number' },
+      sessionHighPct: { type: 'number' },
+      resetSoonMins: { type: 'number' },
+      spikePct: { type: 'number' },
+      dirtyMins: { type: 'number' },
+      nudgeCooldownMins: { type: 'number' },
+    }),
+    run: (a) =>
+      api('/api/orchestrator', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(a) }),
+  },
+  {
+    name: 'orchestrator_ack',
+    description:
+      "MUTATES: acknowledge one attention item by its key after acting on it (or deciding not to). Suppresses that item for cooldownMins (default: the nudgeCooldownMins setting); a session item whose transcript moves after the ack re-arms on its own. `action` is a short note of what was done ('nudged', 'answered', 'queued chip', 'left for human').",
+    inputSchema: S(
+      {
+        key: { type: 'string' },
+        action: { type: 'string' },
+        cooldownMins: { type: 'number' },
+      },
+      ['key', 'action'],
+    ),
+    run: (a) =>
+      api('/api/orchestrator/ack', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(a),
+      }),
+  },
+  {
+    name: 'orchestrator_check',
+    description: 'Run one orchestrator watcher pass now and return the fresh attention feed.',
+    inputSchema: S(),
+    run: () => api('/api/orchestrator/check', { method: 'POST' }),
+  },
+
   // --- self-update ------------------------------------------------------------------
   {
     name: 'check_update',

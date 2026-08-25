@@ -131,6 +131,20 @@ create table if not exists session_scan_cache (
   scanned_at        integer not null
 );
 create index if not exists idx_session_scan_cache_path on session_scan_cache(path);
+
+-- Orchestrator (docs/ORCHESTRATOR.md): reviewer acks on attention items, plus small persisted
+-- state (repo dirty-since, usage baselines) so cooldowns and durations survive a daemon restart.
+create table if not exists orchestrator_acks (
+  key      text primary key,          -- the attention item's stable key
+  action   text not null,             -- what the reviewer says it did (free text, short)
+  until    text not null,             -- ISO; the item stays suppressed while now < until
+  acked_at text not null
+);
+create table if not exists orchestrator_kv (
+  key        text primary key,
+  value      text not null,
+  updated_at text not null
+);
 `)
 
 // A short-lived pre-0.11 hardening change stored manually added account credentials as DPAPI
@@ -395,6 +409,20 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   monitor_enabled: '0',
   monitor_max_attempts: '3',
   monitor_resume_buffer_min: '3',
+  // Orchestrator watcher (docs/ORCHESTRATOR.md) — OFF by default (it reads everything you are
+  // doing on a timer, and that should be a choice).
+  orch_enabled: '0',
+  orch_tick_secs: '60',
+  orch_idle_quiet_secs: '150',
+  orch_ctx_handoff_tokens: '700000',
+  orch_soft_pct: '80',
+  orch_warn_pct: '85',
+  orch_hard_pct: '90',
+  orch_session_high_pct: '90',
+  orch_reset_soon_mins: '120',
+  orch_spike_pct: '5',
+  orch_dirty_mins: '60',
+  orch_nudge_cooldown_mins: '15',
 }
 
 export function getSetting(key: string): string {

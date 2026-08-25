@@ -5,6 +5,29 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The orchestrator: a watcher that babysits every open Claude chat** (`docs/ORCHESTRATOR.md`).
+  Off by default. A deterministic daemon pass reads the CLI's live-session registry and each live
+  chat's transcript tail every minute and publishes an attention feed: chats idle and pending
+  input (with the recap to judge from), chats whose context is past a handoff threshold, per-
+  account usage band crossings/spikes with a reset-soon exemption, repos left dirty with all
+  their sessions idle, off-main branches, and offered task chips. `GET/POST /api/orchestrator`,
+  `POST /api/orchestrator/ack`, `POST /api/orchestrator/check`, plus matching MCP tools
+  (`get_orchestrator`, `set_orchestrator`, `orchestrator_ack`, `orchestrator_check`). The
+  judgment half is an interactive reviewer chat running the shipped `/orchestrate` command
+  (`docs/orchestrate-command.md`), because peer messaging is only available to interactive
+  sessions - measured, and written into the docs.
+
+### Fixed
+
+- **An unset numeric setting no longer clamps to its minimum.** `Number('') === 0` is finite, so
+  a settings key with no stored value and no `DEFAULT_SETTINGS` entry came out as the MIN clamp
+  instead of the intended default. The orchestrator registers its defaults and its reader also
+  treats the empty string as "unset" outright.
+
 ## [0.28.0] - 2026-08-20
 
 ### Added
