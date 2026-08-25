@@ -188,6 +188,16 @@ create table if not exists orchestrator_kv (
   if (!cols.includes('import_to')) db.exec('alter table queue_items add column import_to text')
   if (!cols.includes('import_title'))
     db.exec('alter table queue_items add column import_title text')
+  // How that delivery actually WENT, durably. The import can only fire while the target instance is
+  // running (it refuses to boot a closed one, on purpose), and a run may finish hours after that
+  // target was chosen, so "their app happened to be shut when it finished" must not silently drop
+  // the whole delivery - it used to reach a console.error and nothing else. 'pending' is retried by
+  // dispatch.ts deliverPendingImports until it lands or the deadline passes; import_error keeps the
+  // last refusal so a give-up can be explained instead of just being quiet.
+  if (!cols.includes('import_state'))
+    db.exec('alter table queue_items add column import_state text')
+  if (!cols.includes('import_error'))
+    db.exec('alter table queue_items add column import_error text')
 }
 {
   // --- the analytics tier (server/src/analytics.ts) --------------------------------------------

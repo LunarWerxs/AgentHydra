@@ -21,6 +21,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Minimum plan is a dropdown** (Max 20× / Max 5× / Pro) in the Orchestrator settings instead
   of a free-text box.
 
+### Fixed
+
+- **A chat that could not be delivered to the desktop app is no longer just lost.** Importing a
+  finished run into an instance's app only works while that app is RUNNING - firing it at a
+  closed one would boot that account, so it correctly refuses. But that refusal was terminal:
+  one line in the console, and the work never appeared anywhere while its queue row still read
+  "completed". Since overnight migration exists precisely for when nobody is watching, "their
+  app happened to be shut right then" was enough to silently lose the whole delivery. A
+  completed run is now armed rather than fired once: an always-on sweep retries every minute
+  until it lands, gives up after 24 hours unreachable, and records the last refusal either way.
+  The queue shows a badge on a finished run whose chat has not appeared yet, so a waiting or
+  abandoned delivery is visible instead of inferred. Covers all three import paths - the migrate
+  menu, migrate-on-limit and the desktop handoff surface. A delivery that lands but cannot write
+  the chat's title counts as delivered: the conversation is in the app, and re-firing would not
+  name it any better.
+
 ## [0.30.0] - 2026-08-25
 
 ### Added

@@ -81,6 +81,10 @@ export type QueueStatus =
    *  Deliberately NOT 'rate_limited': that would park a seconds-long blip against a 5-hour reset. */
   | 'overloaded'
   | 'canceled'
+/** Whether a finished run has landed in its target desktop instance's app yet. Separate from
+ *  QueueStatus on purpose: the RUN is over either way, and conflating "the work finished" with
+ *  "you can see it" is exactly how a delivery goes missing without anything looking wrong. */
+export type ImportState = 'pending' | 'done' | 'gave_up'
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan'
 
 /**
@@ -624,6 +628,12 @@ export interface QueueItem {
    *  test fixtures — stay valid; real DB rows always carry the columns post-migration. */
   import_to?: string | null
   import_title?: string | null
+  /** How that delivery went. null = nothing to deliver; 'pending' = the always-on sweep in
+   *  dispatch.ts is still trying (the target app was shut, or the session was live, when the run
+   *  finished); 'done' = it is in the app; 'gave_up' = the deadline passed unreachable.
+   *  `import_error` is the last refusal, kept so a give-up is explainable rather than mute. */
+  import_state?: ImportState | null
+  import_error?: string | null
   started_at: string | null
   finished_at: string | null
   exit_code: number | null

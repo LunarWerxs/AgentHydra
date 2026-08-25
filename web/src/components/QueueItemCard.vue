@@ -9,6 +9,7 @@ import {
   Cpu,
   FolderGit2,
   Gauge,
+  Inbox,
   Pencil,
   Play,
   Trash2,
@@ -63,6 +64,24 @@ defineEmits<{
           </Badge>
           <Badge v-if="item.not_before && item.status === 'queued'" variant="warning">
             <Clock /> {{ $t('queue.scheduledFor', { time: formatRunAt(item.not_before) }) }}
+          </Badge>
+          <!-- The run being over and the work being WHERE THE OWNER LOOKS are two different
+               facts. A migrated or handed-off chat is delivered into a desktop instance's app
+               only while that app is running, so a delivery can sit waiting (or be given up on)
+               behind a row that reads 'completed' - which is exactly what used to be invisible. -->
+          <Badge
+            v-if="item.import_state === 'pending'"
+            variant="warning"
+            :title="item.import_error ?? undefined"
+          >
+            <Inbox /> {{ $t('queue.deliveryPending') }}
+          </Badge>
+          <Badge
+            v-else-if="item.import_state === 'gave_up'"
+            variant="destructive"
+            :title="item.import_error ?? undefined"
+          >
+            <Inbox /> {{ $t('queue.deliveryFailed') }}
           </Badge>
           <Badge v-if="item.new_chat" variant="info">{{ $t('queue.newChat') }}</Badge>
           <Badge v-if="item.fork" variant="secondary">{{ $t('queue.fork') }}</Badge>

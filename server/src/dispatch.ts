@@ -17,7 +17,7 @@ import { coerceQueueItem, db } from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import { classifyLimit, isApiErrorEvent, type LimitKind } from './rate-limit-signal'
 import { eventToTailEvents } from './transcript'
-import type { QueueItem, RunEvent } from './types'
+import type { ImportState, QueueItem, RunEvent } from './types'
 
 // A dispatched `claude` run must OUTLIVE the daemon: quitting AgentHydra (or an auto-update
 // relaunch) tree-kills the daemon (`taskkill /T`), and killing in-flight work with it is exactly
@@ -610,27 +610,153 @@ function finalize(id: string, exitCode: number, opts: { canceled?: boolean } = {
   cleanupRunFiles(id)
 
   // A completed run carrying import_to lands in that desktop instance's app as a visible chat
-  // (a migration or handoff delivery). Fire-and-forget AFTER the row is terminal: an import
-  // failure (instance since closed, etc.) must never unsettle a finished run. Dynamic import to
-  // keep session-launch (which imports core/instances) out of dispatch's module graph at load.
+  // (a migration or handoff delivery). Armed AFTER the row is terminal: a delivery problem
+  // (instance since closed, etc.) must never unsettle a finished run. Arming rather than simply
+  // firing is what makes it survivable — see deliverPendingImports below.
   if (status === 'completed') {
     const row = db
-      .query<
-        { session_id: string; import_to: string | null; import_title: string | null },
-        [string]
-      >('select session_id, import_to, import_title from queue_items where id = ?')
+      .query<{ import_to: string | null }, [string]>(
+        'select import_to from queue_items where id = ?',
+      )
       .get(id)
     if (row?.import_to?.startsWith('desktop:')) {
-      const sessionId = row.session_id
-      const instanceDir = row.import_to.slice('desktop:'.length)
-      const title = row.import_title
-      void import('./session-launch')
-        .then((m) => m.importSessionToDesktop({ sessionId, instanceDir, title }))
-        .then((r) => {
-          if (!r.ok) console.error('[agenthydra] post-run desktop import failed:', r.reason)
-        })
-        .catch((err) => console.error('[agenthydra] post-run desktop import error:', err))
+      // Re-armed on EVERY completion, including a re-run of an already-delivered item: the run
+      // appended new turns, so the chat is worth (re)delivering, and the import URL targets an
+      // existing chat by session id rather than creating a second one.
+      db.query(
+        "update queue_items set import_state = 'pending', import_error = null where id = ?",
+      ).run(id)
+      void attemptDesktopImport(id).catch((err) =>
+        console.error('[agenthydra] post-run desktop import error:', err),
+      )
     }
+  }
+}
+
+// --- desktop delivery of finished runs ---------------------------------------
+
+/**
+ * How long a completed run keeps trying to reach its target instance's app before giving up.
+ *
+ * Generous on purpose. The usual refusal is "that desktop app is not running", and the reason it is
+ * not running is usually that the owner is asleep — which is the exact scenario migrate-on-limit and
+ * the overnight handoffs exist for. A day covers a normal night; past that the delivery is stale
+ * news and a chat surfacing from two days ago is noise, not help.
+ */
+const IMPORT_DEADLINE_MS = 24 * 3600 * 1000
+/** Slower than RETRY_SWEEP_MS: a refused import costs a process-liveness check, and the thing it
+ *  waits for (a human opening an app) does not change on a two-second timescale. */
+const IMPORT_SWEEP_MS = 60_000
+
+/** Seam for tests, so the delivery logic can be driven without spawning a desktop app. */
+export type DesktopImporter = (opts: {
+  sessionId: string
+  instanceDir: string
+  title?: string | null
+}) => Promise<{
+  ok: boolean
+  reason?: string
+  titled?: boolean
+}>
+
+function setImportState(id: string, state: ImportState, error: string | null): void {
+  db.query('update queue_items set import_state = ?, import_error = ? where id = ?').run(
+    state,
+    error,
+    id,
+  )
+}
+
+/**
+ * One attempt to land a completed run in its target desktop instance's app.
+ *
+ * WHY THIS IS RETRIED AND NOT JUST LOGGED. The import deliberately refuses a target that is not
+ * running, because firing it at a closed instance BOOTS that instance (the owner's "never open
+ * accounts on your own" rule, broken by a side door). That refusal is correct, but the old code
+ * treated it as terminal: one console.error and the finished work never appeared anywhere. Since a
+ * migrated run can outlive the moment its target was picked by hours, "the app was shut just then"
+ * was enough to lose the delivery entirely, silently, with the queue row still reading 'completed'.
+ * Staying 'pending' turns that into a wait instead of a loss.
+ *
+ * A successful spawn that could not TITLE the chat is still 'done' — the conversation is in the app,
+ * which is the delivery; re-firing the URL would not name it any better. The caveat is recorded.
+ */
+export async function attemptDesktopImport(id: string, importer?: DesktopImporter): Promise<void> {
+  const row = db
+    .query<
+      {
+        session_id: string
+        import_to: string | null
+        import_title: string | null
+        import_state: ImportState | null
+        finished_at: string | null
+      },
+      [string]
+    >(
+      'select session_id, import_to, import_title, import_state, finished_at from queue_items where id = ?',
+    )
+    .get(id)
+  if (row?.import_state !== 'pending') return
+  if (!row.import_to?.startsWith('desktop:')) {
+    setImportState(id, 'gave_up', 'no desktop instance to deliver to')
+    return
+  }
+  let result: { ok: boolean; reason?: string; titled?: boolean }
+  try {
+    // Dynamic import keeps session-launch (which pulls in core/instances) out of dispatch's module
+    // graph at load time.
+    const run = importer ?? (await import('./session-launch')).importSessionToDesktop
+    result = await run({
+      sessionId: row.session_id,
+      instanceDir: row.import_to.slice('desktop:'.length),
+      title: row.import_title,
+    })
+  } catch (err) {
+    result = { ok: false, reason: err instanceof Error ? err.message : 'import-threw' }
+  }
+  if (result.ok) {
+    setImportState(
+      id,
+      'done',
+      result.titled === false ? 'delivered, but the chat title could not be written' : null,
+    )
+    return
+  }
+  const finished = row.finished_at ? Date.parse(row.finished_at) : Number.NaN
+  const expired = Number.isFinite(finished) && Date.now() - finished > IMPORT_DEADLINE_MS
+  setImportState(id, expired ? 'gave_up' : 'pending', result.reason ?? 'the import was refused')
+}
+
+/**
+ * Retry every delivery still waiting for its target app to come back.
+ *
+ * ALWAYS ON, gated on neither `scheduler_enabled` nor `monitor_enabled`, for the same reason the
+ * transient-retry sweep above is not: those switches govern hours-scale autonomy, while this only
+ * finishes delivering a migration or handoff the user already asked for. It also runs during the
+ * boot window that `isDispatchReady()` guards, deliberately — that guard exists to stop a second
+ * `claude --resume` landing on one transcript, and an import writes no transcript. The guard that
+ * matters here lives inside the import itself, which refuses a session that is live.
+ */
+export async function deliverPendingImports(importer?: DesktopImporter): Promise<void> {
+  const rows = db
+    .query<{ id: string }, []>(
+      "select id from queue_items where import_state = 'pending' order by position asc",
+    )
+    .all()
+  for (const r of rows) await attemptDesktopImport(r.id, importer)
+}
+
+let importTimer: ReturnType<typeof setInterval> | null = null
+
+export function startImportSweep(): void {
+  if (importTimer) return
+  importTimer = setInterval(() => void deliverPendingImports().catch(() => {}), IMPORT_SWEEP_MS)
+}
+
+export function stopImportSweep(): void {
+  if (importTimer) {
+    clearInterval(importTimer)
+    importTimer = null
   }
 }
 

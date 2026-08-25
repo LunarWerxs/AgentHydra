@@ -112,6 +112,28 @@ migrate story. Three deliberate choices behind it:
   resume: Auto-resume: Ship the parser"); `baseTitle()` in monitor.ts peels those prefixes off
   for both the imported chat's name and the queue row itself.
 
+**A delivery is retried until it lands, and says so if it never does.** Every import in this
+document - the migrate menu, migrate-on-limit, the desktop handoff surface - runs through the
+same delivery path in dispatch.ts, and all of them share one hazard: the import can only fire
+while the target instance is RUNNING, because firing it at a closed one would boot that account.
+That refusal used to be terminal - a single `console.error`, and finished work never appeared
+anywhere while its queue row still read `completed`. Since the whole point of overnight
+migration is that nobody is watching, "their app happened to be shut when it finished" was
+enough to lose the delivery outright.
+
+So a completed run with `import_to` is ARMED (`import_state = 'pending'`) rather than fired once.
+`deliverPendingImports()` retries every minute until it lands, then records `done`; after 24
+hours unreachable it records `gave_up` with the last refusal in `import_error`. The sweep is
+ALWAYS ON, gated on neither `scheduler_enabled` nor `monitor_enabled`, for the same reason the
+transient-overload retry sweep beside it is not: those switches govern hours-scale autonomy,
+while this only finishes delivering something the user already asked for. It also runs inside the
+boot window `isDispatchReady()` guards, deliberately - that guard stops two `claude --resume`
+landing on one transcript, and an import writes no transcript; the guard that matters here is
+inside the import, which refuses a session that is live. In the queue UI a finished run carrying
+an undelivered chat wears a badge, so a waiting or abandoned delivery is visible rather than
+inferred. A spawn that lands but cannot write the chat's title is `done`, not pending: the
+conversation is in the app, which is the delivery, and re-firing would not name it any better.
+
 **Parking a thread**: type `/delayo` in any chat and the orchestrator stops prompting it -
 no resumes, no handoffs, no hygiene nudges - until you type `/resumeo` there. The watcher
 drops a held thread's items entirely and the feed's `holds` list shows what is parked, so a

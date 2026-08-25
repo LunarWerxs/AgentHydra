@@ -121,6 +121,7 @@ import {
   isSessionActive,
   type RunMessage,
   reattachRuns,
+  startImportSweep,
   startRetrySweep,
   subscribeRun,
 } from './dispatch'
@@ -2460,6 +2461,13 @@ startAutoUpdate()
 // sessions while I sleep"), whereas this just finishes the run the user started by hand seconds
 // ago and which died on someone else's server hiccup.
 startRetrySweep()
+
+// --- desktop delivery sweep (ALWAYS ON; see server/src/dispatch.ts) ---------------------------
+// Finishes landing migrated/handed-off chats in their target instance's app. The import refuses a
+// target that is not running (firing it at a closed instance would BOOT that account), so a run
+// that finishes while the owner is asleep used to reach a console.error and vanish. Now it stays
+// pending and lands when that app is next open, or gives up after a day and says why.
+startImportSweep()
 
 // --- auto-resume monitor loop (opt-in; OFF by default; see server/src/monitor.ts) -------------
 // The poll loop always runs; each tick is a no-op unless `monitor_enabled` is set. It watches for

@@ -15,6 +15,10 @@ export default {
   itemsCount: '{n} item(s)',
   edit: 'Edit',
   scheduledFor: 'runs {time}',
+  // Shown on a FINISHED run that has not landed in its target desktop app yet. Importing needs
+  // that instance to be open, so a run that ended overnight waits for it rather than vanishing.
+  deliveryPending: 'waiting to appear in the app',
+  deliveryFailed: 'never appeared in the app',
   runDue: 'Run due ({n})',
   runDueTitle: 'Run every due queued item now (ignores scheduler limits)',
   toastRanDue: 'Started {n} run(s)',
