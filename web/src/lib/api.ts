@@ -748,6 +748,14 @@ export const runMonitorCheck = () =>
 export const getOrchestrator = () => j<OrchestratorView>('/api/orchestrator')
 export const updateOrchestrator = (b: Partial<OrchestratorSettings>) =>
   j<OrchestratorView>('/api/orchestrator', { method: 'POST', body: JSON.stringify(b) })
+/** Park (or unpark) one thread — the same switch `/delayo` and `/resumeo` throw from inside a
+ *  chat. Returns the fresh holds list so a caller can adopt the server's answer rather than
+ *  guessing at it. */
+export const setOrchestratorHold = (sessionId: string, held: boolean) =>
+  j<{ ok: boolean; holds: OrchestratorView['holds'] }>('/api/orchestrator/hold', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, held }),
+  })
 /** Move a chat to another account: stops its live process if any, archives its old desktop
  *  entries, runs a one-turn migration on the target account, then imports it into that
  *  instance's desktop app under its real title (the finalize hook fires the import). */

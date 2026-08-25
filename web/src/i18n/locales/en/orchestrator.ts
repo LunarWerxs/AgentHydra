@@ -6,6 +6,10 @@ export default {
   enabledHint:
     'The watcher only reads local state on a timer. The judgment half is an interactive chat running /orchestrate; enabling here also installs the /orchestrate, /delayo and /resumeo commands.',
   statusLine: '{live} live chats · {items} pending · {holds} parked',
+  holdsLabel: 'Parked threads ({n})',
+  holdsHint:
+    'Threads you parked with /delayo. The orchestrator never prompts a parked thread - no resumes, no handoffs, no hygiene nudges - and a hold has no expiry, so it waits here until you lift it. /resumeo inside the chat does the same thing.',
+  holdsUnpark: 'Unpark',
   newChatModelLabel: 'New-chat model & effort',
   newChatModelHint:
     'Model and reasoning effort for every chat the orchestrator starts: handoff continuations, chips, terminal launches.',

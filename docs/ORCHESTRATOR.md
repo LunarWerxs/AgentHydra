@@ -140,6 +140,13 @@ drops a held thread's items entirely and the feed's `holds` list shows what is p
 delayed thread is invisible to the reviewer but never forgotten. Holds persist across daemon
 restarts and have no expiry.
 
+Because they never expire, the Orchestrator settings group **lists the parked threads** (name,
+repo, how long ago) with an Unpark button on each, appearing only when there are any. The status
+line's count alone could not tell you WHICH thread you parked, so the only way back out was to
+remember the chat and type `/resumeo` inside it - which is a poor guarantee for a hold with no
+expiry. Unparking adopts the server's returned list rather than splicing locally, since the same
+hold can be lifted from inside the chat at any moment.
+
 The feed's `instances` array is the routing table: every desktop instance with `isRunning`,
 account, plan, weekly %, band, reset-soon and staleness. **Open means running, nothing else** -
 a running instance with zero chats is open capacity, and a session on a non-running instance is

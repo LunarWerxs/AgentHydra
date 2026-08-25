@@ -20,6 +20,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   produces no transcript movement.
 - **Minimum plan is a dropdown** (Max 20× / Max 5× / Pro) in the Orchestrator settings instead
   of a free-text box.
+- **Parked threads are listed, and can be unparked, from Settings.** A `/delayo` hold has no
+  expiry, but the app only ever showed a COUNT of them - so the only way to lift one was to
+  remember which chat you parked and type `/resumeo` inside it. The Orchestrator group now lists
+  each parked thread with its name, repo and how long ago, each with an Unpark button, and shows
+  up only when something is parked. (Three real threads were sitting parked, from one to three
+  hours, when this was built.)
 
 ### Fixed
 

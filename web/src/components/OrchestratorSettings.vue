@@ -7,8 +7,9 @@
 // Self-contained on purpose: SettingsView.vue mounts it with one line. Every save round-trips
 // through POST /api/orchestrator and re-adopts the server's answer, so a clamped or refused
 // value shows as what actually stuck, never as what was typed.
-import { Bot, ChevronDown, SlidersHorizontal } from '@lucide/vue'
-import { onMounted, reactive, ref } from 'vue'
+import { Bot, ChevronDown, PauseCircle, Play, SlidersHorizontal } from '@lucide/vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -20,6 +21,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import type { OrchestratorView } from '@/lib/api'
 import * as api from '@/lib/api'
+import { baseName, shortId, timeAgo } from '@/lib/format'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 import SettingsGroup from '@/shell/SettingsGroup.vue'
@@ -27,6 +29,22 @@ import SettingsRow from '@/shell/SettingsRow.vue'
 
 const view = ref<OrchestratorView | null>(null)
 const advancedOpen = ref(false)
+const holdsOpen = ref(false)
+/** The session id currently being unparked, so its own button disables without freezing the rest. */
+const unparking = ref<string | null>(null)
+const holds = computed(() => view.value?.holds ?? [])
+
+async function unpark(sessionId: string) {
+  unparking.value = sessionId
+  try {
+    // Adopt the server's list rather than splicing locally: a hold could have been lifted from
+    // inside the chat (/resumeo) since this view was fetched, and the server is the truth.
+    const r = await api.setOrchestratorHold(sessionId, false)
+    if (view.value) view.value = { ...view.value, holds: r.holds }
+  } finally {
+    unparking.value = null
+  }
+}
 
 // Local copies for the free-typed fields, adopted from the server on every round trip.
 const form = reactive({
@@ -247,6 +265,57 @@ onMounted(async () => {
             </Select>
           </template>
         </SettingsRow>
+
+        <!-- Parked threads, listed only when there ARE any. A hold has no expiry and the count in
+             the status line above cannot tell you WHICH thread you parked, so a /delayo typed days
+             ago was effectively unfindable from the app: the only way back was to remember the chat
+             and type /resumeo inside it. This is that memory, plus the way out. -->
+        <template v-if="holds.length">
+          <SettingsRow
+            :icon="PauseCircle"
+            :label="$t('orchestrator.holdsLabel', { n: holds.length })"
+            clickable
+            @click="holdsOpen = !holdsOpen"
+          >
+            <template #info>
+              <InfoHint :text="$t('orchestrator.holdsHint')" />
+            </template>
+            <template #control>
+              <ChevronDown
+                class="size-4 transition-transform duration-200"
+                :class="holdsOpen ? 'rotate-180' : ''"
+              />
+            </template>
+          </SettingsRow>
+          <ExpandTransition :open="holdsOpen">
+            <div class="space-y-1.5 px-3.5 pb-3.5 pt-2.5">
+              <div
+                v-for="h in holds"
+                :key="h.sessionId"
+                class="flex items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5"
+              >
+                <div class="min-w-0 flex-1">
+                  <!-- peerName is the live-session name; a thread parked and since closed has
+                       none, so the session id is the honest fallback rather than a blank row. -->
+                  <div class="truncate text-xs font-medium">
+                    {{ h.peerName || shortId(h.sessionId) }}
+                  </div>
+                  <div class="truncate text-[0.625rem] text-muted-foreground">
+                    <span v-if="h.cwd">{{ baseName(h.cwd) }} · </span>{{ timeAgo(h.heldAt) }}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  :disabled="unparking === h.sessionId"
+                  @click="unpark(h.sessionId)"
+                >
+                  <Play /> {{ $t('orchestrator.holdsUnpark') }}
+                </Button>
+              </div>
+            </div>
+          </ExpandTransition>
+        </template>
 
         <SettingsRow
           :icon="SlidersHorizontal"
