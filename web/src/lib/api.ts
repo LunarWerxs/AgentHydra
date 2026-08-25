@@ -23,6 +23,8 @@ import type {
   MonitorView,
   NotificationSettings,
   NotifyDeliveryResult,
+  OrchestratorSettings,
+  OrchestratorView,
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
@@ -83,6 +85,9 @@ export type {
   MonitorView,
   NotificationSettings,
   NotifyDeliveryResult,
+  OrchestratorInstance,
+  OrchestratorSettings,
+  OrchestratorView,
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
@@ -738,3 +743,8 @@ export const setMonitorAccount = (accountId: string, enabled: boolean) =>
 /** Force one monitor pass now (manual "check for resumable stops"). */
 export const runMonitorCheck = () =>
   j<{ ok: boolean } & MonitorView>('/api/monitor/check', { method: 'POST' })
+
+// --- orchestrator (docs/ORCHESTRATOR.md) ----------------------------------------
+export const getOrchestrator = () => j<OrchestratorView>('/api/orchestrator')
+export const updateOrchestrator = (b: Partial<OrchestratorSettings>) =>
+  j<OrchestratorView>('/api/orchestrator', { method: 'POST', body: JSON.stringify(b) })

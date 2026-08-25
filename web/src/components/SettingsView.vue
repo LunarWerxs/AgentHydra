@@ -31,6 +31,7 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import OrchestratorSettings from '@/components/OrchestratorSettings.vue'
 import ProviderRows from '@/components/ProviderRows.vue'
 import UsageRefreshRows from '@/components/UsageRefreshRows.vue'
 import { Badge } from '@/components/ui/badge'
@@ -1375,6 +1376,9 @@ defineExpose({ save })
         </div>
       </ExpandTransition>
     </SettingsGroup>
+
+    <!-- orchestrator (docs/ORCHESTRATOR.md) - self-contained group, one-line mount -->
+    <OrchestratorSettings />
 
     <!-- auto-resume monitor -->
     <SettingsGroup :label="$t('settings.monitorTitle')" :description="$t('settings.monitorHint')">

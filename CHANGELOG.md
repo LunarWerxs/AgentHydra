@@ -62,6 +62,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   thread's title on every import. Session-management note that shipped alongside: a chat in
   the SAME instance as an agent can be renamed and archived live through the app's own session
   tools; cross-instance changes go through the metadata (visible on that app's next restart).
+- **Settings gained an Orchestrator section** (between Scheduler and the auto-resume monitor):
+  the watcher's master switch with a live status line (live chats / pending items / parked
+  threads), new-chat model+effort+ultracode, handoff surface, open-instances policy with the
+  minimum plan, and the tuning numbers behind an Advanced disclosure - every knob the API had
+  that the UI did not.
 - **New-chat defaults: every orchestrator-started chat runs Opus 5 at max effort with the
   `ultracode` opt-in by default.** Settings `newChatModel` / `newChatEffort` /
   `newChatUltracode` govern handoff continuations, chip launches, and terminal launches; the

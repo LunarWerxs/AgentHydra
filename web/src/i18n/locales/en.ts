@@ -8,6 +8,7 @@ import codexInstances from './en/codexInstances'
 import composer from './en/composer'
 import instances from './en/instances'
 import notifications from './en/notifications'
+import orchestrator from './en/orchestrator'
 import queue from './en/queue'
 import run from './en/run'
 import scheduler from './en/scheduler'
@@ -23,6 +24,7 @@ export default {
   composer,
   instances,
   notifications,
+  orchestrator,
   queue,
   run,
   scheduler,
