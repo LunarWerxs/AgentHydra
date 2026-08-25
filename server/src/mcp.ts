@@ -1401,15 +1401,20 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'import_session_to_desktop',
     description:
-      "MUTATES: import a FINISHED session into a desktop instance's app as a visible chat (the app's own claude://resume one-way import, targeted at one instance). Refuses a currently-live session (the import rewrites the transcript under an active writer). Finish all headless work FIRST and import LAST — this is how completed handoff work lands on the user's screen; a just-imported chat does not process peer messages until the user first interacts with it.",
-    inputSchema: S({ session_id: { type: 'string' }, instance_ref: { type: 'string' } }, [
-      'session_id',
-    ]),
+      "MUTATES: import a FINISHED session into a desktop instance's app as a visible chat (the app's own claude://resume one-way import, targeted at one instance). ALWAYS pass `title` (the thread's real title) — an import without one lands as 'Untitled'. Refuses a currently-live session (the import rewrites the transcript under an active writer) and a non-running instance (importing would boot it). Finish all headless work FIRST and import LAST; a just-imported chat does not process peer messages until the user first interacts with it.",
+    inputSchema: S(
+      {
+        session_id: { type: 'string' },
+        instance_ref: { type: 'string' },
+        title: { type: 'string' },
+      },
+      ['session_id'],
+    ),
     run: async (a) =>
       api(`/api/sessions/${encodeURIComponent(str(a.session_id))}/import-desktop`, {
         method: 'POST',
         headers: JSON_HEADERS,
-        body: JSON.stringify({ instance_ref: a.instance_ref }),
+        body: JSON.stringify({ instance_ref: a.instance_ref, title: a.title }),
       }),
   },
   {

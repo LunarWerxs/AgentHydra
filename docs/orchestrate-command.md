@@ -124,11 +124,13 @@ gets the standing answer, acked `standing-answer`.
      - `"desktop"` (default - the owner watches the desktop app): `POST /api/queue` the
        continuation headless (pinned, `new_chat: true`; NOTE the returned `session_id`), run
        it, and remember the pair. On a later wake, when that queue item shows `completed`:
-       `POST /api/sessions/<new session_id>/import-desktop {"instance_ref": "<target ref>"}` -
-       the finished work appears as a real chat in that instance's desktop app. Import LAST,
-       only after the run is fully done (importing a live session corrupts it), and know that
-       a just-imported chat does not process your peer messages until the owner first clicks
-       into it - it is a delivery of finished work, not a channel for more.
+       `POST /api/sessions/<new session_id>/import-desktop {"instance_ref": "<target ref>",
+       "title": "<the ORIGINAL thread's title>"}` - the finished work appears as a real chat
+       in that instance's desktop app. ALWAYS pass the title: an import without one lands as
+       "Untitled". Import LAST, only after the run is fully done (importing a live session
+       corrupts it), and know that a just-imported chat does not process your peer messages
+       until the owner first clicks into it - it is a delivery of finished work, not a
+       channel for more.
      - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt", "instance_ref"}` -
        a visible terminal window, live and orchestratable while it works.
      - `"queue"`: headless only; visible in AgentHydra's Sessions tab.
@@ -136,7 +138,9 @@ gets the standing answer, acked `standing-answer`.
      `POST /api/sessions/<id>/done {"done": true}`, then archive its desktop entry:
      `POST /api/sessions/<id>/desktop-archive {"archived": true}`. Relay the caveat once if it
      matters: on an instance whose app is running, the archive shows after that app next
-     restarts; the done-mark is the immediate signal.
+     restarts; the done-mark is the immediate signal. Exception worth using: a chat in YOUR
+     OWN instance can be archived and renamed LIVE through your session-management tools
+     (list_sessions / set_session_title / archive_session) - prefer those when they reach.
   4. Ack `handoff-continued`, cooldown 720.
 
 **`interrupted`** - the human pressed stop. Never auto-resume it. Ack `human-interrupted`,

@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  applyDesktopChatTitle,
   archiveDesktopChat,
   buildImportPlan,
   buildTerminalLaunchPlan,
@@ -70,6 +71,19 @@ test('import refuses a non-running instance instead of booting it', async () => 
     isInstanceRunning: async () => true,
   })
   expect(live.reason).toContain('session-live')
+})
+
+test('applyDesktopChatTitle writes the same field pair the app itself writes', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-title-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  const metaPath = join(store, 'local_sess-t1.json')
+  writeFileSync(metaPath, JSON.stringify({ cliSessionId: 'sess-t1', isArchived: false }))
+  expect(applyDesktopChatTitle(profile, 'sess-t1', 'My Real Title')).toBe('titled')
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+  expect(meta.title).toBe('My Real Title')
+  expect(meta.titleSource).toBe('tool')
+  expect(applyDesktopChatTitle(profile, 'sess-nope', 'x')).toBe('not-found')
 })
 
 test('archiveDesktopChat flips the metadata flag by filename across profiles', async () => {

@@ -2038,6 +2038,7 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
   const result = await importSessionToDesktop({
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
+    title: typeof body.title === 'string' ? body.title : null,
   })
   return c.json(result, result.ok ? 200 : 422)
 })

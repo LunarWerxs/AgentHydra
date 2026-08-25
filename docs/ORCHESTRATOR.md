@@ -73,9 +73,10 @@ POST /api/orchestrator/check      run one pass now
 POST /api/orchestrator/hold       { session_id, held } - park/unpark one thread (/delayo, /resumeo)
 POST /api/sessions/launch-terminal  { cwd, prompt, instance_ref?, model? } - open a VISIBLE
                                   terminal running a new interactive session on that account
-POST /api/sessions/:id/import-desktop  { instance_ref? } - import a FINISHED session into that
-                                  instance's desktop app as a visible chat (refused when the
-                                  instance is not running - importing would boot it)
+POST /api/sessions/:id/import-desktop  { instance_ref?, title? } - import a FINISHED session
+                                  into that instance's desktop app as a visible chat (refused
+                                  when the instance is not running - importing would boot it;
+                                  always pass title or the chat lands as "Untitled")
 POST /api/sessions/:id/desktop-archive { archived? }     - archive/unarchive the chat in the
                                   desktop app (shows after that instance next restarts when
                                   its app was running at the time)

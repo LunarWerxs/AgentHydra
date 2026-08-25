@@ -55,6 +55,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is running shows the change only after that app next restarts; for closed instances it is
   reliable. The /orchestrate handoff flow now archives the old chat's desktop entry alongside
   the done-mark.
+- **Imports keep their titles.** The desktop app derives no title at import time (three
+  migrated threads all landed as "Untitled"), so `import-desktop` now takes a `title` and
+  writes it into the chat's metadata the moment the app creates it - the same `{title,
+  titleSource}` pair the app's own rename writes. The /orchestrate flow passes the original
+  thread's title on every import. Session-management note that shipped alongside: a chat in
+  the SAME instance as an agent can be renamed and archived live through the app's own session
+  tools; cross-instance changes go through the metadata (visible on that app's next restart).
 - **`import-desktop` refuses instances that are not running.** Aimed at a closed instance the
   import spawn would not fail - it would BOOT that instance (measured; a display-name-derived
   path started a sixth desktop app). The endpoint now enforces the same open-instances-only

@@ -327,10 +327,16 @@ export async function archiveDesktopChat(
 export async function importSessionToDesktop(opts: {
   sessionId: string
   instanceDir: string
+  /** Title for the imported chat. The import itself creates the chat as "Untitled" (the app
+   *  derives nothing from the transcript at import time — measured: three migrated threads all
+   *  landed as "Untitled"/generic), so the caller passes the thread's real title and it is
+   *  written into the chat's metadata once the app has created the file. Shows immediately if
+   *  the app re-reads, otherwise on that instance's next restart. */
+  title?: string | null
   isLive?: (sessionId: string) => boolean
   /** Seam for tests; the default asks the instance manager. */
   isInstanceRunning?: (dir: string) => Promise<boolean>
-}): Promise<{ ok: boolean; reason?: string }> {
+}): Promise<{ ok: boolean; reason?: string; titled?: boolean }> {
   if ((opts.isLive ?? sessionIsLive)(opts.sessionId))
     return { ok: false, reason: 'session-live: refusing to import under an active writer' }
   if (!existsSync(opts.instanceDir)) return { ok: false, reason: 'instance-dir-not-found' }
@@ -348,8 +354,59 @@ export async function importSessionToDesktop(opts: {
     // A GUI hand-off spawn: windowsHide deliberately absent (this file is exempt from the
     // console-window guard for exactly this class of spawn).
     Bun.spawn(argv, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
-    return { ok: true }
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : 'spawn-failed' }
+  }
+  const title = opts.title?.trim()
+  if (!title) return { ok: true }
+  // Wait for the app to create the chat's metadata file, then write the title into it.
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline) {
+    const outcome = applyDesktopChatTitle(opts.instanceDir, opts.sessionId, title)
+    if (outcome !== 'not-found') return { ok: true, titled: outcome === 'titled' }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return { ok: true, titled: false }
+}
+
+/**
+ * One attempt to write a title into a chat's desktop metadata (`{ title, titleSource }`, the
+ * same field pair the app's own rename writes). 'not-found' means the app has not created the
+ * metadata file yet — the import waiter retries on that; 'failed' means the file exists but
+ * could not be updated (contended/corrupt), which is terminal for titling but not for the
+ * import itself.
+ */
+export function applyDesktopChatTitle(
+  instanceDir: string,
+  sessionId: string,
+  title: string,
+): 'titled' | 'not-found' | 'failed' {
+  const store = join(instanceDir, 'claude-code-sessions')
+  let metaPath: string | null = null
+  try {
+    for (const org of readdirSync(store, { withFileTypes: true })) {
+      if (!org.isDirectory()) continue
+      for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+        if (!user.isDirectory()) continue
+        const p = join(store, org.name, user.name, `local_${sessionId}.json`)
+        if (existsSync(p)) {
+          metaPath = p
+          break
+        }
+      }
+      if (metaPath) break
+    }
+  } catch {
+    return 'not-found' // store not created yet
+  }
+  if (!metaPath) return 'not-found'
+  try {
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+    meta.title = title
+    meta.titleSource = 'tool'
+    writeFileSync(metaPath, JSON.stringify(meta))
+    return 'titled'
+  } catch {
+    return 'failed'
   }
 }
