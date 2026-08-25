@@ -31,6 +31,7 @@ import {
   type TailInfo,
 } from '../src/orchestrator'
 import type { AttentionItem, UsageSnapshot } from '../src/types'
+import { desktopKey } from '../src/usage-service'
 
 const line = (o: unknown) => JSON.stringify(o)
 
@@ -299,6 +300,8 @@ test('instance rows: running-with-no-chats is open capacity; stale readings are 
     ...fresh(95, 'old <o@x> · Max 20×'),
     capturedAt: new Date(now - 30 * 3600 * 1000).toISOString(),
   }
+  // Cache keys built by the SAME normalizer the code under test uses — hand-built keys only
+  // matched on Windows (case-folding path normalization) and failed the ubuntu CI leg.
   const rows = buildInstanceRows(
     [
       { dir: 'c:\\i\\empty', name: 'empty-but-open', isRunning: true },
@@ -307,10 +310,10 @@ test('instance rows: running-with-no-chats is open capacity; stale readings are 
       { dir: 'c:\\i\\stale', name: 'stale', isRunning: true },
     ],
     {
-      [`desktop:${'c:\\i\\empty'}`]: fresh(10, 'a <a@x> · Max 20×'),
-      [`desktop:${'c:\\i\\busy'}`]: fresh(80, 'b <b@x> · Max 5×'),
-      [`desktop:${'c:\\i\\closed'}`]: fresh(1, 'c <c@x> · Pro'),
-      [`desktop:${'c:\\i\\stale'}`]: staleSnap,
+      [desktopKey('c:\\i\\empty')]: fresh(10, 'a <a@x> · Max 20×'),
+      [desktopKey('c:\\i\\busy')]: fresh(80, 'b <b@x> · Max 5×'),
+      [desktopKey('c:\\i\\closed')]: fresh(1, 'c <c@x> · Pro'),
+      [desktopKey('c:\\i\\stale')]: staleSnap,
     },
     S,
     now,
