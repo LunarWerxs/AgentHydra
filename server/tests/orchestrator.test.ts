@@ -120,6 +120,11 @@ test('cross-session mail and task notifications are not "the human said somethin
   const t = parseTranscriptTail(raw)
   expect(t.lastHumanText).toBe('please fix the login bug')
   expect(isInjectedUserText('<local-command-stdout>Compacted </local-command-stdout>')).toBe(true)
+  // Orchestrator plumbing is never "the human speaking" — a migration notice counted as a human
+  // hold made the reviewer avoid every migrated thread forever.
+  expect(isInjectedUserText('[orchestrator] You are being migrated to a different account')).toBe(
+    true,
+  )
 })
 
 test('spawn_task chips are captured with id, title and prompt', () => {

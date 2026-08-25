@@ -359,7 +359,11 @@ export function isInjectedUserText(text: string): boolean {
     t.startsWith('<local-command-stdout>') ||
     t.startsWith('<command-name>') ||
     t.startsWith('<system-reminder>') ||
-    t.startsWith('[Request interrupted')
+    t.startsWith('[Request interrupted') ||
+    // Orchestrator plumbing (migration notices, revive prompts, reviewer nudges) is marked with
+    // this prefix by convention. Counting it as "the human said something" made every migrated
+    // thread read as human-held, so the reviewer never touched it again.
+    t.startsWith('[orchestrator]')
   )
 }
 

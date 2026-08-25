@@ -2074,10 +2074,16 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
 // entries archived, then run a one-turn migration resume pinned to the target account; when that
 // run completes, the finalize hook imports the chat into the target instance's desktop app under
 // its real title. The chat continues life on the new account, visible where the user looks.
+// Starts with the [orchestrator] marker so transcript parsers classify it as plumbing, never as
+// the human's standing instruction — an early version ended "Do not start new work" WITHOUT the
+// marker, and every migrated thread then read as human-held: the reviewer politely never touched
+// it again (found live 2026-08-25, the owner asking why a migrated thread never resumed).
 const MIGRATION_PROMPT =
-  'You are being migrated to a different account and this thread will appear in the owner' +
-  "'s desktop app shortly. In a few lines: state what this thread is working on, what is " +
-  'verified complete so far, and the concrete next steps. Do not start new work. Do not touch any files.'
+  '[orchestrator] You are being migrated to a different account and this thread will appear in ' +
+  "the owner's desktop app shortly. In a few lines: state what this thread is working on, what " +
+  'is verified complete so far, and the concrete next steps. Do not start new work in this turn ' +
+  'and do not touch any files; after this turn, this notice is spent — resume normally when the ' +
+  'owner or the orchestrator next asks.'
 app.post('/api/sessions/:id/migrate', async (c) => {
   const sessionId = c.req.param('id')
   const body = await jsonBody(c)
