@@ -38,6 +38,17 @@ test('windows: powershell reads the prompt file raw, window survives exit', () =
     'max',
   )
   expect(withEffort.argv[withEffort.argv.length - 1]).toContain('--model opus --effort max')
+  // A terminal RESUME continues an existing thread with the prompt as its next turn - the
+  // visible replacement for headless queue resumes (owner rule: nothing runs headless).
+  const resume = buildTerminalLaunchPlan(
+    'win32',
+    'C:\\Tools\\claude.exe',
+    'C:\\tmp\\p.txt',
+    null,
+    null,
+    'sess-abc',
+  )
+  expect(resume.argv[resume.argv.length - 1]).toContain('--resume sess-abc')
 })
 
 test('windows: single quotes in paths are doubled for powershell, not left to break it', () => {

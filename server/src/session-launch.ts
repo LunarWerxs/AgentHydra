@@ -81,8 +81,12 @@ export function buildTerminalLaunchPlan(
   promptFile: string,
   model: string | null,
   effort: string | null = null,
+  resumeSessionId: string | null = null,
 ): TerminalLaunchPlan {
-  const modelArgs = `${model ? ` --model ${model}` : ''}${effort ? ` --effort ${effort}` : ''}`
+  // With resumeSessionId, the window CONTINUES an existing thread (--resume) with the prompt as
+  // its next turn — the visible alternative to a headless queue resume, per the owner's standing
+  // rule that nothing runs headless: work happens where it can be watched.
+  const modelArgs = `${resumeSessionId ? ` --resume ${resumeSessionId}` : ''}${model ? ` --model ${model}` : ''}${effort ? ` --effort ${effort}` : ''}`
   if (platform === 'win32') {
     // PowerShell (not cmd) runs the claude line: `Get-Content -Raw` hands the multiline prompt
     // over as ONE argv element, which cmd cannot do. -NoExit keeps the window (and any startup
@@ -124,6 +128,9 @@ export async function launchTerminalSession(opts: {
   instanceRef?: string | null
   model?: string | null
   effort?: string | null
+  /** Continue THIS existing thread (--resume) instead of starting a new session. The caller
+   *  must have stopped any live process for it first (two-writers rule). */
+  resumeSessionId?: string | null
 }): Promise<TerminalLaunchResult> {
   const env: Record<string, string> = {}
   const ref = opts.instanceRef?.trim() || null
@@ -156,6 +163,7 @@ export async function launchTerminalSession(opts: {
     promptFile,
     opts.model?.trim() || null,
     opts.effort?.trim() || null,
+    opts.resumeSessionId?.trim() || null,
   )
   if (plan.argv.length === 0) return { ok: false, reason: 'no-terminal', command: plan.command }
   // The child gets a SANITIZED environment: every CLAUDE*/ANTHROPIC* variable the daemon itself

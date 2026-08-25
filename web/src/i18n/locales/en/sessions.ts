@@ -140,7 +140,7 @@ export default {
   migrateAccount: 'Migrate to another account',
   migrateNoTargets: 'No other running instances',
   migrateStarted:
-    'Migrating to {name} — the chat will appear in that desktop app when the hop finishes.',
+    'Migrated to {name} — the chat is in that desktop app now; click it once to set it going.',
   migrateFailed: "Couldn't migrate this chat.",
   // --- readable export ---
   exportMarkdown: 'Save as Markdown',

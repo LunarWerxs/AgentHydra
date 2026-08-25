@@ -19,10 +19,10 @@ export default {
   migrateOnLimitLabel: 'Migrate 5-hour-limited chats',
   migrateOnLimitHint:
     'When a run hits its 5-hour limit but its weekly is fine, resume it immediately on another running account with headroom instead of parking it until the reset. The original account rejoins the pool once its window resets. When the borrowed run finishes, the chat is imported into that account’s desktop app under its own name, so you can see it and carry on there. Needs the auto-resume monitor enabled.',
-  handoffSurfaceLabel: 'Handoff surface',
+  handoffSurfaceLabel: 'Work surface',
   handoffSurfaceHint:
-    'Where continuations land. Desktop: run headless, then import the finished work into the owning instance’s app as a visible chat. Terminal: a live window you can watch. Queue: headless only.',
-  surfaceDesktop: 'Desktop app (import when done)',
+    'Where the orchestrator places ALL the work it starts or continues. Desktop: threads live as chats in your apps - continuations arrive as queued messages and your first click on a chat activates it; no terminals, nothing headless. Terminal: visible windows you can watch live. Queue: classic headless runs.',
+  surfaceDesktop: 'Desktop app (chats + your click)',
   surfaceTerminal: 'Terminal window (watch live)',
   surfaceQueue: 'Queue (headless)',
   openInstancesLabel: 'Open closed instances',

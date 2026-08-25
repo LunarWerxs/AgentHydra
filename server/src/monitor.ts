@@ -490,7 +490,46 @@ async function dispatchDueResumes(): Promise<void> {
     const q = coerceQueueItem(raw)
     const due = !q.not_before || q.not_before <= now
     if (q.status === 'queued' && due && !isActive(q.id) && !isSessionActive(q.session_id)) {
-      void dispatchItem(q)
+      // Placement follows the owner's surface preference (standing rule 2026-08-25: match the
+      // preference; 'desktop' means no terminals and nothing headless). 'terminal' opens a
+      // visible window continuing the thread; 'desktop' lands the thread in its instance's app
+      // where the reviewer nudges it onward (the owner's first click activates it); 'queue'
+      // keeps the classic headless dispatch for owners who chose it.
+      const surface = getOrchestratorSettings().handoffSurface
+      if (
+        surface === 'queue' ||
+        (surface === 'desktop' && !q.instance_ref?.startsWith('desktop:'))
+      ) {
+        void dispatchItem(q)
+      } else {
+        void (async () => {
+          try {
+            const { importSessionToDesktop, launchTerminalSession } = await import(
+              './session-launch'
+            )
+            const res =
+              surface === 'terminal'
+                ? await launchTerminalSession({
+                    cwd: q.cwd,
+                    prompt: q.prompt,
+                    instanceRef: q.instance_ref,
+                    model: q.model,
+                    effort: q.effort,
+                    resumeSessionId: q.session_id,
+                  })
+                : await importSessionToDesktop({
+                    sessionId: q.session_id,
+                    instanceDir: (q.instance_ref as string).slice('desktop:'.length),
+                    title: q.import_title ?? null,
+                  })
+            db.query(
+              'update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?',
+            ).run(res.ok ? 'completed' : 'failed', new Date().toISOString(), res.ok ? 0 : 1, q.id)
+          } catch (err) {
+            console.error('[agenthydra] visible auto-resume failed:', err)
+          }
+        })()
+      }
     }
   }
 }

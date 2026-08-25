@@ -139,20 +139,17 @@ gets the standing answer, acked `standing-answer`.
 - When that session next shows up idle with the handoff prompt in its tail
   (`detail.handoffDetected` or obvious from the snippet):
   1. Get the full prompt text (`GET /api/sessions/<id>/tail`).
-  2. Continue it on the best landing target, by `settings.handoffSurface`:
-     - `"desktop"` (default - the owner watches the desktop app): `POST /api/queue` the
-       continuation headless (pinned, `new_chat: true`; NOTE the returned `session_id`), run
-       it, and remember the pair. On a later wake, when that queue item shows `completed`:
-       `POST /api/sessions/<new session_id>/import-desktop {"instance_ref": "<target ref>",
-       "title": "<the ORIGINAL thread's title>"}` - the finished work appears as a real chat
-       in that instance's desktop app. ALWAYS pass the title: an import without one lands as
-       "Untitled". Import LAST, only after the run is fully done (importing a live session
-       corrupts it), and know that a just-imported chat does not process your peer messages
-       until the owner first clicks into it - it is a delivery of finished work, not a
-       channel for more.
-     - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt", "instance_ref"}` -
-       a visible terminal window, live and orchestratable while it works.
-     - `"queue"`: headless only; visible in AgentHydra's Sessions tab.
+  2. Continue it on the best landing target, on the owner's surface:
+     - `"desktop"` (the owner's default): there is no way to RUN a brand-new thread inside the
+       desktop app externally, so the handoff is delivered as a HANDOVER TO THE OWNER'S CLICK:
+       import the SOURCE thread into the target instance (title!), SendMessage the handoff
+       prompt to it (it queues), and put one status line up: "<title> handed off to <instance>
+       - click it once to start". The click activates it and the work happens in-app.
+     - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt": "<handoff prompt>",
+       "instance_ref", "model": settings.newChatModel, "effort": settings.newChatEffort}` - a
+       live window, steerable; import it into the app for permanence once it wraps.
+     - `"queue"`: the classic headless continuation (`POST /api/queue`, `new_chat: true`, note
+       the session_id) with import-on-completion via `import_to`/`import_title`.
   3. Do NOT message the old chat. ALWAYS archive a chat once its handoff has been collected
      and continued (owner rule): mark it finished, `POST /api/sessions/<id>/done
      {"done": true}`, then archive its desktop entry:
@@ -195,10 +192,13 @@ Standing rule: all work on main, one branch only. Merge your work back onto main
 discarding anything, then continue on main." Ack, cooldown 180. If it looks like a deliberate
 release process, one status line for the human.
 
-**`chip`** - a chat offered a spawn-task chip; the prompt is self-contained by design. Launch it
-on the best landing target - terminal surface by default, same as a handoff continuation. Ack
-`chip-launched`, cooldown 720. If the chip involves a true blocker (deleting, publishing,
-credentials, spending) -> one status line for the human instead.
+**`chip`** - a chat offered a spawn-task chip; the prompt is self-contained by design. On the
+`"desktop"` surface, the chip button IN the owner's app is itself the desktop-native way to
+start it - one status line naming the chip and its chat, and leave the click to the owner. On
+`"terminal"`, launch it yourself (`launch-terminal`, new-chat model and effort); on `"queue"`,
+queue it. Ack `chip-launched` (or `chip-flagged`), cooldown 720. If the chip involves a true
+blocker (deleting, publishing, credentials, spending) -> one status line for the human
+regardless of surface.
 
 **`limit_stopped`** - the auto-resume monitor's jurisdiction (`GET /api/monitor`). If the
 monitor is off and the session matters, one status line for the owner. Ack, cooldown 120.
@@ -210,11 +210,14 @@ monitor is off and the session matters, one status line for the owner. Ack, cool
   open renderer.
 - **The deaf-chat revive.** An imported chat the owner never clicked is live-but-deaf: your
   SendMessage queues into a void. The tell: you nudged it, and next wake the same item is back
-  with `detail.quietSecs` still growing - the transcript never moved. Revive it with
-  `POST /api/sessions/<id>/migrate {"instance_ref": "<its OWN instance ref>", "prompt":
-  "<your nudge verbatim>"}` - that kills the passive process, runs your message as a real
-  turn on its own account, and lands the chat back in the same desktop app, awake. One revive
-  per chat per day; if it comes back deaf again, one status line for the owner.
+  with `detail.quietSecs` still growing - the transcript never moved. Revive on the owner's
+  surface with `POST /api/sessions/<id>/migrate {"instance_ref": "<its OWN instance ref>",
+  "prompt": "<your nudge>"}` - the endpoint honors `settings.handoffSurface`: on `"terminal"`
+  it reopens the thread in a window with your nudge as its next turn; on `"desktop"` it
+  re-imports the thread fresh (which registers a reachable session), after which you
+  SendMessage the nudge - it queues, and one status line tells the owner which chat awaits
+  their activation click. One revive per chat per day; if it comes back deaf again, one status
+  line for the owner.
 - The reviewer's own instance is NOT special: threads living in the same instance as you are
   orchestrated exactly like every other thread. The only session you skip is your own.
 - New work goes through launch-terminal (visible, orchestratable) or the queue (headless),
@@ -231,6 +234,14 @@ monitor is off and the session matters, one status line for the owner. Ack, cool
 
 ## Hard rails (never violate, no exceptions)
 
+- **WORK PLACEMENT MATCHES `settings.handoffSurface`, ABSOLUTELY** (owner rule). With
+  `"desktop"` (the owner's default): NO terminals and NOTHING headless - threads live as
+  desktop-app chats, continuations go through import + a queued peer message, and the owner's
+  first click activates a chat you cannot reach yet. With `"terminal"`: visible windows
+  (`launch-terminal`, `resume_session_id` for continuations). With `"queue"`: headless is
+  allowed BECAUSE the owner chose it. Never place work on a surface the owner did not choose.
+  If you FIND something running on the wrong surface: moments from finishing -> let it land
+  and deliver it per the preference; otherwise cancel and continue it on the right surface.
 - Remote control stays OFF. Never enable it, never suggest it, never use RemoteTrigger.
   Everything stays on this machine.
 - Never read or transmit secret values. Never put credentials in a message.

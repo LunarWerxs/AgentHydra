@@ -2028,12 +2028,22 @@ app.post('/api/sessions/launch-terminal', async (c) => {
     return c.json({ error: 'cwd and prompt are required' }, 400)
   if (body.effort != null && invalidEnum(body.effort, VALID_EFFORTS, 'effort'))
     return c.json({ error: invalidEnum(body.effort, VALID_EFFORTS, 'effort') }, 400)
+  // resume_session_id continues an existing thread in the window (owner's no-headless rule:
+  // continuations happen where they can be watched). Refuse it while that thread is live.
+  if (typeof body.resume_session_id === 'string' && body.resume_session_id.trim()) {
+    if (liveSessionEntry(body.resume_session_id.trim()))
+      return c.json(
+        { ok: false, reason: 'session-live: stop its process before a terminal resume' },
+        409,
+      )
+  }
   const result = await launchTerminalSession({
     cwd: body.cwd,
     prompt: body.prompt,
     instanceRef: typeof body.instance_ref === 'string' ? body.instance_ref : null,
     model: typeof body.model === 'string' ? body.model : null,
     effort: typeof body.effort === 'string' ? body.effort : null,
+    resumeSessionId: typeof body.resume_session_id === 'string' ? body.resume_session_id : null,
   })
   return c.json(result, result.ok ? 200 : 422)
 })
@@ -2122,34 +2132,37 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // creates the fresh entry in the target profile.
   await archiveDesktopChat(sessionId, true).catch(() => null)
 
-  const id = crypto.randomUUID()
-  const posRow = db
-    .query<{ m: number | null }, []>('select max(position) as m from queue_items')
-    .get()
-  db.query(
-    `insert into queue_items
-       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at, import_to, import_title)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, null, ?, ?, ?)`,
-  ).run(
-    id,
+  // Placement follows the owner's chosen surface (their standing rule: match the preference,
+  // and 'desktop' means no terminals and nothing headless).
+  const surface = getOrchestratorSettings().handoffSurface
+  if (surface === 'terminal') {
+    const launched = await launchTerminalSession({
+      cwd: s.cwd,
+      prompt,
+      instanceRef: ref,
+      resumeSessionId: sessionId,
+    })
+    if (!launched.ok)
+      return c.json({ ok: false, error: launched.reason ?? 'terminal launch failed' }, 422)
+    return c.json({ ok: true, surface: 'terminal', stoppedLive: !!live })
+  }
+  // Desktop surface: the thread lands in the target instance's app as a chat. The daemon has no
+  // peer tools, so the PROMPT is not delivered here — the interactive caller (the reviewer)
+  // sends it as a peer message after the import registers; it queues on the chat and processes
+  // when the owner first clicks it (the activation, measured). Everything after happens in-app.
+  const imported = await importSessionToDesktop({
     sessionId,
-    `Migrate: ${s.title}`.slice(0, 200),
-    s.cwd,
-    prompt,
-    null,
-    null,
-    null,
-    null,
-    ref,
-    (posRow?.m ?? 0) + 1,
-    Date.now(),
-    ref,
-    s.title,
-  )
-  const raw = db.query('select * from queue_items where id = ?').get(id)
-  const item = coerceQueueItem(raw)
-  if (!isActive(item.id) && !isSessionActive(item.session_id)) void dispatchItem(item)
-  return c.json({ ok: true, itemId: id, stoppedLive: !!live })
+    instanceDir: ref.slice('desktop:'.length),
+    title: s.title,
+  })
+  if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
+  return c.json({
+    ok: true,
+    surface: 'desktop',
+    stoppedLive: !!live,
+    promptDelivery: 'send-a-peer-message-after-it-registers',
+    awaitsActivationClick: true,
+  })
 })
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------

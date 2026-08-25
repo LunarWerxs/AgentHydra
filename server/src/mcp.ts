@@ -1357,6 +1357,7 @@ export const TOOLS: McpEngineTool[] = [
         instance_ref: { type: 'string' },
         model: { type: 'string' },
         effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
+        resume_session_id: { type: 'string' },
       },
       ['cwd', 'prompt'],
     ),
