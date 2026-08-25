@@ -108,8 +108,12 @@ gets the standing answer, acked `standing-answer`.
 ## The rubric
 
 **`idle_pending`** - a live chat finished and is waiting.
-- `detail.staleTasks` true -> its background tasks are DEAD (transcript and task outputs both
-  silent past the threshold; the summary says how long). Do NOT keep waiting. SendMessage:
+- `detail.staleTasks` true -> the watcher suspects dead background tasks (transcript and task
+  outputs both silent past the threshold). This is a HINT, not a verdict: READ the tailSnippet
+  first. Task-completion notices, a recap, or any sign the tasks reached a terminal state and
+  the chat simply idled afterward means ordinary idle handling, not this - a false "your tasks
+  are dead" costs a big-context chat an expensive refutation turn (measured). Only when the
+  tail genuinely shows unresolved waiting, SendMessage:
   "[orchestrator] You have been waiting on background tasks that have produced nothing for
   <duration> - they are almost certainly dead or their completion never woke you. Check their
   status and output files now, kill or restart what is needed, and continue the work. If their
