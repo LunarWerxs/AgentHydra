@@ -1213,6 +1213,10 @@ export type AttentionKind =
   | 'branch_off_main'
   | 'chip'
   | 'limit_stopped'
+  /** The session's process is GONE (computer restart, crash, kill) with the thread unfinished —
+   *  its live-registry file survived its pid. Mid-process death is a resumable scenario: the
+   *  reviewer revives it per the owner's surface preference. */
+  | 'orphaned'
 
 /** One thing the watcher thinks needs a judgment call. The payload carries enough to judge
  *  from (tail snippet, numbers), so the reviewer never has to open the transcript itself. */

@@ -150,9 +150,13 @@ gets the standing answer, acked `standing-answer`.
        live window, steerable; import it into the app for permanence once it wraps.
      - `"queue"`: the classic headless continuation (`POST /api/queue`, `new_chat: true`, note
        the session_id) with import-on-completion via `import_to`/`import_title`.
-  3. Do NOT message the old chat. ALWAYS archive a chat once its handoff has been collected
-     and continued (owner rule): mark it finished, `POST /api/sessions/<id>/done
-     {"done": true}`, then archive its desktop entry:
+  3. Do NOT message the old chat. Mark it finished FIRST, `POST /api/sessions/<id>/done
+     {"done": true}`, THEN start the continuation - the done-mark is the lineage ledger that
+     stops every other path (nudges, auto-resumes, imports, a second reviewer pass) from
+     reviving the old copy while the successor spins up. If the continuation launch then
+     fails, un-mark (`{"done": false}`) so the thread is not stranded. ALWAYS archive a chat
+     once its handoff has been collected and continued (owner rule): after the done-mark,
+     archive its desktop entry:
      `POST /api/sessions/<id>/desktop-archive {"archived": true}`. Relay the caveat once if it
      matters: on an instance whose app is running, the archive shows after that app next
      restarts; the done-mark is the immediate signal. Exception worth using: a chat in YOUR
@@ -164,6 +168,29 @@ gets the standing answer, acked `standing-answer`.
 
 **`interrupted`** - the human pressed stop. Never auto-resume it. Ack `human-interrupted`,
 cooldown 360. Mention it in status only if it has sat forgotten for hours.
+
+**`orphaned`** - the session's PROCESS IS GONE (computer restart, crash, or kill) with the
+thread unfinished; its live-registry file outlived its pid. Mid-process death is a RESUMABLE
+scenario - the thread never finished and nobody is going to finish it unless you act. After a
+restart the whole fleet lands here at once; handle it as a batch, not one-at-a-time noise.
+- First, the watcher already cleaned superseded/finished residue - every item you see is real
+  unfinished work. Read `detail`: `midTurn` true means it died mid-turn (work definitely
+  incomplete); `handoffDetected` true means it died AFTER writing a handoff - collect and
+  continue that handoff via the normal flow instead of reviving the dead copy.
+- You cannot SendMessage a dead session. Revive per the owner's surface:
+  - `"desktop"`: the chat still sits in its instance's sidebar (it was never archived). If its
+    instance is running, put up ONE status line for the batch: "restart recovery: <titles>
+    died mid-work - click each once and I will take it from there." The owner's click revives
+    the session; it then reappears as a live idle chat and the normal rubric nudges it. If its
+    instance is closed, follow the open-instances policy (never boot an account on your own).
+  - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt": "[orchestrator] Your
+    process died mid-work (computer restart or crash). Review your last steps, verify what
+    actually landed on disk, and resume from where you truly are - files may be ahead of or
+    behind your notes.", "instance_ref", "resume_session_id": "<id>"}`.
+- The verify-first wording matters: a killed session's last writes may be half-applied. Never
+  tell it "continue as planned"; tell it to re-verify state first.
+- Ack `orphan-revive` after acting, cooldown 60 (desktop clicks take however long the owner
+  takes; the item self-clears once the session lives again or is done-marked).
 
 **`errored`** - `detail.ending` says why.
 - `overload` (a 529): one nudge - "You stopped on a server overload. Please continue where you
@@ -234,6 +261,17 @@ monitor is off and the session matters, one status line for the owner. Ack, cool
 
 ## Hard rails (never violate, no exceptions)
 
+- **ONE LINEAGE, ONE CONTINUATION** (owner rule, 2026-08-25, after chats overwrote each
+  other's work). Every thread's unique identifier is its session id, and its disposition
+  lives in the done-mark ledger (`POST /api/sessions/<id>/done`). Before ANY resume, revive,
+  import, migrate, or nudge, the question is: does this lineage already have a live
+  continuation, and is it done-marked? Done-marked = handed off/migrated/closed = a successor
+  owns the task = you NEVER revive the old copy (the API now refuses with 409 `superseded`;
+  do not reach for `force:true` - it exists for the owner's deliberate resurrections, not for
+  routing around the guard). Done-mark a chat the MOMENT its handoff is collected, BEFORE
+  starting the successor. Never start two continuations of one handoff, and never hand the
+  same task to a second chat because the first looks slow - nudge the first or escalate to
+  the owner instead.
 - **WORK PLACEMENT MATCHES `settings.handoffSurface`, ABSOLUTELY** (owner rule). With
   `"desktop"` (the owner's default): NO terminals and NOTHING headless - threads live as
   desktop-app chats, continuations go through import + a queued peer message, and the owner's

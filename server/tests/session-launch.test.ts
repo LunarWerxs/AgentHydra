@@ -8,6 +8,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { db } from '../src/db'
 import {
   applyDesktopChatTitle,
   archiveDesktopChat,
@@ -15,8 +16,16 @@ import {
   buildTerminalLaunchPlan,
   bundledClaudeExe,
   importSessionToDesktop,
+  isSessionSuperseded,
+  launchTerminalSession,
   sweepUntitledDesktopChats,
 } from '../src/session-launch'
+
+function markDone(sessionId: string, done: boolean): void {
+  db.query(
+    'insert into session_marks (session_id, done, updated_at) values (?, ?, ?) on conflict(session_id) do update set done = ?, updated_at = ?',
+  ).run(sessionId, done ? 1 : 0, Date.now(), done ? 1 : 0, Date.now())
+}
 
 test('windows: powershell reads the prompt file raw, window survives exit', () => {
   const plan = buildTerminalLaunchPlan(
@@ -171,6 +180,48 @@ test('bundledClaudeExe picks the numerically newest version, not the lexicograph
   }
   expect(bundledClaudeExe(dir)).toContain('2.1.237')
   expect(bundledClaudeExe(join(dir, 'no-such'))).toBe(null)
+})
+
+// --- one lineage, one continuation: superseded (done-marked) sessions stay retired ------------
+
+test('isSessionSuperseded reads the done-mark ledger', () => {
+  expect(isSessionSuperseded('lineage-none')).toBe(false)
+  markDone('lineage-a', true)
+  expect(isSessionSuperseded('lineage-a')).toBe(true)
+  markDone('lineage-a', false)
+  expect(isSessionSuperseded('lineage-a')).toBe(false)
+})
+
+test('import refuses a done-marked lineage; force falls through to the next guard', async () => {
+  markDone('lineage-b', true)
+  const refused = await importSessionToDesktop({
+    sessionId: 'lineage-b',
+    instanceDir: 'X:\\no-such-instance',
+    isLive: () => false,
+  })
+  expect(refused.ok).toBe(false)
+  expect(refused.reason).toStartWith('superseded')
+  // force: the lineage guard steps aside and the ordinary guards take over.
+  const forced = await importSessionToDesktop({
+    sessionId: 'lineage-b',
+    instanceDir: 'X:\\no-such-instance',
+    isLive: () => false,
+    force: true,
+  })
+  expect(forced.reason).toBe('instance-dir-not-found')
+  markDone('lineage-b', false)
+})
+
+test('a terminal resume of a done-marked lineage is refused before anything launches', async () => {
+  markDone('lineage-c', true)
+  const res = await launchTerminalSession({
+    cwd: 'D:\\Fake',
+    prompt: 'resume',
+    resumeSessionId: 'lineage-c',
+  })
+  expect(res.ok).toBe(false)
+  expect(res.reason).toStartWith('superseded')
+  markDone('lineage-c', false)
 })
 
 test('darwin and linux read the file via cat; unknown platforms still return the command text', () => {

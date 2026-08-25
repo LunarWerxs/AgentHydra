@@ -168,6 +168,39 @@ Same four verbs over MCP: `get_orchestrator`, `set_orchestrator`, `orchestrator_
 | `branch_off_main` | a session cwd is on a non-main branch / worktree | nudge back onto main |
 | `chip` | a session offered a `spawn_task` chip (title + prompt captured) | queue it via `/api/queue` on the best account, or surface to the human |
 | `limit_stopped` | a live chat's last turn ended at a usage limit | none (the auto-resume monitor's jurisdiction; check `/api/monitor`) |
+| `orphaned` | the session's PROCESS DIED mid-work (computer restart, crash, kill): its live-registry file outlived its pid | revive per the surface preference: desktop → the chat is still in its instance's sidebar, one status line asks the owner to click it back to life; terminal → `launch-terminal` with `resume_session_id` and a verify-first prompt |
+
+### Restart recovery (orphaned sessions)
+
+A graceful CLI exit deletes its own `~/.claude/sessions/<pid>.json`; a hard stop (computer
+restart, crash, kill) leaves the file behind with a dead pid. The watcher reads that residue
+every tick: superseded files (the session lives again under a new pid), done-marked lineages,
+and owner-archived chats are cleaned silently; everything else is genuinely unfinished work
+and becomes an `orphaned` item after `idleQuietSecs` of transcript silence. The whole flow is
+self-healing - the moment the owner clicks a dead desktop chat back to life (or a terminal
+resume lands), the next tick sees the live successor and retires the orphan file. Queue runs
+that were in flight when the daemon died are a separate, older recovery (`reattachRuns` at
+boot: replay the on-disk log, resume tailing or finalize).
+
+### One lineage, one continuation (the duplicate-work guard)
+
+Field report (2026-08-25): chats complained their work was being overridden - two sessions
+had ended up continuing the same task. The unique identifier for a thread is its **session
+id**; its disposition is the **done-mark ledger** (`session_marks`, written by
+`POST /api/sessions/<id>/done`). The rules, enforced in code rather than by convention:
+
+- A done-marked session generates **no attention items** (no nudges, no hygiene addressing) -
+  its successor owns the task. The archive janitor is what retires its desktop entries.
+- `launch-terminal` (resume), `import-desktop`, and `migrate` all **refuse a done-marked
+  session with 409 `superseded`** unless `force: true` (for the owner's deliberate
+  resurrections only). The same guard sits inside the primitives, so the finalize auto-import
+  and the monitor's surface-aware resumes are covered too.
+- The auto-resume monitor **cancels a scheduled resume** whose session was done-marked after
+  scheduling.
+- The reviewer's rubric orders the handoff flow: done-mark the old chat FIRST, then start the
+  successor - so a crash between the two steps leaves a missing continuation (recoverable:
+  the handoff is still in the transcript) rather than a duplicate one (not recoverable: both
+  copies write to the same repo).
 
 ## The reviewer (`/orchestrate`)
 

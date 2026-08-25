@@ -27,6 +27,7 @@ import { dispatchItem, isActive, isSessionActive } from './dispatch'
 import { sessionMetaMap } from './instance-sessions'
 import { getOrchestratorSettings } from './orchestrator'
 import { discoverPendingStops, type RateLimitedStop } from './rate-limit-discovery'
+import { isSessionSuperseded } from './session-launch'
 import type {
   MonitorSettings,
   MonitorStateName,
@@ -488,6 +489,18 @@ async function dispatchDueResumes(): Promise<void> {
     const raw = db.query('select * from queue_items where id = ?').get(r.resume_item_id)
     if (!raw) continue
     const q = coerceQueueItem(raw)
+    // One lineage, one continuation: a session done-marked (handed off/migrated) AFTER this
+    // resume was scheduled must not be revived — its successor owns the task, and firing the
+    // resume would set two sessions overwriting the same work. Cancel the row; the reconciler
+    // settles the monitor state from it on the next pass.
+    if (q.status === 'queued' && isSessionSuperseded(q.session_id)) {
+      db.query('update queue_items set status = ?, finished_at = ? where id = ?').run(
+        'canceled',
+        new Date().toISOString(),
+        q.id,
+      )
+      continue
+    }
     const due = !q.not_before || q.not_before <= now
     if (q.status === 'queued' && due && !isActive(q.id) && !isSessionActive(q.session_id)) {
       // Placement follows the owner's surface preference (standing rule 2026-08-25: match the

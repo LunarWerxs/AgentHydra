@@ -35,6 +35,26 @@ import { resolveClaudeExe } from './config'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
+import { db } from './db'
+
+/**
+ * One lineage, one continuation. A done-marked session (session_marks.done = 1) was handed off,
+ * migrated onward, or closed out — its successor owns the task now. Reviving the old copy sets
+ * TWO sessions working (and overwriting) the same files, which the owner hit in the field
+ * (2026-08-25: chats complaining their work was overridden by other chats). Every resume/import
+ * path checks this ledger; callers that genuinely mean to resurrect a retired thread pass
+ * force: true (after un-marking it, they own the consequences).
+ */
+export function isSessionSuperseded(sessionId: string): boolean {
+  try {
+    const row = db
+      .query<{ done: number }, [string]>('select done from session_marks where session_id = ?')
+      .get(sessionId)
+    return !!row?.done
+  } catch {
+    return false
+  }
+}
 
 /**
  * The newest CLI the pinned desktop instance itself bundles
@@ -131,7 +151,16 @@ export async function launchTerminalSession(opts: {
   /** Continue THIS existing thread (--resume) instead of starting a new session. The caller
    *  must have stopped any live process for it first (two-writers rule). */
   resumeSessionId?: string | null
+  /** Resume a done-marked (superseded) lineage anyway. See isSessionSuperseded. */
+  force?: boolean
 }): Promise<TerminalLaunchResult> {
+  if (opts.resumeSessionId && !opts.force && isSessionSuperseded(opts.resumeSessionId))
+    return {
+      ok: false,
+      reason:
+        'superseded: this session is done-marked (handed off/migrated) — resuming it would duplicate its successor’s work; pass force to override',
+      command: '',
+    }
   const env: Record<string, string> = {}
   const ref = opts.instanceRef?.trim() || null
   let exe: string | null = null
@@ -431,9 +460,17 @@ export async function importSessionToDesktop(opts: {
   isLive?: (sessionId: string) => boolean
   /** Seam for tests; the default asks the instance manager. */
   isInstanceRunning?: (dir: string) => Promise<boolean>
+  /** Import a done-marked (superseded) lineage anyway. See isSessionSuperseded. */
+  force?: boolean
 }): Promise<{ ok: boolean; reason?: string; titled?: boolean }> {
   if ((opts.isLive ?? sessionIsLive)(opts.sessionId))
     return { ok: false, reason: 'session-live: refusing to import under an active writer' }
+  if (!opts.force && isSessionSuperseded(opts.sessionId))
+    return {
+      ok: false,
+      reason:
+        'superseded: this session is done-marked (handed off/migrated) — importing it would revive a retired lineage; pass force to override',
+    }
   if (!existsSync(opts.instanceDir)) return { ok: false, reason: 'instance-dir-not-found' }
   // The import spawn targets the RUNNING app via Electron's single-instance lock. Aimed at an
   // instance that is NOT running it does not fail — it BOOTS that instance, which is exactly

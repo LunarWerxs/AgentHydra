@@ -39,11 +39,12 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 // Text imports: bundled into compiled builds, so a packaged AgentHydra can still install the
 // commands on a machine that has no checkout and no docs/ directory.
 import DELAYO_COMMAND from '../../docs/delayo-command.md' with { type: 'text' }
@@ -51,7 +52,7 @@ import ORCHESTRATE_COMMAND from '../../docs/orchestrate-command.md' with { type:
 import RESUMEO_COMMAND from '../../docs/resumeo-command.md' with { type: 'text' }
 import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
-import { instanceRefForSession } from './instance-sessions'
+import { instanceRefForSession, sessionMetaMap } from './instance-sessions'
 import { classifyEnding, type SessionEnding } from './session-ending'
 import { archiveDesktopChat, sweepUntitledDesktopChats } from './session-launch'
 import type {
@@ -278,33 +279,66 @@ function transcriptPathFor(claudeHome: string, cwd: string, sessionId: string): 
   return null
 }
 
-function readLiveRegistry(claudeHome: string): LiveSession[] {
+/** A registry file that outlived its process: the session died un-gracefully (computer restart,
+ *  crash, kill) — a graceful exit deletes its own `<pid>.json`. Mid-process death is a resumable
+ *  scenario, so these are surfaced, not silently dropped. */
+export interface OrphanSession extends LiveSession {
+  /** The stale registry file itself — the evidence, and the cleanup handle. */
+  registryPath: string
+}
+
+function scanRegistry(claudeHome: string): { live: LiveSession[]; orphans: OrphanSession[] } {
   const dir = join(claudeHome, 'sessions')
   let files: string[] = []
   try {
     files = readdirSync(dir).filter((f) => f.endsWith('.json'))
   } catch {
-    return []
+    return { live: [], orphans: [] }
   }
-  const out: LiveSession[] = []
+  const live: LiveSession[] = []
+  const orphans: OrphanSession[] = []
   for (const f of files) {
     try {
       const reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
       if (typeof reg?.sessionId !== 'string' || typeof reg?.cwd !== 'string') continue
-      if (typeof reg.pid !== 'number' || !pidAlive(reg.pid)) continue
-      out.push({
+      if (typeof reg.pid !== 'number') continue
+      const entry: LiveSession = {
         pid: reg.pid,
         sessionId: reg.sessionId,
         cwd: reg.cwd,
         name: typeof reg.name === 'string' ? reg.name : reg.sessionId.slice(0, 8),
         startedAt: typeof reg.startedAt === 'number' ? reg.startedAt : 0,
         transcriptPath: transcriptPathFor(claudeHome, reg.cwd, reg.sessionId),
-      })
+      }
+      if (pidAlive(reg.pid)) live.push(entry)
+      else orphans.push({ ...entry, registryPath: join(dir, f) })
     } catch {
       // One unreadable registry entry must not hide the others.
     }
   }
-  return out
+  return { live, orphans }
+}
+
+function readLiveRegistry(claudeHome: string): LiveSession[] {
+  return scanRegistry(claudeHome).live
+}
+
+export function readOrphanedRegistry(claudeHome: string): OrphanSession[] {
+  return scanRegistry(claudeHome).orphans
+}
+
+/** Remove a stale registry file and its `<pid>.*.key` siblings. Only ever called for entries
+ *  whose pid is verifiably dead — this is residue, not state. */
+function cleanOrphanFiles(orphan: OrphanSession): void {
+  try {
+    rmSync(orphan.registryPath, { force: true })
+    const dir = dirname(orphan.registryPath)
+    for (const f of readdirSync(dir)) {
+      if (f.startsWith(`${orphan.pid}.`) && f.endsWith('.key')) rmSync(join(dir, f), { force: true })
+    }
+  } catch {
+    // Best-effort: a locked file just means the orphan shows again next tick.
+  }
 }
 
 // --- transcript tail parsing (pure; exported for tests) ---------------------
@@ -724,6 +758,8 @@ export interface OrchestratorDeps {
   nowMs: () => number
   claudeHome: () => string
   registry: (claudeHome: string) => LiveSession[]
+  /** Registry files whose pid is dead: sessions that died mid-process (restart/crash/kill). */
+  orphans: (claudeHome: string) => OrphanSession[]
   tailInfo: (path: string) => TailInfo
   mtimeMs: (path: string) => number | null
   /** See taskActivityMtime. Null = the session has no background-task outputs at all. */
@@ -738,6 +774,7 @@ const defaultDeps: OrchestratorDeps = {
   nowMs: () => Date.now(),
   claudeHome: () => join(homedir(), '.claude'),
   registry: readLiveRegistry,
+  orphans: readOrphanedRegistry,
   tailInfo: readTailInfo,
   mtimeMs: (path) => {
     try {
@@ -811,6 +848,18 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   // reviewer cannot nudge what it never sees. They still count for git grouping (a held chat's
   // repo is still that repo), but are never chosen as a nudge addressee.
   const holdSet = new Set(listSessionHolds().map((h) => h.sessionId))
+  // One lineage, one continuation. A done-marked session was handed off, migrated onward, or
+  // closed out — its successor owns the task now. Nudging the old copy back to life sets two
+  // sessions working (and overwriting) the same files, which is exactly what the owner reported
+  // (2026-08-25: chats complaining their work was overridden by other chats). Done-marked
+  // sessions generate no nudge items and are never a hygiene addressee; the archive janitor is
+  // what retires their desktop entries.
+  const doneSet = new Set(
+    db
+      .query<{ session_id: string }, []>('select session_id from session_marks where done = 1')
+      .all()
+      .map((r) => r.session_id),
+  )
   for (const sess of sessions) lastNames.set(sess.sessionId, { name: sess.name, cwd: sess.cwd })
 
   // -- per-session ------------------------------------------------------------
@@ -832,7 +881,10 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     const mtime = deps.mtimeMs(sess.transcriptPath)
     if (mtime === null) continue
     const quietSecs = Math.max(0, Math.round((started - mtime) / 1000))
-    const held = holdSet.has(sess.sessionId)
+    // A done-marked session is treated like a held one from here down: it still anchors its
+    // repo for git grouping, but must never be nudged or chosen as a hygiene addressee — its
+    // successor owns the work (see doneSet above).
+    const held = holdSet.has(sess.sessionId) || doneSet.has(sess.sessionId)
     const list = byCwd.get(sess.cwd) ?? []
     list.push({ session: sess, quietSecs, held })
     byCwd.set(sess.cwd, list)
@@ -942,6 +994,82 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
         detail: { title: chip.title, prompt: chip.prompt },
       })
     }
+  }
+
+  // -- orphaned sessions: died mid-process (computer restart, crash, kill) -----
+  // A graceful CLI exit deletes its own ~/.claude/sessions/<pid>.json; a registry file whose
+  // pid is dead means the session was killed with its thread unfinished — the owner's restart
+  // scenario (2026-08-25). Mid-process death is a RESUMABLE scenario, so each one gets an
+  // attention item; superseded/finished residue is cleaned instead, so a revived chat's stale
+  // file never shadows its live successor (self-healing once the owner clicks the chat back
+  // to life or a resume lands).
+  const liveIds = new Set(sessions.map((x) => x.sessionId))
+  let metaMap: Map<string, { archived: boolean }> = new Map()
+  try {
+    metaMap = sessionMetaMap()
+  } catch {
+    // No desktop metadata just means the owner-archived check is skipped this tick.
+  }
+  const newestOrphan = new Map<string, OrphanSession>()
+  for (const o of deps.orphans(deps.claudeHome())) {
+    const prevO = newestOrphan.get(o.sessionId)
+    if (!prevO) {
+      newestOrphan.set(o.sessionId, o)
+    } else if (o.startedAt >= prevO.startedAt) {
+      // Two crashes can leave two files for one session — keep the newest, clean the older.
+      cleanOrphanFiles(prevO)
+      newestOrphan.set(o.sessionId, o)
+    } else {
+      cleanOrphanFiles(o)
+    }
+  }
+  for (const orphan of newestOrphan.values()) {
+    if (liveIds.has(orphan.sessionId)) {
+      cleanOrphanFiles(orphan) // superseded: the session lives again under a new pid
+      continue
+    }
+    if (doneSet.has(orphan.sessionId) || metaMap.get(orphan.sessionId)?.archived) {
+      cleanOrphanFiles(orphan) // finished or owner-closed: residue, not resumable work
+      continue
+    }
+    if (holdSet.has(orphan.sessionId)) continue // parked stays parked, even dead
+    if (!orphan.transcriptPath) continue
+    const mtime = deps.mtimeMs(orphan.transcriptPath)
+    if (mtime === null) continue
+    const quietSecs = Math.max(0, Math.round((started - mtime) / 1000))
+    if (quietSecs < s.idleQuietSecs) continue // could still be relaunching — let it settle
+    let tail: TailInfo
+    try {
+      tail = deps.tailInfo(orphan.transcriptPath)
+    } catch {
+      continue
+    }
+    const iref = deps.instanceRef(orphan.sessionId)
+    items.push({
+      key: `orphan:${orphan.sessionId}`,
+      kind: 'orphaned',
+      sessionId: orphan.sessionId,
+      peerName: orphan.name,
+      cwd: orphan.cwd,
+      instanceRef: iref ?? undefined,
+      tailSnippet: tail.lastAssistantText ?? undefined,
+      summary: `${orphan.name} died mid-process ${fmtQuiet(quietSecs)} ago (computer restart, crash, or kill — its process is gone)${
+        tail.midTurn ? ', mid-turn' : ''
+      } — resumable per the surface preference`,
+      detail: {
+        quietSecs,
+        pid: orphan.pid,
+        midTurn: tail.midTurn,
+        ending: tail.ending,
+        ctxTokens: tail.ctxTokens,
+        recapDetected: tail.recapDetected,
+        handoffDetected: tail.handoffDetected,
+        lastHumanText: tail.lastHumanText,
+        lastHumanAt: tail.lastHumanAt,
+      },
+      firstSeenAt: nowIso,
+      seenCount: 1,
+    })
   }
 
   // -- git hygiene, one look per distinct cwd ---------------------------------

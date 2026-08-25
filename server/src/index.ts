@@ -181,6 +181,7 @@ import { type ExportFormat, exportSession, scanSessionSecrets } from './session-
 import {
   archiveDesktopChat,
   importSessionToDesktop,
+  isSessionSuperseded,
   launchTerminalSession,
   liveSessionEntry,
 } from './session-launch'
@@ -2029,11 +2030,22 @@ app.post('/api/sessions/launch-terminal', async (c) => {
   if (body.effort != null && invalidEnum(body.effort, VALID_EFFORTS, 'effort'))
     return c.json({ error: invalidEnum(body.effort, VALID_EFFORTS, 'effort') }, 400)
   // resume_session_id continues an existing thread in the window (owner's no-headless rule:
-  // continuations happen where they can be watched). Refuse it while that thread is live.
+  // continuations happen where they can be watched). Refuse it while that thread is live, and
+  // refuse a done-marked lineage (one lineage, one continuation — its successor owns the task).
   if (typeof body.resume_session_id === 'string' && body.resume_session_id.trim()) {
-    if (liveSessionEntry(body.resume_session_id.trim()))
+    const rid = body.resume_session_id.trim()
+    if (liveSessionEntry(rid))
       return c.json(
         { ok: false, reason: 'session-live: stop its process before a terminal resume' },
+        409,
+      )
+    if (body.force !== true && isSessionSuperseded(rid))
+      return c.json(
+        {
+          ok: false,
+          reason:
+            'superseded: session is done-marked (handed off/migrated); resuming would duplicate its successor — pass force:true only if you have verified there is no successor',
+        },
         409,
       )
   }
@@ -2044,6 +2056,7 @@ app.post('/api/sessions/launch-terminal', async (c) => {
     model: typeof body.model === 'string' ? body.model : null,
     effort: typeof body.effort === 'string' ? body.effort : null,
     resumeSessionId: typeof body.resume_session_id === 'string' ? body.resume_session_id : null,
+    force: body.force === true,
   })
   return c.json(result, result.ok ? 200 : 422)
 })
@@ -2063,10 +2076,20 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
       { ok: false, error: "instance_ref ('desktop:<dir>') is required — none could be inferred" },
       400,
     )
+  if (body.force !== true && isSessionSuperseded(sessionId))
+    return c.json(
+      {
+        ok: false,
+        error:
+          'superseded: session is done-marked (handed off/migrated); importing would revive a retired lineage — pass force:true only if you have verified there is no successor',
+      },
+      409,
+    )
   const result = await importSessionToDesktop({
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
     title: typeof body.title === 'string' ? body.title : null,
+    force: body.force === true,
   })
   return c.json(result, result.ok ? 200 : 422)
 })
@@ -2110,6 +2133,18 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       : MIGRATION_PROMPT
   const s = await getSession(sessionId, 'claude')
   if (!s) return c.json({ ok: false, error: 'session not found' }, 404)
+  // One lineage, one continuation — checked BEFORE the kill below, so a refused migrate never
+  // leaves the thread stopped. A done-marked session was already handed off or migrated; moving
+  // it again would spin up a second continuation of work its successor owns.
+  if (body.force !== true && isSessionSuperseded(sessionId))
+    return c.json(
+      {
+        ok: false,
+        error:
+          'superseded: session is done-marked (already handed off/migrated); migrating would duplicate its successor — pass force:true only if you have verified there is no successor',
+      },
+      409,
+    )
 
   // A live chat's process must stop before anything appends to its transcript. User-initiated:
   // clicking "migrate" means "move this thread", current turn included.
@@ -2141,6 +2176,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       prompt,
       instanceRef: ref,
       resumeSessionId: sessionId,
+      force: body.force === true,
     })
     if (!launched.ok)
       return c.json({ ok: false, error: launched.reason ?? 'terminal launch failed' }, 422)
@@ -2154,6 +2190,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
     title: s.title,
+    force: body.force === true,
   })
   if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
   return c.json({

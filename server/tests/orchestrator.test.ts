@@ -6,7 +6,7 @@
 // test pins one classification the reviewer depends on, against synthetic transcript records in
 // the CLI's own shapes (captured from a real store on 2026-08-25, CLI v2.1.237).
 import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../src/db'
@@ -21,6 +21,7 @@ import {
   isInjectedUserText,
   type LiveSession,
   type OrchestratorDeps,
+  type OrphanSession,
   orchestratorView,
   parseTranscriptTail,
   planOfAccountLabel,
@@ -482,6 +483,7 @@ function fakeDeps(over: Partial<OrchestratorDeps> & { tail?: TailInfo; mtime?: n
     nowMs: () => Date.now(),
     claudeHome: () => 'unused',
     registry: () => [session],
+    orphans: () => [],
     tailInfo: () => tail,
     mtimeMs: () => over.mtime ?? Date.now() - 10 * 60_000,
     git: async () => null,
@@ -627,4 +629,93 @@ test('branch and dirty hygiene: off-main flags immediately; dirty flags after di
   feed = orchestratorView().attention
   expect(feed.some((i: AttentionItem) => i.kind === 'repo_dirty')).toBe(true)
   expect(feed.find((i: AttentionItem) => i.kind === 'repo_dirty')?.peerName).toBe('fake-aa')
+})
+
+// --- orphaned sessions: died mid-process (computer restart / crash / kill) ---
+
+/** A stale registry file on disk (json + key sibling), as a hard restart leaves them. */
+function orphanOnDisk(sessionId: string, pid: number): OrphanSession {
+  const dir = mkdtempSync(join(tmpdir(), 'ah-orph-'))
+  const registryPath = join(dir, `${pid}.json`)
+  writeFileSync(registryPath, JSON.stringify({ sessionId, cwd: 'D:\\Fake', pid, name: `orph-${pid}` }))
+  writeFileSync(join(dir, `${pid}.abc.key`), 'k')
+  return {
+    pid,
+    sessionId,
+    cwd: 'D:\\Fake',
+    name: `orph-${pid}`,
+    startedAt: 1,
+    transcriptPath: 'D:\\fake\\orph.jsonl',
+    registryPath,
+  }
+}
+
+test('a dead-pid registry entry becomes an orphaned item: mid-process death is resumable', async () => {
+  const o = orphanOnDisk('orph-sess-1', 90001)
+  const { deps } = fakeDeps({ registry: () => [], orphans: () => [o] })
+  await runOrchestratorOnce(deps)
+  const item = orchestratorView().attention.find(
+    (i: AttentionItem) => i.key === 'orphan:orph-sess-1',
+  )
+  expect(item?.kind).toBe('orphaned')
+  expect(item?.summary).toContain('died mid-process')
+  expect(existsSync(o.registryPath)).toBe(true) // evidence kept while the item stands
+})
+
+test('an orphan superseded by a live session with the same id is cleaned, not reported', async () => {
+  const o = orphanOnDisk('sess-1', 90002) // fakeDeps' live session is also sess-1
+  const { deps } = fakeDeps({ orphans: () => [o], mtime: Date.now() - 5_000 })
+  await runOrchestratorOnce(deps)
+  expect(
+    orchestratorView().attention.some((i: AttentionItem) => i.key === 'orphan:sess-1'),
+  ).toBe(false)
+  expect(existsSync(o.registryPath)).toBe(false) // residue removed, key sibling included
+  expect(existsSync(join(o.registryPath, '..', '90002.abc.key'))).toBe(false)
+})
+
+test('a done-marked orphan is finished work: cleaned, never resumed', async () => {
+  const o = orphanOnDisk('orph-done-1', 90003)
+  db.query(
+    'insert into session_marks (session_id, done, updated_at) values (?, 1, ?) on conflict(session_id) do update set done = 1',
+  ).run('orph-done-1', Date.now())
+  const { deps } = fakeDeps({ registry: () => [], orphans: () => [o] })
+  await runOrchestratorOnce(deps)
+  expect(
+    orchestratorView().attention.some((i: AttentionItem) => i.key === 'orphan:orph-done-1'),
+  ).toBe(false)
+  expect(existsSync(o.registryPath)).toBe(false)
+})
+
+test('a held orphan stays parked: no item, evidence kept', async () => {
+  const o = orphanOnDisk('orph-held-1', 90004)
+  setSessionHold('orph-held-1', true)
+  const { deps } = fakeDeps({ registry: () => [], orphans: () => [o] })
+  await runOrchestratorOnce(deps)
+  expect(
+    orchestratorView().attention.some((i: AttentionItem) => i.key === 'orphan:orph-held-1'),
+  ).toBe(false)
+  expect(existsSync(o.registryPath)).toBe(true)
+  setSessionHold('orph-held-1', false)
+})
+
+test('a fresh orphan (inside the quiet window) waits: a relaunch may be in flight', async () => {
+  const o = orphanOnDisk('orph-fresh-1', 90005)
+  const { deps } = fakeDeps({ registry: () => [], orphans: () => [o], mtime: Date.now() - 5_000 })
+  await runOrchestratorOnce(deps)
+  expect(
+    orchestratorView().attention.some((i: AttentionItem) => i.key === 'orphan:orph-fresh-1'),
+  ).toBe(false)
+  expect(existsSync(o.registryPath)).toBe(true)
+})
+
+test('one lineage, one continuation: a done-marked LIVE session gets no nudge items', async () => {
+  db.query(
+    'insert into session_marks (session_id, done, updated_at) values (?, 1, ?) on conflict(session_id) do update set done = 1',
+  ).run('sess-1', Date.now())
+  const { deps } = fakeDeps({})
+  await runOrchestratorOnce(deps)
+  expect(
+    orchestratorView().attention.some((i: AttentionItem) => i.sessionId === 'sess-1'),
+  ).toBe(false)
+  db.query('update session_marks set done = 0 where session_id = ?').run('sess-1')
 })
