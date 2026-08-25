@@ -58,9 +58,7 @@ export interface MonitorDeps {
    * real one joins the instance list with the usage cache (orchestrator's routing table).
    * Optional so pre-existing deps objects stay valid; absent means "no target" (scheduled path).
    */
-  pickMigrationTarget?: (
-    excludeRef: string | null,
-  ) => Promise<{ ref: string; name: string } | null>
+  pickMigrationTarget?: (excludeRef: string | null) => Promise<{ ref: string; name: string } | null>
 }
 
 const defaultDeps: MonitorDeps = {

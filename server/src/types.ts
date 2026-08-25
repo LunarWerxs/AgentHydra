@@ -619,9 +619,11 @@ export interface QueueItem {
   retry_attempts: number
   /** When set ('desktop:<dir>'), a run that COMPLETES is imported into that instance's desktop
    *  app as a visible chat (session-launch.ts importSessionToDesktop), titled import_title.
-   *  This is how a migration or handoff lands on the user's screen without anyone polling. */
-  import_to: string | null
-  import_title: string | null
+   *  This is how a migration or handoff lands on the user's screen without anyone polling.
+   *  Optional (absent = null) so synthetic QueueItem literals — discovered rate-limit stops,
+   *  test fixtures — stay valid; real DB rows always carry the columns post-migration. */
+  import_to?: string | null
+  import_title?: string | null
   started_at: string | null
   finished_at: string | null
   exit_code: number | null
