@@ -5,10 +5,34 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.31.0] - 2026-08-25
 
 ### Added
 
+- **Restart recovery: a session whose process died mid-work is found and revived.** A computer
+  restart (or crash, or kill) used to make chats simply vanish from the orchestrator's view,
+  because the live-registry scan silently dropped dead-pid entries. A registry file that
+  outlived its process is now read as what it is: evidence of an un-graceful death with the
+  thread unfinished. Each becomes an `orphaned` attention item and the reviewer revives it per
+  the surface preference (desktop: the chat still sits in its sidebar, one click; terminal: a
+  visible `--resume` window) with a verify-first prompt, since a killed session's last writes
+  may be half-applied. Superseded, finished, and owner-archived residue is cleaned instead of
+  reported, so the whole flow self-heals as chats come back to life.
+- **One lineage, one continuation: the duplicate-work guard.** Chats were found overwriting
+  each other's work: two sessions continuing the same task. The done-mark ledger
+  (`session_marks`, keyed by session id) is now enforced in code. A done-marked (handed
+  off/migrated/closed) session generates no nudge items, is never a hygiene addressee, and
+  every revival path (terminal resume, desktop import, migrate, the monitor's scheduled
+  auto-resumes) refuses it with 409 `superseded`; `force:true` exists for deliberate
+  resurrections only. The reviewer rubric orders every handoff mark-first, so a crash
+  between collecting a handoff and starting its successor leaves a recoverable gap rather
+  than an unrecoverable duplicate.
+- **The archive janitor: done-marked chats get archived, continuously.** Any session the flow
+  itself marked finished (handed off, migrated onward, closed out) has its desktop entries
+  archived on the same ~10-minute cycle as the title janitor, instead of sitting open in the
+  sidebar after their work moved on. Keyed on the done-mark and nothing else, because
+  prose-reading guesses wrongly and hides live work. The standing caveat applies: a running
+  app shows the change after it next restarts.
 - **The title janitor: thread names are managed continuously, not fixed once.** Plumbing-created
   desktop chats (imports, migrations) land "Untitled" or with a generic AI name; every ~10
   minutes the watcher now hands the scanner's real title to any desktop entry that has none.
