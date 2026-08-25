@@ -53,7 +53,7 @@ import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { instanceRefForSession } from './instance-sessions'
 import { classifyEnding, type SessionEnding } from './session-ending'
-import { sweepUntitledDesktopChats } from './session-launch'
+import { archiveDesktopChat, sweepUntitledDesktopChats } from './session-launch'
 import type {
   AttentionItem,
   OrchestratorInstance,
@@ -1059,7 +1059,37 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     } catch (err) {
       console.error('[agenthydra] title janitor failed:', err)
     }
+    try {
+      const archived = await sweepArchivesForDoneSessions()
+      if (archived > 0)
+        console.log(`[agenthydra] archive janitor flagged ${archived} finished chat(s)`)
+    } catch (err) {
+      console.error('[agenthydra] archive janitor failed:', err)
+    }
   }
+}
+
+/**
+ * The archive janitor: any session the flow itself marked done (session_marks — handed off,
+ * migrated onward, closed out) gets its desktop entries archived, continuously. Keyed on the
+ * done-mark and nothing else: prose-reading ("the final post says it was migrated") guesses,
+ * and archiving wrongly hides live work; the done-mark is the flow's own bookkeeping. The
+ * standing caveat applies: a RUNNING app shows the change after it next restarts.
+ */
+export async function sweepArchivesForDoneSessions(roots?: string[]): Promise<number> {
+  const rows = db
+    .query<{ session_id: string }, []>('select session_id from session_marks where done = 1')
+    .all()
+  let flagged = 0
+  for (const r of rows) {
+    try {
+      const res = await archiveDesktopChat(r.session_id, true, roots)
+      if (res.ok) flagged += res.hits.filter((h) => h.changed).length
+    } catch {
+      // one broken store must not stop the sweep
+    }
+  }
+  return flagged
 }
 
 let lastTitleSweepMs = 0

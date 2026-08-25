@@ -279,6 +279,8 @@ export interface DesktopArchiveHit {
   profile: string
   /** The instance's app was running when the flag was written — the caveat applies. */
   wasRunning: boolean
+  /** False when the entry was already in the requested state (nothing written). */
+  changed: boolean
 }
 
 export async function archiveDesktopChat(
@@ -326,11 +328,18 @@ export async function archiveDesktopChat(
     if (!found) continue
     try {
       const meta = JSON.parse(readFileSync(found, 'utf8'))
+      // Already in the requested state: report the hit without rewriting the file, so a
+      // periodic sweep is idempotent instead of churning every metadata file every pass.
+      if (meta.isArchived === archived) {
+        hits.push({ profile, wasRunning: false, changed: false })
+        continue
+      }
       meta.isArchived = archived
       writeFileSync(found, JSON.stringify(meta))
       hits.push({
         profile,
         wasRunning: await isInstanceRunning(profile).catch(() => false),
+        changed: true,
       })
     } catch {
       // An unwritable/corrupt metadata file: skip it rather than fail the others.

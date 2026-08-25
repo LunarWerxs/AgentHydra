@@ -6,7 +6,7 @@
 // test pins one classification the reviewer depends on, against synthetic transcript records in
 // the CLI's own shapes (captured from a real store on 2026-08-25, CLI v2.1.237).
 import { expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -28,6 +28,7 @@ import {
   runOrchestratorOnce,
   setOrchestratorSettings,
   setSessionHold,
+  sweepArchivesForDoneSessions,
   type TailInfo,
 } from '../src/orchestrator'
 import type { AttentionItem, UsageSnapshot } from '../src/types'
@@ -371,6 +372,29 @@ test('new-chat defaults: Opus 5 at max effort with ultracode, all overridable', 
     'high',
   )
   setOrchestratorSettings({ newChatModel: 'opus', newChatEffort: 'max', newChatUltracode: true })
+})
+
+test('the archive janitor archives every done-marked session, idempotently', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-archjan-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  writeFileSync(
+    join(store, 'local_done-sess-1.json'),
+    JSON.stringify({ cliSessionId: 'done-sess-1', isArchived: false }),
+  )
+  writeFileSync(
+    join(store, 'local_active-sess-1.json'),
+    JSON.stringify({ cliSessionId: 'active-sess-1', isArchived: false }),
+  )
+  db.query(
+    'insert into session_marks (session_id, done, updated_at) values (?, 1, ?) on conflict(session_id) do update set done = 1',
+  ).run('done-sess-1', Date.now())
+  expect(await sweepArchivesForDoneSessions([profile])).toBe(1)
+  const read = (n: string) => JSON.parse(readFileSync(join(store, n), 'utf8'))
+  expect(read('local_done-sess-1.json').isArchived).toBe(true)
+  expect(read('local_active-sess-1.json').isArchived).toBe(false) // no done-mark, untouched
+  // Second sweep changes nothing (idempotent) — the count of CHANGED entries is zero.
+  expect(await sweepArchivesForDoneSessions([profile])).toBe(0)
 })
 
 // --- shipping the /orchestrate command --------------------------------------
