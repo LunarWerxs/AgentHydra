@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import {
   ackAttention,
   bandForPct,
+  buildInstanceRows,
   commandInstallOutcome,
   computeUsageItems,
   getOrchestratorSettings,
@@ -21,6 +22,7 @@ import {
   type OrchestratorDeps,
   orchestratorView,
   parseTranscriptTail,
+  planOfAccountLabel,
   projectKeyForCwd,
   resetsSoon,
   runOrchestratorOnce,
@@ -274,6 +276,73 @@ test('settings round-trip and clamp', () => {
   setOrchestratorSettings({ enabled: false, tickSecs: 60, dirtyMins: 60 })
 })
 
+// --- the routing table ------------------------------------------------------
+
+test('plan parses off the account label; absent suffix is null', () => {
+  expect(planOfAccountLabel('tobix <t@x.com> · Max 20×')).toBe('Max 20×')
+  expect(planOfAccountLabel('wiem <w@x.com> · Pro')).toBe('Pro')
+  expect(planOfAccountLabel('just-a-label')).toBe(null)
+  expect(planOfAccountLabel(null)).toBe(null)
+})
+
+test('instance rows: running-with-no-chats is open capacity; stale readings are unknown', () => {
+  const now = Date.now()
+  const fresh = (pct: number, account: string): UsageSnapshot => ({
+    account,
+    session: { pct: 5, resets: '' },
+    weekAll: { pct, resets: '', resetsAt: new Date(now + 48 * 3600 * 1000).toISOString() },
+    weekModel: null,
+    capturedAt: new Date(now - 60_000).toISOString(),
+  })
+  const staleSnap: UsageSnapshot = {
+    ...fresh(95, 'old <o@x> · Max 20×'),
+    capturedAt: new Date(now - 30 * 3600 * 1000).toISOString(),
+  }
+  const rows = buildInstanceRows(
+    [
+      { dir: 'c:\\i\\empty', name: 'empty-but-open', isRunning: true },
+      { dir: 'c:\\i\\busy', name: 'busy', isRunning: true },
+      { dir: 'c:\\i\\closed', name: 'closed', isRunning: false },
+      { dir: 'c:\\i\\stale', name: 'stale', isRunning: true },
+    ],
+    {
+      [`desktop:${'c:\\i\\empty'}`]: fresh(10, 'a <a@x> · Max 20×'),
+      [`desktop:${'c:\\i\\busy'}`]: fresh(80, 'b <b@x> · Max 5×'),
+      [`desktop:${'c:\\i\\closed'}`]: fresh(1, 'c <c@x> · Pro'),
+      [`desktop:${'c:\\i\\stale'}`]: staleSnap,
+    },
+    S,
+    now,
+  )
+  // Running first, most headroom first; the chatless-but-running instance is plain open capacity.
+  expect(rows[0].name).toBe('empty-but-open')
+  expect(rows[0].isRunning).toBe(true)
+  expect(rows[0].plan).toBe('Max 20×')
+  expect(rows.findIndex((r) => r.name === 'closed')).toBe(3) // closed sorts after ALL running
+  const stale = rows.find((r) => r.name === 'stale')
+  expect(stale?.stale).toBe(true)
+  expect(stale?.weeklyPct).toBe(null)
+  expect(stale?.band).toBe('unknown')
+  const busy = rows.find((r) => r.name === 'busy')
+  expect(busy?.band).toBe('elevated')
+})
+
+test('new settings round-trip: open-instances mode, min plan, reserve, handoff surface', () => {
+  const s = setOrchestratorSettings({
+    openInstances: 'when-exhausted',
+    openMinPlan: 'Max 20',
+    reviewerReservePct: 75,
+    handoffSurface: 'queue',
+  })
+  expect(s.openInstances).toBe('when-exhausted')
+  expect(s.openMinPlan).toBe('Max 20')
+  expect(s.reviewerReservePct).toBe(75)
+  expect(s.handoffSurface).toBe('queue')
+  const back = setOrchestratorSettings({ openInstances: 'never', handoffSurface: 'terminal' })
+  expect(back.openInstances).toBe('never')
+  expect(back.handoffSurface).toBe('terminal')
+})
+
 // --- shipping the /orchestrate command --------------------------------------
 
 test('command install decision: write when absent, keep an edited copy unless forced', () => {
@@ -331,6 +400,7 @@ function fakeDeps(over: Partial<OrchestratorDeps> & { tail?: TailInfo; mtime?: n
     git: async () => null,
     usage: () => ({}),
     instanceRef: () => null,
+    desktopInstances: async () => [],
     ...over,
   }
   return { deps }

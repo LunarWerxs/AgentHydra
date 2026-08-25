@@ -47,11 +47,19 @@ import { join } from 'node:path'
 // Text import: bundled into compiled builds, so a packaged AgentHydra can still install the
 // command on a machine that has no checkout and no docs/ directory.
 import ORCHESTRATE_COMMAND from '../../docs/orchestrate-command.md' with { type: 'text' }
+import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { instanceRefForSession } from './instance-sessions'
 import { classifyEnding, type SessionEnding } from './session-ending'
-import type { AttentionItem, OrchestratorSettings, OrchestratorView, UsageSnapshot } from './types'
+import type {
+  AttentionItem,
+  OrchestratorInstance,
+  OrchestratorSettings,
+  OrchestratorView,
+  UsageSnapshot,
+} from './types'
 import { allCachedUsage } from './usage-cache'
+import { desktopKey } from './usage-service'
 
 // --- settings ---------------------------------------------------------------
 
@@ -78,6 +86,11 @@ export function getOrchestratorSettings(): OrchestratorSettings {
     spikePct: num('orch_spike_pct', 5, 1, 100),
     dirtyMins: num('orch_dirty_mins', 60, 1, 7 * 24 * 60),
     nudgeCooldownMins: num('orch_nudge_cooldown_mins', 15, 1, 24 * 60),
+    openInstances:
+      getSetting('orch_open_instances') === 'when-exhausted' ? 'when-exhausted' : 'never',
+    openMinPlan: getSetting('orch_open_min_plan') || 'Max 20',
+    reviewerReservePct: num('orch_reviewer_reserve_pct', 75, 1, 100),
+    handoffSurface: getSetting('orch_handoff_surface') === 'queue' ? 'queue' : 'terminal',
   }
 }
 
@@ -100,6 +113,13 @@ export function setOrchestratorSettings(
   clamp('orch_spike_pct', patch.spikePct, 1, 100)
   clamp('orch_dirty_mins', patch.dirtyMins, 1, 7 * 24 * 60)
   clamp('orch_nudge_cooldown_mins', patch.nudgeCooldownMins, 1, 24 * 60)
+  if (patch.openInstances === 'never' || patch.openInstances === 'when-exhausted')
+    setSetting('orch_open_instances', patch.openInstances)
+  if (typeof patch.openMinPlan === 'string' && patch.openMinPlan.trim())
+    setSetting('orch_open_min_plan', patch.openMinPlan.trim().slice(0, 40))
+  clamp('orch_reviewer_reserve_pct', patch.reviewerReservePct, 1, 100)
+  if (patch.handoffSurface === 'terminal' || patch.handoffSurface === 'queue')
+    setSetting('orch_handoff_surface', patch.handoffSurface)
   return getOrchestratorSettings()
 }
 
@@ -571,6 +591,52 @@ export function computeUsageItems(
   return { items, next }
 }
 
+// --- the desktop fleet as a routing table (pure; exported for tests) ---------
+
+/** "Max 20×" out of "tobix <a@b> · Max 20×". Null when the label has no plan suffix. */
+export function planOfAccountLabel(account: string | null | undefined): string | null {
+  const m = account?.match(/·\s*([^·]+)$/)
+  return m ? m[1].trim() : null
+}
+
+/**
+ * Join the desktop instance list with the usage cache. A RUNNING instance with zero chats is
+ * still open capacity — the first live run counted "open accounts" from the session registry
+ * and missed exactly that instance, which is why this table exists in the feed at all.
+ */
+export function buildInstanceRows(
+  instances: Array<{ dir: string; name: string; isRunning: boolean }>,
+  cache: Record<string, UsageSnapshot>,
+  s: OrchestratorSettings,
+  nowMs: number,
+): OrchestratorInstance[] {
+  const rows: OrchestratorInstance[] = instances.map((i) => {
+    const ref = desktopKey(i.dir)
+    const snap = cache[ref]
+    const capturedMs = Date.parse(snap?.capturedAt ?? '')
+    const stale = !snap || Number.isNaN(capturedMs) || nowMs - capturedMs > 24 * 3600 * 1000
+    const wk = stale ? null : (snap?.weekAll ?? null)
+    return {
+      ref,
+      name: i.name,
+      isRunning: i.isRunning,
+      account: snap?.account ?? null,
+      plan: planOfAccountLabel(snap?.account),
+      weeklyPct: wk?.pct ?? null,
+      weeklyResetsAt: wk?.resetsAt ?? null,
+      sessionPct: stale ? null : (snap?.session?.pct ?? null),
+      band: wk && typeof wk.pct === 'number' ? bandForPct(wk.pct, s) : 'unknown',
+      resetsSoon: wk ? resetsSoon(wk.resetsAt ?? null, nowMs, s) : false,
+      stale,
+    }
+  })
+  // Running first, then most headroom first — the order a router wants to read.
+  return rows.sort((a, b) => {
+    if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1
+    return (a.weeklyPct ?? 101) - (b.weeklyPct ?? 101)
+  })
+}
+
 // --- the pass ---------------------------------------------------------------
 
 export interface OrchestratorDeps {
@@ -582,6 +648,7 @@ export interface OrchestratorDeps {
   git: (cwd: string) => Promise<GitInfo | null>
   usage: () => Record<string, UsageSnapshot>
   instanceRef: (sessionId: string) => string | null
+  desktopInstances: () => Promise<Array<{ dir: string; name: string; isRunning: boolean }>>
 }
 
 const defaultDeps: OrchestratorDeps = {
@@ -599,10 +666,17 @@ const defaultDeps: OrchestratorDeps = {
   git: gitInfoFor,
   usage: allCachedUsage,
   instanceRef: instanceRefForSession,
+  desktopInstances: async () =>
+    (await listInstances()).map((i) => ({
+      dir: i.dir,
+      name: i.label ?? i.name,
+      isRunning: i.isRunning,
+    })),
 }
 
 interface TickState {
   attention: AttentionItem[]
+  instances: OrchestratorInstance[]
   lastTickAt: string | null
   lastTickMs: number | null
   liveSessions: number
@@ -611,6 +685,7 @@ interface TickState {
 
 const state: TickState = {
   attention: [],
+  instances: [],
   lastTickAt: null,
   lastTickMs: null,
   liveSessions: 0,
@@ -828,6 +903,14 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   kvSet('usagePrev', JSON.stringify(usage.next))
   items.push(...usage.items)
 
+  // -- the desktop fleet as a routing table -----------------------------------
+  try {
+    state.instances = buildInstanceRows(await deps.desktopInstances(), cache, s, started)
+  } catch (err) {
+    console.error('[agenthydra] orchestrator instance listing failed:', err)
+    state.instances = []
+  }
+
   // -- ack suppression --------------------------------------------------------
   const acks = activeAcks(started)
   const visible = items.filter((i) => {
@@ -857,6 +940,7 @@ export function orchestratorView(): OrchestratorView {
   return {
     settings: getOrchestratorSettings(),
     attention: state.attention,
+    instances: state.instances,
     meta: {
       lastTickAt: state.lastTickAt,
       lastTickMs: state.lastTickMs,

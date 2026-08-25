@@ -25,8 +25,31 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   `orchestrator_install_command` MCP tool) installs or force-refreshes it on any machine; an
   edited copy is never overwritten without force.
 
+- **Handoff continuations are visible now: launch a new session in a real terminal window.**
+  `POST /api/sessions/launch-terminal` (+ the `launch_terminal_session` MCP tool) opens an
+  interactive `claude` in a visible terminal, pinned to an instance's account, with the prompt
+  delivered byte-exact via a temp file. Unlike a headless queue run it appears on screen, joins
+  the live peer registry, and stays steerable by the orchestrator (proven end-to-end: launch →
+  register → cross-session message → reply). The launcher prefers the pinned instance's own
+  bundled CLI (the globally installed npm CLI, at 2.1.220, registered but hosted no messaging
+  socket) and starts from a sanitized environment (a daemon restarted from inside a Claude
+  session leaked that session's CLAUDE_CODE_* vars into launches: child-session marker,
+  transcript saving off, wrong account).
+- **The orchestrator feed now carries the desktop fleet as a routing table** (`instances`:
+  running state, account, plan, weekly %, band, reset-soon, staleness). Open means running -
+  a running instance with zero chats is open capacity (the first live run undercounted exactly
+  that case). New reviewer policy settings: `openInstances` (`never` by default /
+  `when-exhausted`), `openMinPlan`, `reviewerReservePct` (the reviewer's own account stays
+  under 75% so it can always keep orchestrating), `handoffSurface` (`terminal` / `queue`).
+
 ### Fixed
 
+- **One exotic character in one process's arguments no longer blinds instance detection.**
+  Windows PowerShell 5.1 encodes piped output in the legacy codepage, so a command line
+  containing e.g. "→" came back with raw SUB control bytes that unparsed the whole
+  `Get-CimInstance` JSON; the wmic fallback does not exist on current Windows, and every
+  instance read as not-running. The scan now forces UTF-8 output and defensively strips raw
+  control bytes before parsing.
 - **An unset numeric setting no longer clamps to its minimum.** `Number('') === 0` is finite, so
   a settings key with no stored value and no `DEFAULT_SETTINGS` entry came out as the MIN clamp
   instead of the intended default. The orchestrator registers its defaults and its reader also

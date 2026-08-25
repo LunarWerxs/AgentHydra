@@ -165,6 +165,29 @@ interface WinProcRecord {
   creationDate: string | null
 }
 
+/**
+ * Strip raw control bytes out of PowerShell's JSON before parsing. The UTF-8 preamble in the
+ * script below prevents the known corruption (see its comment), but the failure mode is too
+ * expensive to leave to one line of defense: a single stray control byte in ONE process's
+ * command line otherwise unparses the whole document and blinds running-detection for the
+ * entire fleet. Escaped backslash-u sequences are untouched — only literal bytes JSON forbids
+ * inside strings are replaced, each with a space so offsets stay meaningful.
+ */
+export function sanitizeCimJson(s: string): string {
+  let out = ''
+  let dirty = false
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) {
+      out += ' '
+      dirty = true
+    } else {
+      out += s[i]
+    }
+  }
+  return dirty ? out : s
+}
+
 /** Primary Windows strategy: `Get-CimInstance Win32_Process` filtered to `Claude.exe`,
  *  emitted as JSON so parsing is exact (no column-width truncation like `wmic`/`tasklist`,
  *  and no ambiguity from `Format-List`'s line-wrapping of long command lines).
@@ -177,6 +200,13 @@ interface WinProcRecord {
 async function listWindowsProcessesViaCim(): Promise<WinProcRecord[] | null> {
   const script = [
     "$ErrorActionPreference = 'Stop'",
+    // Force UTF-8 stdout. Windows PowerShell 5.1 otherwise encodes piped output in the legacy
+    // OEM codepage, where any character it cannot represent becomes a raw 0x1A SUB byte — and a
+    // control byte inside a JSON string makes the WHOLE document unparseable. Found live
+    // 2026-08-25: one claude.exe whose command line contained "→" (a prompt) corrupted the scan,
+    // the wmic fallback does not exist on current Windows, and every instance read as
+    // not-running until that unrelated session exited.
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
     'Get-CimInstance -ClassName Win32_Process -Filter "Name=\'Claude.exe\'" | ' +
       'Select-Object ProcessId, CommandLine, WorkingSetSize, ' +
       "@{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToString('o') } }} | " +
@@ -192,7 +222,7 @@ async function listWindowsProcessesViaCim(): Promise<WinProcRecord[] | null> {
   ])
   if (stdout === null) return null
 
-  const trimmed = stdout.trim()
+  const trimmed = sanitizeCimJson(stdout).trim()
   if (!trimmed) return [] // no Claude.exe processes running — valid empty result
 
   try {

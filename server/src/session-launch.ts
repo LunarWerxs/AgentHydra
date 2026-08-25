@@ -1,0 +1,187 @@
+// server/src/session-launch.ts — start a NEW interactive Claude session in a visible terminal.
+//
+// WHY THIS EXISTS. The orchestrator's handoff continuations used to go through the headless
+// queue, and the owner's verdict after the first real run was immediate: "none of the chats
+// that say 'Handoff continued in a new session' show any new session running ANYWHERE." A
+// headless run is real work, but it is invisible in the desktop app and it does not register
+// as a live peer session, so the orchestrator itself cannot nudge it either. An INTERACTIVE
+// terminal session fixes both at once: the window is on the user's screen, and the session
+// joins ~/.claude/sessions and the peer-messaging daemon, so it is orchestratable like any
+// desktop chat. (A new DESKTOP-app chat cannot be created externally at all — there is no
+// stable interface for it; the terminal window is the visible surface that exists.)
+//
+// THIS WINDOW IS MEANT TO BE SEEN — `windowsHide` is deliberately ABSENT, same posture and
+// same guard exemption as session-resume.ts (scripts/checks/spawn-console-window.mjs).
+//
+// CREDENTIALS. A launch pinned to an instance runs on THAT instance's account:
+//   · 'cli:<id>'      → CLAUDE_CONFIG_DIR points at the CLI instance's config dir. No token
+//                       ever touches this process; `claude` reads its own credential file.
+//   · 'desktop:<dir>' → the desktop app's OAuth token, extracted value-blind at spawn
+//                       (core/accounts.ts resolveInstanceToken — the same in-process-only
+//                       discipline every other token path here keeps) and passed as
+//                       CLAUDE_CODE_OAUTH_TOKEN/-_SCOPES in the child's environment only.
+//                       Never persisted, logged, or returned to any caller.
+//
+// THE PROMPT RIDES IN A FILE, not on the command line. Handoff prompts are long, multiline,
+// and full of quoting hazards; a temp file plus `Get-Content -Raw` / `$(cat …)` delivers the
+// exact bytes where cmd/bash quoting would mangle them. The file holds a task description,
+// never a secret, and is left for the OS temp cleaner (deleting it too early would race the
+// terminal still starting up).
+
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { resolveClaudeExe } from './config'
+import { resolveInstanceToken } from './core/accounts'
+import { getCliInstance } from './core/cli-instances'
+
+/**
+ * The newest CLI the pinned desktop instance itself bundles
+ * (`<dir>/claude-code/<version>/claude.exe`), or null when it has none.
+ *
+ * Preferring this over the machine's global `claude` is not cosmetic: measured 2026-08-25, the
+ * globally installed npm CLI (2.1.220) writes a live-registry entry but hosts NO peer-messaging
+ * socket, so a session launched with it is invisible to SendMessage — the orchestrator could
+ * start it but never steer it. The desktop-bundled CLI (2.1.237) is the version whose peer
+ * plumbing provably interoperates with the rest of the fleet on this machine.
+ */
+export function bundledClaudeExe(instanceDir: string): string | null {
+  try {
+    const root = join(instanceDir, 'claude-code')
+    const best = readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => ({ v: d.name, key: d.name.split('.').map((n) => Number(n) || 0) }))
+      .sort(
+        (a, b) =>
+          (b.key[0] ?? 0) - (a.key[0] ?? 0) ||
+          (b.key[1] ?? 0) - (a.key[1] ?? 0) ||
+          (b.key[2] ?? 0) - (a.key[2] ?? 0),
+      )[0]
+    if (!best) return null
+    const exe = join(root, best.v, process.platform === 'win32' ? 'claude.exe' : 'claude')
+    return existsSync(exe) ? exe : null
+  } catch {
+    return null
+  }
+}
+
+export interface TerminalLaunchPlan {
+  /** What to spawn. Empty when this platform has no known way to open a terminal. */
+  argv: string[]
+  /** A copyable equivalent, for the caller/UI when the spawn cannot work. */
+  command: string
+}
+
+/** Pure and platform-parameterised, like session-resume's buildResumePlan, so tests can pin
+ *  every platform from one machine. `promptFile` carries the initial prompt's exact bytes. */
+export function buildTerminalLaunchPlan(
+  platform: NodeJS.Platform,
+  exe: string,
+  promptFile: string,
+  model: string | null,
+): TerminalLaunchPlan {
+  const modelArgs = model ? ` --model ${model}` : ''
+  if (platform === 'win32') {
+    // PowerShell (not cmd) runs the claude line: `Get-Content -Raw` hands the multiline prompt
+    // over as ONE argv element, which cmd cannot do. -NoExit keeps the window (and any startup
+    // error) on screen, the same reason session-resume uses `cmd /k`.
+    const ps = `& '${exe.replaceAll("'", "''")}'${modelArgs} (Get-Content -Raw '${promptFile.replaceAll("'", "''")}')`
+    return {
+      argv: ['cmd', '/c', 'start', '', 'powershell', '-NoExit', '-Command', ps],
+      command: ps,
+    }
+  }
+  const sh = `"${exe}"${modelArgs} "$(cat '${promptFile}')"`
+  if (platform === 'darwin') {
+    const script = `tell application "Terminal" to do script ${JSON.stringify(sh)}`
+    return { argv: ['osascript', '-e', script], command: sh }
+  }
+  if (platform === 'linux') {
+    return { argv: ['x-terminal-emulator', '-e', 'bash', '-lc', `${sh}; exec bash`], command: sh }
+  }
+  return { argv: [], command: sh }
+}
+
+export interface TerminalLaunchResult {
+  ok: boolean
+  /** Why the terminal did not open, when it did not. */
+  reason?: string
+  /** The launch line (minus environment), for the copy fallback. */
+  command: string
+}
+
+/**
+ * Open a visible terminal running a NEW `claude` session in `cwd` with `prompt` as its first
+ * message, on the account `instanceRef` names (or the ambient login when null). The session id
+ * is chosen by the CLI itself; within seconds the session appears in ~/.claude/sessions, which
+ * is where the orchestrator watcher (and anyone else) picks it up.
+ */
+export async function launchTerminalSession(opts: {
+  cwd: string
+  prompt: string
+  instanceRef?: string | null
+  model?: string | null
+}): Promise<TerminalLaunchResult> {
+  const env: Record<string, string> = {}
+  const ref = opts.instanceRef?.trim() || null
+  let exe: string | null = null
+  if (ref?.startsWith('cli:')) {
+    const configDir = getCliInstance(ref.slice('cli:'.length))?.configDir
+    if (!configDir) return { ok: false, reason: 'cli-instance-not-found', command: '' }
+    env.CLAUDE_CONFIG_DIR = configDir
+  } else if (ref?.startsWith('desktop:')) {
+    const dir = ref.slice('desktop:'.length)
+    const grant = await resolveInstanceToken(dir)
+    // A pinned launch must never silently fall back to the ambient login — the exact rule
+    // dispatch.ts enforces pre-launch, for the exact reason (wrong account pays).
+    if (!grant) return { ok: false, reason: 'instance-token-unavailable', command: '' }
+    env.CLAUDE_CODE_OAUTH_TOKEN = grant.token
+    if (grant.scopes) env.CLAUDE_CODE_OAUTH_SCOPES = grant.scopes
+    exe = bundledClaudeExe(dir) // see bundledClaudeExe: the peer-capable CLI wins
+  } else if (ref) {
+    return { ok: false, reason: `malformed instance ref (${ref})`, command: '' }
+  }
+
+  const dir = join(tmpdir(), 'agenthydra-launch')
+  mkdirSync(dir, { recursive: true })
+  const promptFile = join(dir, `prompt-${crypto.randomUUID()}.txt`)
+  writeFileSync(promptFile, opts.prompt)
+
+  const plan = buildTerminalLaunchPlan(
+    process.platform,
+    exe ?? resolveClaudeExe(),
+    promptFile,
+    opts.model?.trim() || null,
+  )
+  if (plan.argv.length === 0) return { ok: false, reason: 'no-terminal', command: plan.command }
+  // The child gets a SANITIZED environment: every CLAUDE*/ANTHROPIC* variable the daemon itself
+  // inherited is dropped before the pinned credentials go in. Measured 2026-08-25: a daemon that
+  // had been (re)started from inside a Claude session leaked that session's CLAUDE_CODE_* vars
+  // into the launched terminal — the new session came up marked as a CHILD session (transcript
+  // saving off, never registered as a live peer), on the WRONG account, with bypass-permissions
+  // inherited. Exactly the trap AI_USAGE_SELFCHECK.md documents: spawned-claude runs must start
+  // from a clean env or the parent's environment masks everything.
+  const cleanEnv: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v !== 'string') continue
+    if (/^(CLAUDE|ANTHROPIC)/i.test(k)) continue
+    cleanEnv[k] = v
+  }
+  try {
+    Bun.spawn(plan.argv, {
+      // No windowsHide: see the header. This window is the point.
+      cwd: opts.cwd,
+      env: { ...cleanEnv, ...env },
+      stdin: 'ignore',
+      stdout: 'ignore',
+      stderr: 'ignore',
+    })
+    return { ok: true, command: plan.command }
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : 'spawn-failed',
+      command: plan.command,
+    }
+  }
+}

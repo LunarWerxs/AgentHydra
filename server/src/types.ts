@@ -1134,6 +1134,41 @@ export interface OrchestratorSettings {
   dirtyMins: number
   /** Default ack cooldown for session-scoped items. */
   nudgeCooldownMins: number
+  /** Whether the reviewer may LAUNCH a closed desktop instance. 'never' (default): only
+   *  instances already running count as open; sessions on closed accounts are not resumable.
+   *  'when-exhausted': only once every running instance is out of headroom. */
+  openInstances: 'never' | 'when-exhausted'
+  /** Minimum plan an auto-opened instance must have (substring match on the account's plan,
+   *  e.g. "Max 20"). Only consulted when openInstances is 'when-exhausted'. */
+  openMinPlan: string
+  /** The reviewer's own account stays under this weekly % so it can always keep orchestrating;
+   *  above it, it stops accepting handoff landings for itself. */
+  reviewerReservePct: number
+  /** Where handoff continuations run: 'terminal' (default) opens a visible interactive
+   *  terminal session (orchestratable, on-screen); 'queue' uses the headless dispatch queue. */
+  handoffSurface: 'terminal' | 'queue'
+}
+
+/** One desktop instance as the orchestrator routing logic sees it: is it OPEN right now, and
+ *  what does its account have left. An instance that is running with zero chats is still open
+ *  capacity — the first live run missed exactly that and undercounted the fleet. */
+export interface OrchestratorInstance {
+  /** 'desktop:<dir>' — the instance_ref dispatch and launch take. */
+  ref: string
+  name: string
+  isRunning: boolean
+  /** Account label from the usage cache ("name <email> · Max 20×"), when known. */
+  account: string | null
+  /** Plan fragment parsed off the account label ("Max 20×" | "Max 5×" | "Pro"), when known. */
+  plan: string | null
+  weeklyPct: number | null
+  weeklyResetsAt: string | null
+  sessionPct: number | null
+  /** Banding of weeklyPct under the current thresholds ('unknown' when no reading). */
+  band: 'ok' | 'elevated' | 'high' | 'critical' | 'unknown'
+  resetsSoon: boolean
+  /** The usage reading is older than a day (treat pct as absent, not as data). */
+  stale: boolean
 }
 
 export type AttentionKind =
@@ -1173,6 +1208,8 @@ export interface AttentionItem {
 export interface OrchestratorView {
   settings: OrchestratorSettings
   attention: AttentionItem[]
+  /** The desktop fleet with usage joined — the routing table for nudges/handoffs/launches. */
+  instances: OrchestratorInstance[]
   meta: {
     lastTickAt: string | null
     lastTickMs: number | null

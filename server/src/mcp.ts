@@ -1333,9 +1333,33 @@ export const TOOLS: McpEngineTool[] = [
       spikePct: { type: 'number' },
       dirtyMins: { type: 'number' },
       nudgeCooldownMins: { type: 'number' },
+      openInstances: { type: 'string', enum: ['never', 'when-exhausted'] },
+      openMinPlan: { type: 'string' },
+      reviewerReservePct: { type: 'number' },
+      handoffSurface: { type: 'string', enum: ['terminal', 'queue'] },
     }),
     run: (a) =>
       api('/api/orchestrator', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(a) }),
+  },
+  {
+    name: 'launch_terminal_session',
+    description:
+      "MUTATES: open a VISIBLE terminal window running a NEW interactive Claude session in `cwd` with `prompt` as its first message, pinned to `instance_ref`'s account ('desktop:<dir>' or 'cli:<id>'; omitted = ambient login). Unlike a headless queue run, the session is on the user's screen and joins the live peer registry, so the orchestrator can keep orchestrating it. This is the default handoff-continuation surface.",
+    inputSchema: S(
+      {
+        cwd: { type: 'string' },
+        prompt: { type: 'string' },
+        instance_ref: { type: 'string' },
+        model: { type: 'string' },
+      },
+      ['cwd', 'prompt'],
+    ),
+    run: (a) =>
+      api('/api/sessions/launch-terminal', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(a),
+      }),
   },
   {
     name: 'orchestrator_ack',

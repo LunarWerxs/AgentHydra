@@ -176,6 +176,7 @@ import {
 import { schedulerState, setSchedulerSettings } from './scheduler'
 import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
+import { launchTerminalSession } from './session-launch'
 import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
 import { runCost, sessionUsage } from './session-usage'
@@ -1939,6 +1940,11 @@ app.post('/api/orchestrator', async (c) => {
   ] as const) {
     if (typeof body[k] === 'number') patch[k] = body[k]
   }
+  if (typeof body.reviewerReservePct === 'number')
+    patch.reviewerReservePct = body.reviewerReservePct
+  for (const k of ['openInstances', 'openMinPlan', 'handoffSurface'] as const) {
+    if (typeof body[k] === 'string') patch[k] = body[k]
+  }
   setOrchestratorSettings(patch)
   // Flipping it on should produce a feed now, not a tick-interval from now — and a machine that
   // has never had the reviewer command gets it installed (an existing copy is never touched here).
@@ -1977,6 +1983,26 @@ app.post('/api/orchestrator/ack', async (c) => {
 app.post('/api/orchestrator/check', async (c) => {
   await runOrchestratorOnce()
   return c.json({ ok: true, ...orchestratorView() })
+})
+// Start a NEW interactive Claude session in a VISIBLE terminal window, pinned to an instance's
+// account. This is the handoff-continuation surface: unlike a headless queue run it is on the
+// user's screen and joins the live registry, so the orchestrator can keep orchestrating it.
+app.post('/api/sessions/launch-terminal', async (c) => {
+  const body = await jsonBody(c)
+  if (
+    typeof body.cwd !== 'string' ||
+    !body.cwd.trim() ||
+    typeof body.prompt !== 'string' ||
+    !body.prompt.trim()
+  )
+    return c.json({ error: 'cwd and prompt are required' }, 400)
+  const result = await launchTerminalSession({
+    cwd: body.cwd,
+    prompt: body.prompt,
+    instanceRef: typeof body.instance_ref === 'string' ? body.instance_ref : null,
+    model: typeof body.model === 'string' ? body.model : null,
+  })
+  return c.json(result, result.ok ? 200 : 422)
 })
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------

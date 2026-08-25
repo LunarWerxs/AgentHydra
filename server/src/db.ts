@@ -423,6 +423,14 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   orch_spike_pct: '5',
   orch_dirty_mins: '60',
   orch_nudge_cooldown_mins: '15',
+  // Launching closed instances is OFF by default (owner directive 2026-08-25): sessions on
+  // accounts that are not currently open are simply not resumable. The 'when-exhausted' mode,
+  // when a user opts in, may open an instance of at least orch_open_min_plan only once every
+  // running instance is out of headroom.
+  orch_open_instances: 'never',
+  orch_open_min_plan: 'Max 20',
+  orch_reviewer_reserve_pct: '75',
+  orch_handoff_surface: 'terminal',
 }
 
 export function getSetting(key: string): string {

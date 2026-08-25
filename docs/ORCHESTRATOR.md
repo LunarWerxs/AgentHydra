@@ -66,11 +66,19 @@ monitor's job, and they compose fine).
 ### API
 
 ```
-GET  /api/orchestrator            settings + attention feed + tick metadata
+GET  /api/orchestrator            settings + attention feed + the instances routing table + tick metadata
 POST /api/orchestrator            patch settings ({ enabled: true } is the on switch)
 POST /api/orchestrator/ack        { key, action, cooldownMins? } - reviewer marks an item handled
 POST /api/orchestrator/check      run one pass now
+POST /api/sessions/launch-terminal  { cwd, prompt, instance_ref?, model? } - open a VISIBLE
+                                  terminal running a new interactive session on that account
 ```
+
+The feed's `instances` array is the routing table: every desktop instance with `isRunning`,
+account, plan, weekly %, band, reset-soon and staleness. **Open means running, nothing else** -
+a running instance with zero chats is open capacity, and a session on a non-running instance is
+not resumable and not the orchestrator's to touch (the first live run undercounted the fleet by
+inferring openness from which chats existed; this table is the fix).
 
 Same four verbs over MCP: `get_orchestrator`, `set_orchestrator`, `orchestrator_ack`,
 `orchestrator_check`.
@@ -150,6 +158,21 @@ Turning it off is the reverse in either order; each half degrades safely without
 | `spikePct` | 5 | weekly jump between reads that flags a spike |
 | `dirtyMins` | 60 | continuous dirty time before a repo is flagged |
 | `nudgeCooldownMins` | 15 | default ack cooldown for session items |
+| `openInstances` | `never` | whether the reviewer may LAUNCH a closed instance; `when-exhausted` allows it only once every running instance is out of headroom |
+| `openMinPlan` | `Max 20` | minimum plan an auto-opened instance must have |
+| `reviewerReservePct` | 75 | the reviewer's own account stays under this weekly % so it can always keep orchestrating |
+| `handoffSurface` | `terminal` | where handoff continuations run: a visible terminal session (orchestratable, on-screen) or the headless queue |
+
+## Where new sessions show up (and where they cannot)
+
+- A **terminal launch** appears as a real window on your screen, joins the live registry, and
+  is orchestratable like any chat. This is the default handoff surface.
+- A **queue run** is headless: it exists only in AgentHydra's Sessions/Queue tabs (live-tail
+  there). It never appears in the desktop app and the orchestrator cannot nudge it mid-run.
+- **Nothing can create a chat inside the desktop app itself** - there is no stable external
+  interface for that, and the desktop's own archive flag is read-only from outside too (which
+  is why a handed-off chat gets AgentHydra's done-mark and a status line asking you to archive
+  it in the desktop when convenient).
 
 ## Limitations, stated out loud
 
