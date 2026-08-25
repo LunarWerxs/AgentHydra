@@ -1413,6 +1413,20 @@ export const TOOLS: McpEngineTool[] = [
       }),
   },
   {
+    name: 'archive_desktop_chat',
+    description:
+      'MUTATES: archive (archived=true, the default) or unarchive a chat in the Claude DESKTOP app by flipping its per-profile metadata flag. Caveat the caller must relay: for an instance whose app is RUNNING, the change appears only after that instance next restarts (a running app may even re-save the old state); for closed instances it is reliable. The AgentHydra done-mark is the immediate in-AgentHydra signal either way.',
+    inputSchema: S({ session_id: { type: 'string' }, archived: { type: 'boolean' } }, [
+      'session_id',
+    ]),
+    run: (a) =>
+      api(`/api/sessions/${encodeURIComponent(str(a.session_id))}/desktop-archive`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ archived: a.archived }),
+      }),
+  },
+  {
     name: 'orchestrator_hold',
     description:
       'MUTATES: park or unpark one thread for the orchestrator (what /delayo and /resumeo do). held=true drops every feed item for that session so the reviewer never prompts it; held=false lifts the hold. Holds persist until lifted.',

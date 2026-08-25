@@ -49,6 +49,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   visible as parked. `POST /api/orchestrator/hold` + the `orchestrator_hold` MCP tool are the
   API form; both commands ship in the daemon and install alongside `/orchestrate`.
 
+- **Desktop-chat archiving** (`POST /api/sessions/:id/desktop-archive` + the
+  `archive_desktop_chat` MCP tool): flips the desktop's own per-chat metadata flag in every
+  profile that carries the chat. Honest caveat carried in the response: an instance whose app
+  is running shows the change only after that app next restarts; for closed instances it is
+  reliable. The /orchestrate handoff flow now archives the old chat's desktop entry alongside
+  the done-mark.
+- **`import-desktop` refuses instances that are not running.** Aimed at a closed instance the
+  import spawn would not fail - it would BOOT that instance (measured; a display-name-derived
+  path started a sixth desktop app). The endpoint now enforces the same open-instances-only
+  rule the reviewer routing follows.
+
 ### Fixed
 
 - **One exotic character in one process's arguments no longer blinds instance detection.**

@@ -74,7 +74,11 @@ POST /api/orchestrator/hold       { session_id, held } - park/unpark one thread 
 POST /api/sessions/launch-terminal  { cwd, prompt, instance_ref?, model? } - open a VISIBLE
                                   terminal running a new interactive session on that account
 POST /api/sessions/:id/import-desktop  { instance_ref? } - import a FINISHED session into that
-                                  instance's desktop app as a visible chat
+                                  instance's desktop app as a visible chat (refused when the
+                                  instance is not running - importing would boot it)
+POST /api/sessions/:id/desktop-archive { archived? }     - archive/unarchive the chat in the
+                                  desktop app (shows after that instance next restarts when
+                                  its app was running at the time)
 ```
 
 **Parking a thread**: type `/delayo` in any chat and the orchestrator stops prompting it -
@@ -185,9 +189,12 @@ Turning it off is the reverse in either order; each half degrades safely without
   is orchestratable while it works - the surface for watching a continuation live.
 - A **queue run** is headless: it exists only in AgentHydra's Sessions/Queue tabs (live-tail
   there). It never appears in the desktop app and the orchestrator cannot nudge it mid-run.
-- The desktop's own archive flag is read-only from outside (which is why a handed-off chat
-  gets AgentHydra's done-mark and a status line asking you to archive it in the desktop when
-  convenient).
+- **Desktop archiving works, with one honest caveat.** The desktop keeps a per-chat metadata
+  flag, and `POST /api/sessions/:id/desktop-archive` flips it in every profile that carries the
+  chat. For an instance whose app is RUNNING, the sidebar reflects it only after that app next
+  restarts (the running app holds its list in memory and may even re-save the old state); for
+  closed instances it is reliable. Handed-off chats get AgentHydra's done-mark as the immediate
+  signal plus the archive flag for the desktop's next start.
 
 ## Limitations, stated out loud
 

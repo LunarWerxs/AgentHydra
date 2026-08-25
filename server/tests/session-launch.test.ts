@@ -5,10 +5,16 @@
 // how arguments get silently mangled. These tests pin that the plan reads the file, keeps the
 // window open on failure, and never interpolates the prompt text itself into argv.
 import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildImportPlan, buildTerminalLaunchPlan, bundledClaudeExe } from '../src/session-launch'
+import {
+  archiveDesktopChat,
+  buildImportPlan,
+  buildTerminalLaunchPlan,
+  bundledClaudeExe,
+  importSessionToDesktop,
+} from '../src/session-launch'
 
 test('windows: powershell reads the prompt file raw, window survives exit', () => {
   const plan = buildTerminalLaunchPlan(
@@ -45,6 +51,45 @@ test('the desktop import plan targets one instance via its profile dir', () => {
   // darwin: resolveLaunchBinary returns the 'Claude' marker, which must go through `open -na`.
   const mac = buildImportPlan('darwin', 'Claude', '/Users/x/instances/work', 'abc-123')
   expect(mac.slice(0, 4)).toEqual(['open', '-na', 'Claude', '--args'])
+})
+
+test('import refuses a non-running instance instead of booting it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-import-guard-'))
+  const r = await importSessionToDesktop({
+    sessionId: 'no-such-session',
+    instanceDir: dir,
+    isLive: () => false,
+    isInstanceRunning: async () => false,
+  })
+  expect(r.ok).toBe(false)
+  expect(r.reason).toContain('instance-not-running')
+  const live = await importSessionToDesktop({
+    sessionId: 'no-such-session',
+    instanceDir: dir,
+    isLive: () => true,
+    isInstanceRunning: async () => true,
+  })
+  expect(live.reason).toContain('session-live')
+})
+
+test('archiveDesktopChat flips the metadata flag by filename across profiles', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-archive-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  const metaPath = join(store, 'local_sess-arch-1.json')
+  writeFileSync(metaPath, JSON.stringify({ cliSessionId: 'sess-arch-1', isArchived: false }))
+  const notRunning = async () => false
+  const r = await archiveDesktopChat('sess-arch-1', true, [profile], notRunning)
+  expect(r.ok).toBe(true)
+  expect(r.hits).toHaveLength(1)
+  expect(r.hits[0].wasRunning).toBe(false)
+  expect(JSON.parse(readFileSync(metaPath, 'utf8')).isArchived).toBe(true)
+  const back = await archiveDesktopChat('sess-arch-1', false, [profile], notRunning)
+  expect(back.ok).toBe(true)
+  expect(JSON.parse(readFileSync(metaPath, 'utf8')).isArchived).toBe(false)
+  const miss = await archiveDesktopChat('sess-nope', true, [profile], notRunning)
+  expect(miss.ok).toBe(false)
+  expect(miss.reason).toBe('no-desktop-chat-found')
 })
 
 test('bundledClaudeExe picks the numerically newest version, not the lexicographic one', () => {

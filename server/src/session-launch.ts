@@ -217,6 +217,14 @@ export function buildImportPlan(
   return [binary, dataDir, url]
 }
 
+async function defaultInstanceRunning(instanceDir: string): Promise<boolean> {
+  const { listInstances } = await import('./core/instances')
+  const needle = instanceDir.replace(/[\\/]+$/, '').toLowerCase()
+  return (await listInstances()).some(
+    (i) => i.isRunning && i.dir.replace(/[\\/]+$/, '').toLowerCase() === needle,
+  )
+}
+
 /** True when the live registry holds this session with a pid that is still running. */
 function sessionIsLive(sessionId: string): boolean {
   try {
@@ -242,14 +250,97 @@ function sessionIsLive(sessionId: string): boolean {
   return false
 }
 
+// --- archiving a desktop chat by its metadata file ---------------------------
+// The desktop keeps one metadata file per chat — `claude-code-sessions/<org>/<user>/
+// local_<cliSessionId>.json` — with an `isArchived` boolean. Flipping it IS the archive, with
+// one measured caveat that callers must repeat honestly: a RUNNING app keeps its chat list in
+// memory, so the change shows only after that instance next restarts (and a running app may
+// re-save the file and undo the flip). For a chat in a closed instance it is reliable and
+// immediate-on-next-open.
+
+export interface DesktopArchiveHit {
+  /** Instance dir (or the default profile) whose store carried this chat. */
+  profile: string
+  /** The instance's app was running when the flag was written — the caveat applies. */
+  wasRunning: boolean
+}
+
+export async function archiveDesktopChat(
+  sessionId: string,
+  archived: boolean,
+  roots?: string[],
+  isInstanceRunning: (dir: string) => Promise<boolean> = defaultInstanceRunning,
+): Promise<{ ok: boolean; hits: DesktopArchiveHit[]; reason?: string }> {
+  const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
+  const searchRoots = roots ?? [
+    join(appData, 'Claude'),
+    ...((): string[] => {
+      const root = join(homedir(), '.claude-instances')
+      try {
+        return readdirSync(root, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => join(root, d.name))
+      } catch {
+        return []
+      }
+    })(),
+  ]
+  const hits: DesktopArchiveHit[] = []
+  for (const profile of searchRoots) {
+    const store = join(profile, 'claude-code-sessions')
+    if (!existsSync(store)) continue
+    // Filename IS the key (local_<cliSessionId>.json), two levels down (org/user).
+    let found: string | null = null
+    try {
+      for (const org of readdirSync(store, { withFileTypes: true })) {
+        if (!org.isDirectory()) continue
+        for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+          if (!user.isDirectory()) continue
+          const p = join(store, org.name, user.name, `local_${sessionId}.json`)
+          if (existsSync(p)) {
+            found = p
+            break
+          }
+        }
+        if (found) break
+      }
+    } catch {
+      continue
+    }
+    if (!found) continue
+    try {
+      const meta = JSON.parse(readFileSync(found, 'utf8'))
+      meta.isArchived = archived
+      writeFileSync(found, JSON.stringify(meta))
+      hits.push({
+        profile,
+        wasRunning: await isInstanceRunning(profile).catch(() => false),
+      })
+    } catch {
+      // An unwritable/corrupt metadata file: skip it rather than fail the others.
+    }
+  }
+  if (hits.length === 0) return { ok: false, hits, reason: 'no-desktop-chat-found' }
+  return { ok: true, hits }
+}
+
 export async function importSessionToDesktop(opts: {
   sessionId: string
   instanceDir: string
   isLive?: (sessionId: string) => boolean
+  /** Seam for tests; the default asks the instance manager. */
+  isInstanceRunning?: (dir: string) => Promise<boolean>
 }): Promise<{ ok: boolean; reason?: string }> {
   if ((opts.isLive ?? sessionIsLive)(opts.sessionId))
     return { ok: false, reason: 'session-live: refusing to import under an active writer' }
   if (!existsSync(opts.instanceDir)) return { ok: false, reason: 'instance-dir-not-found' }
+  // The import spawn targets the RUNNING app via Electron's single-instance lock. Aimed at an
+  // instance that is NOT running it does not fail — it BOOTS that instance, which is exactly
+  // the owner's "never open accounts on your own" rule broken by a side door (and how a wrong
+  // display-name-derived path silently started a sixth desktop app on 2026-08-25). Refuse.
+  const running = await (opts.isInstanceRunning ?? defaultInstanceRunning)(opts.instanceDir)
+  if (!running)
+    return { ok: false, reason: 'instance-not-running: importing would boot that instance' }
   const binary = await resolveLaunchBinary()
   if (!binary) return { ok: false, reason: 'desktop-binary-not-found' }
   const argv = buildImportPlan(process.platform, binary, opts.instanceDir, opts.sessionId)

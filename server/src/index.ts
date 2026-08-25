@@ -177,7 +177,7 @@ import {
 import { schedulerState, setSchedulerSettings } from './scheduler'
 import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
-import { importSessionToDesktop, launchTerminalSession } from './session-launch'
+import { archiveDesktopChat, importSessionToDesktop, launchTerminalSession } from './session-launch'
 import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
 import { runCost, sessionUsage } from './session-usage'
@@ -2040,6 +2040,15 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
     instanceDir: ref.slice('desktop:'.length),
   })
   return c.json(result, result.ok ? 200 : 422)
+})
+// Archive (or unarchive) a chat in the DESKTOP app by flipping its metadata flag across every
+// profile that carries it. Honest caveat in the response: for a profile whose app was running,
+// the change shows only after that instance next restarts (and could be re-saved away by the
+// running app; the AgentHydra done-mark is the immediate signal either way).
+app.post('/api/sessions/:id/desktop-archive', async (c) => {
+  const body = await jsonBody(c)
+  const result = await archiveDesktopChat(c.req.param('id'), body.archived !== false)
+  return c.json(result, result.ok ? 200 : 404)
 })
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------

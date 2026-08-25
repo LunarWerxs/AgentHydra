@@ -58,6 +58,10 @@ band, and `resetsSoon`. The rules are absolute:
 - **Pick a landing target** (handoffs, chips, continuations): running instances only, ordered by
   lowest weekly %; skip `band: "critical"` unless `resetsSoon` (a reset within ~2h makes a high
   account a preferred dump target); treat `stale: true` readings as unknown, not as headroom.
+- **Copy the row's `ref` field VERBATIM as your `instance_ref`.** Never build a path from a
+  display name: labels and folder names diverge (a folder named `4claude` can wear the label
+  "3claude"), and a wrong path aimed at a closed instance used to boot it. The API now refuses
+  imports at non-running instances, but the ref discipline is what keeps every call honest.
 - **Your own instance is a valid landing target** with a tighter cap: never land work on it if
   that would be while its weekly % is at or above `settings.reviewerReservePct` (default 75).
   The reviewer must always be able to keep reviewing; protect your own runway at all costs.
@@ -129,9 +133,10 @@ gets the standing answer, acked `standing-answer`.
        a visible terminal window, live and orchestratable while it works.
      - `"queue"`: headless only; visible in AgentHydra's Sessions tab.
   3. Do NOT message the old chat. Mark it finished instead:
-     `POST /api/sessions/<id>/done {"done": true}` - and if the desktop app is where the user
-     looks, one status line ("<title> handed off - archive it in the desktop when convenient")
-     covers the part no tool can do (the desktop's own archive is not externally writable).
+     `POST /api/sessions/<id>/done {"done": true}`, then archive its desktop entry:
+     `POST /api/sessions/<id>/desktop-archive {"archived": true}`. Relay the caveat once if it
+     matters: on an instance whose app is running, the archive shows after that app next
+     restarts; the done-mark is the immediate signal.
   4. Ack `handoff-continued`, cooldown 720.
 
 **`interrupted`** - the human pressed stop. Never auto-resume it. Ack `human-interrupted`,
