@@ -4,6 +4,7 @@ import {
   AlignJustify,
   Archive,
   ArrowLeft,
+  ArrowRightLeft,
   BookOpen,
   Boxes,
   Brain,
@@ -890,6 +891,53 @@ const usageDetail = computed(() => {
   parts.push(t('sessions.usageListPrice', { date: u.pricesAsOf }))
   return parts.join(' ')
 })
+
+// --- migrate to another account ----------------------------------------------
+// The flyout lists RUNNING desktop instances (the only legal landing spots — the server refuses
+// imports at closed instances so it can never boot one). Loaded lazily when the chat menu opens;
+// the session's own instance is disabled in the list rather than hidden, so "why isn't mine
+// here" never needs asking.
+interface MigrateTarget {
+  ref: string
+  name: string
+  account: string | null
+  isCurrent: boolean
+}
+const migrateTargets = ref<MigrateTarget[]>([])
+const migrating = ref(false)
+
+async function loadMigrateTargets(s: SessionSummary) {
+  try {
+    const [instances, cache] = await Promise.all([api.listInstances(), api.getUsageCache()])
+    migrateTargets.value = instances
+      .filter((i) => i.isRunning)
+      .map((i) => {
+        const ref = `desktop:${i.dir}`
+        const snap = cache.cache[ref.toLowerCase()] ?? cache.cache[ref]
+        return {
+          ref,
+          name: i.label ?? i.name,
+          account: snap?.account ?? null,
+          isCurrent: s.instance != null && s.instance === i.name,
+        }
+      })
+  } catch {
+    migrateTargets.value = []
+  }
+}
+
+async function migrateTo(s: SessionSummary, target: MigrateTarget) {
+  migrating.value = true
+  try {
+    const r = await api.migrateSession(s.session_id, target.ref)
+    if (r.ok) toast.success(t('sessions.migrateStarted', { name: target.name }))
+    else toast.error(r.error ?? t('sessions.migrateFailed'))
+  } catch {
+    toast.error(t('sessions.migrateFailed'))
+  } finally {
+    migrating.value = false
+  }
+}
 
 // --- reopen in a terminal ----------------------------------------------------
 // The command comes back whether or not the terminal opened, so a machine we cannot open a window
@@ -1870,6 +1918,30 @@ function copy(text: string) {
                         <DropdownMenuItem :disabled="resuming" @select="resumeInTerminal(selected)">
                           <SquareTerminal />{{ $t('sessions.resumeTerminal') }}
                         </DropdownMenuItem>
+                        <DropdownMenuSub>
+                          <DropdownMenuSubTrigger @pointerenter="loadMigrateTargets(selected)">
+                            <ArrowRightLeft class="size-3.5" />{{ $t('sessions.migrateAccount') }}
+                          </DropdownMenuSubTrigger>
+                          <DropdownMenuSubContent>
+                            <DropdownMenuItem v-if="migrateTargets.length === 0" disabled>
+                              {{ $t('sessions.migrateNoTargets') }}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              v-for="target in migrateTargets"
+                              :key="target.ref"
+                              :disabled="migrating || target.isCurrent"
+                              @select="migrateTo(selected, target)"
+                            >
+                              <ArrowRightLeft class="size-3.5" />
+                              <span class="flex flex-col">
+                                <span>{{ target.name }}</span>
+                                <span v-if="target.account" class="text-xs text-muted-foreground">
+                                  {{ target.account }}
+                                </span>
+                              </span>
+                            </DropdownMenuItem>
+                          </DropdownMenuSubContent>
+                        </DropdownMenuSub>
                       </template>
                     </DropdownMenuContent>
                   </DropdownMenu>

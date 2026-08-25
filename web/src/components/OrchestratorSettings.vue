@@ -165,6 +165,18 @@ onMounted(async () => {
           </template>
         </SettingsRow>
 
+        <SettingsRow :icon="Bot" :label="$t('orchestrator.migrateOnLimitLabel')">
+          <template #info>
+            <InfoHint :text="$t('orchestrator.migrateOnLimitHint')" />
+          </template>
+          <template #control>
+            <Switch
+              :model-value="view?.settings.migrateOnLimit ?? false"
+              @update:model-value="(v: boolean) => save({ migrateOnLimit: v })"
+            />
+          </template>
+        </SettingsRow>
+
         <SettingsRow :icon="Bot" :label="$t('orchestrator.handoffSurfaceLabel')">
           <template #info>
             <InfoHint :text="$t('orchestrator.handoffSurfaceHint')" />

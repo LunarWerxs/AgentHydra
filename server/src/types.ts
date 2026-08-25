@@ -617,6 +617,11 @@ export interface QueueItem {
    *  not_before in the future means "waiting out a backoff", which the always-on retry sweep in
    *  dispatch.ts fires — no scheduler or monitor opt-in involved. */
   retry_attempts: number
+  /** When set ('desktop:<dir>'), a run that COMPLETES is imported into that instance's desktop
+   *  app as a visible chat (session-launch.ts importSessionToDesktop), titled import_title.
+   *  This is how a migration or handoff lands on the user's screen without anyone polling. */
+  import_to: string | null
+  import_title: string | null
   started_at: string | null
   finished_at: string | null
   exit_code: number | null
@@ -1155,6 +1160,10 @@ export interface OrchestratorSettings {
   newChatEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   /** Prepend the "ultracode" opt-in keyword to every orchestrator-started chat's prompt. */
   newChatUltracode: boolean
+  /** When a run hits its 5-HOUR limit (weekly fine), immediately resume it on another running
+   *  account with headroom instead of parking it until the reset. Consumed by the auto-resume
+   *  monitor; needs the monitor enabled to act. */
+  migrateOnLimit: boolean
 }
 
 /** One desktop instance as the orchestrator routing logic sees it: is it OPEN right now, and

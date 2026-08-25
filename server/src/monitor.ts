@@ -25,6 +25,7 @@ import { isDispatchReady } from './boot-state'
 import { coerceQueueItem, db, getSetting, setSetting } from './db'
 import { dispatchItem, isActive, isSessionActive } from './dispatch'
 import { sessionMetaMap } from './instance-sessions'
+import { getOrchestratorSettings } from './orchestrator'
 import { discoverPendingStops, type RateLimitedStop } from './rate-limit-discovery'
 import type {
   MonitorSettings,
@@ -51,6 +52,15 @@ export interface MonitorDeps {
    * reads files, which a unit test has no business doing to the developer's actual ~/.claude.
    */
   discoverStops: () => Promise<RateLimitedStop[]>
+  /**
+   * The migrate-on-limit target: a RUNNING desktop instance with headroom, excluding the ref the
+   * stop already ran under, or null when no viable account exists. Behind the seam because the
+   * real one joins the instance list with the usage cache (orchestrator's routing table).
+   * Optional so pre-existing deps objects stay valid; absent means "no target" (scheduled path).
+   */
+  pickMigrationTarget?: (
+    excludeRef: string | null,
+  ) => Promise<{ ref: string; name: string } | null>
 }
 
 const defaultDeps: MonitorDeps = {
@@ -67,6 +77,34 @@ const defaultDeps: MonitorDeps = {
           )
           .get(sessionId)?.n,
     }),
+  pickMigrationTarget: async (excludeRef) => {
+    // The orchestrator's routing table, filtered to what a migration may land on: running, a
+    // fresh reading, weekly under the hard band, not the account that just hit its limit.
+    const { buildInstanceRows, getOrchestratorSettings } = await import('./orchestrator')
+    const { listInstances } = await import('./core/instances')
+    const { allCachedUsage } = await import('./usage-cache')
+    const s = getOrchestratorSettings()
+    const rows = buildInstanceRows(
+      (await listInstances()).map((i) => ({
+        dir: i.dir,
+        name: i.label ?? i.name,
+        isRunning: i.isRunning,
+      })),
+      allCachedUsage(),
+      s,
+      Date.now(),
+    )
+    const norm = (r: string | null) => r?.replace(/[\\/]+$/, '').toLowerCase() ?? null
+    const hit = rows.find(
+      (r) =>
+        r.isRunning &&
+        !r.stale &&
+        r.band !== 'critical' &&
+        (r.sessionPct ?? 0) < s.sessionHighPct &&
+        norm(r.ref) !== norm(excludeRef),
+    )
+    return hit ? { ref: hit.ref, name: hit.name } : null
+  },
 }
 
 /** The locked resume prompt — a code constant, not a field users casually edit (an advanced
@@ -326,8 +364,10 @@ export function monitorStatus(): MonitorStatusRow[] {
 
 // --- resume enqueue ----------------------------------------------------------
 
-/** Enqueue a resume of the rate-limited item's session, scheduled for `notBefore`. Returns its id. */
-function enqueueResume(item: QueueItem, notBefore: string): string {
+/** Enqueue a resume of the rate-limited item's session, scheduled for `notBefore`. When
+ *  `instanceRefOverride` is set (migrate-on-limit), the resume runs on THAT account instead of
+ *  the original pin — the whole point being that the original just hit its 5-hour wall. */
+function enqueueResume(item: QueueItem, notBefore: string, instanceRefOverride?: string): string {
   const id = crypto.randomUUID()
   const prompt = getMonitorSettings().resumePrompt
   const posRow = db
@@ -341,16 +381,18 @@ function enqueueResume(item: QueueItem, notBefore: string): string {
   ).run(
     id,
     item.session_id,
-    `Auto-resume: ${item.title}`.slice(0, 200),
+    `${instanceRefOverride ? 'Migrated resume' : 'Auto-resume'}: ${item.title}`.slice(0, 200),
     item.cwd,
     prompt,
     item.model ?? null,
     item.effort ?? null,
     item.permission_mode ?? null,
-    item.account_id ?? null,
+    // A migrated resume must not carry the original account_id either — the instance ref wins in
+    // the runner, but leaving a stale account id on the row misreports who paid.
+    instanceRefOverride ? null : (item.account_id ?? null),
     // Carry the ORIGINAL item's pinning forward — otherwise an instance-pinned run that gets
     // auto-resumed loses its pin and resumes as Ambient (wrong credentials, defeats the pin).
-    item.instance_ref ?? null,
+    instanceRefOverride ?? item.instance_ref ?? null,
     position,
     notBefore,
     Date.now(),
@@ -496,7 +538,32 @@ async function processRateLimited(deps: MonitorDeps): Promise<void> {
       continue
     }
 
-    // Weekly has room → schedule the resume just after the 5-hour session reset (+ buffer). If the
+    // Weekly has room. A 5-hour stop with the migrate toggle on doesn't wait for the reset at
+    // all: it resumes NOW on another running account with headroom (owner directive 2026-08-25 —
+    // "if the chat seems like it should still be running, migrate it and keep working"). The
+    // original account rejoins the routing pool naturally once its window resets. Falls back to
+    // the scheduled resume when no viable target exists.
+    if (getOrchestratorSettings().migrateOnLimit) {
+      let target: { ref: string; name: string } | null = null
+      try {
+        target = (await deps.pickMigrationTarget?.(item.instance_ref ?? null)) ?? null
+      } catch (err) {
+        console.error('[agenthydra] migration target pick failed:', err)
+      }
+      if (target) {
+        const resumeId = enqueueResume(item, new Date().toISOString(), target.ref)
+        upsertState(item, {
+          state: 'scheduled',
+          message: `migrated to ${target.name} until the 5h resets`,
+          resumeItemId: resumeId,
+          attempts: priorAttempts + 1,
+          nextCheckAt: null,
+        })
+        continue
+      }
+    }
+
+    // Schedule the resume just after the 5-hour session reset (+ buffer). If the
     // 5h reset can't be parsed, fall back to now + 5h (the worst-case window length).
     const sessIso = snap.session ? parseResetTime(snap.session.resets) : null
     const base = sessIso ? new Date(sessIso) : new Date(Date.now() + 5 * 3600 * 1000)

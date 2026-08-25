@@ -5,7 +5,7 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.29.0] - 2026-08-25
 
 ### Added
 
@@ -62,6 +62,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   thread's title on every import. Session-management note that shipped alongside: a chat in
   the SAME instance as an agent can be renamed and archived live through the app's own session
   tools; cross-instance changes go through the metadata (visible on that app's next restart).
+- **Migrate a chat to another account, from the chat's own menu.** Every Claude chat's "…" menu
+  gained "Migrate to another account": a flyout of running instances (with their accounts);
+  picking one stops the chat's live process if it has one, archives its old desktop entries,
+  runs a one-turn migration under the new account, and auto-imports the chat into that
+  instance's desktop app under its real title (`POST /api/sessions/:id/migrate`; the
+  queue-completion import hook `import_to`/`import_title` does the landing, so nothing polls).
+- **Migrate-on-limit: a 5-hour-limited run keeps working on another account.** Off by default
+  (`migrateOnLimit` in the Orchestrator settings): when a run hits its 5-hour limit but its
+  weekly is fine, the auto-resume monitor resumes it immediately on another running account
+  with headroom instead of parking it until the reset; the original account rejoins the pool
+  once its window resets. Falls back to the scheduled resume when no viable target exists.
 - **Settings gained an Orchestrator section** (between Scheduler and the auto-resume monitor):
   the watcher's master switch with a live status line (live chats / pending items / parked
   threads), new-chat model+effort+ultracode, handoff surface, open-instances policy with the

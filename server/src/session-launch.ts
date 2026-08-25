@@ -228,8 +228,9 @@ async function defaultInstanceRunning(instanceDir: string): Promise<boolean> {
   )
 }
 
-/** True when the live registry holds this session with a pid that is still running. */
-function sessionIsLive(sessionId: string): boolean {
+/** The live registry entry (with an alive pid) for this session, or null. Exported for the
+ *  migrate flow, which needs the pid to stop a live chat the user asked to move. */
+export function liveSessionEntry(sessionId: string): { pid: number } | null {
   try {
     const dir = join(homedir(), '.claude', 'sessions')
     for (const f of readdirSync(dir)) {
@@ -239,9 +240,9 @@ function sessionIsLive(sessionId: string): boolean {
         if (reg?.sessionId !== sessionId || typeof reg?.pid !== 'number') continue
         try {
           process.kill(reg.pid, 0)
-          return true
+          return { pid: reg.pid }
         } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === 'EPERM') return true
+          if ((err as NodeJS.ErrnoException).code === 'EPERM') return { pid: reg.pid }
         }
       } catch {
         // one unreadable entry says nothing about the others
@@ -250,7 +251,11 @@ function sessionIsLive(sessionId: string): boolean {
   } catch {
     // no registry dir — nothing can be live
   }
-  return false
+  return null
+}
+
+function sessionIsLive(sessionId: string): boolean {
+  return liveSessionEntry(sessionId) !== null
 }
 
 // --- archiving a desktop chat by its metadata file ---------------------------

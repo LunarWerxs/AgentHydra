@@ -608,6 +608,30 @@ function finalize(id: string, exitCode: number, opts: { canceled?: boolean } = {
   runtime.delete(id)
   active.delete(id)
   cleanupRunFiles(id)
+
+  // A completed run carrying import_to lands in that desktop instance's app as a visible chat
+  // (a migration or handoff delivery). Fire-and-forget AFTER the row is terminal: an import
+  // failure (instance since closed, etc.) must never unsettle a finished run. Dynamic import to
+  // keep session-launch (which imports core/instances) out of dispatch's module graph at load.
+  if (status === 'completed') {
+    const row = db
+      .query<
+        { session_id: string; import_to: string | null; import_title: string | null },
+        [string]
+      >('select session_id, import_to, import_title from queue_items where id = ?')
+      .get(id)
+    if (row?.import_to?.startsWith('desktop:')) {
+      const sessionId = row.session_id
+      const instanceDir = row.import_to.slice('desktop:'.length)
+      const title = row.import_title
+      void import('./session-launch')
+        .then((m) => m.importSessionToDesktop({ sessionId, instanceDir, title }))
+        .then((r) => {
+          if (!r.ok) console.error('[agenthydra] post-run desktop import failed:', r.reason)
+        })
+        .catch((err) => console.error('[agenthydra] post-run desktop import error:', err))
+    }
+  }
 }
 
 /**

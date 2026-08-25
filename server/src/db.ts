@@ -182,6 +182,12 @@ create table if not exists orchestrator_kv (
   // (dispatch.ts dispatchDueRetries), instead of a timer that died with the process.
   if (!cols.includes('retry_attempts'))
     db.exec('alter table queue_items add column retry_attempts integer not null default 0')
+  // A run that COMPLETES with import_to set is imported into that desktop instance's app as a
+  // visible chat (finalize() in dispatch.ts → session-launch.ts), titled import_title. In the DB
+  // so the pairing survives a daemon restart between queueing and run-end.
+  if (!cols.includes('import_to')) db.exec('alter table queue_items add column import_to text')
+  if (!cols.includes('import_title'))
+    db.exec('alter table queue_items add column import_title text')
 }
 {
   // --- the analytics tier (server/src/analytics.ts) --------------------------------------------
@@ -437,6 +443,8 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   orch_new_chat_model: 'opus',
   orch_new_chat_effort: 'max',
   orch_new_chat_ultracode: '1',
+  // OFF by default like the monitor it rides on: it spends OTHER accounts' quota unattended.
+  orch_migrate_on_limit: '0',
 }
 
 export function getSetting(key: string): string {

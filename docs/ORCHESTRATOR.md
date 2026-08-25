@@ -80,7 +80,19 @@ POST /api/sessions/:id/import-desktop  { instance_ref?, title? } - import a FINI
 POST /api/sessions/:id/desktop-archive { archived? }     - archive/unarchive the chat in the
                                   desktop app (shows after that instance next restarts when
                                   its app was running at the time)
+POST /api/sessions/:id/migrate  { instance_ref }        - move a chat to another account, end to
+                                  end: stops its live process if any, archives its old desktop
+                                  entries, runs a one-turn migration on the target account, then
+                                  auto-imports it into that instance's app under its real title
 ```
+
+**Migrate-on-limit** (`migrateOnLimit`, off by default): a run stopped by its 5-HOUR limit whose
+weekly is fine resumes immediately on another running account with headroom instead of parking
+until the reset - the original account rejoins the routing pool naturally once its window
+resets. Rides the auto-resume monitor (which must be enabled) and picks targets from the same
+routing table the reviewer uses: running, fresh reading, weekly under the hard band, 5-hour
+under the high band. In the app, every Claude chat's menu also has **Migrate to another
+account**, a flyout of running instances that runs the full migration pipeline on click.
 
 **Parking a thread**: type `/delayo` in any chat and the orchestrator stops prompting it -
 no resumes, no handoffs, no hygiene nudges - until you type `/resumeo` there. The watcher
@@ -179,6 +191,7 @@ Turning it off is the reverse in either order; each half degrades safely without
 | `newChatModel` | `opus` | model for every orchestrator-started chat (handoffs, chips, launches) |
 | `newChatEffort` | `max` | reasoning effort for those chats (`low`/`medium`/`high`/`xhigh`/`max`) |
 | `newChatUltracode` | `true` | prepend the `ultracode` opt-in keyword to every orchestrator-started chat's prompt |
+| `migrateOnLimit` | `false` | 5-hour-limited runs (weekly fine) resume immediately on another running account instead of waiting for the reset; needs the auto-resume monitor on |
 
 ## Where new sessions show up (and where they cannot)
 

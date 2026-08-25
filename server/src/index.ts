@@ -177,7 +177,12 @@ import {
 import { schedulerState, setSchedulerSettings } from './scheduler'
 import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
-import { archiveDesktopChat, importSessionToDesktop, launchTerminalSession } from './session-launch'
+import {
+  archiveDesktopChat,
+  importSessionToDesktop,
+  launchTerminalSession,
+  liveSessionEntry,
+} from './session-launch'
 import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
 import { runCost, sessionUsage } from './session-usage'
@@ -1953,6 +1958,7 @@ app.post('/api/orchestrator', async (c) => {
     if (typeof body[k] === 'string') patch[k] = body[k]
   }
   if (typeof body.newChatUltracode === 'boolean') patch.newChatUltracode = body.newChatUltracode
+  if (typeof body.migrateOnLimit === 'boolean') patch.migrateOnLimit = body.migrateOnLimit
   setOrchestratorSettings(patch)
   // Flipping it on should produce a feed now, not a tick-interval from now — and a machine that
   // has never had the reviewer command gets it installed (an existing copy is never touched here).
@@ -2060,6 +2066,74 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   const body = await jsonBody(c)
   const result = await archiveDesktopChat(c.req.param('id'), body.archived !== false)
   return c.json(result, result.ok ? 200 : 404)
+})
+// Move a chat to a different account, end to end: stop its live process if it has one (this is
+// user-initiated — the chat is being moved, so its current run ends), flag its old desktop
+// entries archived, then run a one-turn migration resume pinned to the target account; when that
+// run completes, the finalize hook imports the chat into the target instance's desktop app under
+// its real title. The chat continues life on the new account, visible where the user looks.
+const MIGRATION_PROMPT =
+  'You are being migrated to a different account and this thread will appear in the owner' +
+  "'s desktop app shortly. In a few lines: state what this thread is working on, what is " +
+  'verified complete so far, and the concrete next steps. Do not start new work. Do not touch any files.'
+app.post('/api/sessions/:id/migrate', async (c) => {
+  const sessionId = c.req.param('id')
+  const body = await jsonBody(c)
+  const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''
+  if (!ref.startsWith('desktop:'))
+    return c.json({ ok: false, error: "instance_ref ('desktop:<dir>') is required" }, 400)
+  const s = await getSession(sessionId, 'claude')
+  if (!s) return c.json({ ok: false, error: 'session not found' }, 404)
+
+  // A live chat's process must stop before anything appends to its transcript. User-initiated:
+  // clicking "migrate" means "move this thread", current turn included.
+  const live = liveSessionEntry(sessionId)
+  if (live) {
+    try {
+      process.kill(live.pid)
+    } catch {
+      // Already exiting — the wait below settles it either way.
+    }
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline && liveSessionEntry(sessionId)) {
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    if (liveSessionEntry(sessionId))
+      return c.json({ ok: false, error: 'could not stop the live session process' }, 409)
+  }
+
+  // Old desktop entries: flagged archived now (shows when those apps restart), BEFORE the import
+  // creates the fresh entry in the target profile.
+  await archiveDesktopChat(sessionId, true).catch(() => null)
+
+  const id = crypto.randomUUID()
+  const posRow = db
+    .query<{ m: number | null }, []>('select max(position) as m from queue_items')
+    .get()
+  db.query(
+    `insert into queue_items
+       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at, import_to, import_title)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, null, ?, ?, ?)`,
+  ).run(
+    id,
+    sessionId,
+    `Migrate: ${s.title}`.slice(0, 200),
+    s.cwd,
+    MIGRATION_PROMPT,
+    null,
+    null,
+    null,
+    null,
+    ref,
+    (posRow?.m ?? 0) + 1,
+    Date.now(),
+    ref,
+    s.title,
+  )
+  const raw = db.query('select * from queue_items where id = ?').get(id)
+  const item = coerceQueueItem(raw)
+  if (!isActive(item.id) && !isSessionActive(item.session_id)) void dispatchItem(item)
+  return c.json({ ok: true, itemId: id, stoppedLive: !!live })
 })
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------

@@ -137,6 +137,11 @@ export default {
   resumeCopied: "Couldn't open a terminal, so the command is on your clipboard.",
   resumeUnsupported: 'Only Claude sessions can be resumed. The command is on your clipboard.',
   resumeFailed: "Couldn't reopen this session.",
+  migrateAccount: 'Migrate to another account',
+  migrateNoTargets: 'No other running instances',
+  migrateStarted:
+    'Migrating to {name} — the chat will appear in that desktop app when the hop finishes.',
+  migrateFailed: "Couldn't migrate this chat.",
   // --- readable export ---
   exportMarkdown: 'Save as Markdown',
   exportHtml: 'Save as a web page',

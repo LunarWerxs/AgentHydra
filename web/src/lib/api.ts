@@ -748,3 +748,11 @@ export const runMonitorCheck = () =>
 export const getOrchestrator = () => j<OrchestratorView>('/api/orchestrator')
 export const updateOrchestrator = (b: Partial<OrchestratorSettings>) =>
   j<OrchestratorView>('/api/orchestrator', { method: 'POST', body: JSON.stringify(b) })
+/** Move a chat to another account: stops its live process if any, archives its old desktop
+ *  entries, runs a one-turn migration on the target account, then imports it into that
+ *  instance's desktop app under its real title (the finalize hook fires the import). */
+export const migrateSession = (sessionId: string, instanceRef: string) =>
+  j<{ ok: boolean; itemId?: string; stoppedLive?: boolean; error?: string }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/migrate`,
+    { method: 'POST', body: JSON.stringify({ instance_ref: instanceRef }) },
+  )

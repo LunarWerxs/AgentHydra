@@ -102,6 +102,7 @@ export function getOrchestratorSettings(): OrchestratorSettings {
       return e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh' ? e : 'max'
     })(),
     newChatUltracode: getSetting('orch_new_chat_ultracode') !== '0',
+    migrateOnLimit: getSetting('orch_migrate_on_limit') === '1',
   }
 }
 
@@ -147,6 +148,8 @@ export function setOrchestratorSettings(
     setSetting('orch_new_chat_effort', patch.newChatEffort)
   if (typeof patch.newChatUltracode === 'boolean')
     setSetting('orch_new_chat_ultracode', patch.newChatUltracode ? '1' : '0')
+  if (typeof patch.migrateOnLimit === 'boolean')
+    setSetting('orch_migrate_on_limit', patch.migrateOnLimit ? '1' : '0')
   return getOrchestratorSettings()
 }
 

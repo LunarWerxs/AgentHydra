@@ -12,6 +12,9 @@ export default {
   newChatUltracodeLabel: 'Ultracode on new chats',
   newChatUltracodeHint:
     'Prepends the "ultracode" opt-in keyword to every orchestrator-started chat, so it runs in exhaustive mode.',
+  migrateOnLimitLabel: 'Migrate 5-hour-limited chats',
+  migrateOnLimitHint:
+    'When a run hits its 5-hour limit but its weekly is fine, resume it immediately on another running account with headroom instead of parking it until the reset. The original account rejoins the pool once its window resets. Needs the auto-resume monitor enabled.',
   handoffSurfaceLabel: 'Handoff surface',
   handoffSurfaceHint:
     'Where continuations land. Desktop: run headless, then import the finished work into the owning instance’s app as a visible chat. Terminal: a live window you can watch. Queue: headless only.',

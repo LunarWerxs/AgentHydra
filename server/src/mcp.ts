@@ -1340,6 +1340,7 @@ export const TOOLS: McpEngineTool[] = [
       newChatModel: { type: 'string' },
       newChatEffort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
       newChatUltracode: { type: 'boolean' },
+      migrateOnLimit: { type: 'boolean' },
     }),
     run: (a) =>
       api('/api/orchestrator', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(a) }),
