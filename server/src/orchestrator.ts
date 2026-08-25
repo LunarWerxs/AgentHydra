@@ -106,6 +106,7 @@ export function getOrchestratorSettings(): OrchestratorSettings {
     })(),
     newChatUltracode: getSetting('orch_new_chat_ultracode') !== '0',
     migrateOnLimit: getSetting('orch_migrate_on_limit') === '1',
+    maxActiveChats: num('orch_max_active_chats', 0, 0, 500),
   }
 }
 
@@ -154,6 +155,7 @@ export function setOrchestratorSettings(
     setSetting('orch_new_chat_ultracode', patch.newChatUltracode ? '1' : '0')
   if (typeof patch.migrateOnLimit === 'boolean')
     setSetting('orch_migrate_on_limit', patch.migrateOnLimit ? '1' : '0')
+  clamp('orch_max_active_chats', patch.maxActiveChats, 0, 500)
   return getOrchestratorSettings()
 }
 
@@ -803,6 +805,8 @@ interface TickState {
   lastTickMs: number | null
   liveSessions: number
   usageAgeSecs: number | null
+  runningChats: number
+  slotsFree: number | null
 }
 
 const state: TickState = {
@@ -812,6 +816,8 @@ const state: TickState = {
   lastTickMs: null,
   liveSessions: 0,
   usageAgeSecs: null,
+  runningChats: 0,
+  slotsFree: null,
 }
 
 /** Last-known live identity per session, so the holds list can name a parked thread even
@@ -864,6 +870,9 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   for (const sess of sessions) lastNames.set(sess.sessionId, { name: sess.name, cwd: sess.cwd })
 
   // -- per-session ------------------------------------------------------------
+  // Chats actively WORKING right now (transcript fresher than the idle threshold). Held and
+  // done-marked ones included: a busy chat holds a concurrency slot no matter its bookkeeping.
+  let runningChats = 0
   const byCwd = new Map<string, { session: LiveSession; quietSecs: number; held: boolean }[]>()
   for (const sess of sessions) {
     if (!sess.transcriptPath) {
@@ -882,6 +891,7 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     const mtime = deps.mtimeMs(sess.transcriptPath)
     if (mtime === null) continue
     const quietSecs = Math.max(0, Math.round((started - mtime) / 1000))
+    if (quietSecs < s.idleQuietSecs) runningChats++
     // A done-marked session is treated like a held one from here down: it still anchors its
     // repo for git grouping, but must never be nudged or chosen as a hygiene addressee — its
     // successor owns the work (see doneSet above).
@@ -1157,6 +1167,32 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     state.instances = []
   }
 
+  // -- the concurrency cap (round-robin rotation) -----------------------------
+  // maxActiveChats caps how many chats may WORK at once, fleet-wide (0 = unlimited, the
+  // default). Busy chats hold the slots; free slots are offered to idle chats LONGEST-IDLE
+  // FIRST, and that ordering IS the round-robin: a nudged chat goes busy, and when it next
+  // idles it re-enters at the back of the line (freshest mtime), so every waiting chat cycles
+  // through fairly with no extra bookkeeping. The overflow is marked waiting-for-slot; the
+  // reviewer skips those WITHOUT acking, so they resurface the moment a slot frees. Handoffs,
+  // answers, and orphan revives are never gated here — only resume nudges are, since those are
+  // what actually multiply concurrent work.
+  state.runningChats = runningChats
+  state.slotsFree = s.maxActiveChats > 0 ? Math.max(0, s.maxActiveChats - runningChats) : null
+  if (s.maxActiveChats > 0) {
+    const resumable = items
+      .filter((i) => i.kind === 'idle_pending')
+      .sort(
+        (a, b) =>
+          (((b.detail?.quietSecs as number) ?? 0) as number) -
+          (((a.detail?.quietSecs as number) ?? 0) as number),
+      )
+    for (const [idx, item] of resumable.entries()) {
+      if (idx < (state.slotsFree ?? 0)) continue
+      item.detail = { ...item.detail, waitingForSlot: true }
+      item.summary += ` — WAITING FOR A SLOT (${runningChats}/${s.maxActiveChats} running); do not nudge`
+    }
+  }
+
   // -- ack suppression --------------------------------------------------------
   const acks = activeAcks(started)
   const visible = items.filter((i) => {
@@ -1254,6 +1290,8 @@ export function orchestratorView(): OrchestratorView {
       lastTickMs: state.lastTickMs,
       liveSessions: state.liveSessions,
       usageAgeSecs: state.usageAgeSecs,
+      runningChats: state.runningChats,
+      slotsFree: state.slotsFree,
     },
   }
 }

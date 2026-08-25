@@ -63,6 +63,7 @@ const form = reactive({
   dirtyMins: 0,
   staleTaskMins: 0,
   nudgeCooldownMins: 0,
+  maxActiveChats: 0,
 })
 
 function adopt(v: OrchestratorView) {
@@ -82,6 +83,7 @@ function adopt(v: OrchestratorView) {
   form.dirtyMins = v.settings.dirtyMins
   form.staleTaskMins = v.settings.staleTaskMins
   form.nudgeCooldownMins = v.settings.nudgeCooldownMins
+  form.maxActiveChats = v.settings.maxActiveChats
 }
 
 async function save(patch: Parameters<typeof api.updateOrchestrator>[0]) {
@@ -107,6 +109,7 @@ function saveNumbers() {
     dirtyMins: Number(form.dirtyMins),
     staleTaskMins: Number(form.staleTaskMins),
     nudgeCooldownMins: Number(form.nudgeCooldownMins),
+    maxActiveChats: Number(form.maxActiveChats),
   })
 }
 
@@ -195,6 +198,20 @@ onMounted(async () => {
               :model-value="view?.settings.migrateOnLimit ?? false"
               @update:model-value="(v: boolean) => save({ migrateOnLimit: v })"
             />
+          </template>
+        </SettingsRow>
+
+        <SettingsRow :icon="Bot" :label="$t('orchestrator.maxActiveChatsLabel')">
+          <template #info>
+            <InfoHint :text="$t('orchestrator.maxActiveChatsHint')" />
+          </template>
+          <template #control>
+            <div class="flex items-center gap-2">
+              <Input v-model="form.maxActiveChats" type="number" min="0" class="w-24" @change="saveNumbers" />
+              <span v-if="Number(form.maxActiveChats) === 0" class="text-xs text-muted-foreground">
+                {{ $t('orchestrator.maxActiveChatsUnlimited') }}
+              </span>
+            </div>
           </template>
         </SettingsRow>
 

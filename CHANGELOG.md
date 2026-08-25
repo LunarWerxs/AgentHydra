@@ -5,6 +5,20 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-08-25
+
+### Added
+
+- **A concurrency cap for orchestrated chats, default Unlimited.** `maxActiveChats` (Settings ->
+  Orchestrator -> "Max running chats", 0 = unlimited) caps how many chats may actively work at
+  once across the whole fleet. Past the cap, idle chats wait their turn and rotate round-robin:
+  the chat idle longest gets the next free slot, and a nudged chat re-enters at the back of the
+  line, so everyone cycles through fairly with no extra bookkeeping. The watcher marks the
+  overflow `waitingForSlot` (the reviewer skips those without acking, so they resurface the
+  moment a slot frees) and publishes `runningChats`/`slotsFree` in the feed meta. Only
+  resume-to-work nudges and new work are gated; answering a chat's question, handoff
+  continuations (replacements, not additions), and crash revives never wait.
+
 ## [0.31.0] - 2026-08-25
 
 ### Added

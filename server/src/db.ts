@@ -456,6 +456,9 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   orch_new_chat_ultracode: '1',
   // OFF by default like the monitor it rides on: it spends OTHER accounts' quota unattended.
   orch_migrate_on_limit: '0',
+  // 0 = unlimited (the default). A positive value caps how many chats may WORK at once,
+  // fleet-wide; the overflow rotates in round-robin, longest-idle first.
+  orch_max_active_chats: '0',
 }
 
 export function getSetting(key: string): string {

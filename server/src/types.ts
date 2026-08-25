@@ -1179,6 +1179,10 @@ export interface OrchestratorSettings {
    *  account with headroom instead of parking it until the reset. Consumed by the auto-resume
    *  monitor; needs the monitor enabled to act. */
   migrateOnLimit: boolean
+  /** Maximum chats actively WORKING at once, fleet-wide. 0 = unlimited (the default). When the
+   *  cap is reached, further idle chats are marked waiting-for-slot and the reviewer rotates
+   *  them in round-robin (longest-idle gets the next free slot). */
+  maxActiveChats: number
 }
 
 /** One desktop instance as the orchestrator routing logic sees it: is it OPEN right now, and
@@ -1255,5 +1259,10 @@ export interface OrchestratorView {
     liveSessions: number
     /** Age of the newest usage-cache reading, seconds (null = no cache yet). */
     usageAgeSecs: number | null
+    /** Live sessions currently WORKING (transcript fresher than idleQuietSecs). */
+    runningChats: number
+    /** Free slots under maxActiveChats (null = unlimited). The reviewer starts/nudges at most
+     *  this many chats per wake; the watcher already marks the overflow waiting-for-slot. */
+    slotsFree: number | null
   }
 }

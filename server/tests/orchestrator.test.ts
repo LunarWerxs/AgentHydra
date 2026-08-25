@@ -711,6 +711,77 @@ test('a fresh orphan (inside the quiet window) waits: a relaunch may be in fligh
   expect(existsSync(o.registryPath)).toBe(true)
 })
 
+// --- the concurrency cap (round-robin rotation) ------------------------------
+
+function slotSession(id: string, pid: number): LiveSession {
+  return {
+    pid,
+    sessionId: id,
+    cwd: 'D:\\Fake',
+    name: id,
+    startedAt: 0,
+    transcriptPath: `D:\\fake\\${id}.jsonl`,
+  }
+}
+
+test('maxActiveChats round-trips, clamps at 0, and defaults to unlimited', () => {
+  expect(getOrchestratorSettings().maxActiveChats).toBe(0)
+  expect(setOrchestratorSettings({ maxActiveChats: 15 }).maxActiveChats).toBe(15)
+  expect(setOrchestratorSettings({ maxActiveChats: -3 }).maxActiveChats).toBe(0)
+})
+
+test('cap: free slots go longest-idle first; the overflow is marked waiting, never dropped', async () => {
+  setOrchestratorSettings({ maxActiveChats: 1 })
+  const now = Date.now()
+  const mtimes: Record<string, number> = {
+    'D:\\fake\\slot-a.jsonl': now - 40 * 60_000, // longest idle — gets the slot
+    'D:\\fake\\slot-b.jsonl': now - 20 * 60_000, // waits
+  }
+  const { deps } = fakeDeps({
+    registry: () => [slotSession('slot-a', 91001), slotSession('slot-b', 91002)],
+    mtimeMs: (p: string) => mtimes[p] ?? now - 10 * 60_000,
+    nowMs: () => now,
+  })
+  await runOrchestratorOnce(deps)
+  const feed = orchestratorView().attention
+  const a = feed.find((i: AttentionItem) => i.key === 'idle:slot-a')
+  const b = feed.find((i: AttentionItem) => i.key === 'idle:slot-b')
+  expect(a?.detail?.waitingForSlot).toBeUndefined()
+  expect(b?.detail?.waitingForSlot).toBe(true)
+  expect(b?.summary).toContain('WAITING FOR A SLOT')
+  expect(orchestratorView().meta.slotsFree).toBe(1)
+  setOrchestratorSettings({ maxActiveChats: 0 })
+})
+
+test('cap: a BUSY chat holds a slot, so every idle chat waits; 0 disables the whole gate', async () => {
+  setOrchestratorSettings({ maxActiveChats: 1 })
+  const now = Date.now()
+  const mtimes: Record<string, number> = {
+    'D:\\fake\\slot-c.jsonl': now - 5_000, // busy: holds the only slot
+    'D:\\fake\\slot-d.jsonl': now - 20 * 60_000, // idle: must wait
+  }
+  const { deps } = fakeDeps({
+    registry: () => [slotSession('slot-c', 91003), slotSession('slot-d', 91004)],
+    mtimeMs: (p: string) => mtimes[p] ?? now - 10 * 60_000,
+    nowMs: () => now,
+  })
+  await runOrchestratorOnce(deps)
+  let view = orchestratorView()
+  expect(view.meta.runningChats).toBe(1)
+  expect(view.meta.slotsFree).toBe(0)
+  expect(
+    view.attention.find((i: AttentionItem) => i.key === 'idle:slot-d')?.detail?.waitingForSlot,
+  ).toBe(true)
+  // Unlimited: same fleet, no gate, slotsFree is null (not a number to obey).
+  setOrchestratorSettings({ maxActiveChats: 0 })
+  await runOrchestratorOnce(deps)
+  view = orchestratorView()
+  expect(view.meta.slotsFree).toBe(null)
+  expect(
+    view.attention.find((i: AttentionItem) => i.key === 'idle:slot-d')?.detail?.waitingForSlot,
+  ).toBeUndefined()
+})
+
 test('one lineage, one continuation: a done-marked LIVE session gets no nudge items', async () => {
   db.query(
     'insert into session_marks (session_id, done, updated_at) values (?, 1, ?) on conflict(session_id) do update set done = 1',

@@ -108,6 +108,14 @@ gets the standing answer, acked `standing-answer`.
 ## The rubric
 
 **`idle_pending`** - a live chat finished and is waiting.
+- `detail.waitingForSlot` true -> the fleet is at its concurrency cap
+  (`settings.maxActiveChats`; 0 = unlimited and the flag never appears). Do NOT nudge and do
+  NOT ack - the item must resurface unchanged the moment a slot frees, and the watcher already
+  runs the rotation (longest-idle chat gets the next free slot, which is the round-robin).
+  Never nudge more resumes in one wake than `meta.slotsFree`. The cap gates ONLY
+  resume-to-work nudges and new work (chips, new chats): answering a chat's question,
+  collecting/continuing a handoff (a replacement, not an addition), and orphan revives are
+  never blocked by it.
 - `detail.staleTasks` true -> the watcher suspects dead background tasks (transcript and task
   outputs both silent past the threshold). This is a HINT, not a verdict: READ the tailSnippet
   first. Task-completion notices, a recap, or any sign the tasks reached a terminal state and
