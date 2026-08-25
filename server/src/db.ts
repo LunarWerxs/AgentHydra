@@ -431,6 +431,12 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   orch_open_min_plan: 'Max 20',
   orch_reviewer_reserve_pct: '75',
   orch_handoff_surface: 'desktop',
+  // Every orchestrator-started chat (handoff continuation, chip, terminal launch) runs on the
+  // owner's chosen model/effort - Opus 5 at max effort with the ultracode opt-in by default
+  // (owner directive 2026-08-25).
+  orch_new_chat_model: 'opus',
+  orch_new_chat_effort: 'max',
+  orch_new_chat_ultracode: '1',
 }
 
 export function getSetting(key: string): string {

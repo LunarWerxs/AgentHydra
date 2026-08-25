@@ -345,6 +345,26 @@ test('new settings round-trip: open-instances mode, min plan, reserve, handoff s
   expect(setOrchestratorSettings({ handoffSurface: 'desktop' }).handoffSurface).toBe('desktop')
 })
 
+test('new-chat defaults: Opus 5 at max effort with ultracode, all overridable', () => {
+  const s = getOrchestratorSettings()
+  expect(s.newChatModel).toBe('opus')
+  expect(s.newChatEffort).toBe('max')
+  expect(s.newChatUltracode).toBe(true)
+  const changed = setOrchestratorSettings({
+    newChatModel: 'sonnet',
+    newChatEffort: 'high',
+    newChatUltracode: false,
+  })
+  expect(changed.newChatModel).toBe('sonnet')
+  expect(changed.newChatEffort).toBe('high')
+  expect(changed.newChatUltracode).toBe(false)
+  // An invalid effort is refused, not stored.
+  expect(setOrchestratorSettings({ newChatEffort: 'ultracode' as never }).newChatEffort).toBe(
+    'high',
+  )
+  setOrchestratorSettings({ newChatModel: 'opus', newChatEffort: 'max', newChatUltracode: true })
+})
+
 // --- shipping the /orchestrate command --------------------------------------
 
 test('command install decision: write when absent, keep an edited copy unless forced', () => {

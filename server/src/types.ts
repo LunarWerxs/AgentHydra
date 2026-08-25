@@ -1149,6 +1149,12 @@ export interface OrchestratorSettings {
    *  open a visible interactive terminal session (watchable live, orchestratable). 'queue':
    *  headless only, visible in AgentHydra's Sessions tab. */
   handoffSurface: 'desktop' | 'terminal' | 'queue'
+  /** Model every orchestrator-started chat runs (handoff continuations, chips, launches). */
+  newChatModel: string
+  /** Reasoning effort for those chats (the CLI's --effort values). */
+  newChatEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** Prepend the "ultracode" opt-in keyword to every orchestrator-started chat's prompt. */
+  newChatUltracode: boolean
 }
 
 /** One desktop instance as the orchestrator routing logic sees it: is it OPEN right now, and

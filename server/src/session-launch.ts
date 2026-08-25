@@ -80,8 +80,9 @@ export function buildTerminalLaunchPlan(
   exe: string,
   promptFile: string,
   model: string | null,
+  effort: string | null = null,
 ): TerminalLaunchPlan {
-  const modelArgs = model ? ` --model ${model}` : ''
+  const modelArgs = `${model ? ` --model ${model}` : ''}${effort ? ` --effort ${effort}` : ''}`
   if (platform === 'win32') {
     // PowerShell (not cmd) runs the claude line: `Get-Content -Raw` hands the multiline prompt
     // over as ONE argv element, which cmd cannot do. -NoExit keeps the window (and any startup
@@ -122,6 +123,7 @@ export async function launchTerminalSession(opts: {
   prompt: string
   instanceRef?: string | null
   model?: string | null
+  effort?: string | null
 }): Promise<TerminalLaunchResult> {
   const env: Record<string, string> = {}
   const ref = opts.instanceRef?.trim() || null
@@ -153,6 +155,7 @@ export async function launchTerminalSession(opts: {
     exe ?? resolveClaudeExe(),
     promptFile,
     opts.model?.trim() || null,
+    opts.effort?.trim() || null,
   )
   if (plan.argv.length === 0) return { ok: false, reason: 'no-terminal', command: plan.command }
   // The child gets a SANITIZED environment: every CLAUDE*/ANTHROPIC* variable the daemon itself

@@ -96,6 +96,12 @@ export function getOrchestratorSettings(): OrchestratorSettings {
       const hs = getSetting('orch_handoff_surface')
       return hs === 'queue' || hs === 'terminal' ? hs : 'desktop'
     })(),
+    newChatModel: getSetting('orch_new_chat_model') || 'opus',
+    newChatEffort: ((): OrchestratorSettings['newChatEffort'] => {
+      const e = getSetting('orch_new_chat_effort')
+      return e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh' ? e : 'max'
+    })(),
+    newChatUltracode: getSetting('orch_new_chat_ultracode') !== '0',
   }
 }
 
@@ -129,6 +135,18 @@ export function setOrchestratorSettings(
     patch.handoffSurface === 'desktop'
   )
     setSetting('orch_handoff_surface', patch.handoffSurface)
+  if (typeof patch.newChatModel === 'string' && patch.newChatModel.trim())
+    setSetting('orch_new_chat_model', patch.newChatModel.trim().slice(0, 60))
+  if (
+    patch.newChatEffort === 'low' ||
+    patch.newChatEffort === 'medium' ||
+    patch.newChatEffort === 'high' ||
+    patch.newChatEffort === 'xhigh' ||
+    patch.newChatEffort === 'max'
+  )
+    setSetting('orch_new_chat_effort', patch.newChatEffort)
+  if (typeof patch.newChatUltracode === 'boolean')
+    setSetting('orch_new_chat_ultracode', patch.newChatUltracode ? '1' : '0')
   return getOrchestratorSettings()
 }
 

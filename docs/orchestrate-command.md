@@ -80,6 +80,14 @@ band, and `resetsSoon`. The rules are absolute:
   default) and the fleet is exhausted: hold the work, say so in one status line, and re-check
   each wake.
 
+## New-chat defaults (every chat you start)
+
+Every session you start - handoff continuations, chip launches, terminal launches - uses the
+owner's configured defaults from settings: pass `model: settings.newChatModel` and
+`effort: settings.newChatEffort` on every `POST /api/queue` and `/api/sessions/launch-terminal`
+call, and when `settings.newChatUltracode` is true, make the literal word `ultracode` the first
+line of the prompt, above the handoff/chip text. Defaults: Opus 5, max effort, ultracode on.
+
 ## The standing answer (when a chat wants owner input)
 
 The owner's standing instruction, verbatim in spirit: do not ask him for input on anything that

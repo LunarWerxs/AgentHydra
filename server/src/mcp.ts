@@ -1337,6 +1337,9 @@ export const TOOLS: McpEngineTool[] = [
       openMinPlan: { type: 'string' },
       reviewerReservePct: { type: 'number' },
       handoffSurface: { type: 'string', enum: ['desktop', 'terminal', 'queue'] },
+      newChatModel: { type: 'string' },
+      newChatEffort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      newChatUltracode: { type: 'boolean' },
     }),
     run: (a) =>
       api('/api/orchestrator', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(a) }),
@@ -1351,6 +1354,7 @@ export const TOOLS: McpEngineTool[] = [
         prompt: { type: 'string' },
         instance_ref: { type: 'string' },
         model: { type: 'string' },
+        effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
       },
       ['cwd', 'prompt'],
     ),

@@ -176,6 +176,9 @@ Turning it off is the reverse in either order; each half degrades safely without
 | `openMinPlan` | `Max 20` | minimum plan an auto-opened instance must have |
 | `reviewerReservePct` | 75 | the reviewer's own account stays under this weekly % so it can always keep orchestrating |
 | `handoffSurface` | `desktop` | where handoff continuations land: `desktop` (headless run, then imported into the desktop app as a visible chat), `terminal` (watchable live window), or `queue` (headless only) |
+| `newChatModel` | `opus` | model for every orchestrator-started chat (handoffs, chips, launches) |
+| `newChatEffort` | `max` | reasoning effort for those chats (`low`/`medium`/`high`/`xhigh`/`max`) |
+| `newChatUltracode` | `true` | prepend the `ultracode` opt-in keyword to every orchestrator-started chat's prompt |
 
 ## Where new sessions show up (and where they cannot)
 

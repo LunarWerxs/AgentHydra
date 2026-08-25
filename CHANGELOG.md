@@ -62,6 +62,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   thread's title on every import. Session-management note that shipped alongside: a chat in
   the SAME instance as an agent can be renamed and archived live through the app's own session
   tools; cross-instance changes go through the metadata (visible on that app's next restart).
+- **New-chat defaults: every orchestrator-started chat runs Opus 5 at max effort with the
+  `ultracode` opt-in by default.** Settings `newChatModel` / `newChatEffort` /
+  `newChatUltracode` govern handoff continuations, chip launches, and terminal launches; the
+  /orchestrate rubric applies them on every dispatch, and `launch-terminal` gained an
+  `--effort` pass-through.
 - **`import-desktop` refuses instances that are not running.** Aimed at a closed instance the
   import spawn would not fail - it would BOOT that instance (measured; a display-name-derived
   path started a sixth desktop app). The endpoint now enforces the same open-instances-only

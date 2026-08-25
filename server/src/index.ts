@@ -1943,9 +1943,16 @@ app.post('/api/orchestrator', async (c) => {
   }
   if (typeof body.reviewerReservePct === 'number')
     patch.reviewerReservePct = body.reviewerReservePct
-  for (const k of ['openInstances', 'openMinPlan', 'handoffSurface'] as const) {
+  for (const k of [
+    'openInstances',
+    'openMinPlan',
+    'handoffSurface',
+    'newChatModel',
+    'newChatEffort',
+  ] as const) {
     if (typeof body[k] === 'string') patch[k] = body[k]
   }
+  if (typeof body.newChatUltracode === 'boolean') patch.newChatUltracode = body.newChatUltracode
   setOrchestratorSettings(patch)
   // Flipping it on should produce a feed now, not a tick-interval from now — and a machine that
   // has never had the reviewer command gets it installed (an existing copy is never touched here).
@@ -2011,11 +2018,14 @@ app.post('/api/sessions/launch-terminal', async (c) => {
     !body.prompt.trim()
   )
     return c.json({ error: 'cwd and prompt are required' }, 400)
+  if (body.effort != null && invalidEnum(body.effort, VALID_EFFORTS, 'effort'))
+    return c.json({ error: invalidEnum(body.effort, VALID_EFFORTS, 'effort') }, 400)
   const result = await launchTerminalSession({
     cwd: body.cwd,
     prompt: body.prompt,
     instanceRef: typeof body.instance_ref === 'string' ? body.instance_ref : null,
     model: typeof body.model === 'string' ? body.model : null,
+    effort: typeof body.effort === 'string' ? body.effort : null,
   })
   return c.json(result, result.ok ? 200 : 422)
 })

@@ -29,6 +29,14 @@ test('windows: powershell reads the prompt file raw, window survives exit', () =
   const ps = plan.argv[plan.argv.length - 1]
   expect(ps).toContain("Get-Content -Raw 'C:\\tmp\\prompt-1.txt'")
   expect(ps).toContain('--model sonnet')
+  const withEffort = buildTerminalLaunchPlan(
+    'win32',
+    'C:\\Tools\\claude.exe',
+    'C:\\tmp\\prompt-1.txt',
+    'opus',
+    'max',
+  )
+  expect(withEffort.argv[withEffort.argv.length - 1]).toContain('--model opus --effort max')
 })
 
 test('windows: single quotes in paths are doubled for powershell, not left to break it', () => {
