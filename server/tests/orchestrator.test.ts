@@ -9,6 +9,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { db } from '../src/db'
 import {
   ackAttention,
   bandForPct,
