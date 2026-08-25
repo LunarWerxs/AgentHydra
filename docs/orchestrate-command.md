@@ -149,13 +149,16 @@ gets the standing answer, acked `standing-answer`.
      - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt", "instance_ref"}` -
        a visible terminal window, live and orchestratable while it works.
      - `"queue"`: headless only; visible in AgentHydra's Sessions tab.
-  3. Do NOT message the old chat. Mark it finished instead:
-     `POST /api/sessions/<id>/done {"done": true}`, then archive its desktop entry:
+  3. Do NOT message the old chat. ALWAYS archive a chat once its handoff has been collected
+     and continued (owner rule): mark it finished, `POST /api/sessions/<id>/done
+     {"done": true}`, then archive its desktop entry:
      `POST /api/sessions/<id>/desktop-archive {"archived": true}`. Relay the caveat once if it
      matters: on an instance whose app is running, the archive shows after that app next
      restarts; the done-mark is the immediate signal. Exception worth using: a chat in YOUR
      OWN instance can be archived and renamed LIVE through your session-management tools
      (list_sessions / set_session_title / archive_session) - prefer those when they reach.
+     This applies to every handoff path: context rollovers, hard-cutoff evacuations, and any
+     chat you explicitly asked to write handoff docs.
   4. Ack `handoff-continued`, cooldown 720.
 
 **`interrupted`** - the human pressed stop. Never auto-resume it. Ack `human-interrupted`,
@@ -223,6 +226,11 @@ monitor is off and the session matters, one status line for the owner. Ack, cool
 - Never push a public repo yourself; when nudging others to push, always include the PUBLIC
   check instruction.
 - No worktrees, no new branches - not for you, not in your instructions to peers.
+- Test and plumbing prompts NEVER go into working chats (owner rule). Anything you need to
+  try - a delivery check, a capability probe, a template dry-run - runs in a NEW sacrificial
+  session (terminal launch on a low-usage account), and you archive that session the moment
+  the test is done. A working chat's transcript is the owner's record; keep experiments out
+  of it.
 - Keep your own output terse: one status line per action taken this wake, nothing else. If your
   own context grows past ~150k tokens, write a one-paragraph state note (open handoffs, pending
   cutoffs, cooldowns that matter) so auto-compact preserves the load-bearing state.
