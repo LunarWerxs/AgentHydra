@@ -157,10 +157,11 @@ import { openUi } from './open-ui'
 import {
   ackAttention,
   getOrchestratorSettings,
-  installOrchestrateCommand,
+  installOrchestratorCommands,
   orchestratorView,
   runOrchestratorOnce,
   setOrchestratorSettings,
+  setSessionHold,
   startOrchestrator,
 } from './orchestrator'
 import { openPortableWindow } from './portable-window.mjs'
@@ -1951,22 +1952,36 @@ app.post('/api/orchestrator', async (c) => {
   if (patch.enabled === true) {
     await runOrchestratorOnce().catch(() => {})
     try {
-      installOrchestrateCommand(false)
+      installOrchestratorCommands(false)
     } catch (err) {
-      console.error('[agenthydra] /orchestrate command install failed:', err)
+      console.error('[agenthydra] orchestrator command install failed:', err)
     }
   }
   return c.json(orchestratorView())
 })
-// Install (or with {"force": true}, refresh) the /orchestrate reviewer command into
-// ~/.claude/commands — for a new machine, or after an AgentHydra update changed the command.
+// Install (or with {"force": true}, refresh) the shipped orchestrator commands
+// (/orchestrate, /delayo, /resumeo) into ~/.claude/commands — for a new machine, or after an
+// AgentHydra update changed them.
 app.post('/api/orchestrator/install-command', async (c) => {
   const body = await jsonBody(c)
   try {
-    return c.json({ ok: true, ...installOrchestrateCommand(body.force === true) })
+    return c.json({ ok: true, files: installOrchestratorCommands(body.force === true) })
   } catch (err) {
     return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
   }
+})
+// Park/unpark one thread (/delayo and /resumeo call this with their own session id). A held
+// thread gets no orchestrator prompts of any kind until the hold is lifted.
+app.post('/api/orchestrator/hold', async (c) => {
+  const body = await jsonBody(c)
+  if (
+    typeof body.session_id !== 'string' ||
+    !body.session_id.trim() ||
+    typeof body.held !== 'boolean'
+  )
+    return c.json({ error: 'session_id and held (boolean) are required' }, 400)
+  setSessionHold(body.session_id.trim(), body.held)
+  return c.json({ ok: true, holds: orchestratorView().holds })
 })
 app.post('/api/orchestrator/ack', async (c) => {
   const body = await jsonBody(c)

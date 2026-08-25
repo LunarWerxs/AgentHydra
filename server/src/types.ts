@@ -1210,6 +1210,9 @@ export interface OrchestratorView {
   attention: AttentionItem[]
   /** The desktop fleet with usage joined — the routing table for nudges/handoffs/launches. */
   instances: OrchestratorInstance[]
+  /** Threads the owner parked with /delayo: the feed carries nothing for them, and the
+   *  reviewer must never prompt them until /resumeo lifts the hold. */
+  holds: Array<{ sessionId: string; heldAt: string; peerName?: string; cwd?: string }>
   meta: {
     lastTickAt: string | null
     lastTickMs: number | null

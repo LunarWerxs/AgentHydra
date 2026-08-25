@@ -66,13 +66,20 @@ monitor's job, and they compose fine).
 ### API
 
 ```
-GET  /api/orchestrator            settings + attention feed + the instances routing table + tick metadata
+GET  /api/orchestrator            settings + attention feed + the instances routing table + holds + tick metadata
 POST /api/orchestrator            patch settings ({ enabled: true } is the on switch)
 POST /api/orchestrator/ack        { key, action, cooldownMins? } - reviewer marks an item handled
 POST /api/orchestrator/check      run one pass now
+POST /api/orchestrator/hold       { session_id, held } - park/unpark one thread (/delayo, /resumeo)
 POST /api/sessions/launch-terminal  { cwd, prompt, instance_ref?, model? } - open a VISIBLE
                                   terminal running a new interactive session on that account
 ```
+
+**Parking a thread**: type `/delayo` in any chat and the orchestrator stops prompting it -
+no resumes, no handoffs, no hygiene nudges - until you type `/resumeo` there. The watcher
+drops a held thread's items entirely and the feed's `holds` list shows what is parked, so a
+delayed thread is invisible to the reviewer but never forgotten. Holds persist across daemon
+restarts and have no expiry.
 
 The feed's `instances` array is the routing table: every desktop instance with `isRunning`,
 account, plan, weekly %, band, reset-soon and staleness. **Open means running, nothing else** -

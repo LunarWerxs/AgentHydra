@@ -42,6 +42,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   `when-exhausted`), `openMinPlan`, `reviewerReservePct` (the reviewer's own account stays
   under 75% so it can always keep orchestrating), `handoffSurface` (`terminal` / `queue`).
 
+- **`/delayo` and `/resumeo`: park a thread, unpark a thread.** Typed in any chat, `/delayo`
+  marks that session held: the watcher generates no items for it (no resume nudges, no
+  handoffs, no hygiene pings) until `/resumeo` lifts the hold. Holds persist across restarts,
+  never expire on their own, and are listed in the feed (`holds`) so a parked thread stays
+  visible as parked. `POST /api/orchestrator/hold` + the `orchestrator_hold` MCP tool are the
+  API form; both commands ship in the daemon and install alongside `/orchestrate`.
+
 ### Fixed
 
 - **One exotic character in one process's arguments no longer blinds instance detection.**

@@ -16,7 +16,7 @@ import {
   commandInstallOutcome,
   computeUsageItems,
   getOrchestratorSettings,
-  installOrchestrateCommand,
+  installOrchestratorCommands,
   isInjectedUserText,
   type LiveSession,
   type OrchestratorDeps,
@@ -27,6 +27,7 @@ import {
   resetsSoon,
   runOrchestratorOnce,
   setOrchestratorSettings,
+  setSessionHold,
   type TailInfo,
 } from '../src/orchestrator'
 import type { AttentionItem, UsageSnapshot } from '../src/types'
@@ -352,18 +353,50 @@ test('command install decision: write when absent, keep an edited copy unless fo
   expect(commandInstallOutcome('user edited', 'shipped', true)).toBe('updated')
 })
 
-test('installOrchestrateCommand writes the bundled command and respects edits', () => {
+test('installOrchestratorCommands ships all three commands and respects edits', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-cmd-'))
-  const first = installOrchestrateCommand(false, dir)
-  expect(first.outcome).toBe('installed')
-  const written = readFileSync(first.path, 'utf8')
+  const first = installOrchestratorCommands(false, dir)
+  expect(first.map((f) => [f.file, f.outcome])).toEqual([
+    ['orchestrate.md', 'installed'],
+    ['delayo.md', 'installed'],
+    ['resumeo.md', 'installed'],
+  ])
+  const orch = first[0]
+  const written = readFileSync(orch.path, 'utf8')
   expect(written).toContain('/orchestrate - the reviewer loop')
-  expect(installOrchestrateCommand(false, dir).outcome).toBe('up-to-date')
-  writeFileSync(first.path, `${written}\nlocal tweak`)
-  expect(installOrchestrateCommand(false, dir).outcome).toBe('differs')
-  expect(readFileSync(first.path, 'utf8')).toContain('local tweak')
-  expect(installOrchestrateCommand(true, dir).outcome).toBe('updated')
-  expect(readFileSync(first.path, 'utf8')).toBe(written)
+  expect(readFileSync(first[1].path, 'utf8')).toContain('"held": true')
+  expect(readFileSync(first[2].path, 'utf8')).toContain('"held": false')
+  expect(installOrchestratorCommands(false, dir).every((f) => f.outcome === 'up-to-date')).toBe(
+    true,
+  )
+  writeFileSync(orch.path, `${written}\nlocal tweak`)
+  const mixed = installOrchestratorCommands(false, dir)
+  expect(mixed[0].outcome).toBe('differs')
+  expect(mixed[1].outcome).toBe('up-to-date')
+  expect(readFileSync(orch.path, 'utf8')).toContain('local tweak')
+  expect(installOrchestratorCommands(true, dir)[0].outcome).toBe('updated')
+  expect(readFileSync(orch.path, 'utf8')).toBe(written)
+})
+
+test('a held session produces NO feed items; lifting the hold restores them', async () => {
+  // Clocks sit an hour ahead of the other tests so no earlier ack on this session id can
+  // shadow the re-arm assertion (ack suppression needs mtime <= acked_at AND now < until).
+  const { deps } = fakeDeps({
+    nowMs: () => Date.now() + 60 * 60_000,
+    mtime: Date.now() + 50 * 60_000,
+  })
+  setSessionHold('sess-1', true)
+  await runOrchestratorOnce(deps)
+  expect(orchestratorView().attention.some((i: AttentionItem) => i.sessionId === 'sess-1')).toBe(
+    false,
+  )
+  expect(orchestratorView().holds.some((h) => h.sessionId === 'sess-1')).toBe(true)
+  setSessionHold('sess-1', false)
+  await runOrchestratorOnce(deps)
+  expect(orchestratorView().attention.some((i: AttentionItem) => i.key === 'idle:sess-1')).toBe(
+    true,
+  )
+  expect(orchestratorView().holds).toHaveLength(0)
 })
 
 // --- the pass, with injected deps -------------------------------------------

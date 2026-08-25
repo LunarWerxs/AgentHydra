@@ -44,9 +44,11 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-// Text import: bundled into compiled builds, so a packaged AgentHydra can still install the
-// command on a machine that has no checkout and no docs/ directory.
+// Text imports: bundled into compiled builds, so a packaged AgentHydra can still install the
+// commands on a machine that has no checkout and no docs/ directory.
+import DELAYO_COMMAND from '../../docs/delayo-command.md' with { type: 'text' }
 import ORCHESTRATE_COMMAND from '../../docs/orchestrate-command.md' with { type: 'text' }
+import RESUMEO_COMMAND from '../../docs/resumeo-command.md' with { type: 'text' }
 import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { instanceRefForSession } from './instance-sessions'
@@ -142,6 +144,27 @@ function kvSet(key: string, value: string): void {
 
 function kvDelete(key: string): void {
   db.query('delete from orchestrator_kv where key = ?').run(key)
+}
+
+// --- holds (/delayo and /resumeo) -------------------------------------------
+// A held thread is one the owner has parked: lower priority right now, too much else running.
+// The watcher drops every session-scoped item for it, so the reviewer never sees it to nudge.
+// No expiry — a hold stands until /resumeo lifts it (parking for days is a legitimate use).
+
+const HOLD_PREFIX = 'hold:'
+
+export function setSessionHold(sessionId: string, held: boolean): void {
+  if (held) kvSet(HOLD_PREFIX + sessionId, new Date().toISOString())
+  else kvDelete(HOLD_PREFIX + sessionId)
+}
+
+export function listSessionHolds(): Array<{ sessionId: string; heldAt: string }> {
+  return db
+    .query<{ key: string; value: string }, [string]>(
+      'select key, value from orchestrator_kv where key like ?',
+    )
+    .all(`${HOLD_PREFIX}%`)
+    .map((r) => ({ sessionId: r.key.slice(HOLD_PREFIX.length), heldAt: r.value }))
 }
 
 // --- acks -------------------------------------------------------------------
@@ -692,6 +715,10 @@ const state: TickState = {
   usageAgeSecs: null,
 }
 
+/** Last-known live identity per session, so the holds list can name a parked thread even
+ *  between passes. Advisory display data only — the hold itself lives in sqlite. */
+const lastNames = new Map<string, { name: string; cwd: string }>()
+
 /** firstSeenAt/seenCount continuity between passes, keyed by item key (in-memory is right:
  *  "how long has this been pending" resets naturally with the daemon). */
 const seen = new Map<string, { firstSeenAt: string; count: number }>()
@@ -719,8 +746,14 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   const sessions = deps.registry(deps.claudeHome())
   state.liveSessions = sessions.length
 
+  // Held threads (/delayo): no session-scoped item may be generated for them at all — the
+  // reviewer cannot nudge what it never sees. They still count for git grouping (a held chat's
+  // repo is still that repo), but are never chosen as a nudge addressee.
+  const holdSet = new Set(listSessionHolds().map((h) => h.sessionId))
+  for (const sess of sessions) lastNames.set(sess.sessionId, { name: sess.name, cwd: sess.cwd })
+
   // -- per-session ------------------------------------------------------------
-  const byCwd = new Map<string, { session: LiveSession; quietSecs: number }[]>()
+  const byCwd = new Map<string, { session: LiveSession; quietSecs: number; held: boolean }[]>()
   for (const sess of sessions) {
     if (!sess.transcriptPath) {
       items.push({
@@ -738,9 +771,11 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     const mtime = deps.mtimeMs(sess.transcriptPath)
     if (mtime === null) continue
     const quietSecs = Math.max(0, Math.round((started - mtime) / 1000))
+    const held = holdSet.has(sess.sessionId)
     const list = byCwd.get(sess.cwd) ?? []
-    list.push({ session: sess, quietSecs })
+    list.push({ session: sess, quietSecs, held })
     byCwd.set(sess.cwd, list)
+    if (held) continue
     if (quietSecs < s.idleQuietSecs) continue
 
     let tail: TailInfo
@@ -866,8 +901,10 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
           key: `dirty:${cwd}`,
           kind: 'repo_dirty',
           cwd,
-          // Address the nudge to the longest-idle session in that cwd — it knows its own diff.
-          peerName: sess.sort((a, b) => b.quietSecs - a.quietSecs)[0]?.session.name,
+          // Address the nudge to the longest-idle UNHELD session in that cwd — it knows its own
+          // diff, and a held thread must not receive prompts even for hygiene.
+          peerName: sess.filter((x) => !x.held).sort((a, b) => b.quietSecs - a.quietSecs)[0]
+            ?.session.name,
           summary: `${cwd}: ${g.dirtyCount} dirty file(s) for ${dirtyMins}m with all its sessions idle`,
           detail: {
             dirtyCount: g.dirtyCount,
@@ -941,6 +978,11 @@ export function orchestratorView(): OrchestratorView {
     settings: getOrchestratorSettings(),
     attention: state.attention,
     instances: state.instances,
+    holds: listSessionHolds().map((h) => ({
+      ...h,
+      peerName: lastNames.get(h.sessionId)?.name,
+      cwd: lastNames.get(h.sessionId)?.cwd,
+    })),
     meta: {
       lastTickAt: state.lastTickAt,
       lastTickMs: state.lastTickMs,
@@ -1006,21 +1048,31 @@ export function commandInstallOutcome(
   return force ? 'updated' : 'differs'
 }
 
-export function installOrchestrateCommand(
+/** Everything the orchestrator ships as a user-typeable command: the reviewer loop plus the
+ *  per-thread park/unpark pair (/delayo marks a thread "not now", /resumeo lifts it). */
+const SHIPPED_COMMANDS: Array<{ file: string; text: string }> = [
+  { file: 'orchestrate.md', text: ORCHESTRATE_COMMAND },
+  { file: 'delayo.md', text: DELAYO_COMMAND },
+  { file: 'resumeo.md', text: RESUMEO_COMMAND },
+]
+
+export function installOrchestratorCommands(
   force = false,
   commandsDir: string = join(homedir(), '.claude', 'commands'),
-): { outcome: CommandInstallOutcome; path: string } {
-  const path = join(commandsDir, 'orchestrate.md')
-  let existing: string | null = null
-  try {
-    existing = readFileSync(path, 'utf8')
-  } catch {
-    existing = null
-  }
-  const outcome = commandInstallOutcome(existing, ORCHESTRATE_COMMAND, force)
-  if (outcome === 'installed' || outcome === 'updated') {
-    mkdirSync(commandsDir, { recursive: true })
-    writeFileSync(path, ORCHESTRATE_COMMAND)
-  }
-  return { outcome, path }
+): Array<{ file: string; outcome: CommandInstallOutcome; path: string }> {
+  return SHIPPED_COMMANDS.map(({ file, text }) => {
+    const path = join(commandsDir, file)
+    let existing: string | null = null
+    try {
+      existing = readFileSync(path, 'utf8')
+    } catch {
+      existing = null
+    }
+    const outcome = commandInstallOutcome(existing, text, force)
+    if (outcome === 'installed' || outcome === 'updated') {
+      mkdirSync(commandsDir, { recursive: true })
+      writeFileSync(path, text)
+    }
+    return { file, outcome, path }
+  })
 }

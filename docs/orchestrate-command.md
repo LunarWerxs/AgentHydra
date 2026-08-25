@@ -61,6 +61,13 @@ band, and `resetsSoon`. The rules are absolute:
 - **Your own instance is a valid landing target** with a tighter cap: never land work on it if
   that would be while its weekly % is at or above `settings.reviewerReservePct` (default 75).
   The reviewer must always be able to keep reviewing; protect your own runway at all costs.
+- **Held threads are untouchable.** The feed's `holds` list is every thread the owner parked
+  with `/delayo` (the watcher already drops their items, so you will not see them - the list
+  exists so you KNOW they are parked, not forgotten). Never message a held thread for any
+  reason, including commit hygiene and hard cutoffs; a hold ends only when the owner runs
+  `/resumeo` in that thread (or asks you to lift it: `POST /api/orchestrator/hold
+  {"session_id": "...", "held": false}`). At most, one line in a rare status summary
+  ("2 threads parked").
 - **Opening closed instances**: only if `settings.openInstances` is `"when-exhausted"`, and only
   when EVERY running instance is out of headroom (critical and not resetting soon). Then pick a
   closed instance whose `plan` meets `settings.openMinPlan` (e.g. "Max 20") with the lowest

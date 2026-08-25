@@ -1389,10 +1389,25 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'orchestrator_install_command',
     description:
-      "MUTATES: install the shipped /orchestrate reviewer command into this machine's ~/.claude/commands (the command file the interactive reviewer chat runs). A copy the user edited is reported as 'differs' and left alone unless force is true. Enabling the orchestrator also installs it when absent.",
+      "MUTATES: install the shipped orchestrator commands (/orchestrate reviewer loop, /delayo park-this-thread, /resumeo unpark) into this machine's ~/.claude/commands. A copy the user edited is reported as 'differs' and left alone unless force is true. Enabling the orchestrator also installs them when absent.",
     inputSchema: S({ force: { type: 'boolean' } }),
     run: (a) =>
       api('/api/orchestrator/install-command', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(a),
+      }),
+  },
+  {
+    name: 'orchestrator_hold',
+    description:
+      'MUTATES: park or unpark one thread for the orchestrator (what /delayo and /resumeo do). held=true drops every feed item for that session so the reviewer never prompts it; held=false lifts the hold. Holds persist until lifted.',
+    inputSchema: S({ session_id: { type: 'string' }, held: { type: 'boolean' } }, [
+      'session_id',
+      'held',
+    ]),
+    run: (a) =>
+      api('/api/orchestrator/hold', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify(a),
