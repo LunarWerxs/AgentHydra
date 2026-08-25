@@ -637,7 +637,10 @@ test('branch and dirty hygiene: off-main flags immediately; dirty flags after di
 function orphanOnDisk(sessionId: string, pid: number): OrphanSession {
   const dir = mkdtempSync(join(tmpdir(), 'ah-orph-'))
   const registryPath = join(dir, `${pid}.json`)
-  writeFileSync(registryPath, JSON.stringify({ sessionId, cwd: 'D:\\Fake', pid, name: `orph-${pid}` }))
+  writeFileSync(
+    registryPath,
+    JSON.stringify({ sessionId, cwd: 'D:\\Fake', pid, name: `orph-${pid}` }),
+  )
   writeFileSync(join(dir, `${pid}.abc.key`), 'k')
   return {
     pid,
@@ -666,9 +669,9 @@ test('an orphan superseded by a live session with the same id is cleaned, not re
   const o = orphanOnDisk('sess-1', 90002) // fakeDeps' live session is also sess-1
   const { deps } = fakeDeps({ orphans: () => [o], mtime: Date.now() - 5_000 })
   await runOrchestratorOnce(deps)
-  expect(
-    orchestratorView().attention.some((i: AttentionItem) => i.key === 'orphan:sess-1'),
-  ).toBe(false)
+  expect(orchestratorView().attention.some((i: AttentionItem) => i.key === 'orphan:sess-1')).toBe(
+    false,
+  )
   expect(existsSync(o.registryPath)).toBe(false) // residue removed, key sibling included
   expect(existsSync(join(o.registryPath, '..', '90002.abc.key'))).toBe(false)
 })
@@ -714,8 +717,8 @@ test('one lineage, one continuation: a done-marked LIVE session gets no nudge it
   ).run('sess-1', Date.now())
   const { deps } = fakeDeps({})
   await runOrchestratorOnce(deps)
-  expect(
-    orchestratorView().attention.some((i: AttentionItem) => i.sessionId === 'sess-1'),
-  ).toBe(false)
+  expect(orchestratorView().attention.some((i: AttentionItem) => i.sessionId === 'sess-1')).toBe(
+    false,
+  )
   db.query('update session_marks set done = 0 where session_id = ?').run('sess-1')
 })

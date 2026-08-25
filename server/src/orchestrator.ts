@@ -334,7 +334,8 @@ function cleanOrphanFiles(orphan: OrphanSession): void {
     rmSync(orphan.registryPath, { force: true })
     const dir = dirname(orphan.registryPath)
     for (const f of readdirSync(dir)) {
-      if (f.startsWith(`${orphan.pid}.`) && f.endsWith('.key')) rmSync(join(dir, f), { force: true })
+      if (f.startsWith(`${orphan.pid}.`) && f.endsWith('.key'))
+        rmSync(join(dir, f), { force: true })
     }
   } catch {
     // Best-effort: a locked file just means the orphan shows again next tick.
