@@ -976,6 +976,11 @@ interface TickState {
   usageAgeSecs: number | null
   runningChats: number
   slotsFree: number | null
+  /** Orphaned items BEFORE ack suppression. Auto-revive works from this list, never from the
+   *  suppressed feed: a reviewer acking an orphan ("awaiting click", cooldown 15) used to
+   *  blindfold the reviver for exactly the chat that most needed it (found live 2026-08-25,
+   *  the Glimmer chat). Acks shape the reviewer's TO-READ list, not the daemon's TO-DO list. */
+  reviveCandidates: AttentionItem[]
 }
 
 const state: TickState = {
@@ -987,6 +992,7 @@ const state: TickState = {
   usageAgeSecs: null,
   runningChats: 0,
   slotsFree: null,
+  reviveCandidates: [],
 }
 
 /** Last-known live identity per session, so the holds list can name a parked thread even
@@ -1435,6 +1441,9 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     }
   }
 
+  // Revive candidates are captured BEFORE ack suppression (see TickState.reviveCandidates).
+  state.reviveCandidates = items.filter((i) => i.kind === 'orphaned')
+
   // -- ack suppression --------------------------------------------------------
   const acks = activeAcks(started)
   const visible = items.filter((i) => {
@@ -1505,9 +1514,8 @@ async function runAutoRevive(): Promise<void> {
   const s = getOrchestratorSettings()
   if (!s.autoRevive || process.platform !== 'win32') return
   const acks = activeAcks(Date.now())
-  const item = state.attention.find(
+  const item = state.reviveCandidates.find(
     (i) =>
-      i.kind === 'orphaned' &&
       i.sessionId &&
       i.instanceRef?.startsWith('desktop:') &&
       !acks.get(`auto-revive:${i.sessionId}`),
@@ -1651,6 +1659,7 @@ export function orchestratorView(): OrchestratorView {
       usageAgeSecs: state.usageAgeSecs,
       runningChats: state.runningChats,
       slotsFree: state.slotsFree,
+      revivePending: state.reviveCandidates.length,
     },
   }
 }

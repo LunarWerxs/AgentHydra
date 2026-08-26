@@ -1288,5 +1288,8 @@ export interface OrchestratorView {
     /** Free slots under maxActiveChats (null = unlimited). The reviewer starts/nudges at most
      *  this many chats per wake; the watcher already marks the overflow waiting-for-slot. */
     slotsFree: number | null
+    /** Orphaned chats pending auto-revive, counted BEFORE ack suppression — an acked orphan
+     *  is hidden from the reviewer's feed but never from the reviver. */
+    revivePending: number
   }
 }

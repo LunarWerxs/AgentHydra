@@ -5,6 +5,18 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.1] - 2026-08-25
+
+### Fixed
+
+- **A reviewer's ack can no longer blindfold auto-revive.** Found live within the hour of
+  shipping: the reviewer acked a dead chat's item "awaiting click" (its old playbook), which
+  suppressed the item from the feed, and auto-revive read only the suppressed feed - so the
+  one chat the owner was asking about stayed dead while everything else got revived. Revive
+  candidates are now captured before ack suppression: acks shape the reviewer's reading
+  list, never the reviver's to-do list. The feed meta shows `revivePending` so the queue is
+  observable.
+
 ## [0.34.0] - 2026-08-25
 
 ### Added

@@ -866,6 +866,44 @@ test('a STRANDED desktop chat (graceful shutdown, no registry residue) is surfac
   expect(feed.some((i: AttentionItem) => i.key === 'orphan:strand-3')).toBe(false)
 })
 
+test('an ACKED orphan disappears from the feed but never from the revive list', async () => {
+  const now = Date.now()
+  const deafSession: LiveSession = {
+    pid: 92003,
+    sessionId: 'deaf-acked-1',
+    cwd: 'D:\\Fake',
+    name: 'deaf-acked-1',
+    startedAt: now - 5 * 60_000,
+    transcriptPath: 'D:\\fake\\deaf-acked-1.jsonl',
+  }
+  const deafTail: TailInfo = {
+    ending: 'complete',
+    lastAssistantText: 'old recap',
+    ctxTokens: 100_000,
+    midTurn: false,
+    recapDetected: true,
+    handoffDetected: false,
+    chips: [],
+    lastHumanText: null,
+    lastHumanAt: null,
+    lastEventAt: new Date(now - 6 * 3600_000).toISOString(),
+    unreadable: false,
+  }
+  // The reviewer acks the orphan ("awaiting click") — the exact move that used to blindfold
+  // auto-revive for the chat that most needed it.
+  ackAttention('orphan:deaf-acked-1', 'orphan-revive-awaiting-click', 15)
+  const { deps } = fakeDeps({
+    registry: () => [deafSession],
+    nowMs: () => now,
+    mtimeMs: () => now - 10 * 60_000,
+    tail: deafTail,
+  })
+  await runOrchestratorOnce(deps)
+  const view = orchestratorView()
+  expect(view.attention.some((i: AttentionItem) => i.key === 'orphan:deaf-acked-1')).toBe(false)
+  expect(view.meta.revivePending).toBeGreaterThanOrEqual(1)
+})
+
 // --- the concurrency cap (round-robin rotation) ------------------------------
 
 function slotSession(id: string, pid: number): LiveSession {
