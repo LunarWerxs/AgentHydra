@@ -1509,7 +1509,9 @@ function readTranscriptCwd(sessionId: string): string | null {
     for (const d of readdirSync(root)) {
       const p = join(root, d, `${sessionId}.jsonl`)
       if (!existsSync(p)) continue
-      const head = readFileSync(p, 'utf8').slice(0, 64 * 1024).split('\n')
+      const head = readFileSync(p, 'utf8')
+        .slice(0, 64 * 1024)
+        .split('\n')
       for (const line of head) {
         try {
           const cwd = (JSON.parse(line) as { cwd?: string }).cwd
