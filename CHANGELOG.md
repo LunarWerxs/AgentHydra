@@ -5,6 +5,16 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.3] - 2026-08-25
+
+### Fixed
+
+- **The chat-row search waits for the app's accessibility tree to wake up.** Chromium builds
+  it lazily on the first query, so the first revive attempt on a freshly-queried window saw
+  only the window frame and safely aborted (chat-row-not-found). The search now retries over
+  ~10s while the tree warms; aborts also report the tree size seen, and the visibility sweep
+  logs each imported session id so a re-import loop can never hide behind a count.
+
 ## [0.34.2] - 2026-08-25
 
 ### Fixed

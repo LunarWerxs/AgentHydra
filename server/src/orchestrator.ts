@@ -1598,7 +1598,11 @@ export async function sweepInvisibleChats(): Promise<number> {
         instanceDir: ref.slice('desktop:'.length),
         title: peelQueueTitle(r.title ?? '') || null,
       })
-      if (res.ok) imported++
+      if (res.ok) {
+        imported++
+        // Named per import so a re-import loop is visible in the log, not just a count.
+        console.log(`[agenthydra] visibility sweep imported ${r.session_id.slice(0, 8)} -> ${ref}`)
+      }
     } catch {
       // One refused import (closed instance, live session) must not stop the sweep.
     }

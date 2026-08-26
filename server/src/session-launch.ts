@@ -582,18 +582,23 @@ for ($i = 0; $i -lt 4; $i++) {
   if ([RvNative]::GetForegroundWindow() -eq $hwnd) { $got = $true; break }
 }
 if (-not $got) { Out-Result '{"ok":false,"reason":"focus-failed"}' }
-# The right CHAT, by title, via the UI Automation tree. No row, no typing.
+# The right CHAT, by title, via the UI Automation tree. No row, no typing. Chromium builds
+# its accessibility tree LAZILY on the first UIA query, so the first FindAll often returns
+# only the window frame - retry while it warms up.
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
-$all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
 $titleKey = if ($ChatTitle.Length -gt 24) { $ChatTitle.Substring(0, 24) } else { $ChatTitle }
 $row = $null
-if ($titleKey) {
-  foreach ($el in $all) {
-    $n = $el.Current.Name
-    if ($n -and $n.Contains($titleKey) -and -not $el.Current.BoundingRectangle.IsEmpty) { $row = $el; break }
+for ($try = 0; $try -lt 4 -and $null -eq $row; $try++) {
+  if ($try -gt 0) { Start-Sleep -Milliseconds 2500 }
+  $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+  if ($titleKey) {
+    foreach ($el in $all) {
+      $n = $el.Current.Name
+      if ($n -and $n.Contains($titleKey) -and -not $el.Current.BoundingRectangle.IsEmpty) { $row = $el; break }
+    }
   }
 }
-if ($null -eq $row) { Out-Result '{"ok":false,"reason":"chat-row-not-found"}' }
+if ($null -eq $row) { Out-Result ('{"ok":false,"reason":"chat-row-not-found","treeSize":' + $all.Count + '}') }
 $rr = $row.Current.BoundingRectangle
 Click-Point ([int]($rr.X + $rr.Width / 2)) ([int]($rr.Y + $rr.Height / 2))
 Start-Sleep -Milliseconds 1200
