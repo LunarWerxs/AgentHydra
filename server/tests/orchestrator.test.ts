@@ -519,6 +519,7 @@ test('an idle session with a recap becomes idle_pending; huge context becomes ha
       recapDetected: false,
       handoffDetected: false,
       chips: [],
+      lastEventAt: null,
       lastHumanText: null,
       lastHumanAt: null,
       unreadable: false,
