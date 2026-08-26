@@ -1,0 +1,9 @@
+# bun test reads the bunfig.toml of its CWD only — it does NOT walk up to the repo root — so a
+# suite run from server/ (`bun test`, or `bun test tests/monitor-migrate.test.ts`) skipped the root
+# preload and opened the developer's LIVE db in server/data. Proven 2026-08-25: monitor-migrate
+# fixtures and a settings round-trip landed in the running daemon's database (fake rate_limited
+# rows the monitor kept resuming; orch_enabled flipped back to its default). Same preload as the
+# root bunfig.toml; config.ts additionally self-isolates under NODE_ENV=test as a backstop for any
+# cwd neither bunfig covers.
+[test]
+preload = ["../tests/setup.ts"]

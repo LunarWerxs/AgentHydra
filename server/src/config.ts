@@ -1,5 +1,5 @@
-import { existsSync, renameSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, mkdtempSync, renameSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import rootPkg from '../../package.json'
 
@@ -91,6 +91,34 @@ export const VERSION: string = rootPkg.version
  * NOT a match on Bun's placeholder path string: the string is Bun-internal, the disk probe is not.
  */
 export const IS_COMPILED = !existsSync(join(import.meta.dir, 'config.ts'))
+
+// Backstop for the test suite: bun test sets NODE_ENV=test, but only reads the bunfig.toml of its
+// CWD, so a run started anywhere without a preload-carrying bunfig (server/tests, a future
+// workspace, an IDE runner with the wrong cwd) arrives here with none of the isolation overrides
+// set — and every constant below would resolve to the developer's LIVE state: the same sqlite file
+// their running daemon has open. That happened on 2026-08-25 (fixture rate_limited rows the live
+// monitor kept resuming; a settings round-trip left orch_enabled at its default, silently disabling
+// the live orchestrator). Rather than trust every entry point to remember the preload, refuse to
+// touch real state under test at all: point the whole state surface at a throwaway temp dir. Set
+// via process.env (not local variables) so child processes tests spawn inherit the same scratch.
+// tests/setup.ts remains the primary isolation (it also fixes PATH for child-process fixtures);
+// when it ran first, these are already set and this block is inert.
+if (
+  !IS_COMPILED &&
+  process.env.NODE_ENV === 'test' &&
+  !appEnv('HOME')?.trim() &&
+  appEnv('DB') === undefined &&
+  !appEnv('DATA_DIR')?.trim()
+) {
+  const scratch = mkdtempSync(join(tmpdir(), 'agenthydra-test-'))
+  process.env.AGENTHYDRA_HOME = scratch
+  process.env.AGENTHYDRA_DB = join(scratch, 'agenthydra-test.db')
+  process.env.AGENTHYDRA_DATA_DIR = join(scratch, 'data')
+  process.env.AGENTHYDRA_RUN_LOG_DIR = join(scratch, 'run-logs')
+  console.error(
+    `[agenthydra] NODE_ENV=test with no AGENTHYDRA_HOME/DB/DATA_DIR override — using throwaway state at ${scratch}`,
+  )
+}
 
 /** Canonical Claude Code CLI transcript store: <home>/.claude/projects/<encoded-cwd>/<session-id>.jsonl */
 export const CLAUDE_PROJECTS_ROOT = join(HOME, '.claude', 'projects')
