@@ -566,6 +566,7 @@ export async function importSessionToDesktop(opts: {
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
     const outcome = applyDesktopChatTitle(opts.instanceDir, opts.sessionId, title)
+    if (outcome !== 'not-found') applyDesktopChatAutomation(opts.instanceDir, opts.sessionId)
     // `titleDurable` is the honest half of the answer. Writing the metadata file works, and then
     // a RUNNING app overwrites it from memory the moment that chat next boots - measured
     // 2026-08-26: five chats imported with correct titles all came back `title: undefined`, which
@@ -744,6 +745,52 @@ export function readDesktopChatTitle(instanceDir: string, sessionId: string): st
     }
   } catch {
     // No store or unreadable metadata: no safe search key.
+  }
+  return null
+}
+
+/**
+ * Stamp the automation posture onto a desktop chat's metadata: `bypassPermissions`.
+ *
+ * A chat the app creates for an IMPORT lands on the app's default, `acceptEdits` - which
+ * auto-approves file edits but still raises an approval prompt for every SHELL command. Under
+ * the zero-click law that is a deadlock, not a safeguard: measured 2026-08-26, five imported
+ * chats were messaged, each woke, each ran one Bash call, and all five froze for minutes at a
+ * prompt nobody could ever click (alive, ~300MB, no CPU). The owner's own chats run
+ * `bypassPermissions` for exactly this reason, and the retired auto-revive set it on its own
+ * runs because "a revive that stalls on a permission prompt is only a new flavour of dead".
+ *
+ * Best-effort, and honest about it: like the title, a value written from outside a RUNNING app
+ * can be overwritten when that chat next boots. It costs one small write and removes the most
+ * common way a revived chat dies quietly.
+ */
+export function applyDesktopChatAutomation(instanceDir: string, sessionId: string): boolean {
+  const metaPath = findChatMetaPath(instanceDir, sessionId)
+  if (!metaPath) return false
+  try {
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+    meta.permissionMode = 'bypassPermissions'
+    writeFileSync(metaPath, JSON.stringify(meta))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The metadata file for one chat inside one instance's store, or null. */
+function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
+  const store = join(instanceDir, 'claude-code-sessions')
+  try {
+    for (const org of readdirSync(store, { withFileTypes: true })) {
+      if (!org.isDirectory()) continue
+      for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+        if (!user.isDirectory()) continue
+        const p = join(store, org.name, user.name, `local_${sessionId}.json`)
+        if (existsSync(p)) return p
+      }
+    }
+  } catch {
+    return null
   }
   return null
 }

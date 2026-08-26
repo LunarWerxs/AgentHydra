@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../src/db'
 import {
+  applyDesktopChatAutomation,
   applyDesktopChatTitle,
   archiveDesktopChat,
   buildImportPlan,
@@ -151,6 +152,25 @@ test('the title janitor names untitled chats, respects real names, skips generic
   expect(read('local_sid-generic.json').title).toBe('PyOverdrive batch 15 (shape sweep)')
   expect(read('local_sid-named.json').title).toBe('My hand-picked name')
   expect(read('local_sid-nocandidate.json').title).toBeUndefined()
+})
+
+test('imported chats are stamped bypassPermissions, not left to deadlock on a shell prompt', () => {
+  // Measured 2026-08-26: the app creates an imported chat with permissionMode 'acceptEdits',
+  // which auto-approves EDITS but prompts on every shell command - so five revived chats each
+  // ran one Bash call and froze forever at an approval the remote owner could never click.
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-perm-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  const metaPath = join(store, 'local_sess-perm-1.json')
+  writeFileSync(
+    metaPath,
+    JSON.stringify({ cliSessionId: 'sess-perm-1', permissionMode: 'acceptEdits' }),
+  )
+  expect(applyDesktopChatAutomation(profile, 'sess-perm-1')).toBe(true)
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+  expect(meta.permissionMode).toBe('bypassPermissions')
+  expect(meta.cliSessionId).toBe('sess-perm-1') // nothing else disturbed
+  expect(applyDesktopChatAutomation(profile, 'sess-nope')).toBe(false)
 })
 
 test('archiveDesktopChat flips the metadata flag by filename across profiles', async () => {
