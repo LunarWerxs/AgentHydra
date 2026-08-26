@@ -459,6 +459,9 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // 0 = unlimited (the default). A positive value caps how many chats may WORK at once,
   // fleet-wide; the overflow rotates in round-robin, longest-idle first.
   orch_max_active_chats: '0',
+  // ON by default (owner order): the daemon itself revives dead/deaf desktop chats via UI
+  // automation, gated on the owner being away from the keyboard.
+  orch_auto_revive: '1',
 }
 
 export function getSetting(key: string): string {

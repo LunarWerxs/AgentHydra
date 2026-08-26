@@ -480,6 +480,7 @@ function fakeDeps(over: Partial<OrchestratorDeps> & { tail?: TailInfo; mtime?: n
     chips: [],
     lastHumanText: null,
     lastHumanAt: null,
+    lastEventAt: null,
     unreadable: false,
   }
   const deps: OrchestratorDeps = {
@@ -572,6 +573,7 @@ test('dead background tasks: silent waiting flags for intervention; live tasks d
     chips: [],
     lastHumanText: null,
     lastHumanAt: null,
+    lastEventAt: null,
     unreadable: false,
   }
   // Clocks sit 4h ahead of the other tests, with the transcript mtime AFTER any earlier ack on
@@ -735,6 +737,91 @@ test('uninstall removes the shipped commands; a second pass reports them missing
   expect(uninstallOrchestratorCommands(dir).every((f) => f.outcome === 'missing')).toBe(true)
 })
 
+test('LIVE BUT DEAF: a process with no turn since it spawned is orphaned, not idle', async () => {
+  const now = Date.now()
+  const deafSession: LiveSession = {
+    pid: 92001,
+    sessionId: 'deaf-1',
+    cwd: 'D:\\Fake',
+    name: 'deaf-1',
+    startedAt: now - 5 * 60_000, // process spawned 5 minutes ago...
+    transcriptPath: 'D:\\fake\\deaf-1.jsonl',
+  }
+  const deafTail: TailInfo = {
+    ending: 'complete',
+    lastAssistantText: 'old recap',
+    ctxTokens: 100_000,
+    midTurn: false,
+    recapDetected: true,
+    handoffDetected: false,
+    chips: [],
+    lastHumanText: null,
+    lastHumanAt: null,
+    lastEventAt: new Date(now - 6 * 3600_000).toISOString(), // ...but the last turn is 6h old
+    unreadable: false,
+  }
+  const { deps } = fakeDeps({
+    registry: () => [deafSession],
+    nowMs: () => now,
+    mtimeMs: () => now - 10 * 60_000,
+    tail: deafTail,
+  })
+  await runOrchestratorOnce(deps)
+  const feed = orchestratorView().attention
+  const hit = feed.find((i: AttentionItem) => i.key === 'orphan:deaf-1')
+  expect(hit?.kind).toBe('orphaned')
+  expect(hit?.detail?.deaf).toBe(true)
+  expect(hit?.summary).toContain('LIVE BUT DEAF')
+  expect(feed.some((i: AttentionItem) => i.key === 'idle:deaf-1')).toBe(false)
+})
+
+test('a live chat that HAS run since spawning is ordinary idle, never deaf', async () => {
+  const now = Date.now()
+  const okSession: LiveSession = {
+    pid: 92002,
+    sessionId: 'live-ok-1',
+    cwd: 'D:\\Fake',
+    name: 'live-ok-1',
+    startedAt: now - 2 * 3600_000,
+    transcriptPath: 'D:\\fake\\live-ok-1.jsonl',
+  }
+  const okTail: TailInfo = {
+    ending: 'complete',
+    lastAssistantText: '## Am I 100% done?\n- yes',
+    ctxTokens: 100_000,
+    midTurn: false,
+    recapDetected: true,
+    handoffDetected: false,
+    chips: [],
+    lastHumanText: null,
+    lastHumanAt: null,
+    lastEventAt: new Date(now - 10 * 60_000).toISOString(), // ran a turn after spawn
+    unreadable: false,
+  }
+  const { deps } = fakeDeps({
+    registry: () => [okSession],
+    nowMs: () => now,
+    mtimeMs: () => now - 10 * 60_000,
+    tail: okTail,
+  })
+  await runOrchestratorOnce(deps)
+  const feed = orchestratorView().attention
+  expect(feed.some((i: AttentionItem) => i.key === 'idle:live-ok-1')).toBe(true)
+  expect(feed.some((i: AttentionItem) => i.key === 'orphan:live-ok-1')).toBe(false)
+})
+
+test('parseTranscriptTail captures the newest record timestamp as lastEventAt', () => {
+  const raw = [
+    line({ type: 'user', timestamp: '2026-08-25T14:00:00.000Z', message: { content: 'go' } }),
+    line({
+      type: 'assistant',
+      timestamp: '2026-08-25T15:00:00.000Z',
+      message: { content: [{ type: 'text', text: 'done' }] },
+    }),
+  ].join('\n')
+  expect(parseTranscriptTail(raw).lastEventAt).toBe('2026-08-25T15:00:00.000Z')
+})
+
 test('a STRANDED desktop chat (graceful shutdown, no registry residue) is surfaced', async () => {
   const now = Date.now()
   const midTail: TailInfo = {
@@ -747,6 +834,7 @@ test('a STRANDED desktop chat (graceful shutdown, no registry residue) is surfac
     chips: [],
     lastHumanText: null,
     lastHumanAt: null,
+    lastEventAt: null,
     unreadable: false,
   }
   const recent = [

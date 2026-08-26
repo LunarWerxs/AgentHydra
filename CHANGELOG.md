@@ -5,6 +5,28 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0] - 2026-08-25
+
+### Added
+
+- **Auto-revive: the orchestrator starts dead chats itself.** The platform only runs a
+  desktop chat's turn from its own composer, so imports and restarts left chats that a human
+  had to click and type at - and one sat six hours untouched. The daemon now does the
+  click-and-type at OS level: it opens the chat in its app, pastes the revive prompt,
+  presses Enter, and only claims success after the transcript verifiably grows. Hard gates:
+  never while you have touched the keyboard in the last 45 seconds, never over a chat whose
+  transcript is actively growing, never a retired lineage, never a closed account. On by
+  default (Settings toggle to turn off), Windows only, one attempt per minute with backoff.
+- **Live-but-deaf detection.** Delivery plumbing spawns real processes whose engine never
+  starts; they masqueraded as ordinary idle chats while reviewer nudges queued into a void
+  forever (the Glimmer chat's six hours). Deterministic test now: a process with no
+  transcript record newer than its own spawn time has never run a turn - flagged for
+  auto-revive, and the reviewer is forbidden from messaging it.
+- **The visibility sweep: no invisible chats.** Any completed queue run from the last 48h
+  whose session has no desktop entry anywhere is imported into its owning running instance's
+  app, where the deaf detector and auto-revive take over - everything the machinery starts
+  ends up visible and running on screen.
+
 ## [0.33.0] - 2026-08-25
 
 ### Added

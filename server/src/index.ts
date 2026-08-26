@@ -1966,6 +1966,7 @@ app.post('/api/orchestrator', async (c) => {
   }
   if (typeof body.newChatUltracode === 'boolean') patch.newChatUltracode = body.newChatUltracode
   if (typeof body.migrateOnLimit === 'boolean') patch.migrateOnLimit = body.migrateOnLimit
+  if (typeof body.autoRevive === 'boolean') patch.autoRevive = body.autoRevive
   setOrchestratorSettings(patch)
   // Prompt edits ride the same route: {"prompts": {resumeNudge: "...", ...}}. Blank (or the
   // default text verbatim) clears the override for that key.

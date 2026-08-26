@@ -108,6 +108,7 @@ export function getOrchestratorSettings(): OrchestratorSettings {
     newChatUltracode: getSetting('orch_new_chat_ultracode') !== '0',
     migrateOnLimit: getSetting('orch_migrate_on_limit') === '1',
     maxActiveChats: num('orch_max_active_chats', 0, 0, 500),
+    autoRevive: getSetting('orch_auto_revive') !== '0',
   }
 }
 
@@ -157,6 +158,8 @@ export function setOrchestratorSettings(
   if (typeof patch.migrateOnLimit === 'boolean')
     setSetting('orch_migrate_on_limit', patch.migrateOnLimit ? '1' : '0')
   clamp('orch_max_active_chats', patch.maxActiveChats, 0, 500)
+  if (typeof patch.autoRevive === 'boolean')
+    setSetting('orch_auto_revive', patch.autoRevive ? '1' : '0')
   return getOrchestratorSettings()
 }
 
@@ -512,6 +515,10 @@ export interface TailInfo {
   lastHumanText: string | null
   /** ISO timestamp of that human message, when the record carried one. */
   lastHumanAt: string | null
+  /** ISO timestamp of the newest record in the window — when the ENGINE last did anything.
+   *  Compared against the live registry's process startedAt, this is the deterministic deaf
+   *  test: a process with NO record newer than its own spawn has never run a turn. */
+  lastEventAt: string | null
   /** No parseable user/assistant record found in the window that was read. */
   unreadable: boolean
 }
@@ -557,6 +564,7 @@ export function parseTranscriptTail(raw: string): TailInfo {
     chips: [],
     lastHumanText: null,
     lastHumanAt: null,
+    lastEventAt: null,
     unreadable: true,
   }
   let isNewestMeaningful = true
@@ -578,6 +586,7 @@ export function parseTranscriptTail(raw: string): TailInfo {
     info.unreadable = false
     const newest = isNewestMeaningful
     isNewestMeaningful = false
+    if (newest && typeof ev.timestamp === 'string') info.lastEventAt = ev.timestamp
     const text = textOf(ev.message?.content)
     if (info.ending === null) {
       const e = classifyEnding(ev, text)
@@ -1098,6 +1107,29 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
         summary: `live session ${sess.name}: no parseable record in the transcript tail`,
         detail,
       })
+    } else if (
+      sess.startedAt > 0 &&
+      tail.lastEventAt !== null &&
+      Date.parse(tail.lastEventAt) < sess.startedAt
+    ) {
+      // LIVE BUT DEAF: the process exists yet not one record has landed since it spawned — an
+      // import/migrate delivery child whose engine never started (measured: peer messages
+      // queue into it forever and are never processed). Masquerading as ordinary idle is what
+      // let a migrated chat sit six hours as "idle 6m" while every reviewer nudge vanished
+      // into the void (owner-reported, 2026-08-25). Classified as orphaned so the revive
+      // machinery owns it; the reviewer must NOT SendMessage it.
+      items.push({
+        ...base,
+        key: `orphan:${sess.sessionId}`,
+        kind: 'orphaned',
+        summary: `${sess.name} is LIVE BUT DEAF — no turn has run since its process spawned (an import child awaiting activation); revive machinery's jurisdiction, never nudge`,
+        detail: {
+          ...detail,
+          deaf: true,
+          awaitingActivation: true,
+          processStartedAt: new Date(sess.startedAt).toISOString(),
+        },
+      })
     } else if (tail.ending === 'interrupted') {
       items.push({
         ...base,
@@ -1441,7 +1473,122 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     } catch (err) {
       console.error('[agenthydra] archive janitor failed:', err)
     }
+    try {
+      const shown = await sweepInvisibleChats()
+      if (shown > 0)
+        console.log(`[agenthydra] visibility sweep imported ${shown} invisible chat(s)`)
+    } catch (err) {
+      console.error('[agenthydra] visibility sweep failed:', err)
+    }
   }
+
+  // -- auto-revive (every tick; its own gates make it a no-op almost always) ---
+  if (deps === defaultDeps) {
+    try {
+      await runAutoRevive()
+    } catch (err) {
+      console.error('[agenthydra] auto-revive failed:', err)
+    }
+  }
+}
+
+/**
+ * The auto-revive driver (owner order 2026-08-25: the orchestrator revives dead/deaf chats
+ * ITSELF — a chat sitting six hours because nobody clicked it means the whole point is not
+ * working). One attempt per tick, oldest orphaned item first, and only ever through
+ * reviveDesktopChat's safety gates (user must be away from the keyboard; working engines are
+ * untouchable; superseded lineages stay retired). 'user-active' is not a failure — it retries
+ * next tick until the owner steps away. Attempt bookkeeping rides the ack table under
+ * `auto-revive:<sid>` so a failing chat is retried on a cooldown instead of hammered.
+ */
+async function runAutoRevive(): Promise<void> {
+  const s = getOrchestratorSettings()
+  if (!s.autoRevive || process.platform !== 'win32') return
+  const acks = activeAcks(Date.now())
+  const item = state.attention.find(
+    (i) =>
+      i.kind === 'orphaned' &&
+      i.sessionId &&
+      i.instanceRef?.startsWith('desktop:') &&
+      !acks.get(`auto-revive:${i.sessionId}`),
+  )
+  if (!item?.sessionId || !item.instanceRef) return
+  const { reviveDesktopChat } = await import('./session-launch')
+  const res = await reviveDesktopChat({
+    sessionId: item.sessionId,
+    instanceDir: item.instanceRef.slice('desktop:'.length),
+    prompt: getOrchestratorPrompts().orphanRevive,
+  })
+  if (res.reason === 'user-active') return // the owner is typing; try again next tick
+  ackAttention(
+    `auto-revive:${item.sessionId}`,
+    res.engineVerified ? 'auto-revived' : `revive-failed: ${res.reason ?? 'engine-silent'}`,
+    res.engineVerified ? 60 : 15,
+  )
+  console.log(
+    `[agenthydra] auto-revive ${item.sessionId.slice(0, 8)}: ok=${res.ok} engine=${
+      res.engineVerified ?? false
+    } ${res.reason ?? ''}`,
+  )
+}
+
+/** Strip the queue's nesting prefixes off a title ("Migrated resume: Auto-resume: X" -> "X"). */
+function peelQueueTitle(title: string): string {
+  let t = title
+  for (;;) {
+    const m = t.match(/^(Auto-resume|Migrated resume|Migrate|Handoff):\s*/i)
+    if (!m) return t.trim()
+    t = t.slice(m[0].length)
+  }
+}
+
+/**
+ * The visibility sweep (owner rule: NO chat is ever allowed to be invisible). Any chat WE
+ * started — a completed queue run from the last 48h — whose session has no desktop entry
+ * anywhere gets imported into its owning instance's app, where the deaf detector and
+ * auto-revive take over. Running instances only (never boot an account); done-marked
+ * lineages stay retired.
+ */
+export async function sweepInvisibleChats(): Promise<number> {
+  const since = Date.now() - 48 * 3600 * 1000
+  const rows = db
+    .query<{ session_id: string; instance_ref: string | null; title: string }, [number]>(
+      "select session_id, instance_ref, title from queue_items where status = 'completed' and created_at > ? order by created_at desc",
+    )
+    .all(since)
+  let metaMap: Map<string, { instance: string; archived: boolean }>
+  try {
+    metaMap = sessionMetaMap()
+  } catch {
+    return 0
+  }
+  const doneSet = new Set(
+    db
+      .query<{ session_id: string }, []>('select session_id from session_marks where done = 1')
+      .all()
+      .map((r) => r.session_id),
+  )
+  const seenSessions = new Set<string>()
+  let imported = 0
+  const { importSessionToDesktop } = await import('./session-launch')
+  for (const r of rows) {
+    if (!r.session_id || seenSessions.has(r.session_id)) continue
+    seenSessions.add(r.session_id)
+    if (metaMap.has(r.session_id) || doneSet.has(r.session_id)) continue
+    const ref = r.instance_ref ?? instanceRefForSession(r.session_id)
+    if (!ref?.startsWith('desktop:')) continue
+    try {
+      const res = await importSessionToDesktop({
+        sessionId: r.session_id,
+        instanceDir: ref.slice('desktop:'.length),
+        title: peelQueueTitle(r.title ?? '') || null,
+      })
+      if (res.ok) imported++
+    } catch {
+      // One refused import (closed instance, live session) must not stop the sweep.
+    }
+  }
+  return imported
 }
 
 /**

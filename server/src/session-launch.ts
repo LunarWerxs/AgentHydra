@@ -28,7 +28,7 @@
 // never a secret, and is left for the OS temp cleaner (deleting it too early would race the
 // terminal still starting up).
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveClaudeExe } from './config'
@@ -499,6 +499,204 @@ export async function importSessionToDesktop(opts: {
     await new Promise((r) => setTimeout(r, 500))
   }
   return { ok: true, titled: false }
+}
+
+// --- the UI revive: start a desktop chat's ENGINE, not just its process ------------------------
+//
+// The platform wall this crosses: Anthropic's desktop app only runs a chat's turn when input is
+// entered in ITS OWN composer. Imports and resume plumbing spawn processes whose engine never
+// starts (live-but-deaf, measured repeatedly: peer messages queue forever, transcripts never
+// grow), and until 2026-08-25 the only cure was the owner's own click-and-type. This automates
+// exactly that cure at the OS level — deep-link the chat open, focus the window, click the
+// composer, paste the prompt, Enter — because the owner's standing order is that the
+// orchestrator must revive these itself, and the only door the app offers is the UI.
+//
+// Safety gates, all load-bearing:
+//   · never while the owner is at the keyboard (GetLastInputInfo idle >= minUserIdleMs) — a
+//     synthetic click while they type would land input in whatever window they are using;
+//   · never over a WORKING engine (a live process only gets killed when its transcript has
+//     been quiet, and killing the do-nothing import child is what makes the deep link safe);
+//   · never a superseded lineage, never a closed instance (no booting accounts);
+//   · the claim "revived" is only made after the ENGINE is verified: the transcript must grow
+//     within engineWaitMs, else the caller hears engineVerified: false and surfaces it.
+
+const REVIVE_SCRIPT = `param([string]$InstanceDir, [string]$PromptFile, [int]$MinIdleMs = 45000)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class RvNative {
+  [StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+  [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+"@
+$lii = New-Object RvNative+LASTINPUTINFO
+$lii.cbSize = [uint32][System.Runtime.InteropServices.Marshal]::SizeOf($lii)
+[void][RvNative]::GetLastInputInfo([ref]$lii)
+$idleMs = [Environment]::TickCount - $lii.dwTime
+if ($idleMs -lt $MinIdleMs) { Write-Output ('{"ok":false,"reason":"user-active","idleMs":' + $idleMs + '}'); exit 0 }
+$needle = ("--user-data-dir=" + $InstanceDir).ToLower()
+$procs = Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.ToLower().Contains($needle) }
+$hwnd = [IntPtr]::Zero
+foreach ($p in $procs) {
+  $gp = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+  if ($gp -and $gp.MainWindowHandle -ne 0) { $hwnd = $gp.MainWindowHandle; break }
+}
+if ($hwnd -eq [IntPtr]::Zero) { Write-Output '{"ok":false,"reason":"app-window-not-found"}'; exit 0 }
+[void][RvNative]::ShowWindow($hwnd, 9)
+[void][RvNative]::SetForegroundWindow($hwnd)
+Start-Sleep -Milliseconds 600
+$r = New-Object RvNative+RECT
+[void][RvNative]::GetWindowRect($hwnd, [ref]$r)
+$x = [int]($r.Left + 0.60 * ($r.Right - $r.Left))
+$y = [int]($r.Bottom - 66)
+[void][RvNative]::SetCursorPos($x, $y)
+Start-Sleep -Milliseconds 200
+[RvNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
+[RvNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+Start-Sleep -Milliseconds 400
+Set-Clipboard -Value (Get-Content -Raw -LiteralPath $PromptFile)
+[System.Windows.Forms.SendKeys]::SendWait('^v')
+Start-Sleep -Milliseconds 400
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+Write-Output ('{"ok":true,"clickX":' + $x + ',"clickY":' + $y + '}')
+`
+
+export interface ReviveResult {
+  ok: boolean
+  /** The transcript grew after the typed turn — the ENGINE is verifiably running. Without this
+   *  true, "revived" must not be claimed (owner law, 2026-08-25). */
+  engineVerified?: boolean
+  reason?: string
+}
+
+export async function reviveDesktopChat(opts: {
+  sessionId: string
+  instanceDir: string
+  prompt: string
+  /** Never inject input unless the owner has been away from the keyboard this long. */
+  minUserIdleMs?: number
+  /** How long to wait for the transcript to grow before declaring the engine unverified. */
+  engineWaitMs?: number
+  force?: boolean
+  isInstanceRunning?: (dir: string) => Promise<boolean>
+}): Promise<ReviveResult> {
+  if (process.platform !== 'win32') return { ok: false, reason: 'win32-only' }
+  if (!opts.force && isSessionSuperseded(opts.sessionId))
+    return { ok: false, reason: 'superseded: done-marked lineage stays retired' }
+  const running = await (opts.isInstanceRunning ?? defaultInstanceRunning)(opts.instanceDir)
+  if (!running) return { ok: false, reason: 'instance-not-running: reviving would boot it' }
+
+  const transcript = findTranscriptPath(opts.sessionId)
+  const mtimeOf = (): number => {
+    try {
+      return transcript ? statSync(transcript).mtimeMs : 0
+    } catch {
+      return 0
+    }
+  }
+
+  // A live process only dies here when its engine is provably NOT working: transcript quiet
+  // for 60s+. A growing transcript means a real turn is running — hands off.
+  const live = liveSessionEntry(opts.sessionId)
+  if (live) {
+    if (Date.now() - mtimeOf() < 60_000)
+      return { ok: false, reason: 'engine-active: transcript is growing, nothing to revive' }
+    try {
+      process.kill(live.pid)
+    } catch {
+      // Already exiting.
+    }
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline && liveSessionEntry(opts.sessionId))
+      await new Promise((r) => setTimeout(r, 250))
+    if (liveSessionEntry(opts.sessionId))
+      return { ok: false, reason: 'could-not-stop-passive-process' }
+  }
+
+  // Open/focus the chat in its app via the deep link (idempotent for an existing entry).
+  const binary = await resolveLaunchBinary()
+  if (!binary) return { ok: false, reason: 'desktop-binary-not-found' }
+  try {
+    Bun.spawn(buildImportPlan(process.platform, binary, opts.instanceDir, opts.sessionId), {
+      stdin: 'ignore',
+      stdout: 'ignore',
+      stderr: 'ignore',
+    })
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : 'deep-link-spawn-failed' }
+  }
+  await new Promise((r) => setTimeout(r, 6000))
+
+  // The UI half: focus, click the composer, paste, Enter — all inside the user-idle gate.
+  const dir = join(tmpdir(), 'agenthydra-revive')
+  mkdirSync(dir, { recursive: true })
+  const scriptPath = join(dir, 'revive.ps1')
+  const promptPath = join(dir, `${opts.sessionId.slice(0, 8)}-${Date.now()}.txt`)
+  writeFileSync(scriptPath, REVIVE_SCRIPT)
+  writeFileSync(promptPath, opts.prompt)
+  const baseline = mtimeOf()
+  let uiOut = ''
+  try {
+    const proc = Bun.spawn(
+      [
+        'powershell',
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-WindowStyle',
+        'Hidden',
+        '-File',
+        scriptPath,
+        '-InstanceDir',
+        opts.instanceDir,
+        '-PromptFile',
+        promptPath,
+        '-MinIdleMs',
+        String(opts.minUserIdleMs ?? 45_000),
+      ],
+      { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', windowsHide: true },
+    )
+    uiOut = await new Response(proc.stdout).text()
+    await proc.exited
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : 'ui-script-failed' }
+  }
+  let ui: { ok?: boolean; reason?: string } = {}
+  try {
+    ui = JSON.parse(uiOut.trim().split('\n').pop() ?? '{}')
+  } catch {
+    return { ok: false, reason: `ui-script-unparseable: ${uiOut.slice(0, 120)}` }
+  }
+  if (!ui.ok) return { ok: false, reason: ui.reason ?? 'ui-script-refused' }
+
+  // The claim gate: only a GROWING transcript is a revived chat.
+  const waitUntil = Date.now() + (opts.engineWaitMs ?? 75_000)
+  while (Date.now() < waitUntil) {
+    if (mtimeOf() > baseline) return { ok: true, engineVerified: true }
+    await new Promise((r) => setTimeout(r, 5000))
+  }
+  return { ok: true, engineVerified: false, reason: 'typed-but-engine-silent' }
+}
+
+/** The CLI transcript for a session, wherever its project dir is. */
+function findTranscriptPath(sessionId: string): string | null {
+  const root = join(homedir(), '.claude', 'projects')
+  try {
+    for (const d of readdirSync(root)) {
+      const p = join(root, d, `${sessionId}.jsonl`)
+      if (existsSync(p)) return p
+    }
+  } catch {
+    // No store, no transcript.
+  }
+  return null
 }
 
 /**

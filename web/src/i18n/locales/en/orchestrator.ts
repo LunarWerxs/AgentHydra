@@ -19,6 +19,9 @@ export default {
   migrateOnLimitLabel: 'Migrate 5-hour-limited chats',
   migrateOnLimitHint:
     'When a run hits its 5-hour limit but its weekly is fine, resume it immediately on another running account with headroom instead of parking it until the reset. The original account rejoins the pool once its window resets. When the borrowed run finishes, the chat is imported into that account’s desktop app under its own name, so you can see it and carry on there. Needs the auto-resume monitor enabled.',
+  autoReviveLabel: 'Auto-revive dead chats',
+  autoReviveHint:
+    'When a desktop chat is found dead or deaf (killed by a restart, or spawned by plumbing and never started), the orchestrator revives it itself: opens the chat in its app, types the revive prompt, and verifies the engine actually started. Only acts while you are away from the keyboard, never touches a chat that is actively working, and never boots a closed account. Windows only.',
   promptsLabel: 'Prompts',
   promptsHint:
     'The exact messages the orchestrator sends into chats. The shipped texts are the defaults; edit any of them and your wording is used instead - blank it (or Reset) to go back to the default. Placeholders in <angle brackets> are filled in when sent.',

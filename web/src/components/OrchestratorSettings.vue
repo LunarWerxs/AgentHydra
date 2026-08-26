@@ -281,6 +281,18 @@ onMounted(async () => {
           </template>
         </SettingsRow>
 
+        <SettingsRow :icon="Bot" :label="$t('orchestrator.autoReviveLabel')">
+          <template #info>
+            <InfoHint :text="$t('orchestrator.autoReviveHint')" />
+          </template>
+          <template #control>
+            <Switch
+              :model-value="view?.settings.autoRevive ?? true"
+              @update:model-value="(v: boolean) => save({ autoRevive: v })"
+            />
+          </template>
+        </SettingsRow>
+
         <SettingsRow :icon="Bot" :label="$t('orchestrator.maxActiveChatsLabel')">
           <template #info>
             <InfoHint :text="$t('orchestrator.maxActiveChatsHint')" />

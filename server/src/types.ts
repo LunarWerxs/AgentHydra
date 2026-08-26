@@ -1183,6 +1183,11 @@ export interface OrchestratorSettings {
    *  cap is reached, further idle chats are marked waiting-for-slot and the reviewer rotates
    *  them in round-robin (longest-idle gets the next free slot). */
   maxActiveChats: number
+  /** The daemon revives orphaned/stranded/deaf desktop chats ITSELF via OS-level UI automation
+   *  (deep-link, focus, type the revive prompt) — gated on the owner being away from the
+   *  keyboard, engine-verified after. ON by default: a dead chat nobody revives is the
+   *  orchestrator not working (owner order 2026-08-25). Windows only. */
+  autoRevive: boolean
 }
 
 /** One desktop instance as the orchestrator routing logic sees it: is it OPEN right now, and

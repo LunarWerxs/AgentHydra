@@ -59,9 +59,10 @@ Every tick (default 60s, only while `enabled`):
   transcript), and cooldown tracking. The reviewer acks what it acts on; acked items stay
   suppressed until the cooldown passes *and* the session has moved since.
 
-The watcher **never**: calls Anthropic, messages a session, starts a run, force-pushes,
-touches your repos, or resumes rate-limited sessions (that is the existing auto-resume
-monitor's job, and they compose fine).
+The watcher never calls Anthropic, never messages a session, never touches your repos, and
+never resumes rate-limited sessions (the auto-resume monitor's job; they compose fine). Its
+one licensed ACTION is auto-revive (below, owner-ordered): starting a dead chat's engine
+through the app's own UI, under hard safety gates.
 
 ### API
 
@@ -184,7 +185,33 @@ transcript that ends mid-turn (found live 2026-08-25: an architect chat sat "CLI
 through a restart, invisible to the dead-pid pass). The STRANDED scan covers it: every tick,
 transcripts touched in the last 48h (a ~60ms store walk) are checked, and a non-live,
 non-done, non-held, non-archived desktop chat with a mid-turn tail and no in-flight dispatch
-becomes the same `orphaned` item with `detail.stranded: true`. The whole flow is
+becomes the same `orphaned` item with `detail.stranded: true`.
+
+The third flavor is LIVE BUT DEAF (`detail.deaf: true`): import/migrate deliveries spawn a
+real process whose ENGINE never starts: peer messages queue into it forever, and it
+masquerades as an ordinary idle chat (found live: a migrated chat sat six hours as "idle 6m"
+while every reviewer nudge vanished). The deterministic test: the registry's process
+`startedAt` against the transcript's newest record timestamp: a process with no record newer
+than its own spawn has never run a turn.
+
+### Auto-revive (the daemon acts, `autoRevive`, ON by default)
+
+Owner order 2026-08-25: a dead chat nobody revives means the orchestrator is not working, so
+the daemon revives orphaned/stranded/deaf desktop chats ITSELF. `reviveDesktopChat`
+(session-launch.ts, Windows only) deep-links the chat open in its app, focuses the window,
+clicks the composer, pastes `prompts.orphanRevive`, presses Enter, and then verifies the
+ENGINE: only a transcript growing within 75s counts as revived (registry-live is not
+running). Safety gates: never while the owner has touched the keyboard in the last 45s
+(retries next tick), never over a transcript that is actively growing, never a done-marked
+lineage, never a closed instance. One attempt per tick, retries on a 15-minute cooldown after
+failure, 60 minutes after success; attempts are visible as `auto-revive:<sid>` acks.
+
+### The visibility sweep (no invisible chats)
+
+Every ~10 minutes: any completed queue run from the last 48h whose session has NO desktop
+entry anywhere (a chat the machinery started that the owner cannot see) is imported into its
+owning running instance's app. From there the deaf detector and auto-revive take over, so
+work the plumbing started always ends up visible and running on screen. The whole flow is
 self-healing - the moment the owner clicks a dead desktop chat back to life (or a terminal
 resume lands), the next tick sees the live successor and retires the orphan file. Queue runs
 that were in flight when the daemon died are a separate, older recovery (`reattachRuns` at

@@ -197,32 +197,35 @@ gets the standing answer, acked `standing-answer`.
 **`interrupted`** - the human pressed stop. Never auto-resume it. Ack `human-interrupted`,
 cooldown 360. Mention it in status only if it has sat forgotten for hours.
 
-**`orphaned`** - the session's PROCESS IS GONE with the thread unfinished. Two flavors, same
-handling: a CRASH leaves a dead-pid registry file (the evidence), while a GRACEFUL shutdown
-(a normal PC restart) deletes it - those arrive with `detail.stranded: true`, found by the
-transcript scan instead (mid-turn tail, un-archived desktop entry, no process). Mid-process
-death is a RESUMABLE scenario - the thread never finished and nobody is going to finish it
-unless you act. After a restart the whole fleet lands here at once; handle it as a batch, not
-one-at-a-time noise.
+**`orphaned`** - a thread that needs REVIVING, in three flavors: a CRASH left a dead-pid
+registry file; a GRACEFUL shutdown (normal PC restart) left no residue and the transcript
+scan found it (`detail.stranded: true`); or the process is LIVE BUT DEAF
+(`detail.deaf: true`) - an import/migrate child that has run NO turn since it spawned, whose
+queued peer messages vanish into a void. **The DAEMON's auto-revive owns these now** (it
+opens the chat in its app, types the revive prompt at OS level while the owner is away from
+the keyboard, and verifies the engine started). Your job on an orphaned item:
+- **NEVER SendMessage a deaf chat** - measured repeatedly: the message queues forever and
+  your nudge "worked" only in your imagination. This replaces the old
+  nudge-then-watch-for-movement heuristic.
+- Give auto-revive time (it retries each tick while the owner is at the keyboard, and its
+  attempts appear as `auto-revive:<sid>` acks). If an item still stands after ~30 minutes
+  with a `revive-failed` ack, put ONE status line up naming the chat, its app, and the
+  failure reason - that is the owner's cue, not yours to hand-fix.
+- `detail.handoffDetected` true means it died AFTER writing a handoff - collect and continue
+  that handoff via the normal flow instead of reviving the dead copy.
 - First, the watcher already cleaned superseded/finished residue - every item you see is real
   unfinished work. Read `detail`: `midTurn` true means it died mid-turn (work definitely
   incomplete); `handoffDetected` true means it died AFTER writing a handoff - collect and
   continue that handoff via the normal flow instead of reviving the dead copy.
-- You cannot SendMessage a dead session. Revive per the owner's surface:
-  - `"desktop"`: the chat still sits in its instance's sidebar (it was never archived). If its
-    instance is running, put up ONE status line for the batch: "restart recovery: <titles>
-    died mid-work - click each once and I will take it from there." The owner's click revives
-    the session; it then reappears as a live idle chat and the normal rubric nudges it. If its
-    instance is closed, follow the open-instances policy (never boot an account on your own).
-  - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt": prompts.orphanRevive,
-    "instance_ref", "resume_session_id": "<id>"}` (default: "[orchestrator] Your process died
-    mid-work (computer restart or crash). Review your last steps, verify what actually landed
-    on disk, and resume from where you truly are - files may be ahead of or behind your
-    notes.").
-- The verify-first wording matters: a killed session's last writes may be half-applied. Never
-  tell it "continue as planned"; tell it to re-verify state first.
-- Ack `orphan-revive` after acting, cooldown 60 (desktop clicks take however long the owner
-  takes; the item self-clears once the session lives again or is done-marked).
+- On the `"terminal"` surface only, you may still revive directly:
+  `POST /api/sessions/launch-terminal {"cwd", "prompt": prompts.orphanRevive, "instance_ref",
+  "resume_session_id": "<id>"}`. On `"desktop"` (the default) the daemon's auto-revive is the
+  actor - see above. If the item's instance is CLOSED, no one revives anything: follow the
+  open-instances policy (never boot an account on your own) and say so in one status line.
+- The verify-first wording of `prompts.orphanRevive` matters: a killed session's last writes
+  may be half-applied. Never tell a revived chat "continue as planned"; it must re-verify
+  disk state first. The item self-clears once the engine verifiably runs (or the lineage is
+  done-marked).
 
 **`errored`** - `detail.ending` says why.
 - `overload` (a 529): one nudge, `prompts.overloadNudge` (default: "You stopped on a server
