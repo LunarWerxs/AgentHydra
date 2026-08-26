@@ -164,15 +164,28 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_HOME` | `~/.agenthydra` | config dir (`runtime.json`, instance-identity cache) |
 | `AGENTHYDRA_SHUTDOWN_TOKEN` | unset | if set, `/api/shutdown` requires a matching `x-agenthydra-shutdown-token` header (the tray sets it) |
 | `AGENTHYDRA_FAKE` | unset | dispatch uses the harmless fake CLI |
-| `AGENTHYDRA_DB` | `server/data/agenthydra.db` | sqlite path |
-| `AGENTHYDRA_RUN_LOG_DIR` | `server/data/run-logs` | detached-run log and sidecar directory |
+| `AGENTHYDRA_DATA_DIR` | `~/.agenthydra/data` | state directory (sqlite db, run logs, caches) |
+| `AGENTHYDRA_DB` | `~/.agenthydra/data/agenthydra.db` | sqlite path |
+| `AGENTHYDRA_RUN_LOG_DIR` | `~/.agenthydra/data/run-logs` | detached-run log and sidecar directory |
 | `AGENTHYDRA_CODEX_HOME` | `~/.codex` | default Codex rollout store to scan |
 | `AGENTHYDRA_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
 | `AGENTHYDRA_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
 | `AGENTHYDRA_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
 
 `/api/health` returns `service: "agenthydra"`, which is load-bearing for the single-instance
-pointer.
+pointer. It also returns `dataDir`, `dbPath` and `dataDirNotice`, which answer "which database is
+this daemon actually using" by looking rather than by inference.
+
+**One state directory, both modes.** A source checkout used to keep its state in the repo's
+`server/data` while a packaged build used `~/.agenthydra/data`, so `bun run start` and the
+installed daemon were the same app reading two different sqlite files: settings, the run queue,
+orchestrator acks, `/delayo` holds and the done-mark ledger all diverged, silently, and forensics
+run against the wrong one answered confidently and wrongly. Both modes now resolve to
+`~/.agenthydra/data`, and a checkout's existing `server/data` is moved across on first run (by
+copy when the two live on different volumes, which is the normal Windows layout). If BOTH already
+hold state, nothing is moved or merged: the per-user directory is used and the other one is named
+in the boot log and in `dataDirNotice`, because the only unrecoverable version of this problem is
+the one nobody is told about.
 
 Manually added dispatch API keys and OAuth tokens are stored as plain values in the per-user SQLite
 database so the database remains portable. The state directories and database receive owner-only

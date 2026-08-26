@@ -25,10 +25,12 @@ MCP-speaking agents, point your `mcpServers` config's `command` at this executab
 with `--mcp` as its arg (no Bun needed), e.g. `{ "command": "C:\\path\\to\\AgentHydra.exe",
 "args": ["--mcp"] }`.
 
-> **Coming from a `git` checkout?** A source checkout keeps its database under the repo's
-> `server/data/`; this packaged build uses `~/.agenthydra/data/` instead, so it starts with an
-> empty queue. Your sessions are unaffected (see above). To carry the old queue/accounts/settings
-> over, point the binary at the old file: set `AGENTHYDRA_DB=<repo>/server/data/agenthydra.db`.
+> **Coming from a `git` checkout?** Nothing to do. A checkout and this packaged build share one
+> state directory, `~/.agenthydra/data/`, so your queue, accounts and settings are already here. A
+> checkout still holding the old repo-local `server/data/` gets it moved across the first time
+> either one starts. If you had already carried state over by hand and both locations hold a
+> database, neither is touched: `~/.agenthydra/data/` is used and the other is named in the boot
+> log and in `/api/health`.
 
 ## Requirements
 

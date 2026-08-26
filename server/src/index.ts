@@ -35,6 +35,9 @@ import {
   appEnv,
   CLIPBOARD_DIR,
   CONFIG_DIR,
+  DATA_DIR,
+  DATA_DIR_NOTICE,
+  DB_PATH,
   HOST,
   IS_COMPILED,
   noAutoOpen,
@@ -385,12 +388,20 @@ app.use(
 )
 
 // --- health (also the single-instance probe: body.service must equal SERVICE_NAME) ---
+// `dataDir`/`dbPath` are here for one reason: a daemon started from a checkout and the installed
+// one used to open DIFFERENT sqlite files, and every forensic session that hit it wasted its time
+// reading the wrong database with total confidence. They resolve to one place now, and this states
+// which place, so the question is answered by looking rather than by inferring from `distribution`.
+// `dataDirNotice` is non-null only when a second, unused state directory is still sitting there.
 app.get('/api/health', (c) =>
   c.json({
     ok: true,
     service: SERVICE_NAME,
     version: VERSION,
     distribution: IS_COMPILED ? 'compiled' : 'source',
+    dataDir: DATA_DIR,
+    dbPath: DB_PATH,
+    dataDirNotice: DATA_DIR_NOTICE,
     ts: Date.now(),
   }),
 )
@@ -2454,6 +2465,10 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
 
 const moved = boundPort !== PORT ? `  (port ${PORT} was busy)` : ''
 console.log(`[agenthydra] http://${HOST}:${boundPort}${moved}`)
+console.log(`[agenthydra] state: ${DB_PATH}`)
+// Loud on purpose. This line only prints when a second state directory exists, and the whole cost
+// of that situation is someone not knowing about it (see resolveDataDir in config.ts).
+if (DATA_DIR_NOTICE) console.warn(`[agenthydra] WARNING: ${DATA_DIR_NOTICE}`)
 
 // --- Connections cloud sync (opt-in; see server/src/connections.ts) ---------
 // Load the persisted session/sync state into memory before the server starts accepting requests.

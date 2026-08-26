@@ -1,4 +1,13 @@
-import { existsSync, mkdtempSync, renameSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmdirSync,
+  rmSync,
+} from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import rootPkg from '../../package.json'
@@ -146,17 +155,101 @@ export const CONFIG_DIR = resolveConfigDir()
  *  web-dist resolution key off this. */
 export const APP_ROOT = IS_COMPILED ? dirname(process.execPath) : join(import.meta.dir, '..', '..')
 
-/** Where our own state lives (sqlite db + per-run logs). Source checkouts keep the historical
- *  server/data location (existing installs' databases live there); a compiled binary has no real
- *  server/ dir (import.meta.dir is virtual and unwritable — db.ts's eager mkdir there would crash
- *  the daemon before logging even starts), so it keeps state under the per-user CONFIG_DIR.
+export interface DataDirResolution {
+  /** The directory state is read from and written to. */
+  dir: string
+  /** Why this is not the clean canonical resolution, in one line, or null when it is. */
+  notice: string | null
+}
+
+/**
+ * Resolve where our own state lives (sqlite db, per-run logs, caches), folding a source checkout's
+ * historical `server/data` into the per-user directory a release has always used.
  *
- *  Overridable for the same reason RUN_LOG_DIR is: in a source checkout this points at the
- *  developer's REAL server/data, so a test touching usage-cache.json or usage-history.json would
- *  otherwise write into their live state (see tests/setup.ts). */
-export const DATA_DIR =
-  appEnv('DATA_DIR')?.trim() ||
-  (IS_COMPILED ? join(CONFIG_DIR, 'data') : join(import.meta.dir, '..', 'data'))
+ * A compiled binary never had a choice here: `import.meta.dir` is a virtual embedded path rather
+ * than a writable disk location (db.ts's eager mkdir there would crash the daemon before logging
+ * even starts), so releases keep state under CONFIG_DIR. Source checkouts kept theirs beside the
+ * code instead, and the two arrangements together are one app reading two DIFFERENT databases:
+ * `bun run start` and the installed tray daemon diverged on settings, the run queue, orchestrator
+ * acks, `/delayo` holds and the done-mark ledger. That ledger is the orchestrator's guarantee that
+ * one thread gets one continuation, and a guarantee kept in two places is not one. Worse, the split
+ * is invisible while you debug it: forensics run against the wrong file answer confidently and
+ * wrongly ("that table does not exist", "the mark was never written"). One directory, both modes.
+ *
+ * The move is non-destructive in the same way {@link resolveConfigDir} is: it happens only when the
+ * destination holds no state of its own, and any failure (a live daemon holding the sqlite file
+ * open on Windows, a permission problem) keeps using the state where it stands rather than booting
+ * onto an empty database.
+ *
+ * A cross-volume home is the normal Windows development layout, not an edge case - a checkout on
+ * `D:` and a profile on `C:` is this machine - and `renameSync` cannot cross a volume: it throws
+ * EXDEV. Left at that, the consolidation would silently never happen for exactly the people who hit
+ * the split, so the fallback is a recursive COPY and then a delete of the source. Ordered that way
+ * round on purpose: an interrupted copy loses nothing, and a copy that lands but cannot delete
+ * leaves a leftover which the next boot reports as the ordinary two-directory case rather than
+ * acting on.
+ *
+ * An EMPTY destination is not state, it is a directory something happened to create (a boot that
+ * got no further, a backup tool, an unpacked archive), so the move still runs. `rmdirSync` refuses
+ * a directory with anything in it, which is what makes that safe: it cannot take contents with it.
+ *
+ * When both hold real contents, neither is safe to assume. Preferring the destination costs a
+ * source developer the work they did today; preferring the source overwrites a real install's
+ * history with a scratch dev database; picking by mtime gets both wrong the moment someone runs the
+ * other one once. So nothing is moved, nothing is merged, the canonical directory is used, and the
+ * other one is REPORTED - in the boot log and in `/api/health` - because a split nobody is told
+ * about is exactly the failure this resolver exists to end.
+ */
+export function resolveDataDir(
+  configDir: string,
+  legacyDir: string | null,
+  /** Seam for the test, and only for the test: production always passes renameSync. A cross-volume
+   *  move is the branch that matters most here and no test can conjure a second volume, so the
+   *  THROW is injected while the copy and the delete underneath it stay real. */
+  rename: (from: string, to: string) => void = renameSync,
+): DataDirResolution {
+  const preferred = join(configDir, 'data')
+  if (!legacyDir || legacyDir === preferred || !existsSync(legacyDir))
+    return { dir: preferred, notice: null }
+  const preferredExists = existsSync(preferred)
+  if (preferredExists && readdirSync(preferred).length > 0)
+    return {
+      dir: preferred,
+      notice: `state also exists at ${legacyDir}; using ${preferred} and leaving the other untouched`,
+    }
+  try {
+    if (preferredExists) rmdirSync(preferred)
+    mkdirSync(dirname(preferred), { recursive: true })
+    try {
+      rename(legacyDir, preferred)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'EXDEV') throw err
+      cpSync(legacyDir, preferred, { recursive: true })
+      // Only now: the copy is complete, so nothing is at risk. A delete that fails leaves a
+      // leftover the next boot reports, which is the honest outcome, not a lost database.
+      rmSync(legacyDir, { recursive: true, force: true })
+    }
+    return { dir: preferred, notice: null }
+  } catch {
+    return {
+      dir: legacyDir,
+      notice: `could not move ${legacyDir} to ${preferred}; still using it in place`,
+    }
+  }
+}
+
+const DATA_DIR_OVERRIDE = appEnv('DATA_DIR')?.trim()
+const DATA_DIR_RESOLUTION: DataDirResolution = DATA_DIR_OVERRIDE
+  ? { dir: DATA_DIR_OVERRIDE, notice: null }
+  : resolveDataDir(CONFIG_DIR, IS_COMPILED ? null : join(import.meta.dir, '..', 'data'))
+
+/** Where our own state lives (sqlite db + per-run logs + caches): the per-user CONFIG_DIR, in both
+ *  source and compiled mode. Overridable for the same reason RUN_LOG_DIR is, so a test touching
+ *  usage-cache.json or usage-history.json never writes into live state (see tests/setup.ts). */
+export const DATA_DIR = DATA_DIR_RESOLUTION.dir
+/** One line naming a state directory that exists but is NOT the one in use, or null when there is
+ *  no ambiguity. Surfaced at boot and by `/api/health` so nobody debugs against the wrong file. */
+export const DATA_DIR_NOTICE = DATA_DIR_RESOLUTION.notice
 export const DB_PATH = appEnv('DB') ?? resolveDbPath(DATA_DIR)
 /** Per-run logs (+ the detached runner's spec/status sidecars). Overridable so tests (and a
  *  portable install) can isolate them from the default data dir. */
