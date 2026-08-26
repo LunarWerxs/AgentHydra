@@ -180,6 +180,36 @@ export function openCodePartsToTailEvents(
 const openCodeListCache = new Map<string, { stamp: string; rows: OpenCodeSessionRecord[] }>()
 
 /**
+ * How long a store's last-write time must have been in the past before that time is evidence.
+ *
+ * A filesystem hands out last-write times from a clock far coarser than its 100 ns field suggests —
+ * 200 back-to-back writes here produced 13 distinct mtimes, and Windows documents a granularity up
+ * to ~15.6 ms — so two writes close together are given the SAME one. Size is the usual second
+ * opinion (see vsCodeChatsUnder in foreign-sessions.ts, which pairs them for exactly this reason),
+ * and it is the one thing a SQLite store will not give: an insert that fits in pages the file
+ * already had leaves the byte count alone. Measured here, a session added to a settled store moved
+ * neither half of the pair in 10% of attempts.
+ *
+ * Both halves holding still would merely be a missed sweep if the stamp caught up later. It does
+ * not: nothing moves an mtime that has already been written, so the list stays stale until some
+ * unrelated write happens to bump it — and for a session nobody returns to, that is forever.
+ *
+ * So a stamp only becomes evidence once the clock has moved past the granule that issued it, after
+ * which no later write can be handed the same one. A second of margin covers every local
+ * filesystem's granularity with room to spare. It costs at most one extra listing per store per
+ * write burst, and nothing at all in the steady state this cache exists for: the sweep runs on a
+ * timer, seconds apart, where every store has long since settled.
+ */
+const STAMP_SETTLE_MS = 1000
+
+interface DbStamp {
+  /** The (mtime, size) pair of the database and its `-wal`, as one comparable string. */
+  key: string
+  /** The newest last-write time either file carries, or null when neither exists. */
+  newestMtimeMs: number | null
+}
+
+/**
  * Identity of a SQLite store as bytes on disk.
  *
  * The `-wal` file counts as much as the database itself: with write-ahead logging on — which is how
@@ -187,23 +217,38 @@ const openCodeListCache = new Map<string, { stamp: string; rows: OpenCodeSession
  * still while the store has moved on. Stamping only the `.db` would serve a stale list until
  * something happened to checkpoint it.
  */
-function openCodeDbStamp(path: string): string {
-  let out = ''
+function openCodeDbStamp(path: string): DbStamp {
+  let key = ''
+  let newestMtimeMs: number | null = null
   for (const p of [path, `${path}-wal`]) {
     try {
       const st = statSync(p)
-      out += `${st.mtimeMs}:${st.size};`
+      key += `${st.mtimeMs}:${st.size};`
+      if (newestMtimeMs === null || st.mtimeMs > newestMtimeMs) newestMtimeMs = st.mtimeMs
     } catch {
-      out += 'x;'
+      key += 'x;'
     }
   }
-  return out
+  return { key, newestMtimeMs }
+}
+
+/**
+ * Whether this stamp is old enough that no write still to come could be handed the same one.
+ *
+ * A store stamped in the future — a restored backup, a clock that stepped, a network share whose
+ * server runs ahead — is deliberately NOT settled: the instant it names has not elapsed yet, so a
+ * write landing at it would match. That costs a repeated listing until the clock catches up, which
+ * is the right side to err on and heals itself.
+ */
+function stampHasSettled(stamp: DbStamp, now = Date.now()): boolean {
+  if (stamp.newestMtimeMs === null) return true
+  return now - stamp.newestMtimeMs >= STAMP_SETTLE_MS
 }
 
 export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRecord[] {
   const stamp = openCodeDbStamp(path)
   const hit = openCodeListCache.get(path)
-  if (hit?.stamp === stamp) return hit.rows
+  if (hit?.stamp === stamp.key) return hit.rows
   const db = openDb(path)
   if (!db) return []
   try {
@@ -232,7 +277,11 @@ export function listOpenCodeSessions(path = OPENCODE_DB_PATH): OpenCodeSessionRe
       // make every session the child of a session that does not exist.
       parent_id: row.parent_id || null,
     }))
-    openCodeListCache.set(path, { stamp, rows: records })
+    // Only remember an answer whose stamp is already evidence. Reading a store within a tick of
+    // its last write cannot rule out a second write sharing that tick, and remembering it would
+    // pin the stale list in place for good — so drop the entry instead and pay one more listing.
+    if (stampHasSettled(stamp)) openCodeListCache.set(path, { stamp: stamp.key, rows: records })
+    else openCodeListCache.delete(path)
     return records
   } catch {
     return []

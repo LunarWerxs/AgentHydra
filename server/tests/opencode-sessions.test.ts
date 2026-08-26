@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { expect, test } from 'bun:test'
+import { existsSync, statSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { CONFIG_DIR } from '../src/config'
 import {
@@ -129,11 +130,8 @@ test('a subagent session carries the id of the session that spawned it', () => {
   expect(byId.size).toBe(3)
 })
 
-// Sizing a session costs two correlated subqueries, so this listing walks the whole `message` and
-// `part` tables once PER SESSION — the store sets the cost, not the session count. Measured at
-// 939 ms for 110 sessions, and a whole-store sweep runs on a timer, so a database nobody has
-// written to must not be re-queried. These pin that the shortcut is taken and that it lets go.
-test('an unchanged OpenCode store is listed from the last query, and a written one is not', () => {
+/** A store with the OpenCode schema and one session in it, closed. */
+function storeWithOneSession(): string {
   const path = join(CONFIG_DIR, `opencode-${crypto.randomUUID()}.db`)
   const db = new Database(path)
   db.exec(`
@@ -148,9 +146,60 @@ test('an unchanged OpenCode store is listed from the last query, and a written o
       id text primary key, message_id text, session_id text, time_created integer, data text
     );
   `)
-  const insert = db.query('insert into session values (?, ?, ?, ?, ?, ?, ?)')
-  insert.run('ses_one', 'p1', 'D:work', 'First', 1000, 2000, null)
+  db.query('insert into session values (?, ?, ?, ?, ?, ?, ?)').run(
+    'ses_one',
+    'p1',
+    'D:work',
+    'First',
+    1000,
+    2000,
+    null,
+  )
   db.close()
+  return path
+}
+
+/** Add a second session to a closed store, the way OpenCode would. */
+function addSecondSession(path: string): void {
+  const again = new Database(path)
+  again
+    .query('insert into session values (?, ?, ?, ?, ?, ?, ?)')
+    .run('ses_two', 'p1', 'D:work', 'Second', 3000, 4000, null)
+  again.close()
+}
+
+/**
+ * Put the store's last-write time at an instant the test chose, on the database and on its `-wal`.
+ *
+ * Every question the listing cache asks is about (mtime, size), and a filesystem issues mtimes from
+ * a clock far coarser than its field suggests: measured here, 200 back-to-back writes produced 13
+ * distinct values. Left to the machine, the tests below would be asserting on whichever side of a
+ * tick boundary a run happened to land — which is exactly how this file used to flake, roughly one
+ * full-suite run in three. Naming the instant makes the distance between two stamps a number the
+ * test set rather than one the scheduler did.
+ */
+function stampAt(path: string, when: Date): void {
+  for (const p of [path, `${path}-wal`]) {
+    try {
+      utimesSync(p, when, when)
+    } catch {
+      // Usually no -wal at all: SQLite checkpoints and removes it on close, so between calls the
+      // database alone carries the stamp.
+    }
+  }
+}
+
+// Sizing a session costs two correlated subqueries, so this listing walks the whole `message` and
+// `part` tables once PER SESSION — the store sets the cost, not the session count. Measured at
+// 939 ms for 110 sessions, and a whole-store sweep runs on a timer, so a database nobody has
+// written to must not be re-queried. These pin that the shortcut is taken and that it lets go.
+test('an unchanged OpenCode store is listed from the last query, and a written one is not', () => {
+  const path = storeWithOneSession()
+
+  // Let the store settle a minute into the past before anything reads it. Two things follow that
+  // were previously left to chance: the listing is old enough to be remembered at all, and the
+  // write below lands a full minute away from this stamp instead of trusting a tick to elapse.
+  stampAt(path, new Date(Date.now() - 60_000))
 
   const first = listOpenCodeSessions(path)
   expect(first.map((s) => s.session_id)).toEqual(['ses_one'])
@@ -159,14 +208,50 @@ test('an unchanged OpenCode store is listed from the last query, and a written o
   // query did not run again rather than merely returning an equal result.
   expect(listOpenCodeSessions(path)).toBe(first)
 
-  // A real write. The stamp covers the -wal file as well as the database, which is the whole
-  // reason this is detected at all: OpenCode ships with write-ahead logging on, so a new session
-  // lands in the log while the .db file's mtime sits perfectly still.
-  const again = new Database(path)
-  again
-    .query('insert into session values (?, ?, ?, ?, ?, ?, ?)')
-    .run('ses_two', 'p1', 'D:work', 'Second', 3000, 4000, null)
-  again.close()
+  // A real write, and the mtime it really receives is what has to give it away. (Close checkpoints
+  // the `-wal` away, so here the database alone carries the stamp; in production, where OpenCode
+  // holds the store open with write-ahead logging on, the log is the half that moves.)
+  addSecondSession(path)
+
+  expect(
+    listOpenCodeSessions(path)
+      .map((s) => s.session_id)
+      .sort(),
+  ).toEqual(['ses_one', 'ses_two'])
+})
+
+// ...and the case the pair cannot see at all. A SQLite insert moves NEITHER half: the row fits in
+// pages the file already had, so the byte count holds, and a filesystem hands a write that lands
+// close behind the one we stamped the very same last-write time. Measured on this machine, a
+// session added to a just-read store moved nothing at all in 10% of attempts.
+//
+// A missed sweep would be survivable if the stamp caught up later. It never does — nothing bumps an
+// mtime that is already written — so a list remembered across that collision is stale for good, and
+// the session stays invisible until some unrelated write happens to move the file. For a
+// conversation nobody returns to, that is forever. The cache therefore may not remember an answer
+// it read before the store's stamp had settled, which is what this pins.
+test('a write that cannot move the stamp is still not lost to the cache', () => {
+  const path = storeWithOneSession()
+
+  // Stamp the store ahead of the clock: that instant has not elapsed, so a write is still to come
+  // that would be handed exactly this time. Same condition as a store written a tick ago, with the
+  // window widened from milliseconds to a minute so no scheduling hiccup can decide the outcome.
+  const unelapsed = new Date(Date.now() + 60_000)
+  stampAt(path, unelapsed)
+  const before = statSync(path)
+  const hadWal = existsSync(`${path}-wal`)
+
+  expect(listOpenCodeSessions(path).map((s) => s.session_id)).toEqual(['ses_one'])
+
+  addSecondSession(path)
+  // Put the stamp back exactly as the listing above saw it — which is all the tick collision does.
+  stampAt(path, unelapsed)
+
+  // The premise, asserted rather than assumed: with the mtimes restored, these are the only things
+  // left that could give the write away. If a future SQLite ever grew the file or left a log
+  // behind, the stamp would differ and the assertion below would pass without testing anything.
+  expect(statSync(path).size).toBe(before.size)
+  expect(existsSync(`${path}-wal`)).toBe(hadWal)
 
   expect(
     listOpenCodeSessions(path)
