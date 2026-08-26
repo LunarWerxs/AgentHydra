@@ -33,6 +33,7 @@ export default {
   prompt_commitNudge: 'Uncommitted-repo nudge',
   prompt_branchNudge: 'Off-main-branch nudge',
   prompt_orphanRevive: 'Crash / restart revival',
+  prompt_closeoutDocs: 'Closeout before archiving (bring docs current)',
   prompt_migrationNotice: 'Account-migration notice',
   commandsLabel: 'Slash commands',
   commandsHint:
@@ -45,8 +46,8 @@ export default {
   maxActiveChatsUnlimited: 'Unlimited',
   handoffSurfaceLabel: 'Work surface',
   handoffSurfaceHint:
-    'Where the orchestrator places ALL the work it starts or continues. Desktop: threads live as chats in your apps - continuations arrive as queued messages and your first click on a chat activates it; no terminals, nothing headless. Terminal: visible windows you can watch live. Queue: classic headless runs.',
-  surfaceDesktop: 'Desktop app (chats + your click)',
+    'Where the orchestrator places ALL the work it starts or continues. Desktop: threads live as chats in your apps and the orchestrator delivers each turn through the app itself, so a chat wakes and runs where you can watch it - no clicking, no terminals, nothing headless. Terminal: visible windows you can watch live. Queue: classic headless runs.',
+  surfaceDesktop: 'Desktop app (chats, delivered natively)',
   surfaceTerminal: 'Terminal window (watch live)',
   surfaceQueue: 'Queue (headless)',
   openInstancesLabel: 'Open closed instances',

@@ -114,8 +114,19 @@ proves nothing (registry-live is not running).
   old entries, then deliver on the new instance.
 - The concurrency cap never blocks revives; a revive is a continuation, not new work.
 
+**THE CLOSEOUT, before ANY archive of a finished thread** (owner rule 2026-08-26). A thread you
+are retiring because it is DONE is the last place its own knowledge exists, so it gets one final
+turn first: deliver `prompts.closeoutDocs` via the delivery ladder, let it land (verify the
+transcript moved), and archive only after. It brings the repo's markdown current, and it is
+allowed to answer "nothing here is still worth keeping" - that is a good outcome, not a failure.
+- A MIGRATED thread does NOT get this: it is continuing elsewhere, not ending.
+- A thread superseded by a successor does not get it either; the successor owns the knowledge.
+- If the thread cannot be reached (ladder rung 4), archive anyway rather than leaving it
+  visible-but-dead, and say in one status line that it went un-closed-out.
+
 **`archive`**: a done-marked chat still shows in a sidebar.
-- Confirm the done-mark story holds (it is the lineage ledger you or the owner wrote).
+- Confirm the done-mark story holds (it is the lineage ledger you or the owner wrote), and run
+  THE CLOSEOUT above first unless the thread was migrated or superseded.
   Approve and execute: your own instance -> `mcp__ccd_session_mgmt__archive_session`
   (live, instant); elsewhere -> `POST /api/sessions/<id>/desktop-archive
   {"archived": true}` (the daemon restarts that app to repaint once it has zero live
@@ -164,6 +175,12 @@ form). On `"queue"`, the classic queue. Never mix surfaces.
 
 ## Attention rubric (act, then ack)
 
+- **`idle_pending`**: `detail.approvalStall` true -> the chat is FROZEN at a permission prompt,
+  not thinking and not waiting on tasks: it is sitting on `detail.pendingTool` while running in
+  `detail.permissionMode`, which asks approval for that tool, and the owner can never click it.
+  Do not nudge it (a message queues behind the prompt). Revive it instead, instructing it to use
+  FILE TOOLS ONLY and no shell commands - that works under `acceptEdits` and is what unblocked
+  five real chats. Ack `approval-stall`, cooldown 60, and put one status line up naming the chat.
 - **`idle_pending`**: `waitingForSlot` -> skip WITHOUT acking (the cap's rotation handles
   it; never nudge more than `meta.slotsFree` per wake). `staleTasks` -> read the tail first
   (it is a hint, not a verdict); genuinely stuck -> `prompts.staleTaskNudge`, ack

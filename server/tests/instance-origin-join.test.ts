@@ -103,7 +103,11 @@ function resolve(cwd: string, createdAt: number | null): unknown {
 test(
   'a unique origin resolves to its account',
   () => {
-    expect(resolve('D:\\PublicProjects', CREATED)).toEqual({ instance: 'work', archived: false })
+    expect(resolve('D:\\PublicProjects', CREATED)).toEqual({
+      instance: 'work',
+      archived: false,
+      permissionMode: null,
+    })
   },
   SPAWNS_A_CHILD_BUN,
 )
@@ -113,7 +117,11 @@ test(
   () => {
     // Desktop writes "D:\\PublicProjects" and a transcript can carry "d:\\publicprojects" for the
     // same folder; a case-sensitive compare would silently drop the match on half the store.
-    expect(resolve('d:\\publicprojects', CREATED)).toEqual({ instance: 'work', archived: false })
+    expect(resolve('d:\\publicprojects', CREATED)).toEqual({
+      instance: 'work',
+      archived: false,
+      permissionMode: null,
+    })
   },
   SPAWNS_A_CHILD_BUN,
 )
@@ -125,6 +133,7 @@ test(
     expect(resolve('D:\\PublicProjects', CREATED + 1500)).toEqual({
       instance: 'work',
       archived: false,
+      permissionMode: null,
     })
   },
   SPAWNS_A_CHILD_BUN,
@@ -149,6 +158,7 @@ test(
     expect(resolve('D:\\PublicProjects', CREATED + 59_000)).toEqual({
       instance: 'work',
       archived: false,
+      permissionMode: null,
     })
     expect(resolve('D:\\PublicProjects', CREATED + 61_000)).toBeNull()
   },
@@ -168,7 +178,11 @@ test(
 test(
   'two rows from the SAME account are agreement, not ambiguity',
   () => {
-    expect(resolve('D:\\Twins', CREATED)).toEqual({ instance: 'work', archived: true })
+    expect(resolve('D:\\Twins', CREATED)).toEqual({
+      instance: 'work',
+      archived: true,
+      permissionMode: null,
+    })
   },
   SPAWNS_A_CHILD_BUN,
 )

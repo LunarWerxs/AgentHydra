@@ -53,6 +53,7 @@ const PROMPT_KEYS: OrchestratorPromptKey[] = [
   'commitNudge',
   'branchNudge',
   'orphanRevive',
+  'closeoutDocs',
   'migrationNotice',
 ]
 // Static key map (not a template literal) so the i18n usage checker can see each key.
@@ -65,6 +66,7 @@ const PROMPT_LABEL_KEYS: Record<OrchestratorPromptKey, string> = {
   commitNudge: 'orchestrator.prompt_commitNudge',
   branchNudge: 'orchestrator.prompt_branchNudge',
   orphanRevive: 'orchestrator.prompt_orphanRevive',
+  closeoutDocs: 'orchestrator.prompt_closeoutDocs',
   migrationNotice: 'orchestrator.prompt_migrationNotice',
 }
 const promptForm = reactive<Record<string, string>>({})

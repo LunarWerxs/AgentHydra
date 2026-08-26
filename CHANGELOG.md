@@ -30,8 +30,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   native route exists), proposals decided first on every wake, and the conflicting
   queue-era flows removed. Shorter than what it replaces.
 
+### Added
+
+- **A retired thread writes its knowledge down before it is archived** (owner rule). A chat
+  being closed out as finished is the last place its own knowledge exists, so it gets one
+  final turn asking it to bring the repo's markdown current: what it did, what is verified
+  versus merely attempted, what is outstanding, and the gotchas a future session would have
+  to rediscover. It is explicitly allowed to answer "nothing here is worth keeping". A
+  MIGRATED thread is not asked, because it is continuing rather than ending. The wording is
+  an editable prompt like all the others.
+
 ### Fixed
 
+- **A chat frozen at a permission prompt is now diagnosed as that**, instead of being
+  reported as "waiting on dead background tasks" - the wrong diagnosis and the wrong fix.
+  The app creates imported chats in a mode that auto-approves file edits but prompts on every
+  shell command, and a prompt the remote owner can never click is a silent deadlock: alive,
+  idle, nothing in any log. It is indistinguishable from thinking unless you ask whether this
+  chat's mode prompts for the tool it is sitting on, which is exactly what the watcher now
+  asks. Imports also request the unattended mode, and the reviewer's fix is to revive with
+  file tools only.
 - **A desktop chat can no longer be continued by a headless run, at the chokepoint.** This is
   the owner's reported failure ("every chat you were migrating from desktop to desktop ended
   up being migrated to a headless thing that I couldn't see"), and an audit of the live
@@ -58,6 +76,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **"Revive:" titles can no longer stick to a chat.** The revive era's queue prefix joined
   the title peelers, so a re-imported thread wears its real name, never the plumbing's
   (found live: an architect chat re-wearing "CLICK TO RESUME" through an import).
+- **One database, not one per way you started the app.** A source checkout kept its state in
+  the repo's `server/data` while a packaged build used `~/.agenthydra/data`, so `bun run start`
+  and the installed daemon were the same app reading two different sqlite files: settings, the
+  queue, orchestrator acks, `/delayo` holds and the done-mark ledger all diverged silently, and
+  forensics run against the wrong file answered confidently and wrongly (measured on the live
+  pair: one held 22 done-marks, 24 queue rows and 46 acks; the other had no orchestrator tables
+  at all). Both modes now resolve to `~/.agenthydra/data`, a checkout's existing `server/data`
+  is migrated across on first run (by copy when the two live on different volumes, which is the
+  normal Windows layout), and `/api/health` reports `dataDir`, `dbPath` and `dataDirNotice` so
+  "which database is this daemon using" is answered by looking. When BOTH already hold state
+  nothing is moved or merged: the per-user directory wins and the other is named out loud.
+- **An OpenCode session write inside one filesystem tick can no longer be cached away.** Two
+  writes can share a single mtime granule, so the second looked like no write at all to a
+  cache keyed on mtime. It only reproduced inside a full-suite run, because it needs an
+  earlier read in the same process to prime the cache.
 
 ## [0.35.4] - 2026-08-26
 

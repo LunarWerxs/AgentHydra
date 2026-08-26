@@ -1293,6 +1293,7 @@ export type OrchestratorPromptKey =
   | 'commitNudge'
   | 'branchNudge'
   | 'orphanRevive'
+  | 'closeoutDocs'
   | 'migrationNotice'
 
 export interface OrchestratorView {

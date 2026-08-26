@@ -26,6 +26,11 @@ import { AMBIENT_RUN_AS } from './types'
 export interface SessionMeta {
   instance: string
   archived: boolean
+  /** The app's per-chat automation posture. 'bypassPermissions' runs unattended; anything else
+   *  (the app creates imported chats as 'acceptEdits') raises an approval prompt for at least
+   *  some tools, which under the zero-click law is a silent deadlock rather than a safeguard.
+   *  Free to collect: this scan already parses every metadata file. */
+  permissionMode: string | null
 }
 
 const TTL_MS = 15_000
@@ -57,7 +62,8 @@ function scanStore(
       const meta = JSON.parse(readFileSync(join(dir, rel), 'utf8'))
       const id = meta?.cliSessionId
       const archived = !!meta.isArchived
-      if (typeof id === 'string' && id) map.set(id, { instance: label, archived })
+      const permissionMode = typeof meta.permissionMode === 'string' ? meta.permissionMode : null
+      if (typeof id === 'string' && id) map.set(id, { instance: label, archived, permissionMode })
       if (typeof meta?.cwd === 'string' && meta.cwd && typeof meta?.createdAt === 'number')
         origins.push({ instance: label, archived, cwd: meta.cwd, createdAt: meta.createdAt })
     } catch {
@@ -127,7 +133,10 @@ export function resolveInstanceByOrigin(cwd: string, createdAt: number | null): 
     // A second candidate naming a DIFFERENT instance makes this ambiguous, and an ambiguous
     // account is worse than no account: the whole point of the chip is knowing whose quota paid.
     if (found && found.instance !== row.instance) return null
-    found ??= { instance: row.instance, archived: row.archived }
+    // The origin join answers WHOSE account ran this, from (cwd, created-instant) alone; it
+    // never sees a metadata row for this session, so the automation posture is genuinely
+    // unknown here rather than absent.
+    found ??= { instance: row.instance, archived: row.archived, permissionMode: null }
   }
   return found
 }

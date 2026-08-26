@@ -216,6 +216,23 @@ export const ORCHESTRATOR_PROMPT_DEFAULTS = {
     '[orchestrator] Your process died mid-work (computer restart or crash). Review your last ' +
     'steps, verify what actually landed on disk, and resume from where you truly are - files ' +
     'may be ahead of or behind your notes.',
+  /** The last turn a thread runs before it is archived as FINISHED (owner rule 2026-08-26:
+   *  "if you are going to archive a chat that wasn't migrated, ask the chat to update any
+   *  relevant markdown files, just to make sure all documentation is current"). A retired
+   *  thread is the last place its own knowledge exists, so the closeout is what turns a
+   *  conversation into documentation before it stops being readable. Deliberately says NOT to
+   *  use shell commands: an imported/revived chat usually runs in a mode that raises an
+   *  approval prompt for those, and the remote owner can never click it - measured, five chats
+   *  frozen that way. Migrations do NOT get this: that thread is continuing, not ending. */
+  closeoutDocs:
+    '[orchestrator] This thread is being retired and archived. Before it closes, capture what ' +
+    'exists ONLY in this conversation: update the relevant markdown file(s) in this repo with ' +
+    'what this thread did, what is VERIFIED complete versus merely attempted, what is still ' +
+    'outstanding, and any decisions, gotchas or dead ends a future session would otherwise ' +
+    'have to rediscover. Do NOT run shell commands (they stall on an approval nobody can ' +
+    'click) - use the file tools only, and do not commit. If nothing here is still worth ' +
+    'keeping, say so plainly rather than inventing content. Reply with three lines: what you ' +
+    'wrote, where, and what you could not verify. Do not start any new work.',
   /** The one-turn notice a chat runs while being migrated to another account. Starts with the
    *  [orchestrator] marker so transcript parsers classify it as plumbing, never as the human's
    *  standing instruction (a marker-less version once made every migrated thread read as
@@ -239,6 +256,7 @@ const PROMPT_SETTING_KEYS: Record<OrchestratorPromptKey, string> = {
   commitNudge: 'orch_prompt_commit_nudge',
   branchNudge: 'orch_prompt_branch_nudge',
   orphanRevive: 'orch_prompt_orphan_revive',
+  closeoutDocs: 'orch_prompt_closeout_docs',
   migrationNotice: 'orch_prompt_migration_notice',
 }
 
@@ -452,6 +470,11 @@ export interface RecentTranscript {
 
 const STRANDED_WINDOW_MS = 48 * 3600 * 1000
 
+/** Tools that raise an approval prompt in every mode except 'bypassPermissions'. Deliberately
+ *  narrow: file edits are auto-approved under 'acceptEdits', so including them would turn a
+ *  normal slow Write into a false "frozen" report, and a detector that cries wolf gets ignored. */
+const SHELL_TOOLS = new Set(['Bash', 'BashOutput', 'KillShell', 'PowerShell'])
+
 export function listRecentTranscripts(claudeHome: string, nowMs: number): RecentTranscript[] {
   const root = join(claudeHome, 'projects')
   const out: RecentTranscript[] = []
@@ -515,6 +538,10 @@ export interface TailInfo {
   ctxTokens: number | null
   /** The last turn's final assistant record ended on tool_use with nothing after it. */
   midTurn: boolean
+  /** WHICH tool that dangling call was, when midTurn came from an assistant tool_use. The
+   *  difference between "waiting on a long build" and "frozen at an approval prompt" starts
+   *  here: only some tools prompt, and only in some permission modes. */
+  pendingTool: string | null
   /** A "What I did / Am I 100% done / Do I recommend" recap block is present. */
   recapDetected: boolean
   /** The tail mentions a handoff prompt (the context-rollover protocol's deliverable). */
@@ -569,6 +596,7 @@ export function parseTranscriptTail(raw: string): TailInfo {
     lastAssistantText: null,
     ctxTokens: null,
     midTurn: false,
+    pendingTool: null,
     recapDetected: false,
     handoffDetected: false,
     chips: [],
@@ -626,10 +654,14 @@ export function parseTranscriptTail(raw: string): TailInfo {
             })
           }
         }
-        if (newest && content.some((b) => (b as { type?: string }).type === 'tool_use')) {
+        const dangling = newest
+          ? (content as Array<{ type?: string; name?: string }>).find((b) => b.type === 'tool_use')
+          : undefined
+        if (dangling) {
           // The newest record overall is an assistant record that ends in a tool call: the runtime
           // is (or was) mid-turn, waiting on that tool. Distinct from "finished and waiting".
           info.midTurn = true
+          info.pendingTool = dangling.name ?? null
         }
       }
       if (info.lastAssistantText === null) {
@@ -938,7 +970,10 @@ export interface OrchestratorDeps {
   /** Is a headless dispatch currently running this session (an in-flight run, not stranded). */
   dispatchActive: (sessionId: string) => boolean
   /** Desktop-chat metadata by session id: which instance's sidebar, and its archive flag. */
-  sessionMeta: () => Map<string, { instance: string; archived: boolean }>
+  sessionMeta: () => Map<
+    string,
+    { instance: string; archived: boolean; permissionMode?: string | null }
+  >
   tailInfo: (path: string) => TailInfo
   mtimeMs: (path: string) => number | null
   /** See taskActivityMtime. Null = the session has no background-task outputs at all. */
@@ -1047,6 +1082,19 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       .map((r) => r.session_id),
   )
   for (const sess of sessions) lastNames.set(sess.sessionId, { name: sess.name, cwd: sess.cwd })
+
+  // Desktop metadata for every chat: which sidebar it lives in, whether it is archived, and its
+  // automation posture. Read ONCE, before the per-session loop, because the loop now needs the
+  // posture too (see the approval-stall diagnosis below) and the scan is cached anyway.
+  let metaMap: Map<
+    string,
+    { instance: string; archived: boolean; permissionMode?: string | null }
+  > = new Map()
+  try {
+    metaMap = deps.sessionMeta()
+  } catch {
+    // No desktop metadata just means the owner-archived and stranded checks skip this tick.
+  }
 
   // -- per-session ------------------------------------------------------------
   // Chats actively WORKING right now (transcript fresher than the idle threshold). Held and
@@ -1201,6 +1249,22 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
         tail.midTurn && quietSecs >= staleSecs && (taskAgeSec === null || taskAgeSec >= staleSecs)
       detail.taskNewestAgeSec = taskAgeSec
       detail.staleTasks = staleTasks
+      // FROZEN AT AN APPROVAL PROMPT, the same evidence read correctly. A chat stuck mid-tool
+      // used to be reported as "waiting on dead background tasks", which is the wrong diagnosis
+      // and the wrong fix. Measured 2026-08-26: five revived chats each ran one Bash call and
+      // froze for good at a permission prompt the remote owner could never click - alive,
+      // ~300MB, no CPU, nothing in any log. It is indistinguishable from thinking unless you
+      // ask the one question that separates them: does this chat's permission mode prompt for
+      // the tool it is sitting on? The app creates imported chats as 'acceptEdits', which
+      // auto-approves edits and prompts on every shell command, so a dangling Bash there is an
+      // approval stall; under 'bypassPermissions' the same dangling Bash is simply a long build.
+      const perm = metaMap.get(sess.sessionId)?.permissionMode ?? null
+      const promptsForPendingTool =
+        perm !== null && perm !== 'bypassPermissions' && SHELL_TOOLS.has(tail.pendingTool ?? '')
+      const approvalStall = staleTasks && promptsForPendingTool
+      detail.permissionMode = perm
+      detail.pendingTool = tail.pendingTool
+      detail.approvalStall = approvalStall
       items.push({
         ...base,
         key: `idle:${sess.sessionId}`,
@@ -1208,13 +1272,17 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
         summary: `${sess.name} idle ${fmtQuiet(quietSecs)}${
           tail.recapDetected ? ' with a recap' : ''
         }${
-          staleTasks
-            ? ` — WAITING ON DEAD BACKGROUND TASKS (task output silent ${
-                taskAgeSec === null ? fmtQuiet(quietSecs) : fmtQuiet(taskAgeSec)
-              }); intervene`
-            : tail.midTurn
-              ? ' (tail ends mid-tool: likely a background task)'
-              : ''
+          approvalStall
+            ? ` — FROZEN AT A PERMISSION PROMPT: sitting on ${tail.pendingTool} for ${fmtQuiet(
+                quietSecs,
+              )} while running in '${perm}' mode, which asks approval for that tool and nobody can click it. Not dead tasks; it needs reviving without shell commands (or the owner's chat set to bypass)`
+            : staleTasks
+              ? ` — WAITING ON DEAD BACKGROUND TASKS (task output silent ${
+                  taskAgeSec === null ? fmtQuiet(quietSecs) : fmtQuiet(taskAgeSec)
+                }); intervene`
+              : tail.midTurn
+                ? ' (tail ends mid-tool: likely a background task)'
+                : ''
         }${
           handoffDue ? ` at ${Math.round((tail.ctxTokens ?? 0) / 1000)}k context — hand off` : ''
         }`,
@@ -1241,12 +1309,6 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   // file never shadows its live successor (self-healing once the owner clicks the chat back
   // to life or a resume lands).
   const liveIds = new Set(sessions.map((x) => x.sessionId))
-  let metaMap: Map<string, { instance: string; archived: boolean }> = new Map()
-  try {
-    metaMap = deps.sessionMeta()
-  } catch {
-    // No desktop metadata just means the owner-archived and stranded checks skip this tick.
-  }
   const newestOrphan = new Map<string, OrphanSession>()
   for (const o of deps.orphans(deps.claudeHome())) {
     const prevO = newestOrphan.get(o.sessionId)

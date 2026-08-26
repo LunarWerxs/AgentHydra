@@ -96,8 +96,10 @@ POST /api/sessions/:id/desktop-archive { archived? }     - archive/unarchive the
                                   its app was running at the time)
 POST /api/sessions/:id/migrate  { instance_ref }        - move a chat to another account, end to
                                   end: stops its live process if any, archives its old desktop
-                                  entries, runs a one-turn migration on the target account, then
-                                  auto-imports it into that instance's app under its real title
+                                  entries, and imports it into the target instance's app. NO turn
+                                  is run and nothing goes headless - transcripts are shared across
+                                  instances, so a move needs no work done to it. The caller
+                                  delivers any prompt natively afterwards.
 ```
 
 **Migrate-on-limit** (`migrateOnLimit`, off by default): a run stopped by its 5-HOUR limit whose
@@ -108,11 +110,13 @@ routing table the reviewer uses: running, fresh reading, weekly under the hard b
 under the high band. In the app, every Claude chat's menu also has **Migrate to another
 account**, a flyout of running instances that runs the full migration pipeline on click.
 
-The migrated resume carries `import_to`/`import_title`, so when the borrowed-account run
-completes, `finalize()` lands it in that instance's desktop app as a visible chat under the
-thread's own name - the same delivery the menu route uses. Without it a limit-migration
-finished headless and the owner never saw it anywhere, which was the one gap left in the
-migrate story. Three deliberate choices behind it:
+A limit-migration still runs on the borrowed account through the queue, because a run stopped
+by a usage wall is AgentHydra's own work rather than one of the owner's desktop threads; it
+carries `import_to`/`import_title` so `finalize()` lands the result in that instance's app
+instead of finishing where nobody looks. **A DESKTOP thread never takes this path** - the
+surface-purity guard in dispatch.ts refuses to continue one headlessly at all, and the monitor
+hands those to the reviewer as a revive proposal delivered natively. Three deliberate choices
+behind the import-back that remains:
 
 - **Only a migration imports.** A same-account auto-resume writes no import fields: that chat is
   already in the app it belongs to, and transcripts are shared across instances
@@ -408,11 +412,26 @@ enable (or the install endpoint) away.
 
 - The reviewer must be an interactive session; a scheduled task or headless run cannot carry
   the loop (no peer tools there - measured, not guessed).
-- Headless continuation of a chat whose window is *open* is deliberately not done: the
-  transcript would advance under a renderer that may not show it (REFERENCE.md documents the
-  instability). Open chats are nudged through the front door instead.
+- Headless continuation of a DESKTOP chat is not merely avoided, it is refused in code
+  (dispatch.ts, at the one chokepoint every run passes through). The transcript would advance
+  under a renderer that may not show it, and the owner's report was blunter than that: those
+  threads became "a headless thing I couldn't see". Desktop chats are driven through the app.
+- A revived chat can wake and still do nothing. The app creates imported chats with a
+  permission mode that prompts on shell commands, and a prompt nobody can click is a silent
+  deadlock: alive, idle, no error anywhere. Imports now request the unattended mode, the
+  watcher diagnoses the stall by name (`detail.approvalStall`) instead of blaming dead
+  background tasks, and the reliable workaround is to revive with file tools only. The mode
+  itself is the app's to keep, so this is mitigated rather than closed.
 - Context-size numbers come from the last assistant event's token usage - accurate enough for
   a handoff threshold, not an accounting tool.
+- **Synthetic UI input is a dead end, not an unbuilt fallback.** A pre-v0.36 revive path drove
+  the desktop app's own window (focus it, type into it). It was deleted with zero callers, and
+  it must not be reintroduced as the answer to "no native route exists into this instance",
+  because it cannot work in either state Remote Desktop leaves the owner in: while he is
+  CONNECTED his own input keeps the app's idle gate shut, so the injected turn never starts;
+  while he is DISCONNECTED the console session locks and synthetic input is dropped outright.
+  The native delivery ladder is the only actuator, and when it has no route the action waits
+  visibly instead.
 - Windows-verified. The registry/transcript formats are the CLI's own and could shift with a
   CLI release; every parser here fails soft (a session it cannot read is reported as
   unreadable, never guessed at).

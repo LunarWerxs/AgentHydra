@@ -986,6 +986,77 @@ test('samePath survives the exact casing mismatch that let the daemon kill a liv
   expect(samePath('C:\\A\\work', 'C:\\A\\work2')).toBe(false)
 })
 
+test('a chat frozen at a permission prompt is diagnosed as that, not as dead background tasks', async () => {
+  // Measured 2026-08-26: five revived chats each ran one Bash call and froze at an approval the
+  // remote owner could never click - alive, ~300MB, no CPU, nothing in any log. The old code
+  // called this "waiting on dead background tasks", which is the wrong diagnosis AND the wrong
+  // fix. What separates the two is whether this chat's permission mode prompts for the tool it
+  // is sitting on.
+  const now = Date.now()
+  const stuckTail: TailInfo = {
+    ending: 'complete',
+    lastAssistantText: 'Let me check the tree.',
+    ctxTokens: 100_000,
+    midTurn: true,
+    pendingTool: 'Bash',
+    recapDetected: false,
+    handoffDetected: false,
+    chips: [],
+    lastHumanText: null,
+    lastHumanAt: null,
+    lastEventAt: null,
+    unreadable: false,
+  }
+  const base = {
+    nowMs: () => now,
+    // Quiet well past staleTaskMins (120 default), so the stale-task rule fires either way.
+    mtimeMs: () => now - 5 * 3600_000,
+    tail: stuckTail,
+    registry: () => [slotSession('perm-stuck', 93001)],
+  }
+  // 'acceptEdits' auto-approves EDITS but prompts on every shell command -> an approval stall.
+  const blocked = fakeDeps({
+    ...base,
+    sessionMeta: () =>
+      new Map([['perm-stuck', { instance: 'work', archived: false, permissionMode: 'acceptEdits' }]]),
+  })
+  await runOrchestratorOnce(blocked.deps)
+  const hit = orchestratorView().attention.find((i: AttentionItem) => i.key === 'idle:perm-stuck')
+  expect(hit?.detail?.approvalStall).toBe(true)
+  expect(hit?.detail?.pendingTool).toBe('Bash')
+  expect(hit?.summary).toContain('FROZEN AT A PERMISSION PROMPT')
+  expect(hit?.summary).not.toContain('DEAD BACKGROUND TASKS')
+
+  // Same evidence, bypass mode: the identical dangling Bash is a long build, NOT a stall. A
+  // detector that cried wolf here would get ignored, which is how the real one gets missed.
+  const running = fakeDeps({
+    ...base,
+    sessionMeta: () =>
+      new Map([
+        ['perm-stuck', { instance: 'work', archived: false, permissionMode: 'bypassPermissions' }],
+      ]),
+  })
+  await runOrchestratorOnce(running.deps)
+  const hit2 = orchestratorView().attention.find((i: AttentionItem) => i.key === 'idle:perm-stuck')
+  expect(hit2?.detail?.approvalStall).toBe(false)
+  expect(hit2?.summary).not.toContain('FROZEN AT A PERMISSION PROMPT')
+})
+
+test('parseTranscriptTail names the tool a mid-turn chat is sitting on', () => {
+  const raw = [
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: 'checking' }] } }),
+    line({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', id: 'tu_9', name: 'Bash', input: { command: 'cargo test' } }],
+      },
+    }),
+  ].join('\n')
+  const t = parseTranscriptTail(raw)
+  expect(t.midTurn).toBe(true)
+  expect(t.pendingTool).toBe('Bash')
+})
+
 // --- the concurrency cap (round-robin rotation) ------------------------------
 
 function slotSession(id: string, pid: number): LiveSession {
