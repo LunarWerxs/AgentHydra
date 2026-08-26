@@ -951,8 +951,8 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // every run - "does this id already live in a desktop app?" - costs one directory walk and
   // cannot be reasoned around.
   if (!item.allow_headless) {
-    const { findDesktopEntryFile } = await import('./session-launch')
-    const home = await findDesktopEntryFile(item.session_id).catch(() => null)
+    const { desktopHomeFor } = await import('./session-launch')
+    const home = await desktopHomeFor(item.session_id).catch(() => null)
     if (home) {
       failPreLaunch(
         item,
@@ -1160,8 +1160,8 @@ export async function reattachRuns(): Promise<void> {
     // transcript, which the stranded detector already surfaces for a proper in-app revive - a far
     // better end state than a hidden process writing into a visible chat.
     if (!row.allow_headless) {
-      const { findDesktopEntryFile } = await import('./session-launch')
-      const home = await findDesktopEntryFile(row.session_id).catch(() => null)
+      const { desktopHomeFor } = await import('./session-launch')
+      const home = await desktopHomeFor(row.session_id).catch(() => null)
       if (home) {
         recordEvent(
           id,

@@ -143,6 +143,13 @@ function originRows(): OriginRow[] {
   return scanAll().origins
 }
 
+/** Drop the 15s scan cache. Tests that WRITE a metadata fixture and then ask about it need this:
+ *  a cached answer from before the write is stale by construction, and the surface-purity guard
+ *  (dispatch.ts) consults this map on a hot path, so the TTL is not something to shorten. */
+export function invalidateSessionMetaCache(): void {
+  cache = null
+}
+
 function scanAll(): { map: Map<string, SessionMeta>; origins: OriginRow[] } {
   const now = performance.now()
   if (cache && now - cache.at < TTL_MS) return cache

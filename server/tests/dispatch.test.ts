@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { markDispatchReady } from '../src/boot-state'
 import { db } from '../src/db'
 import * as dispatch from '../src/dispatch'
+import { invalidateSessionMetaCache } from '../src/instance-sessions'
 
 // AGENTHYDRA_DB / AGENTHYDRA_HOME / AGENTHYDRA_RUN_LOG_DIR are isolated by the preload
 // (tests/setup.ts); AGENTHYDRA_FAKE is read at dispatch-CALL time, so setting it here (before any
@@ -491,6 +492,29 @@ function makeDesktopResident(sessionId: string): void {
     JSON.stringify({ cliSessionId: sessionId, isArchived: false }),
   )
 }
+
+/** The OTHER residency shape: a chat CREATED in the app is filed under the app's own id, with the
+ *  CLI transcript id only INSIDE the file. 1,325 of 1,343 chats on the owner's real fleet look
+ *  like this, so a filename-only guard was blind to 98.7% of what it existed to protect. */
+function makeDesktopResidentByContent(cliSessionId: string): void {
+  const store = join(INSTANCES_ROOT, 'desktoptest', 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  writeFileSync(
+    join(store, `local_${crypto.randomUUID()}.json`),
+    JSON.stringify({ cliSessionId, isArchived: false, title: 'a chat born in the app' }),
+  )
+  invalidateSessionMetaCache()
+}
+
+test('a chat CREATED in the app (id only inside the file) is refused too, not just imported ones', async () => {
+  const item = makeItem({ new_chat: false })
+  makeDesktopResidentByContent(item.session_id)
+  await dispatch.dispatchItem(item)
+  expect(statusOf(item.id)?.status).toBe('failed')
+  expect(dispatch.getRunEvents(item.id).some((e) => e.text.includes('surface-violation'))).toBe(
+    true,
+  )
+})
 
 test('a headless resume of a DESKTOP-resident chat is refused at the dispatch chokepoint', async () => {
   const item = makeItem({ new_chat: false })

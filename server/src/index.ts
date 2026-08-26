@@ -188,7 +188,7 @@ import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
 import {
   archiveDesktopChat,
-  findDesktopEntryFile,
+  desktopHomeFor,
   importSessionToDesktop,
   isSessionSuperseded,
   launchTerminalSession,
@@ -1157,7 +1157,7 @@ app.post('/api/queue', async (c) => {
   // `{new_chat: true, session_id: <an existing desktop chat>}` write headless turns into that
   // chat. The question is about the ID, never about the caller's label for the request.
   const allowHeadless = body.force === true
-  if (!allowHeadless && (await findDesktopEntryFile(sessionId)))
+  if (!allowHeadless && (await desktopHomeFor(sessionId)))
     return c.json(
       {
         error:

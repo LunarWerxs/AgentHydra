@@ -658,6 +658,35 @@ export async function seedDesktopSession(opts: {
  * visibility sweep re-imports an already-visible chat forever (found live 2026-08-25: the
  * architect chat re-imported and re-titled every cycle).
  */
+/**
+ * Does this session live in a desktop app, and which one? THE question the surface-purity guard
+ * asks before every headless run, so it has to be right in both of the two ways a chat can be
+ * resident - which are genuinely different on disk:
+ *
+ *   A) IMPORTED chats (claude://resume) are filed under the CLI id: `local_<cliSessionId>.json`.
+ *      findDesktopEntryFile matches those by FILENAME.
+ *   B) Chats CREATED in the app are filed under the app's OWN id, and the CLI transcript id
+ *      lives INSIDE the file as `cliSessionId`. A filename lookup cannot see those at all.
+ *
+ * Measured on the owner's fleet 2026-08-26: 1,343 desktop chats, of which 1,325 - 98.7%, this
+ * very session among them - are findable only by (B). A guard built on the filename alone was
+ * therefore blind to almost every chat it existed to protect, while looking like it worked
+ * because the handful of chats it was TESTED against were imported ones. sessionMetaMap is the
+ * content-keyed index (cached, 15s) and is checked first because it is both cheaper and the
+ * common case; the filename walk stays as the roll-proof second opinion.
+ */
+export async function desktopHomeFor(sessionId: string): Promise<string | null> {
+  try {
+    const { sessionMetaMap } = await import('./instance-sessions')
+    const hit = sessionMetaMap().get(sessionId)
+    if (hit) return hit.instance
+  } catch {
+    // No readable metadata store: fall through to the filename walk rather than answering "no".
+  }
+  const file = await findDesktopEntryFile(sessionId)
+  return file ? file.instanceDir : null
+}
+
 export async function findDesktopEntryFile(
   sessionId: string,
 ): Promise<{ instanceDir: string; path: string; cliSessionId: string | null } | null> {
