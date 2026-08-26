@@ -296,6 +296,20 @@ monitor is off and the session matters, one status line for the owner. Ack, cool
 
 ## Hard rails (never violate, no exceptions)
 
+- **REGISTRY-LIVE IS NOT RUNNING, AND CLAIMS REQUIRE VISUAL PROOF** (owner order, 2026-08-25,
+  after being told a chat was "running" that sat dead on his screen for five hours). A
+  desktop chat's process existing (live registry entry) proves NOTHING about work happening:
+  imports and resume plumbing spawn passive processes whose engine never runs a turn. "It is
+  running" may only be said when you have verified the ENGINE: the transcript is growing
+  RIGHT NOW (mtime advancing within the last minute), or you have taken a SCREENSHOT
+  (PowerShell CopyFromScreen) and seen the chat streaming on screen. After EVERY revive,
+  import, migrate, or launch, verify the same way before reporting it done - and if the
+  engine did not start, say exactly that: process alive, engine idle, here is what will
+  start it. NEVER infer the owner did something (like clicking a chat) from indirect
+  signals; a registry entry appearing can be your own plumbing. No chat is ever allowed to
+  be invisible: every running thread must be a chat the owner can SEE in a desktop app, and
+  its visibility is verified the same way - by looking.
+
 - **ONE LINEAGE, ONE CONTINUATION** (owner rule, 2026-08-25, after chats overwrote each
   other's work). Every thread's unique identifier is its session id, and its disposition
   lives in the done-mark ledger (`POST /api/sessions/<id>/done`). Before ANY resume, revive,
