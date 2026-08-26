@@ -32,6 +32,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **An orchestration self-test you can run any time.** Every rail in this feature was added
+  because something silently did the wrong thing on the real machine while the unit tests
+  stayed green, so this runs the real guards against real state and reports what held: the
+  watcher completes a pass, the surface guard recognises the chats that actually exist here,
+  the action gate refuses to act before the AI has ruled, archiving and titling work, imports
+  refuse a closed instance and a live session, every prompt resolves, and the reviewer command
+  is installed. Safe to run against a live fleet by construction - every artifact it touches
+  is one it created, under sacrificial ids in a throwaway directory. It found a real bug on
+  its first run (below). An opt-in deep mode additionally seeds one real chat to prove the
+  app-facing half works, then archives it.
+- **Codex threads appear in the same attention feed.** AgentHydra manages both agents but the
+  orchestrator watched only one, so a Codex thread that stopped mid-work was invisible to the
+  machinery that babysits every Claude chat. Codex rollouts are now classified the same way
+  (finished, interrupted, stopped mid-turn, with the recap captured) and carried in one feed.
+  Observe-only and labelled as such: Codex exposes no message channel, so every item says
+  `deliverable: false` rather than inviting a nudge that would go nowhere.
 - **A retired thread writes its knowledge down before it is archived** (owner rule). A chat
   being closed out as finished is the last place its own knowledge exists, so it gets one
   final turn asking it to bring the repo's markdown current: what it did, what is verified
@@ -42,6 +58,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Archiving a chat only worked for one chat in eighty.** It matched the metadata filename,
+  which is how an IMPORTED chat is filed; a chat the owner started in the app is filed under
+  the app's own id with the session id inside. So the archive endpoint returned
+  "no-desktop-chat-found" and quietly did nothing for 1,325 of 1,343 real chats - the same
+  blindness fixed in the surface guard days earlier, in a second place nobody had checked.
+  Found by the new self-test on its first real run, which is precisely what it is for.
 - **A chat frozen at a permission prompt is now diagnosed as that**, instead of being
   reported as "waiting on dead background tasks" - the wrong diagnosis and the wrong fix.
   The app creates imported chats in a mode that auto-approves file edits but prompts on every

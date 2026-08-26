@@ -172,6 +172,7 @@ import {
   startOrchestrator,
   uninstallOrchestratorCommands,
 } from './orchestrator'
+import { runOrchestratorSelfTest } from './orchestrator-selftest'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { decideProposal, openProposalsForSession, reportProposalExecuted } from './proposals'
@@ -2074,6 +2075,19 @@ app.post('/api/orchestrator/ack', async (c) => {
 app.post('/api/orchestrator/check', async (c) => {
   await runOrchestratorOnce()
   return c.json({ ok: true, ...orchestratorView() })
+})
+// The orchestration self-test: run the real guards against real state and report what held.
+// Safe to run at any time - every artifact it touches is one it created (sacrificial ids, a
+// throwaway metadata store), and it never reads or writes a real chat. `deep: true` additionally
+// seeds ONE real desktop chat to prove the app-facing half works, then archives it.
+app.post('/api/orchestrator/selftest', async (c) => {
+  const body = await jsonBody(c)
+  try {
+    const report = await runOrchestratorSelfTest({ deep: body.deep === true })
+    return c.json(report, report.ok ? 200 : 500)
+  } catch (err) {
+    return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
+  }
 })
 // --- the action gate (owner law 2026-08-26: every action is AI-checked before it is made) ---
 // The daemon's detectors write proposals; the reviewer rules on each one here, EXECUTES the

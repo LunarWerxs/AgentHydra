@@ -62,6 +62,12 @@ import { dirname, join } from 'node:path'
 import DELAYO_COMMAND from '../../docs/delayo-command.md' with { type: 'text' }
 import ORCHESTRATE_COMMAND from '../../docs/orchestrate-command.md' with { type: 'text' }
 import RESUMEO_COMMAND from '../../docs/resumeo-command.md' with { type: 'text' }
+import {
+  type CodexTail,
+  type CodexThread,
+  listRecentCodexThreads,
+  readCodexTail,
+} from './codex-orchestration'
 import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { isSessionActive } from './dispatch'
@@ -121,6 +127,7 @@ export function getOrchestratorSettings(): OrchestratorSettings {
     newChatUltracode: getSetting('orch_new_chat_ultracode') !== '0',
     migrateOnLimit: getSetting('orch_migrate_on_limit') === '1',
     maxActiveChats: num('orch_max_active_chats', 0, 0, 500),
+    watchCodex: getSetting('orch_watch_codex') !== '0',
   }
 }
 
@@ -170,6 +177,8 @@ export function setOrchestratorSettings(
   if (typeof patch.migrateOnLimit === 'boolean')
     setSetting('orch_migrate_on_limit', patch.migrateOnLimit ? '1' : '0')
   clamp('orch_max_active_chats', patch.maxActiveChats, 0, 500)
+  if (typeof patch.watchCodex === 'boolean')
+    setSetting('orch_watch_codex', patch.watchCodex ? '1' : '0')
   return getOrchestratorSettings()
 }
 
@@ -969,6 +978,9 @@ export interface OrchestratorDeps {
   recentTranscripts: (claudeHome: string, nowMs: number) => RecentTranscript[]
   /** Is a headless dispatch currently running this session (an in-flight run, not stranded). */
   dispatchActive: (sessionId: string) => boolean
+  /** Recent Codex rollouts - the other agent this machine runs. */
+  codexThreads: (nowMs: number) => CodexThread[]
+  codexTail: (path: string) => CodexTail
   /** Desktop-chat metadata by session id: which instance's sidebar, and its archive flag. */
   sessionMeta: () => Map<
     string,
@@ -990,6 +1002,8 @@ const defaultDeps: OrchestratorDeps = {
   registry: readLiveRegistry,
   orphans: readOrphanedRegistry,
   recentTranscripts: listRecentTranscripts,
+  codexThreads: (nowMs) => listRecentCodexThreads(nowMs),
+  codexTail: readCodexTail,
   dispatchActive: isSessionActive,
   sessionMeta: sessionMetaMap,
   tailInfo: readTailInfo,
@@ -1419,6 +1433,56 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       firstSeenAt: nowIso,
       seenCount: 1,
     })
+  }
+
+  // -- Codex threads (the other half of a unified manager) --------------------
+  // Observe-only by construction: Codex exposes no live-process registry and no message
+  // channel, so these items tell the owner what is waiting without pretending the reviewer can
+  // drive it. Every one carries source:'codex' and deliverable:false for exactly that reason -
+  // a reviewer that nudged one would be talking into a void, the same failure the deaf-chat
+  // rail exists to stop.
+  if (s.watchCodex) {
+    try {
+      for (const t of deps.codexThreads(started)) {
+        if (doneSet.has(t.sessionId) || holdSet.has(t.sessionId)) continue
+        const quietSecs = Math.max(0, Math.round((started - t.mtimeMs) / 1000))
+        if (quietSecs < s.idleQuietSecs) continue
+        const tail = deps.codexTail(t.path)
+        if (tail.unreadable) continue
+        if (t.cwd) {
+          const list = byCwd.get(t.cwd) ?? []
+          byCwd.set(t.cwd, list) // its repo still counts for git hygiene, even unmessageable
+        }
+        const kind: AttentionItem['kind'] =
+          tail.ending === 'interrupted' ? 'interrupted' : 'idle_pending'
+        items.push({
+          key: `codex:${t.sessionId}`,
+          kind,
+          sessionId: t.sessionId,
+          cwd: t.cwd ?? undefined,
+          tailSnippet: tail.lastAgentText ?? undefined,
+          summary: `[codex] ${t.sessionId.slice(0, 8)} ${
+            tail.ending === 'interrupted'
+              ? 'was interrupted'
+              : tail.ending === 'mid-turn'
+                ? 'stopped mid-turn'
+                : 'finished'
+          } ${fmtQuiet(quietSecs)} ago${tail.recapDetected ? ' with a recap' : ''} - Codex cannot be messaged, so this is for the owner to pick up`,
+          detail: {
+            source: 'codex',
+            deliverable: false,
+            quietSecs,
+            ending: tail.ending,
+            recapDetected: tail.recapDetected,
+            rolloutPath: t.path,
+          },
+          firstSeenAt: nowIso,
+          seenCount: 1,
+        })
+      }
+    } catch (err) {
+      console.error('[agenthydra] codex scan failed:', err)
+    }
   }
 
   // -- git hygiene, one look per distinct cwd ---------------------------------

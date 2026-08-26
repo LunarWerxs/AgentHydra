@@ -549,6 +549,14 @@ function fakeDeps(over: Partial<OrchestratorDeps> & { tail?: TailInfo; mtime?: n
     registry: () => [session],
     orphans: () => [],
     recentTranscripts: () => [],
+    // Codex is observe-only and off this fixture's path by default; the codex tests inject it.
+    codexThreads: () => [],
+    codexTail: () => ({
+      ending: 'complete' as const,
+      lastAgentText: null,
+      recapDetected: false,
+      unreadable: true,
+    }),
     dispatchActive: () => false,
     sessionMeta: () => new Map(),
     tailInfo: () => tail,

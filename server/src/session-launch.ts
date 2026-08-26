@@ -349,21 +349,12 @@ export async function archiveDesktopChat(
   for (const profile of searchRoots) {
     const store = join(profile, 'claude-code-sessions')
     if (!existsSync(store)) continue
-    // Filename IS the key (local_<cliSessionId>.json), two levels down (org/user).
+    // BOTH shapes: `local_<cliSessionId>.json` for an imported chat, or the app's own filename
+    // with the CLI id inside for one the owner started. Filename-only matching meant archiving
+    // silently did nothing for almost every real chat (found by the self-test).
     let found: string | null = null
     try {
-      for (const org of readdirSync(store, { withFileTypes: true })) {
-        if (!org.isDirectory()) continue
-        for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
-          if (!user.isDirectory()) continue
-          const p = join(store, org.name, user.name, `local_${sessionId}.json`)
-          if (existsSync(p)) {
-            found = p
-            break
-          }
-        }
-        if (found) break
-      }
+      found = findChatMetaPath(profile, sessionId)
     } catch {
       continue
     }
@@ -422,19 +413,14 @@ export function desktopChatArchiveState(
     const store = join(profile, 'claude-code-sessions')
     if (!existsSync(store)) continue
     try {
-      for (const org of readdirSync(store, { withFileTypes: true })) {
-        if (!org.isDirectory()) continue
-        for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
-          if (!user.isDirectory()) continue
-          const p = join(store, org.name, user.name, `local_${sessionId}.json`)
-          if (!existsSync(p)) continue
-          found = true
-          try {
-            const meta = JSON.parse(readFileSync(p, 'utf8'))
-            if (meta.isArchived !== true) allArchived = false
-          } catch {
-            allArchived = false // unreadable = assume visible; a false "visible" only re-proposes
-          }
+      const p = findChatMetaPath(profile, sessionId)
+      if (p) {
+        found = true
+        try {
+          const meta = JSON.parse(readFileSync(p, 'utf8'))
+          if (meta.isArchived !== true) allArchived = false
+        } catch {
+          allArchived = false // unreadable = assume visible; a false "visible" only re-proposes
         }
       }
     } catch {
@@ -777,16 +763,38 @@ export function applyDesktopChatAutomation(instanceDir: string, sessionId: strin
   }
 }
 
-/** The metadata file for one chat inside one instance's store, or null. */
-function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
+/**
+ * The metadata file for one chat inside one instance's store, or null - matching BOTH of the
+ * shapes a chat can have on disk.
+ *
+ * `local_<cliSessionId>.json` is only how IMPORTED chats are filed. A chat created in the app is
+ * filed under the app's own id and carries the CLI id inside as `cliSessionId`, which is 98.7%
+ * of the owner's real chats. Every lookup here was filename-only, which meant archiving a chat
+ * the owner had actually started returned "no-desktop-chat-found" and quietly did nothing -
+ * found by the orchestration self-test on its first real run, in the same week the identical
+ * blindness was fixed in the surface guard.
+ */
+export function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
   const store = join(instanceDir, 'claude-code-sessions')
   try {
     for (const org of readdirSync(store, { withFileTypes: true })) {
       if (!org.isDirectory()) continue
       for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
         if (!user.isDirectory()) continue
-        const p = join(store, org.name, user.name, `local_${sessionId}.json`)
-        if (existsSync(p)) return p
+        const dir = join(store, org.name, user.name)
+        // Fast path: the imported shape, one existsSync.
+        const direct = join(dir, `local_${sessionId}.json`)
+        if (existsSync(direct)) return direct
+        // Then the created-in-app shape, which costs a directory read and a parse per file.
+        for (const f of readdirSync(dir)) {
+          if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+          try {
+            const meta = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { cliSessionId?: string }
+            if (meta.cliSessionId === sessionId) return join(dir, f)
+          } catch {
+            // one unreadable metadata file says nothing about the others
+          }
+        }
       }
     }
   } catch {

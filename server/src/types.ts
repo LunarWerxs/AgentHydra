@@ -1190,6 +1190,9 @@ export interface OrchestratorSettings {
    *  cap is reached, further idle chats are marked waiting-for-slot and the reviewer rotates
    *  them in round-robin (longest-idle gets the next free slot). */
   maxActiveChats: number
+  /** Watch Codex threads too, so one feed covers both agents this machine runs. Observe-only:
+   *  Codex has no message channel, so those items are marked deliverable:false. */
+  watchCodex: boolean
 }
 
 /** What kind of action a proposal asks for. 'revive' covers every flavor of dead thread
