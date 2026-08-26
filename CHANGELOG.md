@@ -5,6 +5,20 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-08-25
+
+### Changed
+
+- **Auto-revive now runs through the queue, not the keyboard.** The owner operates over
+  Remote Desktop while traveling: his remote input kept the user-idle safety gate closed
+  whenever he was connected, and a disconnected session locks the console where synthetic
+  input cannot land - so UI injection was structurally the wrong tool. Revives now run as a
+  one-turn resume through the queue with the revive prompt (the exact migrate-flow pattern in
+  production since v0.29), landed back into the chat's desktop app by the finalize import.
+  Needs neither the screen nor the keyboard, works connected or disconnected, and the turn's
+  own transcript is the engine verification. The UI-injection path remains in the codebase
+  but no longer drives.
+
 ## [0.34.4] - 2026-08-25
 
 ### Fixed

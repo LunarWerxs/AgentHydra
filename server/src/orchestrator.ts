@@ -1501,18 +1501,47 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   }
 }
 
+/** The revived thread's working directory: the item's, or read off the transcript's own
+ *  records (every CLI record carries the cwd it ran in). */
+function readTranscriptCwd(sessionId: string): string | null {
+  const root = join(homedir(), '.claude', 'projects')
+  try {
+    for (const d of readdirSync(root)) {
+      const p = join(root, d, `${sessionId}.jsonl`)
+      if (!existsSync(p)) continue
+      const head = readFileSync(p, 'utf8').slice(0, 64 * 1024).split('\n')
+      for (const line of head) {
+        try {
+          const cwd = (JSON.parse(line) as { cwd?: string }).cwd
+          if (typeof cwd === 'string' && cwd) return cwd
+        } catch {
+          // Keep looking.
+        }
+      }
+      return null
+    }
+  } catch {
+    // No store.
+  }
+  return null
+}
+
 /**
  * The auto-revive driver (owner order 2026-08-25: the orchestrator revives dead/deaf chats
  * ITSELF — a chat sitting six hours because nobody clicked it means the whole point is not
- * working). One attempt per tick, oldest orphaned item first, and only ever through
- * reviveDesktopChat's safety gates (user must be away from the keyboard; working engines are
- * untouchable; superseded lineages stay retired). 'user-active' is not a failure — it retries
- * next tick until the owner steps away. Attempt bookkeeping rides the ack table under
- * `auto-revive:<sid>` so a failing chat is retried on a cooldown instead of hammered.
+ * working). One attempt per tick, first eligible orphaned item, retried on an ack cooldown.
+ *
+ * MECHANISM (v0.35, the migrate pattern): a one-turn `--resume` through the queue with the
+ * revive prompt, landed back into the chat's desktop app by the finalize import — the exact
+ * delivery the migrate flow has used in production since v0.29. The earlier UI-injection
+ * path (type into the app) is retired as the driver: the owner operates over Remote Desktop
+ * while traveling, where his input keeps the user-idle gate closed while he is connected and
+ * the locked console defeats synthetic input when he is not. A queue turn needs neither the
+ * screen nor the keyboard, and its transcript IS the engine verification.
  */
 async function runAutoRevive(): Promise<void> {
   const s = getOrchestratorSettings()
-  if (!s.autoRevive || process.platform !== 'win32') return
+  if (!s.autoRevive) return
   const acks = activeAcks(Date.now())
   const item = state.reviveCandidates.find(
     (i) =>
@@ -1521,22 +1550,81 @@ async function runAutoRevive(): Promise<void> {
       !acks.get(`auto-revive:${i.sessionId}`),
   )
   if (!item?.sessionId || !item.instanceRef) return
-  const { reviveDesktopChat } = await import('./session-launch')
-  const res = await reviveDesktopChat({
-    sessionId: item.sessionId,
-    instanceDir: item.instanceRef.slice('desktop:'.length),
-    prompt: getOrchestratorPrompts().orphanRevive,
-  })
-  if (res.reason === 'user-active') return // the owner is typing; try again next tick
-  ackAttention(
-    `auto-revive:${item.sessionId}`,
-    res.engineVerified ? 'auto-revived' : `revive-failed: ${res.reason ?? 'engine-silent'}`,
-    res.engineVerified ? 60 : 15,
+  const sid = item.sessionId
+  const fail = (why: string, cooldownMins = 15): void => {
+    ackAttention(`auto-revive:${sid}`, `revive-failed: ${why}`, cooldownMins)
+    console.log(`[agenthydra] auto-revive ${sid.slice(0, 8)}: FAILED ${why}`)
+  }
+  const { isSessionSuperseded, liveSessionEntry, readDesktopChatTitle } = await import(
+    './session-launch'
   )
+  if (isSessionSuperseded(sid)) {
+    ackAttention(`auto-revive:${sid}`, 'superseded-lineage', 720)
+    return
+  }
+  // A DEAF chat's passive child must die before the queue turn (two writers, one transcript).
+  // Only deaf items are ever live here, and deaf means zero turns since spawn — nothing real
+  // is interrupted.
+  const live = liveSessionEntry(sid)
+  if (live) {
+    if (item.detail?.deaf !== true) return // paranoia: never kill a process we can't classify
+    try {
+      process.kill(live.pid)
+    } catch {
+      // Already exiting.
+    }
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline && liveSessionEntry(sid))
+      await new Promise((r) => setTimeout(r, 250))
+    if (liveSessionEntry(sid)) {
+      fail('could-not-stop-passive-process')
+      return
+    }
+  }
+  const cwd = item.cwd ?? readTranscriptCwd(sid)
+  if (!cwd) {
+    fail('cwd-unknown', 60)
+    return
+  }
+  const title =
+    readDesktopChatTitle(item.instanceRef.slice('desktop:'.length), sid) ??
+    scannerTitleFor(sid) ??
+    sid.slice(0, 8)
+  const id = crypto.randomUUID()
+  const posRow = db
+    .query<{ m: number | null }, []>('select max(position) as m from queue_items')
+    .get()
+  db.query(
+    `insert into queue_items
+       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at, import_to, import_title)
+     values (?, ?, ?, ?, ?, null, null, ?, null, ?, 0, 0, 'queued', ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    sid,
+    `Revive: ${title}`.slice(0, 200),
+    cwd,
+    getOrchestratorPrompts().orphanRevive,
+    // The fleet's chats run bypass (the owner's standing automation posture); a revive turn
+    // that stalls on a permission prompt would be a fresh flavor of dead.
+    'bypassPermissions',
+    item.instanceRef,
+    (posRow?.m ?? 0) + 1,
+    new Date().toISOString(),
+    Date.now(),
+    item.instanceRef,
+    title.slice(0, 200),
+  )
+  const { coerceQueueItem } = await import('./db')
+  const raw = db.query('select * from queue_items where id = ?').get(id)
+  if (!raw) {
+    fail('queue-row-vanished')
+    return
+  }
+  const { dispatchItem } = await import('./dispatch')
+  void dispatchItem(coerceQueueItem(raw))
+  ackAttention(`auto-revive:${sid}`, 'auto-revive-dispatched', 60)
   console.log(
-    `[agenthydra] auto-revive ${item.sessionId.slice(0, 8)}: ok=${res.ok} engine=${
-      res.engineVerified ?? false
-    } ${res.reason ?? ''}`,
+    `[agenthydra] auto-revive ${sid.slice(0, 8)}: dispatched one-turn resume (queue ${id.slice(0, 8)}) -> imports back to ${item.instanceRef}`,
   )
 }
 
