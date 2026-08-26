@@ -5,6 +5,19 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.4] - 2026-08-25
+
+### Fixed
+
+- **Session ROLL discovered, and the re-import loop it caused killed.** A desktop chat that
+  continues rolls onto a NEW underlying session id while its sidebar entry keeps the original
+  id in its filename. Every lookup keyed by the new id then reports the original as
+  "invisible", so the visibility sweep re-imported (and re-titled) an already-visible chat
+  every cycle - caught within minutes by the per-import logging added one release earlier.
+  Visibility is now judged by the entry FILE (roll-proof) plus liveness, and revive's engine
+  verification watches the chat's own metadata activity as well as the transcript, so a
+  revive that rolls the session still verifies. The clobbered chat title was restored.
+
 ## [0.34.3] - 2026-08-25
 
 ### Fixed

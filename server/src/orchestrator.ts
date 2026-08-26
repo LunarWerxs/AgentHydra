@@ -1585,11 +1585,18 @@ export async function sweepInvisibleChats(): Promise<number> {
   )
   const seenSessions = new Set<string>()
   let imported = 0
-  const { importSessionToDesktop } = await import('./session-launch')
+  const { findDesktopEntryFile, importSessionToDesktop, liveSessionEntry } = await import(
+    './session-launch'
+  )
   for (const r of rows) {
     if (!r.session_id || seenSessions.has(r.session_id)) continue
     seenSessions.add(r.session_id)
     if (metaMap.has(r.session_id) || doneSet.has(r.session_id)) continue
+    // A live session is already somewhere the owner can see (or deliberately opened); and the
+    // FILE-level check is the roll-proof one — a continued chat rolls onto a new cliSessionId,
+    // making cliSessionId-keyed maps report the original id as invisible forever.
+    if (liveSessionEntry(r.session_id)) continue
+    if (await findDesktopEntryFile(r.session_id)) continue
     const ref = r.instance_ref ?? instanceRefForSession(r.session_id)
     if (!ref?.startsWith('desktop:')) continue
     try {

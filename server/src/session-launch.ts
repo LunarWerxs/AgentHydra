@@ -659,12 +659,42 @@ export async function reviveDesktopChat(opts: {
   if (!running) return { ok: false, reason: 'instance-not-running: reviving would boot it' }
 
   const transcript = findTranscriptPath(opts.sessionId)
-  const mtimeOf = (): number => {
+  // Engine evidence, roll-proof: a desktop chat that continues can roll onto a NEW
+  // cliSessionId, so the typed turn's writes may land in a different transcript than the id
+  // we revived. The chat's own metadata (lastActivityAt, and cliSessionId itself changing)
+  // moves either way, so activity = transcript growth OR metadata movement.
+  const metaFile = ((): string | null => {
+    const store = join(opts.instanceDir, 'claude-code-sessions')
     try {
-      return transcript ? statSync(transcript).mtimeMs : 0
+      for (const org of readdirSync(store, { withFileTypes: true })) {
+        if (!org.isDirectory()) continue
+        for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+          if (!user.isDirectory()) continue
+          const p = join(store, org.name, user.name, `local_${opts.sessionId}.json`)
+          if (existsSync(p)) return p
+        }
+      }
     } catch {
-      return 0
+      // No store yet.
     }
+    return null
+  })()
+  const mtimeOf = (): number => {
+    let m = 0
+    try {
+      if (transcript) m = statSync(transcript).mtimeMs
+    } catch {
+      // Transcript gone mid-check: metadata still speaks.
+    }
+    try {
+      if (metaFile) {
+        const d = JSON.parse(readFileSync(metaFile, 'utf8')) as { lastActivityAt?: number }
+        if (typeof d.lastActivityAt === 'number' && d.lastActivityAt > m) m = d.lastActivityAt
+      }
+    } catch {
+      // Unreadable metadata: transcript alone decides.
+    }
+    return m
   }
 
   // A live process only dies here when its engine is provably NOT working: transcript quiet
@@ -754,6 +784,44 @@ export async function reviveDesktopChat(opts: {
     await new Promise((r) => setTimeout(r, 5000))
   }
   return { ok: true, engineVerified: false, reason: 'typed-but-engine-silent' }
+}
+
+/**
+ * The desktop metadata FILE for a session id, searched across every instance's store. This is
+ * the roll-proof visibility test: a desktop chat that continues rolls onto a NEW cliSessionId
+ * while its metadata file keeps the ORIGINAL id in its name — so any lookup keyed by
+ * cliSessionId (sessionMetaMap) reports the original id as missing and, unguarded, the
+ * visibility sweep re-imports an already-visible chat forever (found live 2026-08-25: the
+ * architect chat re-imported and re-titled every cycle).
+ */
+export async function findDesktopEntryFile(
+  sessionId: string,
+): Promise<{ instanceDir: string; path: string; cliSessionId: string | null } | null> {
+  const { listInstances } = await import('./core/instances')
+  for (const inst of await listInstances()) {
+    const store = join(inst.dir, 'claude-code-sessions')
+    try {
+      for (const org of readdirSync(store, { withFileTypes: true })) {
+        if (!org.isDirectory()) continue
+        for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+          if (!user.isDirectory()) continue
+          const p = join(store, org.name, user.name, `local_${sessionId}.json`)
+          if (!existsSync(p)) continue
+          let cli: string | null = null
+          try {
+            const d = JSON.parse(readFileSync(p, 'utf8')) as { cliSessionId?: string }
+            cli = typeof d.cliSessionId === 'string' ? d.cliSessionId : null
+          } catch {
+            // Shape unknown: the file existing is still visibility.
+          }
+          return { instanceDir: inst.dir, path: p, cliSessionId: cli }
+        }
+      }
+    } catch {
+      // No store in this instance.
+    }
+  }
+  return null
 }
 
 /** The chat's title from the instance's own metadata store — the row-finder's search key.
