@@ -23,6 +23,7 @@ import type {
   MonitorView,
   NotificationSettings,
   NotifyDeliveryResult,
+  OrchestratorPromptKey,
   OrchestratorSettings,
   OrchestratorView,
   PermissionMode,
@@ -86,6 +87,7 @@ export type {
   NotificationSettings,
   NotifyDeliveryResult,
   OrchestratorInstance,
+  OrchestratorPromptKey,
   OrchestratorSettings,
   OrchestratorView,
   PermissionMode,
@@ -746,8 +748,25 @@ export const runMonitorCheck = () =>
 
 // --- orchestrator (docs/ORCHESTRATOR.md) ----------------------------------------
 export const getOrchestrator = () => j<OrchestratorView>('/api/orchestrator')
-export const updateOrchestrator = (b: Partial<OrchestratorSettings>) =>
-  j<OrchestratorView>('/api/orchestrator', { method: 'POST', body: JSON.stringify(b) })
+export const updateOrchestrator = (
+  b: Partial<OrchestratorSettings> & {
+    /** Prompt-template edits; blank (or the default text verbatim) resets that key. */
+    prompts?: Partial<Record<OrchestratorPromptKey, string>>
+  },
+) => j<OrchestratorView>('/api/orchestrator', { method: 'POST', body: JSON.stringify(b) })
+/** (Re)install the shipped /orchestrate, /delayo, /resumeo commands into ~/.claude/commands. */
+export const installOrchestratorCommands = (force = false) =>
+  j<{ ok: boolean; files: Array<{ file: string; outcome: string; path: string }> }>(
+    '/api/orchestrator/install-command',
+    { method: 'POST', body: JSON.stringify({ force }) },
+  )
+/** The opt-out: disable the orchestrator and remove its shipped commands from this machine. */
+export const uninstallOrchestratorCommands = () =>
+  j<{
+    ok: boolean
+    disabled: boolean
+    files: Array<{ file: string; outcome: string; path: string }>
+  }>('/api/orchestrator/uninstall-command', { method: 'POST', body: JSON.stringify({}) })
 /** Park (or unpark) one thread — the same switch `/delayo` and `/resumeo` throw from inside a
  *  chat. Returns the fresh holds list so a caller can adopt the server's answer rather than
  *  guessing at it. */

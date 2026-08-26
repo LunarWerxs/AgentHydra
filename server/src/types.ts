@@ -1245,8 +1245,27 @@ export interface AttentionItem {
   seenCount: number
 }
 
+/** The named messages the orchestrator sends into chats. The shipped texts are the defaults;
+ *  the owner can edit each (Settings -> Automation -> Prompts) and a blank edit restores the
+ *  default. Placeholders in <angle brackets> are substituted by the sender. */
+export type OrchestratorPromptKey =
+  | 'resumeNudge'
+  | 'handoffRequest'
+  | 'staleTaskNudge'
+  | 'hardCutoff'
+  | 'overloadNudge'
+  | 'commitNudge'
+  | 'branchNudge'
+  | 'orphanRevive'
+  | 'migrationNotice'
+
 export interface OrchestratorView {
   settings: OrchestratorSettings
+  /** Resolved prompt set: the owner's edit where one exists, the shipped default otherwise.
+   *  The REVIEWER reads its outgoing message texts from here, so edits apply on its next wake. */
+  prompts: Record<OrchestratorPromptKey, string>
+  /** The shipped defaults, so an editor can show diffs and offer per-prompt reset. */
+  promptDefaults: Record<OrchestratorPromptKey, string>
   attention: AttentionItem[]
   /** The desktop fleet with usage joined — the routing table for nudges/handoffs/launches. */
   instances: OrchestratorInstance[]

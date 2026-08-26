@@ -176,7 +176,15 @@ A graceful CLI exit deletes its own `~/.claude/sessions/<pid>.json`; a hard stop
 restart, crash, kill) leaves the file behind with a dead pid. The watcher reads that residue
 every tick: superseded files (the session lives again under a new pid), done-marked lineages,
 and owner-archived chats are cleaned silently; everything else is genuinely unfinished work
-and becomes an `orphaned` item after `idleQuietSecs` of transcript silence. The whole flow is
+and becomes an `orphaned` item after `idleQuietSecs` of transcript silence.
+
+The second flavor has NO residue: a normal PC restart shuts sessions down gracefully, so the
+registry file is deleted while the chat still sits un-archived in a desktop sidebar with a
+transcript that ends mid-turn (found live 2026-08-25: an architect chat sat "CLICK TO RESUME"
+through a restart, invisible to the dead-pid pass). The STRANDED scan covers it: every tick,
+transcripts touched in the last 48h (a ~60ms store walk) are checked, and a non-live,
+non-done, non-held, non-archived desktop chat with a mid-turn tail and no in-flight dispatch
+becomes the same `orphaned` item with `detail.stranded: true`. The whole flow is
 self-healing - the moment the owner clicks a dead desktop chat back to life (or a terminal
 resume lands), the next tick sees the live successor and retires the orphan file. Queue runs
 that were in flight when the daemon died are a separate, older recovery (`reattachRuns` at
@@ -274,6 +282,32 @@ Turning it off is the reverse in either order; each half degrades safely without
 | `newChatUltracode` | `true` | prepend the `ultracode` opt-in keyword to every orchestrator-started chat's prompt |
 | `migrateOnLimit` | `false` | 5-hour-limited runs (weekly fine) resume immediately on another running account instead of waiting for the reset; needs the auto-resume monitor on |
 | `maxActiveChats` | 0 (unlimited) | caps how many chats may actively WORK at once, fleet-wide. Past the cap the watcher marks overflow idle chats `waitingForSlot` and the reviewer skips them without acking; the rotation is round-robin by construction: longest-idle gets the next free slot, a nudged chat re-enters at the back. Only resume nudges and new work are gated; answers, handoff continuations (replacements), and orphan revives never wait |
+
+### Prompts (editable, defaults shipped)
+
+Every message the machinery sends into a chat is a named template: `resumeNudge`,
+`handoffRequest`, `staleTaskNudge`, `hardCutoff`, `overloadNudge`, `commitNudge`,
+`branchNudge`, `orphanRevive`, `migrationNotice`. The shipped texts are the defaults; the
+owner edits any of them under Settings -> Automation -> Orchestrator -> Prompts (or
+`POST /api/orchestrator {"prompts": {...}}`), and a blank edit (or saving the default text
+verbatim) restores the default so future shipped improvements still land. `GET
+/api/orchestrator` serves the resolved set as `prompts` plus `promptDefaults`; the reviewer
+always sends `prompts.<name>` from the feed, and the daemon uses `migrationNotice` itself for
+migrate flows. Placeholders in `<angle brackets>` are substituted at send time.
+
+### Load balancing (5-hour windows)
+
+The `instances` routing table arrives pre-sorted for placement: running first, then weekly
+band (reset-soon counts as healthy, the dump-target exemption), then LOWEST 5-hour session
+%, then lowest weekly %. With several accounts open, consecutive placements spread across the
+top rows instead of stacking one account's 5-hour window (owner rule 2026-08-25).
+
+### Removing it
+
+`POST /api/orchestrator/uninstall-command` (Settings: "Remove & disable", or the
+`orchestrator_uninstall_command` MCP tool) turns the watcher off and deletes the three
+shipped command files from `~/.claude/commands`, edited copies included. Reinstalling is one
+enable (or the install endpoint) away.
 
 ## Where new sessions show up (and where they cannot)
 

@@ -1,5 +1,8 @@
 // SettingsView strings — scheduler controls and account credential management.
 export default {
+  // top-level tabs
+  tabGeneral: 'General',
+  tabAutomation: 'Automation',
   // appearance section
   appearance: 'Appearance',
   themeLabel: 'Theme',

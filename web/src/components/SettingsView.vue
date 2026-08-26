@@ -52,6 +52,7 @@ import { composeSessionPathClipboard } from '@/lib/session-clipboard'
 import { useTheme } from '@/lib/theme'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
+import SettingsTabs from '@/shell/SettingsTabs.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 import SettingsGroup from '@/shell/SettingsGroup.vue'
 import SettingsRow from '@/shell/SettingsRow.vue'
@@ -72,6 +73,18 @@ function setSectionEl(id: string, el: unknown) {
   sectionEls.value[id] = el as { $el?: HTMLElement } | HTMLElement | null as HTMLElement | null
 }
 
+// General vs Automation (owner request 2026-08-25: the page got long and confusing, and the
+// automation machinery — scheduler, orchestrator, auto-resume monitor — is a coherent chunk).
+// Sections stay MOUNTED behind v-show per SettingsTabs' consumer rule, so open-watchers and
+// deep-link section refs keep working on the hidden tab.
+const settingsTab = ref<'general' | 'automation'>('general')
+const settingsTabs = computed(() => [
+  { id: 'general' as const, label: t('settings.tabGeneral') },
+  { id: 'automation' as const, label: t('settings.tabAutomation') },
+])
+/** Section ids that live on the Automation tab — a deep link to one flips the tab first. */
+const AUTOMATION_SECTIONS = new Set(['scheduler'])
+
 // Which section is currently flashing after a deep link. A scroll alone lands you somewhere without
 // saying WHERE — on a page of near-identical cards the arrival is ambiguous, so the target pulses
 // briefly (see .settings-flash in style.css). Cleared on a timer, and re-armed if a second deep link
@@ -83,6 +96,9 @@ const { settingsRequestedTab } = usePanels()
 function consumeRequestedTab() {
   const req = settingsRequestedTab.value
   if (req) {
+    // The target may live on the other tab — flip first, or scrollIntoView lands on a
+    // display:none node and does nothing.
+    settingsTab.value = AUTOMATION_SECTIONS.has(req) ? 'automation' : 'general'
     // Wait a tick so the section is laid out (view may be mounting fresh), then scroll to it.
     nextTick(() => {
       const el = sectionEls.value[req]
@@ -702,8 +718,13 @@ defineExpose({ save })
 
 <template>
   <div class="mx-auto max-w-3xl space-y-6 overflow-y-auto p-6">
-    <!-- One scrolling page (tabs merged). Sections carry a ref so a deep link
-         (composer's tomorrow gear → 'scheduler') can scroll straight to them. -->
+    <!-- Two tabs: General, and Automation (scheduler + orchestrator + auto-resume monitor).
+         Sections carry a ref so a deep link (composer's tomorrow gear → 'scheduler') can flip
+         the tab and scroll straight to them. Both tabs stay MOUNTED (v-show) so watchers and
+         deep-link refs keep working on the hidden one. -->
+    <SettingsTabs v-model="settingsTab" :tabs="settingsTabs" />
+
+    <div v-show="settingsTab === 'general'" class="space-y-6">
 
     <!-- appearance -->
     <SettingsGroup :label="$t('settings.appearance')">
@@ -1314,13 +1335,15 @@ defineExpose({ save })
       <p v-if="syncError" class="px-3.5 pb-2.5 text-xs text-destructive">{{ syncError }}</p>
     </SettingsGroup>
 
+    </div>
+
+    <div v-show="settingsTab === 'automation'" class="space-y-6">
+
     <!-- scheduler (deep-link target: the queue drawer's indicator, the header chip and the
          composer's tomorrow gear all scroll here).
-         The ref sits on the GROUP, not on a wrapper div. A wrapper is what caused the missing gap
-         above the auto-resume monitor: the page's space-y-6 only applies between its DIRECT
-         children, so two groups sharing one wrapper got no margin between them. Anchoring the deep
-         link to the group itself keeps both groups direct children, and scopes the landing flash to
-         the section actually asked for rather than to both at once. -->
+         The ref sits on the GROUP, not on a wrapper div — within this tab's own space-y-6
+         wrapper, groups must stay DIRECT children or they lose the margin between them, and
+         the landing flash must scope to the one section asked for. -->
     <SettingsGroup
       :ref="(el) => setSectionEl('scheduler', el)"
       :label="$t('settings.scheduler')"
@@ -1461,6 +1484,8 @@ defineExpose({ save })
         </div>
       </ExpandTransition>
     </SettingsGroup>
+
+    </div>
 
     <!-- No Accounts group here anymore. It listed only LEGACY pasted credentials, which are
          nobody's normal path since accounts arrived by signing an instance in, so for almost

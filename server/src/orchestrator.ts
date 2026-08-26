@@ -52,6 +52,7 @@ import ORCHESTRATE_COMMAND from '../../docs/orchestrate-command.md' with { type:
 import RESUMEO_COMMAND from '../../docs/resumeo-command.md' with { type: 'text' }
 import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
+import { isSessionActive } from './dispatch'
 import { instanceRefForSession, sessionMetaMap } from './instance-sessions'
 import { classifyEnding, type SessionEnding } from './session-ending'
 import { archiveDesktopChat, sweepUntitledDesktopChats } from './session-launch'
@@ -157,6 +158,102 @@ export function setOrchestratorSettings(
     setSetting('orch_migrate_on_limit', patch.migrateOnLimit ? '1' : '0')
   clamp('orch_max_active_chats', patch.maxActiveChats, 0, 500)
   return getOrchestratorSettings()
+}
+
+// --- the prompts the orchestrator sends into chats ---------------------------
+// Every message the machinery sends a chat is a named template the owner can edit (Settings ->
+// Automation -> Prompts). The shipped texts are the defaults and stay authoritative when a key
+// is unset or blank; an edit is stored per key and survives updates. Placeholders in <angle
+// brackets> (<n>, <cwd>, <duration>, <m>, <x>) are substituted by the sender before delivery.
+
+export const ORCHESTRATOR_PROMPT_DEFAULTS = {
+  /** The classic nudge for an idle chat whose recap recommends safe next steps. */
+  resumeNudge: 'Resume working on whatever you recommend next.',
+  /** Sent when a chat's context passes ctxHandoffTokens. */
+  handoffRequest:
+    'Your context is getting very large. Finish anything in flight, update all relevant ' +
+    'markdown files, then give me a handoff prompt a fresh session can use to continue ' +
+    'seamlessly - include repo paths, current verified state, and next steps.',
+  /** Sent when a chat has been waiting on background tasks that went silent. */
+  staleTaskNudge:
+    '[orchestrator] You have been waiting on background tasks that have produced nothing for ' +
+    '<duration> - they are almost certainly dead or their completion never woke you. Check ' +
+    'their status and output files now, kill or restart what is needed, and continue the work. ' +
+    'If their results are unrecoverable, redo that work directly. Do not go back to waiting.',
+  /** Sent to every live chat on an account that crossed the hard weekly cutoff. */
+  hardCutoff:
+    'URGENT: this account is at <n>% weekly. Stop after your current step, commit and sync ' +
+    'your own files (path-scoped git add, never git add -A; check repo visibility before any ' +
+    'push), and give me a handoff prompt. Do not start anything new.',
+  /** Sent once to a chat that stopped on a 529 server overload. */
+  overloadNudge: 'You stopped on a server overload. Please continue where you left off.',
+  /** Sent to the longest-idle chat of a repo that has sat dirty past dirtyMins. */
+  commitNudge:
+    'The repo at <cwd> has had <n> uncommitted file(s) for <m> minutes and nothing is syncing ' +
+    'them. If those changes are yours and complete: commit and push ONLY your own files ' +
+    '(path-scoped git add, never git add -A). Before any push, check whether the repo is ' +
+    'PUBLIC and follow the public-repo warning protocol. If they are not your changes, say so ' +
+    'and stop.',
+  /** Sent to a chat working on a non-main branch. */
+  branchNudge:
+    "You are on branch '<x>'. Standing rule: all work on main, one branch only. Merge your " +
+    'work back onto main without discarding anything, then continue on main.',
+  /** The resume turn for a session whose process died mid-work (restart/crash/kill). */
+  orphanRevive:
+    '[orchestrator] Your process died mid-work (computer restart or crash). Review your last ' +
+    'steps, verify what actually landed on disk, and resume from where you truly are - files ' +
+    'may be ahead of or behind your notes.',
+  /** The one-turn notice a chat runs while being migrated to another account. Starts with the
+   *  [orchestrator] marker so transcript parsers classify it as plumbing, never as the human's
+   *  standing instruction (a marker-less version once made every migrated thread read as
+   *  human-held, and the reviewer politely never touched them again). */
+  migrationNotice:
+    '[orchestrator] You are being migrated to a different account and this thread will appear ' +
+    "in the owner's desktop app shortly. In a few lines: state what this thread is working on, " +
+    'what is verified complete so far, and the concrete next steps. Do not start new work in ' +
+    'this turn and do not touch any files; after this turn, this notice is spent - resume ' +
+    'normally when the owner or the orchestrator next asks.',
+} as const
+
+export type OrchestratorPromptKey = keyof typeof ORCHESTRATOR_PROMPT_DEFAULTS
+
+const PROMPT_SETTING_KEYS: Record<OrchestratorPromptKey, string> = {
+  resumeNudge: 'orch_prompt_resume_nudge',
+  handoffRequest: 'orch_prompt_handoff_request',
+  staleTaskNudge: 'orch_prompt_stale_task_nudge',
+  hardCutoff: 'orch_prompt_hard_cutoff',
+  overloadNudge: 'orch_prompt_overload_nudge',
+  commitNudge: 'orch_prompt_commit_nudge',
+  branchNudge: 'orch_prompt_branch_nudge',
+  orphanRevive: 'orch_prompt_orphan_revive',
+  migrationNotice: 'orch_prompt_migration_notice',
+}
+
+/** The resolved prompt set: the owner's edit where one exists, the shipped default otherwise. */
+export function getOrchestratorPrompts(): Record<OrchestratorPromptKey, string> {
+  const out = {} as Record<OrchestratorPromptKey, string>
+  for (const key of Object.keys(ORCHESTRATOR_PROMPT_DEFAULTS) as OrchestratorPromptKey[]) {
+    const stored = getSetting(PROMPT_SETTING_KEYS[key]).trim()
+    out[key] = stored || ORCHESTRATOR_PROMPT_DEFAULTS[key]
+  }
+  return out
+}
+
+/** Store edits. Blank, or text identical to the default, clears the override (so a reset in the
+ *  UI is just "save the default text" and future default improvements reach that machine). */
+export function setOrchestratorPrompts(
+  patch: Partial<Record<OrchestratorPromptKey, string>>,
+): Record<OrchestratorPromptKey, string> {
+  for (const key of Object.keys(ORCHESTRATOR_PROMPT_DEFAULTS) as OrchestratorPromptKey[]) {
+    const v = patch[key]
+    if (typeof v !== 'string') continue
+    const trimmed = v.trim()
+    setSetting(
+      PROMPT_SETTING_KEYS[key],
+      trimmed && trimmed !== ORCHESTRATOR_PROMPT_DEFAULTS[key] ? trimmed.slice(0, 4000) : '',
+    )
+  }
+  return getOrchestratorPrompts()
 }
 
 // --- tiny persisted KV (dirty-since, usage baselines) -----------------------
@@ -327,6 +424,50 @@ function readLiveRegistry(claudeHome: string): LiveSession[] {
 
 export function readOrphanedRegistry(claudeHome: string): OrphanSession[] {
   return scanRegistry(claudeHome).orphans
+}
+
+/** Recent transcripts on disk: the raw material of the STRANDED-chat scan. A PC restart shuts
+ *  sessions down GRACEFULLY, and a graceful exit deletes its own registry file — so the
+ *  dead-pid orphan pass has no residue to read, while the chat's transcript still ends
+ *  mid-turn and its entry still sits un-archived in a desktop sidebar. This enumerates the
+ *  store cheaply (measured: 0.06s for 1331 files); the caller applies every gate. */
+export interface RecentTranscript {
+  sessionId: string
+  path: string
+  mtimeMs: number
+}
+
+const STRANDED_WINDOW_MS = 48 * 3600 * 1000
+
+export function listRecentTranscripts(claudeHome: string, nowMs: number): RecentTranscript[] {
+  const root = join(claudeHome, 'projects')
+  const out: RecentTranscript[] = []
+  let dirs: string[] = []
+  try {
+    dirs = readdirSync(root)
+  } catch {
+    return []
+  }
+  for (const d of dirs) {
+    let files: string[] = []
+    try {
+      files = readdirSync(join(root, d))
+    } catch {
+      continue
+    }
+    for (const f of files) {
+      if (!f.endsWith('.jsonl')) continue
+      const path = join(root, d, f)
+      try {
+        const m = statSync(path).mtimeMs
+        if (nowMs - m <= STRANDED_WINDOW_MS)
+          out.push({ sessionId: f.slice(0, -'.jsonl'.length), path, mtimeMs: m })
+      } catch {
+        // A file deleted mid-scan is just not recent.
+      }
+    }
+  }
+  return out
 }
 
 /** Remove a stale registry file and its `<pid>.*.key` siblings. Only ever called for entries
@@ -725,9 +866,19 @@ export function buildInstanceRows(
       stale,
     }
   })
-  // Running first, then most headroom first — the order a router wants to read.
+  // Running first, then the router's preference order. The 5-HOUR window is the tiebreak inside
+  // a weekly band (owner rule 2026-08-25: with several accounts open, spread work so no one
+  // account's 5-hour window gets hammered): the weekly band decides who is ELIGIBLE, the session
+  // pct decides who is NEXT, and weekly pct settles the rest. An account resetting soon ranks
+  // with the healthy ones — its week is about to wipe, the standing dump-target exemption.
+  const bandRank = (r: OrchestratorInstance): number =>
+    r.resetsSoon ? 0 : { ok: 0, elevated: 1, high: 2, critical: 3, unknown: 4 }[r.band]
   return rows.sort((a, b) => {
     if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1
+    const br = bandRank(a) - bandRank(b)
+    if (br !== 0) return br
+    const sp = (a.sessionPct ?? 101) - (b.sessionPct ?? 101)
+    if (sp !== 0) return sp
     return (a.weeklyPct ?? 101) - (b.weeklyPct ?? 101)
   })
 }
@@ -763,6 +914,12 @@ export interface OrchestratorDeps {
   registry: (claudeHome: string) => LiveSession[]
   /** Registry files whose pid is dead: sessions that died mid-process (restart/crash/kill). */
   orphans: (claudeHome: string) => OrphanSession[]
+  /** Transcripts touched within the stranded window — see listRecentTranscripts. */
+  recentTranscripts: (claudeHome: string, nowMs: number) => RecentTranscript[]
+  /** Is a headless dispatch currently running this session (an in-flight run, not stranded). */
+  dispatchActive: (sessionId: string) => boolean
+  /** Desktop-chat metadata by session id: which instance's sidebar, and its archive flag. */
+  sessionMeta: () => Map<string, { instance: string; archived: boolean }>
   tailInfo: (path: string) => TailInfo
   mtimeMs: (path: string) => number | null
   /** See taskActivityMtime. Null = the session has no background-task outputs at all. */
@@ -778,6 +935,9 @@ const defaultDeps: OrchestratorDeps = {
   claudeHome: () => join(homedir(), '.claude'),
   registry: readLiveRegistry,
   orphans: readOrphanedRegistry,
+  recentTranscripts: listRecentTranscripts,
+  dispatchActive: isSessionActive,
+  sessionMeta: sessionMetaMap,
   tailInfo: readTailInfo,
   mtimeMs: (path) => {
     try {
@@ -1015,11 +1175,11 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   // file never shadows its live successor (self-healing once the owner clicks the chat back
   // to life or a resume lands).
   const liveIds = new Set(sessions.map((x) => x.sessionId))
-  let metaMap: Map<string, { archived: boolean }> = new Map()
+  let metaMap: Map<string, { instance: string; archived: boolean }> = new Map()
   try {
-    metaMap = sessionMetaMap()
+    metaMap = deps.sessionMeta()
   } catch {
-    // No desktop metadata just means the owner-archived check is skipped this tick.
+    // No desktop metadata just means the owner-archived and stranded checks skip this tick.
   }
   const newestOrphan = new Map<string, OrphanSession>()
   for (const o of deps.orphans(deps.claudeHome())) {
@@ -1075,6 +1235,56 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
         ctxTokens: tail.ctxTokens,
         recapDetected: tail.recapDetected,
         handoffDetected: tail.handoffDetected,
+        lastHumanText: tail.lastHumanText,
+        lastHumanAt: tail.lastHumanAt,
+      },
+      firstSeenAt: nowIso,
+      seenCount: 1,
+    })
+  }
+
+  // -- stranded desktop chats: killed GRACEFULLY mid-work, so no residue -------
+  // A PC restart shuts sessions down cleanly, and a clean exit deletes its own registry file —
+  // the orphan pass above then has nothing to read, while the chat still sits un-archived in a
+  // desktop sidebar with a transcript that ends mid-turn. Found live 2026-08-25: the owner's
+  // "CLICK TO RESUME" architect chat sat pending through a restart precisely this way. Scan
+  // recent transcripts (48h window; the store scan is ~60ms) and surface any non-live,
+  // non-done, non-held, non-archived DESKTOP chat whose tail is mid-work as the same
+  // 'orphaned' scenario. midTurn-only keeps precision: a finished chat idling in a sidebar is
+  // the sidebar's normal state, not a stranding.
+  const orphanFlagged = new Set(
+    items.filter((i) => i.kind === 'orphaned').map((i) => i.sessionId as string),
+  )
+  for (const t of deps.recentTranscripts(deps.claudeHome(), started)) {
+    if (liveIds.has(t.sessionId) || orphanFlagged.has(t.sessionId)) continue
+    if (doneSet.has(t.sessionId) || holdSet.has(t.sessionId)) continue
+    const meta = metaMap.get(t.sessionId)
+    if (!meta || meta.archived) continue // only chats that live in a desktop sidebar
+    if (deps.dispatchActive(t.sessionId)) continue // an in-flight headless run is not stranded
+    const quietSecs = Math.max(0, Math.round((started - t.mtimeMs) / 1000))
+    if (quietSecs < s.idleQuietSecs) continue
+    let tail: TailInfo
+    try {
+      tail = deps.tailInfo(t.path)
+    } catch {
+      continue
+    }
+    if (!tail.midTurn) continue
+    const title = scannerTitleFor(t.sessionId)
+    items.push({
+      key: `orphan:${t.sessionId}`,
+      kind: 'orphaned',
+      sessionId: t.sessionId,
+      instanceRef: deps.instanceRef(t.sessionId) ?? undefined,
+      tailSnippet: tail.lastAssistantText ?? undefined,
+      summary: `${title ?? t.sessionId.slice(0, 8)} is STRANDED mid-work ${fmtQuiet(quietSecs)} ago — no process (graceful shutdown/restart left no residue), still open in the ${meta.instance} app's sidebar; revive per the surface preference`,
+      detail: {
+        quietSecs,
+        stranded: true,
+        instance: meta.instance,
+        midTurn: tail.midTurn,
+        ending: tail.ending,
+        ctxTokens: tail.ctxTokens,
         lastHumanText: tail.lastHumanText,
         lastHumanAt: tail.lastHumanAt,
       },
@@ -1278,6 +1488,8 @@ function fmtQuiet(secs: number): string {
 export function orchestratorView(): OrchestratorView {
   return {
     settings: getOrchestratorSettings(),
+    prompts: getOrchestratorPrompts(),
+    promptDefaults: ORCHESTRATOR_PROMPT_DEFAULTS,
     attention: state.attention,
     instances: state.instances,
     holds: listSessionHolds().map((h) => ({
@@ -1378,5 +1590,20 @@ export function installOrchestratorCommands(
       writeFileSync(path, text)
     }
     return { file, outcome, path }
+  })
+}
+
+/** The opt-out mirror of installOrchestratorCommands: remove the shipped /orchestrate, /delayo
+ *  and /resumeo files from the user's commands directory. Removes edited copies too — "remove
+ *  the orchestrator and its commands" means gone, and the shipped texts are always one
+ *  reinstall away. A file that is not there reports 'missing' rather than erroring. */
+export function uninstallOrchestratorCommands(
+  commandsDir: string = join(homedir(), '.claude', 'commands'),
+): Array<{ file: string; outcome: 'removed' | 'missing'; path: string }> {
+  return SHIPPED_COMMANDS.map(({ file }) => {
+    const path = join(commandsDir, file)
+    if (!existsSync(path)) return { file, outcome: 'missing' as const, path }
+    rmSync(path, { force: true })
+    return { file, outcome: 'removed' as const, path }
   })
 }

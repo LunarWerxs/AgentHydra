@@ -7,10 +7,19 @@
 // Self-contained on purpose: SettingsView.vue mounts it with one line. Every save round-trips
 // through POST /api/orchestrator and re-adopts the server's answer, so a clamped or refused
 // value shows as what actually stuck, never as what was typed.
-import { Bot, ChevronDown, PauseCircle, Play, SlidersHorizontal } from '@lucide/vue'
+import {
+  Bot,
+  ChevronDown,
+  MessageSquareText,
+  PauseCircle,
+  Play,
+  SlidersHorizontal,
+  Trash2,
+} from '@lucide/vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -19,7 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import type { OrchestratorView } from '@/lib/api'
+import type { OrchestratorPromptKey, OrchestratorView } from '@/lib/api'
 import * as api from '@/lib/api'
 import { baseName, shortId, timeAgo } from '@/lib/format'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
@@ -30,6 +39,76 @@ import SettingsRow from '@/shell/SettingsRow.vue'
 const view = ref<OrchestratorView | null>(null)
 const advancedOpen = ref(false)
 const holdsOpen = ref(false)
+const promptsOpen = ref(false)
+
+// The prompt templates, in the order the reviewer meets them. Labels/hints are i18n keys
+// (orchestrator.prompt_<key>Label). The shipped defaults come from the server so this list can
+// never drift from what the daemon actually sends.
+const PROMPT_KEYS: OrchestratorPromptKey[] = [
+  'resumeNudge',
+  'handoffRequest',
+  'staleTaskNudge',
+  'hardCutoff',
+  'overloadNudge',
+  'commitNudge',
+  'branchNudge',
+  'orphanRevive',
+  'migrationNotice',
+]
+// Static key map (not a template literal) so the i18n usage checker can see each key.
+const PROMPT_LABEL_KEYS: Record<OrchestratorPromptKey, string> = {
+  resumeNudge: 'orchestrator.prompt_resumeNudge',
+  handoffRequest: 'orchestrator.prompt_handoffRequest',
+  staleTaskNudge: 'orchestrator.prompt_staleTaskNudge',
+  hardCutoff: 'orchestrator.prompt_hardCutoff',
+  overloadNudge: 'orchestrator.prompt_overloadNudge',
+  commitNudge: 'orchestrator.prompt_commitNudge',
+  branchNudge: 'orchestrator.prompt_branchNudge',
+  orphanRevive: 'orchestrator.prompt_orphanRevive',
+  migrationNotice: 'orchestrator.prompt_migrationNotice',
+}
+const promptForm = reactive<Record<string, string>>({})
+function promptIsCustom(key: OrchestratorPromptKey): boolean {
+  const v = view.value
+  return !!v && v.prompts[key] !== v.promptDefaults[key]
+}
+async function savePrompt(key: OrchestratorPromptKey) {
+  await save({ prompts: { [key]: promptForm[key] ?? '' } })
+}
+async function resetPrompt(key: OrchestratorPromptKey) {
+  await save({ prompts: { [key]: '' } })
+}
+
+// Command install/removal. Removing also turns the watcher off — "remove the orchestrator and
+// its commands" means the whole thing stands down; re-enabling reinstalls what's missing.
+const commandsBusy = ref(false)
+const commandsNote = ref('')
+async function removeCommands() {
+  commandsBusy.value = true
+  try {
+    const r = await api.uninstallOrchestratorCommands()
+    commandsNote.value = r.ok
+      ? `${r.files.filter((f) => f.outcome === 'removed').length} file(s) removed`
+      : 'failed'
+    view.value = await api.getOrchestrator()
+    adopt(view.value)
+  } catch {
+    commandsNote.value = 'daemon unreachable'
+  } finally {
+    commandsBusy.value = false
+  }
+}
+async function reinstallCommands() {
+  commandsBusy.value = true
+  try {
+    const r = await api.installOrchestratorCommands(true)
+    commandsNote.value = r.ok ? `${r.files.length} file(s) installed` : 'failed'
+  } catch {
+    commandsNote.value = 'daemon unreachable'
+  } finally {
+    commandsBusy.value = false
+  }
+}
 /** The session id currently being unparked, so its own button disables without freezing the rest. */
 const unparking = ref<string | null>(null)
 const holds = computed(() => view.value?.holds ?? [])
@@ -84,6 +163,7 @@ function adopt(v: OrchestratorView) {
   form.staleTaskMins = v.settings.staleTaskMins
   form.nudgeCooldownMins = v.settings.nudgeCooldownMins
   form.maxActiveChats = v.settings.maxActiveChats
+  for (const k of PROMPT_KEYS) promptForm[k] = v.prompts[k]
 }
 
 async function save(patch: Parameters<typeof api.updateOrchestrator>[0]) {
@@ -403,7 +483,68 @@ onMounted(async () => {
             </div>
           </div>
         </ExpandTransition>
+
+        <SettingsRow
+          :icon="MessageSquareText"
+          :label="$t('orchestrator.promptsLabel')"
+          clickable
+          @click="promptsOpen = !promptsOpen"
+        >
+          <template #info>
+            <InfoHint :text="$t('orchestrator.promptsHint')" />
+          </template>
+          <template #control>
+            <ChevronDown
+              class="size-4 transition-transform duration-200"
+              :class="promptsOpen ? 'rotate-180' : ''"
+            />
+          </template>
+        </SettingsRow>
+        <ExpandTransition :open="promptsOpen">
+          <div class="space-y-3 px-3.5 pb-3.5 pt-2.5">
+            <div v-for="k in PROMPT_KEYS" :key="k" class="space-y-1.5">
+              <div class="flex items-center justify-between">
+                <label class="text-xs font-medium text-muted-foreground">
+                  {{ $t(PROMPT_LABEL_KEYS[k]) }}
+                </label>
+                <Button
+                  v-if="promptIsCustom(k)"
+                  size="sm"
+                  variant="ghost"
+                  class="h-6 px-2 text-[0.6875rem]"
+                  @click="resetPrompt(k)"
+                >
+                  {{ $t('orchestrator.promptReset') }}
+                </Button>
+              </div>
+              <Textarea v-model="promptForm[k]" :rows="3" class="text-xs" @change="savePrompt(k)" />
+            </div>
+            <p class="text-[0.6875rem] text-muted-foreground">
+              {{ $t('orchestrator.promptsPlaceholders') }}
+            </p>
+          </div>
+        </ExpandTransition>
+
       </div>
     </ExpandTransition>
+
+    <!-- Outside the enabled-gate on purpose: removing the commands is exactly what someone who
+         just turned the orchestrator OFF wants next, and it must not require re-enabling. -->
+    <SettingsRow :icon="Trash2" :label="$t('orchestrator.commandsLabel')">
+      <template #info>
+        <InfoHint :text="$t('orchestrator.commandsHint')" />
+      </template>
+      <template #control>
+        <div class="flex items-center gap-2">
+          <span v-if="commandsNote" class="text-xs text-muted-foreground">{{ commandsNote }}</span>
+          <Button size="sm" variant="ghost" :disabled="commandsBusy" @click="reinstallCommands">
+            {{ $t('orchestrator.commandsReinstall') }}
+          </Button>
+          <Button size="sm" variant="destructive" :disabled="commandsBusy" @click="removeCommands">
+            {{ $t('orchestrator.commandsRemove') }}
+          </Button>
+        </div>
+      </template>
+    </SettingsRow>
   </SettingsGroup>
 </template>

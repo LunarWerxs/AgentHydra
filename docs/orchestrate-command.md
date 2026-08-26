@@ -55,9 +55,15 @@ band, and `resetsSoon`. The rules are absolute:
 - **A session on a non-running instance is not resumable and not yours to touch.** No nudges at
   it, no queue resumes of it, no counting it. It is simply out of play until a human (or the
   exhausted-fleet rule below) opens that instance.
-- **Pick a landing target** (handoffs, chips, continuations): running instances only, ordered by
-  lowest weekly %; skip `band: "critical"` unless `resetsSoon` (a reset within ~2h makes a high
-  account a preferred dump target); treat `stale: true` readings as unknown, not as headroom.
+- **Pick a landing target** (handoffs, chips, continuations): the `instances` list arrives
+  PRE-SORTED for placement - running first, then by weekly band (reset-soon counts as healthy:
+  a reset within ~2h makes a high account a preferred dump target), then by LOWEST 5-HOUR
+  session %, then lowest weekly %. Take the first eligible row. Skip `band: "critical"` unless
+  `resetsSoon`; treat `stale: true` readings as unknown, not as headroom.
+- **Load-balance the 5-hour windows** (owner rule): when you start or land SEVERAL things in
+  one wake and more than one account is eligible, spread them across the top rows instead of
+  stacking them all on the first - hammering one account's 5-hour window walls it while the
+  others sit cold. One item -> first row; N items -> the top N eligible rows, round-robin.
 - **Copy the row's `ref` field VERBATIM as your `instance_ref`.** Never build a path from a
   display name: labels and folder names diverge (a folder named `4claude` can wear the label
   "3claude"), and a wrong path aimed at a closed instance used to boot it. The API now refuses
@@ -87,6 +93,18 @@ owner's configured defaults from settings: pass `model: settings.newChatModel` a
 `effort: settings.newChatEffort` on every `POST /api/queue` and `/api/sessions/launch-terminal`
 call, and when `settings.newChatUltracode` is true, make the literal word `ultracode` the first
 line of the prompt, above the handoff/chip text. Defaults: Opus 5, max effort, ultracode on.
+
+## The prompts are the owner's, not yours
+
+Every message text this rubric tells you to send is a NAMED TEMPLATE the owner can edit in
+Settings -> Automation -> Prompts. `GET /api/orchestrator` serves the current set as
+`prompts.<name>` (resumeNudge, handoffRequest, staleTaskNudge, hardCutoff, overloadNudge,
+commitNudge, branchNudge, orphanRevive, migrationNotice). **Always send `prompts.<name>` from
+the feed you already fetched this wake** - the wordings quoted in this file are the shipped
+defaults, kept here so you understand each message's intent, and they may be OLDER than the
+owner's current text. Substitute the `<angle-bracket>` placeholders (<n>, <cwd>, <m>,
+<duration>, <x>) with real values before sending; leave the owner's other wording exactly as
+written. The daemon already uses `migrationNotice` on its own for migrate flows.
 
 ## The standing answer (when a chat wants owner input)
 
@@ -121,7 +139,7 @@ gets the standing answer, acked `standing-answer`.
   first. Task-completion notices, a recap, or any sign the tasks reached a terminal state and
   the chat simply idled afterward means ordinary idle handling, not this - a false "your tasks
   are dead" costs a big-context chat an expensive refutation turn (measured). Only when the
-  tail genuinely shows unresolved waiting, SendMessage:
+  tail genuinely shows unresolved waiting, SendMessage `prompts.staleTaskNudge` (default:)
   "[orchestrator] You have been waiting on background tasks that have produced nothing for
   <duration> - they are almost certainly dead or their completion never woke you. Check their
   status and output files now, kill or restart what is needed, and continue the work. If their
@@ -134,13 +152,15 @@ gets the standing answer, acked `standing-answer`.
   e.g. "keep going".)
 - Recap present -> read its recommendations from `tailSnippet`: all safe (nothing from the
   true-blocker list, nothing reversing a recorded owner decision) -> SendMessage the peer
-  EXACTLY: "Resume working on whatever you recommend next." Mixed -> name the safe subset:
+  `prompts.resumeNudge` EXACTLY (default: "Resume working on whatever you recommend next.").
+  Mixed -> name the safe subset:
   "Resume working on <safe items>. Skip <risky items> - those need the owner."
 - The chat asked a question or is waiting on a decision -> the standing answer, above.
 - Recap says fully closed out, nothing pending -> ack `closed-out`, cooldown 120, no message.
 
 **`handoff_due`** - same as idle, but its context is past the rollover threshold.
-- If it would otherwise get a resume nudge, send instead: "Your context is getting very large.
+- If it would otherwise get a resume nudge, send `prompts.handoffRequest` instead (default):
+  "Your context is getting very large.
   Finish anything in flight, update all relevant markdown files, then give me a handoff prompt a
   fresh session can use to continue seamlessly - include repo paths, current verified state, and
   next steps." Ack `handoff-requested`, cooldown 30.
@@ -177,10 +197,13 @@ gets the standing answer, acked `standing-answer`.
 **`interrupted`** - the human pressed stop. Never auto-resume it. Ack `human-interrupted`,
 cooldown 360. Mention it in status only if it has sat forgotten for hours.
 
-**`orphaned`** - the session's PROCESS IS GONE (computer restart, crash, or kill) with the
-thread unfinished; its live-registry file outlived its pid. Mid-process death is a RESUMABLE
-scenario - the thread never finished and nobody is going to finish it unless you act. After a
-restart the whole fleet lands here at once; handle it as a batch, not one-at-a-time noise.
+**`orphaned`** - the session's PROCESS IS GONE with the thread unfinished. Two flavors, same
+handling: a CRASH leaves a dead-pid registry file (the evidence), while a GRACEFUL shutdown
+(a normal PC restart) deletes it - those arrive with `detail.stranded: true`, found by the
+transcript scan instead (mid-turn tail, un-archived desktop entry, no process). Mid-process
+death is a RESUMABLE scenario - the thread never finished and nobody is going to finish it
+unless you act. After a restart the whole fleet lands here at once; handle it as a batch, not
+one-at-a-time noise.
 - First, the watcher already cleaned superseded/finished residue - every item you see is real
   unfinished work. Read `detail`: `midTurn` true means it died mid-turn (work definitely
   incomplete); `handoffDetected` true means it died AFTER writing a handoff - collect and
@@ -191,24 +214,26 @@ restart the whole fleet lands here at once; handle it as a batch, not one-at-a-t
     died mid-work - click each once and I will take it from there." The owner's click revives
     the session; it then reappears as a live idle chat and the normal rubric nudges it. If its
     instance is closed, follow the open-instances policy (never boot an account on your own).
-  - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt": "[orchestrator] Your
-    process died mid-work (computer restart or crash). Review your last steps, verify what
-    actually landed on disk, and resume from where you truly are - files may be ahead of or
-    behind your notes.", "instance_ref", "resume_session_id": "<id>"}`.
+  - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt": prompts.orphanRevive,
+    "instance_ref", "resume_session_id": "<id>"}` (default: "[orchestrator] Your process died
+    mid-work (computer restart or crash). Review your last steps, verify what actually landed
+    on disk, and resume from where you truly are - files may be ahead of or behind your
+    notes.").
 - The verify-first wording matters: a killed session's last writes may be half-applied. Never
   tell it "continue as planned"; tell it to re-verify state first.
 - Ack `orphan-revive` after acting, cooldown 60 (desktop clicks take however long the owner
   takes; the item self-clears once the session lives again or is done-marked).
 
 **`errored`** - `detail.ending` says why.
-- `overload` (a 529): one nudge - "You stopped on a server overload. Please continue where you
-  left off." Cooldown 60.
+- `overload` (a 529): one nudge, `prompts.overloadNudge` (default: "You stopped on a server
+  overload. Please continue where you left off."). Cooldown 60.
 - `error` / `refused`: this IS potentially a genuine issue - one status line for the human,
   ack `needs-owner`, cooldown 360.
 
 **`usage_alert`**
 - `detail.hardCutoff` false: no message; just route new work away from that account. Ack, cooldown 60.
-- `detail.hardCutoff` true: for each live chat on that instance, SendMessage: "URGENT: this
+- `detail.hardCutoff` true: for each live chat on that instance, SendMessage
+  `prompts.hardCutoff` (default): "URGENT: this
   account is at <n>% weekly. Stop after your current step, commit and sync your own files
   (path-scoped git add, never git add -A; check repo visibility before any push), and give me a
   handoff prompt. Do not start anything new." Then continue each handoff via the flow above
@@ -216,13 +241,15 @@ restart the whole fleet lands here at once; handle it as a batch, not one-at-a-t
 - A spike item: ask that instance's chats to pause new heavy fan-outs until the next reset; no
   hard stop unless it is also critical.
 
-**`repo_dirty`** - message the item's `peerName` (the longest-idle chat in that cwd): "The repo
+**`repo_dirty`** - message the item's `peerName` (the longest-idle chat in that cwd) with
+`prompts.commitNudge` (default): "The repo
 at <cwd> has had <n> uncommitted file(s) for <m> minutes and nothing is syncing them. If those
 changes are yours and complete: commit and push ONLY your own files (path-scoped git add, never
 git add -A). Before any push, check whether the repo is PUBLIC and follow the public-repo
 warning protocol. If they are not your changes, say so and stop." Ack `commit-nudge`, cooldown 120.
 
-**`branch_off_main`** - message the most recent chat in that cwd: "You are on branch '<x>'.
+**`branch_off_main`** - message the most recent chat in that cwd with `prompts.branchNudge`
+(default): "You are on branch '<x>'.
 Standing rule: all work on main, one branch only. Merge your work back onto main without
 discarding anything, then continue on main." Ack, cooldown 180. If it looks like a deliberate
 release process, one status line for the human.

@@ -1406,6 +1406,18 @@ export const TOOLS: McpEngineTool[] = [
       }),
   },
   {
+    name: 'orchestrator_uninstall_command',
+    description:
+      "MUTATES: turn the orchestrator OFF and remove its shipped commands (/orchestrate, /delayo, /resumeo) from this machine's ~/.claude/commands — the opt-out mirror of orchestrator_install_command. Removes edited copies too; a reinstall is one call away. Pass keep_enabled true to remove only the files and leave the watcher running.",
+    inputSchema: S({ keep_enabled: { type: 'boolean' } }),
+    run: (a) =>
+      api('/api/orchestrator/uninstall-command', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(a),
+      }),
+  },
+  {
     name: 'import_session_to_desktop',
     description:
       "MUTATES: import a FINISHED session into a desktop instance's app as a visible chat (the app's own claude://resume one-way import, targeted at one instance). ALWAYS pass `title` (the thread's real title) — an import without one lands as 'Untitled'. Refuses a currently-live session (the import rewrites the transcript under an active writer) and a non-running instance (importing would boot it). Finish all headless work FIRST and import LAST; a just-imported chat does not process peer messages until the user first interacts with it.",

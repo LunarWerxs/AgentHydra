@@ -5,6 +5,39 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] - 2026-08-25
+
+### Added
+
+- **The orchestrator's prompts are yours to edit.** Every message the machinery sends into a
+  chat (the resume nudge, handoff request, dead-tasks intervention, hard-cutoff order,
+  overload retry, commit and branch nudges, crash revival, migration notice) is now a named
+  template under Settings -> Automation -> Orchestrator -> Prompts. The shipped texts stay
+  the defaults; edit any of them and your wording is what gets sent, blank one (or hit
+  Reset) and the default returns, so future shipped improvements still land. The reviewer
+  reads its outgoing texts from the live feed, so edits apply on its next wake.
+- **Settings grew tabs: General and Automation.** The scheduler, orchestrator, and
+  auto-resume monitor moved to an Automation tab; deep links (the composer's tomorrow gear,
+  the queue drawer) flip the tab and land on their section as before.
+- **Remove & disable.** One button (and `POST /api/orchestrator/uninstall-command`, MCP
+  `orchestrator_uninstall_command`) turns the orchestrator off and deletes its three shipped
+  slash-command files; Reinstall puts the shipped versions back.
+- **Stranded chats are found, not just crashed ones.** A normal PC restart shuts sessions
+  down gracefully, which deletes the registry residue the crash detector reads, so a chat
+  could sit "CLICK TO RESUME" through a restart, invisible (found live: the owner's
+  architect chat). A transcript-store scan (48h window, ~60ms) now surfaces any non-live,
+  un-archived desktop chat whose tail ends mid-turn as the same orphaned scenario.
+- **5-hour load balancing.** The routing table is now sorted running -> weekly band
+  (reset-soon counts healthy) -> lowest 5-hour session % -> lowest weekly %, and the
+  reviewer spreads same-wake placements across the top rows, so no single account's 5-hour
+  window gets hammered while others sit cold.
+
+### Fixed
+
+- **"Max running chats" edits from Settings now persist.** The settings route dropped the
+  `maxActiveChats` field on its allowlist, so the UI accepted the number and the daemon
+  forgot it.
+
 ## [0.32.0] - 2026-08-25
 
 ### Added

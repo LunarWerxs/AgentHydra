@@ -16,6 +16,7 @@ import {
   buildInstanceRows,
   commandInstallOutcome,
   computeUsageItems,
+  getOrchestratorPrompts,
   getOrchestratorSettings,
   installOrchestratorCommands,
   isInjectedUserText,
@@ -28,10 +29,12 @@ import {
   projectKeyForCwd,
   resetsSoon,
   runOrchestratorOnce,
+  setOrchestratorPrompts,
   setOrchestratorSettings,
   setSessionHold,
   sweepArchivesForDoneSessions,
   type TailInfo,
+  uninstallOrchestratorCommands,
 } from '../src/orchestrator'
 import type { AttentionItem, UsageSnapshot } from '../src/types'
 import { desktopKey } from '../src/usage-service'
@@ -484,6 +487,9 @@ function fakeDeps(over: Partial<OrchestratorDeps> & { tail?: TailInfo; mtime?: n
     claudeHome: () => 'unused',
     registry: () => [session],
     orphans: () => [],
+    recentTranscripts: () => [],
+    dispatchActive: () => false,
+    sessionMeta: () => new Map(),
     tailInfo: () => tail,
     mtimeMs: () => over.mtime ?? Date.now() - 10 * 60_000,
     git: async () => null,
@@ -709,6 +715,66 @@ test('a fresh orphan (inside the quiet window) waits: a relaunch may be in fligh
     orchestratorView().attention.some((i: AttentionItem) => i.key === 'orphan:orph-fresh-1'),
   ).toBe(false)
   expect(existsSync(o.registryPath)).toBe(true)
+})
+
+test('prompts: defaults resolve, edits override, blank or default-text saves reset', () => {
+  const p0 = getOrchestratorPrompts()
+  expect(p0.resumeNudge).toBe('Resume working on whatever you recommend next.')
+  expect(setOrchestratorPrompts({ resumeNudge: 'Go on then.' }).resumeNudge).toBe('Go on then.')
+  // Saving the default text verbatim clears the override (future default improvements land).
+  expect(setOrchestratorPrompts({ resumeNudge: p0.resumeNudge }).resumeNudge).toBe(p0.resumeNudge)
+  // Blank resets too.
+  setOrchestratorPrompts({ handoffRequest: 'custom handoff ask' })
+  expect(setOrchestratorPrompts({ handoffRequest: '   ' }).handoffRequest).toBe(p0.handoffRequest)
+})
+
+test('uninstall removes the shipped commands; a second pass reports them missing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ah-cmds-'))
+  installOrchestratorCommands(false, dir)
+  expect(uninstallOrchestratorCommands(dir).every((f) => f.outcome === 'removed')).toBe(true)
+  expect(uninstallOrchestratorCommands(dir).every((f) => f.outcome === 'missing')).toBe(true)
+})
+
+test('a STRANDED desktop chat (graceful shutdown, no registry residue) is surfaced', async () => {
+  const now = Date.now()
+  const midTail: TailInfo = {
+    ending: 'complete',
+    lastAssistantText: 'Editing the policy file now.',
+    ctxTokens: 200_000,
+    midTurn: true,
+    recapDetected: false,
+    handoffDetected: false,
+    chips: [],
+    lastHumanText: null,
+    lastHumanAt: null,
+    unreadable: false,
+  }
+  const recent = [
+    { sessionId: 'strand-1', path: 'D:\\fake\\strand-1.jsonl', mtimeMs: now - 30 * 60_000 },
+    // Finished tail: a chat idling in a sidebar is normal, not stranded.
+    { sessionId: 'strand-2', path: 'D:\\fake\\strand-2.jsonl', mtimeMs: now - 30 * 60_000 },
+    // No desktop metadata: not a sidebar chat, not this scan's business.
+    { sessionId: 'strand-3', path: 'D:\\fake\\strand-3.jsonl', mtimeMs: now - 30 * 60_000 },
+  ]
+  const { deps } = fakeDeps({
+    registry: () => [],
+    nowMs: () => now,
+    recentTranscripts: () => recent,
+    sessionMeta: () =>
+      new Map([
+        ['strand-1', { instance: 'work', archived: false }],
+        ['strand-2', { instance: 'work', archived: false }],
+      ]),
+    tailInfo: (p: string) => (p.includes('strand-1') ? midTail : { ...midTail, midTurn: false }),
+  })
+  await runOrchestratorOnce(deps)
+  const feed = orchestratorView().attention
+  const hit = feed.find((i: AttentionItem) => i.key === 'orphan:strand-1')
+  expect(hit?.kind).toBe('orphaned')
+  expect(hit?.summary).toContain('STRANDED')
+  expect(hit?.detail?.stranded).toBe(true)
+  expect(feed.some((i: AttentionItem) => i.key === 'orphan:strand-2')).toBe(false)
+  expect(feed.some((i: AttentionItem) => i.key === 'orphan:strand-3')).toBe(false)
 })
 
 // --- the concurrency cap (round-robin rotation) ------------------------------

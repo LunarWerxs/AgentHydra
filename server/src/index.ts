@@ -157,13 +157,16 @@ import {
 import { openUi } from './open-ui'
 import {
   ackAttention,
+  getOrchestratorPrompts,
   getOrchestratorSettings,
   installOrchestratorCommands,
   orchestratorView,
   runOrchestratorOnce,
+  setOrchestratorPrompts,
   setOrchestratorSettings,
   setSessionHold,
   startOrchestrator,
+  uninstallOrchestratorCommands,
 } from './orchestrator'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
@@ -1946,6 +1949,7 @@ app.post('/api/orchestrator', async (c) => {
     'dirtyMins',
     'staleTaskMins',
     'nudgeCooldownMins',
+    'maxActiveChats',
   ] as const) {
     if (typeof body[k] === 'number') patch[k] = body[k]
   }
@@ -1963,6 +1967,10 @@ app.post('/api/orchestrator', async (c) => {
   if (typeof body.newChatUltracode === 'boolean') patch.newChatUltracode = body.newChatUltracode
   if (typeof body.migrateOnLimit === 'boolean') patch.migrateOnLimit = body.migrateOnLimit
   setOrchestratorSettings(patch)
+  // Prompt edits ride the same route: {"prompts": {resumeNudge: "...", ...}}. Blank (or the
+  // default text verbatim) clears the override for that key.
+  if (body.prompts && typeof body.prompts === 'object')
+    setOrchestratorPrompts(body.prompts as Record<string, string>)
   // Flipping it on should produce a feed now, not a tick-interval from now — and a machine that
   // has never had the reviewer command gets it installed (an existing copy is never touched here).
   if (patch.enabled === true) {
@@ -1982,6 +1990,22 @@ app.post('/api/orchestrator/install-command', async (c) => {
   const body = await jsonBody(c)
   try {
     return c.json({ ok: true, files: installOrchestratorCommands(body.force === true) })
+  } catch (err) {
+    return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
+// The opt-out: turn the orchestrator off and remove its shipped commands (/orchestrate,
+// /delayo, /resumeo) from ~/.claude/commands. Edited copies are removed too — a reinstall is
+// one click (or one enable) away. Pass {"keep_enabled": true} to remove only the files.
+app.post('/api/orchestrator/uninstall-command', async (c) => {
+  const body = await jsonBody(c)
+  try {
+    if (body.keep_enabled !== true) setOrchestratorSettings({ enabled: false })
+    return c.json({
+      ok: true,
+      disabled: body.keep_enabled !== true,
+      files: uninstallOrchestratorCommands(),
+    })
   } catch (err) {
     return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
   }
@@ -2107,16 +2131,11 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
 // entries archived, then run a one-turn migration resume pinned to the target account; when that
 // run completes, the finalize hook imports the chat into the target instance's desktop app under
 // its real title. The chat continues life on the new account, visible where the user looks.
-// Starts with the [orchestrator] marker so transcript parsers classify it as plumbing, never as
-// the human's standing instruction — an early version ended "Do not start new work" WITHOUT the
-// marker, and every migrated thread then read as human-held: the reviewer politely never touched
-// it again (found live 2026-08-25, the owner asking why a migrated thread never resumed).
-const MIGRATION_PROMPT =
-  '[orchestrator] You are being migrated to a different account and this thread will appear in ' +
-  "the owner's desktop app shortly. In a few lines: state what this thread is working on, what " +
-  'is verified complete so far, and the concrete next steps. Do not start new work in this turn ' +
-  'and do not touch any files; after this turn, this notice is spent — resume normally when the ' +
-  'owner or the orchestrator next asks.'
+// The migration notice lives in the editable prompt set (ORCHESTRATOR_PROMPT_DEFAULTS
+// .migrationNotice) — the owner can tune it in Settings, and the [orchestrator] marker rule is
+// documented there: transcript parsers classify marked text as plumbing, never as the human's
+// standing instruction (a marker-less version once made every migrated thread read as
+// human-held, and the reviewer politely never touched them again).
 app.post('/api/sessions/:id/migrate', async (c) => {
   const sessionId = c.req.param('id')
   const body = await jsonBody(c)
@@ -2130,7 +2149,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   const prompt =
     typeof body.prompt === 'string' && body.prompt.trim()
       ? body.prompt.trim().slice(0, 8000)
-      : MIGRATION_PROMPT
+      : getOrchestratorPrompts().migrationNotice
   const s = await getSession(sessionId, 'claude')
   if (!s) return c.json({ ok: false, error: 'session not found' }, 404)
   // One lineage, one continuation — checked BEFORE the kill below, so a refused migrate never

@@ -19,6 +19,26 @@ export default {
   migrateOnLimitLabel: 'Migrate 5-hour-limited chats',
   migrateOnLimitHint:
     'When a run hits its 5-hour limit but its weekly is fine, resume it immediately on another running account with headroom instead of parking it until the reset. The original account rejoins the pool once its window resets. When the borrowed run finishes, the chat is imported into that account’s desktop app under its own name, so you can see it and carry on there. Needs the auto-resume monitor enabled.',
+  promptsLabel: 'Prompts',
+  promptsHint:
+    'The exact messages the orchestrator sends into chats. The shipped texts are the defaults; edit any of them and your wording is used instead - blank it (or Reset) to go back to the default. Placeholders in <angle brackets> are filled in when sent.',
+  promptsPlaceholders:
+    'Placeholders: <n> a number, <cwd> a repo path, <m> minutes, <duration> a time span, <x> a branch name. Leave them in - they are filled at send time.',
+  promptReset: 'Reset',
+  prompt_resumeNudge: 'Resume nudge (idle chat with a recap)',
+  prompt_handoffRequest: 'Handoff request (context too large)',
+  prompt_staleTaskNudge: 'Dead-tasks intervention',
+  prompt_hardCutoff: 'Hard usage cutoff',
+  prompt_overloadNudge: 'Server-overload retry',
+  prompt_commitNudge: 'Uncommitted-repo nudge',
+  prompt_branchNudge: 'Off-main-branch nudge',
+  prompt_orphanRevive: 'Crash / restart revival',
+  prompt_migrationNotice: 'Account-migration notice',
+  commandsLabel: 'Slash commands',
+  commandsHint:
+    'The orchestrator installs /orchestrate, /delayo and /resumeo into ~/.claude/commands when enabled. Remove deletes those files and turns the orchestrator off; Reinstall puts the shipped versions back (overwriting local edits).',
+  commandsReinstall: 'Reinstall',
+  commandsRemove: 'Remove & disable',
   maxActiveChatsLabel: 'Max running chats',
   maxActiveChatsHint:
     'Caps how many chats may actively work at once, fleet-wide. 0 = unlimited. Past the cap, idle chats wait their turn and the orchestrator rotates them round-robin: the chat idle longest gets the next free slot. Answers, handoffs, and revives are never blocked - only "resume working" nudges wait.',
