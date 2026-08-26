@@ -1151,8 +1151,13 @@ app.post('/api/queue', async (c) => {
   // cross-open the owner banned. dispatch.ts enforces the same rule at the spawn chokepoint, so
   // this route check is the friendly message rather than the enforcement; `force` records the
   // owner's deliberate override ON THE ROW (allow_headless) so the chokepoint honours it too.
+  // Checked for EVERY row, new_chat included. A new chat normally mints its own id and sails
+  // through, but this route accepts a caller-supplied id even when new_chat is true, and the
+  // runner then passes it as `--session-id` — so exempting new_chat let
+  // `{new_chat: true, session_id: <an existing desktop chat>}` write headless turns into that
+  // chat. The question is about the ID, never about the caller's label for the request.
   const allowHeadless = body.force === true
-  if (!body.new_chat && !allowHeadless && (await findDesktopEntryFile(sessionId)))
+  if (!allowHeadless && (await findDesktopEntryFile(sessionId)))
     return c.json(
       {
         error:

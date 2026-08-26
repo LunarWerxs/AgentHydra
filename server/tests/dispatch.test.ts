@@ -503,8 +503,23 @@ test('a headless resume of a DESKTOP-resident chat is refused at the dispatch ch
   expect(events.some((e) => e.text.includes('desktop app'))).toBe(true)
 })
 
+test('new_chat is NOT a way past the guard when the session id is an existing desktop chat', async () => {
+  // The hole an adversarial audit found: the create route accepts a caller-supplied session_id
+  // even when new_chat is true, and the runner passes it as `--session-id`, so a request labelled
+  // "new chat" pointed at an EXISTING desktop chat wrote headless turns straight into it with the
+  // check skipped at both layers - reachable from the MCP tool, i.e. by the orchestrator itself.
+  // The guard asks about the ID now, never about the caller's label for the request.
+  const liar = makeItem({ new_chat: true })
+  makeDesktopResident(liar.session_id)
+  await dispatch.dispatchItem(liar)
+  expect(statusOf(liar.id)?.status).toBe('failed')
+  expect(dispatch.getRunEvents(liar.id).some((e) => e.text.includes('surface-violation'))).toBe(
+    true,
+  )
+})
+
 test('the guard spares a NEW chat and honours the owner explicit allow_headless override', async () => {
-  // A new chat has no desktop entry to violate - it is born in the queue, which IS its surface.
+  // A genuinely new chat mints a fresh id, so it has no desktop entry and sails through.
   const fresh = makeItem({ new_chat: true })
   await dispatch.dispatchItem(fresh)
   expect(await waitForStatus(fresh.id, 'completed')).toBe('completed')

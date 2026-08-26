@@ -939,15 +939,24 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   //
   // The guard lives HERE, not in the HTTP route, deliberately: six call sites reach this function
   // (route, run-due, retry sweep, scheduler, monitor) and a route-level check would leave five
-  // ways in. A NEW chat has no desktop entry yet and passes; only continuing a thread that
-  // already lives in a sidebar is refused, and `allow_headless` is the owner's explicit override.
-  if (!item.new_chat && !item.allow_headless) {
+  // ways in. `allow_headless` is the owner's explicit override and the ONLY way past it.
+  //
+  // It deliberately does NOT exempt new_chat, though a genuinely new chat always passes it (a
+  // freshly minted uuid has no desktop entry, so the lookup returns null). An adversarial audit
+  // found the exemption was a real hole rather than a free optimisation: the create route lets a
+  // caller supply the session id even when new_chat is true, and buildArgv then passes it as
+  // `--session-id <id>`, so `{new_chat: true, session_id: <an existing desktop chat>}` wrote
+  // headless turns straight into that chat's transcript with the check skipped at both layers.
+  // Reachable from the MCP tool too, i.e. by the orchestrator itself. Asking the question about
+  // every run - "does this id already live in a desktop app?" - costs one directory walk and
+  // cannot be reasoned around.
+  if (!item.allow_headless) {
     const { findDesktopEntryFile } = await import('./session-launch')
     const home = await findDesktopEntryFile(item.session_id).catch(() => null)
     if (home) {
       failPreLaunch(
         item,
-        'surface-violation: this thread lives in the desktop app, so a headless resume would ' +
+        'surface-violation: this thread lives in the desktop app, so a headless run would ' +
           'continue it where you cannot see it. Continue it in its app (the orchestrator ' +
           'delivers turns natively), or re-queue with force to override.',
       )
@@ -1142,6 +1151,31 @@ export async function reattachRuns(): Promise<void> {
       )
       finalize(id, -1)
       continue
+    }
+    // SURFACE PURITY, re-checked on adoption. The pre-launch guard is a point-in-time answer, and
+    // this is the one moment a stale answer can be corrected: a run legal when it started may have
+    // had its session imported into a desktop app while the daemon was down, and adopting it would
+    // resume tailing a headless writer inside a chat the owner now sees (an adversarial audit,
+    // 2026-08-26, found nothing re-gated a run after launch). Stopping it leaves a mid-turn
+    // transcript, which the stranded detector already surfaces for a proper in-app revive - a far
+    // better end state than a hidden process writing into a visible chat.
+    if (!row.allow_headless) {
+      const { findDesktopEntryFile } = await import('./session-launch')
+      const home = await findDesktopEntryFile(row.session_id).catch(() => null)
+      if (home) {
+        recordEvent(
+          id,
+          'system',
+          'meta',
+          'surface-violation on reattach: this thread now lives in the desktop app, so the ' +
+            'headless run continuing it was stopped. Continue it in its app.',
+          null,
+        )
+        entry.canceled = true
+        if (childPid) void killTree(childPid)
+        finalize(id, -1)
+        continue
+      }
     }
     // runnerAlive → resume tailing a live run; else the log exists → tailRun replays it and either
     // finalizes from its terminal marker (finished while we were down) or, seeing the runner gone with

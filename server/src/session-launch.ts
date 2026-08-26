@@ -161,6 +161,19 @@ export async function launchTerminalSession(opts: {
         'superseded: this session is done-marked (handed off/migrated) — resuming it would duplicate its successor’s work; pass force to override',
       command: '',
     }
+  // TWO WRITERS, ONE TRANSCRIPT — refused in the primitive, so every caller inherits it. The
+  // interactive route checked this itself, but the auto-resume monitor's terminal branch calls
+  // straight in here and did not, so an unattended resume could open a second writer on a chat
+  // that is live in the desktop app right now (found by an adversarial audit, 2026-08-26). There
+  // is deliberately NO force escape: superseded is a judgement call the owner may overrule,
+  // while two processes appending to one transcript is never the thing anyone wanted.
+  if (opts.resumeSessionId && liveSessionEntry(opts.resumeSessionId))
+    return {
+      ok: false,
+      reason:
+        'session-live: that thread already has a running process (it is open in an app or a terminal) — resuming it here would put two writers on one transcript',
+      command: '',
+    }
   const env: Record<string, string> = {}
   const ref = opts.instanceRef?.trim() || null
   let exe: string | null = null
