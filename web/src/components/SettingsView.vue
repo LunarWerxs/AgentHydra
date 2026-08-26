@@ -52,10 +52,10 @@ import { composeSessionPathClipboard } from '@/lib/session-clipboard'
 import { useTheme } from '@/lib/theme'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
-import SettingsTabs from '@/shell/SettingsTabs.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 import SettingsGroup from '@/shell/SettingsGroup.vue'
 import SettingsRow from '@/shell/SettingsRow.vue'
+import SettingsTabs from '@/shell/SettingsTabs.vue'
 
 const { t } = useI18n()
 
