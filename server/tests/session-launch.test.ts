@@ -141,8 +141,9 @@ test('the title janitor names untitled chats, respects real names, skips generic
     'sid-named': 'Should never be used',
     'sid-nocandidate': 'Untitled',
   }
-  const fixed = sweepUntitledDesktopChats((sid) => titles[sid] ?? null, [profile])
-  expect(fixed).toBe(2)
+  const swept = sweepUntitledDesktopChats((sid) => titles[sid] ?? null, [profile])
+  expect(swept.fixed).toBe(2)
+  expect(swept.profiles).toEqual([profile]) // renamed profiles feed the visibility restart
   const read = (n: string) => JSON.parse(readFileSync(join(store, n), 'utf8'))
   expect(read('local_sid-untitled.json').title).toBe('Ship the parser rewrite')
   expect(read('local_sid-generic.json').title).toBe('PyOverdrive batch 15 (shape sweep)')

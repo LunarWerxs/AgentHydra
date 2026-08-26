@@ -5,6 +5,16 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.4] - 2026-08-26
+
+### Fixed
+
+- **Renamed chats appear renamed NOW.** The title janitor fixed names on disk, but a running
+  app keeps showing the old name until it restarts - so freshly named chats still read
+  "General coding session" on screen (owner report). Title renames now feed the same
+  sidebar-visibility restart the archive flow uses: the affected app restarts the moment it
+  has zero live sessions, and the new names show.
+
 ## [0.35.3] - 2026-08-26
 
 ### Changed

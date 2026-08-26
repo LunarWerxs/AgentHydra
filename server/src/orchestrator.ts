@@ -1477,8 +1477,13 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   if (deps === defaultDeps && started - lastTitleSweepMs > 10 * 60_000) {
     lastTitleSweepMs = started
     try {
-      const fixed = sweepUntitledDesktopChats(scannerTitleFor)
-      if (fixed > 0) console.log(`[agenthydra] title janitor named ${fixed} desktop chat(s)`)
+      const titled = sweepUntitledDesktopChats(scannerTitleFor)
+      if (titled.fixed > 0) {
+        console.log(`[agenthydra] title janitor named ${titled.fixed} desktop chat(s)`)
+        // New names must APPEAR, not wait for some future restart (owner rule) — same
+        // sidebar-visibility restart the archive flow uses.
+        for (const p of titled.profiles) noteArchiveVisibilityPending(p)
+      }
     } catch (err) {
       console.error('[agenthydra] title janitor failed:', err)
     }

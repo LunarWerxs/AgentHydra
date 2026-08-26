@@ -392,7 +392,7 @@ export async function archiveDesktopChat(
 export function sweepUntitledDesktopChats(
   lookupTitle: (cliSessionId: string) => string | null,
   roots?: string[],
-): number {
+): { fixed: number; profiles: string[] } {
   const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
   const searchRoots = roots ?? [
     join(appData, 'Claude'),
@@ -409,6 +409,10 @@ export function sweepUntitledDesktopChats(
   ]
   const GENERIC = /^(untitled|general coding session|new (chat|session))$/i
   let fixed = 0
+  // Profiles that had at least one rename: a RUNNING app keeps showing the old name until it
+  // restarts, so the janitor hands these to the sidebar-visibility restart (owner rule: names
+  // appear automatically, not at some future restart).
+  const renamedProfiles = new Set<string>()
   for (const profile of searchRoots) {
     const store = join(profile, 'claude-code-sessions')
     if (!existsSync(store)) continue
@@ -435,6 +439,7 @@ export function sweepUntitledDesktopChats(
               meta.titleSource = 'tool'
               writeFileSync(path, JSON.stringify(meta))
               fixed++
+              renamedProfiles.add(profile)
             } catch {
               // one unreadable metadata file must not stop the sweep
             }
@@ -445,7 +450,7 @@ export function sweepUntitledDesktopChats(
       // an unreadable store just contributes nothing
     }
   }
-  return fixed
+  return { fixed, profiles: [...renamedProfiles] }
 }
 
 export async function importSessionToDesktop(opts: {
