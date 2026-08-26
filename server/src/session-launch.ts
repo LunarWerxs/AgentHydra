@@ -533,7 +533,7 @@ export async function importSessionToDesktop(opts: {
   isInstanceRunning?: (dir: string) => Promise<boolean>
   /** Import a done-marked (superseded) lineage anyway. See isSessionSuperseded. */
   force?: boolean
-}): Promise<{ ok: boolean; reason?: string; titled?: boolean }> {
+}): Promise<{ ok: boolean; reason?: string; titled?: boolean; titleDurable?: boolean }> {
   if ((opts.isLive ?? sessionIsLive)(opts.sessionId))
     return { ok: false, reason: 'session-live: refusing to import under an active writer' }
   if (!opts.force && isSessionSuperseded(opts.sessionId))
@@ -561,15 +561,24 @@ export async function importSessionToDesktop(opts: {
     return { ok: false, reason: err instanceof Error ? err.message : 'spawn-failed' }
   }
   const title = opts.title?.trim()
-  if (!title) return { ok: true }
+  if (!title) return { ok: true, titleDurable: !running }
   // Wait for the app to create the chat's metadata file, then write the title into it.
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
     const outcome = applyDesktopChatTitle(opts.instanceDir, opts.sessionId, title)
-    if (outcome !== 'not-found') return { ok: true, titled: outcome === 'titled' }
+    // `titleDurable` is the honest half of the answer. Writing the metadata file works, and then
+    // a RUNNING app overwrites it from memory the moment that chat next boots - measured
+    // 2026-08-26: five chats imported with correct titles all came back `title: undefined`, which
+    // the sidebar renders as "General coding session", seconds after each was first messaged. So
+    // a title written from outside a running instance is a hint, not a fact, and reporting
+    // `titled: true` for it was a false success. The durable channel is the app's OWN rename
+    // (the reviewer's session-management tool); the title janitor is the slow fallback for
+    // instances that are closed or later restart.
+    if (outcome !== 'not-found')
+      return { ok: true, titled: outcome === 'titled', titleDurable: !running }
     await new Promise((r) => setTimeout(r, 500))
   }
-  return { ok: true, titled: false }
+  return { ok: true, titled: false, titleDurable: !running }
 }
 
 /**

@@ -128,6 +128,11 @@ invisible).
   the reason). Execute: `POST /api/sessions/<id>/import-desktop {"instance_ref":
   "<proposal.instanceRef>", "title": "<proposal.title>"}`. The imported chat is dormant and
   visible; the deaf detector will propose a revive if it has pending work.
+- **Then RENAME it through the app, always.** The response's `titleDurable: false` means the
+  target app is running, and a running app overwrites the title we wrote into its metadata
+  the moment that chat next boots - it then shows as "General coding session" (measured: five
+  imports, five wiped titles). Use your own session-management rename tool for chats in your
+  instance, or ask the relay to; a file-written title is a hint, the app's rename is a fact.
 
 ## New work: handoffs and chips (desktop surface)
 

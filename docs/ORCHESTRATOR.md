@@ -388,6 +388,15 @@ enable (or the install endpoint) away.
   is orchestratable while it works - the surface for watching a continuation live.
 - A **queue run** is headless: it exists only in AgentHydra's Sessions/Queue tabs (live-tail
   there). It never appears in the desktop app and the orchestrator cannot nudge it mid-run.
+- **A title written from outside a RUNNING app does not stick.** The import writes the chat's
+  real name into its metadata file and that is genuinely correct on disk, but the running app
+  holds the chat in memory and re-saves the file when the chat next boots, dropping the name;
+  the sidebar then shows "General coding session". Measured 2026-08-26: five chats imported
+  with correct titles, all five wiped seconds after they were first messaged. The import now
+  reports `titleDurable: false` in that case, the reviewer renames through the app's own
+  rename tool (which the app cannot overwrite), and the title janitor remains the slow
+  fallback for instances that are closed or later restart. Same shape as the archive caveat
+  below, and the same cause: while an app is running, its metadata files are its own.
 - **Desktop archiving works, with one honest caveat.** The desktop keeps a per-chat metadata
   flag, and `POST /api/sessions/:id/desktop-archive` flips it in every profile that carries the
   chat. For an instance whose app is RUNNING, the sidebar reflects it only after that app next
