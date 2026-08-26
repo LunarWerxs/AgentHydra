@@ -1164,10 +1164,11 @@ export interface OrchestratorSettings {
   /** The reviewer's own account stays under this weekly % so it can always keep orchestrating;
    *  above it, it stops accepting handoff landings for itself. */
   reviewerReservePct: number
-  /** Where handoff continuations land. 'desktop' (default): run headless, then import the
-   *  finished work into the owning instance's desktop app as a visible chat. 'terminal':
+  /** Where handoff continuations land. 'desktop' (default): seed a new desktop chat and let
+   *  the reviewer deliver the prompt through the app's own channel - the thread runs VISIBLY
+   *  in the app, never headless (owner law 2026-08-26: desktop stays desktop). 'terminal':
    *  open a visible interactive terminal session (watchable live, orchestratable). 'queue':
-   *  headless only, visible in AgentHydra's Sessions tab. */
+   *  headless, visible in AgentHydra's Sessions tab - only for owners who chose it. */
   handoffSurface: 'desktop' | 'terminal' | 'queue'
   /** Model every orchestrator-started chat runs (handoff continuations, chips, launches). */
   newChatModel: string
@@ -1183,11 +1184,35 @@ export interface OrchestratorSettings {
    *  cap is reached, further idle chats are marked waiting-for-slot and the reviewer rotates
    *  them in round-robin (longest-idle gets the next free slot). */
   maxActiveChats: number
-  /** The daemon revives orphaned/stranded/deaf desktop chats ITSELF via OS-level UI automation
-   *  (deep-link, focus, type the revive prompt) — gated on the owner being away from the
-   *  keyboard, engine-verified after. ON by default: a dead chat nobody revives is the
-   *  orchestrator not working (owner order 2026-08-25). Windows only. */
-  autoRevive: boolean
+}
+
+/** What kind of action a proposal asks for. 'revive' covers every flavor of dead thread
+ *  (crash orphan, stranded, live-but-deaf, usage-window reset); 'archive' retires a finished
+ *  or superseded chat's desktop entries; 'import' lands an invisible finished session as a
+ *  visible desktop chat. */
+export type ProposalKind = 'revive' | 'archive' | 'import'
+
+/** One action the machinery wants to take, awaiting (or carrying) the AI's ruling. The owner
+ *  law (2026-08-26): every action is checked by the orchestrator AI before it is made. The
+ *  daemon writes these; the reviewer decides and executes; this row is the audit trail. */
+export interface OrchestratorProposal {
+  id: string
+  kind: ProposalKind
+  sessionId: string
+  instanceRef: string | null
+  title: string | null
+  /** One human line: the case for the action. */
+  summary: string
+  /** Everything the checker needs to judge (flavor, quiet time, tail snippet, cwd, ...). */
+  evidence: Record<string, unknown>
+  status: 'proposed' | 'approved' | 'rejected' | 'executed' | 'failed' | 'expired'
+  proposedAt: string
+  updatedAt: string
+  decidedAt: string | null
+  decidedBy: string | null
+  decisionNote: string | null
+  executedAt: string | null
+  result: string | null
 }
 
 /** One desktop instance as the orchestrator routing logic sees it: is it OPEN right now, and
@@ -1271,6 +1296,9 @@ export interface OrchestratorView {
   prompts: Record<OrchestratorPromptKey, string>
   /** The shipped defaults, so an editor can show diffs and offer per-prompt reset. */
   promptDefaults: Record<OrchestratorPromptKey, string>
+  /** Actions the machinery wants to take, awaiting the reviewer's ruling (plus the last day's
+   *  decided rows for audit). The reviewer decides these FIRST on every wake. */
+  proposals: OrchestratorProposal[]
   attention: AttentionItem[]
   /** The desktop fleet with usage joined — the routing table for nudges/handoffs/launches. */
   instances: OrchestratorInstance[]
@@ -1288,8 +1316,7 @@ export interface OrchestratorView {
     /** Free slots under maxActiveChats (null = unlimited). The reviewer starts/nudges at most
      *  this many chats per wake; the watcher already marks the overflow waiting-for-slot. */
     slotsFree: number | null
-    /** Orphaned chats pending auto-revive, counted BEFORE ack suppression — an acked orphan
-     *  is hidden from the reviewer's feed but never from the reviver. */
-    revivePending: number
+    /** Open proposals (proposed + approved-not-yet-executed) awaiting the reviewer. */
+    proposalsPending: number
   }
 }

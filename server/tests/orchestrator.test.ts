@@ -27,15 +27,22 @@ import {
   parseTranscriptTail,
   planOfAccountLabel,
   projectKeyForCwd,
+  proposeArchivesForDoneSessions,
   resetsSoon,
   runOrchestratorOnce,
+  samePath,
   setOrchestratorPrompts,
   setOrchestratorSettings,
   setSessionHold,
-  sweepArchivesForDoneSessions,
   type TailInfo,
   uninstallOrchestratorCommands,
 } from '../src/orchestrator'
+import {
+  decideProposal,
+  openProposalsForSession,
+  proposeAction,
+  reportProposalExecuted,
+} from '../src/proposals'
 import type { AttentionItem, UsageSnapshot } from '../src/types'
 import { desktopKey } from '../src/usage-service'
 
@@ -379,7 +386,7 @@ test('new-chat defaults: Opus 5 at max effort with ultracode, all overridable', 
   setOrchestratorSettings({ newChatModel: 'opus', newChatEffort: 'max', newChatUltracode: true })
 })
 
-test('the archive janitor archives every done-marked session, idempotently', async () => {
+test('the archive janitor PROPOSES retiring done-marked chats, and never flips flags itself', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'agenthydra-archjan-'))
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
@@ -394,12 +401,64 @@ test('the archive janitor archives every done-marked session, idempotently', asy
   db.query(
     'insert into session_marks (session_id, done, updated_at) values (?, 1, ?) on conflict(session_id) do update set done = 1',
   ).run('done-sess-1', Date.now())
-  expect(await sweepArchivesForDoneSessions([profile])).toBe(1)
+  expect(await proposeArchivesForDoneSessions([profile])).toBe(1)
   const read = (n: string) => JSON.parse(readFileSync(join(store, n), 'utf8'))
-  expect(read('local_done-sess-1.json').isArchived).toBe(true)
-  expect(read('local_active-sess-1.json').isArchived).toBe(false) // no done-mark, untouched
-  // Second sweep changes nothing (idempotent) — the count of CHANGED entries is zero.
-  expect(await sweepArchivesForDoneSessions([profile])).toBe(0)
+  // The action gate: nothing on disk changes until the reviewer approves and executes.
+  expect(read('local_done-sess-1.json').isArchived).toBe(false)
+  expect(read('local_active-sess-1.json').isArchived).toBe(false) // no done-mark, no proposal
+  const open = openProposalsForSession('done-sess-1')
+  expect(open).toHaveLength(1)
+  expect(open[0].kind).toBe('archive')
+  // A second sweep refreshes the open proposal instead of stacking a duplicate.
+  expect(await proposeArchivesForDoneSessions([profile])).toBe(1)
+  expect(openProposalsForSession('done-sess-1')).toHaveLength(1)
+  // Approved + executed (the reviewer flipped the flag): the ask leaves the open set...
+  const id = open[0].id
+  expect(decideProposal(id, true, 'test-reviewer', 'retire it').ok).toBe(true)
+  expect(reportProposalExecuted(id, true, 'archived natively').ok).toBe(true)
+  writeFileSync(
+    join(store, 'local_done-sess-1.json'),
+    JSON.stringify({ cliSessionId: 'done-sess-1', isArchived: true }),
+  )
+  // ...and once every entry is archived, the sweep has nothing left to propose.
+  expect(await proposeArchivesForDoneSessions([profile])).toBe(0)
+  db.query('update session_marks set done = 0 where session_id = ?').run('done-sess-1')
+})
+
+test('the proposal gate: decide-then-execute is enforced, rejections stay quiet on old evidence', () => {
+  const id = proposeAction({
+    kind: 'revive',
+    sessionId: 'gate-sess-1',
+    summary: 'gate test',
+    evidence: { flavor: 'crash' },
+    evidenceAt: new Date(Date.now() - 3600_000).toISOString(),
+  })
+  expect(id).toBeTruthy()
+  // Executing an undecided proposal is refused: the check comes FIRST, by law.
+  expect(reportProposalExecuted(id as string, true).ok).toBe(false)
+  // Double-deciding is refused too (the first ruling stands).
+  expect(decideProposal(id as string, false, 'test-reviewer', 'not real').ok).toBe(true)
+  expect(decideProposal(id as string, true, 'test-reviewer').ok).toBe(false)
+  // Same evidence after a rejection: suppressed. NEWER evidence: a fresh proposal.
+  expect(
+    proposeAction({
+      kind: 'revive',
+      sessionId: 'gate-sess-1',
+      summary: 'gate test again',
+      evidence: { flavor: 'crash' },
+      evidenceAt: new Date(Date.now() - 3600_000).toISOString(),
+    }),
+  ).toBe(null)
+  const fresh = proposeAction({
+    kind: 'revive',
+    sessionId: 'gate-sess-1',
+    summary: 'it moved again',
+    evidence: { flavor: 'crash' },
+    evidenceAt: new Date(Date.now() + 1000).toISOString(),
+  })
+  expect(fresh).toBeTruthy()
+  expect(fresh).not.toBe(id)
+  decideProposal(fresh as string, false, 'test-reviewer', 'cleanup')
 })
 
 // --- shipping the /orchestrate command --------------------------------------
@@ -532,12 +591,16 @@ test('an idle session with a recap becomes idle_pending; huge context becomes ha
   )
 })
 
-test('a busy session (fresh mtime) produces no idle item', async () => {
+test('a busy session (fresh mtime) produces no idle item, but IS flagged if unmapped', async () => {
   const { deps } = fakeDeps({ mtime: Date.now() - 5_000 })
   await runOrchestratorOnce(deps)
-  expect(orchestratorView().attention.some((i: AttentionItem) => i.sessionId === 'sess-1')).toBe(
-    false,
-  )
+  const feed = orchestratorView().attention
+  expect(feed.some((i: AttentionItem) => i.key === 'idle:sess-1')).toBe(false)
+  // The owner's tell (2026-08-26): a session with no desktop home shows as "unknown account"
+  // in the UI - broken headless residue. On the desktop surface it is flagged busy or not.
+  const unmapped = feed.find((i: AttentionItem) => i.key === 'unmapped:sess-1')
+  expect(unmapped?.kind).toBe('errored')
+  expect(unmapped?.detail?.unmappedInstance).toBe(true)
 })
 
 test('an acked item is suppressed, and re-arms when the transcript moves after the ack', async () => {
@@ -889,8 +952,8 @@ test('an ACKED orphan disappears from the feed but never from the revive list', 
     lastEventAt: new Date(now - 6 * 3600_000).toISOString(),
     unreadable: false,
   }
-  // The reviewer acks the orphan ("awaiting click") — the exact move that used to blindfold
-  // auto-revive for the chat that most needed it.
+  // The reviewer acks the orphan — the move that used to blindfold the old reviver for the
+  // chat that most needed it. Acks shape the READING list; the proposal ledger sees pre-ack.
   ackAttention('orphan:deaf-acked-1', 'orphan-revive-awaiting-click', 15)
   const { deps } = fakeDeps({
     registry: () => [deafSession],
@@ -901,7 +964,26 @@ test('an ACKED orphan disappears from the feed but never from the revive list', 
   await runOrchestratorOnce(deps)
   const view = orchestratorView()
   expect(view.attention.some((i: AttentionItem) => i.key === 'orphan:deaf-acked-1')).toBe(false)
-  expect(view.meta.revivePending).toBeGreaterThanOrEqual(1)
+  const open = openProposalsForSession('deaf-acked-1')
+  expect(open).toHaveLength(1)
+  expect(open[0].kind).toBe('revive')
+  expect(open[0].evidence.flavor).toBe('deaf')
+  expect(view.meta.proposalsPending).toBeGreaterThanOrEqual(1)
+  decideProposal(open[0].id, false, 'test-reviewer', 'cleanup')
+})
+
+test('samePath survives the exact casing mismatch that let the daemon kill a live chat', () => {
+  // 2026-08-26 incident: instanceRefForSession returned the real-cased dir while the restart
+  // marker stored it lowercased; strict === matched nothing, "zero live sessions" was always
+  // true, and the visibility restart quit the work app under a live mid-turn chat.
+  expect(
+    samePath(
+      'C:\\Users\\blogi\\.claude-instances\\work',
+      'c:\\users\\blogi\\.claude-instances\\work',
+    ),
+  ).toBe(true)
+  expect(samePath('C:\\A\\work\\', 'c:\\a\\work')).toBe(true)
+  expect(samePath('C:\\A\\work', 'C:\\A\\work2')).toBe(false)
 })
 
 // --- the concurrency cap (round-robin rotation) ------------------------------

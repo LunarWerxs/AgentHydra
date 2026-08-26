@@ -379,6 +379,59 @@ export async function archiveDesktopChat(
 }
 
 /**
+ * Read-only probe of a chat's desktop entries: does any store carry it, and is every carried
+ * entry archived? The archive janitor uses this to PROPOSE retiring a chat instead of flipping
+ * flags itself (action-gate law 2026-08-26: the AI checks before any archive) — so the probe
+ * must never write. `archived` is true only when ALL found entries are archived; one visible
+ * entry anywhere means the chat still shows somewhere.
+ */
+export function desktopChatArchiveState(
+  sessionId: string,
+  roots?: string[],
+): { found: boolean; archived: boolean } {
+  const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
+  const searchRoots = roots ?? [
+    join(appData, 'Claude'),
+    ...((): string[] => {
+      const root = join(homedir(), '.claude-instances')
+      try {
+        return readdirSync(root, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => join(root, d.name))
+      } catch {
+        return []
+      }
+    })(),
+  ]
+  let found = false
+  let allArchived = true
+  for (const profile of searchRoots) {
+    const store = join(profile, 'claude-code-sessions')
+    if (!existsSync(store)) continue
+    try {
+      for (const org of readdirSync(store, { withFileTypes: true })) {
+        if (!org.isDirectory()) continue
+        for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+          if (!user.isDirectory()) continue
+          const p = join(store, org.name, user.name, `local_${sessionId}.json`)
+          if (!existsSync(p)) continue
+          found = true
+          try {
+            const meta = JSON.parse(readFileSync(p, 'utf8'))
+            if (meta.isArchived !== true) allArchived = false
+          } catch {
+            allArchived = false // unreadable = assume visible; a false "visible" only re-proposes
+          }
+        }
+      }
+    } catch {
+      // an unreadable store contributes nothing
+    }
+  }
+  return { found, archived: found && allArchived }
+}
+
+/**
  * The title janitor: give every desktop chat that has NO real name the best title the scanner
  * knows for it. "Untitled" / "General coding session" happens whenever a chat is created by
  * plumbing (imports, migrations) rather than by a person — the desktop derives nothing at
@@ -504,6 +557,84 @@ export async function importSessionToDesktop(opts: {
     await new Promise((r) => setTimeout(r, 500))
   }
   return { ok: true, titled: false }
+}
+
+/**
+ * Seed a brand-new DESKTOP chat: fabricate a minimal finished transcript on disk, then import
+ * it into the target instance's app. The result is a visible, dormant chat the reviewer then
+ * DELIVERS the real prompt into through the app's own message channel (which boots the engine
+ * and runs the turn in the app — proven 2026-08-26). Together they are the desktop-native
+ * replacement for the banned queue-with-import-back pattern (owner law: desktop stays desktop;
+ * no thread of his ever runs headless): handoff continuations and chip launches both start
+ * life this way, visible from their first real turn.
+ */
+export async function seedDesktopSession(opts: {
+  cwd: string
+  title: string
+  instanceRef: string
+  isInstanceRunning?: (dir: string) => Promise<boolean>
+  /** Seam for tests; the default is the real ~/.claude store. */
+  claudeHome?: string
+}): Promise<{ ok: boolean; sessionId?: string; reason?: string }> {
+  if (!opts.instanceRef.startsWith('desktop:'))
+    return { ok: false, reason: "instance_ref must be 'desktop:<dir>'" }
+  if (!existsSync(opts.cwd)) return { ok: false, reason: 'cwd-not-found' }
+  const sessionId = crypto.randomUUID()
+  // The CLI's transcript-store key for a cwd: every non-alphanumeric character becomes '-'
+  // (same encoding orchestrator.ts's projectKeyForCwd documents).
+  const projectKey = opts.cwd.replace(/[^a-zA-Z0-9]/g, '-')
+  const dir = join(opts.claudeHome ?? join(homedir(), '.claude'), 'projects', projectKey)
+  mkdirSync(dir, { recursive: true })
+  const now = new Date().toISOString()
+  const userUuid = crypto.randomUUID()
+  const records = [
+    {
+      type: 'user',
+      uuid: userUuid,
+      parentUuid: null,
+      sessionId,
+      cwd: opts.cwd,
+      timestamp: now,
+      isSidechain: false,
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text:
+              '[orchestrator] This thread was seeded by AgentHydra for a new task. ' +
+              'The task prompt arrives as the next message; treat that as the real start.',
+          },
+        ],
+      },
+    },
+    {
+      type: 'assistant',
+      uuid: crypto.randomUUID(),
+      parentUuid: userUuid,
+      sessionId,
+      cwd: opts.cwd,
+      timestamp: now,
+      isSidechain: false,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Ready.' }] },
+    },
+  ]
+  try {
+    writeFileSync(
+      join(dir, `${sessionId}.jsonl`),
+      `${records.map((r) => JSON.stringify(r)).join('\n')}\n`,
+    )
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : 'transcript-write-failed' }
+  }
+  const res = await importSessionToDesktop({
+    sessionId,
+    instanceDir: opts.instanceRef.slice('desktop:'.length),
+    title: opts.title,
+    isInstanceRunning: opts.isInstanceRunning,
+  })
+  if (!res.ok) return { ok: false, reason: res.reason }
+  return { ok: true, sessionId }
 }
 
 /**

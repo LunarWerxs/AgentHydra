@@ -379,7 +379,7 @@ export function monitorStatus(): MonitorStatusRow[] {
 export function baseTitle(title: string): string {
   let t = (title ?? '').trim()
   for (;;) {
-    const next = t.replace(/^(?:Auto-resume|Migrated resume|Migrate):\s*/, '').trim()
+    const next = t.replace(/^(?:Auto-resume|Migrated resume|Migrate|Revive):\s*/, '').trim()
     if (next === t) break
     t = next
   }
@@ -505,36 +505,59 @@ async function dispatchDueResumes(): Promise<void> {
     if (q.status === 'queued' && due && !isActive(q.id) && !isSessionActive(q.session_id)) {
       // Placement follows the owner's surface preference (standing rule 2026-08-25: match the
       // preference; 'desktop' means no terminals and nothing headless). 'terminal' opens a
-      // visible window continuing the thread; 'desktop' lands the thread in its instance's app
-      // where the reviewer nudges it onward (the owner's first click activates it); 'queue'
-      // keeps the classic headless dispatch for owners who chose it.
+      // visible window continuing the thread; 'queue' keeps the classic headless dispatch for
+      // owners who chose it. 'desktop' hands the due resume to the ACTION GATE (owner law
+      // 2026-08-26): a revive proposal the reviewer decides and then delivers through the
+      // desktop app's own message channel — the thread wakes VISIBLY in its app, never
+      // headless, never as a deaf re-import.
       const surface = getOrchestratorSettings().handoffSurface
       if (
         surface === 'queue' ||
         (surface === 'desktop' && !q.instance_ref?.startsWith('desktop:'))
       ) {
         void dispatchItem(q)
+      } else if (surface === 'desktop') {
+        try {
+          const { proposeAction } = await import('./proposals')
+          proposeAction({
+            kind: 'revive',
+            sessionId: q.session_id,
+            instanceRef: q.instance_ref,
+            title: baseTitle(q.title),
+            summary: `${baseTitle(q.title)} stopped at a usage limit and its window has reset — deliver the resume turn`,
+            evidence: {
+              flavor: 'limit-reset',
+              resumePrompt: q.prompt,
+              cwd: q.cwd,
+              scheduledFor: q.not_before ?? null,
+            },
+            evidenceAt: new Date().toISOString(),
+          })
+          db.query(
+            'update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?',
+          ).run('completed', new Date().toISOString(), 0, q.id)
+          db.query(
+            'update monitor_state set message = ?, updated_at = ? where resume_item_id = ?',
+          ).run(
+            'window reset — handed to the reviewer as a revive proposal',
+            new Date().toISOString(),
+            q.id,
+          )
+        } catch (err) {
+          console.error('[agenthydra] revive-proposal handoff failed:', err)
+        }
       } else {
         void (async () => {
           try {
-            const { importSessionToDesktop, launchTerminalSession } = await import(
-              './session-launch'
-            )
-            const res =
-              surface === 'terminal'
-                ? await launchTerminalSession({
-                    cwd: q.cwd,
-                    prompt: q.prompt,
-                    instanceRef: q.instance_ref,
-                    model: q.model,
-                    effort: q.effort,
-                    resumeSessionId: q.session_id,
-                  })
-                : await importSessionToDesktop({
-                    sessionId: q.session_id,
-                    instanceDir: (q.instance_ref as string).slice('desktop:'.length),
-                    title: q.import_title ?? null,
-                  })
+            const { launchTerminalSession } = await import('./session-launch')
+            const res = await launchTerminalSession({
+              cwd: q.cwd,
+              prompt: q.prompt,
+              instanceRef: q.instance_ref,
+              model: q.model,
+              effort: q.effort,
+              resumeSessionId: q.session_id,
+            })
             db.query(
               'update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?',
             ).run(res.ok ? 'completed' : 'failed', new Date().toISOString(), res.ok ? 0 : 1, q.id)

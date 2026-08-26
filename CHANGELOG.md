@@ -5,6 +5,45 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0] - 2026-08-26
+
+### Changed
+
+- **The action gate: nothing acts blind anymore** (owner law). Every action the machinery
+  wants - a revive, an archive, an import, a "you crashed, please resume" - is now a
+  PROPOSAL the orchestrator AI must check first. The daemon's detectors (crash orphans,
+  stranded transcripts, deaf processes, usage-window resets, the archive janitor, the
+  visibility sweep) write proposals with full evidence; the reviewer rules on each with a
+  recorded reason, executes the approved ones itself, and reports the outcome. The ledger is
+  served in the feed and audited for a day after each decision, and decide-then-execute is
+  enforced by the API.
+- **Surface purity** (owner law, same day): desktop stays desktop, CLI stays CLI, headless
+  stays headless. The v0.35 auto-revive mechanism - a headless `--resume` imported back into
+  the app - is DELETED, not disabled, and the queue-with-import-back pattern is retired
+  everywhere. Desktop chats get their turns through the desktop app's own message channel,
+  which boots a dormant chat's engine and runs the turn visibly (proven live: zero clicks,
+  zero headless processes). New work is SEEDED as a real desktop chat
+  (`POST /api/sessions/seed-desktop`) and delivered the same way. The monitor's
+  usage-window resumes of desktop threads became revive proposals too.
+- **The reviewer rubric rewritten around the new shape** - one delivery ladder (native
+  same-instance, peer to live chats, relay into other instances, wait visibly when no
+  native route exists), proposals decided first on every wake, and the conflicting
+  queue-era flows removed. Shorter than what it replaces.
+
+### Fixed
+
+- **The sidebar-repaint restart can no longer kill a live chat.** Its "zero live sessions"
+  guard compared a real-cased instance path against a lowercased one with strict equality,
+  matched nothing, and had therefore NEVER actually protected anyone - it quit and reopened
+  the work app under a live mid-turn chat (the owner had to hand-resume it). Three
+  independent layers now: case-insensitive path identity everywhere, no restarts at all
+  while any live session has no mapped instance ("unknown account" rows), and direct
+  process-ancestry proof that no live session's process tree hangs off the app about to be
+  quit - with "could not check" treated as "do not restart".
+- **"Revive:" titles can no longer stick to a chat.** The revive era's queue prefix joined
+  the title peelers, so a re-imported thread wears its real name, never the plumbing's
+  (found live: an architect chat re-wearing "CLICK TO RESUME" through an import).
+
 ## [0.35.4] - 2026-08-26
 
 ### Fixed

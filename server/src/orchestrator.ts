@@ -10,6 +10,18 @@
 // seconds). So the daemon watches, the reviewer speaks, and this file must NEVER try to speak:
 // no Anthropic calls, no messaging, no dispatching, no touching repos.
 //
+// THE ACTION GATE (owner law 2026-08-26, restoring the split above after it drifted). For a
+// while this file also ACTED: auto-revive dispatched headless resumes, the archive janitor
+// flipped flags, the visibility sweep imported chats — all blind, no AI judgment. The owner's
+// ruling: EVERY action (a revive, an archive, an import) is CHECKED by the orchestrator AI
+// before it is made. So detectors now write PROPOSALS (proposals.ts) instead of acting; the
+// reviewer decides each one and executes the approved ones itself, through the desktop app's
+// own native channels — never headless (owner law, same day: desktop stays desktop, CLI stays
+// CLI, headless stays headless; no thread is ever continued on a surface it does not live on).
+// The only things this file still does by itself are thread-neutral hygiene: naming untitled
+// chats from the scanner (owner order: names are managed automatically), cleaning dead-pid
+// registry residue, and restarting an idle app so already-approved changes become visible.
+//
 // WHAT IT READS, all local, all already there:
 //   · ~/.claude/sessions/<pid>.json — the CLI's live-session registry: peer name (the SendMessage
 //     address), transcript sessionId, cwd, pid. The deterministic bridge between the messaging
@@ -54,8 +66,9 @@ import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { isSessionActive } from './dispatch'
 import { instanceRefForSession, sessionMetaMap } from './instance-sessions'
+import { listProposalsForView, maintainProposals, proposeAction } from './proposals'
 import { classifyEnding, type SessionEnding } from './session-ending'
-import { archiveDesktopChat, sweepUntitledDesktopChats } from './session-launch'
+import { desktopChatArchiveState, sweepUntitledDesktopChats } from './session-launch'
 import type {
   AttentionItem,
   OrchestratorInstance,
@@ -108,7 +121,6 @@ export function getOrchestratorSettings(): OrchestratorSettings {
     newChatUltracode: getSetting('orch_new_chat_ultracode') !== '0',
     migrateOnLimit: getSetting('orch_migrate_on_limit') === '1',
     maxActiveChats: num('orch_max_active_chats', 0, 0, 500),
-    autoRevive: getSetting('orch_auto_revive') !== '0',
   }
 }
 
@@ -158,8 +170,6 @@ export function setOrchestratorSettings(
   if (typeof patch.migrateOnLimit === 'boolean')
     setSetting('orch_migrate_on_limit', patch.migrateOnLimit ? '1' : '0')
   clamp('orch_max_active_chats', patch.maxActiveChats, 0, 500)
-  if (typeof patch.autoRevive === 'boolean')
-    setSetting('orch_auto_revive', patch.autoRevive ? '1' : '0')
   return getOrchestratorSettings()
 }
 
@@ -976,11 +986,6 @@ interface TickState {
   usageAgeSecs: number | null
   runningChats: number
   slotsFree: number | null
-  /** Orphaned items BEFORE ack suppression. Auto-revive works from this list, never from the
-   *  suppressed feed: a reviewer acking an orphan ("awaiting click", cooldown 15) used to
-   *  blindfold the reviver for exactly the chat that most needed it (found live 2026-08-25,
-   *  the Glimmer chat). Acks shape the reviewer's TO-READ list, not the daemon's TO-DO list. */
-  reviveCandidates: AttentionItem[]
 }
 
 const state: TickState = {
@@ -992,7 +997,6 @@ const state: TickState = {
   usageAgeSecs: null,
   runningChats: 0,
   slotsFree: null,
-  reviveCandidates: [],
 }
 
 /** Last-known live identity per session, so the holds list can name a parked thread even
@@ -1075,6 +1079,23 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     list.push({ session: sess, quietSecs, held })
     byCwd.set(sess.cwd, list)
     if (held) continue
+    // The owner's tell for a purity break (2026-08-26): a thread showing "unknown account" is
+    // one running with no desktop home — broken headless residue, or work started outside the
+    // app. On the desktop surface every thread must live in a desktop app, so an unmapped
+    // live session is flagged every pass — busy or idle — until it is landed or retired.
+    if (s.handoffSurface === 'desktop' && deps.instanceRef(sess.sessionId) === null) {
+      items.push({
+        key: `unmapped:${sess.sessionId}`,
+        kind: 'errored',
+        sessionId: sess.sessionId,
+        peerName: sess.name,
+        cwd: sess.cwd,
+        summary: `${sess.name} runs under an UNKNOWN ACCOUNT (no desktop home) — surface-purity break: land it in a desktop app when it finishes, or retire it`,
+        detail: { unmappedInstance: true, quietSecs },
+        firstSeenAt: nowIso,
+        seenCount: 1,
+      })
+    }
     if (quietSecs < s.idleQuietSecs) continue
 
     let tail: TailInfo
@@ -1448,8 +1469,31 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     }
   }
 
-  // Revive candidates are captured BEFORE ack suppression (see TickState.reviveCandidates).
-  state.reviveCandidates = items.filter((i) => i.kind === 'orphaned')
+  // Every orphaned item is an ACTION WANTED (a revive). Captured BEFORE ack suppression — an
+  // ack shapes the reviewer's reading list, never the action ledger (found live 2026-08-25:
+  // an acked orphan blindfolded the old reviver for exactly the chat that most needed it) —
+  // and written as a PROPOSAL, never acted on here (owner law 2026-08-26: the AI checks every
+  // action first; the reviewer decides these and executes the approved ones itself).
+  maintainProposals(started)
+  for (const item of items) {
+    if (item.kind !== 'orphaned' || !item.sessionId) continue
+    const quiet = typeof item.detail?.quietSecs === 'number' ? item.detail.quietSecs : 0
+    proposeAction({
+      kind: 'revive',
+      sessionId: item.sessionId,
+      instanceRef: item.instanceRef ?? null,
+      title: scannerTitleFor(item.sessionId),
+      summary: item.summary,
+      evidence: {
+        flavor: item.detail?.deaf ? 'deaf' : item.detail?.stranded ? 'stranded' : 'crash',
+        ...item.detail,
+        cwd: item.cwd ?? null,
+        peerName: item.peerName ?? null,
+        tailSnippet: item.tailSnippet?.slice(0, 600) ?? null,
+      },
+      evidenceAt: new Date(started - quiet * 1000).toISOString(),
+    })
+  }
 
   // -- ack suppression --------------------------------------------------------
   const acks = activeAcks(started)
@@ -1488,16 +1532,16 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       console.error('[agenthydra] title janitor failed:', err)
     }
     try {
-      const archived = await sweepArchivesForDoneSessions()
-      if (archived > 0)
-        console.log(`[agenthydra] archive janitor flagged ${archived} finished chat(s)`)
+      const asks = await proposeArchivesForDoneSessions()
+      if (asks > 0)
+        console.log(`[agenthydra] archive janitor proposed retiring ${asks} finished chat(s)`)
     } catch (err) {
       console.error('[agenthydra] archive janitor failed:', err)
     }
     try {
-      const shown = await sweepInvisibleChats()
-      if (shown > 0)
-        console.log(`[agenthydra] visibility sweep imported ${shown} invisible chat(s)`)
+      const asks = await proposeInvisibleChats()
+      if (asks > 0)
+        console.log(`[agenthydra] visibility sweep proposed importing ${asks} invisible chat(s)`)
     } catch (err) {
       console.error('[agenthydra] visibility sweep failed:', err)
     }
@@ -1507,151 +1551,25 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       console.error('[agenthydra] archive-visibility restart failed:', err)
     }
   }
-
-  // -- auto-revive (every tick; its own gates make it a no-op almost always) ---
-  if (deps === defaultDeps) {
-    try {
-      await runAutoRevive()
-    } catch (err) {
-      console.error('[agenthydra] auto-revive failed:', err)
-    }
-  }
 }
 
-/** The revived thread's working directory: the item's, or read off the transcript's own
- *  records (every CLI record carries the cwd it ran in). */
-function readTranscriptCwd(sessionId: string): string | null {
-  const root = join(homedir(), '.claude', 'projects')
-  try {
-    for (const d of readdirSync(root)) {
-      const p = join(root, d, `${sessionId}.jsonl`)
-      if (!existsSync(p)) continue
-      const head = readFileSync(p, 'utf8')
-        .slice(0, 64 * 1024)
-        .split('\n')
-      for (const line of head) {
-        try {
-          const cwd = (JSON.parse(line) as { cwd?: string }).cwd
-          if (typeof cwd === 'string' && cwd) return cwd
-        } catch {
-          // Keep looking.
-        }
-      }
-      return null
-    }
-  } catch {
-    // No store.
-  }
-  return null
-}
+// The headless auto-revive driver that used to live here (v0.35: a one-turn `--resume`
+// through the queue, imported back into the app) is deliberately GONE, not disabled. It
+// continued desktop threads headlessly, which the owner banned outright (2026-08-26: desktop
+// stays desktop; nothing about his threads ever runs headless), and it acted with no AI
+// judgment, which the same day's action-gate law forbids. Revives are now PROPOSALS; the
+// reviewer decides them and delivers the revive turn through the desktop app's own native
+// message channel (proven 2026-08-26: the app boots a dormant chat's engine and runs the turn
+// visibly, zero clicks, zero headless processes — see docs/orchestrate-command.md).
 
-/**
- * The auto-revive driver (owner order 2026-08-25: the orchestrator revives dead/deaf chats
- * ITSELF — a chat sitting six hours because nobody clicked it means the whole point is not
- * working). One attempt per tick, first eligible orphaned item, retried on an ack cooldown.
- *
- * MECHANISM (v0.35, the migrate pattern): a one-turn `--resume` through the queue with the
- * revive prompt, landed back into the chat's desktop app by the finalize import — the exact
- * delivery the migrate flow has used in production since v0.29. The earlier UI-injection
- * path (type into the app) is retired as the driver: the owner operates over Remote Desktop
- * while traveling, where his input keeps the user-idle gate closed while he is connected and
- * the locked console defeats synthetic input when he is not. A queue turn needs neither the
- * screen nor the keyboard, and its transcript IS the engine verification.
- */
-async function runAutoRevive(): Promise<void> {
-  const s = getOrchestratorSettings()
-  if (!s.autoRevive) return
-  const acks = activeAcks(Date.now())
-  const item = state.reviveCandidates.find(
-    (i) =>
-      i.sessionId &&
-      i.instanceRef?.startsWith('desktop:') &&
-      !acks.get(`auto-revive:${i.sessionId}`),
-  )
-  if (!item?.sessionId || !item.instanceRef) return
-  const sid = item.sessionId
-  const fail = (why: string, cooldownMins = 15): void => {
-    ackAttention(`auto-revive:${sid}`, `revive-failed: ${why}`, cooldownMins)
-    console.log(`[agenthydra] auto-revive ${sid.slice(0, 8)}: FAILED ${why}`)
-  }
-  const { isSessionSuperseded, liveSessionEntry, readDesktopChatTitle } = await import(
-    './session-launch'
-  )
-  if (isSessionSuperseded(sid)) {
-    ackAttention(`auto-revive:${sid}`, 'superseded-lineage', 720)
-    return
-  }
-  // A DEAF chat's passive child must die before the queue turn (two writers, one transcript).
-  // Only deaf items are ever live here, and deaf means zero turns since spawn — nothing real
-  // is interrupted.
-  const live = liveSessionEntry(sid)
-  if (live) {
-    if (item.detail?.deaf !== true) return // paranoia: never kill a process we can't classify
-    try {
-      process.kill(live.pid)
-    } catch {
-      // Already exiting.
-    }
-    const deadline = Date.now() + 8000
-    while (Date.now() < deadline && liveSessionEntry(sid))
-      await new Promise((r) => setTimeout(r, 250))
-    if (liveSessionEntry(sid)) {
-      fail('could-not-stop-passive-process')
-      return
-    }
-  }
-  const cwd = item.cwd ?? readTranscriptCwd(sid)
-  if (!cwd) {
-    fail('cwd-unknown', 60)
-    return
-  }
-  const title =
-    readDesktopChatTitle(item.instanceRef.slice('desktop:'.length), sid) ??
-    scannerTitleFor(sid) ??
-    sid.slice(0, 8)
-  const id = crypto.randomUUID()
-  const posRow = db
-    .query<{ m: number | null }, []>('select max(position) as m from queue_items')
-    .get()
-  db.query(
-    `insert into queue_items
-       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at, import_to, import_title)
-     values (?, ?, ?, ?, ?, null, null, ?, null, ?, 0, 0, 'queued', ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    sid,
-    `Revive: ${title}`.slice(0, 200),
-    cwd,
-    getOrchestratorPrompts().orphanRevive,
-    // The fleet's chats run bypass (the owner's standing automation posture); a revive turn
-    // that stalls on a permission prompt would be a fresh flavor of dead.
-    'bypassPermissions',
-    item.instanceRef,
-    (posRow?.m ?? 0) + 1,
-    new Date().toISOString(),
-    Date.now(),
-    item.instanceRef,
-    title.slice(0, 200),
-  )
-  const { coerceQueueItem } = await import('./db')
-  const raw = db.query('select * from queue_items where id = ?').get(id)
-  if (!raw) {
-    fail('queue-row-vanished')
-    return
-  }
-  const { dispatchItem } = await import('./dispatch')
-  void dispatchItem(coerceQueueItem(raw))
-  ackAttention(`auto-revive:${sid}`, 'auto-revive-dispatched', 60)
-  console.log(
-    `[agenthydra] auto-revive ${sid.slice(0, 8)}: dispatched one-turn resume (queue ${id.slice(0, 8)}) -> imports back to ${item.instanceRef}`,
-  )
-}
-
-/** Strip the queue's nesting prefixes off a title ("Migrated resume: Auto-resume: X" -> "X"). */
+/** Strip the queue's nesting prefixes off a title ("Migrated resume: Auto-resume: X" -> "X").
+ *  'Revive' is in the list because the retired auto-revive era stamped it, and one of those
+ *  titles re-imported UNpeeled is exactly how a chat wore "Revive: ..." in the owner's sidebar
+ *  (found live 2026-08-26 on the architect chat). */
 function peelQueueTitle(title: string): string {
   let t = title
   for (;;) {
-    const m = t.match(/^(Auto-resume|Migrated resume|Migrate|Handoff):\s*/i)
+    const m = t.match(/^(Auto-resume|Migrated resume|Migrate|Handoff|Revive):\s*/i)
     if (!m) return t.trim()
     t = t.slice(m[0].length)
   }
@@ -1660,11 +1578,11 @@ function peelQueueTitle(title: string): string {
 /**
  * The visibility sweep (owner rule: NO chat is ever allowed to be invisible). Any chat WE
  * started — a completed queue run from the last 48h — whose session has no desktop entry
- * anywhere gets imported into its owning instance's app, where the deaf detector and
- * auto-revive take over. Running instances only (never boot an account); done-marked
- * lineages stay retired.
+ * anywhere is PROPOSED for import into its owning instance's app (action-gate law: the
+ * reviewer approves, then calls the import endpoint itself). Running instances only (never
+ * boot an account); done-marked lineages stay retired.
  */
-export async function sweepInvisibleChats(): Promise<number> {
+export async function proposeInvisibleChats(): Promise<number> {
   const since = Date.now() - 48 * 3600 * 1000
   const rows = db
     .query<
@@ -1691,10 +1609,8 @@ export async function sweepInvisibleChats(): Promise<number> {
       .map((r) => r.session_id),
   )
   const seenSessions = new Set<string>()
-  let imported = 0
-  const { findDesktopEntryFile, importSessionToDesktop, liveSessionEntry } = await import(
-    './session-launch'
-  )
+  let proposed = 0
+  const { findDesktopEntryFile, liveSessionEntry } = await import('./session-launch')
   for (const r of rows) {
     if (!r.session_id || seenSessions.has(r.session_id)) continue
     seenSessions.add(r.session_id)
@@ -1706,49 +1622,53 @@ export async function sweepInvisibleChats(): Promise<number> {
     if (await findDesktopEntryFile(r.session_id)) continue
     const ref = r.instance_ref ?? instanceRefForSession(r.session_id)
     if (!ref?.startsWith('desktop:')) continue
-    try {
-      const res = await importSessionToDesktop({
-        sessionId: r.session_id,
-        instanceDir: ref.slice('desktop:'.length),
-        title: peelQueueTitle(r.title ?? '') || null,
-      })
-      if (res.ok) {
-        imported++
-        // Named per import so a re-import loop is visible in the log, not just a count.
-        console.log(`[agenthydra] visibility sweep imported ${r.session_id.slice(0, 8)} -> ${ref}`)
-      }
-    } catch {
-      // One refused import (closed instance, live session) must not stop the sweep.
-    }
+    const title = peelQueueTitle(r.title ?? '') || null
+    const id = proposeAction({
+      kind: 'import',
+      sessionId: r.session_id,
+      instanceRef: ref,
+      title,
+      summary: `finished session "${title ?? r.session_id.slice(0, 8)}" is visible in no desktop sidebar — import it into ${ref}`,
+      evidence: { cwd: r.cwd ?? null, queueTitle: r.title ?? null },
+    })
+    if (id) proposed++
   }
-  return imported
+  return proposed
 }
 
 /**
- * The archive janitor: any session the flow itself marked done (session_marks — handed off,
- * migrated onward, closed out) gets its desktop entries archived, continuously. Keyed on the
- * done-mark and nothing else: prose-reading ("the final post says it was migrated") guesses,
- * and archiving wrongly hides live work; the done-mark is the flow's own bookkeeping. The
- * standing caveat applies: a RUNNING app shows the change after it next restarts.
+ * The archive janitor: any session the flow marked done (session_marks — handed off, migrated
+ * onward, closed out) whose desktop entries are still visible is PROPOSED for archiving
+ * (action-gate law: even though the done-mark was itself an AI's call, the owner's ruling is
+ * "checked before an archive", so the reviewer confirms and executes — natively in its own
+ * instance, or via the desktop-archive endpoint elsewhere). Keyed on the done-mark and
+ * nothing else: prose-reading guesses, and archiving wrongly hides live work.
  */
-export async function sweepArchivesForDoneSessions(roots?: string[]): Promise<number> {
+export async function proposeArchivesForDoneSessions(roots?: string[]): Promise<number> {
   const rows = db
-    .query<{ session_id: string }, []>('select session_id from session_marks where done = 1')
+    .query<{ session_id: string; updated_at: number }, []>(
+      'select session_id, updated_at from session_marks where done = 1',
+    )
     .all()
-  let flagged = 0
+  let proposed = 0
   for (const r of rows) {
     try {
-      const res = await archiveDesktopChat(r.session_id, true, roots)
-      for (const h of res.hits) {
-        if (!h.changed) continue
-        flagged++
-        if (h.wasRunning) noteArchiveVisibilityPending(h.profile)
-      }
+      const state = desktopChatArchiveState(r.session_id, roots)
+      if (!state.found || state.archived) continue
+      const id = proposeAction({
+        kind: 'archive',
+        sessionId: r.session_id,
+        title: scannerTitleFor(r.session_id),
+        summary: `done-marked chat ${scannerTitleFor(r.session_id) ?? r.session_id.slice(0, 8)} still sits un-archived in a desktop sidebar — retire its entries`,
+        evidence: { doneMarkedAt: new Date(r.updated_at).toISOString() },
+        evidenceAt: new Date(r.updated_at).toISOString(),
+      })
+      if (id) proposed++
     } catch {
       // one broken store must not stop the sweep
     }
   }
-  return flagged
+  return proposed
 }
 
 /**
@@ -1764,20 +1684,68 @@ export function noteArchiveVisibilityPending(profileDir: string): void {
   kvSet(`archPending:${profileDir.toLowerCase()}`, new Date().toISOString())
 }
 
+/** Case/slash-insensitive path identity — the comparison bug that killed a live chat (below).
+ *  Exported for the regression test that pins the exact incident shape. */
+export function samePath(a: string, b: string): boolean {
+  return a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase()
+}
+
 async function restartAppsForArchiveVisibility(): Promise<void> {
   const pending = db
     .query<{ key: string }, []>("select key from orchestrator_kv where key like 'archPending:%'")
     .all()
   if (pending.length === 0) return
   const live = readLiveRegistry(join(homedir(), '.claude'))
+  // GUARD HISTORY (2026-08-26, the self-kill): the old ownership test compared
+  // instanceRefForSession's real-cased ref against the marker's LOWERCASED dir with `===`,
+  // which matched NOTHING — so "zero live sessions" was always true and the restart quit the
+  // work app under a LIVE chat mid-turn (the owner had to hand-resume it). Three layers now,
+  // each sufficient to stop that class alone:
+  //   1. every path comparison is case/slash-insensitive (samePath);
+  //   2. any live session the metadata CANNOT map might be hosted by any app — restart
+  //      nothing while one exists (those are the "unknown account" rows, already flagged in
+  //      the feed);
+  //   3. direct process evidence outranks metadata: a live session whose process ANCESTRY
+  //      carries this instance's --user-data-dir is hosted by this app, mapped or not, and
+  //      an ancestry read that fails proves nothing and therefore blocks the restart.
+  const unmapped = live.filter((s) => instanceRefForSession(s.sessionId) === null)
+  if (unmapped.length > 0) {
+    console.log(
+      `[agenthydra] archive-visibility restart deferred: ${unmapped.length} live session(s) with no mapped instance — cannot prove any app is empty`,
+    )
+    return
+  }
   for (const row of pending) {
     const dir = row.key.slice('archPending:'.length)
-    const ref = desktopKey(dir)
-    const cooldownKey = `archRestart:${ref}`
+    const cooldownKey = `archRestart:${desktopKey(dir)}`
     const last = kvGet(cooldownKey)
     if (last && Date.now() - Date.parse(last) < 3600_000) continue
-    const owned = live.filter((s) => instanceRefForSession(s.sessionId) === ref)
+    const owned = live.filter((s) => {
+      const r = instanceRefForSession(s.sessionId)
+      return r !== null && samePath(r.slice('desktop:'.length), dir)
+    })
     if (owned.length > 0) continue // someone is working in there — the flag waits
+    // Layer 3: ask the processes themselves. Any live pid whose ancestor chain carries this
+    // instance's --user-data-dir is hosted here regardless of what the metadata said.
+    let hostedHere = false
+    for (const s of live) {
+      const { extractUserDataDir, processAncestry } = await import('./core/process')
+      const chain = await processAncestry(s.pid)
+      if (chain === null) {
+        hostedHere = true // could not enumerate — refuse rather than guess
+        break
+      }
+      if (
+        chain.some((a) => {
+          const udd = a.commandLine ? extractUserDataDir(a.commandLine) : null
+          return udd !== null && samePath(udd, dir)
+        })
+      ) {
+        hostedHere = true
+        break
+      }
+    }
+    if (hostedHere) continue
     try {
       const { openInstance, quitInstance } = await import('./core/instances')
       const q = await quitInstance(dir)
@@ -1818,10 +1786,12 @@ function fmtQuiet(secs: number): string {
 }
 
 export function orchestratorView(): OrchestratorView {
+  const proposals = listProposalsForView(Date.now())
   return {
     settings: getOrchestratorSettings(),
     prompts: getOrchestratorPrompts(),
     promptDefaults: ORCHESTRATOR_PROMPT_DEFAULTS,
+    proposals,
     attention: state.attention,
     instances: state.instances,
     holds: listSessionHolds().map((h) => ({
@@ -1836,7 +1806,8 @@ export function orchestratorView(): OrchestratorView {
       usageAgeSecs: state.usageAgeSecs,
       runningChats: state.runningChats,
       slotsFree: state.slotsFree,
-      revivePending: state.reviveCandidates.length,
+      proposalsPending: proposals.filter((p) => p.status === 'proposed' || p.status === 'approved')
+        .length,
     },
   }
 }

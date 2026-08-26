@@ -145,6 +145,30 @@ create table if not exists orchestrator_kv (
   value      text not null,
   updated_at text not null
 );
+
+-- Proposed actions (owner law 2026-08-26: EVERY action - a revive, an archive, an import - is
+-- checked by the orchestrator AI before it is made; nothing acts blind). The daemon's detectors
+-- write rows here instead of acting; the reviewer decides each one and executes the approved
+-- ones itself, then reports the outcome. This table is the audit ledger of everything the
+-- machinery wanted to do and what the AI said.
+create table if not exists orchestrator_proposals (
+  id            text primary key,
+  kind          text not null,       -- revive | archive | import
+  session_id    text not null,
+  instance_ref  text,
+  title         text,
+  summary       text not null,       -- one human line: the case for the action
+  evidence      text not null,       -- JSON: everything the checker needs to judge
+  status        text not null default 'proposed',  -- proposed | approved | rejected | executed | failed | expired
+  proposed_at   text not null,
+  updated_at    text not null,
+  decided_at    text,
+  decided_by    text,
+  decision_note text,
+  executed_at   text,
+  result        text
+);
+create index if not exists idx_orch_proposals_open on orchestrator_proposals(status, kind, session_id);
 `)
 
 // A short-lived pre-0.11 hardening change stored manually added account credentials as DPAPI
@@ -459,9 +483,6 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // 0 = unlimited (the default). A positive value caps how many chats may WORK at once,
   // fleet-wide; the overflow rotates in round-robin, longest-idle first.
   orch_max_active_chats: '0',
-  // ON by default (owner order): the daemon itself revives dead/deaf desktop chats via UI
-  // automation, gated on the owner being away from the keyboard.
-  orch_auto_revive: '1',
 }
 
 export function getSetting(key: string): string {

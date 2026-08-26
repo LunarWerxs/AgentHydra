@@ -60,9 +60,11 @@ Every tick (default 60s, only while `enabled`):
   suppressed until the cooldown passes *and* the session has moved since.
 
 The watcher never calls Anthropic, never messages a session, never touches your repos, and
-never resumes rate-limited sessions (the auto-resume monitor's job; they compose fine). Its
-one licensed ACTION is auto-revive (below, owner-ordered): starting a dead chat's engine with a
-one-turn queue resume that lands back in its app, under hard safety gates.
+never acts on a thread AT ALL (owner law 2026-08-26, the ACTION GATE): when it wants
+something done - a revive, an archive, an import - it writes a PROPOSAL and the reviewer
+decides it, executes the approved ones itself, and reports the outcome. The only things the
+daemon still does alone are thread-neutral hygiene: naming untitled chats from the scanner,
+cleaning dead-pid registry residue, and restarting an idle app so approved changes repaint.
 
 ### API
 
@@ -72,6 +74,17 @@ POST /api/orchestrator            patch settings ({ enabled: true } is the on sw
 POST /api/orchestrator/ack        { key, action, cooldownMins? } - reviewer marks an item handled
 POST /api/orchestrator/check      run one pass now
 POST /api/orchestrator/hold       { session_id, held } - park/unpark one thread (/delayo, /resumeo)
+POST /api/orchestrator/proposals/:id/decide    { approved, by?, note? } - the reviewer's ruling
+                                  on one proposed action (the action gate; decide-then-execute
+                                  is enforced)
+POST /api/orchestrator/proposals/:id/executed  { ok, result? } - the execution report after the
+                                  reviewer carried an approved proposal out
+POST /api/sessions/seed-desktop   { cwd, title, instance_ref } - create a brand-new VISIBLE
+                                  desktop chat (fabricated minimal transcript + import); the
+                                  reviewer then delivers the real prompt through the app's own
+                                  message channel, which boots the engine and runs the turn in
+                                  the app - the desktop-native replacement for queue-with-
+                                  import-back
 POST /api/sessions/launch-terminal  { cwd, prompt, instance_ref?, model? } - open a VISIBLE
                                   terminal running a new interactive session on that account
 POST /api/sessions/:id/import-desktop  { instance_ref?, title? } - import a FINISHED session
@@ -169,7 +182,7 @@ Same four verbs over MCP: `get_orchestrator`, `set_orchestrator`, `orchestrator_
 | `branch_off_main` | a session cwd is on a non-main branch / worktree | nudge back onto main |
 | `chip` | a session offered a `spawn_task` chip (title + prompt captured) | queue it via `/api/queue` on the best account, or surface to the human |
 | `limit_stopped` | a live chat's last turn ended at a usage limit | none (the auto-resume monitor's jurisdiction; check `/api/monitor`) |
-| `orphaned` | the session's PROCESS DIED mid-work (computer restart, crash, kill): its live-registry file outlived its pid | revive per the surface preference: desktop → the chat is still in its instance's sidebar, one status line asks the owner to click it back to life; terminal → `launch-terminal` with `resume_session_id` and a verify-first prompt |
+| `orphaned` | the thread needs REVIVING: a dead pid (crash), a stranded mid-turn transcript (graceful restart), or a live-but-deaf plumbing process | informational twin of a `revive` PROPOSAL - the proposal is where the reviewer rules and acts (native delivery), the item just keeps the feed honest |
 
 ### Restart recovery (orphaned sessions)
 
@@ -194,50 +207,50 @@ while every reviewer nudge vanished). The deterministic test: the registry's pro
 `startedAt` against the transcript's newest record timestamp: a process with no record newer
 than its own spawn has never run a turn.
 
+### The two laws (owner orders 2026-08-26)
+
+**The action gate.** Every action is checked by the orchestrator AI before it is made -
+before a resume, before an archive, before a "you crashed, please resume". The daemon's
+detectors (dead-pid orphans, stranded transcripts, deaf processes, monitor limit-resets, the
+archive janitor, the visibility sweep) all write `orchestrator_proposals` rows instead of
+acting; the reviewer rules on each with a recorded reason, executes the approved ones, and
+reports the outcome. The ledger (served as `proposals` in the feed, open + last-day decided)
+is the audit trail of everything the machinery wanted and what the AI said.
+
+**Surface purity.** Desktop stays desktop, CLI stays CLI, headless stays headless - a thread
+is never continued on a surface it does not live on, and every one of the owner's threads is
+a VISIBLE DESKTOP CHAT. This deleted the v0.35 auto-revive mechanism outright (it ran a
+headless `--resume` and imported the result back - a desktop thread running headless) and
+retired the queue-with-import-back pattern everywhere: handoffs and chips are now seeded as
+real desktop chats and delivered natively.
+
+**The native actuator** (proven live 2026-08-26): the desktop app itself delivers messages
+into its chats, and a delivery BOOTS a dormant chat's engine and runs the turn visibly in
+the app - zero clicks, zero headless processes. A session hosted in an instance reaches that
+instance's chats via `mcp__ccd_session_mgmt__send_message`; the reviewer reaches other
+instances via peer messages to live chats, or a RELAY (ask a live chat in the target
+instance to run its own send_message). The delivery ladder in the command file orders these;
+when no native route exists into an instance, the action WAITS visibly instead of falling
+back to anything headless.
+
 ### The zero-click law
 
 Owner order (2026-08-26): clicking is impossible for him, always - he operates over Remote
 Desktop while traveling. Nothing in AgentHydra may wait on the owner clicking, activating,
 or starting anything: no activation clicks on imported chats, no chips left as buttons, no
-"click once to begin" handovers. The queue-turn-with-import-back is the universal actuator:
-work gets STARTED by the machinery and lands visible. Only true blockers (credentials,
-spending, publishing, deleting real data) are surfaced to him, as plain status lines.
-
-### Auto-revive (the daemon acts, `autoRevive`, ON by default)
-
-Owner order 2026-08-25: a dead chat nobody revives means the orchestrator is not working, so
-the daemon revives orphaned/stranded/deaf desktop chats ITSELF, through the queue, which is the
-same actuator the zero-click law names everywhere else. `runAutoRevive` (orchestrator.ts) queues
-a one-turn `--resume` pinned to the chat's own instance carrying `prompts.orphanRevive`, run
-under `bypassPermissions` because a revive that stalls on a permission prompt is only a new
-flavour of dead, and `finalize()` imports the finished turn back into that instance's app under
-the thread's real title. The transcript that turn writes IS the engine verification; nothing
-here infers "running" from a process existing.
-
-Gates, all load-bearing: never a done-marked lineage (acked `superseded-lineage`, 12h), never
-without a resolvable cwd, and a DEAF chat's passive child is stopped first, because two writers
-on one transcript is the one outcome worse than a dead chat. Only an item already classified
-deaf is ever killed, and deaf means zero turns since spawn, so nothing real is interrupted. One
-attempt per tick against the first eligible candidate; a failure acks `revive-failed: <why>` for
-15 minutes, a dispatch acks for 60. Every attempt is visible as an `auto-revive:<sid>` ack.
-
-The UI-injection path this replaced (deep-link the chat, focus the window, click the composer,
-type the prompt, verify the transcript grew) has been DELETED rather than kept as a fallback. It
-could not serve this fleet in either state the owner is ever in: connected over Remote Desktop
-his input holds the user-idle gate shut, and disconnected the console locks and synthetic input
-dies. A second mechanism that is wrong for the only fleet it has is not a fallback, it is
-something that eventually runs.
+"click once to begin" handovers. The native delivery ladder is the universal actuator: work
+gets STARTED by the machinery and streams visibly in the app. Only true blockers
+(credentials, spending, publishing, deleting real data) are surfaced to him, as plain
+status lines.
 
 ### The visibility sweep (no invisible chats)
 
 Every ~10 minutes: any completed queue run from the last 48h whose session has NO desktop
-entry anywhere (a chat the machinery started that the owner cannot see) is imported into its
-owning running instance's app. From there the deaf detector and auto-revive take over, so
-work the plumbing started always ends up visible and running on screen. The whole flow is
-self-healing - the moment the owner clicks a dead desktop chat back to life (or a terminal
-resume lands), the next tick sees the live successor and retires the orphan file. Queue runs
-that were in flight when the daemon died are a separate, older recovery (`reattachRuns` at
-boot: replay the on-disk log, resume tailing or finalize).
+entry anywhere (a chat the machinery started that the owner cannot see) is PROPOSED for
+import into its owning running instance's app; on approval the reviewer imports it, and the
+deaf detector proposes a revive if it has pending work. Queue runs that were in flight when
+the daemon died are a separate, older recovery (`reattachRuns` at boot: replay the on-disk
+log, resume tailing or finalize).
 
 ### One lineage, one continuation (the duplicate-work guard)
 
@@ -282,12 +295,15 @@ overwritten - your edits are newer intent, not drift.
 
 What the loop does, per wake:
 
-1. `GET /api/orchestrator` (one call). Nothing pending → subscribe `notify_when_idle` to any
-   new busy peers and sleep. Something pending → judge each item by the rubric in the command
-   file, act, `ack`.
-2. Delivery: live chat → `SendMessage` by peer name. Closed session / new work (chips,
-   handoff continuations) → `POST /api/queue` instance-pinned to the account with the most
-   weekly headroom (respecting the 80/85/90 bands and the reset-soon exemption).
+1. `GET /api/orchestrator` (one call). Decide every open PROPOSAL first (approve/reject with
+   a reason, execute approved ones, report the outcome), then judge each attention item by
+   the rubric in the command file, act, `ack`.
+2. Delivery is NATIVE (the delivery ladder): own-instance chats via the app's
+   send_message tool (works on dormant chats - it boots the engine), live chats elsewhere
+   via peer `SendMessage`, dormant chats elsewhere via a relay through a live chat in that
+   instance. New work (chips, handoff continuations) is seeded as a visible desktop chat
+   (`POST /api/sessions/seed-desktop`) and delivered the same way - nothing of the owner's
+   ever runs headless.
 3. Pacing: it does not poll at a fixed 60s. `notify_when_idle` gives push notifications the
    moment a peer finishes its turn - *faster* than polling - and a long heartbeat covers
    usage/git/chips. Idle cost is a few small requests per hour.
@@ -325,7 +341,7 @@ Turning it off is the reverse in either order; each half degrades safely without
 | `openInstances` | `never` | whether the reviewer may LAUNCH a closed instance; `when-exhausted` allows it only once every running instance is out of headroom |
 | `openMinPlan` | `Max 20` | minimum plan an auto-opened instance must have |
 | `reviewerReservePct` | 75 | the reviewer's own account stays under this weekly % so it can always keep orchestrating |
-| `handoffSurface` | `desktop` | where handoff continuations land: `desktop` (headless run, then imported into the desktop app as a visible chat), `terminal` (watchable live window), or `queue` (headless only) |
+| `handoffSurface` | `desktop` | where handoff continuations land: `desktop` (seeded as a visible desktop chat, prompt delivered natively - never headless), `terminal` (watchable live window), or `queue` (headless, only for owners who chose it) |
 | `newChatModel` | `opus` | model for every orchestrator-started chat (handoffs, chips, launches) |
 | `newChatEffort` | `max` | reasoning effort for those chats (`low`/`medium`/`high`/`xhigh`/`max`) |
 | `newChatUltracode` | `true` | prepend the `ultracode` opt-in keyword to every orchestrator-started chat's prompt |
@@ -360,13 +376,14 @@ enable (or the install endpoint) away.
 
 ## Where new sessions show up (and where they cannot)
 
-- A **desktop import** (`POST /api/sessions/:id/import-desktop`, the default handoff surface)
-  lands a FINISHED session as a real chat in the target instance's desktop app - the app's own
-  `claude://resume` one-way import, aimed at one instance via its profile dir. Verified live:
-  the chat appears in the sidebar, fully rendered, on the right account. Two hard rules: never
-  import a session that is still running (the import rewrites the transcript under an active
-  writer), and a just-imported chat does not process orchestrator messages until you first
-  click into it - import delivers finished work; it is not a steering channel.
+- A **desktop import** (`POST /api/sessions/:id/import-desktop`) lands a FINISHED session as
+  a real chat in the target instance's desktop app - the app's own `claude://resume` one-way
+  import, aimed at one instance via its profile dir. Verified live: the chat appears in the
+  sidebar, fully rendered, on the right account. One hard rule: never import a session that
+  is still running (the import rewrites the transcript under an active writer). An imported
+  chat is dormant; PEER messages queue into its passive process forever (never SendMessage
+  one), but the app's own send_message channel boots it and runs the turn visibly - that is
+  the steering channel (proven 2026-08-26).
 - A **terminal launch** appears as a real window on your screen, joins the live registry, and
   is orchestratable while it works - the surface for watching a continuation live.
 - A **queue run** is headless: it exists only in AgentHydra's Sessions/Queue tabs (live-tail

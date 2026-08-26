@@ -174,6 +174,7 @@ import {
 } from './orchestrator'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
+import { decideProposal, openProposalsForSession, reportProposalExecuted } from './proposals'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { buildRelaunchArgv } from './relaunch-argv.mjs'
 import {
@@ -187,10 +188,12 @@ import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
 import {
   archiveDesktopChat,
+  findDesktopEntryFile,
   importSessionToDesktop,
   isSessionSuperseded,
   launchTerminalSession,
   liveSessionEntry,
+  seedDesktopSession,
 } from './session-launch'
 import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
@@ -1142,6 +1145,19 @@ app.post('/api/queue', async (c) => {
   const sessionId = body.new_chat ? (body.session_id ?? crypto.randomUUID()) : body.session_id
   if (!sessionId)
     return c.json({ error: 'session_id is required when resuming an existing session' }, 400)
+  // SURFACE PURITY, enforced in code (owner law 2026-08-26, hardened same day: "much more
+  // programmatic guardrails, so it can't make mistakes"). A thread that lives in a desktop
+  // sidebar is NEVER continued headless — a queued `--resume` of it is exactly the cross-open
+  // the owner banned. The reviewer delivers desktop turns through the app's own channel; the
+  // force escape exists for the owner's own deliberate calls, not for routing around the law.
+  if (!body.new_chat && body.force !== true && (await findDesktopEntryFile(sessionId)))
+    return c.json(
+      {
+        error:
+          'surface-violation: this thread lives in the desktop app — continue it there (native delivery), never headless. force:true is the owner-only escape.',
+      },
+      409,
+    )
   if (
     body.not_before != null &&
     (typeof body.not_before !== 'string' || Number.isNaN(Date.parse(body.not_before)))
@@ -1978,7 +1994,6 @@ app.post('/api/orchestrator', async (c) => {
   }
   if (typeof body.newChatUltracode === 'boolean') patch.newChatUltracode = body.newChatUltracode
   if (typeof body.migrateOnLimit === 'boolean') patch.migrateOnLimit = body.migrateOnLimit
-  if (typeof body.autoRevive === 'boolean') patch.autoRevive = body.autoRevive
   setOrchestratorSettings(patch)
   // Prompt edits ride the same route: {"prompts": {resumeNudge: "...", ...}}. Blank (or the
   // default text verbatim) clears the override for that key.
@@ -2052,6 +2067,34 @@ app.post('/api/orchestrator/check', async (c) => {
   await runOrchestratorOnce()
   return c.json({ ok: true, ...orchestratorView() })
 })
+// --- the action gate (owner law 2026-08-26: every action is AI-checked before it is made) ---
+// The daemon's detectors write proposals; the reviewer rules on each one here, EXECUTES the
+// approved ones itself (native app tools in its own instance, peer relay elsewhere, or the
+// archive/import endpoints), then reports the outcome. Decide-then-execute is enforced: an
+// execution report on an undecided proposal is refused.
+app.post('/api/orchestrator/proposals/:id/decide', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.approved !== 'boolean')
+    return c.json({ error: 'approved (boolean) is required' }, 400)
+  const by = typeof body.by === 'string' && body.by.trim() ? body.by.trim() : 'reviewer'
+  const note = typeof body.note === 'string' ? body.note : null
+  const res = decideProposal(c.req.param('id'), body.approved, by, note)
+  if (!res.ok)
+    return c.json({ ok: false, error: res.reason }, res.reason === 'not-found' ? 404 : 409)
+  return c.json({ ok: true, proposal: res.proposal })
+})
+app.post('/api/orchestrator/proposals/:id/executed', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.ok !== 'boolean') return c.json({ error: 'ok (boolean) is required' }, 400)
+  const res = reportProposalExecuted(
+    c.req.param('id'),
+    body.ok,
+    typeof body.result === 'string' ? body.result : null,
+  )
+  if (!res.ok)
+    return c.json({ ok: false, error: res.reason }, res.reason === 'not-found' ? 404 : 409)
+  return c.json({ ok: true, proposal: res.proposal })
+})
 // Start a NEW interactive Claude session in a VISIBLE terminal window, pinned to an instance's
 // account. This is the handoff-continuation surface: unlike a headless queue run it is on the
 // user's screen and joins the live registry, so the orchestrator can keep orchestrating it.
@@ -2122,12 +2165,43 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
       },
       409,
     )
+  // The action gate, same shape as desktop-archive: an undecided import proposal must be
+  // decided before this fires; an approved one is auto-closed by the execution.
+  const importAsk = openProposalsForSession(sessionId).find((p) => p.kind === 'import')
+  if (importAsk?.status === 'proposed')
+    return c.json(
+      {
+        ok: false,
+        error: `proposal-pending: decide proposal ${importAsk.id} first (the action gate)`,
+      },
+      409,
+    )
   const result = await importSessionToDesktop({
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
     title: typeof body.title === 'string' ? body.title : null,
     force: body.force === true,
   })
+  if (importAsk?.status === 'approved')
+    reportProposalExecuted(importAsk.id, result.ok, result.ok ? 'imported' : result.reason)
+  return c.json(result, result.ok ? 200 : 422)
+})
+// Seed a brand-new visible desktop chat (fabricated minimal transcript + import). The reviewer
+// then delivers the real prompt through the app's own message channel, which boots the engine
+// and runs the turn IN the app — the desktop-native replacement for queue-with-import-back
+// (owner law 2026-08-26: desktop stays desktop; his threads never run headless). Returns the
+// new session id; the chat is dormant until the first delivered message.
+app.post('/api/sessions/seed-desktop', async (c) => {
+  const body = await jsonBody(c)
+  const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''
+  const cwd = typeof body.cwd === 'string' ? body.cwd.trim() : ''
+  const title = typeof body.title === 'string' ? body.title.trim() : ''
+  if (!ref.startsWith('desktop:') || !cwd || !title)
+    return c.json(
+      { ok: false, error: "instance_ref ('desktop:<dir>'), cwd and title are required" },
+      400,
+    )
+  const result = await seedDesktopSession({ cwd, title, instanceRef: ref })
   return c.json(result, result.ok ? 200 : 422)
 })
 // Archive (or unarchive) a chat in the DESKTOP app by flipping its metadata flag across every
@@ -2136,11 +2210,27 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
 // running app; the AgentHydra done-mark is the immediate signal either way).
 app.post('/api/sessions/:id/desktop-archive', async (c) => {
   const body = await jsonBody(c)
-  const result = await archiveDesktopChat(c.req.param('id'), body.archived !== false)
+  const sessionId = c.req.param('id')
+  // The action gate, enforced in code: an archive with an UNDECIDED proposal open must be
+  // decided first (no acting past the check), and executing an APPROVED one auto-closes the
+  // ledger so the audit trail cannot be forgotten. A session with no proposal at all is the
+  // owner's own manual call and passes untouched.
+  const archiveAsk = openProposalsForSession(sessionId).find((p) => p.kind === 'archive')
+  if (body.archived !== false && archiveAsk?.status === 'proposed')
+    return c.json(
+      {
+        ok: false,
+        error: `proposal-pending: decide proposal ${archiveAsk.id} first (the action gate)`,
+      },
+      409,
+    )
+  const result = await archiveDesktopChat(sessionId, body.archived !== false)
   // A flag written under a RUNNING app is invisible until that app restarts — queue the
   // archive-visibility restart (owner ask: archived means GONE FROM THE SIDEBAR now).
   for (const h of result.hits ?? [])
     if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
+  if (body.archived !== false && archiveAsk?.status === 'approved')
+    reportProposalExecuted(archiveAsk.id, result.ok, result.ok ? 'archived' : result.reason)
   return c.json(result, result.ok ? 200 : 404)
 })
 // Move a chat to a different account, end to end: stop its live process if it has one (this is
