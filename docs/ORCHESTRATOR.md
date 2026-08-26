@@ -61,8 +61,8 @@ Every tick (default 60s, only while `enabled`):
 
 The watcher never calls Anthropic, never messages a session, never touches your repos, and
 never resumes rate-limited sessions (the auto-resume monitor's job; they compose fine). Its
-one licensed ACTION is auto-revive (below, owner-ordered): starting a dead chat's engine
-through the app's own UI, under hard safety gates.
+one licensed ACTION is auto-revive (below, owner-ordered): starting a dead chat's engine with a
+one-turn queue resume that lands back in its app, under hard safety gates.
 
 ### API
 
@@ -206,14 +206,27 @@ spending, publishing, deleting real data) are surfaced to him, as plain status l
 ### Auto-revive (the daemon acts, `autoRevive`, ON by default)
 
 Owner order 2026-08-25: a dead chat nobody revives means the orchestrator is not working, so
-the daemon revives orphaned/stranded/deaf desktop chats ITSELF. `reviveDesktopChat`
-(session-launch.ts, Windows only) deep-links the chat open in its app, focuses the window,
-clicks the composer, pastes `prompts.orphanRevive`, presses Enter, and then verifies the
-ENGINE: only a transcript growing within 75s counts as revived (registry-live is not
-running). Safety gates: never while the owner has touched the keyboard in the last 45s
-(retries next tick), never over a transcript that is actively growing, never a done-marked
-lineage, never a closed instance. One attempt per tick, retries on a 15-minute cooldown after
-failure, 60 minutes after success; attempts are visible as `auto-revive:<sid>` acks.
+the daemon revives orphaned/stranded/deaf desktop chats ITSELF, through the queue, which is the
+same actuator the zero-click law names everywhere else. `runAutoRevive` (orchestrator.ts) queues
+a one-turn `--resume` pinned to the chat's own instance carrying `prompts.orphanRevive`, run
+under `bypassPermissions` because a revive that stalls on a permission prompt is only a new
+flavour of dead, and `finalize()` imports the finished turn back into that instance's app under
+the thread's real title. The transcript that turn writes IS the engine verification; nothing
+here infers "running" from a process existing.
+
+Gates, all load-bearing: never a done-marked lineage (acked `superseded-lineage`, 12h), never
+without a resolvable cwd, and a DEAF chat's passive child is stopped first, because two writers
+on one transcript is the one outcome worse than a dead chat. Only an item already classified
+deaf is ever killed, and deaf means zero turns since spawn, so nothing real is interrupted. One
+attempt per tick against the first eligible candidate; a failure acks `revive-failed: <why>` for
+15 minutes, a dispatch acks for 60. Every attempt is visible as an `auto-revive:<sid>` ack.
+
+The UI-injection path this replaced (deep-link the chat, focus the window, click the composer,
+type the prompt, verify the transcript grew) has been DELETED rather than kept as a fallback. It
+could not serve this fleet in either state the owner is ever in: connected over Remote Desktop
+his input holds the user-idle gate shut, and disconnected the console locks and synthetic input
+dies. A second mechanism that is wrong for the only fleet it has is not a fallback, it is
+something that eventually runs.
 
 ### The visibility sweep (no invisible chats)
 
