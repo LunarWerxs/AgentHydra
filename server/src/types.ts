@@ -634,6 +634,12 @@ export interface QueueItem {
    *  `import_error` is the last refusal, kept so a give-up is explainable rather than mute. */
   import_state?: ImportState | null
   import_error?: string | null
+  /** Deliberate SURFACE-PURITY override. dispatch.ts refuses to launch a headless run against a
+   *  session that lives in a desktop app (owner law 2026-08-26: desktop stays desktop, and the
+   *  reported failure was desktop chats becoming "a headless thing I couldn't see"). Only a
+   *  caller that explicitly forced it sets this, so the refusal cannot be routed around by
+   *  accident. Optional so synthetic QueueItem literals stay valid. */
+  allow_headless?: boolean
   started_at: string | null
   finished_at: string | null
   exit_code: number | null

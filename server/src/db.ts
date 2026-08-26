@@ -222,6 +222,13 @@ create index if not exists idx_orch_proposals_open on orchestrator_proposals(sta
     db.exec('alter table queue_items add column import_state text')
   if (!cols.includes('import_error'))
     db.exec('alter table queue_items add column import_error text')
+  // SURFACE PURITY override (owner law 2026-08-26: desktop stays desktop). dispatch.ts refuses
+  // to launch a HEADLESS run against a session that lives in a desktop app - the failure the
+  // owner reported as "every chat you migrated ended up as a headless thing I couldn't see".
+  // This column is the single deliberate escape, set only when a caller passes force, so the
+  // refusal can never be routed around by accident while the owner can still override himself.
+  if (!cols.includes('allow_headless'))
+    db.exec('alter table queue_items add column allow_headless integer not null default 0')
 }
 {
   // --- the analytics tier (server/src/analytics.ts) --------------------------------------------
@@ -395,7 +402,12 @@ create index if not exists idx_session_edits_ts on session_edits(ts desc);
  *  so it lives with the table rather than as a fourth private copy (index/scheduler/monitor/dispatch
  *  each had their own). db.ts imports nothing of theirs, so this is cycle-free for all of them. */
 export function coerceQueueItem(row: any): QueueItem {
-  return { ...row, new_chat: !!row.new_chat, fork: !!row.fork }
+  return {
+    ...row,
+    new_chat: !!row.new_chat,
+    fork: !!row.fork,
+    allow_headless: !!row.allow_headless,
+  }
 }
 
 /** A run's terminal statuses. `completed` is the only one that means the work got done. */

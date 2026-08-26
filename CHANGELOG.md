@@ -32,6 +32,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A desktop chat can no longer be continued by a headless run, at the chokepoint.** This is
+  the owner's reported failure ("every chat you were migrating from desktop to desktop ended
+  up being migrated to a headless thing that I couldn't see"), and an audit of the live
+  database found 11 real cases. The guard now sits in the ONE function every headless run
+  passes through, so all six callers (the HTTP route, run-due, the retry sweep, the
+  scheduler, the monitor, migrate) are covered by one rule instead of five ways in; a route
+  check alone would have left the other five open. New chats are exempt by design, and a
+  single explicit override is recorded on the row for the owner's own deliberate calls.
+- **Migrating a chat between accounts no longer burns a headless turn.** Transcripts are
+  shared across instances, so a move is just "archive the old entry, import into the new
+  one"; the old design ran a one-turn notice through the queue first, which is precisely how
+  a migrated chat spent its first turn invisible. The endpoint also stopped advertising that
+  the moved chat "awaits an activation click", which the zero-click law forbids.
+- **The test suite no longer reads the developer's real desktop-instance store**, so instance
+  discovery is deterministic instead of depending on which apps happen to be installed.
 - **The sidebar-repaint restart can no longer kill a live chat.** Its "zero live sessions"
   guard compared a real-cased instance path against a lowercased one with strict equality,
   matched nothing, and had therefore NEVER actually protected anyone - it quit and reopened

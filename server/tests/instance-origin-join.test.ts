@@ -29,6 +29,11 @@ const env = {
   HOME: home,
   AGENTHYDRA_HOME: join(home, '.agenthydra'),
   AGENTHYDRA_DB: join(home, 'test.db'),
+  // This child drives its own HOME, so it must also claim the instance root explicitly: the
+  // preload exports AGENTHYDRA_INSTANCES_ROOT for the parent's scratch, and an inherited value
+  // outranks USERPROFILE inside instancesRoot() — the child would then look for these fixtures
+  // in the parent's world and find an empty one.
+  AGENTHYDRA_INSTANCES_ROOT: join(home, '.claude-instances'),
 }
 const MOD = JSON.stringify(join(import.meta.dir, '..', 'src', 'instance-sessions.ts'))
 const SPAWNS_A_CHILD_BUN = 30_000

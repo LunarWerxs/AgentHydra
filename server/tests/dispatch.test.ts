@@ -6,7 +6,7 @@
 // design exists for: the runner does NOT hang off the daemon, so quitting the app cannot take a run
 // with it (see 'the runner escapes...' below).
 import { afterEach, expect, test } from 'bun:test'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { markDispatchReady } from '../src/boot-state'
@@ -17,6 +17,10 @@ import * as dispatch from '../src/dispatch'
 // (tests/setup.ts); AGENTHYDRA_FAKE is read at dispatch-CALL time, so setting it here (before any
 // dispatchItem call) makes buildArgv use the harmless fake `claude` stand-in.
 process.env.AGENTHYDRA_FAKE = '1'
+// The instance store the surface-purity guard searches, isolated by the preload (tests/setup.ts)
+// so this file's "does this session live in a desktop app?" checks see a world it controls
+// rather than the developer's real fleet.
+const INSTANCES_ROOT = process.env.AGENTHYDRA_INSTANCES_ROOT as string
 const RUN_LOG_DIR = process.env.AGENTHYDRA_RUN_LOG_DIR as string
 const dir = tmpdir() // a real cwd for the fake run; nothing is written to it
 
@@ -470,3 +474,45 @@ test('a reattach onto a dead runner never adopts its stale child pid', async () 
   // runner-liveness probe, because the grace is the thing under test — a marker still in flight has
   // to be able to win before we call the run lost.
 }, 20_000)
+
+// --- SURFACE PURITY: a desktop-resident thread never runs headless -------------
+// Owner law 2026-08-26, from a reported failure: "every chat you were migrating from desktop to
+// desktop ended up being migrated to a headless thing that I couldn't see." A queued --resume
+// appends to a desktop chat's transcript from a process the owner cannot watch. The guard sits in
+// dispatchItem, the ONE chokepoint all six call sites (route, run-due, retry sweep, scheduler,
+// monitor, migrate) funnel through - a route-level check would have left five ways in.
+
+/** Write the desktop metadata file that makes a session "resident" in an instance's sidebar. */
+function makeDesktopResident(sessionId: string): void {
+  const store = join(INSTANCES_ROOT, 'desktoptest', 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  writeFileSync(
+    join(store, `local_${sessionId}.json`),
+    JSON.stringify({ cliSessionId: sessionId, isArchived: false }),
+  )
+}
+
+test('a headless resume of a DESKTOP-resident chat is refused at the dispatch chokepoint', async () => {
+  const item = makeItem({ new_chat: false })
+  makeDesktopResident(item.session_id)
+  await dispatch.dispatchItem(item)
+  // Refused BEFORE any spawn: failed, and the reason names the law rather than looking like a crash.
+  expect(statusOf(item.id)?.status).toBe('failed')
+  const events = dispatch.getRunEvents(item.id)
+  expect(events.some((e) => e.text.includes('surface-violation'))).toBe(true)
+  expect(events.some((e) => e.text.includes('desktop app'))).toBe(true)
+})
+
+test('the guard spares a NEW chat and honours the owner explicit allow_headless override', async () => {
+  // A new chat has no desktop entry to violate - it is born in the queue, which IS its surface.
+  const fresh = makeItem({ new_chat: true })
+  await dispatch.dispatchItem(fresh)
+  expect(await waitForStatus(fresh.id, 'completed')).toBe('completed')
+
+  // The override is the owner's deliberate escape, stored on the row so the chokepoint honours
+  // what the route recorded; without it this exact item would be refused by the test above.
+  const forced = makeItem({ new_chat: false, allow_headless: true })
+  makeDesktopResident(forced.session_id)
+  await dispatch.dispatchItem(forced)
+  expect(await waitForStatus(forced.id, 'completed')).toBe('completed')
+})

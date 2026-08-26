@@ -23,9 +23,16 @@ export function currentPlatform(): SupportedPlatform {
   return 'linux'
 }
 
-/** `~/.claude-instances` — root of all isolated instance dirs. */
+/** `~/.claude-instances` — root of all isolated instance dirs.
+ *
+ *  `AGENTHYDRA_INSTANCES_ROOT` overrides it. The other state roots (db, config dir, run logs)
+ *  already have such an override and the test preload redirects them; this one did not, so any
+ *  test touching instance discovery read the DEVELOPER'S REAL instance store — harmless while
+ *  nothing consulted it on a hot path, and no longer true now that the surface-purity guard
+ *  (dispatch.ts) asks "does this session live in a desktop app?" before every headless run. */
 export function instancesRoot(): string {
-  return path.join(os.homedir(), INSTANCES_DIR_NAME)
+  const override = process.env.AGENTHYDRA_INSTANCES_ROOT?.trim()
+  return override || path.join(os.homedir(), INSTANCES_DIR_NAME)
 }
 
 /** Our own app-data dir: instances-cache.json / agenthydra settings / logs (never an

@@ -931,6 +931,30 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // two concurrent --resume of the same session would interleave transcript writes.
   if (isSessionActive(item.session_id)) return
 
+  // SURFACE PURITY, at the one chokepoint every headless run passes through (owner law
+  // 2026-08-26: "desktop stays desktop, CLI stays CLI, headless stays headless, and you never
+  // cross open"). The reported failure was desktop chats being continued as "a headless thing I
+  // couldn't see": a queue --resume appends to the thread's transcript from outside, so the work
+  // happens in a process the owner cannot watch and the desktop app cannot show live.
+  //
+  // The guard lives HERE, not in the HTTP route, deliberately: six call sites reach this function
+  // (route, run-due, retry sweep, scheduler, monitor) and a route-level check would leave five
+  // ways in. A NEW chat has no desktop entry yet and passes; only continuing a thread that
+  // already lives in a sidebar is refused, and `allow_headless` is the owner's explicit override.
+  if (!item.new_chat && !item.allow_headless) {
+    const { findDesktopEntryFile } = await import('./session-launch')
+    const home = await findDesktopEntryFile(item.session_id).catch(() => null)
+    if (home) {
+      failPreLaunch(
+        item,
+        'surface-violation: this thread lives in the desktop app, so a headless resume would ' +
+          'continue it where you cannot see it. Continue it in its app (the orchestrator ' +
+          'delivers turns natively), or re-queue with force to override.',
+      )
+      return
+    }
+  }
+
   // fresh run: clear prior events + any stale files from an earlier run of this item.
   db.query('delete from run_events where queue_item_id = ?').run(item.id)
   runtime.set(item.id, freshRuntime())

@@ -1145,12 +1145,14 @@ app.post('/api/queue', async (c) => {
   const sessionId = body.new_chat ? (body.session_id ?? crypto.randomUUID()) : body.session_id
   if (!sessionId)
     return c.json({ error: 'session_id is required when resuming an existing session' }, 400)
-  // SURFACE PURITY, enforced in code (owner law 2026-08-26, hardened same day: "much more
-  // programmatic guardrails, so it can't make mistakes"). A thread that lives in a desktop
-  // sidebar is NEVER continued headless — a queued `--resume` of it is exactly the cross-open
-  // the owner banned. The reviewer delivers desktop turns through the app's own channel; the
-  // force escape exists for the owner's own deliberate calls, not for routing around the law.
-  if (!body.new_chat && body.force !== true && (await findDesktopEntryFile(sessionId)))
+  // SURFACE PURITY, refused early with a readable error (owner law 2026-08-26, hardened same
+  // day: "much more programmatic guardrails, so it can't make mistakes"). A thread that lives in
+  // a desktop sidebar is NEVER continued headless — a queued `--resume` of it is exactly the
+  // cross-open the owner banned. dispatch.ts enforces the same rule at the spawn chokepoint, so
+  // this route check is the friendly message rather than the enforcement; `force` records the
+  // owner's deliberate override ON THE ROW (allow_headless) so the chokepoint honours it too.
+  const allowHeadless = body.force === true
+  if (!body.new_chat && !allowHeadless && (await findDesktopEntryFile(sessionId)))
     return c.json(
       {
         error:
@@ -1184,8 +1186,8 @@ app.post('/api/queue', async (c) => {
   const position = (posRow?.m ?? 0) + 1
   db.query(
     `insert into queue_items
-       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at, allow_headless)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
   ).run(
     id,
     sessionId,
@@ -1202,6 +1204,7 @@ app.post('/api/queue', async (c) => {
     position,
     notBefore,
     Date.now(),
+    allowHeadless ? 1 : 0,
   )
   return c.json(coerceQueueItem(db.query('select * from queue_items where id = ?').get(id)))
 })
@@ -2235,14 +2238,18 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
 })
 // Move a chat to a different account, end to end: stop its live process if it has one (this is
 // user-initiated — the chat is being moved, so its current run ends), flag its old desktop
-// entries archived, then run a one-turn migration resume pinned to the target account; when that
-// run completes, the finalize hook imports the chat into the target instance's desktop app under
-// its real title. The chat continues life on the new account, visible where the user looks.
-// The migration notice lives in the editable prompt set (ORCHESTRATOR_PROMPT_DEFAULTS
-// .migrationNotice) — the owner can tune it in Settings, and the [orchestrator] marker rule is
-// documented there: transcript parsers classify marked text as plumbing, never as the human's
-// standing instruction (a marker-less version once made every migrated thread read as
-// human-held, and the reviewer politely never touched them again).
+// entries archived, then IMPORT it into the target instance's app under its real title. The
+// chat continues life on the new account, visible where the user looks.
+//
+// NOTHING HEADLESS HAPPENS HERE, and that is the point (owner law 2026-08-26). An earlier
+// design ran a one-turn "migration notice" resume through the queue on the target account and
+// let the finalize hook import the result — which meant every migrated desktop chat spent its
+// first turn as an invisible headless run, the exact failure the owner reported ("every chat
+// you were migrating from desktop to desktop ended up being migrated to a headless thing I
+// couldn't see"). The transcript store is SHARED across instances, so moving a thread needs no
+// turn at all: archive the old entries, import into the new profile, done. Any prompt the
+// caller wants delivered is sent afterwards through the app's own native message channel, which
+// boots the chat's engine in the app where the owner can watch it.
 app.post('/api/sessions/:id/migrate', async (c) => {
   const sessionId = c.req.param('id')
   const body = await jsonBody(c)
@@ -2311,10 +2318,12 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       return c.json({ ok: false, error: launched.reason ?? 'terminal launch failed' }, 422)
     return c.json({ ok: true, surface: 'terminal', stoppedLive: !!live })
   }
-  // Desktop surface: the thread lands in the target instance's app as a chat. The daemon has no
-  // peer tools, so the PROMPT is not delivered here — the interactive caller (the reviewer)
-  // sends it as a peer message after the import registers; it queues on the chat and processes
-  // when the owner first clicks it (the activation, measured). Everything after happens in-app.
+  // Desktop surface: the thread lands in the target instance's app as a chat, dormant. The
+  // daemon has no messaging tools of its own, so the PROMPT is not delivered here — the
+  // interactive caller (the reviewer) delivers it through the app's own message channel, which
+  // BOOTS the dormant chat's engine and runs the turn in the app (measured 2026-08-26). No
+  // click is involved, and no headless process is created; the old "queues until the owner
+  // activates it" contract was the zero-click violation and is gone.
   const imported = await importSessionToDesktop({
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
@@ -2326,8 +2335,9 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     ok: true,
     surface: 'desktop',
     stoppedLive: !!live,
-    promptDelivery: 'send-a-peer-message-after-it-registers',
-    awaitsActivationClick: true,
+    ranHeadless: false,
+    prompt,
+    promptDelivery: 'deliver-natively-via-the-app-message-channel (boots the chat; no click)',
   })
 })
 

@@ -56,3 +56,11 @@ mkdirSync(process.env.AGENTHYDRA_RUN_LOG_DIR, { recursive: true })
 // state their running app reads — a synthetic account's usage row showing up in their own UI.
 process.env.AGENTHYDRA_DATA_DIR = path.join(scratch, 'data')
 mkdirSync(process.env.AGENTHYDRA_DATA_DIR, { recursive: true })
+// And the INSTANCE store. Every other state root was already redirected above; this one was not,
+// so any test touching instance discovery read the developer's REAL ~/.claude-instances — a
+// machine-dependent answer, and one the suite now asks for on a hot path (dispatch.ts's
+// surface-purity guard checks "does this session live in a desktop app?" before every headless
+// run). Tests that deliberately drive a DIFFERENT home in a child process must set this
+// explicitly in that child's env; inheriting this value there would silently outrank their HOME.
+process.env.AGENTHYDRA_INSTANCES_ROOT = path.join(scratch, '.claude-instances')
+mkdirSync(process.env.AGENTHYDRA_INSTANCES_ROOT, { recursive: true })
