@@ -1116,7 +1116,14 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     } else if (
       sess.startedAt > 0 &&
       tail.lastEventAt !== null &&
-      Date.parse(tail.lastEventAt) < sess.startedAt
+      Date.parse(tail.lastEventAt) < sess.startedAt &&
+      // A chat that WORKED recently is not deaf-stalled, it is between turns — every
+      // queue-revive re-imports the chat as a fresh passive child, so without this gate the
+      // just-revived chat would be re-flagged 150s later and re-revived hourly forever. The
+      // 30-minute quiet floor turns the cycle into "revive again only once it has genuinely
+      // sat", which for a chat with pending work is a sane work cadence, and the reviewer
+      // retires finished ones (done-mark) so the cycle converges.
+      started - Date.parse(tail.lastEventAt) >= 30 * 60_000
     ) {
       // LIVE BUT DEAF: the process exists yet not one record has landed since it spawned — an
       // import/migrate delivery child whose engine never started (measured: peer messages

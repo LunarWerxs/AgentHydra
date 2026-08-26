@@ -213,6 +213,11 @@ the keyboard, and verifies the engine started). Your job on an orphaned item:
   failure reason - that is the owner's cue, not yours to hand-fix.
 - `detail.handoffDetected` true means it died AFTER writing a handoff - collect and continue
   that handoff via the normal flow instead of reviving the dead copy.
+- **Close the loop on finished work**: a deaf/orphaned item whose `tailSnippet` recap says the
+  work is COMPLETE (fully closed out, nothing pending) must be RETIRED, not revived again -
+  `POST /api/sessions/<id>/done {"done": true}` then desktop-archive. Auto-revive re-runs a
+  turn roughly hourly on any deaf chat that still has pending work; your done-mark is what
+  makes that cycle converge instead of spinning on a finished thread.
 - First, the watcher already cleaned superseded/finished residue - every item you see is real
   unfinished work. Read `detail`: `midTurn` true means it died mid-turn (work definitely
   incomplete); `handoffDetected` true means it died AFTER writing a handoff - collect and

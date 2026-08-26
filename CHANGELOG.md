@@ -5,6 +5,16 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.2] - 2026-08-25
+
+### Fixed
+
+- **A just-revived chat can no longer be re-flagged deaf 150 seconds later.** Every
+  queue-revive re-imports the chat as a fresh passive process, which the deaf detector would
+  flag again almost immediately. A 30-minute quiet floor on the deaf test turns the cycle
+  into "revive again only once it has genuinely sat" - a sane work cadence for chats with
+  pending work - and the reviewer retires finished threads so the cycle converges.
+
 ## [0.35.1] - 2026-08-25
 
 ### Added
