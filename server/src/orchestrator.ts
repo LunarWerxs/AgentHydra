@@ -1560,10 +1560,17 @@ function peelQueueTitle(title: string): string {
 export async function sweepInvisibleChats(): Promise<number> {
   const since = Date.now() - 48 * 3600 * 1000
   const rows = db
-    .query<{ session_id: string; instance_ref: string | null; title: string }, [number]>(
-      "select session_id, instance_ref, title from queue_items where status = 'completed' and created_at > ? order by created_at desc",
+    .query<
+      { session_id: string; instance_ref: string | null; title: string; cwd: string | null },
+      [number]
+    >(
+      "select session_id, instance_ref, title, cwd from queue_items where status = 'completed' and created_at > ? order by created_at desc",
     )
     .all(since)
+    // Scratchpad/temp runs are working files, not owner-facing threads — importing one puts a
+    // meaningless chat in a sidebar and then auto-revive dutifully wakes it (happened live on
+    // the first night). Skip them.
+    .filter((r) => !/[\\/](temp|tmp)[\\/]/i.test(r.cwd ?? ''))
   let metaMap: Map<string, { instance: string; archived: boolean }>
   try {
     metaMap = sessionMetaMap()

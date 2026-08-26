@@ -520,27 +520,49 @@ export async function importSessionToDesktop(opts: {
 //   · the claim "revived" is only made after the ENGINE is verified: the transcript must grow
 //     within engineWaitMs, else the caller hears engineVerified: false and surfaces it.
 
-const REVIVE_SCRIPT = `param([string]$InstanceDir, [string]$PromptFile, [int]$MinIdleMs = 45000)
+// Field lessons baked into this script (2026-08-25, first live night):
+//   · SetForegroundWindow FAILS SILENTLY without foreground rights, and SendKeys then types
+//     into whatever window really has focus — a revive prompt landed in an unrelated chat
+//     this way. Now: ALT-nudge + retries, and NOTHING is ever typed unless
+//     GetForegroundWindow verifiably equals the target, re-checked right before the keys.
+//   · The claude:// deep link imports/spawns but does NOT navigate the visible UI, so the
+//     open chat can be a different one. Now: the chat's sidebar row is located by TITLE in
+//     the window's UI Automation tree and clicked; no row found = abort, never type blind.
+//   · The composer is found the same way (a focusable Edit/Document control in the lower
+//     part of the window), with a geometric fallback only inside the focus-verified window.
+const REVIVE_SCRIPT = `param([string]$InstanceDir, [string]$PromptFile, [string]$ChatTitle = '', [int]$MinIdleMs = 45000)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
 Add-Type @"
 using System; using System.Runtime.InteropServices;
 public class RvNative {
   [StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
   [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
-  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }
 "@
-$lii = New-Object RvNative+LASTINPUTINFO
-$lii.cbSize = [uint32][System.Runtime.InteropServices.Marshal]::SizeOf($lii)
-[void][RvNative]::GetLastInputInfo([ref]$lii)
-$idleMs = [Environment]::TickCount - $lii.dwTime
-if ($idleMs -lt $MinIdleMs) { Write-Output ('{"ok":false,"reason":"user-active","idleMs":' + $idleMs + '}'); exit 0 }
+function Out-Result([string]$json) { Write-Output $json; exit 0 }
+function Assert-Idle {
+  $lii = New-Object RvNative+LASTINPUTINFO
+  $lii.cbSize = [uint32][System.Runtime.InteropServices.Marshal]::SizeOf($lii)
+  [void][RvNative]::GetLastInputInfo([ref]$lii)
+  $idleMs = [Environment]::TickCount - $lii.dwTime
+  if ($idleMs -lt $MinIdleMs) { Out-Result ('{"ok":false,"reason":"user-active","idleMs":' + $idleMs + '}') }
+}
+function Click-Point([int]$x, [int]$y) {
+  [void][RvNative]::SetCursorPos($x, $y)
+  Start-Sleep -Milliseconds 150
+  [RvNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
+  [RvNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+}
+Assert-Idle
 $needle = ("--user-data-dir=" + $InstanceDir).ToLower()
 $procs = Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.ToLower().Contains($needle) }
 $hwnd = [IntPtr]::Zero
@@ -548,24 +570,62 @@ foreach ($p in $procs) {
   $gp = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
   if ($gp -and $gp.MainWindowHandle -ne 0) { $hwnd = $gp.MainWindowHandle; break }
 }
-if ($hwnd -eq [IntPtr]::Zero) { Write-Output '{"ok":false,"reason":"app-window-not-found"}'; exit 0 }
+if ($hwnd -eq [IntPtr]::Zero) { Out-Result '{"ok":false,"reason":"app-window-not-found"}' }
+# Foreground, VERIFIED. The ALT nudge unlocks SetForegroundWindow for background processes.
 [void][RvNative]::ShowWindow($hwnd, 9)
-[void][RvNative]::SetForegroundWindow($hwnd)
-Start-Sleep -Milliseconds 600
-$r = New-Object RvNative+RECT
-[void][RvNative]::GetWindowRect($hwnd, [ref]$r)
-$x = [int]($r.Left + 0.60 * ($r.Right - $r.Left))
-$y = [int]($r.Bottom - 66)
-[void][RvNative]::SetCursorPos($x, $y)
-Start-Sleep -Milliseconds 200
-[RvNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
-[RvNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+$got = $false
+for ($i = 0; $i -lt 4; $i++) {
+  [RvNative]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+  [RvNative]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+  [void][RvNative]::SetForegroundWindow($hwnd)
+  Start-Sleep -Milliseconds 400
+  if ([RvNative]::GetForegroundWindow() -eq $hwnd) { $got = $true; break }
+}
+if (-not $got) { Out-Result '{"ok":false,"reason":"focus-failed"}' }
+# The right CHAT, by title, via the UI Automation tree. No row, no typing.
+$root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+$all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+$titleKey = if ($ChatTitle.Length -gt 24) { $ChatTitle.Substring(0, 24) } else { $ChatTitle }
+$row = $null
+if ($titleKey) {
+  foreach ($el in $all) {
+    $n = $el.Current.Name
+    if ($n -and $n.Contains($titleKey) -and -not $el.Current.BoundingRectangle.IsEmpty) { $row = $el; break }
+  }
+}
+if ($null -eq $row) { Out-Result '{"ok":false,"reason":"chat-row-not-found"}' }
+$rr = $row.Current.BoundingRectangle
+Click-Point ([int]($rr.X + $rr.Width / 2)) ([int]($rr.Y + $rr.Height / 2))
+Start-Sleep -Milliseconds 1200
+if ([RvNative]::GetForegroundWindow() -ne $hwnd) { Out-Result '{"ok":false,"reason":"focus-lost-after-nav"}' }
+# The composer: a keyboard-focusable Edit/Document in the LOWER HALF of the window; the
+# bottom-most wins. Geometric fallback only inside this focus-verified window.
+$all2 = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+$edit = $null
+foreach ($el in $all2) {
+  $ct = $el.Current.ControlType
+  if ($ct -ne [System.Windows.Automation.ControlType]::Edit -and $ct -ne [System.Windows.Automation.ControlType]::Document) { continue }
+  if (-not $el.Current.IsKeyboardFocusable) { continue }
+  $b = $el.Current.BoundingRectangle
+  if ($b.IsEmpty) { continue }
+  if ($null -eq $edit -or $b.Y -gt $edit.Current.BoundingRectangle.Y) { $edit = $el }
+}
+$winRect = $root.Current.BoundingRectangle
+if ($null -ne $edit) {
+  $b = $edit.Current.BoundingRectangle
+  Click-Point ([int]($b.X + $b.Width / 2)) ([int]($b.Y + $b.Height / 2))
+} else {
+  Click-Point ([int]($winRect.X + 0.60 * $winRect.Width)) ([int]($winRect.Y + $winRect.Height - 66))
+}
 Start-Sleep -Milliseconds 400
+Assert-Idle
+if ([RvNative]::GetForegroundWindow() -ne $hwnd) { Out-Result '{"ok":false,"reason":"focus-lost-before-type"}' }
 Set-Clipboard -Value (Get-Content -Raw -LiteralPath $PromptFile)
 [System.Windows.Forms.SendKeys]::SendWait('^v')
 Start-Sleep -Milliseconds 400
+if ([RvNative]::GetForegroundWindow() -ne $hwnd) { Out-Result '{"ok":false,"reason":"focus-lost-mid-type"}' }
 [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-Write-Output ('{"ok":true,"clickX":' + $x + ',"clickY":' + $y + '}')
+Out-Result ('{"ok":true,"composer":' + ($(if ($null -ne $edit) { '"uia"' } else { '"geometric"' })) + '}')
 `
 
 export interface ReviveResult {
@@ -634,7 +694,11 @@ export async function reviveDesktopChat(opts: {
   }
   await new Promise((r) => setTimeout(r, 6000))
 
-  // The UI half: focus, click the composer, paste, Enter — all inside the user-idle gate.
+  // The UI half: focus (verified), navigate to the chat row by title, click the composer,
+  // paste, Enter — all inside the user-idle gate, aborting rather than ever typing blind.
+  const chatTitle = readDesktopChatTitle(opts.instanceDir, opts.sessionId)
+  if (!chatTitle)
+    return { ok: false, reason: 'chat-title-unknown: cannot locate the sidebar row safely' }
   const dir = join(tmpdir(), 'agenthydra-revive')
   mkdirSync(dir, { recursive: true })
   const scriptPath = join(dir, 'revive.ps1')
@@ -658,6 +722,8 @@ export async function reviveDesktopChat(opts: {
         opts.instanceDir,
         '-PromptFile',
         promptPath,
+        '-ChatTitle',
+        chatTitle,
         '-MinIdleMs',
         String(opts.minUserIdleMs ?? 45_000),
       ],
@@ -683,6 +749,27 @@ export async function reviveDesktopChat(opts: {
     await new Promise((r) => setTimeout(r, 5000))
   }
   return { ok: true, engineVerified: false, reason: 'typed-but-engine-silent' }
+}
+
+/** The chat's title from the instance's own metadata store — the row-finder's search key.
+ *  A revive with no known title aborts rather than clicking an unidentified row. */
+export function readDesktopChatTitle(instanceDir: string, sessionId: string): string | null {
+  const store = join(instanceDir, 'claude-code-sessions')
+  try {
+    for (const org of readdirSync(store, { withFileTypes: true })) {
+      if (!org.isDirectory()) continue
+      for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+        if (!user.isDirectory()) continue
+        const p = join(store, org.name, user.name, `local_${sessionId}.json`)
+        if (!existsSync(p)) continue
+        const title = (JSON.parse(readFileSync(p, 'utf8')) as { title?: string }).title
+        return typeof title === 'string' && title.trim() ? title.trim() : null
+      }
+    }
+  } catch {
+    // No store or unreadable metadata: no safe search key.
+  }
+  return null
 }
 
 /** The CLI transcript for a session, wherever its project dir is. */

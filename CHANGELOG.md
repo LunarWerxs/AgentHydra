@@ -5,6 +5,21 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.2] - 2026-08-25
+
+### Fixed
+
+- **Auto-revive can no longer type into the wrong window, or blind.** First-night lesson:
+  focusing a window can fail silently, and the deep link opens a chat's process without
+  switching the visible chat - so a revive could type into the void (verified caught by the
+  engine check, which correctly refused to call it success). Now nothing is EVER typed
+  unless the target window verifiably holds focus (re-checked right before each keystroke
+  batch), the chat's own sidebar row is located by title through the accessibility tree and
+  clicked, and the composer is found the same way. Any of those missing aborts the attempt -
+  fail safe, retry later, never mistype.
+- **Scratchpad runs stay out of the sidebar.** The visibility sweep imported a temp-folder
+  working session, which auto-revive then dutifully woke. Temp/scratchpad runs are excluded.
+
 ## [0.34.1] - 2026-08-25
 
 ### Fixed
