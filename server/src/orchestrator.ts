@@ -1549,6 +1549,11 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       evidence: {
         flavor: item.detail?.deaf ? 'deaf' : item.detail?.stranded ? 'stranded' : 'crash',
         ...item.detail,
+        // Carried for EVERY flavor, not just the idle-derived ones: the reviewer needs it to
+        // pick a revive that can actually run. Anything other than 'bypassPermissions' prompts
+        // for shell commands, and a revive prompt that sends such a chat straight at `git` or
+        // `cargo` just re-freezes it at an approval nobody can click.
+        permissionMode: metaMap.get(item.sessionId)?.permissionMode ?? null,
         cwd: item.cwd ?? null,
         peerName: item.peerName ?? null,
         tailSnippet: item.tailSnippet?.slice(0, 600) ?? null,

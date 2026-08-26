@@ -1018,7 +1018,9 @@ test('a chat frozen at a permission prompt is diagnosed as that, not as dead bac
   const blocked = fakeDeps({
     ...base,
     sessionMeta: () =>
-      new Map([['perm-stuck', { instance: 'work', archived: false, permissionMode: 'acceptEdits' }]]),
+      new Map([
+        ['perm-stuck', { instance: 'work', archived: false, permissionMode: 'acceptEdits' }],
+      ]),
   })
   await runOrchestratorOnce(blocked.deps)
   const hit = orchestratorView().attention.find((i: AttentionItem) => i.key === 'idle:perm-stuck')

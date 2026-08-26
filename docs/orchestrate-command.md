@@ -106,7 +106,11 @@ proves nothing (registry-live is not running).
 - REJECT when the lineage is superseded (a successor owns the task), when a human was
   recently driving it, or when the evidence does not hold up when you read the tail.
 - APPROVE otherwise, then execute: deliver `prompts.orphanRevive` (or
-  `evidence.resumePrompt` for limit-reset) via the delivery ladder. A DEAF chat's passive
+  `evidence.resumePrompt` for limit-reset) via the delivery ladder. **Check
+  `evidence.permissionMode` first**: anything other than `bypassPermissions` prompts for shell
+  commands, so append one line telling that chat to use FILE TOOLS ONLY and run no shell
+  commands. Skip that line when the mode IS bypass - the chat can work normally there, and
+  needlessly hobbling it wastes the revive. A DEAF chat's passive
   process is abandoned the moment real delivery lands (the app replaces it); never
   SendMessage a deaf chat directly - measured: it queues into a void forever.
 - A revive whose `instanceRef` points at an instance the chat does NOT currently live in is
