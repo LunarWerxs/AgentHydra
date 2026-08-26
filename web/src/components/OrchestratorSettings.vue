@@ -19,7 +19,6 @@ import {
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -28,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import type { OrchestratorPromptKey, OrchestratorView } from '@/lib/api'
 import * as api from '@/lib/api'
 import { baseName, shortId, timeAgo } from '@/lib/format'
