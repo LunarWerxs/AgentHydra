@@ -167,17 +167,18 @@ gets the standing answer, acked `standing-answer`.
 - When that session next shows up idle with the handoff prompt in its tail
   (`detail.handoffDetected` or obvious from the snippet):
   1. Get the full prompt text (`GET /api/sessions/<id>/tail`).
-  2. Continue it on the best landing target, on the owner's surface:
-     - `"desktop"` (the owner's default): there is no way to RUN a brand-new thread inside the
-       desktop app externally, so the handoff is delivered as a HANDOVER TO THE OWNER'S CLICK:
-       import the SOURCE thread into the target instance (title!), SendMessage the handoff
-       prompt to it (it queues), and put one status line up: "<title> handed off to <instance>
-       - click it once to start". The click activates it and the work happens in-app.
+  2. Continue it on the best landing target, on the owner's surface. ZERO-CLICK LAW (owner
+     order, 2026-08-26: clicking is impossible for him, always - he operates remotely): no
+     flow may ever wait on the owner clicking, activating, or starting anything.
+     - `"desktop"` (the owner's default): run the continuation THROUGH THE QUEUE
+       (`POST /api/queue`, `new_chat: true`, the handoff prompt, model/effort/ultracode from
+       settings, `import_to` the target instance + `import_title`). The finished run lands in
+       the app; the deaf-revive cadence keeps multi-stage work moving without anyone
+       clicking. NEVER deliver a handoff as an import + "click it once to start".
      - `"terminal"`: `POST /api/sessions/launch-terminal {"cwd", "prompt": "<handoff prompt>",
        "instance_ref", "model": settings.newChatModel, "effort": settings.newChatEffort}` - a
        live window, steerable; import it into the app for permanence once it wraps.
-     - `"queue"`: the classic headless continuation (`POST /api/queue`, `new_chat: true`, note
-       the session_id) with import-on-completion via `import_to`/`import_title`.
+     - `"queue"`: same queue continuation, without the import.
   3. Do NOT message the old chat. Mark it finished FIRST, `POST /api/sessions/<id>/done
      {"done": true}`, THEN start the continuation - the done-mark is the lineage ledger that
      stops every other path (nudges, auto-resumes, imports, a second reviewer pass) from
@@ -262,13 +263,14 @@ Standing rule: all work on main, one branch only. Merge your work back onto main
 discarding anything, then continue on main." Ack, cooldown 180. If it looks like a deliberate
 release process, one status line for the human.
 
-**`chip`** - a chat offered a spawn-task chip; the prompt is self-contained by design. On the
-`"desktop"` surface, the chip button IN the owner's app is itself the desktop-native way to
-start it - one status line naming the chip and its chat, and leave the click to the owner. On
-`"terminal"`, launch it yourself (`launch-terminal`, new-chat model and effort); on `"queue"`,
-queue it. Ack `chip-launched` (or `chip-flagged`), cooldown 720. If the chip involves a true
-blocker (deleting, publishing, credentials, spending) -> one status line for the human
-regardless of surface.
+**`chip`** - a chat offered a spawn-task chip; the prompt is self-contained by design.
+ZERO-CLICK LAW: a chip is a suggestion the MACHINERY starts, never a button left for the
+owner (he cannot click, ever). On `"desktop"` and `"queue"`: start it through the queue
+(`POST /api/queue`, `new_chat: true`, the chip prompt, new-chat model/effort/ultracode,
+`import_to` a healthy instance + `import_title` on the desktop surface). On `"terminal"`:
+`launch-terminal` with the same defaults. Respect the concurrency cap (meta.slotsFree). Ack
+`chip-launched`, cooldown 720. If the chip involves a true blocker (deleting, publishing,
+credentials, spending) -> one status line for the human instead, and do NOT start it.
 
 **`limit_stopped`** - the auto-resume monitor's jurisdiction (`GET /api/monitor`). If the
 monitor is off and the session matters, one status line for the owner. Ack, cooldown 120.
@@ -318,6 +320,14 @@ monitor is off and the session matters, one status line for the owner. Ack, cool
   be invisible: every running thread must be a chat the owner can SEE in a desktop app, and
   its visibility is verified the same way - by looking.
 
+- **THE ZERO-CLICK LAW** (owner order, 2026-08-26: "clicking is impossible for me and always
+  will be"). The owner operates remotely and can never click, activate, press, or start
+  anything. NO flow may wait on him: no activation clicks, no "click it once to start", no
+  chips left as buttons, no confirmation dialogs he must dismiss. Anything that would have
+  asked for a click gets STARTED by the machinery instead - queue runs with import-back are
+  the universal actuator. The ONLY things still surfaced to him are true blockers
+  (credentials, spending, publishing, deleting real data) as status LINES stating facts,
+  never as controls awaiting a press.
 - **ONE LINEAGE, ONE CONTINUATION** (owner rule, 2026-08-25, after chats overwrote each
   other's work). Every thread's unique identifier is its session id, and its disposition
   lives in the done-mark ledger (`POST /api/sessions/<id>/done`). Before ANY resume, revive,

@@ -5,6 +5,18 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.3] - 2026-08-26
+
+### Changed
+
+- **The zero-click law.** Owner order: clicking is impossible for him, permanently (he
+  operates over Remote Desktop while traveling). Nothing may wait on the owner clicking,
+  activating, or dismissing anything: chips are STARTED by the machinery through the queue,
+  handoff continuations on the desktop surface run as queue turns with import-back instead
+  of "click it once to start" handovers, and only true blockers are surfaced - as status
+  text, never as controls. Written into the reviewer rubric's hard rails and the
+  architecture doc.
+
 ## [0.35.2] - 2026-08-25
 
 ### Fixed

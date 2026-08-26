@@ -194,6 +194,15 @@ while every reviewer nudge vanished). The deterministic test: the registry's pro
 `startedAt` against the transcript's newest record timestamp: a process with no record newer
 than its own spawn has never run a turn.
 
+### The zero-click law
+
+Owner order (2026-08-26): clicking is impossible for him, always - he operates over Remote
+Desktop while traveling. Nothing in AgentHydra may wait on the owner clicking, activating,
+or starting anything: no activation clicks on imported chats, no chips left as buttons, no
+"click once to begin" handovers. The queue-turn-with-import-back is the universal actuator:
+work gets STARTED by the machinery and lands visible. Only true blockers (credentials,
+spending, publishing, deleting real data) are surfaced to him, as plain status lines.
+
 ### Auto-revive (the daemon acts, `autoRevive`, ON by default)
 
 Owner order 2026-08-25: a dead chat nobody revives means the orchestrator is not working, so
