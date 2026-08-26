@@ -1489,6 +1489,11 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     } catch (err) {
       console.error('[agenthydra] visibility sweep failed:', err)
     }
+    try {
+      await restartAppsForArchiveVisibility()
+    } catch (err) {
+      console.error('[agenthydra] archive-visibility restart failed:', err)
+    }
   }
 
   // -- auto-revive (every tick; its own gates make it a no-op almost always) ---
@@ -1722,12 +1727,64 @@ export async function sweepArchivesForDoneSessions(roots?: string[]): Promise<nu
   for (const r of rows) {
     try {
       const res = await archiveDesktopChat(r.session_id, true, roots)
-      if (res.ok) flagged += res.hits.filter((h) => h.changed).length
+      for (const h of res.hits) {
+        if (!h.changed) continue
+        flagged++
+        if (h.wasRunning) noteArchiveVisibilityPending(h.profile)
+      }
     } catch {
       // one broken store must not stop the sweep
     }
   }
   return flagged
+}
+
+/**
+ * "Archive immediately, not at some future restart" (owner ask, 2026-08-25). A RUNNING app
+ * repaints its sidebar only at startup, so an archive flag written from outside stays
+ * invisible until that app restarts. This records which instances carry invisible flags, and
+ * the janitor restarts each one — ONLY while it has zero live sessions (nothing to
+ * interrupt; the default non-isolated profile is refused by quitInstance itself), at most
+ * once an hour per instance. The restart is exactly the "later" the flag was waiting for,
+ * brought forward to now.
+ */
+export function noteArchiveVisibilityPending(profileDir: string): void {
+  kvSet(`archPending:${profileDir.toLowerCase()}`, new Date().toISOString())
+}
+
+async function restartAppsForArchiveVisibility(): Promise<void> {
+  const pending = db
+    .query<{ key: string }, []>("select key from orchestrator_kv where key like 'archPending:%'")
+    .all()
+  if (pending.length === 0) return
+  const live = readLiveRegistry(join(homedir(), '.claude'))
+  for (const row of pending) {
+    const dir = row.key.slice('archPending:'.length)
+    const ref = desktopKey(dir)
+    const cooldownKey = `archRestart:${ref}`
+    const last = kvGet(cooldownKey)
+    if (last && Date.now() - Date.parse(last) < 3600_000) continue
+    const owned = live.filter((s) => instanceRefForSession(s.sessionId) === ref)
+    if (owned.length > 0) continue // someone is working in there — the flag waits
+    try {
+      const { openInstance, quitInstance } = await import('./core/instances')
+      const q = await quitInstance(dir)
+      if (!q.ok) {
+        console.log(`[agenthydra] archive-visibility restart refused for ${dir}: ${q.message}`)
+        kvDelete(row.key) // a structural refusal (e.g. the default profile) refuses forever
+        continue
+      }
+      await new Promise((r) => setTimeout(r, 2500))
+      const o = await openInstance(dir)
+      kvSet(cooldownKey, new Date().toISOString())
+      kvDelete(row.key)
+      console.log(
+        `[agenthydra] archive-visibility restart: ${dir} (quit ok, reopen ${o.ok ? 'ok' : `failed: ${o.message}`}) — archived chats now show`,
+      )
+    } catch (err) {
+      console.error('[agenthydra] archive-visibility restart failed:', err)
+    }
+  }
 }
 
 let lastTitleSweepMs = 0

@@ -160,6 +160,7 @@ import {
   getOrchestratorPrompts,
   getOrchestratorSettings,
   installOrchestratorCommands,
+  noteArchiveVisibilityPending,
   orchestratorView,
   runOrchestratorOnce,
   setOrchestratorPrompts,
@@ -2125,6 +2126,10 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
 app.post('/api/sessions/:id/desktop-archive', async (c) => {
   const body = await jsonBody(c)
   const result = await archiveDesktopChat(c.req.param('id'), body.archived !== false)
+  // A flag written under a RUNNING app is invisible until that app restarts — queue the
+  // archive-visibility restart (owner ask: archived means GONE FROM THE SIDEBAR now).
+  for (const h of result.hits ?? [])
+    if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
   return c.json(result, result.ok ? 200 : 404)
 })
 // Move a chat to a different account, end to end: stop its live process if it has one (this is
@@ -2183,9 +2188,12 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       return c.json({ ok: false, error: 'could not stop the live session process' }, 409)
   }
 
-  // Old desktop entries: flagged archived now (shows when those apps restart), BEFORE the import
-  // creates the fresh entry in the target profile.
-  await archiveDesktopChat(sessionId, true).catch(() => null)
+  // Old desktop entries: flagged archived now, BEFORE the import creates the fresh entry in
+  // the target profile — and queued for the archive-visibility restart so they leave the
+  // sidebars promptly instead of at some future restart.
+  const oldEntries = await archiveDesktopChat(sessionId, true).catch(() => null)
+  for (const h of oldEntries?.hits ?? [])
+    if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
 
   // Placement follows the owner's chosen surface (their standing rule: match the preference,
   // and 'desktop' means no terminals and nothing headless).

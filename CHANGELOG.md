@@ -5,6 +5,17 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.1] - 2026-08-25
+
+### Added
+
+- **Archived means gone from the sidebar NOW.** A running app repaints its sidebar only at
+  startup, so archive flags written from outside used to wait for "whenever that app next
+  restarts". Every archive (janitor, API, migrate) now queues an archive-visibility restart:
+  the janitor restarts the affected app the moment it has zero live sessions (nothing to
+  interrupt; the real non-isolated Claude profile is never touched; at most once an hour per
+  app), and the archived chats vanish immediately after.
+
 ## [0.35.0] - 2026-08-25
 
 ### Changed
