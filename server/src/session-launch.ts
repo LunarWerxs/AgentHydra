@@ -841,6 +841,36 @@ export async function desktopHomeFor(sessionId: string): Promise<string | null> 
   return file ? file.instanceDir : null
 }
 
+/** The org/user walk for one instance's store in {@link findDesktopEntryFile}, split out so the
+ *  caller's own complexity reflects only "try the cache, then try each instance", not this
+ *  directory shape too. Behaviour is unchanged - same walk, same return, same swallowed errors. */
+function findDesktopEntryInStore(
+  store: string,
+  sessionId: string,
+): { path: string; cliSessionId: string | null } | null {
+  try {
+    for (const org of readdirSync(store, { withFileTypes: true })) {
+      if (!org.isDirectory()) continue
+      for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+        if (!user.isDirectory()) continue
+        const p = join(store, org.name, user.name, `local_${sessionId}.json`)
+        if (!existsSync(p)) continue
+        let cli: string | null = null
+        try {
+          const d = JSON.parse(readFileSync(p, 'utf8')) as { cliSessionId?: string }
+          cli = typeof d.cliSessionId === 'string' ? d.cliSessionId : null
+        } catch {
+          // Shape unknown: the file existing is still visibility.
+        }
+        return { path: p, cliSessionId: cli }
+      }
+    }
+  } catch {
+    // No store in this instance.
+  }
+  return null
+}
+
 export async function findDesktopEntryFile(
   sessionId: string,
 ): Promise<{ instanceDir: string; path: string; cliSessionId: string | null } | null> {
@@ -862,26 +892,8 @@ export async function findDesktopEntryFile(
   const { listInstances } = await import('./core/instances')
   for (const inst of await listInstances()) {
     const store = join(inst.dir, 'claude-code-sessions')
-    try {
-      for (const org of readdirSync(store, { withFileTypes: true })) {
-        if (!org.isDirectory()) continue
-        for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
-          if (!user.isDirectory()) continue
-          const p = join(store, org.name, user.name, `local_${sessionId}.json`)
-          if (!existsSync(p)) continue
-          let cli: string | null = null
-          try {
-            const d = JSON.parse(readFileSync(p, 'utf8')) as { cliSessionId?: string }
-            cli = typeof d.cliSessionId === 'string' ? d.cliSessionId : null
-          } catch {
-            // Shape unknown: the file existing is still visibility.
-          }
-          return { instanceDir: inst.dir, path: p, cliSessionId: cli }
-        }
-      }
-    } catch {
-      // No store in this instance.
-    }
+    const found = findDesktopEntryInStore(store, sessionId)
+    if (found) return { instanceDir: inst.dir, path: found.path, cliSessionId: found.cliSessionId }
   }
   return null
 }
@@ -926,6 +938,26 @@ export function applyDesktopChatAutomation(instanceDir: string, sessionId: strin
  * found by the orchestration self-test on its first real run, in the same week the identical
  * blindness was fixed in the surface guard.
  */
+/** The imported-shape / created-in-app-shape check for one org/user leaf directory, split out of
+ *  {@link findChatMetaPath}'s walk so that function's own complexity reflects only the walk, not
+ *  this per-directory shape test too. Behaviour is unchanged. */
+function findChatMetaPathInDir(dir: string, sessionId: string): string | null {
+  // Fast path: the imported shape, one existsSync.
+  const direct = join(dir, `local_${sessionId}.json`)
+  if (existsSync(direct)) return direct
+  // Then the created-in-app shape, which costs a directory read and a parse per file.
+  for (const f of readdirSync(dir)) {
+    if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+    try {
+      const meta = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { cliSessionId?: string }
+      if (meta.cliSessionId === sessionId) return join(dir, f)
+    } catch {
+      // one unreadable metadata file says nothing about the others
+    }
+  }
+  return null
+}
+
 function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
   // Cached index first: it already knows this file's path under either naming shape, and the
   // walk below re-reads every metadata file in the store when the filename does not match.
@@ -937,20 +969,8 @@ function findChatMetaPath(instanceDir: string, sessionId: string): string | null
       if (!org.isDirectory()) continue
       for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
         if (!user.isDirectory()) continue
-        const dir = join(store, org.name, user.name)
-        // Fast path: the imported shape, one existsSync.
-        const direct = join(dir, `local_${sessionId}.json`)
-        if (existsSync(direct)) return direct
-        // Then the created-in-app shape, which costs a directory read and a parse per file.
-        for (const f of readdirSync(dir)) {
-          if (!f.startsWith('local_') || !f.endsWith('.json')) continue
-          try {
-            const meta = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { cliSessionId?: string }
-            if (meta.cliSessionId === sessionId) return join(dir, f)
-          } catch {
-            // one unreadable metadata file says nothing about the others
-          }
-        }
+        const found = findChatMetaPathInDir(join(store, org.name, user.name), sessionId)
+        if (found) return found
       }
     }
   } catch {

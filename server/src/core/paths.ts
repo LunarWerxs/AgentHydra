@@ -100,6 +100,48 @@ export function logFile(): string {
   return path.join(appDataDir(), 'agenthydra.log')
 }
 
+/** The win32 branch of {@link resolveLaunchBinary}, split out so that function's own cognitive
+ *  complexity reflects only the platform dispatch, not this OS's multi-step candidate search.
+ *  Behaviour is unchanged — same candidates, same order, same fall-through on failure. */
+function resolveWindowsLaunchBinary(): string | null {
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local')
+  const anthropicDir = path.join(localAppData, 'AnthropicClaude')
+
+  // Prefer the STABLE Squirrel root stub over the versioned app-<ver> scan below — same
+  // rationale as core/shortcut.ts's stableWinLaunchTarget() (shortcut.ts:6-11, 48-54): the
+  // stub always forwards to whichever version is newest, so it survives Claude Desktop
+  // updates and needs no version-directory bookkeeping of its own.
+  const stableStub = path.join(anthropicDir, 'claude.exe')
+  if (existsSync(stableStub)) return stableStub
+
+  let newestAppDir: { dir: string; version: number[] } | null = null
+  try {
+    const entries = readdirSync(anthropicDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith('app-')) continue
+      const exe = path.join(anthropicDir, entry.name, 'Claude.exe')
+      if (!existsSync(exe)) continue // skip version dirs lacking the exe
+      const versionStr = entry.name.slice('app-'.length)
+      const version = versionStr.split('.').map((n) => Number.parseInt(n, 10) || 0)
+      if (!newestAppDir || compareVersions(version, newestAppDir.version) > 0) {
+        newestAppDir = { dir: entry.name, version }
+      }
+    }
+  } catch {
+    // AnthropicClaude dir absent — fall through to other candidates.
+  }
+  if (newestAppDir) return path.join(anthropicDir, newestAppDir.dir, 'Claude.exe')
+
+  const fallbacks = [
+    path.join(localAppData, 'Programs', 'Claude', 'Claude.exe'),
+    'C:\\Program Files\\Claude\\Claude.exe',
+  ]
+  for (const candidate of fallbacks) {
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
 /** Resolve the Claude launch binary path on this OS. Never throws — returns null when no
  *  candidate exists. Async so callers can uniformly `await` it (mac/linux resolution may
  *  shell out in the future; kept sync-fast internally on Windows today). */
@@ -110,44 +152,7 @@ export async function resolveLaunchBinary(override?: string | null): Promise<str
 
     const plat = currentPlatform()
 
-    if (plat === 'win32') {
-      const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local')
-      const anthropicDir = path.join(localAppData, 'AnthropicClaude')
-
-      // Prefer the STABLE Squirrel root stub over the versioned app-<ver> scan below — same
-      // rationale as core/shortcut.ts's stableWinLaunchTarget() (shortcut.ts:6-11, 48-54): the
-      // stub always forwards to whichever version is newest, so it survives Claude Desktop
-      // updates and needs no version-directory bookkeeping of its own.
-      const stableStub = path.join(anthropicDir, 'claude.exe')
-      if (existsSync(stableStub)) return stableStub
-
-      let newestAppDir: { dir: string; version: number[] } | null = null
-      try {
-        const entries = readdirSync(anthropicDir, { withFileTypes: true })
-        for (const entry of entries) {
-          if (!entry.isDirectory() || !entry.name.startsWith('app-')) continue
-          const exe = path.join(anthropicDir, entry.name, 'Claude.exe')
-          if (!existsSync(exe)) continue // skip version dirs lacking the exe
-          const versionStr = entry.name.slice('app-'.length)
-          const version = versionStr.split('.').map((n) => Number.parseInt(n, 10) || 0)
-          if (!newestAppDir || compareVersions(version, newestAppDir.version) > 0) {
-            newestAppDir = { dir: entry.name, version }
-          }
-        }
-      } catch {
-        // AnthropicClaude dir absent — fall through to other candidates.
-      }
-      if (newestAppDir) return path.join(anthropicDir, newestAppDir.dir, 'Claude.exe')
-
-      const fallbacks = [
-        path.join(localAppData, 'Programs', 'Claude', 'Claude.exe'),
-        'C:\\Program Files\\Claude\\Claude.exe',
-      ]
-      for (const candidate of fallbacks) {
-        if (existsSync(candidate)) return candidate
-      }
-      return null
-    }
+    if (plat === 'win32') return resolveWindowsLaunchBinary()
 
     if (plat === 'darwin') {
       // Launched via `open -na "Claude"` — no direct binary path needed; return the app name
