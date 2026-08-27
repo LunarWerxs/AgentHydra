@@ -1224,6 +1224,121 @@ function withContinuity(items: AttentionItem[]): AttentionItem[] {
   })
 }
 
+/**
+ * The bracketed detail appended to an idle session's headline in runOrchestratorOnce.
+ *
+ * Same four-way precedence as before (recap tag, then approval-stall / stale-tasks / mid-tool,
+ * then a trailing handoff note), pulled out as its own scope so the nested ternary chain adds its
+ * nesting here rather than to the already-enormous per-session loop.
+ */
+function idleSummarySuffix(opts: {
+  recapDetected: boolean
+  approvalStall: boolean
+  pendingTool: string | null
+  permissionMode: string | null
+  quietSecs: number
+  staleTasks: boolean
+  taskAgeSec: number | null
+  midTurn: boolean
+  handoffDue: boolean
+  ctxTokens: number | null
+}): string {
+  const {
+    recapDetected,
+    approvalStall,
+    pendingTool,
+    permissionMode,
+    quietSecs,
+    staleTasks,
+    taskAgeSec,
+    midTurn,
+    handoffDue,
+    ctxTokens,
+  } = opts
+  let suffix = recapDetected ? ' with a recap' : ''
+  suffix += approvalStall
+    ? ` — FROZEN AT A PERMISSION PROMPT: sitting on ${pendingTool} for ${fmtQuiet(
+        quietSecs,
+      )} while running in '${permissionMode}' mode, which asks approval for that tool and nobody can click it. Not dead tasks; it needs reviving without shell commands (or the owner's chat set to bypass)`
+    : staleTasks
+      ? ` — WAITING ON DEAD BACKGROUND TASKS (task output silent ${
+          taskAgeSec === null ? fmtQuiet(quietSecs) : fmtQuiet(taskAgeSec)
+        }); intervene`
+      : midTurn
+        ? ' (tail ends mid-tool: likely a background task)'
+        : ''
+  suffix += handoffDue ? ` at ${Math.round((ctxTokens ?? 0) / 1000)}k context — hand off` : ''
+  return suffix
+}
+
+/**
+ * One orphaned live-session record, judged: cleaned up as residue, skipped (parked/unreadable/too
+ * fresh), or turned into the 'orphaned' attention item. Pulled out of runOrchestratorOnce's orphan
+ * loop as its own function — every `continue` in the original loop body becomes a `return null`
+ * here, in the same order, with the same cleanOrphanFiles side effects before returning.
+ */
+function classifyOrphanSession(
+  orphan: OrphanSession,
+  ctx: {
+    deps: OrchestratorDeps
+    liveIds: Set<string>
+    doneSet: Set<string>
+    holdSet: Set<string>
+    metaMap: Map<string, { instance: string; archived: boolean; permissionMode?: string | null }>
+    started: number
+    nowIso: string
+    idleQuietSecs: number
+  },
+): AttentionItem | null {
+  const { deps, liveIds, doneSet, holdSet, metaMap, started, nowIso, idleQuietSecs } = ctx
+  if (liveIds.has(orphan.sessionId)) {
+    cleanOrphanFiles(orphan) // superseded: the session lives again under a new pid
+    return null
+  }
+  if (doneSet.has(orphan.sessionId) || metaMap.get(orphan.sessionId)?.archived) {
+    cleanOrphanFiles(orphan) // finished or owner-closed: residue, not resumable work
+    return null
+  }
+  if (holdSet.has(orphan.sessionId)) return null // parked stays parked, even dead
+  if (!orphan.transcriptPath) return null
+  const mtime = deps.mtimeMs(orphan.transcriptPath)
+  if (mtime === null) return null
+  const quietSecs = Math.max(0, Math.round((started - mtime) / 1000))
+  if (quietSecs < idleQuietSecs) return null // could still be relaunching — let it settle
+  let tail: TailInfo
+  try {
+    tail = deps.tailInfo(orphan.transcriptPath)
+  } catch {
+    return null
+  }
+  const iref = deps.instanceRef(orphan.sessionId)
+  return {
+    key: `orphan:${orphan.sessionId}`,
+    kind: 'orphaned',
+    sessionId: orphan.sessionId,
+    peerName: orphan.name,
+    cwd: orphan.cwd,
+    instanceRef: iref ?? undefined,
+    tailSnippet: tail.lastAssistantText ?? undefined,
+    summary: `${orphan.name} died mid-process ${fmtQuiet(quietSecs)} ago (computer restart, crash, or kill — its process is gone)${
+      tail.midTurn ? ', mid-turn' : ''
+    } — resumable per the surface preference`,
+    detail: {
+      quietSecs,
+      pid: orphan.pid,
+      midTurn: tail.midTurn,
+      ending: tail.ending,
+      ctxTokens: tail.ctxTokens,
+      recapDetected: tail.recapDetected,
+      handoffDetected: tail.handoffDetected,
+      lastHumanText: tail.lastHumanText,
+      lastHumanAt: tail.lastHumanAt,
+    },
+    firstSeenAt: nowIso,
+    seenCount: 1,
+  }
+}
+
 export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps): Promise<void> {
   const started = deps.nowMs()
   const s = getOrchestratorSettings()
@@ -1457,23 +1572,18 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
         ...base,
         key: `idle:${sess.sessionId}`,
         kind: handoffDue ? 'handoff_due' : 'idle_pending',
-        summary: `${sess.name} idle ${fmtQuiet(quietSecs)}${
-          tail.recapDetected ? ' with a recap' : ''
-        }${
-          approvalStall
-            ? ` — FROZEN AT A PERMISSION PROMPT: sitting on ${tail.pendingTool} for ${fmtQuiet(
-                quietSecs,
-              )} while running in '${perm}' mode, which asks approval for that tool and nobody can click it. Not dead tasks; it needs reviving without shell commands (or the owner's chat set to bypass)`
-            : staleTasks
-              ? ` — WAITING ON DEAD BACKGROUND TASKS (task output silent ${
-                  taskAgeSec === null ? fmtQuiet(quietSecs) : fmtQuiet(taskAgeSec)
-                }); intervene`
-              : tail.midTurn
-                ? ' (tail ends mid-tool: likely a background task)'
-                : ''
-        }${
-          handoffDue ? ` at ${Math.round((tail.ctxTokens ?? 0) / 1000)}k context — hand off` : ''
-        }`,
+        summary: `${sess.name} idle ${fmtQuiet(quietSecs)}${idleSummarySuffix({
+          recapDetected: tail.recapDetected,
+          approvalStall,
+          pendingTool: tail.pendingTool,
+          permissionMode: perm,
+          quietSecs,
+          staleTasks,
+          taskAgeSec,
+          midTurn: tail.midTurn,
+          handoffDue,
+          ctxTokens: tail.ctxTokens,
+        })}`,
         detail,
       })
     }
@@ -1511,52 +1621,17 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     }
   }
   for (const orphan of newestOrphan.values()) {
-    if (liveIds.has(orphan.sessionId)) {
-      cleanOrphanFiles(orphan) // superseded: the session lives again under a new pid
-      continue
-    }
-    if (doneSet.has(orphan.sessionId) || metaMap.get(orphan.sessionId)?.archived) {
-      cleanOrphanFiles(orphan) // finished or owner-closed: residue, not resumable work
-      continue
-    }
-    if (holdSet.has(orphan.sessionId)) continue // parked stays parked, even dead
-    if (!orphan.transcriptPath) continue
-    const mtime = deps.mtimeMs(orphan.transcriptPath)
-    if (mtime === null) continue
-    const quietSecs = Math.max(0, Math.round((started - mtime) / 1000))
-    if (quietSecs < s.idleQuietSecs) continue // could still be relaunching — let it settle
-    let tail: TailInfo
-    try {
-      tail = deps.tailInfo(orphan.transcriptPath)
-    } catch {
-      continue
-    }
-    const iref = deps.instanceRef(orphan.sessionId)
-    items.push({
-      key: `orphan:${orphan.sessionId}`,
-      kind: 'orphaned',
-      sessionId: orphan.sessionId,
-      peerName: orphan.name,
-      cwd: orphan.cwd,
-      instanceRef: iref ?? undefined,
-      tailSnippet: tail.lastAssistantText ?? undefined,
-      summary: `${orphan.name} died mid-process ${fmtQuiet(quietSecs)} ago (computer restart, crash, or kill — its process is gone)${
-        tail.midTurn ? ', mid-turn' : ''
-      } — resumable per the surface preference`,
-      detail: {
-        quietSecs,
-        pid: orphan.pid,
-        midTurn: tail.midTurn,
-        ending: tail.ending,
-        ctxTokens: tail.ctxTokens,
-        recapDetected: tail.recapDetected,
-        handoffDetected: tail.handoffDetected,
-        lastHumanText: tail.lastHumanText,
-        lastHumanAt: tail.lastHumanAt,
-      },
-      firstSeenAt: nowIso,
-      seenCount: 1,
+    const item = classifyOrphanSession(orphan, {
+      deps,
+      liveIds,
+      doneSet,
+      holdSet,
+      metaMap,
+      started,
+      nowIso,
+      idleQuietSecs: s.idleQuietSecs,
     })
+    if (item) items.push(item)
   }
 
   // -- stranded desktop chats: killed GRACEFULLY mid-work, so no residue -------

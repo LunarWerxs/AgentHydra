@@ -268,46 +268,68 @@ function scanMeta(tf: TranscriptFile): Promise<ScannedMeta> {
   return started
 }
 
+/** Same precedence as `title` in parseMeta, kept in step with it: whichever term won, names
+ *  itself. Pulled out as a flat lookup rather than a nested ternary — same four-way precedence,
+ *  same 'envelope' vs 'message' split for a turn-derived label, zero nesting either way. */
+function resolveTitleSource(
+  customTitle: string,
+  aiTitle: string,
+  storeTitle: string | undefined,
+  turn: { label: string; envelope: boolean },
+): TitleSource {
+  if (customTitle) return 'custom'
+  if (aiTitle) return 'ai'
+  if (storeTitle) return 'store'
+  if (turn.label) return turn.envelope ? 'envelope' : 'message'
+  return 'id'
+}
+
+// Both opencode and foreign transcripts carry their own title, cwd and timestamps on the index
+// row, because their stores record them as fields rather than leaving them to be inferred from
+// the conversation. Split out of parseMeta as a self-contained seam: this branch never touches the
+// line-by-line Claude/Codex parse below it.
+function parseForeignOrOpenCodeMeta(tf: TranscriptFile, key: string): ScannedMeta {
+  const events =
+    tf.source === 'foreign'
+      ? readForeignSession(tf.tool ?? '', tf.path)
+      : (readOpenCodeSession(tf.session_id)?.events ?? [])
+  const content =
+    tf.source === 'foreign'
+      ? { events, messageCount: events.length }
+      : (readOpenCodeSession(tf.session_id) ?? { events, messageCount: 0 })
+  const textEvents = (content?.events ?? []).filter((event) => event.kind === 'text')
+  const first = textEvents[0]
+  const last = textEvents.at(-1)
+  // These stores hand us a title as a FIELD, so there is no envelope to unwrap and no ambiguity
+  // about provenance: it is the provider's own label, or the first thing said, or the id.
+  const titleSource: TitleSource = tf.title ? 'store' : first?.text ? 'message' : 'id'
+  const meta: ScannedMeta = {
+    title: oneLine(tf.title || first?.text || tf.session_id, 120),
+    cwd: tf.cwd || '',
+    git_branch: null,
+    message_count: content?.messageCount ?? 0,
+    created_at: tf.created_at ?? null,
+    last_activity_at: tf.mtime_ms,
+    last_role: last?.role ?? null,
+    last_text_preview: last ? oneLine(last.text) : null,
+    substantive_turns: textEvents.length,
+    // Neither store records a usage wall in a form this detector is willing to trust. An absence
+    // is the truth; a false badge here would be worse than a missing one.
+    limit_stop: null,
+    title_source: titleSource,
+    title_tag: null,
+    // These stores keep one row per conversation, so a transcript never has a second copy and
+    // its own id is a perfectly good conversation identity.
+    thread_key: tf.session_id,
+    // Neither store records how a session stopped in a form worth trusting.
+    ended_because: null,
+  }
+  return rememberScan(tf, key, meta)
+}
+
 async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> {
-  // Both of these carry their own title, cwd and timestamps on the index row, because their stores
-  // record them as fields rather than leaving them to be inferred from the conversation.
   if (tf.source === 'opencode' || tf.source === 'foreign') {
-    const events =
-      tf.source === 'foreign'
-        ? readForeignSession(tf.tool ?? '', tf.path)
-        : (readOpenCodeSession(tf.session_id)?.events ?? [])
-    const content =
-      tf.source === 'foreign'
-        ? { events, messageCount: events.length }
-        : (readOpenCodeSession(tf.session_id) ?? { events, messageCount: 0 })
-    const textEvents = (content?.events ?? []).filter((event) => event.kind === 'text')
-    const first = textEvents[0]
-    const last = textEvents.at(-1)
-    // These stores hand us a title as a FIELD, so there is no envelope to unwrap and no ambiguity
-    // about provenance: it is the provider's own label, or the first thing said, or the id.
-    const titleSource: TitleSource = tf.title ? 'store' : first?.text ? 'message' : 'id'
-    const meta: ScannedMeta = {
-      title: oneLine(tf.title || first?.text || tf.session_id, 120),
-      cwd: tf.cwd || '',
-      git_branch: null,
-      message_count: content?.messageCount ?? 0,
-      created_at: tf.created_at ?? null,
-      last_activity_at: tf.mtime_ms,
-      last_role: last?.role ?? null,
-      last_text_preview: last ? oneLine(last.text) : null,
-      substantive_turns: textEvents.length,
-      // Neither store records a usage wall in a form this detector is willing to trust. An absence
-      // is the truth; a false badge here would be worse than a missing one.
-      limit_stop: null,
-      title_source: titleSource,
-      title_tag: null,
-      // These stores keep one row per conversation, so a transcript never has a second copy and
-      // its own id is a perfectly good conversation identity.
-      thread_key: tf.session_id,
-      // Neither store records how a session stopped in a form worth trusting.
-      ended_because: null,
-    }
-    return rememberScan(tf, key, meta)
+    return parseForeignOrOpenCodeMeta(tf, key)
   }
 
   // read up to the last 12 MB — covers effectively every real transcript
@@ -442,17 +464,7 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
   const title = oneLine(customTitle || aiTitle || tf.title || turn.label || tf.session_id, 120)
   // Same precedence as the line above, kept in step with it: whichever term won, names itself.
   // This is what lets a row explain a title nobody recognises instead of just displaying it.
-  const titleSource: TitleSource = customTitle
-    ? 'custom'
-    : aiTitle
-      ? 'ai'
-      : tf.title
-        ? 'store'
-        : turn.label
-          ? turn.envelope
-            ? 'envelope'
-            : 'message'
-          : 'id'
+  const titleSource: TitleSource = resolveTitleSource(customTitle, aiTitle, tf.title, turn)
   const meta: ScannedMeta = {
     title,
     cwd: cwd || decodeProjectKey(tf.project),
