@@ -357,8 +357,16 @@ function accountForFile(
     return
   }
 
-  if (tool.format === 'codex') return accountForCodexFile(text, isSession, isSibling, state)
-  if (tool.format === 'claude') return accountForClaudeFile(path, text, isSession, isSibling, state)
+  // Called for the side effect, then returned separately: `return f()` where f returns void
+  // trips noVoidTypeReturn, and the two-statement form says what is actually meant.
+  if (tool.format === 'codex') {
+    accountForCodexFile(text, isSession, isSibling, state)
+    return
+  }
+  if (tool.format === 'claude') {
+    accountForClaudeFile(path, text, isSession, isSibling, state)
+    return
+  }
 
   // A store with no token model of its own (foreign) or one whose totals come from its own
   // columns (opencode): file accounting still applies, token accounting does not.

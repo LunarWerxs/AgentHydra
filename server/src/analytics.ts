@@ -171,7 +171,10 @@ function firstPath(input: unknown): string | null {
  * a log, so there is nothing to stream. See openCodeSpend for why `reasoning` is kept out of
  * `output` rather than added to it.
  */
-function scanOpenCodeAnalytics(sessionId: string | undefined, out: SessionAnalytics): SessionAnalytics {
+function scanOpenCodeAnalytics(
+  sessionId: string | undefined,
+  out: SessionAnalytics,
+): SessionAnalytics {
   const row = sessionId ? readOpenCodeUsage(sessionId) : null
   if (row) {
     const spend = openCodeSpend(row)
