@@ -73,7 +73,12 @@ import { db, getSetting, setSetting } from './db'
 import { isSessionActive } from './dispatch'
 import { findDesktopChat, instanceRefForSession, sessionMetaMap } from './instance-sessions'
 import { listRecentPlacements, normalizeRef, prunePlacements, recentPlacements } from './placements'
-import { listProposalsForView, maintainProposals, proposeAction } from './proposals'
+import {
+  listProposalsForView,
+  maintainProposals,
+  proposeAction,
+  retireProposalsForSessions,
+} from './proposals'
 import { classifyEnding, type SessionEnding } from './session-ending'
 import { desktopChatArchiveState, sweepUntitledDesktopChats } from './session-launch'
 import type {
@@ -1136,7 +1141,12 @@ export interface OrchestratorDeps {
   /** Desktop-chat metadata by session id: which instance's sidebar, and its archive flag. */
   sessionMeta: () => Map<
     string,
-    { instance: string; archived: boolean; permissionMode?: string | null }
+    {
+      instance: string
+      archived: boolean
+      permissionMode?: string | null
+      chatId?: string | null
+    }
   >
   tailInfo: (path: string) => TailInfo
   mtimeMs: (path: string) => number | null
@@ -1284,7 +1294,15 @@ function classifyOrphanSession(
     liveIds: Set<string>
     doneSet: Set<string>
     holdSet: Set<string>
-    metaMap: Map<string, { instance: string; archived: boolean; permissionMode?: string | null }>
+    metaMap: Map<
+      string,
+      {
+        instance: string
+        archived: boolean
+        permissionMode?: string | null
+        chatId?: string | null
+      }
+    >
     started: number
     nowIso: string
     idleQuietSecs: number
@@ -1371,7 +1389,12 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   // posture too (see the approval-stall diagnosis below) and the scan is cached anyway.
   let metaMap: Map<
     string,
-    { instance: string; archived: boolean; permissionMode?: string | null }
+    {
+      instance: string
+      archived: boolean
+      permissionMode?: string | null
+      chatId?: string | null
+    }
   > = new Map()
   try {
     metaMap = deps.sessionMeta()
@@ -1856,6 +1879,22 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   // and written as a PROPOSAL, never acted on here (owner law 2026-08-26: the AI checks every
   // action first; the reviewer decides these and executes the approved ones itself).
   maintainProposals(started)
+  // A PROPOSAL CAN OUTLIVE ITS TARGET. Open rows stand for up to 48 hours, and the chat
+  // underneath can be archived in that time - which is exactly what happened on 2026-08-27,
+  // when four approved revives pointed at retired threads and the reviewer spent a relay round
+  // finding out. The detectors already refuse to propose for an archived chat; this applies the
+  // same test to rows already on the books.
+  {
+    const archivedNow: string[] = []
+    for (const [id, meta] of metaMap) if (meta.archived) archivedNow.push(id)
+    const retired = retireProposalsForSessions(
+      archivedNow,
+      started,
+      'target was archived after this was proposed; retired rather than offered as work',
+    )
+    if (retired > 0)
+      console.log(`[agenthydra] retired ${retired} proposal(s) whose chat has been archived`)
+  }
   for (const item of items) {
     if (item.kind !== 'orphaned' || !item.sessionId) continue
     const quiet = typeof item.detail?.quietSecs === 'number' ? item.detail.quietSecs : 0
@@ -1873,6 +1912,12 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
         // for shell commands, and a revive prompt that sends such a chat straight at `git` or
         // `cargo` just re-freezes it at an approval nobody can click.
         permissionMode: metaMap.get(item.sessionId)?.permissionMode ?? null,
+        // THE ID THE APP'S TOOLS TAKE. Not `local_<sessionId>`: that form is correct only
+        // for imported chats, and 98.7% of this fleet was created IN the app and is filed
+        // under a different id. The reviewer had no way to know that and addressed four
+        // deliveries at chats that do not exist (2026-08-27). Use this verbatim for
+        // send_message, rename, archive, and for any relay request.
+        chatId: metaMap.get(item.sessionId)?.chatId ?? null,
         cwd: item.cwd ?? null,
         peerName: item.peerName ?? null,
         tailSnippet: item.tailSnippet?.slice(0, 600) ?? null,

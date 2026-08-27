@@ -42,6 +42,7 @@ import {
   openProposalsForSession,
   proposeAction,
   reportProposalExecuted,
+  retireProposalsForSessions,
 } from '../src/proposals'
 import type { AttentionItem, UsageSnapshot } from '../src/types'
 import { desktopKey } from '../src/usage-service'
@@ -297,6 +298,43 @@ test('settings round-trip and clamp', () => {
 })
 
 // --- the routing table ------------------------------------------------------
+
+test('a proposal whose chat was archived after it was raised is retired, not offered', () => {
+  // An open proposal stands for up to 48 hours and the chat underneath can be archived inside
+  // that window. On 2026-08-27 four APPROVED revives pointed at chats that had since been
+  // retired, and the reviewer spent a whole relay round discovering it. The detectors already
+  // refuse to propose for an archived chat; this is that test applied to rows already on the books.
+  proposeAction({
+    kind: 'revive',
+    sessionId: 'retire-me',
+    instanceRef: 'desktop:c:\\i\\x',
+    title: 'Since archived',
+    summary: 'crashed mid-work',
+    evidence: { flavor: 'crash' },
+    evidenceAt: new Date().toISOString(),
+  })
+  expect(openProposalsForSession('retire-me').length).toBe(1)
+
+  // An unrelated session must be untouched by the sweep.
+  proposeAction({
+    kind: 'revive',
+    sessionId: 'keep-me',
+    instanceRef: 'desktop:c:\\i\\x',
+    title: 'Still live',
+    summary: 'crashed mid-work',
+    evidence: { flavor: 'crash' },
+    evidenceAt: new Date().toISOString(),
+  })
+
+  const n = retireProposalsForSessions(['retire-me'], Date.now(), 'target was archived')
+  expect(n).toBe(1)
+  expect(openProposalsForSession('retire-me').length).toBe(0)
+  expect(openProposalsForSession('keep-me').length).toBe(1)
+
+  // Retiring something with nothing open is a no-op, not an error: the sweep runs every tick
+  // over every archived chat on the machine, which is overwhelmingly chats with no proposals.
+  expect(retireProposalsForSessions(['retire-me', 'never-seen'], Date.now(), 'x')).toBe(0)
+})
 
 test('plan parses off the account label; absent suffix is null', () => {
   expect(planOfAccountLabel('tobix <t@x.com> · Max 20×')).toBe('Max 20×')

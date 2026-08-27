@@ -37,6 +37,13 @@ export interface SessionMeta {
    *  by filename - which is exactly how a chat that has rolled onto a new transcript is still
    *  reachable by the id its filename kept. */
   cliSessionId: string | null
+  /** THE ID THE APP'S OWN TOOLS TAKE (`local_<...>`), which is the metadata FILENAME and not
+   *  always `local_<cliSessionId>`. An imported chat is filed under the session id, so the two
+   *  agree; a chat the APP created is filed under the app's own id, and 98.7% of this fleet is
+   *  that shape. Anyone addressing a chat - send_message, rename, archive, a relay - must use
+   *  THIS, and the reviewer landed 0 of 4 deliveries on 2026-08-27 by constructing the other
+   *  one. Null only for the row-derived fallback below, which has no file to name. */
+  chatId: string | null
   /** The app's per-chat automation posture. 'bypassPermissions' runs unattended; anything else
    *  (the app creates imported chats as 'acceptEdits') raises an approval prompt for at least
    *  some tools, which under the zero-click law is a silent deadlock rather than a safeguard.
@@ -76,12 +83,17 @@ function scanStore(
       const archived = !!meta.isArchived
       const permissionMode = typeof meta.permissionMode === 'string' ? meta.permissionMode : null
       const title = typeof meta?.title === 'string' && meta.title.trim() ? meta.title.trim() : null
+      // The filename IS the app's chat id. It was already being computed below purely as a
+      // second lookup key and then discarded; keeping it is what lets a caller address this
+      // chat at all.
+      const chatId = rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null
       const entry: SessionMeta = {
         instance: label,
         archived,
         permissionMode,
         path,
         title,
+        chatId,
         cliSessionId: typeof id === 'string' && id ? id : null,
       }
       // TWO KEYS, one scan. A chat IMPORTED into the app is filed as `local_<cliSessionId>.json`,
@@ -170,6 +182,7 @@ export function resolveInstanceByOrigin(cwd: string, createdAt: number | null): 
       permissionMode: null,
       path: '',
       title: null,
+      chatId: null,
       cliSessionId: null,
     }
   }

@@ -37,13 +37,15 @@ never-clicked, dormant, freshly imported chat answered within seconds; zero clic
 headless processes). Reach for these in order:
 
 1. **Same instance as you** -> your own session-management tool
-   (`mcp__ccd_session_mgmt__send_message`, target `local_<sessionId>`). Works on dormant
+   (`mcp__ccd_session_mgmt__send_message`, target the proposal's `evidence.chatId`). Works on
+   dormant
    chats; this is the universal actuator inside your instance.
 2. **Other instance, target session LIVE and not deaf** -> peer `SendMessage` (the feed's
    `peerName`).
 3. **Other instance, target dormant or deaf, but SOME chat in that instance is live** ->
    RELAY: peer-message that live chat: "[orchestrator] Relay request: call your
-   mcp__ccd_session_mgmt__send_message tool with session_id local_<id> and exactly this
+   mcp__ccd_session_mgmt__send_message tool with session_id <the chatId you were given> and
+   exactly this
    message: <text>. Reply DONE when sent." One relay per wake per instance; the relay's DONE
    plus the target's transcript moving is your verification.
    VERIFIED 2026-08-27, end to end: the relay reported DONE, the dormant target's transcript
@@ -55,6 +57,18 @@ headless processes). Reach for these in order:
    proposal approved, note "no native route into <instance> yet", and retry on later wakes
    (a chat there going live, or the owner opening one, restores rung 1-3). NEVER fall back
    to a headless resume, a terminal window (unless the surface IS terminal), or UI typing.
+
+**NEVER BUILD A CHAT ID. USE `evidence.chatId` VERBATIM.** `local_<sessionId>` is correct only
+for IMPORTED chats. A chat the APP created is filed under the app's OWN id and stores the
+session id inside, and 98.7% of this fleet is that shape - so a constructed id addresses a
+chat that does not exist and every tool returns "not found". Measured 2026-08-27: a relay
+round landed 0 of 4 for exactly this reason, on ids this file had told the reviewer to build.
+When you ask someone to relay, hand them the `chatId`, not the session id.
+
+**RENAME AFTER THE FIRST TURN, NEVER BEFORE IT.** A delivery BOOTS the chat, and the app
+rewrites that chat's metadata on every boot - which wipes a title you set beforehand. So the
+order is: deliver, confirm the turn ran, THEN rename, then report it done. Renaming first and
+clearing the entry leaves the chat unnamed with nothing left tracking it.
 
 After EVERY delivery, verify the ENGINE: the target's transcript is growing now (mtime
 advancing, `GET /api/sessions/<id>/tail`), or you watched it stream. A process existing
@@ -146,7 +160,7 @@ allowed to answer "nothing here is still worth keeping" - that is a good outcome
 - **Then archive by this LADDER.** The rungs are not interchangeable: the difference between
   them is whether the chat actually leaves the owner's sidebar.
   1. **A chat in YOUR instance** -> `mcp__ccd_session_mgmt__archive_session` with its
-     `local_<sessionId>`. Instant and genuinely gone - measured, the app's own view flips to
+     the proposal's `evidence.chatId`. Instant and genuinely gone - measured, the app's own view flips to
      archived immediately. Always prefer this.
   2. **A chat elsewhere, with any live chat in that instance** -> RELAY: peer-message that live
      chat and ask it to archive the TARGET (never itself) with its own archive tool.

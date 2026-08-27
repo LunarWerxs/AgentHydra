@@ -202,6 +202,42 @@ export function maintainProposals(nowMs: number): void {
   ).run(pruneBefore)
 }
 
+/**
+ * Retire open proposals whose target is no longer a thing to act on, so the reviewer is never
+ * handed retired work. An undecided proposal stands for 48 hours and an approved one until it
+ * is executed, which is plenty of time for the chat underneath to be archived: on 2026-08-27
+ * four approved revives pointed at chats that had since been retired, and the reviewer burned
+ * a full relay round discovering it. The detectors already skip archived chats when proposing;
+ * this is the same check applied to rows that were already on the books.
+ *
+ * Marked `expired` rather than rejected: nobody ruled against these, the world moved. If the
+ * chat is ever unarchived and still needs help, the detectors propose it again from scratch.
+ */
+export function retireProposalsForSessions(
+  sessionIds: Iterable<string>,
+  nowMs: number,
+  note: string,
+): number {
+  const now = new Date(nowMs).toISOString()
+  const stmt = db.query(
+    `update orchestrator_proposals
+        set status = 'expired', updated_at = ?, decision_note = ?
+      where session_id = ? and status in ('proposed', 'approved')`,
+  )
+  let n = 0
+  for (const id of sessionIds) {
+    const before = db
+      .query<{ c: number }, [string]>(
+        "select count(*) as c from orchestrator_proposals where session_id = ? and status in ('proposed', 'approved')",
+      )
+      .get(id)?.c
+    if (!before) continue
+    stmt.run(now, note, id)
+    n += before
+  }
+  return n
+}
+
 /** The feed's view: everything open (the reviewer's to-decide/to-execute list) plus the last
  *  day's decided rows so the owner can audit what the AI ruled. Newest first, open first. */
 export function listProposalsForView(nowMs: number): OrchestratorProposal[] {

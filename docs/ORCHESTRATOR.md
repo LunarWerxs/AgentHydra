@@ -187,6 +187,25 @@ Over MCP: `get_orchestrator`, `set_orchestrator`, `orchestrator_ack`,
 `orchestrator_check`, plus `orchestrator_hold` (park/unpark one thread, the /delayo pair) and
 `orchestrator_install_command` / `orchestrator_uninstall_command`.
 
+**Every revive proposal carries `evidence.chatId`, the id the app's own tools take.** It is the
+chat's metadata FILENAME, which is `local_<sessionId>` only for IMPORTED chats; a chat the app
+created is filed under the app's own id, and 1,325 of this fleet's 1,343 chats are that shape.
+The reviewer previously had a session id and tools that wanted a chat id, with nothing bridging
+them, and a relay round landed 0 of 4 addressing chats that did not exist. The bridge already
+existed inside the store scan and was being discarded.
+
+**A proposal is retired when its target is archived.** Open rows stand for up to 48 hours and a
+chat can be retired inside that window; four approved revives once pointed at chats that had
+since been archived. The detectors already refuse to propose for an archived chat, and every
+tick now applies the same test to rows already on the books, marking them `expired` (nobody
+ruled against them, the world moved).
+
+**Every UNATTENDED terminal launch asks for `bypassPermissions`.** The auto-resume monitor's
+visible window and the `terminal` handoff surface both open while nobody is watching, so a
+per-command approval prompt there is a silent deadlock rather than a safeguard. Measured
+2026-08-27: a session started without it loaded its instructions, issued one shell command and
+froze for good.
+
 ### Attention item kinds
 
 | kind | meaning | typical reviewer action |

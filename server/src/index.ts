@@ -2404,6 +2404,9 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       instanceRef: ref,
       resumeSessionId: sessionId,
       force: body.force === true,
+      // The handoff surface is orchestrator-driven and unattended, so the window must not
+      // stop on a shell approval nobody is there to answer.
+      permissionMode: 'bypassPermissions',
     })
     if (!launched.ok)
       return c.json({ ok: false, error: launched.reason ?? 'terminal launch failed' }, 422)

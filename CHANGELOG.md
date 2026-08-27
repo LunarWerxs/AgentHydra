@@ -44,6 +44,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **The reviewer was told to build chat ids, so it addressed chats that do not exist.** Its
+  first real shift landed 0 of 4 relayed deliveries: the rubric said to target
+  `local_<sessionId>`, which is right only for IMPORTED chats, while a chat the app created is
+  filed under the app's own id - 1,325 of 1,343 chats here. Revive proposals now carry
+  `evidence.chatId`, the id the app's own tools take, and the rubric says to use it verbatim
+  and never construct one. The bridge already existed inside the store scan and was thrown
+  away.
+- **Proposals could outlive their targets.** Open rows stand for up to 48 hours, so four
+  approved revives pointed at chats archived in the meantime and the reviewer spent a relay
+  round finding out. Every tick now retires open proposals whose chat has been archived, the
+  same test the detectors already apply before proposing.
+- **Two unattended terminal launches could still deadlock on a shell approval.** The
+  auto-resume monitor's visible window and the `terminal` handoff surface both open while
+  nobody is watching and neither asked for a permission mode, which is the exact freeze proved
+  live this session. Both now request `bypassPermissions`.
+- **Renaming a seeded chat before its first turn was wasted work**, and the rubric asked for it
+  in that order. A delivery boots the chat and the app rewrites its metadata on boot, so the
+  title has to go on afterwards; doing it first and clearing the entry left the chat unnamed
+  with nothing tracking it.
+
 - **A session running a long command was reported as idle, and the reviewer told it to move
   on.** Field report from the reviewer itself: it was handed a session as idle while that
   session was mid-commit-and-push, and "resume working on whatever you recommend next" is an
