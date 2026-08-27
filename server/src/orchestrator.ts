@@ -356,6 +356,17 @@ export function listPendingRenames(): PendingRename[] {
   }
 }
 
+/** Park one chat for a native rename, keeping any entry already there. Used by the seed path,
+ *  which knows the title that was ASKED for and should not let the janitor guess a worse one
+ *  from a transcript that is barely more than plumbing. */
+export function addPendingRename(ref: string, sessionId: string, title: string): void {
+  const t = title.trim()
+  if (!t) return
+  const kept = listPendingRenames().filter((r) => r.sessionId !== sessionId)
+  kept.push({ ref, sessionId, title: t, at: new Date().toISOString() })
+  kvSet(RENAME_KV, JSON.stringify(kept))
+}
+
 /** The reviewer reports a native rename done (or the owner renamed it by hand). */
 export function clearPendingRename(sessionId: string): number {
   const before = listPendingRenames()

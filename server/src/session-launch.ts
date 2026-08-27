@@ -483,6 +483,12 @@ export function sweepUntitledDesktopChats(
     })(),
   ]
   const GENERIC = /^(untitled|general coding session|new (chat|session))$/i
+  // AgentHydra's own seed preamble. A seeded chat's first user message is fabricated so the
+  // chat has something to boot from, and the title scanner derives titles from the first user
+  // message, so without this the plumbing NAMES the chat. Observed on the owner's sidebar
+  // 2026-08-27: '[orchestrator] This thread was seeded by AgentHydra for a new task. The task
+  // prompt arrives as the next...'. Such a title is replaceable, and never writable.
+  const PLUMBING = /^\[orchestrator\]/i
   let fixed = 0
   // Profiles that had at least one rename: a RUNNING app keeps showing the old name until it
   // restarts, so the janitor hands these to the sidebar-visibility restart (owner rule: names
@@ -504,13 +510,14 @@ export function sweepUntitledDesktopChats(
             try {
               const meta = JSON.parse(readFileSync(path, 'utf8'))
               const current = typeof meta.title === 'string' ? meta.title.trim() : ''
-              if (current && !GENERIC.test(current)) continue
+              if (current && !GENERIC.test(current) && !PLUMBING.test(current)) continue
               const sid =
                 typeof meta.cliSessionId === 'string' && meta.cliSessionId
                   ? meta.cliSessionId
                   : f.slice('local_'.length, -'.json'.length)
               const better = lookupTitle(sid)?.trim()
-              if (!better || GENERIC.test(better) || better === sid) continue
+              if (!better || GENERIC.test(better) || PLUMBING.test(better) || better === sid)
+                continue
               meta.title = better
               meta.titleSource = 'tool'
               writeFileSync(path, JSON.stringify(meta))
@@ -668,6 +675,21 @@ export async function seedDesktopSession(opts: {
     isInstanceRunning: opts.isInstanceRunning,
   })
   if (!res.ok) return { ok: false, reason: res.reason }
+  // THE TITLE WE ASKED FOR IS THE ONE THAT SHOULD WIN. When the app is running it wipes this
+  // chat's title on the first boot, and the scanner then has only the fabricated preamble to
+  // work from, so leaving it to the janitor names the chat after AgentHydra's plumbing. Park
+  // the intended title for the reviewer to apply through the app, which is the one write the
+  // app cannot undo. Dynamic import: orchestrator.ts imports this module, so a static one
+  // would close a cycle.
+  if (!res.titleDurable) {
+    try {
+      const { addPendingRename } = await import('./orchestrator')
+      addPendingRename(opts.instanceRef, sessionId, opts.title)
+    } catch (err) {
+      // Losing the reminder must never fail the seed; the janitor is still the fallback.
+      console.error('[agenthydra] could not park the seeded chat rename:', err)
+    }
+  }
   // A seeded chat IS work placed on that account, so the ledger hears about it here rather
   // than in the callers. Recording at the primitive is what lets balancing count a placement
   // made by the owner clicking in the app the same as one the monitor made itself; a ledger

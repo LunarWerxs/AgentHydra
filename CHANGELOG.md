@@ -44,6 +44,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A seeded chat could end up named after AgentHydra's own plumbing.** Found by the owner on
+  his sidebar: two chats seeded during one session read as "General coding session" and
+  "[orchestrator] This thread was seeded by AgentHydra for a new task. The task prompt arrives
+  as the next...". Same cause both times. A seeded chat's first user message is fabricated so
+  the chat has something to boot from, the app wipes the real title on that first boot, and the
+  title scanner then derives a new one from the only text present: the preamble. Two fixes,
+  because either alone leaves a hole. The janitor now treats an "[orchestrator] ..." title as
+  replaceable and refuses to write one. And the seed, which knows the title that was actually
+  asked for, parks it as a pending native rename instead of leaving the scanner to reinvent a
+  name from a transcript that is barely more than plumbing.
+
 - **The kit-drift guard was reporting green having compared nothing.** The checkout moved down
   into `app/`, so `check:kit` pointed one directory short of the sibling kit; and even once the
   path was corrected, the kit's own config still described the old layout, so the app was SKIPPED
