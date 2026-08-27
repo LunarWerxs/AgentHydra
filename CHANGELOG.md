@@ -54,6 +54,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A six-hour-dead reviewer reported as merely idle.** The health check counted only PROPOSALS as
+  work waiting, so with none open it said "nothing is waiting to be decided, so silence here means
+  idle rather than absent" no matter how long the silence had run. Measured 2026-08-27: the
+  reviewer's process was gone from the live registry and its transcript's last line was written at
+  07:50, while a rename had sat in the feed waiting for it that entire time. The owner spotted it
+  from the outside and asked exactly the right question, that a reviewer should have said
+  something about a live chat by now, so it is probably broken.
+
+  A rename is work only a reviewer can do, because the app overwrites a title written to disk, and
+  it was invisible to the very check that exists to notice an absent reviewer. The count is now
+  everything the reviewer owes an action on, and the feed resolves the rename list once so what
+  the reviewer is shown and what it is judged against cannot disagree. The "only a backlog makes
+  silence meaningful" rule stays, because a check that fires on healthy input stops being read;
+  the bug was never that rule, it was measuring the backlog with too narrow a ruler.
+
 - **A handed-off resume reported itself finished before the work started.** Opening a visible
   terminal returns the instant the window is spawned, because nothing is piped and nothing is
   waited on, and the monitor wrote that result straight into the queue row as

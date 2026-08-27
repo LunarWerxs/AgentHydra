@@ -356,7 +356,7 @@ test('a dead reviewer is visible, and a quiet one with nothing to do is not an a
   const dead = reviewerHealth(now, 19)
   expect(dead.stalled).toBe(true)
   expect(dead.quietMins).toBe(480)
-  expect(dead.why).toContain('19 proposal(s)')
+  expect(dead.why).toContain('19 item(s)')
 
   // A backlog with someone actually working it is fine: a reviewer mid-shift has a queue by
   // definition, so "has a backlog" alone must not be the trigger.
@@ -368,6 +368,20 @@ test('a dead reviewer is visible, and a quiet one with nothing to do is not an a
   // Liveness is measured by WORK, not by a process existing, so it survives the case that matters
   // most: a reviewer that booted and then froze at an approval prompt never stamps.
   expect(reviewerHealth(now, 19).lastSeenAt).toBe(new Date(now - 5 * 60_000).toISOString())
+
+  // THE HOLE THIS CHECK FELL THROUGH, measured live on 2026-08-27. `waiting` used to be the
+  // PROPOSAL count alone. The reviewer had been dead six hours (gone from the live registry, its
+  // transcript's last line written at 07:50), ONE rename had been sitting in the feed waiting for
+  // it that entire time, and because no proposal happened to be open the feed reported "silence
+  // here means idle rather than absent". A rename is work only a reviewer can do, because the app
+  // overwrites a title written to disk. One waiting item has to be enough to tell the two apart.
+  noteReviewerActivity(now - 6 * 3600 * 1000)
+  const oneRename = reviewerHealth(now, 1)
+  expect(oneRename.stalled).toBe(true)
+  expect(oneRename.why).toContain('1 item(s)')
+  expect(oneRename.why).toContain('start one')
+  // And the healthy-input rule still holds at the same silence: zero waiting is still not an alarm.
+  expect(reviewerHealth(now, 0).stalled).toBe(false)
 })
 
 test('plan parses off the account label; absent suffix is null', () => {

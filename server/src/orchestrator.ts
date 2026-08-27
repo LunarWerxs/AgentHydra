@@ -348,24 +348,40 @@ export function noteReviewerActivity(nowMs: number = Date.now()): void {
   kvSet(REVIEWER_KV, new Date(nowMs).toISOString())
 }
 
+/**
+ * `waiting` is EVERYTHING the reviewer owes an action on, not just proposals.
+ *
+ * It used to be the proposal count alone, and that made the whole check blind in the one case it
+ * exists for. Measured 2026-08-27: the reviewer had been dead for six hours (its process gone from
+ * the live registry, its transcript's last line written at 07:50), a rename had been sitting in the
+ * feed's `renames` list that entire time waiting for it, and because no PROPOSAL happened to be
+ * open this function reported "nothing is waiting to be decided, so silence here means idle rather
+ * than absent". The owner spotted it from the outside and asked the right question: the reviewer
+ * should have said something about a live chat by now, so it is probably broken.
+ *
+ * A rename is work only a reviewer can do (the app overwrites a title written to disk, so the
+ * rename has to go through the app itself). Counting it makes an idle reviewer and an absent one
+ * distinguishable again, which is the entire point of this function.
+ *
+ * The "only a backlog makes silence meaningful" rule below is still right and still load-bearing:
+ * a check that fires on healthy input stops being read. The bug was never that rule, it was
+ * measuring the backlog with too narrow a ruler.
+ */
 export function reviewerHealth(
   nowMs: number,
-  pending: number,
+  waiting: number,
 ): { lastSeenAt: string | null; quietMins: number | null; stalled: boolean; why: string } {
   const raw = kvGet(REVIEWER_KV)
   const at = raw ? Date.parse(raw) : Number.NaN
   const quietMins = Number.isNaN(at) ? null : Math.round((nowMs - at) / 60_000)
-  // Only a BACKLOG makes silence meaningful. A reviewer with nothing to decide is quiet
-  // because there is nothing to do, and calling that stalled would cry wolf until nobody
-  // read it - the same way a check that fires on healthy input stops being a check.
-  const stalled = pending > 0 && (quietMins === null || quietMins >= 30)
-  const why = !pending
-    ? 'nothing is waiting to be decided, so silence here means idle rather than absent'
+  const stalled = waiting > 0 && (quietMins === null || quietMins >= 30)
+  const why = !waiting
+    ? 'nothing is waiting to be acted on, so silence here means idle rather than absent'
     : quietMins === null
-      ? `${pending} proposal(s) waiting and NO reviewer has ever acted on this machine`
+      ? `${waiting} item(s) waiting and NO reviewer has ever acted on this machine`
       : stalled
-        ? `${pending} proposal(s) waiting and no reviewer has acted for ${quietMins}m - start one`
-        : `${pending} proposal(s) waiting, a reviewer acted ${quietMins}m ago`
+        ? `${waiting} item(s) waiting and no reviewer has acted for ${quietMins}m - start one`
+        : `${waiting} item(s) waiting, a reviewer acted ${quietMins}m ago`
   return {
     lastSeenAt: Number.isNaN(at) ? null : new Date(at).toISOString(),
     quietMins,
@@ -2361,6 +2377,9 @@ function fmtQuiet(secs: number): string {
 
 export function orchestratorView(): OrchestratorView {
   const proposals = listProposalsForView(Date.now())
+  // Resolved ONCE and shared with the reviewer-health count below, so the list the reviewer is
+  // shown and the backlog it is judged against can never disagree.
+  const renames = listPendingRenames()
   return {
     settings: getOrchestratorSettings(),
     prompts: getOrchestratorPrompts(),
@@ -2370,7 +2389,7 @@ export function orchestratorView(): OrchestratorView {
     instances: state.instances,
     // Chats the janitor renamed ON DISK inside a RUNNING app, where that write does not show
     // until the app restarts. The reviewer renames these natively and reports them done.
-    renames: listPendingRenames(),
+    renames,
     // WHAT TO PUT IN FRONT OF A NEW CHAT'S FIRST MESSAGE, already decided. The daemon applies
     // this itself wherever it composes the launch (see new-chat-opening.ts), but the reviewer
     // delivers opening prompts NATIVELY through the app, which no server code can reach. Serving
@@ -2410,9 +2429,12 @@ export function orchestratorView(): OrchestratorView {
       usageAgeSecs: state.usageAgeSecs,
       runningChats: state.runningChats,
       slotsFree: state.slotsFree,
+      // Proposals AND pending renames: both are work only a reviewer can do, and counting only
+      // the first is what let a six-hour-dead reviewer report as merely idle. See reviewerHealth.
       reviewer: reviewerHealth(
         Date.now(),
-        proposals.filter((p) => p.status === 'proposed' || p.status === 'approved').length,
+        proposals.filter((p) => p.status === 'proposed' || p.status === 'approved').length +
+          renames.length,
       ),
       proposalsPending: proposals.filter((p) => p.status === 'proposed' || p.status === 'approved')
         .length,
