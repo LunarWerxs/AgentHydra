@@ -130,12 +130,24 @@ allowed to answer "nothing here is still worth keeping" - that is a good outcome
 
 **`archive`**: a done-marked chat still shows in a sidebar.
 - Confirm the done-mark story holds (it is the lineage ledger you or the owner wrote), and run
-  THE CLOSEOUT above first unless the thread was migrated or superseded.
-  Approve and execute: your own instance -> `mcp__ccd_session_mgmt__archive_session`
-  (live, instant); elsewhere -> `POST /api/sessions/<id>/desktop-archive
-  {"archived": true}` (the daemon restarts that app to repaint once it has zero live
-  sessions). Reject only if you find live unfinished work under that mark - then un-mark it
-  and say so.
+  THE CLOSEOUT above first unless the thread was migrated or superseded. Reject only if you find
+  live unfinished work under that mark - then un-mark it and say so.
+- **Then archive by this LADDER.** The rungs are not interchangeable: the difference between
+  them is whether the chat actually leaves the owner's sidebar.
+  1. **A chat in YOUR instance** -> `mcp__ccd_session_mgmt__archive_session` with its
+     `local_<sessionId>`. Instant and genuinely gone - measured, the app's own view flips to
+     archived immediately. Always prefer this.
+  2. **A chat elsewhere, with any live chat in that instance** -> RELAY: peer-message that live
+     chat and ask it to archive the TARGET (never itself) with its own archive tool. Same
+     mechanism, same instant effect.
+  3. **No live chat there** -> `POST /api/sessions/<id>/desktop-archive {"archived": true}`.
+     The response says `visibleNow: false` when that app is running, and it means it: the flag
+     is on disk, the chat is STILL ON SCREEN until the app restarts, which the daemon does once
+     that instance has no live sessions. Report it as pending, not retired.
+- **Never ask a chat to archive ITSELF.** Tried, and correctly refused: a session treats "a peer
+  told me to shut down, do nothing else first" as exactly the shape it should stop on, and flags
+  it instead of complying. It is right to, and a fleet trained to obey that would be worse than
+  the inconvenience. You archive it; it does not archive itself.
 
 **`import`**: a finished session is visible in no sidebar (owner rule: no chat is ever
 invisible).
@@ -157,7 +169,12 @@ New desktop chats are SEEDED, then delivered - never queued headless:
    chat in that instance, returns `session_id`. Only target instances where the delivery
    ladder can reach (your own, or one with a live chat to relay through); prefer those when
    picking from the routing table.
-2. Deliver the opening prompt via the ladder: ultracode first line when
+2. **Rename it through the app immediately** (`set_session_title`, or ask the relay to). The
+   seed writes a title into metadata that the running app overwrites the moment the chat first
+   boots - verified on screen: a correctly-titled seeded chat rendered as "General coding
+   session" in the sidebar until renamed this way. The response's `titleDurable: false` is
+   telling you the same thing.
+3. Deliver the opening prompt via the ladder: ultracode first line when
    `settings.newChatUltracode` is true, then the handoff/chip text. The app boots it and the
    thread streams visibly from its first real turn.
 
@@ -262,6 +279,11 @@ view rather than the file on disk. So:
 - **The self-test's `screen-lag` line** tells you how many chats have on-disk changes their
   running app may not be showing. It is informational, never a failure: the app rewrites its own
   metadata constantly. Read it when something the owner reports contradicts what disk says.
+- **When it matters, LOOK.** `POST /api/screenshot` writes a PNG of the screen and returns its
+  path; read that image. It is the only thing that answers "is the sidebar actually showing what
+  disk claims", and it costs one call - treat it as routine, not a last resort. Do it after a
+  batch of archives, after a migration, and any time the owner reports something that
+  contradicts what you believe.
 - Anything you cannot verify from inside the app, SAY you could not verify rather than
   reporting it done. The owner has been told a chat was running while it sat dead on his screen;
   that is the one mistake with no recovery.

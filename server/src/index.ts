@@ -185,6 +185,7 @@ import {
   startResetWatch,
 } from './reset-watch'
 import { schedulerState, setSchedulerSettings } from './scheduler'
+import { captureScreen } from './screenshot'
 import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
 import {
@@ -2075,6 +2076,16 @@ app.post('/api/orchestrator/ack', async (c) => {
 app.post('/api/orchestrator/check', async (c) => {
   await runOrchestratorOnce()
   return c.json({ ok: true, ...orchestratorView() })
+})
+// Capture what is actually ON SCREEN, and hand back the path so the caller can LOOK at it.
+// Everything else this daemon reports is read from disk, and disk is not the screen - the gap
+// between them is where the archive-that-stayed-visible and the title-that-got-wiped both
+// lived. An AI session can read the returned PNG directly; a human can open it. Nothing here
+// interprets the image, deliberately: it is a camera, not a judge.
+app.post('/api/screenshot', async (c) => {
+  const body = await jsonBody(c)
+  const result = await captureScreen(typeof body.path === 'string' ? body.path : undefined)
+  return c.json(result, result.ok ? 200 : 500)
 })
 // The orchestration self-test: run the real guards against real state and report what held.
 // Safe to run at any time - every artifact it touches is one it created (sacrificial ids, a

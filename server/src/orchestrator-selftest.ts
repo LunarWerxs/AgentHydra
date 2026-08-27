@@ -82,6 +82,9 @@ export interface SelfTestReport {
    * rendered needs the app's own view (the reviewer's session tools) or a screenshot.
    */
   visualChecks: false
+  /** A deep run leaves a PNG of the screen here. READ IT - it is the only thing in this report
+   *  that can answer whether the sidebar matches what disk claims. */
+  screenshotPath?: string
   checks: SelfTestCheck[]
 }
 
@@ -448,10 +451,25 @@ export async function runOrchestratorSelfTest(
     }
   }
 
+  // A deep run ends with a photograph. It proves nothing on its own - nothing here reads
+  // pixels - but it means the one question this report cannot answer ("is that actually what
+  // the sidebar shows?") has an artifact attached to it instead of a shrug.
+  let screenshotPath: string | undefined
+  if (opts.deep) {
+    try {
+      const { captureScreen } = await import('./screenshot')
+      const shot = await captureScreen()
+      if (shot.ok) screenshotPath = shot.path
+    } catch {
+      // A failed capture must never fail the report; the absent path says it did not happen.
+    }
+  }
+
   const failed = checks.filter((c) => !c.ok).length
   return {
     ok: failed === 0,
     visualChecks: false,
+    screenshotPath,
     ranAt: new Date(startedAt).toISOString(),
     durationMs: Date.now() - startedAt,
     passed: checks.length - failed,

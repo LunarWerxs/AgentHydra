@@ -584,7 +584,7 @@ export async function seedDesktopSession(opts: {
   isInstanceRunning?: (dir: string) => Promise<boolean>
   /** Seam for tests; the default is the real ~/.claude store. */
   claudeHome?: string
-}): Promise<{ ok: boolean; sessionId?: string; reason?: string }> {
+}): Promise<{ ok: boolean; sessionId?: string; reason?: string; titleDurable?: boolean }> {
   if (!opts.instanceRef.startsWith('desktop:'))
     return { ok: false, reason: "instance_ref must be 'desktop:<dir>'" }
   if (!existsSync(opts.cwd)) return { ok: false, reason: 'cwd-not-found' }
@@ -643,7 +643,11 @@ export async function seedDesktopSession(opts: {
     isInstanceRunning: opts.isInstanceRunning,
   })
   if (!res.ok) return { ok: false, reason: res.reason }
-  return { ok: true, sessionId }
+  // The title is written into metadata a RUNNING app will overwrite the moment this chat first
+  // boots - seen on screen, not inferred: a freshly seeded chat with a perfectly good title
+  // rendered as "General coding session" in the sidebar until it was renamed through the app.
+  // So the caller is told, and the rubric requires the native rename right after seeding.
+  return { ok: true, sessionId, titleDurable: res.titleDurable }
 }
 
 /**

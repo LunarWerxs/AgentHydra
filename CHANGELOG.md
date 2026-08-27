@@ -43,6 +43,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is one it created, under sacrificial ids in a throwaway directory. It found a real bug on
   its first run (below). An opt-in deep mode additionally seeds one real chat to prove the
   app-facing half works, then archives it.
+- **A screenshot endpoint, so a claim about the screen can be looked at.** Everything else the
+  daemon reports is read from disk, and disk is not the screen - the gap is where the archive
+  that stayed visible and the title that got wiped both lived. `POST /api/screenshot` writes a
+  PNG and returns the path; the caller reads it. It interprets nothing on purpose: it is a
+  camera, not a judge, and the reviewer is now told to use it after archives and migrations
+  rather than treating it as a last resort. A deep self-test run leaves one attached.
 - **Codex threads appear in the same attention feed.** AgentHydra manages both agents but the
   orchestrator watched only one, so a Codex thread that stopped mid-work was invisible to the
   machinery that babysits every Claude chat. Codex rollouts are now classified the same way
@@ -59,6 +65,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A newly created chat showed as "General coding session" until renamed.** Seeding writes a
+  title into metadata that the running app overwrites the moment the chat first boots - caught
+  by looking at the sidebar in a screenshot, which is the only thing that could have caught it,
+  since every on-disk check said the title was correct. Seeding now reports that the title is
+  not durable, and the reviewer renames through the app immediately after, which shows on
+  screen instantly.
 - **Archiving no longer reports success for a chat that is still on screen.** Asking the app
   itself right after the call showed the truth: disk said archived, the app still said not
   archived, and the chat stayed in the sidebar. The endpoint now says so - the flag is
