@@ -95,6 +95,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   asserted to COMPLETE, and are now asserted to be refused. A new test proves nothing is spawned
   before the refusal, so "refused" cannot quietly mean "killed shortly after starting".
 
+  `POST /api/queue` refuses at the point of ASKING too, not only at the point of running. The
+  chokepoint is still the enforcement, but without this the route would accept the row, hand back
+  an id, and let the caller discover the problem later: a dead end with a receipt. Verified live,
+  409 with the reason, no row created, and `force: true` does not change the answer.
+
 ### Fixed
 
 - **A shipped command fix could never reach the reviewer that reads it.** The rubric the reviewer

@@ -131,6 +131,7 @@ import {
 import { contentDispositionAttachment, safeTranscriptFilename } from './filenames'
 import { findFreePort } from './find-free-port.mjs'
 import { cleanupStaleUpdateArtifacts } from './github-updater'
+import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
 import {
   clearInstanceInfo,
   findLiveInstance,
@@ -1162,6 +1163,14 @@ app.post('/api/queue', async (c) => {
   // runner then passes it as `--session-id` — so exempting new_chat let
   // `{new_chat: true, session_id: <an existing desktop chat>}` write headless turns into that
   // chat. The question is about the ID, never about the caller's label for the request.
+  // NO HEADLESS (owner law 2026-08-27), refused at the point of ASKING rather than only at the
+  // point of running. The chokepoint in dispatch.ts is still the enforcement and still refuses
+  // every one of these; without this the route would happily accept the row and hand back an id,
+  // and the caller would find out only when it failed later. Queueing work into something that
+  // cannot run it is a dead end with a receipt. The two paragraphs above describe the narrower
+  // check this replaces, whose `force` escape is also gone: an override that defeats "never" is
+  // the old behaviour behind a flag.
+  if (!headlessRunsAllowed()) return c.json({ error: NO_HEADLESS_REASON }, 409)
   const allowHeadless = body.force === true
   if (!allowHeadless && (await desktopHomeFor(sessionId)))
     return c.json(
