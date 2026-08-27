@@ -202,6 +202,55 @@ type TranscriptEventForAnalytics = {
   message?: { role?: string; content?: unknown }
 }
 
+type AnalyticsContentBlock = {
+  type?: string
+  name?: string
+  input?: unknown
+  is_error?: boolean
+}
+
+/**
+ * Fold one content block (a tool_use or tool_result entry) into `out`/the running error streak.
+ * Pure aside from mutating `out`'s counters/collections — split out of
+ * applyTranscriptEventToAnalytics, which was carrying this branch inline inside its own loop.
+ *
+ * Returns the streak to carry into the next block (matching the original inline reassignment of
+ * `nextStreak`).
+ */
+function foldContentBlock(
+  block: unknown,
+  nextTurn: number,
+  atMs: number | null,
+  streak: number,
+  out: SessionAnalytics,
+): number {
+  if (!block || typeof block !== 'object') return streak
+  const b = block as AnalyticsContentBlock
+  if (b.type === 'tool_use') {
+    const name = typeof b.name === 'string' && b.name ? b.name : 'tool'
+    out.tools[name] = (out.tools[name] ?? 0) + 1
+    if (EDIT_TOOLS.has(name)) {
+      const p = firstPath(b.input)
+      if (p) {
+        out.editCount++
+        if (out.edits.length < MAX_EDITS_PER_SESSION)
+          out.edits.push({ path: p, turn: nextTurn, ts: atMs })
+      }
+    }
+    return streak
+  }
+  if (b.type === 'tool_result') {
+    if (b.is_error === true) {
+      const nextStreak = streak + 1
+      if (nextStreak > out.toolErrorStreak) out.toolErrorStreak = nextStreak
+      out.toolErrors++
+      return nextStreak
+    }
+    return 0
+  }
+  return streak
+}
+
 /**
  * Fold one parsed transcript event (an assistant/tool message) into `out`, given the running
  * turn index and tool-error streak. Pure aside from mutating `out`'s counters/collections — no
@@ -226,28 +275,7 @@ function applyTranscriptEventToAnalytics(
   let nextStreak = streak
 
   for (const block of content) {
-    if (!block || typeof block !== 'object') continue
-    const b = block as { type?: string; name?: string; input?: unknown; is_error?: boolean }
-    if (b.type === 'tool_use') {
-      const name = typeof b.name === 'string' && b.name ? b.name : 'tool'
-      out.tools[name] = (out.tools[name] ?? 0) + 1
-      if (EDIT_TOOLS.has(name)) {
-        const p = firstPath(b.input)
-        if (p) {
-          out.editCount++
-          if (out.edits.length < MAX_EDITS_PER_SESSION)
-            out.edits.push({ path: p, turn: nextTurn, ts: atMs })
-        }
-      }
-    } else if (b.type === 'tool_result') {
-      if (b.is_error === true) {
-        out.toolErrors++
-        nextStreak++
-        if (nextStreak > out.toolErrorStreak) out.toolErrorStreak = nextStreak
-      } else {
-        nextStreak = 0
-      }
-    }
+    nextStreak = foldContentBlock(block, nextTurn, atMs, nextStreak, out)
   }
   return { turn: nextTurn, streak: nextStreak }
 }
@@ -942,6 +970,86 @@ interface SpendAccumulator {
 }
 
 /**
+ * Fold one session's per-model spend into `acc.byModel`/`acc.tokenTotals`, returning the
+ * session's total weighted tokens (needed by the caller for the project/account buckets).
+ * Pure aside from mutating `acc` — split out of foldSpendRow, which was carrying this loop
+ * inline, so the per-row function reads as a sequence of named folds instead of one block.
+ *
+ * When the PROVIDER priced the session, its models are priced too — split proportionally, the
+ * same way the day chart splits a session across days. Without this, "cost by model" showed a
+ * dash for every OpenCode model while "cost by provider" showed real money for the same
+ * sessions, which is two answers to one question.
+ */
+function foldModelSpend(
+  tokens: Record<string, ModelSpend>,
+  hasOwnCost: boolean,
+  sessionCost: number | null,
+  at: number,
+  acc: SpendAccumulator,
+): number {
+  const totalWeightedInSession = Object.values(tokens).reduce((n, m) => n + m.weighted, 0)
+  let sessionWeighted = 0
+  for (const [model, spend] of Object.entries(tokens)) {
+    sessionWeighted += spend.weighted
+    const share =
+      hasOwnCost && totalWeightedInSession > 0 ? spend.weighted / totalWeightedInSession : 0
+    const modelCost = hasOwnCost
+      ? (sessionCost ?? 0) * share
+      : priceTokens({ [model]: spend }, at).costUsd
+    const b = addTo(acc.byModel, model, spend.weighted, modelCost)
+    b.sessions++
+    b.turns += spend.turns
+    b.tokens = b.tokens ?? emptyTokens()
+    addTokens(b.tokens, spend)
+    addTokens(acc.tokenTotals, spend)
+  }
+  return sessionWeighted
+}
+
+/**
+ * Fold one session's tokens/cost into `acc.byProvider`. Split out of foldSpendRow for the same
+ * reason as foldModelSpend — "my statistics only show Claude" is exactly the question this
+ * answers, and it is a self-contained accumulation over `tokens`.
+ */
+function foldProviderSpend(
+  provider: SessionSource,
+  tokens: Record<string, ModelSpend>,
+  sessionCost: number | null,
+  acc: SpendAccumulator,
+): void {
+  const pv = acc.byProvider.get(provider) ?? {
+    key: provider,
+    tokens: emptyTokens(),
+    sessions: 0,
+    costUsd: null as number | null,
+  }
+  for (const spend of Object.values(tokens)) addTokens(pv.tokens, spend)
+  pv.sessions++
+  if (sessionCost !== null) pv.costUsd = (pv.costUsd ?? 0) + sessionCost
+  acc.byProvider.set(provider, pv)
+}
+
+/**
+ * Fold one session's per-day split into `acc.byDay` (and the `from`/`to` range). Split out of
+ * foldSpendRow — the one approximation documented at the top of this file: a session's cost is
+ * split across the days it touched in proportion to the weighted tokens spent on each.
+ */
+function foldDaySpend(
+  days: Record<string, number>,
+  sessionCost: number | null,
+  acc: SpendAccumulator,
+): void {
+  const dayTotal = Object.values(days).reduce((n, v) => n + v, 0)
+  for (const [day, weighted] of Object.entries(days)) {
+    const share = dayTotal > 0 ? weighted / dayTotal : 0
+    const db_ = addTo(acc.byDay, day, weighted, sessionCost === null ? null : sessionCost * share)
+    db_.sessions++
+    if (acc.from === null || day < acc.from) acc.from = day
+    if (acc.to === null || day > acc.to) acc.to = day
+  }
+}
+
+/**
  * Fold one analytics_row into the running spendReport accumulators. Pure aside from mutating
  * `acc`'s maps/sets/totals — no I/O, no awaits — split out of spendReport's per-row loop where
  * it was inline before, so the loop itself stays a plain `for (const row of rows) foldSpendRow(...)`.
@@ -976,40 +1084,12 @@ function foldSpendRow(
     acc.anyPriced = true
   }
 
-  // When the PROVIDER priced the session, its models are priced too — split proportionally, the
-  // same way the day chart splits a session across days. Without this, "cost by model" showed a
-  // dash for every OpenCode model while "cost by provider" showed real money for the same
-  // sessions, which is two answers to one question.
-  const totalWeightedInSession = Object.values(tokens).reduce((n, m) => n + m.weighted, 0)
-  let sessionWeighted = 0
-  for (const [model, spend] of Object.entries(tokens)) {
-    sessionWeighted += spend.weighted
-    const share =
-      hasOwnCost && totalWeightedInSession > 0 ? spend.weighted / totalWeightedInSession : 0
-    const modelCost = hasOwnCost
-      ? (sessionCost ?? 0) * share
-      : priceTokens({ [model]: spend }, at).costUsd
-    const b = addTo(acc.byModel, model, spend.weighted, modelCost)
-    b.sessions++
-    b.turns += spend.turns
-    b.tokens = b.tokens ?? emptyTokens()
-    addTokens(b.tokens, spend)
-    addTokens(acc.tokenTotals, spend)
-  }
+  const sessionWeighted = foldModelSpend(tokens, hasOwnCost, sessionCost, at, acc)
   acc.totalWeighted += sessionWeighted
 
   // Per provider, because "my statistics only show Claude" is exactly the question this answers.
   const provider = (row.source as SessionSource) ?? 'claude'
-  const pv = acc.byProvider.get(provider) ?? {
-    key: provider,
-    tokens: emptyTokens(),
-    sessions: 0,
-    costUsd: null as number | null,
-  }
-  for (const spend of Object.values(tokens)) addTokens(pv.tokens, spend)
-  pv.sessions++
-  if (sessionCost !== null) pv.costUsd = (pv.costUsd ?? 0) + sessionCost
-  acc.byProvider.set(provider, pv)
+  foldProviderSpend(provider, tokens, sessionCost, acc)
 
   // Decoded, not the raw key. A row whose scan never filled in `cwd` falls back to the transcript
   // store's own folder name (`d--NEWProjects-shared-Connections`), and leaving that undecoded put
@@ -1025,16 +1105,7 @@ function foldSpendRow(
     ab.sessions++
   }
 
-  // The one approximation, documented at the top of this file: a session's cost is split across
-  // the days it touched in proportion to the weighted tokens spent on each.
-  const dayTotal = Object.values(days).reduce((n, v) => n + v, 0)
-  for (const [day, weighted] of Object.entries(days)) {
-    const share = dayTotal > 0 ? weighted / dayTotal : 0
-    const db_ = addTo(acc.byDay, day, weighted, sessionCost === null ? null : sessionCost * share)
-    db_.sessions++
-    if (acc.from === null || day < acc.from) acc.from = day
-    if (acc.to === null || day > acc.to) acc.to = day
-  }
+  foldDaySpend(days, sessionCost, acc)
 }
 
 export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport {

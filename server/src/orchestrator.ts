@@ -1422,6 +1422,253 @@ function classifyOrphanSession(
   }
 }
 
+/**
+ * Classify one live session into the attention items it produces, plus the byCwd/runningChats
+ * bookkeeping the caller folds in. Pure aside from calling `deps`' read-only accessors (mtimeMs,
+ * instanceRef, tailInfo, usage, taskActivity) — no writes, no awaits — split out of
+ * runOrchestratorOnce's per-session loop where it was inline before. Every `continue` in the
+ * original loop became an early `return` here at the same point, so the decision order and the
+ * items produced are unchanged; the caller still does exactly `items.push(...result.items)` and
+ * the same byCwd/runningChats update in the same iteration order.
+ */
+function classifyLiveSession(
+  sess: LiveSession,
+  ctx: {
+    deps: OrchestratorDeps
+    s: OrchestratorSettings
+    started: number
+    nowIso: string
+    holdSet: Set<string>
+    doneSet: Set<string>
+    metaMap: Map<
+      string,
+      {
+        instance: string
+        archived: boolean
+        permissionMode?: string | null
+        chatId?: string | null
+      }
+    >
+  },
+): {
+  items: AttentionItem[]
+  cwdEntry: { quietSecs: number; held: boolean; running: boolean } | null
+} {
+  const { deps, s, started, nowIso, holdSet, doneSet, metaMap } = ctx
+  const items: AttentionItem[] = []
+  if (!sess.transcriptPath) {
+    items.push({
+      key: `unreadable:${sess.sessionId}`,
+      kind: 'errored',
+      sessionId: sess.sessionId,
+      peerName: sess.name,
+      cwd: sess.cwd,
+      summary: `live session ${sess.name}: transcript not found on disk`,
+      firstSeenAt: nowIso,
+      seenCount: 1,
+    })
+    return { items, cwdEntry: null }
+  }
+  const mtime = deps.mtimeMs(sess.transcriptPath)
+  if (mtime === null) return { items, cwdEntry: null }
+  const quietSecs = Math.max(0, Math.round((started - mtime) / 1000))
+  const running = quietSecs < s.idleQuietSecs
+  // A done-marked session is treated like a held one from here down: it still anchors its
+  // repo for git grouping, but must never be nudged or chosen as a hygiene addressee — its
+  // successor owns the work (see doneSet above).
+  const held = holdSet.has(sess.sessionId) || doneSet.has(sess.sessionId)
+  const cwdEntry = { quietSecs, held, running }
+  if (held) return { items, cwdEntry }
+  // The owner's tell for a purity break (2026-08-26): a thread showing "unknown account" is
+  // one running with no desktop home — broken headless residue, or work started outside the
+  // app. On the desktop surface every thread must live in a desktop app, so an unmapped
+  // live session is flagged every pass — busy or idle — until it is landed or retired.
+  if (s.handoffSurface === 'desktop' && deps.instanceRef(sess.sessionId) === null) {
+    items.push({
+      key: `unmapped:${sess.sessionId}`,
+      kind: 'errored',
+      sessionId: sess.sessionId,
+      peerName: sess.name,
+      cwd: sess.cwd,
+      summary: `${sess.name} runs under an UNKNOWN ACCOUNT (no desktop home) — surface-purity break: land it in a desktop app when it finishes, or retire it`,
+      detail: { unmappedInstance: true, quietSecs },
+      firstSeenAt: nowIso,
+      seenCount: 1,
+    })
+  }
+  if (quietSecs < s.idleQuietSecs) return { items, cwdEntry }
+
+  let tail: TailInfo
+  try {
+    tail = deps.tailInfo(sess.transcriptPath)
+  } catch {
+    return { items, cwdEntry }
+  }
+  const iref = deps.instanceRef(sess.sessionId)
+  const base = {
+    sessionId: sess.sessionId,
+    peerName: sess.name,
+    cwd: sess.cwd,
+    instanceRef: iref ?? undefined,
+    tailSnippet: tail.lastAssistantText ?? undefined,
+    firstSeenAt: nowIso,
+    seenCount: 1,
+  }
+  const detail: Record<string, unknown> = {
+    quietSecs,
+    ctxTokens: tail.ctxTokens,
+    recapDetected: tail.recapDetected,
+    handoffDetected: tail.handoffDetected,
+    midTurn: tail.midTurn,
+    ending: tail.ending,
+    lastHumanText: tail.lastHumanText,
+    lastHumanAt: tail.lastHumanAt,
+    account: iref ? (deps.usage()[iref]?.account ?? null) : null,
+    accountWeeklyPct: iref ? (deps.usage()[iref]?.weekAll?.pct ?? null) : null,
+  }
+  if (tail.unreadable) {
+    items.push({
+      ...base,
+      key: `unreadable:${sess.sessionId}`,
+      kind: 'errored',
+      summary: `live session ${sess.name}: no parseable record in the transcript tail`,
+      detail,
+    })
+  } else if (
+    sess.startedAt > 0 &&
+    tail.lastEventAt !== null &&
+    Date.parse(tail.lastEventAt) < sess.startedAt &&
+    // A chat that WORKED recently is not deaf-stalled, it is between turns — every
+    // queue-revive re-imports the chat as a fresh passive child, so without this gate the
+    // just-revived chat would be re-flagged 150s later and re-revived hourly forever. The
+    // 30-minute quiet floor turns the cycle into "revive again only once it has genuinely
+    // sat", which for a chat with pending work is a sane work cadence, and the reviewer
+    // retires finished ones (done-mark) so the cycle converges.
+    started - Date.parse(tail.lastEventAt) >= 30 * 60_000
+  ) {
+    // LIVE BUT DEAF: the process exists yet not one record has landed since it spawned — an
+    // import/migrate delivery child whose engine never started (measured: peer messages
+    // queue into it forever and are never processed). Masquerading as ordinary idle is what
+    // let a migrated chat sit six hours as "idle 6m" while every reviewer nudge vanished
+    // into the void (owner-reported, 2026-08-25). Classified as orphaned so the revive
+    // machinery owns it; the reviewer must NOT SendMessage it.
+    items.push({
+      ...base,
+      key: `orphan:${sess.sessionId}`,
+      kind: 'orphaned',
+      summary: `${sess.name} is LIVE BUT DEAF — no turn has run since its process spawned (an import child awaiting activation); revive machinery's jurisdiction, never nudge`,
+      detail: {
+        ...detail,
+        deaf: true,
+        awaitingActivation: true,
+        processStartedAt: new Date(sess.startedAt).toISOString(),
+      },
+    })
+  } else if (tail.ending === 'interrupted') {
+    items.push({
+      ...base,
+      key: `intr:${sess.sessionId}`,
+      kind: 'interrupted',
+      summary: `${sess.name} was interrupted by the user ${fmtQuiet(quietSecs)} ago`,
+      detail,
+    })
+  } else if (tail.ending === 'usage-limit') {
+    items.push({
+      ...base,
+      key: `limit:${sess.sessionId}`,
+      kind: 'limit_stopped',
+      summary: `${sess.name} stopped at a usage limit ${fmtQuiet(quietSecs)} ago (auto-resume monitor's jurisdiction)`,
+      detail,
+    })
+  } else if (tail.ending === 'error' || tail.ending === 'refused' || tail.ending === 'overload') {
+    items.push({
+      ...base,
+      key: `err:${sess.sessionId}`,
+      kind: 'errored',
+      summary: `${sess.name} ended on ${tail.ending} ${fmtQuiet(quietSecs)} ago`,
+      detail,
+    })
+  } else {
+    const handoffDue = typeof tail.ctxTokens === 'number' && tail.ctxTokens >= s.ctxHandoffTokens
+    // "Waiting on a background task" only excuses a session while the task shows signs of
+    // life. Transcript AND task outputs both silent past the threshold means the tasks are
+    // dead (or their completion never woke the session) — flagged so the reviewer intervenes
+    // instead of waiting forever (measured: sessions sat "waiting" 9-12h on silent tasks).
+    const taskMtime = deps.taskActivity(sess.cwd, sess.sessionId)
+    const taskAgeSec = taskMtime === null ? null : Math.round((started - taskMtime) / 1000)
+    const staleSecs = s.staleTaskMins * 60
+    const staleTasks =
+      tail.midTurn && quietSecs >= staleSecs && (taskAgeSec === null || taskAgeSec >= staleSecs)
+    detail.taskNewestAgeSec = taskAgeSec
+    detail.staleTasks = staleTasks
+    // FROZEN AT AN APPROVAL PROMPT, the same evidence read correctly. A chat stuck mid-tool
+    // used to be reported as "waiting on dead background tasks", which is the wrong diagnosis
+    // and the wrong fix. Measured 2026-08-26: five revived chats each ran one Bash call and
+    // froze for good at a permission prompt the remote owner could never click - alive,
+    // ~300MB, no CPU, nothing in any log. It is indistinguishable from thinking unless you
+    // ask the one question that separates them: does this chat's permission mode prompt for
+    // the tool it is sitting on? The app creates imported chats as 'acceptEdits', which
+    // auto-approves edits and prompts on every shell command, so a dangling Bash there is an
+    // approval stall; under 'bypassPermissions' the same dangling Bash is simply a long build.
+    const perm = metaMap.get(sess.sessionId)?.permissionMode ?? null
+    const promptsForPendingTool =
+      perm !== null && perm !== 'bypassPermissions' && SHELL_TOOLS.has(tail.pendingTool ?? '')
+    const approvalStall = staleTasks && promptsForPendingTool
+    detail.permissionMode = perm
+    detail.pendingTool = tail.pendingTool
+    detail.approvalStall = approvalStall
+    // A TOOL IN FLIGHT IS WORK, NOT SILENCE. `midTurn` means the transcript ends on a tool
+    // call with no result yet, so the session is inside something right now. Quiet time
+    // measures the transcript, and a test suite that prints nothing for two minutes looks
+    // identical to a chat waiting for input - which is how the reviewer came to be told a
+    // session mid-commit-and-push was idle (field report 2026-08-27; that repo's own test
+    // run is ~130s against a 150s idle threshold, so it would have happened on every run).
+    // Nudging there interrupts real work, and 'resume working on whatever you recommend
+    // next' is a genuinely damaging thing to say to a session halfway through a push.
+    //
+    // So a tool in flight buys GRACE, not silence forever: four idle windows, floor ten
+    // minutes. Under that a mid-tool session is simply working and is not raised at all.
+    // Over it, it is worth a look even if something is still alive, and past the stale
+    // threshold the same evidence means the opposite again (nothing ever came back). A
+    // blanket suppression up to the stale threshold was tried first and was wrong: it also
+    // hid a session quiet for three hours whose task was still writing, which is exactly
+    // the kind of thing the feed exists to show. A crashed session also ends mid-tool and
+    // is NOT lost here: the orphan and stranded detectors own that case, keyed on a dead
+    // or absent process rather than on silence.
+    const midTurnGraceSecs = Math.max(s.idleQuietSecs * 4, 600)
+    if (tail.midTurn && !staleTasks && quietSecs < midTurnGraceSecs) return { items, cwdEntry }
+    items.push({
+      ...base,
+      key: `idle:${sess.sessionId}`,
+      kind: handoffDue ? 'handoff_due' : 'idle_pending',
+      summary: `${sess.name} idle ${fmtQuiet(quietSecs)}${idleSummarySuffix({
+        recapDetected: tail.recapDetected,
+        approvalStall,
+        pendingTool: tail.pendingTool,
+        permissionMode: perm,
+        quietSecs,
+        staleTasks,
+        taskAgeSec,
+        midTurn: tail.midTurn,
+        handoffDue,
+        ctxTokens: tail.ctxTokens,
+      })}`,
+      detail,
+    })
+  }
+  for (const chip of tail.chips) {
+    items.push({
+      ...base,
+      tailSnippet: undefined,
+      key: `chip:${sess.sessionId}:${chip.id}`,
+      kind: 'chip',
+      summary: `${sess.name} offered a task chip: ${chip.title || '(untitled)'}`,
+      detail: { title: chip.title, prompt: chip.prompt },
+    })
+  }
+  return { items, cwdEntry }
+}
+
 export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps): Promise<void> {
   const started = deps.nowMs()
   const s = getOrchestratorSettings()
@@ -1473,217 +1720,21 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   let runningChats = 0
   const byCwd = new Map<string, { session: LiveSession; quietSecs: number; held: boolean }[]>()
   for (const sess of sessions) {
-    if (!sess.transcriptPath) {
-      items.push({
-        key: `unreadable:${sess.sessionId}`,
-        kind: 'errored',
-        sessionId: sess.sessionId,
-        peerName: sess.name,
-        cwd: sess.cwd,
-        summary: `live session ${sess.name}: transcript not found on disk`,
-        firstSeenAt: nowIso,
-        seenCount: 1,
-      })
-      continue
-    }
-    const mtime = deps.mtimeMs(sess.transcriptPath)
-    if (mtime === null) continue
-    const quietSecs = Math.max(0, Math.round((started - mtime) / 1000))
-    if (quietSecs < s.idleQuietSecs) runningChats++
-    // A done-marked session is treated like a held one from here down: it still anchors its
-    // repo for git grouping, but must never be nudged or chosen as a hygiene addressee — its
-    // successor owns the work (see doneSet above).
-    const held = holdSet.has(sess.sessionId) || doneSet.has(sess.sessionId)
-    const list = byCwd.get(sess.cwd) ?? []
-    list.push({ session: sess, quietSecs, held })
-    byCwd.set(sess.cwd, list)
-    if (held) continue
-    // The owner's tell for a purity break (2026-08-26): a thread showing "unknown account" is
-    // one running with no desktop home — broken headless residue, or work started outside the
-    // app. On the desktop surface every thread must live in a desktop app, so an unmapped
-    // live session is flagged every pass — busy or idle — until it is landed or retired.
-    if (s.handoffSurface === 'desktop' && deps.instanceRef(sess.sessionId) === null) {
-      items.push({
-        key: `unmapped:${sess.sessionId}`,
-        kind: 'errored',
-        sessionId: sess.sessionId,
-        peerName: sess.name,
-        cwd: sess.cwd,
-        summary: `${sess.name} runs under an UNKNOWN ACCOUNT (no desktop home) — surface-purity break: land it in a desktop app when it finishes, or retire it`,
-        detail: { unmappedInstance: true, quietSecs },
-        firstSeenAt: nowIso,
-        seenCount: 1,
-      })
-    }
-    if (quietSecs < s.idleQuietSecs) continue
-
-    let tail: TailInfo
-    try {
-      tail = deps.tailInfo(sess.transcriptPath)
-    } catch {
-      continue
-    }
-    const iref = deps.instanceRef(sess.sessionId)
-    const base = {
-      sessionId: sess.sessionId,
-      peerName: sess.name,
-      cwd: sess.cwd,
-      instanceRef: iref ?? undefined,
-      tailSnippet: tail.lastAssistantText ?? undefined,
-      firstSeenAt: nowIso,
-      seenCount: 1,
-    }
-    const detail: Record<string, unknown> = {
-      quietSecs,
-      ctxTokens: tail.ctxTokens,
-      recapDetected: tail.recapDetected,
-      handoffDetected: tail.handoffDetected,
-      midTurn: tail.midTurn,
-      ending: tail.ending,
-      lastHumanText: tail.lastHumanText,
-      lastHumanAt: tail.lastHumanAt,
-      account: iref ? (deps.usage()[iref]?.account ?? null) : null,
-      accountWeeklyPct: iref ? (deps.usage()[iref]?.weekAll?.pct ?? null) : null,
-    }
-    if (tail.unreadable) {
-      items.push({
-        ...base,
-        key: `unreadable:${sess.sessionId}`,
-        kind: 'errored',
-        summary: `live session ${sess.name}: no parseable record in the transcript tail`,
-        detail,
-      })
-    } else if (
-      sess.startedAt > 0 &&
-      tail.lastEventAt !== null &&
-      Date.parse(tail.lastEventAt) < sess.startedAt &&
-      // A chat that WORKED recently is not deaf-stalled, it is between turns — every
-      // queue-revive re-imports the chat as a fresh passive child, so without this gate the
-      // just-revived chat would be re-flagged 150s later and re-revived hourly forever. The
-      // 30-minute quiet floor turns the cycle into "revive again only once it has genuinely
-      // sat", which for a chat with pending work is a sane work cadence, and the reviewer
-      // retires finished ones (done-mark) so the cycle converges.
-      started - Date.parse(tail.lastEventAt) >= 30 * 60_000
-    ) {
-      // LIVE BUT DEAF: the process exists yet not one record has landed since it spawned — an
-      // import/migrate delivery child whose engine never started (measured: peer messages
-      // queue into it forever and are never processed). Masquerading as ordinary idle is what
-      // let a migrated chat sit six hours as "idle 6m" while every reviewer nudge vanished
-      // into the void (owner-reported, 2026-08-25). Classified as orphaned so the revive
-      // machinery owns it; the reviewer must NOT SendMessage it.
-      items.push({
-        ...base,
-        key: `orphan:${sess.sessionId}`,
-        kind: 'orphaned',
-        summary: `${sess.name} is LIVE BUT DEAF — no turn has run since its process spawned (an import child awaiting activation); revive machinery's jurisdiction, never nudge`,
-        detail: {
-          ...detail,
-          deaf: true,
-          awaitingActivation: true,
-          processStartedAt: new Date(sess.startedAt).toISOString(),
-        },
-      })
-    } else if (tail.ending === 'interrupted') {
-      items.push({
-        ...base,
-        key: `intr:${sess.sessionId}`,
-        kind: 'interrupted',
-        summary: `${sess.name} was interrupted by the user ${fmtQuiet(quietSecs)} ago`,
-        detail,
-      })
-    } else if (tail.ending === 'usage-limit') {
-      items.push({
-        ...base,
-        key: `limit:${sess.sessionId}`,
-        kind: 'limit_stopped',
-        summary: `${sess.name} stopped at a usage limit ${fmtQuiet(quietSecs)} ago (auto-resume monitor's jurisdiction)`,
-        detail,
-      })
-    } else if (tail.ending === 'error' || tail.ending === 'refused' || tail.ending === 'overload') {
-      items.push({
-        ...base,
-        key: `err:${sess.sessionId}`,
-        kind: 'errored',
-        summary: `${sess.name} ended on ${tail.ending} ${fmtQuiet(quietSecs)} ago`,
-        detail,
-      })
-    } else {
-      const handoffDue = typeof tail.ctxTokens === 'number' && tail.ctxTokens >= s.ctxHandoffTokens
-      // "Waiting on a background task" only excuses a session while the task shows signs of
-      // life. Transcript AND task outputs both silent past the threshold means the tasks are
-      // dead (or their completion never woke the session) — flagged so the reviewer intervenes
-      // instead of waiting forever (measured: sessions sat "waiting" 9-12h on silent tasks).
-      const taskMtime = deps.taskActivity(sess.cwd, sess.sessionId)
-      const taskAgeSec = taskMtime === null ? null : Math.round((started - taskMtime) / 1000)
-      const staleSecs = s.staleTaskMins * 60
-      const staleTasks =
-        tail.midTurn && quietSecs >= staleSecs && (taskAgeSec === null || taskAgeSec >= staleSecs)
-      detail.taskNewestAgeSec = taskAgeSec
-      detail.staleTasks = staleTasks
-      // FROZEN AT AN APPROVAL PROMPT, the same evidence read correctly. A chat stuck mid-tool
-      // used to be reported as "waiting on dead background tasks", which is the wrong diagnosis
-      // and the wrong fix. Measured 2026-08-26: five revived chats each ran one Bash call and
-      // froze for good at a permission prompt the remote owner could never click - alive,
-      // ~300MB, no CPU, nothing in any log. It is indistinguishable from thinking unless you
-      // ask the one question that separates them: does this chat's permission mode prompt for
-      // the tool it is sitting on? The app creates imported chats as 'acceptEdits', which
-      // auto-approves edits and prompts on every shell command, so a dangling Bash there is an
-      // approval stall; under 'bypassPermissions' the same dangling Bash is simply a long build.
-      const perm = metaMap.get(sess.sessionId)?.permissionMode ?? null
-      const promptsForPendingTool =
-        perm !== null && perm !== 'bypassPermissions' && SHELL_TOOLS.has(tail.pendingTool ?? '')
-      const approvalStall = staleTasks && promptsForPendingTool
-      detail.permissionMode = perm
-      detail.pendingTool = tail.pendingTool
-      detail.approvalStall = approvalStall
-      // A TOOL IN FLIGHT IS WORK, NOT SILENCE. `midTurn` means the transcript ends on a tool
-      // call with no result yet, so the session is inside something right now. Quiet time
-      // measures the transcript, and a test suite that prints nothing for two minutes looks
-      // identical to a chat waiting for input - which is how the reviewer came to be told a
-      // session mid-commit-and-push was idle (field report 2026-08-27; that repo's own test
-      // run is ~130s against a 150s idle threshold, so it would have happened on every run).
-      // Nudging there interrupts real work, and 'resume working on whatever you recommend
-      // next' is a genuinely damaging thing to say to a session halfway through a push.
-      //
-      // So a tool in flight buys GRACE, not silence forever: four idle windows, floor ten
-      // minutes. Under that a mid-tool session is simply working and is not raised at all.
-      // Over it, it is worth a look even if something is still alive, and past the stale
-      // threshold the same evidence means the opposite again (nothing ever came back). A
-      // blanket suppression up to the stale threshold was tried first and was wrong: it also
-      // hid a session quiet for three hours whose task was still writing, which is exactly
-      // the kind of thing the feed exists to show. A crashed session also ends mid-tool and
-      // is NOT lost here: the orphan and stranded detectors own that case, keyed on a dead
-      // or absent process rather than on silence.
-      const midTurnGraceSecs = Math.max(s.idleQuietSecs * 4, 600)
-      if (tail.midTurn && !staleTasks && quietSecs < midTurnGraceSecs) continue
-      items.push({
-        ...base,
-        key: `idle:${sess.sessionId}`,
-        kind: handoffDue ? 'handoff_due' : 'idle_pending',
-        summary: `${sess.name} idle ${fmtQuiet(quietSecs)}${idleSummarySuffix({
-          recapDetected: tail.recapDetected,
-          approvalStall,
-          pendingTool: tail.pendingTool,
-          permissionMode: perm,
-          quietSecs,
-          staleTasks,
-          taskAgeSec,
-          midTurn: tail.midTurn,
-          handoffDue,
-          ctxTokens: tail.ctxTokens,
-        })}`,
-        detail,
-      })
-    }
-    for (const chip of tail.chips) {
-      items.push({
-        ...base,
-        tailSnippet: undefined,
-        key: `chip:${sess.sessionId}:${chip.id}`,
-        kind: 'chip',
-        summary: `${sess.name} offered a task chip: ${chip.title || '(untitled)'}`,
-        detail: { title: chip.title, prompt: chip.prompt },
-      })
+    const result = classifyLiveSession(sess, {
+      deps,
+      s,
+      started,
+      nowIso,
+      holdSet,
+      doneSet,
+      metaMap,
+    })
+    items.push(...result.items)
+    if (result.cwdEntry) {
+      if (result.cwdEntry.running) runningChats++
+      const list = byCwd.get(sess.cwd) ?? []
+      list.push({ session: sess, quietSecs: result.cwdEntry.quietSecs, held: result.cwdEntry.held })
+      byCwd.set(sess.cwd, list)
     }
   }
 
