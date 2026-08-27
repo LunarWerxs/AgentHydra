@@ -100,6 +100,31 @@ const openerAt = (src: string, i: number, quotes: string[]): string | null => {
 const WORD_START = /[A-Za-z_$]/
 const WORD_CHAR = /[A-Za-z0-9_$]/
 
+/** Index where a quoted string that opened at `i` (with `opener` already matched there) ends. */
+function stringEnd(src: string, i: number, opener: string): number {
+  let j = i + opener.length
+  while (j < src.length) {
+    if (src[j] === '\n') break
+    if (src[j] === '\\') {
+      j += 2
+      continue
+    }
+    if (src.startsWith(opener, j)) {
+      j += opener.length
+      break
+    }
+    j++
+  }
+  return Math.min(j, src.length)
+}
+
+/** Index just past the identifier that starts at `i`. */
+function identifierEnd(src: string, i: number): number {
+  let j = i
+  while (j < src.length && WORD_CHAR.test(src[j] ?? '')) j++
+  return j
+}
+
 /**
  * Highlight already-escaped code.
  *
@@ -129,20 +154,7 @@ export function highlight(escapedCode: string, lang: Language): string {
     // rest of the block)
     const opener = openerAt(escapedCode, i, g.quotes)
     if (opener) {
-      let j = i + opener.length
-      while (j < escapedCode.length) {
-        if (escapedCode[j] === '\n') break
-        if (escapedCode[j] === '\\') {
-          j += 2
-          continue
-        }
-        if (escapedCode.startsWith(opener, j)) {
-          j += opener.length
-          break
-        }
-        j++
-      }
-      const stop = Math.min(j, escapedCode.length)
+      const stop = stringEnd(escapedCode, i, opener)
       out += span('string', escapedCode.slice(i, stop))
       i = stop
       continue
@@ -158,8 +170,7 @@ export function highlight(escapedCode: string, lang: Language): string {
 
     // identifier, which may be a keyword
     if (WORD_START.test(escapedCode[i] ?? '')) {
-      let j = i
-      while (j < escapedCode.length && WORD_CHAR.test(escapedCode[j] ?? '')) j++
+      const j = identifierEnd(escapedCode, i)
       const word = escapedCode.slice(i, j)
       out += g.keywords?.has(word) ? span('keyword', word) : word
       i = j
