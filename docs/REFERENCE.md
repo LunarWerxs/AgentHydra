@@ -187,6 +187,18 @@ hold state, nothing is moved or merged: the per-user directory is used and the o
 in the boot log and in `dataDirNotice`, because the only unrecoverable version of this problem is
 the one nobody is told about.
 
+**What the first real migration proved (2026-08-26).** A live fleet's state moved 33 MB from a
+checkout on `D:` to a profile on `C:`, verified row-for-row afterwards: 22/22 done-marks, 27/27
+monitor rows, 46/46 settings and both `/delayo` holds present at the destination, `dataDirNotice`
+null. Two things only surfaced by running it rather than designing it. `renameSync` throws `EXDEV`
+across volumes, and repo-on-`D:` with profile-on-`C:` is the *normal* Windows layout here, so a
+rename-only migration would have silently never run for exactly the people who have the split. The
+fallback copies and then deletes, in that order, so an interrupted migration leaves two copies
+rather than none. And when both directories already hold real state there is no safe arbiter:
+mtime inverts the moment someone runs the other mode once, so the code refuses to choose and says
+so instead. Stop the daemon before moving anything: a copy taken while it holds the sqlite WAL is
+not a copy of a consistent database.
+
 Manually added dispatch API keys and OAuth tokens are stored as plain values in the per-user SQLite
 database so the database remains portable. The state directories and database receive owner-only
 POSIX modes where supported, and the daemon cannot bind beyond loopback. This protects the local
@@ -323,6 +335,20 @@ checkout. External contributors should not run it; nothing in CI depends on it.
 
 CI runs these across `[ubuntu-latest, windows-latest]`, so a green local run on one OS clears one
 leg of two.
+
+### A flake that only exists inside a full-suite run
+
+`bun test` runs the whole suite in one process, so state that a single-file run never accumulates
+(caches keyed to wall-clock granularity, shared temp dirs, module-level singletons) is reachable
+only there. The OpenCode reader's session cache was one: a write landing inside the same filesystem
+timestamp tick as a previous read could be cached away, which requires that preceding read in the
+same process to happen at all. Two rules came out of chasing it:
+
+- **An isolation run proves nothing about a flake that only fires in the full suite.** Re-run the
+  whole suite, enough times that luck is implausible: 15 consecutive green runs against a reported
+  ~1-in-3 failure rate is roughly a 0.2% chance of coincidence.
+- **Anything keyed on mtime alone needs a tiebreaker** (size, or an explicit generation counter),
+  because two writes can share one tick and the second one then looks like no write at all.
 
 ### Repo guardrails (`scripts/checks/`)
 

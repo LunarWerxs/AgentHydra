@@ -79,9 +79,17 @@ Two things make this survive contact with reality:
 
 - **Runs reattach after a restart.** Quitting the app, or letting it auto-update, does not kill
   what is in flight. It picks the runs back up.
+- **It can babysit every open chat for you.** The optional
+  [Orchestrator](docs/ORCHESTRATOR.md) watches every live session each minute and publishes what
+  needs attention: a chat that finished and is waiting, one whose context has outgrown its thread,
+  a repo left dirty, an account near its weekly wall, a thread killed by a restart. A reviewer
+  chat you keep open makes the calls and does the work. Every action it wants to take, from
+  reviving a dead chat to archiving a finished one, is checked by that reviewer before it
+  happens, and nothing is ever continued somewhere you cannot see it. Off by default.
 - **A rate limit is not a dead end.** Sessions stopped by a 5-hour limit can resume themselves once
   the window resets, gated on your weekly usage so it does not spend everything the moment it can.
-  This is off unless you turn it on.
+  With several accounts signed in, it can instead move the run to one that still has headroom and
+  carry on immediately. Both are off unless you turn them on.
 
 ## See where the time and the money went
 
@@ -136,8 +144,9 @@ sessions for you to run. AgentHydra is the first kind.
 **[Claude Squad](https://github.com/smtg-ai/claude-squad)** and **[Conductor](https://www.conductor.build)**
 both launch new Claude Code (and Codex) sessions for you, each in its own git worktree so tasks do
 not collide: Claude Squad in a terminal TUI, Conductor in a macOS-only app. AgentHydra does not
-create worktrees or start sessions on its own; it reads the Claude Code, Codex, and OpenCode session
-history, queue, and account state your existing setup already writes, then adds a run queue with a
+create worktrees, and by default it starts nothing on its own; it reads the Claude Code, Codex, and
+OpenCode session history, queue, and account state your existing setup already writes, then adds a
+run queue with a
 scheduler, cost and usage analytics, and multi-account instance management on top, from a browser
 tab on Windows, macOS, or Linux.
 
@@ -227,6 +236,10 @@ and hitting a wall halfway through it: [docs/AI_USAGE_SELFCHECK.md](docs/AI_USAG
 [Reference](docs/REFERENCE.md) covers configuration, the MCP tools, auto-update, the stack, the repo
 layout and how to run the checks.
 
+[Orchestrator](docs/ORCHESTRATOR.md) covers the attention watcher and the reviewer loop that acts
+on it: what it detects, the rules it obeys, the settings, and the self-test that proves the whole
+thing still works on your machine.
+
 ## FAQ
 
 **Is AgentHydra free?**
@@ -253,9 +266,11 @@ Claude Desktop, not the newer MSIX package.
 
 **How is it different from Claude Squad or Conductor?**
 Claude Squad and Conductor both start new, isolated Claude Code (and Codex) sessions in fresh git
-worktrees. AgentHydra does not create sessions or worktrees; it reads the history, queue, and
-account state your existing Claude Code, Codex, and OpenCode setup already writes, and adds a
-scheduler, cost analytics, and instance management on top. See [How it compares](#how-it-compares).
+worktrees. AgentHydra creates no worktrees, and out of the box it starts nothing by
+itself: it reads the history, queue, and account state your existing Claude Code, Codex, and
+OpenCode setup already writes, and adds a scheduler, cost analytics, and instance management on
+top. The optional [Orchestrator](docs/ORCHESTRATOR.md) is the one part that does start work for
+you, and only once you turn it on. See [How it compares](#how-it-compares).
 
 **Which AI tools does it support?**
 Claude Code, Codex, and OpenCode sessions are read directly and shown together in the session list.

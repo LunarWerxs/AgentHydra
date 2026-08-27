@@ -79,6 +79,12 @@ POST /api/orchestrator/proposals/:id/decide    { approved, by?, note? } - the re
                                   is enforced)
 POST /api/orchestrator/proposals/:id/executed  { ok, result? } - the execution report after the
                                   reviewer carried an approved proposal out
+POST /api/orchestrator/selftest   { deep? } - run the real guards against real state and report
+                                  each check (see below). Safe on a live fleet; `deep` also seeds
+                                  ONE real chat, proves it visible, and archives it
+POST /api/screenshot              { path? } - capture the screen to a PNG and return its path, so
+                                  a claim about what is ON SCREEN can be looked at rather than
+                                  inferred from disk. Interprets nothing: a camera, not a judge
 POST /api/sessions/seed-desktop   { cwd, title, instance_ref } - create a brand-new VISIBLE
                                   desktop chat (fabricated minimal transcript + import); the
                                   reviewer then delivers the real prompt through the app's own
@@ -171,8 +177,9 @@ a running instance with zero chats is open capacity, and a session on a non-runn
 not resumable and not the orchestrator's to touch (the first live run undercounted the fleet by
 inferring openness from which chats existed; this table is the fix).
 
-Same four verbs over MCP: `get_orchestrator`, `set_orchestrator`, `orchestrator_ack`,
-`orchestrator_check`.
+Over MCP: `get_orchestrator`, `set_orchestrator`, `orchestrator_ack`,
+`orchestrator_check`, plus `orchestrator_hold` (park/unpark one thread, the /delayo pair) and
+`orchestrator_install_command` / `orchestrator_uninstall_command`.
 
 ### Attention item kinds
 
@@ -239,6 +246,13 @@ acting; the reviewer rules on each with a recorded reason, executes the approved
 reports the outcome. The ledger (served as `proposals` in the feed, open + last-day decided)
 is the audit trail of everything the machinery wanted and what the AI said.
 
+Its lifecycle runs on three windows, none of which need tending. An undecided proposal EXPIRES
+after 48 hours and is simply re-proposed if the condition still holds, so a reviewer that was
+offline for a day resumes to current asks rather than stale ones. A REJECTED one stays rejected
+for 24 hours unless the detector can show evidence NEWER than the ruling - a transcript that
+moved after the AI said no is a new situation, the same re-arm rule the acks use, and it is what
+stops a rejected proposal reappearing every minute. Decided rows are pruned after 14 days.
+
 **Surface purity.** Desktop stays desktop, CLI stays CLI, headless stays headless - a thread
 is never continued on a surface it does not live on, and every one of the owner's threads is
 a VISIBLE DESKTOP CHAT. This deleted the v0.35 auto-revive mechanism outright (it ran a
@@ -254,6 +268,48 @@ instances via peer messages to live chats, or a RELAY (ask a live chat in the ta
 instance to run its own send_message). The delivery ladder in the command file orders these;
 when no native route exists into an instance, the action WAITS visibly instead of falling
 back to anything headless.
+
+### Codex threads, in the same feed
+
+AgentHydra manages both agents this machine runs, and the orchestrator watched exactly one of
+them - so a Codex thread that stopped mid-work was invisible to the machinery that babysits
+every Claude chat. Codex rollouts (`~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl`) are now
+scanned on the same tick and classified from their own event stream: `task_complete` finished,
+`turn_aborted` with `reason: "interrupted"` is a human stop, anything else newest is mid-turn.
+The `session_meta` first record gives the cwd, so their repos join the same git hygiene pass.
+
+**Observe-only, and every item says so.** Codex exposes no live-process registry and no message
+channel, so there is no rung of the delivery ladder that reaches it. Items carry
+`source: 'codex'` and `deliverable: false` for exactly that reason: a reviewer that believed it
+could nudge one would be talking into a void, which is the deaf-chat failure in a new costume.
+The owner picks these up; the orchestrator only makes sure they are not invisible. Switched by
+`watchCodex`.
+
+### Retiring a thread: the closeout, then the archive ladder
+
+**THE CLOSEOUT** (owner rule 2026-08-26). A thread being retired because it is DONE is the last
+place its own knowledge exists, so it gets one final turn first: `prompts.closeoutDocs` asks it
+to bring the repo's markdown current - what it did, what is verified versus attempted, what is
+outstanding, and the gotchas a future session would otherwise rediscover. It is explicitly
+allowed to answer "nothing here is still worth keeping", and a 30-day-dormant thread did exactly
+that rather than inventing content. A MIGRATED thread is NOT asked: it is continuing, not ending.
+
+**THE ARCHIVE LADDER.** The rungs are not interchangeable - the difference between them is
+whether the chat actually leaves the sidebar:
+
+1. **In the reviewer's own instance** -> the app's own archive tool. Instant and genuinely gone
+   (measured: the app's view flips immediately).
+2. **Elsewhere, with any live chat in that instance** -> relay: ask that chat to archive the
+   TARGET (never itself).
+3. **Nothing live there** -> `POST /api/sessions/:id/desktop-archive`, which writes the flag and
+   returns `visibleNow: false`: the chat is still on screen until that app restarts.
+
+**A chat will not archive ITSELF on a peer's instruction, and should not.** Tried: a session
+treats "a peer told me to shut down, do nothing else first" as exactly the shape it must stop on,
+and flags it instead. It is right to, and a fleet trained to obey that would be worse than the
+inconvenience. Note the structural consequence: the instance hosting the reviewer never reaches
+zero live sessions (the reviewer is itself one), so rung 3 there is invisible indefinitely rather
+than merely delayed - which is why rung 1 is mandatory, not preferred.
 
 ### The zero-click law
 
@@ -368,13 +424,14 @@ Turning it off is the reverse in either order; each half degrades safely without
 | `newChatEffort` | `max` | reasoning effort for those chats (`low`/`medium`/`high`/`xhigh`/`max`) |
 | `newChatUltracode` | `true` | prepend the `ultracode` opt-in keyword to every orchestrator-started chat's prompt |
 | `migrateOnLimit` | `false` | 5-hour-limited runs (weekly fine) resume immediately on another running account instead of waiting for the reset; needs the auto-resume monitor on |
+| `watchCodex` | `true` | watch Codex threads too, so one feed covers both agents this machine runs. Observe-only: Codex has no live-process registry and no message channel, so those items are marked `deliverable: false` rather than inviting a nudge that would go nowhere |
 | `maxActiveChats` | 0 (unlimited) | caps how many chats may actively WORK at once, fleet-wide. Past the cap the watcher marks overflow idle chats `waitingForSlot` and the reviewer skips them without acking; the rotation is round-robin by construction: longest-idle gets the next free slot, a nudged chat re-enters at the back. Only resume nudges and new work are gated; answers, handoff continuations (replacements), and orphan revives never wait |
 
 ### Prompts (editable, defaults shipped)
 
 Every message the machinery sends into a chat is a named template: `resumeNudge`,
 `handoffRequest`, `staleTaskNudge`, `hardCutoff`, `overloadNudge`, `commitNudge`,
-`branchNudge`, `orphanRevive`, `migrationNotice`. The shipped texts are the defaults; the
+`branchNudge`, `orphanRevive`, `closeoutDocs`, `migrationNotice`. The shipped texts are the defaults; the
 owner edits any of them under Settings -> Automation -> Orchestrator -> Prompts (or
 `POST /api/orchestrator {"prompts": {...}}`), and a blank edit (or saving the default text
 verbatim) restores the default so future shipped improvements still land. `GET
