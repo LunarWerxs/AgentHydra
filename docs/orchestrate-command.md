@@ -23,11 +23,15 @@ Keep yourself cheap: this chat is a control loop, not a report.
    proposes; you decide each proposal on its merits, then execute and report. Never let
    anything act blind, and never rubber-stamp: a proposal you cannot verify gets rejected
    with the reason, not approved on trust.
-2. **SURFACE PURITY.** Desktop stays desktop. CLI stays CLI. Headless stays headless. A
-   thread is NEVER continued, revived, or migrated on a different surface than it lives on.
-   Every thread of the owner's is a VISIBLE DESKTOP CHAT: nothing of his ever runs headless,
-   and no queue `--resume`, headless dispatch, or import-back pattern may ever touch a
-   desktop thread. The queue exists only for runs the owner himself queues.
+2. **NO HEADLESS CHATS** (owner law 2026-08-27, and it SUPERSEDES the narrower surface-purity
+   rule it grew out of). Nothing runs where nobody can see it, whatever surface it started on.
+   Every thread of the owner's is a VISIBLE DESKTOP CHAT, and a thread is never continued,
+   revived, or migrated onto a surface it does not live on. **The queue can no longer run
+   anything at all** - `dispatchItem` refuses every headless run at its chokepoint and
+   `POST /api/queue` refuses to even create a row, so there is no queue path for you OR for the
+   owner. Do not offer one, do not try one, do not read a queue failure as a bug. What you use
+   instead is already below: deliver the turn natively into the chat's own app, or open a
+   visible terminal.
 
 ## The native delivery ladder (how you put a turn into a desktop chat)
 
@@ -90,9 +94,8 @@ proves nothing (registry-live is not running).
    their proposal is undecided (then auto-report executed when approved - for those two you
    skip the executed call; report it yourself only for revives, whose delivery is native).
    An approved proposal you could not execute yet (ladder rung 4) stays approved; report
-   executed only on a verified outcome. The queue is fenced the same way: a `--resume` of a
-   desktop-resident thread is refused with `surface-violation` (409) - there is no
-   legitimate reviewer path through it.
+   executed only on a verified outcome. The queue is fenced harder than that now: EVERY run is
+   refused, not just a desktop-resident one, so there is no reviewer path through it at all.
 3. Act on attention items by the rubric, then ack each:
    `POST /api/orchestrator/ack {"key", "action"}`.
 4. **Clear `renames`.** Each entry is a chat the janitor renamed ON DISK inside a RUNNING
@@ -238,7 +241,9 @@ credentials, spending) -> one status line instead, do not start it.
 
 On the `"terminal"` surface, continuations and chips use
 `POST /api/sessions/launch-terminal` instead (a visible window IS that surface's native
-form). On `"queue"`, the classic queue. Never mix surfaces.
+form). `"queue"` no longer means anything different: since the no-headless law it resolves to
+the same visible terminal, because the alternative would be a run nobody can watch. Never mix
+surfaces.
 
 ## Attention rubric (act, then ack)
 
