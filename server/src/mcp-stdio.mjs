@@ -30,6 +30,59 @@ export function parseErrorResponse() {
   return rpcError(null, ERR.PARSE, "Parse error");
 }
 
+/** `initialize` — negotiate the protocol version and hand back this app's serverInfo (+ optional
+ *  standing instructions). Split out of handleRpc so the dispatch switch reads as a dispatch
+ *  table and each method's own logic lives in its own named function. */
+function handleInitialize(id, msg, ctx) {
+  const params = msg.params && typeof msg.params === "object" ? msg.params : {};
+  const protocolVersion =
+    typeof params.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION;
+  return rpcResult(id, {
+    protocolVersion,
+    capabilities: { tools: {} },
+    serverInfo: ctx.serverInfo,
+    // `instructions` is the MCP handshake's one channel for STANDING guidance: the client
+    // shows it to the model once per session, before any tool is called. That is the only
+    // place an app can say "here is how to use me" without a human typing it into every
+    // prompt, and without paying for it again on every tool result. Omitted entirely when the
+    // app supplies none, since an empty string is a field the client still has to render.
+    ...(typeof ctx.instructions === "string" && ctx.instructions.trim()
+      ? { instructions: ctx.instructions }
+      : {}),
+  });
+}
+
+/** `tools/list` — the tool catalog this app's ctx supplies, trimmed to the MCP-visible fields. */
+function handleToolsList(id, ctx) {
+  return rpcResult(id, {
+    tools: ctx.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    })),
+  });
+}
+
+/** `tools/call` — look up the named tool and run it, turning a thrown error into an MCP `isError`
+ *  result (not a JSON-RPC protocol error) so the agent can read and react to it like any other
+ *  tool output. */
+async function handleToolsCall(id, msg, ctx) {
+  const params = msg.params && typeof msg.params === "object" ? msg.params : {};
+  const name = typeof params.name === "string" ? params.name : "";
+  const tool = ctx.tools.find((t) => t.name === name);
+  if (!tool) return rpcError(id, ERR.INVALID_PARAMS, `Unknown tool: ${name || "(none)"}`);
+  const args = params.arguments && typeof params.arguments === "object" ? params.arguments : {};
+  try {
+    const value = await tool.run(args);
+    return rpcResult(id, { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
+  } catch (e) {
+    return rpcResult(id, {
+      content: [{ type: "text", text: e?.message ? e.message : String(e) }],
+      isError: true,
+    });
+  }
+}
+
 /**
  * Dispatch one parsed JSON-RPC message against `ctx` ({ serverInfo, tools }). Returns the response
  * object, or null when the message is a notification (no `id`), the caller must then emit nothing.
@@ -46,56 +99,14 @@ export async function handleRpc(msg, ctx) {
   const id = msg.id == null ? null : msg.id;
 
   switch (method) {
-    case "initialize": {
-      const params = msg.params && typeof msg.params === "object" ? msg.params : {};
-      const protocolVersion =
-        typeof params.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION;
-      return rpcResult(id, {
-        protocolVersion,
-        capabilities: { tools: {} },
-        serverInfo: ctx.serverInfo,
-        // `instructions` is the MCP handshake's one channel for STANDING guidance: the client
-        // shows it to the model once per session, before any tool is called. That is the only
-        // place an app can say "here is how to use me" without a human typing it into every
-        // prompt, and without paying for it again on every tool result. Omitted entirely when the
-        // app supplies none, since an empty string is a field the client still has to render.
-        ...(typeof ctx.instructions === "string" && ctx.instructions.trim()
-          ? { instructions: ctx.instructions }
-          : {}),
-      });
-    }
-
+    case "initialize":
+      return handleInitialize(id, msg, ctx);
     case "ping":
       return rpcResult(id, {});
-
     case "tools/list":
-      return rpcResult(id, {
-        tools: ctx.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: t.inputSchema,
-        })),
-      });
-
-    case "tools/call": {
-      const params = msg.params && typeof msg.params === "object" ? msg.params : {};
-      const name = typeof params.name === "string" ? params.name : "";
-      const tool = ctx.tools.find((t) => t.name === name);
-      if (!tool) return rpcError(id, ERR.INVALID_PARAMS, `Unknown tool: ${name || "(none)"}`);
-      const args = params.arguments && typeof params.arguments === "object" ? params.arguments : {};
-      try {
-        const value = await tool.run(args);
-        return rpcResult(id, { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
-      } catch (e) {
-        // A tool-level failure → an MCP error RESULT (not a JSON-RPC protocol error) the agent can
-        // read and react to, exactly like a normal tool output.
-        return rpcResult(id, {
-          content: [{ type: "text", text: e?.message ? e.message : String(e) }],
-          isError: true,
-        });
-      }
-    }
-
+      return handleToolsList(id, ctx);
+    case "tools/call":
+      return await handleToolsCall(id, msg, ctx);
     default:
       return rpcError(id, ERR.METHOD_NOT_FOUND, "Method not found");
   }

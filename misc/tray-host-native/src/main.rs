@@ -23,7 +23,7 @@ mod win;
 
 use config::{Config, StrayPolicy};
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -661,6 +661,144 @@ fn config_path() -> PathBuf {
     p
 }
 
+/// First-run bootstrap (blocking, once) before the daemon can possibly work, then spawn it.
+/// Split out of `main` along with `report_not_serving_and_teardown` below so `main` reads as the
+/// startup sequence and each non-trivial step's own branching lives in its own named function.
+/// Returns the daemon's pid, or None having already reported the failure — the caller must then
+/// return immediately.
+fn bootstrap_and_spawn_daemon(cfg: &Config, token: &str) -> Option<u32> {
+    for step in &cfg.first_run {
+        if cfg.app_root.join(&step.missing).exists() {
+            continue;
+        }
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("cmd.exe")
+            .raw_arg(format!(
+                "/c \"cd /d \"{}\" && {}\"",
+                cfg.app_root.display(),
+                step.run
+            ))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(0x0800_0000)
+            .status();
+    }
+    // SPAWNED BEFORE ANY UI IS BUILT. This is the whole point: the daemon's ~120 ms boot runs
+    // concurrently with our window, icon and menu setup rather than after it.
+    match daemon::spawn(cfg, token) {
+        Some(pid) => Some(pid),
+        None => {
+            win::message_box(
+                &cfg.display_name,
+                &format!("{} could not start its background process.", cfg.display_name),
+                MB_ICONERROR,
+            );
+            None
+        }
+    }
+}
+
+/// "Started but not serving" guidance, torn down and reported. One app's overwhelmingly likely
+/// cause is a missing configuration step, and the honest answer is to say which command to run
+/// rather than leave a tray icon that quietly does nothing. Returns true when this fired — the
+/// caller must then return immediately: a half-started app with a tray icon invites the user to
+/// keep clicking it.
+unsafe fn report_not_serving_and_teardown(a: &App) -> bool {
+    let Some(hint) = a.cfg.not_serving_hint.clone() else {
+        return false;
+    };
+    daemon::stop(&a.cfg, &a.token, true, false);
+    let pid = a.server_pid.swap(0, Ordering::Relaxed);
+    if pid > 0 {
+        daemon::taskkill(pid);
+    }
+    UI.with(|ui| {
+        let mut slot = ui.borrow_mut();
+        if let Some(ui) = slot.as_mut() {
+            Shell_NotifyIconW(NIM_DELETE, &mut ui.nid);
+            if !ui.mutex.is_null() {
+                ReleaseMutex(ui.mutex);
+                CloseHandle(ui.mutex);
+                ui.mutex = null_mut();
+            }
+        }
+    });
+    win::message_box(&a.cfg.display_name, &hint, MB_ICONWARNING);
+    true
+}
+
+/// Build the (invisible) message window and the tray icon, start the health/sentinel timers, and
+/// show the "running in the tray" balloon. Split out of `main` for the same reason as its
+/// siblings above. Returns the message window's handle, needed by the message loop and the final
+/// `DestroyWindow`.
+unsafe fn create_tray_window(display_name: &str, icon_file: &Path, mutex: HANDLE) -> HWND {
+    let hinst = GetModuleHandleW(null_mut());
+    let class = wide("LunarWerxTrayHost");
+    let mut wc: WNDCLASSW = std::mem::zeroed();
+    wc.lpfnWndProc = Some(wndproc);
+    wc.hInstance = hinst;
+    wc.lpszClassName = class.as_ptr();
+    RegisterClassW(&wc);
+    // A plain top-level window, zero-sized and never shown. It exists to receive the tray
+    // callback and timer ticks — but it must NOT become a message-only window (HWND_MESSAGE
+    // parent), because those are excluded from broadcasts and TaskbarCreated is a broadcast.
+    let title = wide(display_name);
+    let hwnd = CreateWindowExW(
+        0,
+        class.as_ptr(),
+        title.as_ptr(),
+        0,
+        0,
+        0,
+        0,
+        0,
+        null_mut(),
+        null_mut(),
+        hinst,
+        null_mut(),
+    );
+
+    let icon_path = wide(&icon_file.to_string_lossy());
+    let hicon = LoadImageW(
+        null_mut(),
+        icon_path.as_ptr(),
+        IMAGE_ICON,
+        0,
+        0,
+        LR_LOADFROMFILE | LR_DEFAULTSIZE,
+    );
+
+    // Subscribe to the taskbar-recreated broadcast BEFORE the icon exists, so a restart that
+    // lands during our own startup is still caught.
+    TASKBAR_CREATED.store(
+        RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
+        Ordering::Relaxed,
+    );
+
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid.uCallbackMessage = WM_APP_TRAY;
+    nid.hIcon = hicon;
+    fill(&mut nid.szTip, display_name);
+
+    UI.with(|ui| *ui.borrow_mut() = Some(Ui { nid, mutex }));
+    // The ADD itself: ICON_SHOWN starts false, so this is the initial add as well as the
+    // hide-gate. If it fails, the health tick retries every 5s and TaskbarCreated re-fires it.
+    sync_icon_visibility();
+
+    SetTimer(hwnd, TIMER_HEALTH, HEALTH_INTERVAL_MS, null_mut());
+    if app().cfg.sentinel_file.is_some() {
+        SetTimer(hwnd, TIMER_SENTINEL, SENTINEL_INTERVAL_MS, null_mut());
+    }
+
+    balloon("Running in the tray - right-click for options.", NIIF_INFO);
+    hwnd
+}
+
 fn main() {
     let t0 = Instant::now();
     let path = config_path();
@@ -719,36 +857,9 @@ fn main() {
     let started_by_us = existing.is_none();
     let mut server_pid = 0;
     if started_by_us {
-        // First-run bootstrap (blocking, once) before the daemon can possibly work.
-        for step in &cfg.first_run {
-            if cfg.app_root.join(&step.missing).exists() {
-                continue;
-            }
-            use std::os::windows::process::CommandExt;
-            let _ = std::process::Command::new("cmd.exe")
-                .raw_arg(format!(
-                    "/c \"cd /d \"{}\" && {}\"",
-                    cfg.app_root.display(),
-                    step.run
-                ))
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .creation_flags(0x0800_0000)
-                .status();
-        }
-        // SPAWNED BEFORE ANY UI IS BUILT. This is the whole point: the daemon's ~120 ms boot runs
-        // concurrently with our window, icon and menu setup rather than after it.
-        match daemon::spawn(&cfg, &token) {
+        match bootstrap_and_spawn_daemon(&cfg, &token) {
             Some(pid) => server_pid = pid,
-            None => {
-                win::message_box(
-                    &cfg.display_name,
-                    &format!("{} could not start its background process.", cfg.display_name),
-                    MB_ICONERROR,
-                );
-                return;
-            }
+            None => return,
         }
     }
 
@@ -786,101 +897,16 @@ fn main() {
     }
 
     unsafe {
-        let hinst = GetModuleHandleW(null_mut());
-        let class = wide("LunarWerxTrayHost");
-        let mut wc: WNDCLASSW = std::mem::zeroed();
-        wc.lpfnWndProc = Some(wndproc);
-        wc.hInstance = hinst;
-        wc.lpszClassName = class.as_ptr();
-        RegisterClassW(&wc);
-        // A plain top-level window, zero-sized and never shown. It exists to receive the tray
-        // callback and timer ticks — but it must NOT become a message-only window (HWND_MESSAGE
-        // parent), because those are excluded from broadcasts and TaskbarCreated is a broadcast.
-        let title = wide(&display_name);
-        let hwnd = CreateWindowExW(
-            0,
-            class.as_ptr(),
-            title.as_ptr(),
-            0,
-            0,
-            0,
-            0,
-            0,
-            null_mut(),
-            null_mut(),
-            hinst,
-            null_mut(),
-        );
-
-        let icon_path = wide(&icon_file.to_string_lossy());
-        let hicon = LoadImageW(
-            null_mut(),
-            icon_path.as_ptr(),
-            IMAGE_ICON,
-            0,
-            0,
-            LR_LOADFROMFILE | LR_DEFAULTSIZE,
-        );
-
-        // Subscribe to the taskbar-recreated broadcast BEFORE the icon exists, so a restart that
-        // lands during our own startup is still caught.
-        TASKBAR_CREATED.store(
-            RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
-            Ordering::Relaxed,
-        );
-
-        let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
-        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-        nid.hWnd = hwnd;
-        nid.uID = 1;
-        nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        nid.uCallbackMessage = WM_APP_TRAY;
-        nid.hIcon = hicon;
-        fill(&mut nid.szTip, &display_name);
-
-        UI.with(|ui| *ui.borrow_mut() = Some(Ui { nid, mutex }));
-        // The ADD itself: ICON_SHOWN starts false, so this is the initial add as well as the
-        // hide-gate. If it fails, the health tick retries every 5s and TaskbarCreated re-fires it.
-        sync_icon_visibility();
-
-        SetTimer(hwnd, TIMER_HEALTH, HEALTH_INTERVAL_MS, null_mut());
-        if app().cfg.sentinel_file.is_some() {
-            SetTimer(hwnd, TIMER_SENTINEL, SENTINEL_INTERVAL_MS, null_mut());
-        }
-
-        balloon("Running in the tray - right-click for options.", NIIF_INFO);
+        let hwnd = create_tray_window(&display_name, &icon_file, mutex);
 
         // Only now do we wait: by this point the daemon has had our entire setup as a head start.
         if get_url().is_none() {
             set_url(daemon::wait_for_url(&app().cfg, startup_wait));
         }
 
-        // "Started but not serving" guidance. One app's overwhelmingly likely cause is a missing
-        // configuration step, and the honest answer is to say which command to run rather than
-        // leave a tray icon that quietly does nothing. Tear the whole thing down after saying so:
-        // a half-started app with a tray icon invites the user to keep clicking it.
         let a = app();
-        if get_url().is_none() {
-            if let Some(hint) = a.cfg.not_serving_hint.clone() {
-                daemon::stop(&a.cfg, &a.token, true, false);
-                let pid = a.server_pid.swap(0, Ordering::Relaxed);
-                if pid > 0 {
-                    daemon::taskkill(pid);
-                }
-                UI.with(|ui| {
-                    let mut slot = ui.borrow_mut();
-                    if let Some(ui) = slot.as_mut() {
-                        Shell_NotifyIconW(NIM_DELETE, &mut ui.nid);
-                        if !ui.mutex.is_null() {
-                            ReleaseMutex(ui.mutex);
-                            CloseHandle(ui.mutex);
-                            ui.mutex = null_mut();
-                        }
-                    }
-                });
-                win::message_box(&a.cfg.display_name, &hint, MB_ICONWARNING);
-                return;
-            }
+        if get_url().is_none() && report_not_serving_and_teardown(a) {
+            return;
         }
         open_current_ui();
 

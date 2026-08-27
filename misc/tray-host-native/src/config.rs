@@ -135,6 +135,108 @@ pub fn expand(raw: &str) -> String {
     out
 }
 
+/// `..` in the middle of a path confuses later `join`s and anything that logs it, so this
+/// canonicalizes when it can and falls back to the joined (uncanonicalized) path otherwise.
+/// Split out of `Config::from_json` along with its siblings below so that function reads as the
+/// field list and each non-trivial field's own resolution logic lives in its own named function.
+fn resolve_app_root(raw_root: &str, script_dir: &Path) -> PathBuf {
+    let p = PathBuf::from(raw_root);
+    let joined = if p.is_absolute() {
+        p
+    } else {
+        script_dir.join(p)
+    };
+    joined.canonicalize().unwrap_or(joined)
+}
+
+/// Resolve the real interpreter rather than letting cmd.exe pick it off PATH: an `npm i -g bun`
+/// install puts a .cmd shim ahead of the binary, and that shim re-launches through another cmd
+/// layer (~245 ms against ~65 ms measured for the binary directly).
+fn resolve_runtime(v: &Json) -> String {
+    match v.get("runtimeCandidates") {
+        Some(Json::Arr(items)) => items
+            .iter()
+            .filter_map(Json::as_str)
+            .map(|c| PathBuf::from(expand(c)))
+            .find(|p| p.exists())
+            .map(|p| format!("\"{}\"", p.display())),
+        _ => None,
+    }
+    .unwrap_or_else(|| v.str_at("runtimeFallback").unwrap_or("bun").to_string())
+}
+
+/// A malformed value degrades to "feature off", never to a junk --window-size.
+fn resolve_window_size(v: &Json) -> Option<WindowSize> {
+    v.get("portableWindowSize").and_then(|s| {
+        let w = s.num_at("width")? as i32;
+        let h = s.num_at("height")? as i32;
+        (w > 0 && h > 0).then_some(WindowSize {
+            width: w,
+            height: h,
+        })
+    })
+}
+
+fn resolve_start_env(v: &Json) -> BTreeMap<String, String> {
+    let mut start_env = BTreeMap::new();
+    if let Some(Json::Obj(map)) = v.get("startEnv") {
+        for (k, val) in map {
+            if let Some(s) = val.as_str() {
+                start_env.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    start_env
+}
+
+/// {ROOTHASH} = the first 16 uppercase hex chars of SHA-256 over the lowercased resolved root,
+/// which is how one app gives a second checkout on the same machine its own tray host instead of
+/// colliding on a fixed global name. Computed here so the name matches the PowerShell host's byte
+/// for byte.
+fn resolve_mutex_name(raw: String, app_root: &Path) -> String {
+    if !raw.contains("{ROOTHASH}") {
+        return raw;
+    }
+    let id = app_root.to_string_lossy().to_lowercase();
+    // canonicalize() yields a \?\ extended-length prefix; PowerShell's Resolve-Path does not,
+    // and hashing the two would disagree.
+    let id = id.strip_prefix(r"\?\").unwrap_or(&id).to_string();
+    let hash = crate::sha256::hex(id.as_bytes())[..16].to_uppercase();
+    raw.replace("{ROOTHASH}", &hash)
+}
+
+/// A STRING here is expanded first, so an app can gate the dev-only menu on an env var
+/// ("%APP_DEV%") exactly as the PowerShell adapter did, rather than needing a different config
+/// file for a dev checkout.
+fn resolve_is_dev_tree(v: &Json) -> bool {
+    match v.get("isDevTree") {
+        Some(Json::Str(s)) => Json::Str(expand(s)).truthy(),
+        Some(other) => other.truthy(),
+        None => false,
+    }
+}
+
+/// A COMPILED tree has no first run. The steps bootstrap a source checkout (`bun install`, `bun
+/// run build`); a release bundle ships the built artifacts and no interpreter, so every step's
+/// `missing` path is absent there and all of them would fire — spawning bun commands that can
+/// only fail, on the one layout guaranteed not to have bun. The PowerShell adapters gated this
+/// per app (`FirstRun = if ($isCompiledTree) { $null }`); the JSON config has no place to express
+/// that, so the gate belongs here, where the compiled exe was just resolved.
+fn resolve_first_run(v: &Json, compiled: &Option<PathBuf>) -> Vec<FirstRunStep> {
+    match v.get("firstRun").filter(|_| compiled.is_none()) {
+        Some(Json::Arr(items)) => items
+            .iter()
+            .filter_map(|it| {
+                Some(FirstRunStep {
+                    missing: it.str_at("missing")?.to_string(),
+                    run: it.str_at("run")?.to_string(),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Config, String> {
         let src = std::fs::read_to_string(path)
@@ -157,16 +259,7 @@ impl Config {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let raw_root = expand(&need("appRoot")?);
-        let app_root = {
-            let p = PathBuf::from(&raw_root);
-            let joined = if p.is_absolute() {
-                p
-            } else {
-                script_dir.join(p)
-            };
-            // `..` in the middle of a path confuses later `join`s and anything that logs it.
-            joined.canonicalize().unwrap_or(joined)
-        };
+        let app_root = resolve_app_root(&raw_root, &script_dir);
 
         // Compiled release vs source checkout, decided the way the adapter decided it: a compiled
         // exe sitting at the app root means run THAT, and the interpreter is not needed at all.
@@ -174,19 +267,7 @@ impl Config {
             .str_at("compiledExe")
             .map(|rel| app_root.join(expand(rel)))
             .filter(|p| p.exists());
-        // Resolve the real interpreter rather than letting cmd.exe pick it off PATH: an `npm i -g
-        // bun` install puts a .cmd shim ahead of the binary, and that shim re-launches through
-        // another cmd layer (~245 ms against ~65 ms measured for the binary directly).
-        let runtime = match v.get("runtimeCandidates") {
-            Some(Json::Arr(items)) => items
-                .iter()
-                .filter_map(Json::as_str)
-                .map(|c| PathBuf::from(expand(c)))
-                .find(|p| p.exists())
-                .map(|p| format!("\"{}\"", p.display())),
-            _ => None,
-        }
-        .unwrap_or_else(|| v.str_at("runtimeFallback").unwrap_or("bun").to_string());
+        let runtime = resolve_runtime(v);
 
         let start_command = match &compiled {
             Some(exe) => v
@@ -196,24 +277,8 @@ impl Config {
             None => need("startCommand")?.replace("{RUNTIME}", &runtime),
         };
 
-        let size = v.get("portableWindowSize").and_then(|s| {
-            let w = s.num_at("width")? as i32;
-            let h = s.num_at("height")? as i32;
-            // A malformed value degrades to "feature off", never to a junk --window-size.
-            (w > 0 && h > 0).then_some(WindowSize {
-                width: w,
-                height: h,
-            })
-        });
-
-        let mut start_env = BTreeMap::new();
-        if let Some(Json::Obj(map)) = v.get("startEnv") {
-            for (k, val) in map {
-                if let Some(s) = val.as_str() {
-                    start_env.insert(k.clone(), s.to_string());
-                }
-            }
-        }
+        let size = resolve_window_size(v);
+        let start_env = resolve_start_env(v);
 
         Ok(Config {
             display_name: need("displayName")?,
@@ -222,19 +287,7 @@ impl Config {
             // resolved root, which is how one app gives a second checkout on the same machine its
             // own tray host instead of colliding on a fixed global name. Computed here so the name
             // matches the PowerShell host's byte for byte.
-            mutex_name: {
-                let raw = need("mutexName")?;
-                if raw.contains("{ROOTHASH}") {
-                    let id = app_root.to_string_lossy().to_lowercase();
-                    // canonicalize() yields a \?\ extended-length prefix; PowerShell's
-                    // Resolve-Path does not, and hashing the two would disagree.
-                    let id = id.strip_prefix(r"\?\").unwrap_or(&id).to_string();
-                    let hash = crate::sha256::hex(id.as_bytes())[..16].to_uppercase();
-                    raw.replace("{ROOTHASH}", &hash)
-                } else {
-                    raw
-                }
-            },
+            mutex_name: resolve_mutex_name(need("mutexName")?, &app_root),
             icon_file: script_dir.join(expand(v.str_at("iconFile").unwrap_or("app.ico"))),
             script_dir,
             start_command,
@@ -253,14 +306,7 @@ impl Config {
                 .unwrap_or_else(|| format!("Open {}", v.str_at("displayName").unwrap_or("app"))),
             rebuild_command: opt_string(v.str_at("rebuildCommand")),
             rebuild_log_name: v.str_at("rebuildLogName").unwrap_or("Rebuild.log").to_string(),
-            // A STRING here is expanded first, so an app can gate the dev-only menu on an env
-            // var ("%APP_DEV%") exactly as the PowerShell adapter did, rather than needing a
-            // different config file for a dev checkout.
-            is_dev_tree: match v.get("isDevTree") {
-                Some(Json::Str(s)) => Json::Str(expand(s)).truthy(),
-                Some(other) => other.truthy(),
-                None => false,
-            },
+            is_dev_tree: resolve_is_dev_tree(v),
             shutdown_token_env_var: opt_string(v.str_at("shutdownTokenEnvVar")),
             shutdown_header_prefix: v.str_at("shutdownHeaderPrefix").unwrap_or("x-app").to_string(),
             sentinel_file: opt_string(v.str_at("sentinelFile")).map(|s| PathBuf::from(expand(&s))),
@@ -285,25 +331,7 @@ impl Config {
                 .to_string(),
             action_timeout_secs: v.num_at("actionTimeoutSec").unwrap_or(60.0) as u64,
             not_serving_hint: opt_string(v.str_at("notServingHint")),
-            // A COMPILED tree has no first run. The steps bootstrap a source checkout (`bun
-            // install`, `bun run build`); a release bundle ships the built artifacts and no
-            // interpreter, so every step's `missing` path is absent there and all of them would
-            // fire — spawning bun commands that can only fail, on the one layout guaranteed not to
-            // have bun. The PowerShell adapters gated this per app (`FirstRun = if
-            // ($isCompiledTree) { $null }`); the JSON config has no place to express that, so the
-            // gate belongs here, where the compiled exe was just resolved.
-            first_run: match v.get("firstRun").filter(|_| compiled.is_none()) {
-                Some(Json::Arr(items)) => items
-                    .iter()
-                    .filter_map(|it| {
-                        Some(FirstRunStep {
-                            missing: it.str_at("missing")?.to_string(),
-                            run: it.str_at("run")?.to_string(),
-                        })
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            },
+            first_run: resolve_first_run(v, &compiled),
             app_root,
         })
     }
