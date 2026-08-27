@@ -49,6 +49,7 @@ import type { MonitorStateName, SearchIndexStatus, SyncStatus } from '@/lib/api'
 import * as api from '@/lib/api'
 import { type BadgeVariant, baseName, formatBytes } from '@/lib/format'
 import { composeSessionPathClipboard } from '@/lib/session-clipboard'
+import { bindSignInNudgeStatus, nudgeOnSettingsChange } from '@/lib/sign-in-nudge'
 import { useTheme } from '@/lib/theme'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import ExpandTransition from '@/shell/ExpandTransition.vue'
@@ -559,12 +560,22 @@ const syncedLabel = computed(() => {
 // value just applied from a pull/enable (applyingRemoteAppearance).
 watch(themeMode, () => {
   if (applyingRemoteAppearance) return
+  // NOT connected is the interesting case for the sign-in prompt, and it is exactly the branch the
+  // push below discards. Someone who just changed an appearance setting is who "these follow you to
+  // your other machines" is a true sentence for, and this is the same instant we WOULD have pushed
+  // it. The engine says no to almost every one of these; see lib/sign-in-nudge.
+  if (!syncStatus.value.connected) nudgeOnSettingsChange()
   if (!syncStatus.value.enabled || !syncStatus.value.connected) return
   clearTimeout(syncPushTimer)
   syncPushTimer = setTimeout(() => {
     void api.setSync({ appearance: currentAppearance() }).then(absorbSyncResult)
   }, 800)
 })
+
+// Point the prompt at the live connection state. Only the STATUS binds here - the session count
+// starts at app boot (main.ts), because this view is lazy and an owner who never opens Settings
+// would otherwise never accrue a session and never pass the prompt's gate.
+bindSignInNudgeStatus(() => syncStatus.value.connected)
 
 // --- auto-update ---
 // Single toggle - no user-facing interval control (family-standard "Auto-update"). The check
@@ -1400,7 +1411,7 @@ defineExpose({ save })
       </ExpandTransition>
     </SettingsGroup>
 
-    <!-- orchestrator (docs/ORCHESTRATOR.md) - self-contained group, one-line mount -->
+    <!-- orchestrator (docs/ORCHESTRATOR.md) — self-contained group, one-line mount -->
     <OrchestratorSettings />
 
     <!-- auto-resume monitor -->

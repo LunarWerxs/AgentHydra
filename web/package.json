@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@agenthydra/server": "workspace:*",
+    "@cnct/connect": "^1.5.1",
     "@lucide/vue": "^1.26.0",
     "@vueuse/core": "^14.3.0",
     "class-variance-authority": "^0.7.1",

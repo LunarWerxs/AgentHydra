@@ -49,13 +49,147 @@ const OAUTH = {
   scopes: ['openid', 'profile', 'email'],
 }
 
-/** The ONLY settings keys that sync — portable scheduler prefs. Deliberately excludes
- *  machine-specific state (portable_mode, hide_tray_icon) and every secret (accounts). */
-const PREF_KEYS = [
+/**
+ * The ONLY settings keys that sync — portable preferences.
+ *
+ * Widened 2026-08-25 from four scheduler keys to thirty-odd. The old list was not a considered
+ * boundary so much as the four keys that existed when it was written; everything added since
+ * defaulted to not-synced without anyone deciding, which is why a user's notification setup,
+ * display choices and every orchestrator threshold had to be re-entered per machine.
+ *
+ * The line that DID survive is in [`NEVER_SYNCED`]: secrets, this machine's identity, anything
+ * naming a local path, and any switch that makes the app act on its own while nobody is watching.
+ */
+export const PREF_KEYS = [
+  // Scheduler (the original four).
   'scheduler_enabled',
   'spacing_seconds',
   'poll_seconds',
   'max_concurrent',
+  'tomorrow_time',
+  // How you like the app to present itself. The old comment called these "machine-specific";
+  // they are not — "don't show me a tray icon" is a preference about you, not about the PC.
+  'portable_mode',
+  'hide_tray_icon',
+  'show_cli_instances',
+  'show_desktop_instances',
+  'usage_auto_refresh',
+  'usage_refresh_interval_min',
+  // Auto-resume monitor: its TUNING travels, its master switch does not (see NEVER_SYNCED).
+  'monitor_max_attempts',
+  'monitor_resume_buffer_min',
+  'monitor_resume_prompt',
+  // Orchestrator thresholds and cadence. Every one of these is inert unless `orch_enabled` was
+  // turned on locally, so carrying them costs nothing and saves re-tuning eleven numbers by hand.
+  'orch_tick_secs',
+  'orch_idle_quiet_secs',
+  'orch_ctx_handoff_tokens',
+  'orch_soft_pct',
+  'orch_warn_pct',
+  'orch_hard_pct',
+  'orch_session_high_pct',
+  'orch_reset_soon_mins',
+  'orch_spike_pct',
+  'orch_dirty_mins',
+  'orch_nudge_cooldown_mins',
+  // Added by another session while this list was being widened, and caught immediately by the
+  // classification guard rather than by anyone noticing — which is the guard earning its keep on
+  // its first day. Same family as the rest: orchestrator policy and tuning, inert unless
+  // `orch_enabled` was turned on locally.
+  'orch_open_instances',
+  'orch_open_min_plan',
+  'orch_reviewer_reserve_pct',
+  'orch_handoff_surface',
+  // New-chat defaults (model/effort/ultracode for orchestrator-started chats): same family,
+  // owner policy that should read the same on every machine, inert unless orch_enabled.
+  'orch_new_chat_model',
+  'orch_new_chat_effort',
+  'orch_new_chat_ultracode',
+  'orch_stale_task_mins',
+  'orch_max_active_chats',
+  // Watching Codex too is a preference about scope, not an autonomy switch: it only widens what
+  // the feed reports, and reports nothing at all unless orch_enabled is on locally.
+  'orch_watch_codex',
+  // Load balancing is routing POLICY, not an autonomy switch: it changes which of the accounts
+  // the router was already choosing between comes first, and starts nothing on its own. Every
+  // machine should route the owner's fleet the same way, so both keys sync. The ledger they
+  // consult does NOT sync and must not: it is a record of what THIS machine placed, and
+  // merging two machines' placements would have each one balancing against the other's load.
+  'orch_load_balance',
+  'orch_balance_window_mins',
+  // The owner's edited orchestrator prompts: policy text, same on every machine. Blank = the
+  // shipped default, so only real edits ever sync.
+  'orch_prompt_resume_nudge',
+  'orch_prompt_handoff_request',
+  'orch_prompt_stale_task_nudge',
+  'orch_prompt_hard_cutoff',
+  'orch_prompt_overload_nudge',
+  'orch_prompt_commit_nudge',
+  'orch_prompt_branch_nudge',
+  'orch_prompt_orphan_revive',
+  'orch_prompt_closeout_docs',
+  'orch_prompt_migration_notice',
+  // Notifications, including the SMTP endpoint — but never its password, which lives in
+  // NEVER_SYNCED. Telling you something is not the same as acting for you, so unlike the
+  // unattended switches below these travel: a notification setup is tedious to re-enter and
+  // useless until it is complete.
+  'notify_enabled',
+  'notify_desktop',
+  'notify_persistent',
+  'notify_min_pct',
+  'notify_session_reset',
+  'notify_weekly_reset',
+  // Found by the classification guard below rather than by reading the file — which is the
+  // whole argument for having it.
+  'notify_persistent_interval_min',
+  'notify_persistent_max_repeats',
+  'notify_session_max_weekly_pct',
+  'notify_email',
+  'notify_email_from',
+  'notify_email_to',
+  'notify_smtp_host',
+  'notify_smtp_port',
+  'notify_smtp_secure',
+  'notify_smtp_user',
+] as const
+
+/**
+ * Every settings key that deliberately does NOT sync, with the reason it doesn't.
+ *
+ * Together with [`PREF_KEYS`] this must cover every key the app reads or writes;
+ * `tests/connections-sync.test.ts` scans the source and fails naming any key that is in neither.
+ * That check is the point of the list: a settings table keyed by plain strings has no type to
+ * catch a new key, so without it "not synced" stays the silent default forever.
+ */
+export const NEVER_SYNCED = [
+  // The sync state blob itself. Syncing it would be circular.
+  'connections_sync',
+  // A secret.
+  'notify_smtp_pass',
+  // This install's identity. Syncing would merge two machines into one in the ping counts.
+  'app_install_id',
+  'app_ping_reported',
+  // '' means auto-detect; anything else is an ABSOLUTE PATH to an editor on this machine.
+  'transcript_editor',
+  // Which providers exist HERE. A laptop without the Codex desktop app should not be told it has
+  // one because the desktop does.
+  'provider_chatgpt_handoff',
+  'provider_codex_cli',
+  'provider_codex_desktop',
+  // Unattended-action master switches. Both are off by default for the reason their own comments
+  // in db.ts give — one auto-prompts your sessions while you sleep, the other reads everything
+  // you are doing on a timer — and neither should turn itself on somewhere just because you
+  // signed in there.
+  //
+  // `scheduler_enabled` is the honest exception: it is arguably the same kind of switch, and it
+  // has been in PREF_KEYS since the day this file was written. It is left there deliberately
+  // rather than quietly narrowed, because taking away sync someone already relies on is its own
+  // surprise. Worth an explicit decision rather than a drive-by one.
+  'monitor_enabled',
+  'orch_enabled',
+  // Same family: migrate-on-limit spends OTHER accounts' quota unattended. Each machine decides
+  // for itself, like the switches above.
+  'orch_migrate_on_limit',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

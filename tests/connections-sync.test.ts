@@ -41,6 +41,8 @@ import {
   handleCallback,
   hasConnection,
   initConnections,
+  NEVER_SYNCED,
+  PREF_KEYS,
   pullNow,
   pushNow,
   syncStatus,
@@ -304,21 +306,26 @@ describe('pushNow / pullNow', () => {
     setSetting('spacing_seconds', '120')
     setSetting('poll_seconds', '10')
     setSetting('max_concurrent', '7')
-    setSetting('portable_mode', '1') // deliberately excluded from PREF_KEYS
-    setSetting('hide_tray_icon', '1') // deliberately excluded from PREF_KEYS
+    // Each of these is excluded for a DIFFERENT reason, so between them they exercise the whole
+    // rule rather than one branch of it: a machine-local path, an unattended-action switch, and
+    // a secret.
+    setSetting('transcript_editor', 'D:/definitely/local/editor.exe')
+    setSetting('orch_enabled', '1')
+    setSetting('notify_smtp_pass', 'super-secret-smtp-password')
 
     await pushNow()
 
     expect(server.docPostCalls).toBe(1)
-    expect(server.settings.prefs).toEqual({
-      scheduler_enabled: '1',
-      spacing_seconds: '120',
-      poll_seconds: '10',
-      max_concurrent: '7',
-    })
+    // The payload is EXACTLY the allowlist — no more, no fewer. Written against PREF_KEYS rather
+    // than a hand-copied literal so that widening the list cannot leave this test asserting a
+    // set nobody ships any more, while still failing loudly if a key leaks in that is on neither
+    // list (the classification guard at the bottom of this file is what forces that decision).
+    expect(Object.keys(server.settings.prefs as object).sort()).toEqual([...PREF_KEYS].sort())
     const raw = JSON.stringify(server.settings)
-    expect(raw).not.toContain('portable_mode')
-    expect(raw).not.toContain('hide_tray_icon')
+    expect(raw).not.toContain('transcript_editor')
+    expect(raw).not.toContain('definitely/local')
+    expect(raw).not.toContain('orch_enabled')
+    expect(raw).not.toContain('super-secret-smtp-password')
   })
 
   test('pushNow includes the locally-held appearance blob alongside prefs', async () => {
@@ -342,14 +349,22 @@ describe('pushNow / pullNow', () => {
 
   test('pullNow applies only PREF_KEYS-allowlisted keys from the remote doc; extras are ignored', async () => {
     await signInAs('puller')
+    // Set the baseline HERE rather than trusting beforeEach: the push test above writes these two
+    // keys, and beforeEach only resets the ones it knows about. Without this the assertion below
+    // reads a value the previous test left behind, which is how a real "the pull applied it"
+    // failure and a stale-fixture failure become indistinguishable.
+    setSetting('orch_enabled', '0')
+    setSetting('transcript_editor', '')
     server.version = 1
     server.settings = {
       prefs: {
         scheduler_enabled: '1',
         spacing_seconds: '999',
-        // Not on the allowlist; must be ignored even though the remote doc carries it.
-        portable_mode: '1',
-        hide_tray_icon: '1',
+        // Not on the allowlist; must be ignored even though the remote doc carries it. This is
+        // the direction that matters most: a doc written by a newer build, or a tampered one,
+        // must not be able to switch on unattended behaviour or repoint a local path here.
+        orch_enabled: '1',
+        transcript_editor: 'D:/somebody/elses/editor.exe',
         some_future_key: 'x',
       },
     }
@@ -361,8 +376,8 @@ describe('pushNow / pullNow', () => {
     expect(getSetting('scheduler_enabled')).toBe('1')
     expect(getSetting('spacing_seconds')).toBe('999')
     // Non-allowlisted fields are untouched (still at the beforeEach baseline).
-    expect(getSetting('portable_mode')).toBe('0')
-    expect(getSetting('hide_tray_icon')).toBe('0')
+    expect(getSetting('orch_enabled')).toBe('0')
+    expect(getSetting('transcript_editor')).toBe('')
   })
 
   test('pullNow against a never-written remote doc (version 0) applies nothing', async () => {
@@ -562,5 +577,55 @@ describe('access token refresh', () => {
     await pushNow()
     expect(server.tokenCalls).toBe(1) // no refresh; the access token from sign-in was reused
     expect(server.lastAuthHeader).toBe('Bearer access-for-no-refresh-needed')
+  })
+})
+
+// ── the classification guard ───────────────────────────────────────────────────────────────────
+//
+// The settings table is keyed by plain strings, so nothing in the type system can notice a new
+// key. Without this, "not synced" stays the silent default forever — which is exactly what
+// happened between the day PREF_KEYS was written and 2026-08-25: thirty-odd portable preferences
+// accumulated on the wrong side of the line and not one thing was red.
+//
+// So: read the source, find every settings key it touches, and require a decision about each.
+describe('settings classification', () => {
+  const KEY_CALL = /(?:get|set)Setting\(\s*'([a-z0-9_]+)'/g
+  const DEFAULTS_BLOCK = /const DEFAULT_SETTINGS[^{]*\{([\s\S]*?)\n\}/
+  const DEFAULTS_KEY = /^\s{2}([a-z0-9_]+):/gm
+  // Keys reached through a constant rather than a literal, so the scan above cannot see them.
+  // Listed here on purpose: the alternative is a cleverer regex that silently stops matching.
+  const VIA_CONSTANT = ['notify_smtp_pass']
+
+  async function everyKeyInSource(): Promise<Set<string>> {
+    const { Glob } = await import('bun')
+    const keys = new Set<string>(VIA_CONSTANT)
+    for await (const file of new Glob('server/src/**/*.ts').scan('.')) {
+      const src = await Bun.file(file).text()
+      for (const m of src.matchAll(KEY_CALL)) keys.add(m[1] as string)
+      const block = DEFAULTS_BLOCK.exec(src)
+      if (block)
+        for (const m of (block[1] as string).matchAll(DEFAULTS_KEY)) keys.add(m[1] as string)
+    }
+    return keys
+  }
+
+  test('every settings key the app touches is either synced or deliberately not', async () => {
+    const classified = new Set<string>([...PREF_KEYS, ...NEVER_SYNCED])
+    const unclassified = [...(await everyKeyInSource())].filter((k) => !classified.has(k)).sort()
+    expect(unclassified).toEqual([])
+  })
+
+  test('no key is in both lists', () => {
+    const both = PREF_KEYS.filter((k) => (NEVER_SYNCED as readonly string[]).includes(k))
+    expect(both).toEqual([])
+  })
+
+  test('the scan actually finds keys — a regex that matches nothing would pass everything', async () => {
+    // The guard above is only worth anything if the scan works. A silent regex failure would make
+    // `unclassified` empty for the wrong reason, and the check would rot into a no-op.
+    const found = await everyKeyInSource()
+    expect(found.size).toBeGreaterThan(30)
+    expect(found.has('scheduler_enabled')).toBe(true)
+    expect(found.has('orch_enabled')).toBe(true)
   })
 })
