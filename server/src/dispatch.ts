@@ -15,6 +15,7 @@ import { DB_PATH, IS_COMPILED, RUN_LOG_DIR, resolveClaudeExe } from './config'
 import { getCliInstance } from './core/cli-instances'
 import { coerceQueueItem, db } from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
+import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
 import { classifyLimit, isApiErrorEvent, type LimitKind } from './rate-limit-signal'
 import { eventToTailEvents } from './transcript'
 import type { ImportState, QueueItem, RunEvent } from './types'
@@ -950,18 +951,19 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // Reachable from the MCP tool too, i.e. by the orchestrator itself. Asking the question about
   // every run - "does this id already live in a desktop app?" - costs one directory walk and
   // cannot be reasoned around.
-  if (!item.allow_headless) {
-    const { desktopHomeFor } = await import('./session-launch')
-    const home = await desktopHomeFor(item.session_id).catch(() => null)
-    if (home) {
-      failPreLaunch(
-        item,
-        'surface-violation: this thread lives in the desktop app, so a headless run would ' +
-          'continue it where you cannot see it. Continue it in its app (the orchestrator ' +
-          'delivers turns natively), or re-queue with force to override.',
-      )
-      return
-    }
+  // SUPERSEDED 2026-08-27 by a wider law. The block above describes the guard as it was: it asked
+  // only whether THIS thread already lived in a desktop app, and let every other run through. The
+  // owner's ruling closed that gap outright ("We should never have any headless chats. No
+  // headless."), because the property that was wrong is INVISIBLE rather than cross-surface: an
+  // orphaned CLI thread or a scheduled run is just as unwatchable as a hijacked desktop chat.
+  //
+  // `allow_headless` no longer buys a way past. An override that defeats "never" is not an
+  // override, it is the old behaviour behind a flag. The column stays so existing queue rows still
+  // read back, it simply cannot authorise a run any more. See headless-policy.ts for the one
+  // remaining switch and why its default is off.
+  if (!headlessRunsAllowed()) {
+    failPreLaunch(item, NO_HEADLESS_REASON)
+    return
   }
 
   // fresh run: clear prior events + any stale files from an earlier run of this item.

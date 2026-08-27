@@ -10,14 +10,22 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { markDispatchReady } from '../src/boot-state'
-import { db } from '../src/db'
+import { db, setSetting } from '../src/db'
 import * as dispatch from '../src/dispatch'
+import { HEADLESS_ALLOWED_KEY } from '../src/headless-policy'
 import { invalidateSessionMetaCache } from '../src/instance-sessions'
 
 // AGENTHYDRA_DB / AGENTHYDRA_HOME / AGENTHYDRA_RUN_LOG_DIR are isolated by the preload
 // (tests/setup.ts); AGENTHYDRA_FAKE is read at dispatch-CALL time, so setting it here (before any
 // dispatchItem call) makes buildArgv use the harmless fake `claude` stand-in.
 process.env.AGENTHYDRA_FAKE = '1'
+// THE PIPELINE TESTS NEED A PIPELINE. Since 2026-08-27 the dispatch chokepoint refuses every
+// headless run outright (owner law, see headless-policy.ts), which is the correct product
+// behaviour and would leave every test below asserting nothing but the refusal. So the escape
+// hatch is opened here, for the tests that exercise spec-writing, the detached runner, cancel,
+// reattach and rate-limit classification. The tests of the LAW ITSELF close it again, one by one,
+// so they can never pass just because this line exists.
+setSetting(HEADLESS_ALLOWED_KEY, '1')
 // The instance store the surface-purity guard searches, isolated by the preload (tests/setup.ts)
 // so this file's "does this session live in a desktop app?" checks see a world it controls
 // rather than the developer's real fleet.
@@ -476,12 +484,33 @@ test('a reattach onto a dead runner never adopts its stale child pid', async () 
   // to be able to win before we call the run lost.
 }, 20_000)
 
-// --- SURFACE PURITY: a desktop-resident thread never runs headless -------------
-// Owner law 2026-08-26, from a reported failure: "every chat you were migrating from desktop to
-// desktop ended up being migrated to a headless thing that I couldn't see." A queued --resume
-// appends to a desktop chat's transcript from a process the owner cannot watch. The guard sits in
-// dispatchItem, the ONE chokepoint all six call sites (route, run-due, retry sweep, scheduler,
-// monitor, migrate) funnel through - a route-level check would have left five ways in.
+// --- NO HEADLESS CHATS ----------------------------------------------------------
+// Owner law 2026-08-27: "We should never have any headless chats. No headless."
+//
+// This supersedes the 2026-08-26 SURFACE PURITY guard whose tests used to live here. That one came
+// from a reported failure ("every chat you were migrating from desktop to desktop ended up being
+// migrated to a headless thing that I couldn't see") and it only ever asked whether THIS thread
+// already lived in a desktop app, letting everything else through. The wider ruling closed the
+// gap: an orphaned CLI thread or a scheduled run is exactly as unwatchable, so INVISIBLE is the
+// property banned, not cross-surface.
+//
+// The tests below therefore assert the opposite of what their predecessors did. A new chat used to
+// "sail through" and allow_headless used to be honoured; both are now refused, because an override
+// that defeats "never" is not an override. Everything still funnels through the one chokepoint in
+// dispatchItem, which is why one check can hold all five call sites.
+//
+// Note these run with the escape hatch OFF, unlike the pipeline tests above, which turn it on to
+// have any pipeline to test at all.
+
+/** Run `fn` with the ban actually in force, whatever the pipeline tests left set. */
+async function withHeadlessBanned(fn: () => Promise<void>): Promise<void> {
+  setSetting(HEADLESS_ALLOWED_KEY, '0')
+  try {
+    await fn()
+  } finally {
+    setSetting(HEADLESS_ALLOWED_KEY, '1')
+  }
+}
 
 /** Write the desktop metadata file that makes a session "resident" in an instance's sidebar. */
 function makeDesktopResident(sessionId: string): void {
@@ -506,52 +535,66 @@ function makeDesktopResidentByContent(cliSessionId: string): void {
   invalidateSessionMetaCache()
 }
 
-test('a chat CREATED in the app (id only inside the file) is refused too, not just imported ones', async () => {
-  const item = makeItem({ new_chat: false })
-  makeDesktopResidentByContent(item.session_id)
-  await dispatch.dispatchItem(item)
-  expect(statusOf(item.id)?.status).toBe('failed')
-  expect(dispatch.getRunEvents(item.id).some((e) => e.text.includes('surface-violation'))).toBe(
-    true,
-  )
-})
+test('a chat CREATED in the app (id only inside the file) is refused too, not just imported ones', () =>
+  withHeadlessBanned(async () => {
+    const item = makeItem({ new_chat: false })
+    makeDesktopResidentByContent(item.session_id)
+    await dispatch.dispatchItem(item)
+    expect(statusOf(item.id)?.status).toBe('failed')
+    expect(dispatch.getRunEvents(item.id).some((e) => e.text.includes('no-headless'))).toBe(true)
+  }))
 
-test('a headless resume of a DESKTOP-resident chat is refused at the dispatch chokepoint', async () => {
-  const item = makeItem({ new_chat: false })
-  makeDesktopResident(item.session_id)
-  await dispatch.dispatchItem(item)
-  // Refused BEFORE any spawn: failed, and the reason names the law rather than looking like a crash.
-  expect(statusOf(item.id)?.status).toBe('failed')
-  const events = dispatch.getRunEvents(item.id)
-  expect(events.some((e) => e.text.includes('surface-violation'))).toBe(true)
-  expect(events.some((e) => e.text.includes('desktop app'))).toBe(true)
-})
+test('a headless resume of a DESKTOP-resident chat is refused at the dispatch chokepoint', () =>
+  withHeadlessBanned(async () => {
+    const item = makeItem({ new_chat: false })
+    makeDesktopResident(item.session_id)
+    await dispatch.dispatchItem(item)
+    // Refused BEFORE any spawn: failed, and the reason names the law rather than looking like a crash.
+    expect(statusOf(item.id)?.status).toBe('failed')
+    const events = dispatch.getRunEvents(item.id)
+    expect(events.some((e) => e.text.includes('no-headless'))).toBe(true)
+    expect(events.some((e) => e.text.includes('cannot see'))).toBe(true)
+  }))
 
-test('new_chat is NOT a way past the guard when the session id is an existing desktop chat', async () => {
-  // The hole an adversarial audit found: the create route accepts a caller-supplied session_id
-  // even when new_chat is true, and the runner passes it as `--session-id`, so a request labelled
-  // "new chat" pointed at an EXISTING desktop chat wrote headless turns straight into it with the
-  // check skipped at both layers - reachable from the MCP tool, i.e. by the orchestrator itself.
-  // The guard asks about the ID now, never about the caller's label for the request.
-  const liar = makeItem({ new_chat: true })
-  makeDesktopResident(liar.session_id)
-  await dispatch.dispatchItem(liar)
-  expect(statusOf(liar.id)?.status).toBe('failed')
-  expect(dispatch.getRunEvents(liar.id).some((e) => e.text.includes('surface-violation'))).toBe(
-    true,
-  )
-})
+test('new_chat is NOT a way past the law', () =>
+  withHeadlessBanned(async () => {
+    // Under the old surface-purity guard this mattered a great deal: the create route accepts a
+    // caller-supplied session_id even when new_chat is true, so a request LABELLED "new chat" but
+    // pointed at an existing desktop chat wrote headless turns straight into it. The label was
+    // never trustworthy. Under the wider law the question does not even arise, which is the point:
+    // there is no id, label or route that produces an invisible chat.
+    const liar = makeItem({ new_chat: true })
+    makeDesktopResident(liar.session_id)
+    await dispatch.dispatchItem(liar)
+    expect(statusOf(liar.id)?.status).toBe('failed')
+    expect(dispatch.getRunEvents(liar.id).some((e) => e.text.includes('no-headless'))).toBe(true)
+  }))
 
-test('the guard spares a NEW chat and honours the owner explicit allow_headless override', async () => {
-  // A genuinely new chat mints a fresh id, so it has no desktop entry and sails through.
-  const fresh = makeItem({ new_chat: true })
-  await dispatch.dispatchItem(fresh)
-  expect(await waitForStatus(fresh.id, 'completed')).toBe('completed')
+// THE TEST THAT CHANGED SIDES. It used to be called "the guard spares a NEW chat and honours the
+// owner explicit allow_headless override" and asserted both of those runs COMPLETED. Both are
+// refusals now. A genuinely new chat was the largest hole the narrow guard left, because a fresh
+// uuid has no desktop entry and so nothing could object to it, and allow_headless was a documented
+// way to ask for the banned thing by name.
+test('a brand-new chat and an explicit allow_headless override are BOTH refused now', () =>
+  withHeadlessBanned(async () => {
+    const fresh = makeItem({ new_chat: true })
+    await dispatch.dispatchItem(fresh)
+    expect(statusOf(fresh.id)?.status).toBe('failed')
+    expect(dispatch.getRunEvents(fresh.id).some((e) => e.text.includes('no-headless'))).toBe(true)
 
-  // The override is the owner's deliberate escape, stored on the row so the chokepoint honours
-  // what the route recorded; without it this exact item would be refused by the test above.
-  const forced = makeItem({ new_chat: false, allow_headless: true })
-  makeDesktopResident(forced.session_id)
-  await dispatch.dispatchItem(forced)
-  expect(await waitForStatus(forced.id, 'completed')).toBe('completed')
-})
+    const forced = makeItem({ new_chat: false, allow_headless: true })
+    makeDesktopResident(forced.session_id)
+    await dispatch.dispatchItem(forced)
+    expect(statusOf(forced.id)?.status).toBe('failed')
+    expect(dispatch.getRunEvents(forced.id).some((e) => e.text.includes('no-headless'))).toBe(true)
+  }))
+
+test('nothing is spawned when a run is refused', () =>
+  withHeadlessBanned(async () => {
+    // The refusal has to happen BEFORE the spec is written and the detached runner launched, or
+    // "refused" would only mean "killed slightly later", with a real child having briefly existed.
+    const item = makeItem({ new_chat: true })
+    await dispatch.dispatchItem(item)
+    expect(statusOf(item.id)?.status).toBe('failed')
+    expect(existsSync(join(RUN_LOG_DIR, `${item.id}.log`))).toBe(false)
+  }))

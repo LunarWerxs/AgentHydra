@@ -127,8 +127,16 @@ by a usage wall is AgentHydra's own work rather than one of the owner's desktop 
 carries `import_to`/`import_title` so `finalize()` lands the result in that instance's app
 instead of finishing where nobody looks. **A DESKTOP thread never takes this path** - the
 surface-purity guard in dispatch.ts refuses to continue one headlessly at all, and the monitor
-hands those to the reviewer as a revive proposal delivered natively. Three deliberate choices
-behind the import-back that remains:
+hands those to the reviewer as a revive proposal delivered natively.
+
+> **SUPERSEDED 2026-08-27.** Since the no-headless law (above), NO thread takes this path, not
+> merely desktop ones: `dispatchItem` refuses every headless run, so a limit-migration cannot run
+> on the borrowed account through the queue any more. The migration itself is unaffected, because
+> moving a chat between accounts never needed a turn run against it; what is gone is the headless
+> resume that used to follow. The paragraphs below describe the import-back as it was built and
+> are kept because the reasoning still explains the surrounding machinery.
+
+Three deliberate choices behind the import-back that remains:
 
 - **Only a migration imports.** A same-account auto-resume writes no import fields: that chat is
   already in the app it belongs to, and transcripts are shared across instances
@@ -284,6 +292,20 @@ a VISIBLE DESKTOP CHAT. This deleted the v0.35 auto-revive mechanism outright (i
 headless `--resume` and imported the result back - a desktop thread running headless) and
 retired the queue-with-import-back pattern everywhere: handoffs and chips are now seeded as
 real desktop chats and delivered natively.
+
+**NO HEADLESS CHATS** (owner law, 2026-08-27: *"We should never have any headless chats. No
+headless."*). Surface purity above is now the weaker half of this. It asked only whether a thread
+already lived in a desktop app and let everything else through, which meant an orphaned CLI
+thread, a migrate-on-limit resume or a scheduled run still became a conversation nobody could
+watch. The property being banned is INVISIBLE, not cross-surface. `dispatchItem` refuses **every**
+headless run now, at the one chokepoint all five call sites funnel through (route, run-due, retry
+sweep, scheduler, monitor), and the per-row `allow_headless` override no longer buys a way past:
+an override that defeats "never" is just the old behaviour behind a flag. A refused run fails with
+a reason naming the law, so it is visible in the queue rather than silently dropped. The single
+remaining switch is the `dispatch_allow_headless` setting, off unless deliberately set, and its
+polarity is inverted from every other setting here on purpose: absence means the ban applies. The
+`/usage` probe is untouched and is not covered, because it asks the CLI a question and reads a
+number back rather than holding a conversation. See `server/src/headless-policy.ts`.
 
 **The native actuator** (proven live 2026-08-26): the desktop app itself delivers messages
 into its chats, and a delivery BOOTS a dormant chat's engine and runs the turn visibly in
@@ -539,7 +561,7 @@ do, and a signal that cries wolf on healthy input stops being read.
 | `openInstances` | `never` | whether the reviewer may LAUNCH a closed instance; `when-exhausted` allows it only once every running instance is out of headroom |
 | `openMinPlan` | `Max 20` | minimum plan an auto-opened instance must have |
 | `reviewerReservePct` | 75 | the reviewer's own account stays under this weekly % so it can always keep orchestrating |
-| `handoffSurface` | `desktop` | where handoff continuations land: `desktop` (seeded as a visible desktop chat, prompt delivered natively - never headless), `terminal` (watchable live window), or `queue` (headless, only for owners who chose it) |
+| `handoffSurface` | `desktop` | where handoff continuations land: `desktop` (seeded as a visible desktop chat, prompt delivered natively - never headless) or `terminal` (watchable live window). `queue` is still accepted and no longer does anything useful: since the no-headless law every run it produces is refused at the dispatch chokepoint, so a run set this way fails instead of going invisible |
 | `newChatModel` | `opus` | model for every orchestrator-started chat (handoffs, chips, launches) |
 | `newChatEffort` | `max` | reasoning effort for those chats (`low`/`medium`/`high`/`xhigh`/`max`) |
 | `newChatUltracode` | `true` | prepend the `ultracode` opt-in keyword to every orchestrator-started chat's prompt. Unlike its two siblings there is no CLI flag for this and no settings key, so the only way to ask for it is the literal word in the prompt text: the daemon applies it in `launchTerminalSession` (never on a `--resume`), and serves it to the reviewer as the feed's `newChatPrefix` for the native deliveries no server code can reach. See `server/src/new-chat-opening.ts` |

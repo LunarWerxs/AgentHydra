@@ -52,7 +52,46 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   than recomputed, because the sweep only reports what it changed and a recomputed list would
   empty itself within one cycle.
 
+### Changed
+
+- **No headless chats, at all** (owner law, 2026-08-27: "We should never have any headless chats.
+  No headless."). The surface-purity guard added the day before was the weaker half of this: it
+  asked only whether a thread already lived in a desktop app, so an orphaned CLI thread, a
+  migrate-on-limit resume or a scheduled run still became a conversation nobody could watch. It
+  also could not tell "this has no desktop home" from "I could not find one", and read both as
+  permission. The property worth banning is INVISIBLE, not cross-surface.
+
+  `dispatchItem` now refuses every headless run, at the one chokepoint all five call sites funnel
+  through, and the per-row `allow_headless` override no longer buys a way past: an override that
+  defeats "never" is the old behaviour behind a flag. A refused run fails with a reason naming the
+  law, so it shows in the queue instead of vanishing. What runs instead was already built and
+  proven rather than promised: the reviewer delivers turns natively into a chat's own app, and a
+  visible terminal covers work with no app to go back to. The `/usage` probe is deliberately not
+  covered, because it asks the CLI a question and reads a number back rather than holding a
+  conversation. The one remaining switch, `dispatch_allow_headless`, is off unless deliberately
+  set, and its polarity is inverted from every other setting here on purpose: absence means the
+  ban applies, so a fresh install and a wiped settings table both mean no headless.
+
+  Three of this area's tests changed sides rather than being deleted, which is the honest record
+  of a policy reversal: a brand-new chat and an explicit `allow_headless` override used to be
+  asserted to COMPLETE, and are now asserted to be refused. A new test proves nothing is spawned
+  before the refusal, so "refused" cannot quietly mean "killed shortly after starting".
+
 ### Fixed
+
+- **A shipped command fix could never reach the reviewer that reads it.** The rubric the reviewer
+  runs is installed into `~/.claude/commands`, and the only automatic install ran on first enable
+  with force off, whose own comment reads "an existing copy is never touched here". Nothing ever
+  ran after an update, so a release could change the rubric and the installed copy would sit at
+  whatever version first landed. Measured 2026-08-27: the live copy predated the previous day's
+  fixes, so the reviewer was still being told to construct chat ids as `local_<sessionId>` - the
+  exact bug fixed in this changelog, which had never reached the only file the reviewer opens.
+
+  The daemon now records a fingerprint of the copy it writes, which is what separates the two
+  cases the old three-way answer ran together: a file the owner edited, whose edits are the newer
+  intent and are still never overwritten, and our own previous version, left behind because a
+  release moved on without it. On boot it refreshes the second kind only. It never creates a file
+  that way, so a machine that never switched the orchestrator on does not silently gain commands.
 
 - **The ultracode opt-in was a toggle wired to nothing.** `newChatUltracode` was stored, read
   back, patched over the HTTP API and MCP, and rendered as a switch whose own hint reads
