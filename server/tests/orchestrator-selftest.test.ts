@@ -13,6 +13,10 @@ test('the self-test reports per-check results and a truthful summary', async () 
   const report = await runOrchestratorSelfTest()
   expect(report.checks.length).toBeGreaterThan(5)
   expect(report.deep).toBe(false) // never touches the app unless deep is asked for
+  // It must never imply it looked at a screen. Everything it checks is on disk, and the one
+  // time this feature claimed more than it had verified, a chat sat dead in front of the owner
+  // for five hours while being reported as running.
+  expect(report.visualChecks).toBe(false)
   // The summary must be derived from the checks, not asserted independently: a report claiming
   // ok:true with a failed check in it is the exact lie this whole file guards against.
   expect(report.passed).toBe(report.checks.filter((c) => c.ok).length)
@@ -40,6 +44,7 @@ test('the checks that must never be vacuous actually assert something', async ()
     'guard-allows-non-desktop', // the inverse, so the guard cannot just refuse everything
     'gate-refuses-undecided', // acting before the AI has ruled
     'automation-stamp', // the permission mode that freezes revived chats
+    'screen-lag', // how much is on disk but possibly not yet on screen
   ]) {
     expect(byId.has(id)).toBe(true)
   }

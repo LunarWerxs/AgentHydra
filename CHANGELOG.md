@@ -32,7 +32,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
-- **An orchestration self-test you can run any time.** Every rail in this feature was added
+- **An orchestration self-test you can run any time**, which reports `visualChecks: false`
+  rather than implying it looked at a screen. Every rail in this feature was added
   because something silently did the wrong thing on the real machine while the unit tests
   stayed green, so this runs the real guards against real state and reports what held: the
   watcher completes a pass, the surface guard recognises the chats that actually exist here,
@@ -58,6 +59,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Archiving no longer reports success for a chat that is still on screen.** Asking the app
+  itself right after the call showed the truth: disk said archived, the app still said not
+  archived, and the chat stayed in the sidebar. The endpoint now says so - the flag is
+  written, the chat is still visible, a restart is queued and fires when that instance has no
+  live sessions. It matters most for the instance the reviewer runs in, which can never reach
+  zero live sessions because the reviewer is itself one, so there the app own archive is the
+  only thing that actually retires a chat.
 - **Archiving a chat only worked for one chat in eighty.** It matched the metadata filename,
   which is how an IMPORTED chat is filed; a chat the owner started in the app is filed under
   the app's own id with the session id inside. So the archive endpoint returned

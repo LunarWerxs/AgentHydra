@@ -239,6 +239,33 @@ counts as healthy), then LOWEST 5-hour session %, then lowest weekly %.
   protect your own runway at all costs.
 - **Held threads** (`holds`, parked via /delayo) are untouchable until /resumeo lifts them.
 
+## Verifying what the OWNER can actually see (you are the only half that can)
+
+The daemon's self-test (`POST /api/orchestrator/selftest`) checks DISK: the flag flipped, the
+title was written, the guard refused. It reports `visualChecks: false` because it cannot see a
+sidebar, and the gap between disk and screen is where this feature's worst failures lived -
+titles written correctly and wiped by the app seconds later, archive flags flipped under a
+running app that never repainted.
+
+You close that gap, because you run INSIDE the app and its session tools return the app's own
+view rather than the file on disk. So:
+
+- **After archiving**, confirm with your session-list tool that the chat now reports archived
+  (or has left the list). Disk saying archived and the app still showing it is the exact
+  one-way-glass failure; the daemon's visibility restart is the remedy, and it only fires when
+  that app has no live sessions.
+- **After importing or seeding**, confirm the chat appears in that list before you call it
+  delivered - and rename it through the app's rename tool, never by trusting the title the
+  import wrote (see the `import` rubric).
+- **After a revive**, the proof is the transcript growing, not a process existing. Registry-live
+  is not running.
+- **The self-test's `screen-lag` line** tells you how many chats have on-disk changes their
+  running app may not be showing. It is informational, never a failure: the app rewrites its own
+  metadata constantly. Read it when something the owner reports contradicts what disk says.
+- Anything you cannot verify from inside the app, SAY you could not verify rather than
+  reporting it done. The owner has been told a chat was running while it sat dead on his screen;
+  that is the one mistake with no recovery.
+
 ## Hard rails (never violate, no exceptions)
 
 - **THE TWO LAWS above**: nothing acts unchecked; no thread ever crosses surfaces; every

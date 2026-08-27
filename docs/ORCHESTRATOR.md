@@ -211,6 +211,24 @@ while every reviewer nudge vanished). The deterministic test: the registry's pro
 `startedAt` against the transcript's newest record timestamp: a process with no record newer
 than its own spawn has never run a turn.
 
+### The self-test, and what it deliberately cannot tell you
+
+`POST /api/orchestrator/selftest` runs the real guards against real state and reports each check
+with the evidence behind it. It is safe against a live fleet by construction: sacrificial ids, a
+throwaway metadata directory, and it never reads or writes a real chat. `{"deep": true}` adds the
+one check that touches an app - it seeds a real chat, proves it is visible, then archives it.
+
+It reports **`visualChecks: false`**, and that is the honest part. Everything it verifies is on
+DISK. Whether the sidebar then SHOWS it is a different question, and the gap between the two is
+where this feature's worst failures lived. The `screen-lag` check measures how much is currently
+sitting behind that glass (metadata changed since its app started), which is as close as a
+process outside the app can get. Confirming what is actually rendered needs the app's own view -
+the reviewer's session tools, which is why the reviewer rubric requires it after every archive
+and every import - or a screenshot.
+
+It earned its place on its first live run by finding that archiving matched the metadata
+FILENAME, so the archive endpoint quietly did nothing for 1,325 of 1,343 real chats.
+
 ### The two laws (owner orders 2026-08-26)
 
 **The action gate.** Every action is checked by the orchestrator AI before it is made -

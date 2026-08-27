@@ -24,7 +24,16 @@
 //     broken, which is exactly what you would want to know.
 // It never reads or writes a real chat's transcript, and it cleans up after itself.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from './db'
@@ -61,6 +70,18 @@ export interface SelfTestReport {
   failed: number
   /** True when the app-touching checks ran too (they create and archive one real chat). */
   deep: boolean
+  /**
+   * ALWAYS false, and stated rather than implied: nothing here looks at the screen.
+   *
+   * It verifies what is on DISK - the flag flipped, the title was written, the guard refused.
+   * Whether the sidebar then SHOWS that is a different question, and the gap between the two is
+   * where this feature's worst failures lived: titles written correctly and wiped by the app
+   * seconds later, archive flags flipped under a running app that never repainted. The
+   * `screen-lag` check below measures how much is currently stuck behind that glass, which is
+   * the closest a process outside the app can honestly get. Confirming what is actually
+   * rendered needs the app's own view (the reviewer's session tools) or a screenshot.
+   */
+  visualChecks: false
   checks: SelfTestCheck[]
 }
 
@@ -321,7 +342,60 @@ export async function runOrchestratorSelfTest(
       add('reviewer-command-installed', '/orchestrate is installed', false, String(err))
     }
 
-    // --- 9. DEEP: seed a real desktop chat, prove it is visible, retire it ----
+    // --- 9. how much is stuck behind the glass right now ---------------------
+    // The honest version of "did it show up?". A metadata change written while its app was
+    // already running is on disk but not necessarily on screen: the app holds its chat list in
+    // memory and repaints at startup. That is not a theory - it is how five correctly-titled
+    // chats displayed as "General coding session", and how an archived chat kept sitting in the
+    // sidebar. Deterministic to measure: compare each metadata file's mtime against the start
+    // time of the app that owns it.
+    try {
+      const { listInstances } = await import('./core/instances')
+      const running = (await listInstances()).filter((i) => i.isRunning && i.startTime)
+      let pending = 0
+      const names: string[] = []
+      for (const inst of running) {
+        const startedMs = Date.parse(inst.startTime as string)
+        if (Number.isNaN(startedMs)) continue
+        const dir = join(inst.dir, 'claude-code-sessions')
+        if (!existsSync(dir)) continue
+        let n = 0
+        for (const org of readdirSync(dir, { withFileTypes: true })) {
+          if (!org.isDirectory()) continue
+          for (const user of readdirSync(join(dir, org.name), { withFileTypes: true })) {
+            if (!user.isDirectory()) continue
+            const d = join(dir, org.name, user.name)
+            for (const f of readdirSync(d)) {
+              if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+              try {
+                if (statSync(join(d, f)).mtimeMs > startedMs) n++
+              } catch {
+                // a file that vanished mid-scan is not pending anything
+              }
+            }
+          }
+        }
+        // The app re-saves its OWN metadata constantly, so a nonzero count is normal and only
+        // the shape of it is informative. Reported, never failed on: a check that goes red
+        // during ordinary use is one you learn to ignore.
+        if (n > 0) {
+          pending += n
+          names.push(`${inst.label ?? inst.name}:${n}`)
+        }
+      }
+      add(
+        'screen-lag',
+        'how many desktop chats have on-disk changes their running app may not be showing yet',
+        true,
+        running.length === 0
+          ? 'no desktop app is running, so nothing can be stale on screen'
+          : `${pending} chat file(s) changed since their app started (${names.join(', ') || 'none'}) - informational: the app rewrites its own metadata constantly, and the visibility restart is what forces a repaint`,
+      )
+    } catch (err) {
+      add('screen-lag', 'how much is stuck behind the glass', false, String(err))
+    }
+
+    // --- 10. DEEP: seed a real desktop chat, prove it is visible, retire it ----
     // Off by default because it leaves (and then archives) one real chat. It is the only check
     // that exercises the app itself, which is where every silent failure has come from.
     if (opts.deep) {
@@ -377,6 +451,7 @@ export async function runOrchestratorSelfTest(
   const failed = checks.filter((c) => !c.ok).length
   return {
     ok: failed === 0,
+    visualChecks: false,
     ranAt: new Date(startedAt).toISOString(),
     durationMs: Date.now() - startedAt,
     passed: checks.length - failed,

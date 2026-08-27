@@ -2251,6 +2251,25 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   // archive-visibility restart (owner ask: archived means GONE FROM THE SIDEBAR now).
   for (const h of result.hits ?? [])
     if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
+  // ...and SAY so, rather than returning a bare ok:true for a chat the owner can still see.
+  // Measured 2026-08-26 by asking the app itself right after this call: disk said archived,
+  // the app still reported isArchived:false, and the chat stayed in the sidebar. Reporting
+  // that as success is how "archived" came to mean "still there". Worse for the instance that
+  // hosts the reviewer, which can never satisfy the restart's zero-live-sessions condition
+  // because the reviewer is itself a live session - there, the app's OWN archive is the only
+  // thing that works, which is what the reviewer rubric already requires.
+  const underRunningApp = (result.hits ?? []).some((h) => h.changed && h.wasRunning)
+  if (underRunningApp)
+    return c.json({
+      ...result,
+      visibleNow: false,
+      note:
+        'the flag is written, but that app is RUNNING and holds its chat list in memory, so ' +
+        'the chat is STILL ON SCREEN until it restarts. A restart is queued and fires once that ' +
+        'instance has no live sessions. To retire it immediately, use the app own archive (the ' +
+        'reviewer session tools) - required for the instance the reviewer runs in, which never ' +
+        'reaches zero live sessions because the reviewer is itself one.',
+    })
   if (body.archived !== false && archiveAsk?.status === 'approved')
     reportProposalExecuted(archiveAsk.id, result.ok, result.ok ? 'archived' : result.reason)
   return c.json(result, result.ok ? 200 : 404)
