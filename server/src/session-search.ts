@@ -131,51 +131,59 @@ interface FileSearchOutcome {
 
 /** Exported for the unit test: this is where the deadline is actually noticed, and the flag it
  *  raises is what stops an empty result from being read as "the text is not on this machine". */
+/** A foreign store is not JSONL, and streaming it line by line found NOTHING — every line failed
+ *  JSON.parse and was skipped, so a Cursor or Zed conversation containing the query reported a
+ *  confident zero. Those rows were already in this sweep (only OpenCode is excluded above), so the
+ *  miss was silent: the session was listed, searched, and declared clean. Ask its adapter instead,
+ *  exactly as the transcript view and the exporter already do. */
+function searchForeignFile(
+  tf: TranscriptFile,
+  matcher: Matcher,
+  perFileLimit: number,
+): FileSearchOutcome {
+  let matchCount = 0
+  const snippets: string[] = []
+  try {
+    for (const ev of readForeignSession(tf.tool ?? '', tf.path)) {
+      const idx = matcher(ev.text)
+      if (idx === -1) continue
+      matchCount++
+      if (snippets.length < perFileLimit) snippets.push(snippetAround(ev.text, idx, SNIPPET_LEN))
+    }
+  } catch {
+    return { hit: null, stoppedEarly: false }
+  }
+  // No deadline check: an adapter reads a whole conversation in one call, so there is no
+  // part-way point to stop at and nothing to under-report. `stoppedEarly` stays false because it
+  // means "this file's count is an undercount", which here it never is.
+  return matchCount === 0
+    ? { hit: null, stoppedEarly: false }
+    : {
+        stoppedEarly: false,
+        hit: {
+          session_id: tf.session_id,
+          source: tf.source,
+          cwd: tf.cwd || tf.project,
+          project: tf.project,
+          match_count: matchCount,
+          truncated: snippets.length < matchCount,
+          snippets,
+        },
+      }
+}
+
 export async function searchOneFile(
   tf: TranscriptFile,
   matcher: Matcher,
   perFileLimit: number,
   deadline: number,
 ): Promise<FileSearchOutcome> {
+  if (tf.source === 'foreign') return searchForeignFile(tf, matcher, perFileLimit)
+
   let matchCount = 0
   const snippets: string[] = []
   let cwd = ''
   let stoppedEarly = false
-
-  // A foreign store is not JSONL, and streaming it line by line found NOTHING — every line failed
-  // JSON.parse and was skipped, so a Cursor or Zed conversation containing the query reported a
-  // confident zero. Those rows were already in this sweep (only OpenCode is excluded above), so the
-  // miss was silent: the session was listed, searched, and declared clean. Ask its adapter instead,
-  // exactly as the transcript view and the exporter already do.
-  if (tf.source === 'foreign') {
-    try {
-      for (const ev of readForeignSession(tf.tool ?? '', tf.path)) {
-        const idx = matcher(ev.text)
-        if (idx === -1) continue
-        matchCount++
-        if (snippets.length < perFileLimit) snippets.push(snippetAround(ev.text, idx, SNIPPET_LEN))
-      }
-    } catch {
-      return { hit: null, stoppedEarly: false }
-    }
-    // No deadline check: an adapter reads a whole conversation in one call, so there is no
-    // part-way point to stop at and nothing to under-report. `stoppedEarly` stays false because it
-    // means "this file's count is an undercount", which here it never is.
-    return matchCount === 0
-      ? { hit: null, stoppedEarly: false }
-      : {
-          stoppedEarly: false,
-          hit: {
-            session_id: tf.session_id,
-            source: tf.source,
-            cwd: tf.cwd || tf.project,
-            project: tf.project,
-            match_count: matchCount,
-            truncated: snippets.length < matchCount,
-            snippets,
-          },
-        }
-  }
 
   try {
     for await (const rawLine of streamLines(tf.path)) {
@@ -328,16 +336,9 @@ function sortByActivity(results: SessionSearchResult[]): SessionSearchResult[] {
  * text does not exist anywhere is worse off than one that was never given the search at all, so
  * every caller now gets `budgetExhausted` and the file counts behind it.
  */
-export async function searchSessionBodies(opts: SearchOptions): Promise<SessionSearchResponse> {
-  const query = opts.query.trim()
-  if (!query) return EMPTY_RESPONSE
-
-  const matcher = buildMatcher(opts)
-  const limit = opts.limit ?? DEFAULT_LIMIT
-  const perFileLimit = opts.perFileLimit ?? DEFAULT_PER_FILE_LIMIT
-  const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS
-  const deadline = performance.now() + budgetMs
-
+/** Every transcript file in scope for this search, OpenCode excluded (it is searched separately,
+ *  see `searchOpenCode`), newest-first. */
+function resolveSearchFiles(opts: SearchOptions): TranscriptFile[] {
   let files = listTranscriptFiles().filter((file) => file.source !== 'opencode')
   if (opts.source) files = files.filter((file) => file.source === opts.source)
   if (opts.instance) {
@@ -348,7 +349,20 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
         : f.source === 'claude' && imap.get(f.session_id) === opts.instance,
     )
   }
-  files = files.slice().sort((a, b) => b.mtime_ms - a.mtime_ms)
+  return files.slice().sort((a, b) => b.mtime_ms - a.mtime_ms)
+}
+
+export async function searchSessionBodies(opts: SearchOptions): Promise<SessionSearchResponse> {
+  const query = opts.query.trim()
+  if (!query) return EMPTY_RESPONSE
+
+  const matcher = buildMatcher(opts)
+  const limit = opts.limit ?? DEFAULT_LIMIT
+  const perFileLimit = opts.perFileLimit ?? DEFAULT_PER_FILE_LIMIT
+  const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS
+  const deadline = performance.now() + budgetMs
+
+  const files = resolveSearchFiles(opts)
 
   const found: SessionSearchResult[] = []
   const includeOpenCode = (!opts.source || opts.source === 'opencode') && !opts.instance

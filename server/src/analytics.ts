@@ -167,6 +167,32 @@ function firstPath(input: unknown): string | null {
 }
 
 /**
+ * OpenCode has already totalled its own session: the numbers are columns on its row, not events in
+ * a log, so there is nothing to stream. See openCodeSpend for why `reasoning` is kept out of
+ * `output` rather than added to it.
+ */
+function scanOpenCodeAnalytics(sessionId: string | undefined, out: SessionAnalytics): SessionAnalytics {
+  const row = sessionId ? readOpenCodeUsage(sessionId) : null
+  if (row) {
+    const spend = openCodeSpend(row)
+    out.tokens = spend.byModel
+    out.providerCostUsd = spend.costUsd
+    // No per-turn timestamps exist, so the session's own clock places it on the day chart. That
+    // puts a session's whole spend on the day it last ran rather than spreading it, which for a
+    // provider that records no turn times is the only honest placement.
+    const at = typeof row.time_updated === 'number' ? row.time_updated : null
+    if (at) {
+      out.firstTs = at
+      out.lastTs = at
+      const weighted = Object.values(spend.byModel).reduce((n, m) => n + m.weighted, 0)
+      out.days[dayKey(at)] = weighted
+      out.hours[String(hourKey(at))] = 1
+    }
+  }
+  return out
+}
+
+/**
  * Read one transcript end to end and total it up.
  *
  * Streamed, never held whole: these files reach hundreds of megabytes, and this runs over every one
@@ -186,26 +212,7 @@ export async function scanSessionAnalytics(
   // OpenCode has already totalled its own session: the numbers are columns on its row, not events
   // in a log, so there is nothing to stream. See openCodeSpend for why `reasoning` is kept out of
   // `output` rather than added to it.
-  if (source === 'opencode') {
-    const row = sessionId ? readOpenCodeUsage(sessionId) : null
-    if (row) {
-      const spend = openCodeSpend(row)
-      out.tokens = spend.byModel
-      out.providerCostUsd = spend.costUsd
-      // No per-turn timestamps exist, so the session's own clock places it on the day chart. That
-      // puts a session's whole spend on the day it last ran rather than spreading it, which for a
-      // provider that records no turn times is the only honest placement.
-      const at = typeof row.time_updated === 'number' ? row.time_updated : null
-      if (at) {
-        out.firstTs = at
-        out.lastTs = at
-        const weighted = Object.values(spend.byModel).reduce((n, m) => n + m.weighted, 0)
-        out.days[dayKey(at)] = weighted
-        out.hours[String(hourKey(at))] = 1
-      }
-    }
-    return out
-  }
+  if (source === 'opencode') return scanOpenCodeAnalytics(sessionId, out)
   // Not one of these stores records what a turn cost — Copilot bills credits and never writes a
   // token count, and Grok, Kimi and Zed simply do not persist one. So a foreign session is listed
   // and readable and contributes nothing to the spend charts. A zero would claim it was free.

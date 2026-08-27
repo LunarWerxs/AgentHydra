@@ -201,41 +201,62 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
 
   const results: CMInstance[] = []
   for (const meta of known.values()) {
-    const running = runningByDir.get(meta.dir)
-    let account: CMInstance['account'] = null
-    if (options.includeAccount && options.resolveAccount) {
-      try {
-        account = (await options.resolveAccount(meta.dir)) ?? null
-      } catch {
-        account = null
-      }
-    }
-
-    const sizeBytes = options.includeSize ? (dirSizeBytes(meta.dir) ?? null) : null
-    const memoryBytes = running ? (memoryByDir.get(meta.dir) ?? null) : null
-    const ui = metaMap[meta.dir]
-
-    const instance: CMInstance = {
-      num: numbers.get(instanceRef('desktop', meta.dir)) ?? 0,
-      name: meta.name,
-      dir: meta.dir,
-      isRunning: Boolean(running),
-      pid: running?.pid ?? null,
-      startTime: running?.startTime ?? null,
-      sizeBytes,
-      memoryBytes,
-      account,
-      loginUuid: readLoginUuid(meta.dir),
-      isExternal: meta.isExternal,
-      label: ui?.label ?? null,
-      icon: ui?.icon ?? null,
-      color: ui?.color ?? null,
-    }
-    results.push(instance)
+    results.push(
+      await buildInstanceRow(meta, {
+        options,
+        running: runningByDir.get(meta.dir),
+        memoryByDir,
+        metaMap,
+        numbers,
+      }),
+    )
   }
 
   results.sort((a, b) => a.name.localeCompare(b.name))
   return results
+}
+
+/** Builds one row of listInstances's result from its already-gathered per-dir inputs. */
+async function buildInstanceRow(
+  meta: DiscoveredMeta,
+  ctx: {
+    options: ListInstancesOptions
+    running: CMProcessInfo | undefined
+    memoryByDir: Map<string, number>
+    metaMap: ReturnType<typeof readInstanceMetaMap>
+    numbers: Map<string, number>
+  },
+): Promise<CMInstance> {
+  const { options, running, memoryByDir, metaMap, numbers } = ctx
+  let account: CMInstance['account'] = null
+  if (options.includeAccount && options.resolveAccount) {
+    try {
+      account = (await options.resolveAccount(meta.dir)) ?? null
+    } catch {
+      account = null
+    }
+  }
+
+  const sizeBytes = options.includeSize ? (dirSizeBytes(meta.dir) ?? null) : null
+  const memoryBytes = running ? (memoryByDir.get(meta.dir) ?? null) : null
+  const ui = metaMap[meta.dir]
+
+  return {
+    num: numbers.get(instanceRef('desktop', meta.dir)) ?? 0,
+    name: meta.name,
+    dir: meta.dir,
+    isRunning: Boolean(running),
+    pid: running?.pid ?? null,
+    startTime: running?.startTime ?? null,
+    sizeBytes,
+    memoryBytes,
+    account,
+    loginUuid: readLoginUuid(meta.dir),
+    isExternal: meta.isExternal,
+    label: ui?.label ?? null,
+    icon: ui?.icon ?? null,
+    color: ui?.color ?? null,
+  }
 }
 
 // ----------------------------------------------------------------------------

@@ -287,32 +287,36 @@ function pickBestGrant(decryptedJson: string): Grant | null {
     }
 
     if (!best || expiresAt > best.expiresAt) {
-      const parts = grantKey.split(':')
-      // parts[0] = OAuth client id (NOT the account — see Grant.clientId), parts[1] = orgUuid,
-      // remainder (rejoined) = "https://api...:<scopes>"
-      const clientId = parts.length >= 1 ? (parts[0] ?? null) : null
-      const orgUuid = parts.length >= 2 ? (parts[1] ?? null) : null
-
-      let token: string | null = null
-      try {
-        token = typeof value.token === 'string' ? value.token : (value.accessToken ?? null)
-      } catch {
-        token = null
-      }
-
-      best = {
-        token,
-        expiresAt,
-        subscriptionType:
-          typeof value.subscriptionType === 'string' ? value.subscriptionType : null,
-        rateLimitTier: typeof value.rateLimitTier === 'string' ? value.rateLimitTier : null,
-        clientId,
-        orgUuid,
-      }
+      best = buildGrant(grantKey, value, expiresAt)
     }
   }
 
   return best
+}
+
+/** Builds a Grant from one decrypted grant-map entry. See pickBestGrant for the grantKey shape. */
+function buildGrant(grantKey: string, value: RawGrantValue, expiresAt: number): Grant {
+  const parts = grantKey.split(':')
+  // parts[0] = OAuth client id (NOT the account — see Grant.clientId), parts[1] = orgUuid,
+  // remainder (rejoined) = "https://api...:<scopes>"
+  const clientId = parts.length >= 1 ? (parts[0] ?? null) : null
+  const orgUuid = parts.length >= 2 ? (parts[1] ?? null) : null
+
+  let token: string | null = null
+  try {
+    token = typeof value.token === 'string' ? value.token : (value.accessToken ?? null)
+  } catch {
+    token = null
+  }
+
+  return {
+    token,
+    expiresAt,
+    subscriptionType: typeof value.subscriptionType === 'string' ? value.subscriptionType : null,
+    rateLimitTier: typeof value.rateLimitTier === 'string' ? value.rateLimitTier : null,
+    clientId,
+    orgUuid,
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -396,6 +400,29 @@ export interface ResolveAccountOptions {
  * account and NO CLI login: the desktop app's `sk-ant-oat…` OAuth token is a valid
  * CLAUDE_CODE_OAUTH_TOKEN (verified 2026-07-14 — it drives `claude -p "/usage"` directly).
  */
+
+/** Of a decrypted token-cache's grants map, the max-expiresAt grant that carries `user:inference`
+ *  scope — see resolveInstanceToken for why scope, not just expiry, decides the winner here. */
+function pickBestInferenceGrant(
+  parsed: Record<string, unknown>,
+): { token: string; expiresAt: number; scopes: string } | null {
+  let best: { token: string; expiresAt: number; scopes: string } | null = null
+  for (const [key, rawValue] of Object.entries(parsed)) {
+    if (!/user:inference/.test(key)) continue // only the usage-capable CLI grant
+    if (!rawValue || typeof rawValue !== 'object') continue
+    const v = rawValue as RawGrantValue
+    const token = typeof v.token === 'string' ? v.token : (v.accessToken ?? null)
+    if (typeof token !== 'string' || !token.trim()) continue
+    const exp = typeof v.expiresAt === 'number' ? v.expiresAt : Number(v.expiresAt) || 0
+    // The grant key is "<acctUuid>:<orgUuid>:https://api.anthropic.com:<scopes>" — the scope
+    // list must be passed to `claude` as CLAUDE_CODE_OAUTH_SCOPES or /usage silently degrades
+    // (see DEFAULT_OAUTH_SCOPES in usage.ts).
+    const scopes = key.split('https://api.anthropic.com:')[1]?.trim() ?? ''
+    if (!best || exp > best.expiresAt) best = { token, expiresAt: exp, scopes }
+  }
+  return best
+}
+
 export async function resolveInstanceToken(
   instanceDir: string,
 ): Promise<{ token: string; scopes: string } | null> {
@@ -444,20 +471,7 @@ export async function resolveInstanceToken(
     }
     if (!parsed || typeof parsed !== 'object') return null
 
-    let best: { token: string; expiresAt: number; scopes: string } | null = null
-    for (const [key, rawValue] of Object.entries(parsed)) {
-      if (!/user:inference/.test(key)) continue // only the usage-capable CLI grant
-      if (!rawValue || typeof rawValue !== 'object') continue
-      const v = rawValue as RawGrantValue
-      const token = typeof v.token === 'string' ? v.token : (v.accessToken ?? null)
-      if (typeof token !== 'string' || !token.trim()) continue
-      const exp = typeof v.expiresAt === 'number' ? v.expiresAt : Number(v.expiresAt) || 0
-      // The grant key is "<acctUuid>:<orgUuid>:https://api.anthropic.com:<scopes>" — the scope
-      // list must be passed to `claude` as CLAUDE_CODE_OAUTH_SCOPES or /usage silently degrades
-      // (see DEFAULT_OAUTH_SCOPES in usage.ts).
-      const scopes = key.split('https://api.anthropic.com:')[1]?.trim() ?? ''
-      if (!best || exp > best.expiresAt) best = { token, expiresAt: exp, scopes }
-    }
+    const best = pickBestInferenceGrant(parsed)
     if (!best) return null
     // Skip an expired token rather than fire a doomed probe (expiresAt is epoch ms).
     if (best.expiresAt > 0 && best.expiresAt < Date.now()) return null
