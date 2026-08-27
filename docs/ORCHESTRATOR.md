@@ -457,16 +457,29 @@ So a reviewer must be either:
   "model": "sonnet", "permission_mode": "bypassPermissions"}`. Without `permission_mode`
   the window opens and stops on the first shell approval, exactly like the seeded one.
 
-**And the launch has a second gate that used to hang silently.** The CLI asks whether the
-folder is one you trust and blocks on a keypress, while the endpoint has already returned
-`ok: true` - a hang that reports success, which is worse than a refusal. Trust is recorded per
-project path as a LITERAL KEY, so one folder can be recorded twice and disagree with itself:
-this machine had one spelling of `PublicProjects` accepted and the other not, the same folder,
-and 61 of its 114 projects read as untrusted. `ensureProjectTrusted` now mirrors an existing
-YES onto every spelling of that folder before launching, and REFUSES with a reason when the
-folder is not trusted in any form. It will not answer the security question on the owner's
-behalf: mirroring a decision he made is normalization, making one for him is not, and a
-visible refusal beats an invisible hang.
+**And the launch has a second gate, which is NOT SOLVED.** The CLI asks whether the folder is
+one you trust and blocks on a keypress, while the endpoint has already returned `ok: true` - a
+hang that reports success, which is worse than a refusal.
+
+Trust is recorded per project path as a LITERAL KEY, so one folder can be recorded twice and
+disagree with itself: this machine had one spelling of `PublicProjects` accepted and the other
+not, the same folder, and 61 of its 114 projects read as untrusted. `ensureProjectTrusted`
+mirrors an existing YES onto every spelling before launching, and REFUSES with a reason when
+the folder is not trusted in any form. It will not answer the security question on the owner's
+behalf: mirroring a decision he made is normalization, making one for him is not.
+
+**That fixes a real inconsistency and it does NOT stop the dialog.** Measured twice on
+2026-08-27 with an instance-pinned launch: once into a folder recorded as accepted that also
+pre-approves six tool permissions, and once into a folder recorded as accepted that
+pre-approves none. Both showed the dialog anyway and never joined the live registry. So
+whatever the pinned CLI consults, it is not the `hasTrustDialogAccepted` flag in the ambient
+config, and this is recorded as UNSOLVED rather than dressed up as fixed.
+
+**Consequence, stated plainly: AgentHydra cannot currently start a reviewer unattended by any
+route.** A seeded chat deadlocks on shell approval; a terminal launch deadlocks on this
+dialog. Starting one needs a human action once - open a chat in the app and type
+`/orchestrate`, or press a key on the launched window. Everything the reviewer does AFTER that
+is zero-click; only its birth is not, and that gap is the most valuable thing left to close.
 
 Turning it off is the reverse in either order; each half degrades safely without the other
 (the feed just accumulates; the reviewer just finds an empty feed).
