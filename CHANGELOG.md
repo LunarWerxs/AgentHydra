@@ -44,6 +44,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A launched terminal could hang forever while reporting success.** Two separate gates, both
+  invisible from the API: the CLI's folder-trust prompt, and per-command shell approval. Found
+  starting the orchestrator's own reviewer, which opened a window, asked whether the folder was
+  trusted, and waited on a keypress that by the zero-click law can never come. Trust turned out
+  to be recorded per project path as a literal key, so one folder is recorded twice and can
+  disagree with itself (this machine had one spelling accepted and the other not, with 61 of
+  114 projects reading as untrusted). `launch-terminal` now mirrors an existing trust decision
+  onto every spelling of that folder, REFUSES with a reason when the folder was never trusted
+  at all rather than answering the security question for the owner, and accepts
+  `permission_mode` so an unattended window does not stop on shell approvals.
+
 - **A seeded chat could end up named after AgentHydra's own plumbing.** Found by the owner on
   his sidebar: two chats seeded during one session read as "General coding session" and
   "[orchestrator] This thread was seeded by AgentHydra for a new task. The task prompt arrives

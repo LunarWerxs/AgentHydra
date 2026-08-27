@@ -315,7 +315,13 @@ that rather than inventing content. A MIGRATED thread is NOT asked: it is contin
 whether the chat actually leaves the sidebar:
 
 1. **In the reviewer's own instance** -> the app's own archive tool. Instant and genuinely gone
-   (measured: the app's view flips immediately).
+   (measured again 2026-08-27: the flag was written AND it stuck, where the same archive done
+   through the HTTP endpoint was silently reverted by the running app minutes later).
+   **It asks its user to confirm, though, and that is load-bearing.** It went through without
+   a prompt only because that reviewer ran in BYPASS; from a normal-permissions session this
+   rung raises a dialog, which under the zero-click law is a dead end. Same shape as the relay
+   rung below, and the same warning: a ladder validated only from a bypass session looks
+   universal and is not.
 2. **Elsewhere, with any live chat in that instance** -> relay: ask that chat to archive the
    TARGET (never itself).
 3. **Nothing live there** -> `POST /api/sessions/:id/desktop-archive`, which writes the flag and
@@ -388,7 +394,9 @@ id**; its disposition is the **done-mark ledger** (`session_marks`, written by
 ## The reviewer (`/orchestrate`)
 
 An interactive chat - desktop or terminal - because only interactive sessions carry the peer
-tools. Open a chat on a **low-usage account**, model **Sonnet**, and start the loop. A plain
+tools. Open a chat on a **low-usage account**, model **Sonnet**, and start the loop. It must
+be able to run shell unattended (see "Turning it on": a SEEDED chat cannot, and stops dead on
+its first `curl`). A plain
 `claude` in a terminal works exactly as well as a desktop chat: any interactive session joins
 the live registry and gets the peer tools (use a logged-in CLI instance's `CLAUDE_CONFIG_DIR`
 to pick which account pays for it).
@@ -432,6 +440,33 @@ without the PUBLIC warning protocol.
 1. Daemon side: `POST /api/orchestrator {"enabled": true}` (or the `set_orchestrator` MCP
    tool). Defaults are sane; tune later.
 2. Reviewer side: open a fresh chat on a quiet account and type `/orchestrate`.
+
+**A REVIEWER CANNOT BE SEEDED, and this was learned the hard way (2026-08-27).** The obvious
+move, seeding a desktop chat and delivering `/orchestrate` natively, produces a reviewer that
+boots, loads the rubric, issues its first `curl` and STOPS: seeded chats are imports, imports
+land on a mode that prompts for shell, and the whole rubric is shell. Watched live: the
+transcript froze at two tool calls with no results, and the app showed "Allow Claude to run
+the command... This command requires approval". The reviewer is the one component that cannot
+tolerate that, because it is the half that acts.
+
+So a reviewer must be either:
+
+- **a chat the APP creates** (censused at 100% unattended, so it just works), or
+- **a terminal launch that asks for the mode**:
+  `POST /api/sessions/launch-terminal {"cwd", "prompt": "/orchestrate", "instance_ref",
+  "model": "sonnet", "permission_mode": "bypassPermissions"}`. Without `permission_mode`
+  the window opens and stops on the first shell approval, exactly like the seeded one.
+
+**And the launch has a second gate that used to hang silently.** The CLI asks whether the
+folder is one you trust and blocks on a keypress, while the endpoint has already returned
+`ok: true` - a hang that reports success, which is worse than a refusal. Trust is recorded per
+project path as a LITERAL KEY, so one folder can be recorded twice and disagree with itself:
+this machine had one spelling of `PublicProjects` accepted and the other not, the same folder,
+and 61 of its 114 projects read as untrusted. `ensureProjectTrusted` now mirrors an existing
+YES onto every spelling of that folder before launching, and REFUSES with a reason when the
+folder is not trusted in any form. It will not answer the security question on the owner's
+behalf: mirroring a decision he made is normalization, making one for him is not, and a
+visible refusal beats an invisible hang.
 
 Turning it off is the reverse in either order; each half degrades safely without the other
 (the feed just accumulates; the reviewer just finds an empty feed).
@@ -565,12 +600,27 @@ enable (or the install endpoint) away.
   when the reviewer reports it done (`POST /api/orchestrator/renamed`), when the owning
   instance stops running (its app will read the disk title at its next start), or after a
   week.
-- **Desktop archiving works, with one honest caveat.** The desktop keeps a per-chat metadata
-  flag, and `POST /api/sessions/:id/desktop-archive` flips it in every profile that carries the
-  chat. For an instance whose app is RUNNING, the sidebar reflects it only after that app next
-  restarts (the running app holds its list in memory and may even re-save the old state); for
-  closed instances it is reliable. Handed-off chats get AgentHydra's done-mark as the immediate
-  signal plus the archive flag for the desktop's next start.
+- **Desktop archiving works, with one honest caveat, and the caveat is not hypothetical.** The
+  desktop keeps a per-chat metadata flag, and `POST /api/sessions/:id/desktop-archive` flips it
+  in every profile that carries the chat. For an instance whose app is RUNNING, the sidebar
+  reflects it only after that app next restarts; for closed instances it is reliable.
+  Handed-off chats get AgentHydra's done-mark as the immediate signal plus the archive flag for
+  the desktop's next start.
+
+  This used to read "the running app ... may even re-save the old state". OBSERVED 2026-08-27:
+  a chat archived through this endpoint returned `ok: true`, and minutes later its metadata read
+  `isArchived: false` again. The running app had re-asserted its own copy. So the endpoint's
+  honest promise for a running instance is weaker than "archived, pending a restart": the flag
+  can simply be erased before that restart ever happens, and the response cannot tell you which
+  it will be.
+
+  That completes a pattern worth naming, because all three were found separately and are one
+  behaviour: **while an app is running, its metadata files are its own, and it re-asserts them
+  on every boot.** Titles, permission modes and archive flags are all written successfully and
+  all three can be silently reverted. Anything that must STICK in a running instance has to go
+  through the app's own tools, which is why rung 1 of both ladders is mandatory rather than
+  merely preferred, and why a disk write is a fallback for CLOSED instances rather than the
+  primary mechanism anywhere.
 
 ## Limitations, stated out loud
 

@@ -2174,6 +2174,15 @@ app.post('/api/sessions/launch-terminal', async (c) => {
     return c.json({ error: 'cwd and prompt are required' }, 400)
   if (body.effort != null && invalidEnum(body.effort, VALID_EFFORTS, 'effort'))
     return c.json({ error: invalidEnum(body.effort, VALID_EFFORTS, 'effort') }, 400)
+  // An unattended window (the orchestrator reviewer) must be able to ask for a mode that does
+  // not stop on shell approvals. Validated against the same set every other entry point uses,
+  // because 'bypassPermissions' runs every tool with no approval and a typo must not silently
+  // become something else.
+  if (body.permission_mode != null && !VALID_PERMISSION_MODES.has(String(body.permission_mode)))
+    return c.json(
+      { error: `permission_mode must be one of ${[...VALID_PERMISSION_MODES].join(', ')}` },
+      400,
+    )
   // resume_session_id continues an existing thread in the window (owner's no-headless rule:
   // continuations happen where they can be watched). Refuse it while that thread is live, and
   // refuse a done-marked lineage (one lineage, one continuation — its successor owns the task).
@@ -2202,6 +2211,7 @@ app.post('/api/sessions/launch-terminal', async (c) => {
     effort: typeof body.effort === 'string' ? body.effort : null,
     resumeSessionId: typeof body.resume_session_id === 'string' ? body.resume_session_id : null,
     force: body.force === true,
+    permissionMode: typeof body.permission_mode === 'string' ? body.permission_mode : null,
   })
   return c.json(result, result.ok ? 200 : 422)
 })

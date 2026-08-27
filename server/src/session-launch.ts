@@ -104,11 +104,15 @@ export function buildTerminalLaunchPlan(
   model: string | null,
   effort: string | null = null,
   resumeSessionId: string | null = null,
+  permissionMode: string | null = null,
 ): TerminalLaunchPlan {
   // With resumeSessionId, the window CONTINUES an existing thread (--resume) with the prompt as
   // its next turn — the visible alternative to a headless queue resume, per the owner's standing
   // rule that nothing runs headless: work happens where it can be watched.
-  const modelArgs = `${resumeSessionId ? ` --resume ${resumeSessionId}` : ''}${model ? ` --model ${model}` : ''}${effort ? ` --effort ${effort}` : ''}`
+  // An UNATTENDED window (the orchestrator reviewer is the case that forced this) must not
+  // stop on a per-command approval prompt, because nobody is there to answer it. Opt-in: a
+  // caller that does not ask keeps the CLI's own default.
+  const modelArgs = `${resumeSessionId ? ` --resume ${resumeSessionId}` : ''}${model ? ` --model ${model}` : ''}${effort ? ` --effort ${effort}` : ''}${permissionMode ? ` --permission-mode ${permissionMode}` : ''}`
   if (platform === 'win32') {
     // PowerShell (not cmd) runs the claude line: `Get-Content -Raw` hands the multiline prompt
     // over as ONE argv element, which cmd cannot do. -NoExit keeps the window (and any startup
@@ -128,6 +132,68 @@ export function buildTerminalLaunchPlan(
     return { argv: ['x-terminal-emulator', '-e', 'bash', '-lc', `${sh}; exec bash`], command: sh }
   }
   return { argv: [], command: sh }
+}
+
+/**
+ * Is `cwd` trusted for the CLI config at `configDir` (null = the ambient ~/.claude.json), and
+ * if it is trusted under a DIFFERENT spelling of the same path, mirror it onto the spelling
+ * that is missing so the launch does not stop on a dialog.
+ *
+ * The CLI keys `projects` by the literal cwd string, so `D:\\PublicProjects` and
+ * `D:/PublicProjects` are two records of one folder and can disagree. On this machine they DO:
+ * one true, one false, which is how a launch into a long-trusted folder hangs on the trust
+ * prompt. Mirroring an existing YES is a normalization, not a new grant.
+ *
+ * It deliberately does NOT trust a folder nobody has trusted. A launcher that answered the
+ * security question on the owner's behalf would be worse than a launcher that hangs, because
+ * the hang is at least visible. Returns why, so the caller can say so instead of opening a
+ * window that dies quietly.
+ */
+export function ensureProjectTrusted(
+  cwd: string,
+  configDir: string | null,
+): { trusted: boolean; mirrored: boolean; reason?: string } {
+  const file = join(configDir ?? homedir(), '.claude.json')
+  if (!existsSync(file)) return { trusted: false, mirrored: false, reason: 'no-cli-config' }
+  let cfg: Record<string, unknown>
+  try {
+    cfg = JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    return { trusted: false, mirrored: false, reason: 'cli-config-unreadable' }
+  }
+  const projects = (cfg.projects ?? {}) as Record<string, Record<string, unknown>>
+  // Same folder, any spelling: slashes normalized, case-folded (Windows paths are
+  // case-insensitive), trailing separators dropped.
+  const canon = (p: string) =>
+    p
+      .replace(/[\\/]+/g, '/')
+      .replace(/\/+$/, '')
+      .toLowerCase()
+  const target = canon(cwd)
+  const siblings = Object.keys(projects).filter((k) => canon(k) === target)
+  const exact = Object.keys(projects).find((k) => k === cwd)
+  if (exact && projects[exact]?.hasTrustDialogAccepted === true)
+    return { trusted: true, mirrored: false }
+  const trustedElsewhere = siblings.find((k) => projects[k]?.hasTrustDialogAccepted === true)
+  if (!trustedElsewhere)
+    return {
+      trusted: false,
+      mirrored: false,
+      reason: siblings.length ? 'folder-not-trusted' : 'folder-unknown',
+    }
+  // Mirror the YES onto every spelling of this folder, including the one the caller used, so
+  // whichever key the CLI looks up finds it.
+  try {
+    const donor = projects[trustedElsewhere]
+    for (const k of new Set([...siblings, cwd])) {
+      projects[k] = { ...(projects[k] ?? donor), hasTrustDialogAccepted: true }
+    }
+    cfg.projects = projects
+    writeFileSync(file, JSON.stringify(cfg, null, 2))
+    return { trusted: true, mirrored: true }
+  } catch {
+    return { trusted: false, mirrored: false, reason: 'cli-config-unwritable' }
+  }
 }
 
 export interface TerminalLaunchResult {
@@ -155,6 +221,9 @@ export async function launchTerminalSession(opts: {
   resumeSessionId?: string | null
   /** Resume a done-marked (superseded) lineage anyway. See isSessionSuperseded. */
   force?: boolean
+  /** Start the session in this permission mode. An UNATTENDED window needs
+   *  'bypassPermissions' or it stops on the first shell approval with nobody to answer. */
+  permissionMode?: string | null
 }): Promise<TerminalLaunchResult> {
   if (opts.resumeSessionId && !opts.force && isSessionSuperseded(opts.resumeSessionId))
     return {
@@ -196,6 +265,26 @@ export async function launchTerminalSession(opts: {
     return { ok: false, reason: `malformed instance ref (${ref})`, command: '' }
   }
 
+  // THE TRUST PRE-FLIGHT. Without it the window opens, asks 'do you trust this folder', and
+  // waits forever on a keypress nobody can give, while this function has already returned
+  // ok:true. Found 2026-08-27 starting a reviewer: a hang that is invisible from the API is
+  // worse than a refusal, because nothing anywhere says the launch did not take.
+  const trust = ensureProjectTrusted(opts.cwd, env.CLAUDE_CONFIG_DIR ?? null)
+  if (!trust.trusted)
+    return {
+      ok: false,
+      reason:
+        `folder-not-trusted (${trust.reason}): the CLI would stop on its trust prompt for ` +
+        `${opts.cwd} and wait for a keypress. Open that folder once in this account's app or ` +
+        `CLI and accept, then relaunch. AgentHydra deliberately will not answer that question ` +
+        'for you.',
+      command: '',
+    }
+  if (trust.mirrored)
+    console.log(
+      `[agenthydra] mirrored an existing trust decision onto ${opts.cwd} (the CLI keys trust by the literal path string, so slash style can hide a yes)`,
+    )
+
   const dir = join(tmpdir(), 'agenthydra-launch')
   mkdirSync(dir, { recursive: true })
   const promptFile = join(dir, `prompt-${crypto.randomUUID()}.txt`)
@@ -208,6 +297,7 @@ export async function launchTerminalSession(opts: {
     opts.model?.trim() || null,
     opts.effort?.trim() || null,
     opts.resumeSessionId?.trim() || null,
+    opts.permissionMode?.trim() || null,
   )
   if (plan.argv.length === 0) return { ok: false, reason: 'no-terminal', command: plan.command }
   // The child gets a SANITIZED environment: every CLAUDE*/ANTHROPIC* variable the daemon itself
