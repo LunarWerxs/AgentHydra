@@ -17,6 +17,11 @@
  * re-asserts its own import default. The stamp held 4 times in 30. Same mechanism as the title
  * clobber, and the same cause: while an app is running, its metadata files are its own.
  *
+ * The stamp was then measured directly (seed, boot, re-stamp, boot again): it lands, and the
+ * app overwrites it on EVERY boot, not just the import boot. So the 4 survivors above are not
+ * a second mechanism, they are chats nobody has woken yet. Per-chat stamping cannot hold for
+ * a chat the orchestrator wakes, which is every chat it revives.
+ *
  * Run it after changing anything in the import path, and before believing the stamp works.
  *
  *   bun scripts/permission-mode-census.mjs           summary
@@ -96,7 +101,8 @@ console.log(
   `\nLIVE DEADLOCK CANDIDATES (imported, not unattended, not archived): ${stuck.length}`,
 )
 console.log('Each one runs until its first shell command and then waits on a prompt nobody can')
-console.log('click. Revive those with file tools only, or re-stamp after the chat has booted.')
+console.log('click. Revive those with FILE TOOLS ONLY. Do not re-stamp: measured 2026-08-27, the')
+console.log('app overwrites the mode on every boot, and waking the chat to fix it IS a boot.')
 
 if (LIST) {
   const notable = rows

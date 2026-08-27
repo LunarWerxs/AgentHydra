@@ -606,10 +606,29 @@ enable (or the install endpoint) away.
   preference are 100% unattended and chats in folders without it are 99%, which is the same
   answer twice, not a difference. The folder map explains nothing here.
 
-  The untested direction that remains is re-stamping AFTER the chat has booted once, since the
-  clobber happens on that first boot. Until someone measures whether a second stamp survives
-  the NEXT boot, treat this as mitigated rather than closed, and run the census before
-  believing any change to the import path fixed it.
+  **The whole mechanism was then run as an experiment (2026-08-27) and it is worse than
+  mitigated: per-chat stamping cannot work at all for a chat the orchestrator wakes.** A
+  throwaway chat was seeded, and the states measured at every step:
+
+  1. Seeded, not yet booted: `bypassPermissions`. The stamp DOES land.
+  2. One message delivered, engine boots: `acceptEdits` within 9 seconds. Clobbered.
+  3. Re-stamped `bypassPermissions` by hand on the already-booted chat: holds while idle.
+  4. A second message delivered: `acceptEdits` again.
+
+  So the clobber is not a one-time import behaviour that a later stamp could get ahead of. The
+  app re-asserts its own mode on EVERY boot, and a delivery is a boot. That also explains the
+  4 survivors in the census without needing a second mechanism: they are simply chats nobody
+  has woken yet. A stamped import is unattended exactly until the moment it first does
+  anything, which is the moment it stops being useful.
+
+  The per-folder preference does not rescue it either, tested against the population it could
+  plausibly have applied to: imported chats whose cwd IS in their instance's map are 1 of 3
+  unattended, the same rate as everything else.
+
+  **Therefore file-tools-only is not a workaround for an unreliable stamp, it is the standing
+  posture for reviving an imported chat**, and the rubric says so. Closing this properly needs
+  something the app owns: a setting, a launch flag, or an import that lands as an app-created
+  chat rather than an import. Run the census before believing any future change fixed it.
 - Context-size numbers come from the last assistant event's token usage - accurate enough for
   a handoff threshold, not an accounting tool.
 - **Synthetic UI input is a dead end, not an unbuilt fallback.** A pre-v0.36 revive path drove

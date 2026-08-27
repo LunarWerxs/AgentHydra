@@ -167,6 +167,16 @@ allowed to answer "nothing here is still worth keeping" - that is a good outcome
   it instead of complying. It is right to, and a fleet trained to obey that would be worse than
   the inconvenience. You archive it; it does not archive itself.
 
+**REVIVING AN IMPORTED CHAT: ASK FOR FILE TOOLS ONLY, ALWAYS.** Not as a fallback when you
+see `detail.approvalStall`, but in the first message, every time. Measured 2026-08-27 by
+experiment: AgentHydra stamps the unattended mode at import and the app overwrites it back to
+one that PROMPTS on shell commands every single time the chat boots, and your delivery IS a
+boot. Re-stamping afterwards does not help; it is overwritten again on the next turn. So an
+imported chat you wake is always one shell command away from a prompt nobody can click, which
+is a silent deadlock: alive, idle, no error anywhere. Word the revive so the work it resumes
+can be done with Read/Write/Edit/Grep, and if the task genuinely needs a shell, say so and
+surface it rather than starting something that will hang.
+
 **`import`**: a finished session is visible in no sidebar (owner rule: no chat is ever
 invisible).
 - Approve unless the session is plumbing residue that should stay buried (then reject with

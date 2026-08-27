@@ -55,6 +55,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Documented
 
+- **The approval-stall deadlock is now characterised by experiment, and per-chat stamping
+  cannot fix it.** Seeded a chat, watched the states: the unattended stamp lands, the app
+  overwrites it within 9 seconds of the chat's first boot, a manual re-stamp holds while idle
+  and is overwritten again on the very next turn. The clobber is every-boot, and a delivery is
+  a boot, so a stamped import is unattended exactly until it first does anything. The reviewer
+  rubric now asks for file-tools-only in the FIRST message of every revive rather than as a
+  fallback after a stall is detected.
 - **The approval-stall deadlock was understood backwards, and is now measured.** The belief was
   that chats the desktop app creates itself land on a mode that prompts. A census of the real
   fleet (1,362 chats, new `scripts/permission-mode-census.mjs`) says the opposite: chats the
