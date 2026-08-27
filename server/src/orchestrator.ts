@@ -952,6 +952,78 @@ interface UsagePrev {
 
 /** Compare the usage cache against the previous pass's baselines and produce alert items.
  *  Pure: baselines in, baselines out; the caller persists them. */
+/**
+ * The usage-alert items (spike / band-escalation) for one cache key, plus the `next` entry to
+ * carry forward for it — or `next: null` for every early-exit the original inline `continue`s
+ * covered (codex key, no weekly reading, stale capture, already-reset window). Pure — no I/O, no
+ * awaits — split out of computeUsageItems' per-key loop where it was inline before.
+ */
+function usageItemsForKey(
+  key: string,
+  snap: UsageSnapshot,
+  p: UsagePrev | undefined,
+  s: OrchestratorSettings,
+  nowMs: number,
+  nowIso: string,
+): { items: AttentionItem[]; next: UsagePrev | null } {
+  const none = { items: [] as AttentionItem[], next: null }
+  if (key.startsWith('codex:')) return none // Claude quota only; Codex pacing is not this feature
+  const wk = snap.weekAll
+  if (!wk || typeof wk.pct !== 'number') return none
+  // A reading captured before its own weekly reset describes LAST week — alerting on it is a
+  // zombie ("100% critical" from a month-old snapshot of an instance nobody runs anymore).
+  // Same for a reading nothing has refreshed in a day: absence of data, not data.
+  const capturedMs = Date.parse(snap.capturedAt ?? '')
+  if (!Number.isNaN(capturedMs) && nowMs - capturedMs > 24 * 3600 * 1000) return none
+  if (wk.resetsAt) {
+    const resetMs = Date.parse(wk.resetsAt)
+    if (!Number.isNaN(resetMs) && resetMs < nowMs) return none
+  }
+  const band = bandForPct(wk.pct, s)
+  const soon = resetsSoon(wk.resetsAt ?? null, nowMs, s)
+  const next: UsagePrev = { pct: wk.pct, atMs: nowMs, band }
+  const detail: Record<string, unknown> = {
+    account: snap.account,
+    weeklyPct: wk.pct,
+    weeklyResetsAt: wk.resetsAt ?? null,
+    sessionPct: snap.session?.pct ?? null,
+    band,
+    resetsSoon: soon,
+    capturedAt: snap.capturedAt,
+  }
+  const items: AttentionItem[] = []
+  // Spike: a jump of ≥ spikePct between two readings within 30 minutes — the "something just
+  // launched a billion subtasks" tripwire.
+  if (p && nowMs - p.atMs <= 30 * 60_000 && wk.pct - p.pct >= s.spikePct) {
+    items.push({
+      key: `usage-spike:${key}`,
+      kind: 'usage_alert',
+      instanceRef: key,
+      summary: `usage spike: ${snap.account ?? key} weekly ${p.pct}% -> ${wk.pct}% in ${Math.round((nowMs - p.atMs) / 60_000)}m`,
+      detail: { ...detail, spikeFromPct: p.pct },
+      firstSeenAt: nowIso,
+      seenCount: 1,
+    })
+  }
+  // Band escalation (and standing critical): the reset-soon exemption turns a high reading
+  // into a dump target instead of an alarm.
+  const escalated = !p || BAND_RANK[band] > BAND_RANK[p.band]
+  if (band !== 'ok' && !soon && (escalated || band === 'critical')) {
+    items.push({
+      key: `usage:${key}:${band}`,
+      kind: 'usage_alert',
+      instanceRef: key,
+      summary: `${snap.account ?? key} weekly at ${wk.pct}% (${band})${
+        band === 'critical' ? ' — hard-cutoff territory' : ''
+      }`,
+      detail: { ...detail, hardCutoff: band === 'critical' },
+      firstSeenAt: nowIso,
+      seenCount: 1,
+    })
+  }
+  return { items, next }
+}
+
 export function computeUsageItems(
   cache: Record<string, UsageSnapshot>,
   prev: Record<string, UsagePrev>,
@@ -962,60 +1034,9 @@ export function computeUsageItems(
   const items: AttentionItem[] = []
   const next: Record<string, UsagePrev> = {}
   for (const [key, snap] of Object.entries(cache)) {
-    if (key.startsWith('codex:')) continue // Claude quota only; Codex pacing is not this feature
-    const wk = snap.weekAll
-    if (!wk || typeof wk.pct !== 'number') continue
-    // A reading captured before its own weekly reset describes LAST week — alerting on it is a
-    // zombie ("100% critical" from a month-old snapshot of an instance nobody runs anymore).
-    // Same for a reading nothing has refreshed in a day: absence of data, not data.
-    const capturedMs = Date.parse(snap.capturedAt ?? '')
-    if (!Number.isNaN(capturedMs) && nowMs - capturedMs > 24 * 3600 * 1000) continue
-    if (wk.resetsAt) {
-      const resetMs = Date.parse(wk.resetsAt)
-      if (!Number.isNaN(resetMs) && resetMs < nowMs) continue
-    }
-    const band = bandForPct(wk.pct, s)
-    const soon = resetsSoon(wk.resetsAt ?? null, nowMs, s)
-    const p = prev[key]
-    next[key] = { pct: wk.pct, atMs: nowMs, band }
-    const detail: Record<string, unknown> = {
-      account: snap.account,
-      weeklyPct: wk.pct,
-      weeklyResetsAt: wk.resetsAt ?? null,
-      sessionPct: snap.session?.pct ?? null,
-      band,
-      resetsSoon: soon,
-      capturedAt: snap.capturedAt,
-    }
-    // Spike: a jump of ≥ spikePct between two readings within 30 minutes — the "something just
-    // launched a billion subtasks" tripwire.
-    if (p && nowMs - p.atMs <= 30 * 60_000 && wk.pct - p.pct >= s.spikePct) {
-      items.push({
-        key: `usage-spike:${key}`,
-        kind: 'usage_alert',
-        instanceRef: key,
-        summary: `usage spike: ${snap.account ?? key} weekly ${p.pct}% -> ${wk.pct}% in ${Math.round((nowMs - p.atMs) / 60_000)}m`,
-        detail: { ...detail, spikeFromPct: p.pct },
-        firstSeenAt: nowIso,
-        seenCount: 1,
-      })
-    }
-    // Band escalation (and standing critical): the reset-soon exemption turns a high reading
-    // into a dump target instead of an alarm.
-    const escalated = !p || BAND_RANK[band] > BAND_RANK[p.band]
-    if (band !== 'ok' && !soon && (escalated || band === 'critical')) {
-      items.push({
-        key: `usage:${key}:${band}`,
-        kind: 'usage_alert',
-        instanceRef: key,
-        summary: `${snap.account ?? key} weekly at ${wk.pct}% (${band})${
-          band === 'critical' ? ' — hard-cutoff territory' : ''
-        }`,
-        detail: { ...detail, hardCutoff: band === 'critical' },
-        firstSeenAt: nowIso,
-        seenCount: 1,
-      })
-    }
+    const r = usageItemsForKey(key, snap, prev[key], s, nowMs, nowIso)
+    if (r.next) next[key] = r.next
+    items.push(...r.items)
   }
   return { items, next }
 }

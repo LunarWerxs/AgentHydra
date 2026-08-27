@@ -38,7 +38,7 @@ import type {
   SpendReport,
   TokenBreakdown,
 } from './types'
-import { addTurn, CodexUsageReader, openCodeSpend } from './usage-foreign'
+import { addTurn, type CodexTurn, CodexUsageReader, openCodeSpend } from './usage-foreign'
 import { accumulateUsageLine, emptySpend, newUsageSeen } from './usage-tokens'
 
 /**
@@ -195,6 +195,63 @@ function scanOpenCodeAnalytics(
   return out
 }
 
+type TranscriptEventForAnalytics = {
+  type?: string
+  isCompactSummary?: boolean
+  timestamp?: string
+  message?: { role?: string; content?: unknown }
+}
+
+/**
+ * Fold one parsed transcript event (an assistant/tool message) into `out`, given the running
+ * turn index and tool-error streak. Pure aside from mutating `out`'s counters/collections — no
+ * I/O, no awaits — so it can run synchronously wherever the line-parsing loop reaches it.
+ *
+ * Returns the next `{ turn, streak }` when the event carried message content (matching the
+ * original inline `turn++`), or null when it did not (matching the original inline `continue`,
+ * which left `turn`/`streak` untouched for that line).
+ */
+function applyTranscriptEventToAnalytics(
+  ev: TranscriptEventForAnalytics,
+  turn: number,
+  streak: number,
+  out: SessionAnalytics,
+): { turn: number; streak: number } | null {
+  if (ev.isCompactSummary === true) out.compactions++
+  const content = ev.message?.content
+  if (!Array.isArray(content)) return null
+  const nextTurn = turn + 1
+  const at = ev.timestamp ? Date.parse(ev.timestamp) : Number.NaN
+  const atMs = Number.isFinite(at) ? at : null
+  let nextStreak = streak
+
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue
+    const b = block as { type?: string; name?: string; input?: unknown; is_error?: boolean }
+    if (b.type === 'tool_use') {
+      const name = typeof b.name === 'string' && b.name ? b.name : 'tool'
+      out.tools[name] = (out.tools[name] ?? 0) + 1
+      if (EDIT_TOOLS.has(name)) {
+        const p = firstPath(b.input)
+        if (p) {
+          out.editCount++
+          if (out.edits.length < MAX_EDITS_PER_SESSION)
+            out.edits.push({ path: p, turn: nextTurn, ts: atMs })
+        }
+      }
+    } else if (b.type === 'tool_result') {
+      if (b.is_error === true) {
+        out.toolErrors++
+        nextStreak++
+        if (nextStreak > out.toolErrorStreak) out.toolErrorStreak = nextStreak
+      } else {
+        nextStreak = 0
+      }
+    }
+  }
+  return { turn: nextTurn, streak: nextStreak }
+}
+
 /**
  * Read one transcript end to end and total it up.
  *
@@ -266,47 +323,16 @@ export async function scanSessionAnalytics(
       !line.includes('Compact')
     )
       continue
-    let ev: {
-      type?: string
-      isCompactSummary?: boolean
-      timestamp?: string
-      message?: { role?: string; content?: unknown }
-    }
+    let ev: TranscriptEventForAnalytics
     try {
       ev = JSON.parse(line)
     } catch {
       continue
     }
-    if (ev.isCompactSummary === true) out.compactions++
-    const content = ev.message?.content
-    if (!Array.isArray(content)) continue
-    turn++
-    const at = ev.timestamp ? Date.parse(ev.timestamp) : Number.NaN
-    const atMs = Number.isFinite(at) ? at : null
-
-    for (const block of content) {
-      if (!block || typeof block !== 'object') continue
-      const b = block as { type?: string; name?: string; input?: unknown; is_error?: boolean }
-      if (b.type === 'tool_use') {
-        const name = typeof b.name === 'string' && b.name ? b.name : 'tool'
-        out.tools[name] = (out.tools[name] ?? 0) + 1
-        if (EDIT_TOOLS.has(name)) {
-          const p = firstPath(b.input)
-          if (p) {
-            out.editCount++
-            if (out.edits.length < MAX_EDITS_PER_SESSION)
-              out.edits.push({ path: p, turn, ts: atMs })
-          }
-        }
-      } else if (b.type === 'tool_result') {
-        if (b.is_error === true) {
-          out.toolErrors++
-          streak++
-          if (streak > out.toolErrorStreak) out.toolErrorStreak = streak
-        } else {
-          streak = 0
-        }
-      }
+    const next = applyTranscriptEventToAnalytics(ev, turn, streak, out)
+    if (next) {
+      turn = next.turn
+      streak = next.streak
     }
   }
 
@@ -391,6 +417,71 @@ async function scanCodexAnalytics(
   return out
 }
 
+/**
+ * Fold one dated Codex usage turn into `out`'s day/hour/activity charts and returns the new
+ * `prevTs` for the caller's activity-gap tracking. Pure aside from mutating `out` — no I/O, no
+ * awaits — split out of scanOneCodexRollout's per-line loop where it was inline before.
+ */
+function applyCodexTurnToAnalytics(
+  t: CodexTurn,
+  out: SessionAnalytics,
+  prevTs: number | null,
+): number | null {
+  if (t.ts === null) return prevTs
+  const day = dayKey(t.ts)
+  // Weighted so the day chart apportions a Codex session the same way it does a Claude one.
+  out.days[day] =
+    (out.days[day] ?? 0) + t.input + t.cacheRead * 0.1 + t.cacheWrite * 1.25 + t.output * 5
+  const hour = String(hourKey(t.ts))
+  out.hours[hour] = (out.hours[hour] ?? 0) + 1
+  if (out.firstTs === null || t.ts < out.firstTs) out.firstTs = t.ts
+  if (out.lastTs === null || t.ts > out.lastTs) out.lastTs = t.ts
+  if (prevTs !== null && t.ts > prevTs) out.activeMs += Math.min(t.ts - prevTs, ACTIVE_GAP_CAP_MS)
+  return t.ts
+}
+
+/**
+ * Record one Codex tool-call response item into `out.tools`/`out.edits`, mirroring the
+ * `tool_use` handling in applyTranscriptEventToAnalytics for the Claude format. Pure aside from
+ * mutating `out` — split out of scanOneCodexRollout's per-line loop where it was inline before.
+ */
+function recordCodexToolCall(
+  payload: { type?: string; name?: string; arguments?: unknown; call_id?: string },
+  turn: number,
+  lastTs: number | null,
+  out: SessionAnalytics,
+): void {
+  // Codex has TWO call shapes and both are tool use: `function_call` for a declared tool, and
+  // `custom_tool_call` for its sandbox (`exec`, `wait`). Counting only the first missed the two
+  // most-used tools in a real rollout entirely.
+  //
+  // NOTE ON EDITS: no edit is recorded for Codex, deliberately. Its file changes happen INSIDE
+  // the `exec` sandbox as free-form code rather than as a tool call with a path argument, so
+  // there is nothing structured to read. Guessing a path out of a code string would produce a
+  // feed that is wrong in ways nobody could check, which is worse than one that is empty.
+  if (
+    !(payload.type === 'function_call' || payload.type === 'custom_tool_call') ||
+    typeof payload.name !== 'string'
+  )
+    return
+  const name = payload.name || 'tool'
+  out.tools[name] = (out.tools[name] ?? 0) + 1
+  if (!(EDIT_TOOLS.has(name) || /apply_patch|edit_file|write_file/i.test(name))) return
+  let input: unknown = payload.arguments
+  if (typeof input === 'string') {
+    try {
+      input = JSON.parse(input)
+    } catch {
+      input = null
+    }
+  }
+  const p = firstPath(input)
+  if (p) {
+    out.editCount++
+    if (out.edits.length < MAX_EDITS_PER_SESSION) out.edits.push({ path: p, turn, ts: lastTs })
+  }
+}
+
 async function scanOneCodexRollout(path: string, out: SessionAnalytics): Promise<SessionAnalytics> {
   const paths = [path]
   let turn = -1
@@ -436,19 +527,7 @@ async function scanOneCodexRollout(path: string, out: SessionAnalytics): Promise
           attribute(t.model)
           addTurn(out.tokens, t.model, t)
         }
-        if (t.ts !== null) {
-          const day = dayKey(t.ts)
-          // Weighted so the day chart apportions a Codex session the same way it does a Claude one.
-          out.days[day] =
-            (out.days[day] ?? 0) + t.input + t.cacheRead * 0.1 + t.cacheWrite * 1.25 + t.output * 5
-          const hour = String(hourKey(t.ts))
-          out.hours[hour] = (out.hours[hour] ?? 0) + 1
-          if (out.firstTs === null || t.ts < out.firstTs) out.firstTs = t.ts
-          if (out.lastTs === null || t.ts > out.lastTs) out.lastTs = t.ts
-          if (prevTs !== null && t.ts > prevTs)
-            out.activeMs += Math.min(t.ts - prevTs, ACTIVE_GAP_CAP_MS)
-          prevTs = t.ts
-        }
+        prevTs = applyCodexTurnToAnalytics(t, out, prevTs)
       }
 
       const payload = ev.payload
@@ -457,37 +536,7 @@ async function scanOneCodexRollout(path: string, out: SessionAnalytics): Promise
       if (ev.type === 'compacted') out.compactions++
       if (ev.type !== 'response_item') continue
       turn++
-      // Codex has TWO call shapes and both are tool use: `function_call` for a declared tool, and
-      // `custom_tool_call` for its sandbox (`exec`, `wait`). Counting only the first missed the two
-      // most-used tools in a real rollout entirely.
-      //
-      // NOTE ON EDITS: no edit is recorded for Codex, deliberately. Its file changes happen INSIDE
-      // the `exec` sandbox as free-form code rather than as a tool call with a path argument, so
-      // there is nothing structured to read. Guessing a path out of a code string would produce a
-      // feed that is wrong in ways nobody could check, which is worse than one that is empty.
-      if (
-        (payload.type === 'function_call' || payload.type === 'custom_tool_call') &&
-        typeof payload.name === 'string'
-      ) {
-        const name = payload.name || 'tool'
-        out.tools[name] = (out.tools[name] ?? 0) + 1
-        if (EDIT_TOOLS.has(name) || /apply_patch|edit_file|write_file/i.test(name)) {
-          let input: unknown = payload.arguments
-          if (typeof input === 'string') {
-            try {
-              input = JSON.parse(input)
-            } catch {
-              input = null
-            }
-          }
-          const p = firstPath(input)
-          if (p) {
-            out.editCount++
-            if (out.edits.length < MAX_EDITS_PER_SESSION)
-              out.edits.push({ path: p, turn, ts: out.lastTs })
-          }
-        }
-      }
+      recordCodexToolCall(payload, turn, out.lastTs, out)
     }
   }
   // Whatever else this rollout established, applied to the turns that named no model themselves.
@@ -872,131 +921,165 @@ const sortBuckets = (m: Map<string, SpendBucket>) =>
  * because every breakdown has to agree with every other one: a "by project" total that does not sum
  * to the "by model" total is worse than either on its own.
  */
+/** Mutable accumulators threaded through foldSpendRow, one instance per spendReport() call. */
+interface SpendAccumulator {
+  byModel: Map<string, SpendBucket>
+  byProject: Map<string, SpendBucket>
+  byDay: Map<string, SpendBucket>
+  byAccount: Map<string, SpendBucket>
+  byProvider: Map<
+    SessionSource,
+    { key: SessionSource; tokens: TokenBreakdown; sessions: number; costUsd: number | null }
+  >
+  unpriced: Set<string>
+  tokenTotals: TokenBreakdown
+  totalCost: number
+  anyPriced: boolean
+  totalWeighted: number
+  sessions: number
+  from: string | null
+  to: string | null
+}
+
+/**
+ * Fold one analytics_row into the running spendReport accumulators. Pure aside from mutating
+ * `acc`'s maps/sets/totals — no I/O, no awaits — split out of spendReport's per-row loop where
+ * it was inline before, so the loop itself stays a plain `for (const row of rows) foldSpendRow(...)`.
+ */
+function foldSpendRow(
+  row: AnalyticsRow,
+  since: number | null,
+  accounts: Map<string, string>,
+  acc: SpendAccumulator,
+): void {
+  if (row.analytics_version !== ANALYTICS_VERSION) return
+  if (since !== null && (row.last_ts ?? 0) < since) return
+  const tokens = withoutNonModels(parseJson<Record<string, ModelSpend>>(row.tokens_json, {}))
+  const days = parseJson<Record<string, number>>(row.days_json, {})
+  const modelKeys = Object.keys(tokens)
+  if (modelKeys.length === 0) return
+  acc.sessions++
+
+  // Priced at the session's own newest turn, matching what the session header shows, so the two
+  // surfaces cannot disagree about the same session.
+  const at = row.last_ts ?? Date.now()
+  const priced = priceTokens(tokens, at)
+  // A cost the provider computed itself wins over our table: OpenCode routes to models this repo
+  // has no prices for, and its own figure is the real one rather than a gap we would report as
+  // unpriced. Only its models are then left out of the unpriced list, since they ARE priced.
+  const ownCost = row.provider_cost_usd
+  const hasOwnCost = typeof ownCost === 'number' && Number.isFinite(ownCost)
+  if (!hasOwnCost) for (const m of priced.unpriced) acc.unpriced.add(m)
+  const sessionCost = hasOwnCost ? ownCost : priced.costUsd
+  if (sessionCost !== null) {
+    acc.totalCost += sessionCost
+    acc.anyPriced = true
+  }
+
+  // When the PROVIDER priced the session, its models are priced too — split proportionally, the
+  // same way the day chart splits a session across days. Without this, "cost by model" showed a
+  // dash for every OpenCode model while "cost by provider" showed real money for the same
+  // sessions, which is two answers to one question.
+  const totalWeightedInSession = Object.values(tokens).reduce((n, m) => n + m.weighted, 0)
+  let sessionWeighted = 0
+  for (const [model, spend] of Object.entries(tokens)) {
+    sessionWeighted += spend.weighted
+    const share =
+      hasOwnCost && totalWeightedInSession > 0 ? spend.weighted / totalWeightedInSession : 0
+    const modelCost = hasOwnCost
+      ? (sessionCost ?? 0) * share
+      : priceTokens({ [model]: spend }, at).costUsd
+    const b = addTo(acc.byModel, model, spend.weighted, modelCost)
+    b.sessions++
+    b.turns += spend.turns
+    b.tokens = b.tokens ?? emptyTokens()
+    addTokens(b.tokens, spend)
+    addTokens(acc.tokenTotals, spend)
+  }
+  acc.totalWeighted += sessionWeighted
+
+  // Per provider, because "my statistics only show Claude" is exactly the question this answers.
+  const provider = (row.source as SessionSource) ?? 'claude'
+  const pv = acc.byProvider.get(provider) ?? {
+    key: provider,
+    tokens: emptyTokens(),
+    sessions: 0,
+    costUsd: null as number | null,
+  }
+  for (const spend of Object.values(tokens)) addTokens(pv.tokens, spend)
+  pv.sessions++
+  if (sessionCost !== null) pv.costUsd = (pv.costUsd ?? 0) + sessionCost
+  acc.byProvider.set(provider, pv)
+
+  // Decoded, not the raw key. A row whose scan never filled in `cwd` falls back to the transcript
+  // store's own folder name (`d--NEWProjects-shared-Connections`), and leaving that undecoded put
+  // the SAME project on the chart twice under two spellings — caught on real data, and the kind of
+  // error a chart states with total confidence.
+  const project = row.cwd || (row.project ? decodeProjectKey(row.project) : '') || 'unknown'
+  const pb = addTo(acc.byProject, projectKeyOf(project), sessionWeighted, sessionCost)
+  pb.sessions++
+
+  const account = accounts.get(row.session_id)
+  if (account) {
+    const ab = addTo(acc.byAccount, account, sessionWeighted, sessionCost)
+    ab.sessions++
+  }
+
+  // The one approximation, documented at the top of this file: a session's cost is split across
+  // the days it touched in proportion to the weighted tokens spent on each.
+  const dayTotal = Object.values(days).reduce((n, v) => n + v, 0)
+  for (const [day, weighted] of Object.entries(days)) {
+    const share = dayTotal > 0 ? weighted / dayTotal : 0
+    const db_ = addTo(acc.byDay, day, weighted, sessionCost === null ? null : sessionCost * share)
+    db_.sessions++
+    if (acc.from === null || day < acc.from) acc.from = day
+    if (acc.to === null || day > acc.to) acc.to = day
+  }
+}
+
 export function spendReport(opts: { sinceMs?: number | null } = {}): SpendReport {
   const since = opts.sinceMs ?? null
   const rows = selectRows.all()
   const accounts = accountBySession()
   projectDisplay.clear()
 
-  const byModel = new Map<string, SpendBucket>()
-  const byProject = new Map<string, SpendBucket>()
-  const byDay = new Map<string, SpendBucket>()
-  const byAccount = new Map<string, SpendBucket>()
-  const unpriced = new Set<string>()
-  let totalCost = 0
-  let anyPriced = false
-  let totalWeighted = 0
-  let sessions = 0
-  const tokenTotals = emptyTokens()
-  const byProvider = new Map<
-    SessionSource,
-    { key: SessionSource; tokens: TokenBreakdown; sessions: number; costUsd: number | null }
-  >()
-  let from: string | null = null
-  let to: string | null = null
-
-  for (const row of rows) {
-    if (row.analytics_version !== ANALYTICS_VERSION) continue
-    if (since !== null && (row.last_ts ?? 0) < since) continue
-    const tokens = withoutNonModels(parseJson<Record<string, ModelSpend>>(row.tokens_json, {}))
-    const days = parseJson<Record<string, number>>(row.days_json, {})
-    const modelKeys = Object.keys(tokens)
-    if (modelKeys.length === 0) continue
-    sessions++
-
-    // Priced at the session's own newest turn, matching what the session header shows, so the two
-    // surfaces cannot disagree about the same session.
-    const at = row.last_ts ?? Date.now()
-    const priced = priceTokens(tokens, at)
-    // A cost the provider computed itself wins over our table: OpenCode routes to models this repo
-    // has no prices for, and its own figure is the real one rather than a gap we would report as
-    // unpriced. Only its models are then left out of the unpriced list, since they ARE priced.
-    const ownCost = row.provider_cost_usd
-    const hasOwnCost = typeof ownCost === 'number' && Number.isFinite(ownCost)
-    if (!hasOwnCost) for (const m of priced.unpriced) unpriced.add(m)
-    const sessionCost = hasOwnCost ? ownCost : priced.costUsd
-    if (sessionCost !== null) {
-      totalCost += sessionCost
-      anyPriced = true
-    }
-
-    // When the PROVIDER priced the session, its models are priced too — split proportionally, the
-    // same way the day chart splits a session across days. Without this, "cost by model" showed a
-    // dash for every OpenCode model while "cost by provider" showed real money for the same
-    // sessions, which is two answers to one question.
-    const totalWeightedInSession = Object.values(tokens).reduce((n, m) => n + m.weighted, 0)
-    let sessionWeighted = 0
-    for (const [model, spend] of Object.entries(tokens)) {
-      sessionWeighted += spend.weighted
-      const share =
-        hasOwnCost && totalWeightedInSession > 0 ? spend.weighted / totalWeightedInSession : 0
-      const modelCost = hasOwnCost
-        ? (sessionCost ?? 0) * share
-        : priceTokens({ [model]: spend }, at).costUsd
-      const b = addTo(byModel, model, spend.weighted, modelCost)
-      b.sessions++
-      b.turns += spend.turns
-      b.tokens = b.tokens ?? emptyTokens()
-      addTokens(b.tokens, spend)
-      addTokens(tokenTotals, spend)
-    }
-    totalWeighted += sessionWeighted
-
-    // Per provider, because "my statistics only show Claude" is exactly the question this answers.
-    const provider = (row.source as SessionSource) ?? 'claude'
-    const pv = byProvider.get(provider) ?? {
-      key: provider,
-      tokens: emptyTokens(),
-      sessions: 0,
-      costUsd: null as number | null,
-    }
-    for (const spend of Object.values(tokens)) addTokens(pv.tokens, spend)
-    pv.sessions++
-    if (sessionCost !== null) pv.costUsd = (pv.costUsd ?? 0) + sessionCost
-    byProvider.set(provider, pv)
-
-    // Decoded, not the raw key. A row whose scan never filled in `cwd` falls back to the transcript
-    // store's own folder name (`d--NEWProjects-shared-Connections`), and leaving that undecoded put
-    // the SAME project on the chart twice under two spellings — caught on real data, and the kind of
-    // error a chart states with total confidence.
-    const project = row.cwd || (row.project ? decodeProjectKey(row.project) : '') || 'unknown'
-    const pb = addTo(byProject, projectKeyOf(project), sessionWeighted, sessionCost)
-    pb.sessions++
-
-    const account = accounts.get(row.session_id)
-    if (account) {
-      const ab = addTo(byAccount, account, sessionWeighted, sessionCost)
-      ab.sessions++
-    }
-
-    // The one approximation, documented at the top of this file: a session's cost is split across
-    // the days it touched in proportion to the weighted tokens spent on each.
-    const dayTotal = Object.values(days).reduce((n, v) => n + v, 0)
-    for (const [day, weighted] of Object.entries(days)) {
-      const share = dayTotal > 0 ? weighted / dayTotal : 0
-      const db_ = addTo(byDay, day, weighted, sessionCost === null ? null : sessionCost * share)
-      db_.sessions++
-      if (from === null || day < from) from = day
-      if (to === null || day > to) to = day
-    }
+  const acc: SpendAccumulator = {
+    byModel: new Map<string, SpendBucket>(),
+    byProject: new Map<string, SpendBucket>(),
+    byDay: new Map<string, SpendBucket>(),
+    byAccount: new Map<string, SpendBucket>(),
+    byProvider: new Map<
+      SessionSource,
+      { key: SessionSource; tokens: TokenBreakdown; sessions: number; costUsd: number | null }
+    >(),
+    unpriced: new Set<string>(),
+    tokenTotals: emptyTokens(),
+    totalCost: 0,
+    anyPriced: false,
+    totalWeighted: 0,
+    sessions: 0,
+    from: null,
+    to: null,
   }
 
+  for (const row of rows) foldSpendRow(row, since, accounts, acc)
+
   return {
-    from,
-    to,
-    totalCostUsd: anyPriced ? totalCost : null,
-    totalWeighted,
-    tokens: tokenTotals,
-    byProvider: [...byProvider.values()].sort((a, b) => b.tokens.total - a.tokens.total),
-    sessions,
-    byModel: sortBuckets(byModel),
+    from: acc.from,
+    to: acc.to,
+    totalCostUsd: acc.anyPriced ? acc.totalCost : null,
+    totalWeighted: acc.totalWeighted,
+    tokens: acc.tokenTotals,
+    byProvider: [...acc.byProvider.values()].sort((a, b) => b.tokens.total - a.tokens.total),
+    sessions: acc.sessions,
+    byModel: sortBuckets(acc.byModel),
     // Re-labelled with the spelling the reader will recognise, now that grouping is done.
-    byProject: sortBuckets(byProject)
+    byProject: sortBuckets(acc.byProject)
       .slice(0, 25)
       .map((b) => ({ ...b, key: projectDisplay.get(b.key) ?? b.key })),
-    byDay: [...byDay.values()].sort((a, b) => a.key.localeCompare(b.key)),
-    byAccount: sortBuckets(byAccount),
-    unpricedModels: [...unpriced].sort(),
+    byDay: [...acc.byDay.values()].sort((a, b) => a.key.localeCompare(b.key)),
+    byAccount: sortBuckets(acc.byAccount),
+    unpricedModels: [...acc.unpriced].sort(),
     // Where these dollars came from and how old that source is. A cost figure without its price
     // date is a number nobody can audit, and "downloaded" versus "shipped with the build" is the
     // difference between last week's rate card and this release's.
