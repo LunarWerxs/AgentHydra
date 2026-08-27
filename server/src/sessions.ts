@@ -247,9 +247,14 @@ function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): Scann
 // clicked — and without this they each opened their own copy of the same 12 MB transcript.
 // Measured: the first request after a restart took 9.3 s racing the warm-up, and 0.4 s once the two
 // shared their work.
-const inFlight = new Map<string, Promise<ScannedMeta>>()
+const inFlight = new Map<string, Promise<ScannedMeta | null>>()
 
-function scanMeta(tf: TranscriptFile): Promise<ScannedMeta> {
+/** Null when the transcript vanished mid-scan; see parseMeta. Callers must omit the row rather
+ *  than treat it as an empty session, and the type is what forces them to.
+ *
+ *  Exported only so the regression test can point it at a path that no longer exists and prove the
+ *  miss is survivable, the same reason mapPooled above is exported. Nothing else imports it. */
+export function scanMeta(tf: TranscriptFile): Promise<ScannedMeta | null> {
   const key = cacheKey(tf)
   const cached = metaCache.get(key)
   if (cached?.mtimeMs === tf.mtime_ms) return Promise.resolve(cached.meta)
@@ -327,7 +332,22 @@ function parseForeignOrOpenCodeMeta(tf: TranscriptFile, key: string): ScannedMet
   return rememberScan(tf, key, meta)
 }
 
-async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> {
+/**
+ * Null when the transcript is gone by the time we read it, which is a NORMAL race rather than a
+ * fault. `pruneUsageProbeTranscripts()` deletes the `/usage` probe's own transcripts on a timer, so
+ * this daemon routinely removes files its own scanner is mid-way through enumerating; a user
+ * clearing a project does the same by hand.
+ *
+ * It used to throw, and that was fatal. The rejection reached index.ts's last-resort handler, which
+ * exits the process by design, so one deleted probe file killed the whole daemon. Measured
+ * 2026-08-27: it died at 07:53:28 on exactly this, stayed dead for 33 minutes because the tray
+ * watchdog meant to revive it was not running either, and the fleet went unwatched the entire time.
+ * The warm-up at the bottom of this file already caught it ("an unreadable transcript just stays
+ * uncached"); the list path and getSession did not, and the list path is the one that crashed.
+ *
+ * A miss is never cached, so a file that reappears is parsed normally on the next pass.
+ */
+async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta | null> {
   if (tf.source === 'opencode' || tf.source === 'foreign') {
     return parseForeignOrOpenCodeMeta(tf, key)
   }
@@ -335,7 +355,12 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta> 
   // read up to the last 12 MB — covers effectively every real transcript
   const file = Bun.file(tf.path)
   const start = Math.max(0, file.size - 12 * 1024 * 1024)
-  const text = start > 0 ? await file.slice(start).text() : await file.text()
+  let text: string
+  try {
+    text = start > 0 ? await file.slice(start).text() : await file.text()
+  } catch {
+    return null
+  }
 
   let customTitle = ''
   let aiTitle = ''
@@ -840,6 +865,9 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
 
   const toSummary = async (tf: TranscriptFile): Promise<SessionSummary | null> => {
     const m = await scanMeta(tf)
+    // Gone between the listing and the read, so there is no row to show. This is the path that
+    // used to take the daemon down with it.
+    if (!m) return null
     if (m.substantive_turns === 0) return null
     // The mtime pass above is a cheap SUPERSET (writing a turn always touches the file, so mtime is
     // never older than the last activity). It is not exact, though: a transcript can be touched
@@ -1102,6 +1130,9 @@ export async function getSession(
   const tf = await findTranscriptAsync(sessionId, source)
   if (!tf) return null
   const m = await scanMeta(tf)
+  // Deleted between finding it and reading it, which answers the caller's question the same way a
+  // miss above does: there is no such session.
+  if (!m) return null
   const qmap = queueStatusMap()
   const dmap = doneMarkMap()
   // Same resolution the list uses, so a row does not change its account when you click it.

@@ -10,8 +10,12 @@
 // impossible for it to aim at a folder holding real work.
 
 import { expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CLAUDE_PROJECTS_ROOT, DATA_DIR } from '../server/src/config'
+import { scanMeta } from '../server/src/sessions'
+import type { TranscriptFile } from '../server/src/transcript'
 import { encodeCwdKey } from '../server/src/transcript'
 import { usageProbeCwd } from '../server/src/usage'
 import { desktopKey } from '../server/src/usage-service'
@@ -78,4 +82,52 @@ test('different instances still get different keys', () => {
 
 test('the key keeps its desktop: prefix so it cannot collide with cli:/acct: keys', () => {
   expect(desktopKey(INSTANCE_3).startsWith('desktop:')).toBe(true)
+})
+
+// --- the sweep races the scanner, and the scanner must survive losing -----------
+//
+// pruneUsageProbeTranscripts() deletes .jsonl files out of a project folder that the session
+// scanner also enumerates, so this daemon routinely removes files it is itself part-way through
+// reading. There is no lock to take and no ordering to arrange: the probe runs on its own timer.
+//
+// That read used to throw, and the throw escaped into the sessions list. Observed in the live
+// daemon log on 2026-08-27:
+//
+//   ERROR Error: ENOENT: no such file or directory, open
+//   '.../.claude/projects/C--Users-blogi--agenthydra-data-usage-probe/cc54bf76-....jsonl'
+//       at async parseMeta / at async <anonymous> / at async <anonymous>
+//
+// The two anonymous frames are toSummary and mapPooled's worker, so the whole /api/sessions request
+// died and every row already parsed for it died too: one probe file collected at the wrong instant
+// could blank the session list. The warm-up path had always caught this; the list path had not.
+//
+// A vanished transcript is simply not a session now, so it is omitted rather than fatal.
+test('a transcript deleted mid-scan yields no row instead of throwing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ah-swept-'))
+  const path = join(dir, 'cc54bf76-78c4-4524-883b-37aa23b866d7.jsonl')
+  writeFileSync(path, '{"type":"user","message":{"role":"user","content":"hi"}}\n')
+  const stat = statSync(path)
+  const tf: TranscriptFile = {
+    session_id: 'cc54bf76-78c4-4524-883b-37aa23b866d7',
+    source: 'claude',
+    path,
+    project: 'usage-probe',
+    mtime_ms: stat.mtimeMs,
+    size_bytes: stat.size,
+    archived: false,
+  }
+
+  // Control first, so a null below cannot be explained by the row being unreadable all along.
+  expect(await scanMeta(tf)).not.toBeNull()
+
+  // Now the sweep gets it, exactly as pruneUsageProbeTranscripts() does.
+  rmSync(path)
+
+  // Both cache layers key on mtime AND size, so a changed pair is a genuine re-parse rather than a
+  // hit on the control above. That is also the production shape: the file is enumerated, and only
+  // then deleted, so the scanner is always working from a row it read a moment earlier.
+  const rescan = await scanMeta({ ...tf, mtime_ms: stat.mtimeMs + 1, size_bytes: stat.size + 1 })
+  expect(rescan).toBeNull()
+
+  rmSync(dir, { recursive: true, force: true })
 })
