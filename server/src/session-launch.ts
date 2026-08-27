@@ -37,6 +37,7 @@ import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
 import { db } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
+import { newChatOpening } from './new-chat-opening'
 import { recordPlacement } from './placements'
 
 /**
@@ -300,7 +301,13 @@ export async function launchTerminalSession(opts: {
   const dir = join(tmpdir(), 'agenthydra-launch')
   mkdirSync(dir, { recursive: true })
   const promptFile = join(dir, `prompt-${crypto.randomUUID()}.txt`)
-  writeFileSync(promptFile, opts.prompt)
+  // THE ULTRACODE OPT-IN, applied in the primitive so every caller inherits it, exactly as the
+  // two-writers refusal above is. --model and --effort are real flags and are handled below;
+  // ultracode has no flag, so the only place it can be applied is the prompt text itself.
+  // Skipped for a resume: continuing an existing thread is not starting a chat, and the keyword
+  // belongs to the turn it is written on. See new-chat-opening.ts.
+  const firstMessage = opts.resumeSessionId ? opts.prompt : newChatOpening(opts.prompt)
+  writeFileSync(promptFile, firstMessage)
 
   const plan = buildTerminalLaunchPlan(
     process.platform,

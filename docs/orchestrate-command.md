@@ -216,9 +216,13 @@ New desktop chats are SEEDED, then delivered - never queued headless:
    boots - verified on screen: a correctly-titled seeded chat rendered as "General coding
    session" in the sidebar until renamed this way. The response's `titleDurable: false` is
    telling you the same thing.
-3. Deliver the opening prompt via the ladder: ultracode first line when
-   `settings.newChatUltracode` is true, then the handoff/chip text. The app boots it and the
-   thread streams visibly from its first real turn.
+3. Deliver the opening prompt via the ladder: **`newChatPrefix` verbatim, then the handoff/chip
+   text.** The feed hands you that string already resolved from `settings.newChatUltracode`, so
+   concatenate it and do not re-derive the rule; it is `ultracode\n\n` when the opt-in is on and
+   empty when it is off. The app boots it and the thread streams visibly from its first real turn.
+   This step used to read "ultracode first line when `settings.newChatUltracode` is true", which
+   asked you to read a boolean and remember a rule, and a rule only a reader can apply is a rule
+   that gets forgotten. The daemon applies the same prefix itself on the launches IT composes.
 
 **Handoff flow** (context past the threshold, `handoff_due`): ask for the handoff with
 `prompts.handoffRequest`; when the handoff prompt shows in the tail, (1) collect it

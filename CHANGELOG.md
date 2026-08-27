@@ -54,6 +54,28 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **The ultracode opt-in was a toggle wired to nothing.** `newChatUltracode` was stored, read
+  back, patched over the HTTP API and MCP, and rendered as a switch whose own hint reads
+  "Prepends the 'ultracode' opt-in keyword to every orchestrator-started chat, so it runs in
+  exhaustive mode". Nothing ever put the word anywhere. An audit of all six paths that start a
+  chat (terminal launch, desktop seed, the auto-resume monitor, the prompt catalogue, the
+  headless queue, the reviewer's own native delivery) found zero code sites that concatenated
+  it, and the only thing carrying the promise out was a line of prose in the reviewer's rubric
+  asking it to read a boolean and remember a rule. The owner spotted it from the outside: new
+  chats came up on the right model at max effort with the opt-in silently doing nothing.
+
+  It rotted because of an asymmetry worth naming. Its two siblings, `newChatModel` and
+  `newChatEffort`, are real CLI flags, so their wiring is visible in the argv of every launch
+  and could not quietly stop working. Ultracode has no flag and no settings key at all: the
+  only way to ask for it is the literal word in the prompt text, which is exactly the kind of
+  wiring that can be missing and look present. `server/src/new-chat-opening.ts` is now the one
+  definition, for the same reason `pickPlacement()` is one definition, and the daemon applies
+  it in the terminal-launch primitive so every caller inherits it, never on a `--resume`. For
+  the deliveries no server code can reach, the feed serves the answer instead of the rule as
+  `newChatPrefix`, the same move `placement` makes. The guard is a test that flips the setting
+  and proves the output changes, since that is the only thing a keyword-in-prose can be checked
+  by; three of its assertions fail against the old behaviour.
+
 - **One swept probe transcript could blank the whole session list.** The `/usage` probe's sweep
   and the session scanner race by construction: `pruneUsageProbeTranscripts()` deletes .jsonl
   files out of a project folder that the scanner also enumerates, so the daemon routinely

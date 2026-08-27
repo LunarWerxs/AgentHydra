@@ -1336,6 +1336,12 @@ export interface OrchestratorView {
   attention: AttentionItem[]
   /** The desktop fleet with usage joined — the routing table for nudges/handoffs/launches. */
   instances: OrchestratorInstance[]
+  /** What to put in FRONT of a new chat's first message, already resolved from
+   *  `settings.newChatUltracode`. The daemon applies this itself wherever it composes a launch,
+   *  but the reviewer delivers opening prompts natively through the app where no server code can
+   *  reach; serving the literal string means it concatenates rather than remembering a rule.
+   *  Empty when the opt-in is off. */
+  newChatPrefix: string
   /** WHERE THE NEXT PIECE OF WORK SHOULD GO. The same decision the monitor's migration
    *  target takes, resolved once here so the reviewer never has to re-derive placement
    *  policy from the sort order and then drift from it. `blocked` says why each account

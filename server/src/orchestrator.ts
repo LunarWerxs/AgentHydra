@@ -72,6 +72,7 @@ import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { isSessionActive } from './dispatch'
 import { findDesktopChat, instanceRefForSession, sessionMetaMap } from './instance-sessions'
+import { NEW_CHAT_ULTRACODE_KEY, newChatUltracodeEnabled } from './new-chat-opening'
 import { listRecentPlacements, normalizeRef, prunePlacements, recentPlacements } from './placements'
 import {
   listProposalsForView,
@@ -130,7 +131,7 @@ export function getOrchestratorSettings(): OrchestratorSettings {
       const e = getSetting('orch_new_chat_effort')
       return e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh' ? e : 'max'
     })(),
-    newChatUltracode: getSetting('orch_new_chat_ultracode') !== '0',
+    newChatUltracode: newChatUltracodeEnabled(),
     migrateOnLimit: getSetting('orch_migrate_on_limit') === '1',
     maxActiveChats: num('orch_max_active_chats', 0, 0, 500),
     watchCodex: getSetting('orch_watch_codex') !== '0',
@@ -181,7 +182,7 @@ export function setOrchestratorSettings(
   )
     setSetting('orch_new_chat_effort', patch.newChatEffort)
   if (typeof patch.newChatUltracode === 'boolean')
-    setSetting('orch_new_chat_ultracode', patch.newChatUltracode ? '1' : '0')
+    setSetting(NEW_CHAT_ULTRACODE_KEY, patch.newChatUltracode ? '1' : '0')
   if (typeof patch.migrateOnLimit === 'boolean')
     setSetting('orch_migrate_on_limit', patch.migrateOnLimit ? '1' : '0')
   clamp('orch_max_active_chats', patch.maxActiveChats, 0, 500)
@@ -2369,6 +2370,13 @@ export function orchestratorView(): OrchestratorView {
     // Chats the janitor renamed ON DISK inside a RUNNING app, where that write does not show
     // until the app restarts. The reviewer renames these natively and reports them done.
     renames: listPendingRenames(),
+    // WHAT TO PUT IN FRONT OF A NEW CHAT'S FIRST MESSAGE, already decided. The daemon applies
+    // this itself wherever it composes the launch (see new-chat-opening.ts), but the reviewer
+    // delivers opening prompts NATIVELY through the app, which no server code can reach. Serving
+    // the literal string is the same move `placement` makes: the rubric used to ask the reviewer
+    // to read a boolean and remember a rule, and a rule only a reader can apply is a rule that
+    // gets forgotten. Concatenate it; when the opt-in is off it is the empty string.
+    newChatPrefix: newChatUltracodeEnabled() ? 'ultracode\n\n' : '',
     // WHERE THE NEXT PIECE OF WORK SHOULD GO, decided once here rather than re-derived from
     // the sort by every reader. `blocked` states why each passed-over account was passed
     // over, so a placement can be argued with instead of merely trusted, and `recent` is the
