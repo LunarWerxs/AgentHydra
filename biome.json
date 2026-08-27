@@ -25,6 +25,7 @@
       "!**/lib/i18n-core.ts",
       "!**/lib/relativeTime.ts",
       "!**/lib/useSelfUpdate.ts",
+      "!**/lib/sign-in-nudge.ts",
       "!**/lib/tooltip-config.ts",
       "!**/lib/content-inset.ts",
       "!**/lib/grip-drag.ts",

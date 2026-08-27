@@ -6,8 +6,8 @@ index 199e2554e1ee87dde46f331f6207d10148de8be7..ee68480759a8c3039e65989d69aab22a
      "bun.js",
      "types"
    ],
--  "version": "1.3.14"
-+  "version": "1.3.14",
+-  "version": "1.4.0"
++  "version": "1.4.0",
 +  "peerDependencies": {
 +    "undici-types": "*"
 +  }

@@ -50,6 +50,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "bun-types@1.4.0": "patches/bun-types@1.4.0.patch",
+  },
   "packages": {
     "@agenthydra/server": ["@agenthydra/server@workspace:server"],
 

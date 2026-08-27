@@ -33,6 +33,6 @@
     "@biomejs/biome": "^2.5.5"
   },
   "patchedDependencies": {
-    "bun-types@1.3.14": "patches/bun-types@1.3.14.patch"
+    "bun-types@1.4.0": "patches/bun-types@1.4.0.patch"
   }
 }

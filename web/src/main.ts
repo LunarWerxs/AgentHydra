@@ -1,8 +1,8 @@
 import { createApp } from 'vue'
 import { hydrateSharedPrefs } from './composables/useSharedPrefs'
 import { appModeForPath } from './lib/app-mode'
-import { migrateLegacyStorageKeys } from './lib/storage-rebrand'
 import { startSignInNudgeSession } from './lib/sign-in-nudge'
+import { migrateLegacyStorageKeys } from './lib/storage-rebrand'
 import { migrateLegacyUsageFilterScope } from './lib/usage-filter'
 import './style.css'
 
