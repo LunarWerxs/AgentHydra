@@ -168,6 +168,50 @@ function markdownFence(text: string): string {
   return '`'.repeat(Math.max(3, longest + 1))
 }
 
+type CandidateOutcome =
+  | { kind: 'included'; section: string; relativePath: string; length: number }
+  | { kind: 'omitted'; reason: 'sensitive' | 'binary-or-large' | 'budget' }
+  | null // not a real, readable file — not a countable omission either
+
+/** Decide whether one candidate file goes into the pack, and render its section if so. Split out
+ *  of createChatGptContextPack so that loop reads as the budget/omission bookkeeping and this
+ *  reads as the per-file rule (sensitive name → size → readable → not binary → not a secret →
+ *  fits the remaining budget). */
+function renderCandidateSection(candidate: Candidate, usedChars: number): CandidateOutcome {
+  if (isSensitiveFilename(candidate.relativePath)) return { kind: 'omitted', reason: 'sensitive' }
+
+  let size: number
+  try {
+    const info = lstatSync(candidate.absolutePath)
+    if (!info.isFile()) return null
+    size = info.size
+  } catch {
+    return null
+  }
+  if (size > MAX_FILE_BYTES) return { kind: 'omitted', reason: 'binary-or-large' }
+
+  let buffer: Buffer
+  try {
+    buffer = readFileSync(candidate.absolutePath)
+  } catch {
+    return null
+  }
+  if (looksBinary(buffer)) return { kind: 'omitted', reason: 'binary-or-large' }
+  const text = buffer.toString('utf8')
+  if (containsHighConfidenceSecret(text)) return { kind: 'omitted', reason: 'sensitive' }
+
+  const fence = markdownFence(text)
+  const section = [
+    `## ${candidate.relativePath}`,
+    `${fence}${languageHint(candidate.relativePath)}`,
+    text,
+    fence,
+    '',
+  ].join('\n')
+  if (usedChars + section.length > MAX_PACK_CHARS) return { kind: 'omitted', reason: 'budget' }
+  return { kind: 'included', section, relativePath: candidate.relativePath, length: section.length }
+}
+
 export function createChatGptContextPack(cwd: string, task: string): ChatGptContextPack {
   const trimmedTask = task.trim()
   if (!trimmedTask) throw new Error('Task is required.')
@@ -191,55 +235,17 @@ export function createChatGptContextPack(cwd: string, task: string): ChatGptCont
   let usedChars = 0
 
   for (const candidate of candidates) {
-    if (isSensitiveFilename(candidate.relativePath)) {
-      omittedSensitive++
+    const outcome = renderCandidateSection(candidate, usedChars)
+    if (outcome === null) continue
+    if (outcome.kind === 'omitted') {
+      if (outcome.reason === 'sensitive') omittedSensitive++
+      else if (outcome.reason === 'binary-or-large') omittedBinaryOrLarge++
+      else omittedForBudget++
       continue
     }
-
-    let size: number
-    try {
-      const info = lstatSync(candidate.absolutePath)
-      if (!info.isFile()) continue
-      size = info.size
-    } catch {
-      continue
-    }
-    if (size > MAX_FILE_BYTES) {
-      omittedBinaryOrLarge++
-      continue
-    }
-
-    let buffer: Buffer
-    try {
-      buffer = readFileSync(candidate.absolutePath)
-    } catch {
-      continue
-    }
-    if (looksBinary(buffer)) {
-      omittedBinaryOrLarge++
-      continue
-    }
-    const text = buffer.toString('utf8')
-    if (containsHighConfidenceSecret(text)) {
-      omittedSensitive++
-      continue
-    }
-
-    const fence = markdownFence(text)
-    const section = [
-      `## ${candidate.relativePath}`,
-      `${fence}${languageHint(candidate.relativePath)}`,
-      text,
-      fence,
-      '',
-    ].join('\n')
-    if (usedChars + section.length > MAX_PACK_CHARS) {
-      omittedForBudget++
-      continue
-    }
-    sections.push(section)
-    includedFiles.push(candidate.relativePath)
-    usedChars += section.length
+    sections.push(outcome.section)
+    includedFiles.push(outcome.relativePath)
+    usedChars += outcome.length
   }
 
   const warnings: string[] = []

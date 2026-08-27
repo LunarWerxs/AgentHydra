@@ -33,7 +33,7 @@
 // One file, `search-index.db`, in the app's data dir, with journalling set to `delete` so it stays
 // exactly one file: "you can delete it whenever you like" has to survive someone actually doing it.
 
-import { Database } from 'bun:sqlite'
+import { Database, type Statement } from 'bun:sqlite'
 import { existsSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
@@ -203,6 +203,45 @@ export const isRefreshing = () => refreshing
  * of files rather than 1,211. `budgetMs` bounds one pass so a first build on a huge store makes
  * progress in slices instead of holding anything for a minute.
  */
+interface StaleFileStatements {
+  dropRow: Statement
+  dropFts: Statement
+  insertDoc: Statement
+  insertFts: Statement
+  nextRowId: () => number
+}
+
+/** Index (or reindex) one stale file, split out of refreshSearchIndex so the pass loop reads as
+ *  the schedule and this reads as the per-file work. Never throws — an unreadable or
+ *  unindexable file just stays stale and is retried on the next pass. */
+async function indexOneStaleFile(
+  f: IndexableFile,
+  known: Map<string, { rowid: number; mtime_ms: number; size_bytes: number }>,
+  stmts: StaleFileStatements,
+  result: IndexRefreshResult,
+): Promise<void> {
+  const key = docKey(f.source, f.session_id)
+  let text: string
+  try {
+    text = conversationText(await Bun.file(f.path).text())
+  } catch {
+    return // vanished or unreadable mid-pass; it stays stale and is retried next time
+  }
+  const existing = known.get(key)
+  const rowid = existing?.rowid ?? stmts.nextRowId()
+  try {
+    if (existing) {
+      stmts.dropFts.run(rowid)
+      stmts.dropRow.run(rowid)
+    }
+    stmts.insertDoc.run(rowid, key, f.source, f.path, f.mtime_ms, f.size_bytes)
+    stmts.insertFts.run(rowid, text)
+    result.indexed++
+  } catch {
+    // One unindexable session must not abort the pass.
+  }
+}
+
 export async function refreshSearchIndex(
   files: IndexableFile[],
   opts: { budgetMs?: number } = {},
@@ -252,31 +291,13 @@ export async function refreshSearchIndex(
     // Newest first: if a budget cuts the pass short, the sessions someone is most likely to search
     // for are the ones already covered.
     stale.sort((a, b) => b.mtime_ms - a.mtime_ms)
+    const stmts: StaleFileStatements = { dropRow, dropFts, insertDoc, insertFts, nextRowId }
     for (const [i, f] of stale.entries()) {
       if (performance.now() > deadline) {
         result.remaining = stale.length - i
         break
       }
-      const key = docKey(f.source, f.session_id)
-      let text: string
-      try {
-        text = conversationText(await Bun.file(f.path).text())
-      } catch {
-        continue // vanished or unreadable mid-pass; it stays stale and is retried next time
-      }
-      const existing = known.get(key)
-      const rowid = existing?.rowid ?? nextRowId()
-      try {
-        if (existing) {
-          dropFts.run(rowid)
-          dropRow.run(rowid)
-        }
-        insertDoc.run(rowid, key, f.source, f.path, f.mtime_ms, f.size_bytes)
-        insertFts.run(rowid, text)
-        result.indexed++
-      } catch {
-        // One unindexable session must not abort the pass.
-      }
+      await indexOneStaleFile(f, known, stmts, result)
     }
 
     conn

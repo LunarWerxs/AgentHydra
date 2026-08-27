@@ -277,6 +277,89 @@ function checkExecPathSignal(
   }
 }
 
+/** Stage 4 — CLAUDE_CODE_HOST_SESSION_ID → the instance dir that holds this session's own file.
+ *  The strongest filesystem-only route: a Desktop instance stores each Claude Code session as
+ *  <instanceDir>/claude-code-sessions/<a>/<b>/<hostSessionId>.json. No process enumeration, no
+ *  elevated permissions, works when PowerShell/ps is unavailable. */
+function checkHostSessionSignal(
+  env: Record<string, string | undefined>,
+  rootOf: () => string,
+  defaultUdd: () => string,
+  readDir: (p: string) => string[] | null,
+  exists: (p: string) => boolean,
+): EnvSignalResult {
+  const hostSessionId = env.CLAUDE_CODE_HOST_SESSION_ID?.trim()
+  if (!hostSessionId) {
+    return {
+      clue: null,
+      ruledOut: 'CLAUDE_CODE_HOST_SESSION_ID is unset (not a Claude Desktop session)',
+    }
+  }
+  for (const dir of candidateUserDataDirs({ readDir }, rootOf(), defaultUdd())) {
+    const sessionsRoot = join(dir, 'claude-code-sessions')
+    if (!exists(sessionsRoot)) continue
+    const hit = findFileUnder(sessionsRoot, `${hostSessionId}.json`, readDir, exists)
+    if (hit) {
+      return {
+        clue: { method: 'host-session-file', kind: 'desktop', configDir: dir, proof: hit },
+        ruledOut: '',
+      }
+    }
+  }
+  return {
+    clue: null,
+    ruledOut: `no instance holds a claude-code-sessions file for CLAUDE_CODE_HOST_SESSION_ID=${hostSessionId}`,
+  }
+}
+
+/** Stage 5 (last resort) — walk this process's ancestry for a claude-code binary path or a
+ *  Desktop --user-data-dir. The only signal that survives a stripped env, and the only one that
+ *  spawns a process — detectSelfIdentity skips it once anything cheaper has already answered. */
+async function checkProcessAncestrySignal(
+  deps: SelfIdentityDeps,
+  exists: (p: string) => boolean,
+): Promise<EnvSignalResult> {
+  const chain = deps.ancestry ? await deps.ancestry() : await defaultAncestry()
+  if (chain === null) {
+    return { clue: null, ruledOut: 'process ancestry could not be enumerated on this platform' }
+  }
+  if (chain.length === 0) {
+    return { clue: null, ruledOut: 'process ancestry returned no parent processes' }
+  }
+  for (const proc of chain) {
+    // The agent binary itself: <instanceDir>/claude-code/<ver>/claude.exe.
+    const fromExe = userDataDirFromAgentExe(proc.executablePath ?? '')
+    if (fromExe && looksLikeUserDataDir(fromExe, exists)) {
+      return {
+        clue: {
+          method: 'ancestor-execpath',
+          kind: 'desktop',
+          configDir: fromExe,
+          proof: `pid ${proc.pid} (${proc.name ?? 'unknown'}) → ${proc.executablePath}`,
+        },
+        ruledOut: '',
+      }
+    }
+    // The Electron host that launched it: `--user-data-dir=<instanceDir>`.
+    const fromCmd = userDataDirFromCommandLine(proc.commandLine ?? '')
+    if (fromCmd && looksLikeUserDataDir(fromCmd, exists)) {
+      return {
+        clue: {
+          method: 'ancestor-user-data-dir',
+          kind: 'desktop',
+          configDir: fromCmd,
+          proof: `pid ${proc.pid} (${proc.name ?? 'unknown'}) → --user-data-dir=${fromCmd}`,
+        },
+        ruledOut: '',
+      }
+    }
+  }
+  return {
+    clue: null,
+    ruledOut: `walked ${chain.length} ancestor process(es); none carried --user-data-dir or a claude-code binary path`,
+  }
+}
+
 /**
  * Work out which instance THIS process belongs to.
  *
@@ -320,71 +403,17 @@ export async function detectSelfIdentity(
   }
 
   // --- 4. CLAUDE_CODE_HOST_SESSION_ID → the instance dir that holds this session's own file. -----
-  // The strongest filesystem-only route: a Desktop instance stores each Claude Code session as
-  // <instanceDir>/claude-code-sessions/<a>/<b>/<hostSessionId>.json. No process enumeration, no
-  // elevated permissions, works when PowerShell/ps is unavailable.
-  const hostSessionId = env.CLAUDE_CODE_HOST_SESSION_ID?.trim()
-  if (hostSessionId) {
-    let found = false
-    for (const dir of candidateUserDataDirs({ readDir }, rootOf(), defaultUdd())) {
-      const sessionsRoot = join(dir, 'claude-code-sessions')
-      if (!exists(sessionsRoot)) continue
-      const hit = findFileUnder(sessionsRoot, `${hostSessionId}.json`, readDir, exists)
-      if (hit) {
-        add({ method: 'host-session-file', kind: 'desktop', configDir: dir, proof: hit })
-        found = true
-        break
-      }
-    }
-    if (!found) {
-      ruledOut.push(
-        `no instance holds a claude-code-sessions file for CLAUDE_CODE_HOST_SESSION_ID=${hostSessionId}`,
-      )
-    }
-  } else {
-    ruledOut.push('CLAUDE_CODE_HOST_SESSION_ID is unset (not a Claude Desktop session)')
-  }
+  const hostSignal = checkHostSessionSignal(env, rootOf, defaultUdd, readDir, exists)
+  if (hostSignal.clue) add(hostSignal.clue)
+  else ruledOut.push(hostSignal.ruledOut)
 
   // --- 5. Process ancestry — the last resort, and the only one that survives a stripped env. -----
   // Skipped entirely when something above already answered: it is the one step that spawns a
   // process, and paying ~300ms to confirm an env var we already trust is waste.
   if (clues.length === 0) {
-    const chain = deps.ancestry ? await deps.ancestry() : await defaultAncestry()
-    if (chain === null) {
-      ruledOut.push('process ancestry could not be enumerated on this platform')
-    } else if (chain.length === 0) {
-      ruledOut.push('process ancestry returned no parent processes')
-    } else {
-      for (const proc of chain) {
-        // The agent binary itself: <instanceDir>/claude-code/<ver>/claude.exe.
-        const fromExe = userDataDirFromAgentExe(proc.executablePath ?? '')
-        if (fromExe && looksLikeUserDataDir(fromExe, exists)) {
-          add({
-            method: 'ancestor-execpath',
-            kind: 'desktop',
-            configDir: fromExe,
-            proof: `pid ${proc.pid} (${proc.name ?? 'unknown'}) → ${proc.executablePath}`,
-          })
-          break
-        }
-        // The Electron host that launched it: `--user-data-dir=<instanceDir>`.
-        const fromCmd = userDataDirFromCommandLine(proc.commandLine ?? '')
-        if (fromCmd && looksLikeUserDataDir(fromCmd, exists)) {
-          add({
-            method: 'ancestor-user-data-dir',
-            kind: 'desktop',
-            configDir: fromCmd,
-            proof: `pid ${proc.pid} (${proc.name ?? 'unknown'}) → --user-data-dir=${fromCmd}`,
-          })
-          break
-        }
-      }
-      if (clues.length === 0) {
-        ruledOut.push(
-          `walked ${chain.length} ancestor process(es); none carried --user-data-dir or a claude-code binary path`,
-        )
-      }
-    }
+    const ancestrySignal = await checkProcessAncestrySignal(deps, exists)
+    if (ancestrySignal.clue) add(ancestrySignal.clue)
+    else ruledOut.push(ancestrySignal.ruledOut)
   } else {
     ruledOut.push('process ancestry not walked (a cheaper signal already identified this process)')
   }

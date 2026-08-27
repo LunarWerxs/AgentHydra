@@ -76,6 +76,42 @@ function flatten(obj: unknown, prefix = '', out = new Set<string>()): Set<string
 }
 const enKeys = flatten(enBase)
 
+/** TEXT node check: flags rendered template text that isn't in ALLOWLIST. */
+function checkTextNode(node: AstNode, file: string): void {
+  const text = String(node.content ?? '').trim()
+  if (text && HAS_LETTER.test(text) && !ALLOWLIST.has(text)) {
+    add(file, node.loc.start.line, 'error', 'hardcoded-text', JSON.stringify(text))
+  }
+}
+
+/** INTERPOLATION node check: flags sentence-like string literals inside `{{ }}` expressions. */
+function checkInterpolationNode(node: AstNode, file: string): void {
+  const expr = (typeof node.content === 'object' ? node.content?.content : undefined) ?? ''
+  for (const m of expr.matchAll(/(['"`])((?:\\.|(?!\1).)*)\1/g)) {
+    const lit = m[2]
+    if (
+      HAS_LETTER.test(lit) &&
+      (SENTENCE_LIKE.test(lit) || ENDS_SENTENCE.test(lit)) &&
+      !ALLOWLIST.has(lit.trim())
+    ) {
+      add(file, node.loc.start.line, 'warn', 'hardcoded-in-expr', JSON.stringify(lit))
+    }
+  }
+}
+
+/** Element node check: flags hardcoded values in translatable attributes (aria-label, title, …). */
+function checkTranslatableAttrs(node: AstNode, file: string): void {
+  if (!Array.isArray(node.props)) return
+  for (const p of node.props) {
+    if (p.type === ATTRIBUTE && TRANSLATABLE_ATTRS.has(p.name)) {
+      const val = String(p.value?.content ?? '').trim()
+      if (val && HAS_LETTER.test(val) && !ALLOWLIST.has(val)) {
+        add(file, p.loc.start.line, 'error', 'hardcoded-attr', `${p.name}=${JSON.stringify(val)}`)
+      }
+    }
+  }
+}
+
 function checkTemplate(file: string, source: string) {
   let descriptor: ReturnType<typeof parse>['descriptor']
   try {
@@ -90,42 +126,14 @@ function checkTemplate(file: string, source: string) {
   const visit = (node: AstNode | null | undefined) => {
     if (!node) return
     if (node.type === TEXT) {
-      const text = String(node.content ?? '').trim()
-      if (text && HAS_LETTER.test(text) && !ALLOWLIST.has(text)) {
-        add(file, node.loc.start.line, 'error', 'hardcoded-text', JSON.stringify(text))
-      }
+      checkTextNode(node, file)
       return
     }
     if (node.type === INTERPOLATION) {
-      const expr = (typeof node.content === 'object' ? node.content?.content : undefined) ?? ''
-      for (const m of expr.matchAll(/(['"`])((?:\\.|(?!\1).)*)\1/g)) {
-        const lit = m[2]
-        if (
-          HAS_LETTER.test(lit) &&
-          (SENTENCE_LIKE.test(lit) || ENDS_SENTENCE.test(lit)) &&
-          !ALLOWLIST.has(lit.trim())
-        ) {
-          add(file, node.loc.start.line, 'warn', 'hardcoded-in-expr', JSON.stringify(lit))
-        }
-      }
+      checkInterpolationNode(node, file)
       return
     }
-    if (Array.isArray(node.props)) {
-      for (const p of node.props) {
-        if (p.type === ATTRIBUTE && TRANSLATABLE_ATTRS.has(p.name)) {
-          const val = String(p.value?.content ?? '').trim()
-          if (val && HAS_LETTER.test(val) && !ALLOWLIST.has(val)) {
-            add(
-              file,
-              p.loc.start.line,
-              'error',
-              'hardcoded-attr',
-              `${p.name}=${JSON.stringify(val)}`,
-            )
-          }
-        }
-      }
-    }
+    checkTranslatableAttrs(node, file)
     visitChildren(node.children)
   }
 

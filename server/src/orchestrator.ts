@@ -2280,6 +2280,63 @@ export function samePath(a: string, b: string): boolean {
   return a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase()
 }
 
+/** Layer 3 of the ownership test below: ask the processes themselves. Any live pid whose
+ *  ancestor chain carries this instance's --user-data-dir is hosted here regardless of what
+ *  the metadata said. Returns true (refuse) when a chain can't be enumerated at all. */
+async function isDirHostedByLiveProcess(dir: string, live: LiveSession[]): Promise<boolean> {
+  for (const s of live) {
+    const { extractUserDataDir, processAncestry } = await import('./core/process')
+    const chain = await processAncestry(s.pid)
+    if (chain === null) return true // could not enumerate — refuse rather than guess
+    if (
+      chain.some((a) => {
+        const udd = a.commandLine ? extractUserDataDir(a.commandLine) : null
+        return udd !== null && samePath(udd, dir)
+      })
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+/** One pending archive-visibility restart, evaluated and (if safe) carried out. Split out of
+ *  restartAppsForArchiveVisibility so that function reads as the plan and this reads as the
+ *  per-directory ownership test + action. */
+async function restartOneArchivePendingDir(
+  row: { key: string },
+  live: LiveSession[],
+): Promise<void> {
+  const dir = row.key.slice('archPending:'.length)
+  const cooldownKey = `archRestart:${desktopKey(dir)}`
+  const last = kvGet(cooldownKey)
+  if (last && Date.now() - Date.parse(last) < 3600_000) return
+  const owned = live.filter((s) => {
+    const r = instanceRefForSession(s.sessionId)
+    return r !== null && samePath(r.slice('desktop:'.length), dir)
+  })
+  if (owned.length > 0) return // someone is working in there — the flag waits
+  if (await isDirHostedByLiveProcess(dir, live)) return
+  try {
+    const { openInstance, quitInstance } = await import('./core/instances')
+    const q = await quitInstance(dir)
+    if (!q.ok) {
+      console.log(`[agenthydra] archive-visibility restart refused for ${dir}: ${q.message}`)
+      kvDelete(row.key) // a structural refusal (e.g. the default profile) refuses forever
+      return
+    }
+    await new Promise((r) => setTimeout(r, 2500))
+    const o = await openInstance(dir)
+    kvSet(cooldownKey, new Date().toISOString())
+    kvDelete(row.key)
+    console.log(
+      `[agenthydra] archive-visibility restart: ${dir} (quit ok, reopen ${o.ok ? 'ok' : `failed: ${o.message}`}) — archived chats now show`,
+    )
+  } catch (err) {
+    console.error('[agenthydra] archive-visibility restart failed:', err)
+  }
+}
+
 async function restartAppsForArchiveVisibility(): Promise<void> {
   const pending = db
     .query<{ key: string }, []>("select key from orchestrator_kv where key like 'archPending:%'")
@@ -2295,9 +2352,10 @@ async function restartAppsForArchiveVisibility(): Promise<void> {
   //   2. any live session the metadata CANNOT map might be hosted by any app — restart
   //      nothing while one exists (those are the "unknown account" rows, already flagged in
   //      the feed);
-  //   3. direct process evidence outranks metadata: a live session whose process ANCESTRY
-  //      carries this instance's --user-data-dir is hosted by this app, mapped or not, and
-  //      an ancestry read that fails proves nothing and therefore blocks the restart.
+  //   3. direct process evidence outranks metadata (isDirHostedByLiveProcess, above): a live
+  //      session whose process ANCESTRY carries this instance's --user-data-dir is hosted by
+  //      this app, mapped or not, and an ancestry read that fails proves nothing and therefore
+  //      blocks the restart.
   const unmapped = live.filter((s) => instanceRefForSession(s.sessionId) === null)
   if (unmapped.length > 0) {
     console.log(
@@ -2306,54 +2364,7 @@ async function restartAppsForArchiveVisibility(): Promise<void> {
     return
   }
   for (const row of pending) {
-    const dir = row.key.slice('archPending:'.length)
-    const cooldownKey = `archRestart:${desktopKey(dir)}`
-    const last = kvGet(cooldownKey)
-    if (last && Date.now() - Date.parse(last) < 3600_000) continue
-    const owned = live.filter((s) => {
-      const r = instanceRefForSession(s.sessionId)
-      return r !== null && samePath(r.slice('desktop:'.length), dir)
-    })
-    if (owned.length > 0) continue // someone is working in there — the flag waits
-    // Layer 3: ask the processes themselves. Any live pid whose ancestor chain carries this
-    // instance's --user-data-dir is hosted here regardless of what the metadata said.
-    let hostedHere = false
-    for (const s of live) {
-      const { extractUserDataDir, processAncestry } = await import('./core/process')
-      const chain = await processAncestry(s.pid)
-      if (chain === null) {
-        hostedHere = true // could not enumerate — refuse rather than guess
-        break
-      }
-      if (
-        chain.some((a) => {
-          const udd = a.commandLine ? extractUserDataDir(a.commandLine) : null
-          return udd !== null && samePath(udd, dir)
-        })
-      ) {
-        hostedHere = true
-        break
-      }
-    }
-    if (hostedHere) continue
-    try {
-      const { openInstance, quitInstance } = await import('./core/instances')
-      const q = await quitInstance(dir)
-      if (!q.ok) {
-        console.log(`[agenthydra] archive-visibility restart refused for ${dir}: ${q.message}`)
-        kvDelete(row.key) // a structural refusal (e.g. the default profile) refuses forever
-        continue
-      }
-      await new Promise((r) => setTimeout(r, 2500))
-      const o = await openInstance(dir)
-      kvSet(cooldownKey, new Date().toISOString())
-      kvDelete(row.key)
-      console.log(
-        `[agenthydra] archive-visibility restart: ${dir} (quit ok, reopen ${o.ok ? 'ok' : `failed: ${o.message}`}) — archived chats now show`,
-      )
-    } catch (err) {
-      console.error('[agenthydra] archive-visibility restart failed:', err)
-    }
+    await restartOneArchivePendingDir(row, live)
   }
 }
 

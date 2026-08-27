@@ -166,47 +166,14 @@ const CACHE_TTL_MS = 5 * 60 * 1000
  * when no classic (Squirrel) binary resolves; mac/linux always report manageable (their
  * launch paths don't depend on install format). Cached for 5 minutes. Never throws.
  */
-export async function detectDesktopInstall(
-  options: DetectDesktopInstallOptions = {},
+/** win32-only detection: MSIX filesystem signals, live-process evidence for a classic binary,
+ *  and (only when neither fs signal fired) the authoritative appx probe. Split out of
+ *  detectDesktopInstall so that function reads as "pick a platform path" and this reads as the
+ *  win32 verdict itself. */
+async function detectWindowsDesktopInstall(
+  directPath: string | null,
+  options: DetectDesktopInstallOptions,
 ): Promise<CMDesktopInstall> {
-  const platform = currentPlatform()
-
-  const fakeMode = process.env.AGENTHYDRA_FAKE_DESKTOP_INSTALL
-  if (fakeMode) {
-    const fake = fakeResult(fakeMode.trim().toLowerCase())
-    if (fake) return fake
-  }
-
-  const injected =
-    options.localAppData !== undefined ||
-    options.resolveDirect !== undefined ||
-    options.appxProbe !== undefined ||
-    options.listRunningProcesses !== undefined
-  if (!injected && !options.fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) {
-    return cached.value
-  }
-
-  let directPath: string | null = null
-  try {
-    directPath = await (options.resolveDirect ?? resolveLaunchBinary)()
-  } catch {
-    directPath = null
-  }
-
-  if (platform !== 'win32') {
-    // resolveLaunchBinary returns launch markers ("Claude"/"claude") on mac/linux — the
-    // MSIX split doesn't exist there, so the manager is always considered usable.
-    const value: CMDesktopInstall = {
-      platform,
-      directPath,
-      msixDetected: false,
-      msixSignals: [],
-      manageable: true,
-    }
-    if (!injected) cached = { value, at: Date.now() }
-    return value
-  }
-
   const localAppData = options.localAppData ?? localAppDataDir()
   const msixSignals: string[] = []
   if (msixPackagesDirSignal(localAppData)) msixSignals.push('packages-dir')
@@ -251,13 +218,57 @@ export async function detectDesktopInstall(
   // `appxProbe: null`, or the spawn failed), fall back to the fs signals alone.
   const msixDetected = probeRan ? probeResult : msixSignals.length > 0
 
-  const value: CMDesktopInstall = {
-    platform,
+  return {
+    platform: 'win32',
     directPath,
     msixDetected,
     msixSignals,
     manageable: hasClassicEvidence,
   }
+}
+
+export async function detectDesktopInstall(
+  options: DetectDesktopInstallOptions = {},
+): Promise<CMDesktopInstall> {
+  const platform = currentPlatform()
+
+  const fakeMode = process.env.AGENTHYDRA_FAKE_DESKTOP_INSTALL
+  if (fakeMode) {
+    const fake = fakeResult(fakeMode.trim().toLowerCase())
+    if (fake) return fake
+  }
+
+  const injected =
+    options.localAppData !== undefined ||
+    options.resolveDirect !== undefined ||
+    options.appxProbe !== undefined ||
+    options.listRunningProcesses !== undefined
+  if (!injected && !options.fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return cached.value
+  }
+
+  let directPath: string | null = null
+  try {
+    directPath = await (options.resolveDirect ?? resolveLaunchBinary)()
+  } catch {
+    directPath = null
+  }
+
+  if (platform !== 'win32') {
+    // resolveLaunchBinary returns launch markers ("Claude"/"claude") on mac/linux — the
+    // MSIX split doesn't exist there, so the manager is always considered usable.
+    const value: CMDesktopInstall = {
+      platform,
+      directPath,
+      msixDetected: false,
+      msixSignals: [],
+      manageable: true,
+    }
+    if (!injected) cached = { value, at: Date.now() }
+    return value
+  }
+
+  const value = await detectWindowsDesktopInstall(directPath, options)
   if (!injected) cached = { value, at: Date.now() }
   return value
 }
