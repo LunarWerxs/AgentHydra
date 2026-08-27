@@ -1129,63 +1129,82 @@ export function isCodexInjectedUserText(text: string): boolean {
   )
 }
 
+/** {@link codexEventToTailEvents}'s `message` payload handler, split out (with the two handlers
+ * below) so the dispatch table there can stay a flat lookup instead of an if/else chain. Same
+ * role gate, same block filtering, same truncation. */
+function codexMessageEvents(payload: any, timestamp: string | null): TailEvent[] {
+  const role = payload.role
+  if (role !== 'user' && role !== 'assistant') return []
+  const out: TailEvent[] = []
+  const blocks = Array.isArray(payload.content) ? payload.content : []
+  for (const block of blocks) {
+    if (!block || typeof block !== 'object') continue
+    if (block.type !== 'input_text' && block.type !== 'output_text') continue
+    if (typeof block.text !== 'string') continue
+    if (role === 'user' && isCodexInjectedUserText(block.text)) continue
+    const text = compact(block.text)
+    if (!text) continue
+    out.push({
+      role,
+      kind: 'text',
+      text: truncate(text, 6000),
+      tool_name: null,
+      timestamp,
+    })
+  }
+  return out
+}
+
+/** `function_call` / `custom_tool_call` payload handler for {@link codexEventToTailEvents}. */
+function codexToolCallEvent(payload: any, timestamp: string | null): TailEvent[] {
+  const input = compact(stringifyToolResult(payload.arguments ?? payload.input))
+  return [
+    {
+      role: 'assistant',
+      kind: 'tool_use',
+      text: truncate(input, 1200),
+      tool_name: payload.name ?? 'tool',
+      timestamp,
+    },
+  ]
+}
+
+/** `function_call_output` / `custom_tool_call_output` payload handler for
+ * {@link codexEventToTailEvents}. */
+function codexToolResultEvent(payload: any, timestamp: string | null): TailEvent[] {
+  const output = compact(stringifyToolResult(payload.output))
+  return output
+    ? [
+        {
+          role: 'user',
+          kind: 'tool_result',
+          text: truncate(output, 2000),
+          tool_name: null,
+          timestamp,
+        },
+      ]
+    : []
+}
+
+const CODEX_PAYLOAD_HANDLERS: Record<
+  string,
+  (payload: any, timestamp: string | null) => TailEvent[]
+> = {
+  message: codexMessageEvents,
+  function_call: codexToolCallEvent,
+  custom_tool_call: codexToolCallEvent,
+  function_call_output: codexToolResultEvent,
+  custom_tool_call_output: codexToolResultEvent,
+}
+
 /** Convert one Codex rollout item. event_msg mirrors message text for live UI updates, so only
  * response_item is consumed; reading both would duplicate every visible turn. */
 export function codexEventToTailEvents(ev: any): TailEvent[] {
   if (ev?.type !== 'response_item') return []
   const payload = ev?.payload
   const timestamp: string | null = typeof ev?.timestamp === 'string' ? ev.timestamp : null
-
-  if (payload?.type === 'message') {
-    const role = payload.role
-    if (role !== 'user' && role !== 'assistant') return []
-    const out: TailEvent[] = []
-    const blocks = Array.isArray(payload.content) ? payload.content : []
-    for (const block of blocks) {
-      if (!block || typeof block !== 'object') continue
-      if (block.type !== 'input_text' && block.type !== 'output_text') continue
-      if (typeof block.text !== 'string') continue
-      if (role === 'user' && isCodexInjectedUserText(block.text)) continue
-      const text = compact(block.text)
-      if (!text) continue
-      out.push({
-        role,
-        kind: 'text',
-        text: truncate(text, 6000),
-        tool_name: null,
-        timestamp,
-      })
-    }
-    return out
-  }
-
-  if (payload?.type === 'function_call' || payload?.type === 'custom_tool_call') {
-    const input = compact(stringifyToolResult(payload.arguments ?? payload.input))
-    return [
-      {
-        role: 'assistant',
-        kind: 'tool_use',
-        text: truncate(input, 1200),
-        tool_name: payload.name ?? 'tool',
-        timestamp,
-      },
-    ]
-  }
-  if (payload?.type === 'function_call_output' || payload?.type === 'custom_tool_call_output') {
-    const output = compact(stringifyToolResult(payload.output))
-    return output
-      ? [
-          {
-            role: 'user',
-            kind: 'tool_result',
-            text: truncate(output, 2000),
-            tool_name: null,
-            timestamp,
-          },
-        ]
-      : []
-  }
-  return []
+  const handler = payload?.type ? CODEX_PAYLOAD_HANDLERS[payload.type] : undefined
+  return handler ? handler(payload, timestamp) : []
 }
 
 /**
