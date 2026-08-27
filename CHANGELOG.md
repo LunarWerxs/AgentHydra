@@ -55,6 +55,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Documented
 
+- **The approval-stall deadlock was understood backwards, and is now measured.** The belief was
+  that chats the desktop app creates itself land on a mode that prompts. A census of the real
+  fleet (1,362 chats, new `scripts/permission-mode-census.mjs`) says the opposite: chats the
+  app creates are 100% unattended, and it is the chats WE import that are not, at 13%. The
+  unattended stamp is written and then lost when the app re-saves that metadata on the chat's
+  first boot, the same clobber that eats titles. A per-folder preference in the app's config
+  looked like the durable fix and was ruled out by the same census. The docs no longer imply
+  the stamp works; it held 4 times in 30.
+
 - **The cross-instance RELAY is verified**, for the first time since it was written: there had
   never been a live chat outside the reviewer's own instance to test it with. Relaying a MESSAGE
   works exactly as documented, end to end, including booting the dormant target's engine.

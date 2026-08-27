@@ -580,12 +580,36 @@ enable (or the install endpoint) away.
   (dispatch.ts, at the one chokepoint every run passes through). The transcript would advance
   under a renderer that may not show it, and the owner's report was blunter than that: those
   threads became "a headless thing I couldn't see". Desktop chats are driven through the app.
-- A revived chat can wake and still do nothing. The app creates imported chats with a
-  permission mode that prompts on shell commands, and a prompt nobody can click is a silent
-  deadlock: alive, idle, no error anywhere. Imports now request the unattended mode, the
-  watcher diagnoses the stall by name (`detail.approvalStall`) instead of blaming dead
-  background tasks, and the reliable workaround is to revive with file tools only. The mode
-  itself is the app's to keep, so this is mitigated rather than closed.
+- **A revived chat can wake and still do nothing, and the stamp meant to prevent it mostly
+  does not hold.** A prompt nobody can click is a silent deadlock: alive, idle, no error
+  anywhere. Imports request the unattended mode (`applyDesktopChatAutomation`), the watcher
+  diagnoses the stall by name (`detail.approvalStall`) instead of blaming dead background
+  tasks, and the reliable workaround is to revive with file tools only.
+
+  **Censused on the owner's real fleet 2026-08-27** (`bun scripts/permission-mode-census.mjs`,
+  1,362 chats), because this had been reasoned about from anecdotes and the anecdotes had the
+  shape BACKWARDS. The split is clean, and it is not about which folder a chat is in:
+
+  | | n | unattended |
+  |---|---|---|
+  | Chats the app CREATES | 1332 | **100%** (one July exception) |
+  | Chats we IMPORT | 30 | **13%** (4 of 30) |
+
+  So chats the app makes for itself are fine, and every deadlock candidate is an IMPORT, which
+  is to say one of ours. The stamp is written and then LOST: the app re-saves that metadata
+  when the chat first boots and re-asserts its own import default, exactly as it does with
+  titles, and for the same reason (while an app is running, its metadata files are its own).
+  Do not read "imports request the unattended mode" as "imports get it": it held 4 times in 30.
+
+  A per-folder preference in the app's own config (`epitaxy-folder-permission-mode`) looked
+  like the durable lever and was RULED OUT by the same census: chats in folders carrying that
+  preference are 100% unattended and chats in folders without it are 99%, which is the same
+  answer twice, not a difference. The folder map explains nothing here.
+
+  The untested direction that remains is re-stamping AFTER the chat has booted once, since the
+  clobber happens on that first boot. Until someone measures whether a second stamp survives
+  the NEXT boot, treat this as mitigated rather than closed, and run the census before
+  believing any change to the import path fixed it.
 - Context-size numbers come from the last assistant event's token usage - accurate enough for
   a handoff threshold, not an accounting tool.
 - **Synthetic UI input is a dead end, not an unbuilt fallback.** A pre-v0.36 revive path drove
