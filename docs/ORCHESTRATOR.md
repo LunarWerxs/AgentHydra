@@ -457,29 +457,32 @@ So a reviewer must be either:
   "model": "sonnet", "permission_mode": "bypassPermissions"}`. Without `permission_mode`
   the window opens and stops on the first shell approval, exactly like the seeded one.
 
-**And the launch has a second gate, which is NOT SOLVED.** The CLI asks whether the folder is
+**And the launch had a second gate, which IS now solved.** The CLI asks whether the folder is
 one you trust and blocks on a keypress, while the endpoint has already returned `ok: true` - a
-hang that reports success, which is worse than a refusal.
+hang that reports success, which is worse than a refusal. The owner's rule is the reason this
+had to be closed rather than documented: a keypress he must supply today is one he must supply
+forever.
 
-Trust is recorded per project path as a LITERAL KEY, so one folder can be recorded twice and
-disagree with itself: this machine had one spelling of `PublicProjects` accepted and the other
-not, the same folder, and 61 of its 114 projects read as untrusted. `ensureProjectTrusted`
-mirrors an existing YES onto every spelling before launching, and REFUSES with a reason when
-the folder is not trusted in any form. It will not answer the security question on the owner's
-behalf: mirroring a decision he made is normalization, making one for him is not.
+**The mechanism, and it is a slash.** Trust is recorded per project path as a LITERAL KEY in
+the CLI config. Read the whole config at once and the pattern is unmistakable: every
+FORWARD-slash key is `false` and every BACKSLASH key is `true`. The CLI resolves cwd to forward
+slashes and reads trust under THAT key; something else, the app or an older CLI, wrote the
+backslash form. So a folder trusted long ago is asked about again every single time, and 61 of
+this machine's 114 projects read as untrusted for exactly that reason.
 
-**That fixes a real inconsistency and it does NOT stop the dialog.** Measured twice on
-2026-08-27 with an instance-pinned launch: once into a folder recorded as accepted that also
-pre-approves six tool permissions, and once into a folder recorded as accepted that
-pre-approves none. Both showed the dialog anyway and never joined the live registry. So
-whatever the pinned CLI consults, it is not the `hasTrustDialogAccepted` flag in the ambient
-config, and this is recorded as UNSOLVED rather than dressed up as fixed.
+`ensureProjectTrusted` mirrors an existing YES onto **both** spellings before launching. The
+first cut of it wrote only the keys that already existed, which for a backslash-only folder
+means it wrote nothing that mattered and the dialog kept appearing; that near-miss is pinned by
+a test named for it. Proven end to end: a launch that had hung three times registered in seven
+seconds once the forward-slash key carried the same YES, and the reviewer then ran its loop
+with shell commands returning results.
 
-**Consequence, stated plainly: AgentHydra cannot currently start a reviewer unattended by any
-route.** A seeded chat deadlocks on shell approval; a terminal launch deadlocks on this
-dialog. Starting one needs a human action once - open a chat in the app and type
-`/orchestrate`, or press a key on the launched window. Everything the reviewer does AFTER that
-is zero-click; only its birth is not, and that gap is the most valuable thing left to close.
+It still REFUSES, loudly and with a reason, when the folder is not trusted in any spelling. It
+will not answer the security question on the owner's behalf: copying a decision he already made
+onto a second spelling of the same folder is normalization, inventing one is not.
+
+**So a reviewer now starts with no human action at all**: one call to `launch-terminal` with
+`permission_mode: "bypassPermissions"`, into any folder the owner has ever trusted.
 
 Turning it off is the reverse in either order; each half degrades safely without the other
 (the feed just accumulates; the reviewer just finds an empty feed).

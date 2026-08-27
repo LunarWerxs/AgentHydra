@@ -47,11 +47,15 @@ test('an unattended window can ask for a permission mode, and otherwise does not
   expect(plain.command).not.toContain('--permission-mode')
 })
 
-test('a folder already trusted under the exact key is left alone', () => {
+test("the caller's own spelling being trusted is NOT enough on its own", () => {
+  // This test used to assert mirrored:false here, which is precisely the bug: the caller asked
+  // about the backslash spelling, that one said yes, and the function declared victory while the
+  // forward-slash key the CLI actually reads did not exist. It is trusted AND it needs mirroring.
   const d = cfgDir({ 'D:\\Work': { hasTrustDialogAccepted: true } })
   const r = ensureProjectTrusted('D:\\Work', d)
   expect(r.trusted).toBe(true)
-  expect(r.mirrored).toBe(false)
+  expect(r.mirrored).toBe(true)
+  expect(readProjects(d)['D:/Work'].hasTrustDialogAccepted).toBe(true)
 })
 
 test('a YES recorded under another spelling of the same folder is mirrored, not re-asked', () => {
@@ -104,4 +108,32 @@ test('a missing or unreadable CLI config refuses rather than guessing', () => {
   const broken = mkdtempSync(join(tmpdir(), 'ah-trust-bad-'))
   writeFileSync(join(broken, '.claude.json'), '{ not json')
   expect(ensureProjectTrusted('D:\\Work', broken).reason).toBe('cli-config-unreadable')
+})
+
+test('THE SPELLING THE CLI ACTUALLY READS IS THE ONE THAT MUST BE WRITTEN', () => {
+  // This is the whole bug, and the first version of the mirror missed it. Measured on the owner's
+  // config: every FORWARD-slash key is false and every BACKSLASH key is true, because the CLI
+  // resolves cwd to forward slashes and reads trust there while something else wrote the backslash
+  // form. A folder recorded only with backslashes has no forward-slash key at all, so a mirror
+  // that writes "every key that already exists" writes nothing useful and the dialog keeps
+  // appearing. Adding that one key by hand turned a launch that had hung three times into one
+  // that registered in seven seconds.
+  const d = cfgDir({ 'D:\\Only\\Backslashes': { hasTrustDialogAccepted: true } })
+  const r = ensureProjectTrusted('D:\\Only\\Backslashes', d)
+  expect(r.trusted).toBe(true)
+  expect(r.mirrored).toBe(true) // NOT "nothing to do": the forward-slash twin was missing
+
+  const p = readProjects(d)
+  expect(p['D:/Only/Backslashes'].hasTrustDialogAccepted).toBe(true)
+  expect(p['D:\\Only\\Backslashes'].hasTrustDialogAccepted).toBe(true)
+})
+
+test('when both spellings already agree, there is genuinely nothing to do', () => {
+  const d = cfgDir({
+    'D:\\Both': { hasTrustDialogAccepted: true },
+    'D:/Both': { hasTrustDialogAccepted: true },
+  })
+  const r = ensureProjectTrusted('D:\\Both', d)
+  expect(r.trusted).toBe(true)
+  expect(r.mirrored).toBe(false)
 })

@@ -44,18 +44,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
-- **A launched terminal could hang forever while reporting success, and one half of that is
-  fixed while the other is now documented as unsolved.** Found starting the orchestrator's own
-  reviewer: the window opened, asked whether the folder was trusted, and waited on a keypress
-  that by the zero-click law can never come, while the endpoint had already returned ok. Trust
-  turned out to be recorded per project path as a literal key, so one folder is recorded twice
-  and can disagree with itself (one spelling accepted, the other not, with 61 of 114 projects
-  reading as untrusted). `launch-terminal` now mirrors an existing trust decision onto every
-  spelling, refuses with a reason when the folder was never trusted rather than answering the
-  security question for the owner, and accepts `permission_mode` so an unattended window does
-  not stop on shell approvals. It does NOT stop the dialog for an instance-pinned launch,
-  measured twice, so the docs say so instead of implying a fix. The standing consequence:
-  starting a reviewer still needs one human action, and closing that is the top open item.
+- **A launched terminal could hang forever while reporting success. Fixed, and the cause was a
+  slash.** Starting the orchestrator's reviewer opened a window, asked whether the folder was
+  trusted, and waited on a keypress that by the zero-click law can never come, while the API
+  had already returned ok. Trust is recorded per project path as a literal key, and across the
+  whole config every forward-slash key was false while every backslash key was true: the CLI
+  resolves cwd to forward slashes and reads trust there, while something else wrote the other
+  form, so 61 of 114 projects read as untrusted and long-trusted folders were asked about
+  forever. `launch-terminal` now mirrors an existing trust decision onto BOTH spellings, still
+  refuses loudly for a folder never trusted in any form rather than answering the security
+  question for the owner, and accepts `permission_mode` so an unattended window does not stop
+  on shell approvals. A launch that had hung three times then registered in seven seconds, and
+  the reviewer ran its loop with shell commands returning results. Starting a reviewer now
+  takes no human action.
 
 - **A seeded chat could end up named after AgentHydra's own plumbing.** Found by the owner on
   his sidebar: two chats seeded during one session read as "General coding session" and

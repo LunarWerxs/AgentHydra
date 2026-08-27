@@ -171,9 +171,13 @@ export function ensureProjectTrusted(
       .toLowerCase()
   const target = canon(cwd)
   const siblings = Object.keys(projects).filter((k) => canon(k) === target)
-  const exact = Object.keys(projects).find((k) => k === cwd)
-  if (exact && projects[exact]?.hasTrustDialogAccepted === true)
-    return { trusted: true, mirrored: false }
+  // Both spellings must already say yes before this can claim there is nothing to do. Checking
+  // only the caller's spelling is what let the original version return 'trusted, nothing to
+  // mirror' for a folder whose forward-slash key did not exist, and then hang on the dialog.
+  const forwardKey = cwd.replace(/\\/g, '/')
+  const backslashKey = cwd.replace(/\//g, '\\')
+  const yes = (k: string) => projects[k]?.hasTrustDialogAccepted === true
+  if (yes(cwd) && yes(forwardKey) && yes(backslashKey)) return { trusted: true, mirrored: false }
   const trustedElsewhere = siblings.find((k) => projects[k]?.hasTrustDialogAccepted === true)
   if (!trustedElsewhere)
     return {
@@ -181,11 +185,19 @@ export function ensureProjectTrusted(
       mirrored: false,
       reason: siblings.length ? 'folder-not-trusted' : 'folder-unknown',
     }
-  // Mirror the YES onto every spelling of this folder, including the one the caller used, so
-  // whichever key the CLI looks up finds it.
+  // Mirror the YES onto every spelling of this folder, INCLUDING the two it may not have yet.
+  // Writing only the keys that already exist is not enough and was the bug in the first cut of
+  // this: measured on the owner's config, every forward-slash key is false and every backslash
+  // key is true, because the CLI resolves cwd to FORWARD slashes and reads trust under that
+  // key while something else wrote the backslash form. A folder recorded only with backslashes
+  // therefore has no forward-slash key, the mirror skipped it, and the dialog kept appearing.
+  // Adding that one key by hand turned a launch that had hung three times into one that
+  // registered in seven seconds.
   try {
     const donor = projects[trustedElsewhere]
-    for (const k of new Set([...siblings, cwd])) {
+    const forward = cwd.replace(/\\/g, '/')
+    const backslash = cwd.replace(/\//g, '\\')
+    for (const k of new Set([...siblings, cwd, forward, backslash])) {
       projects[k] = { ...(projects[k] ?? donor), hasTrustDialogAccepted: true }
     }
     cfg.projects = projects
