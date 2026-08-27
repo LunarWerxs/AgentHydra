@@ -6,15 +6,16 @@
 // test pins one classification the reviewer depends on, against synthetic transcript records in
 // the CLI's own shapes (captured from a real store on 2026-08-25, CLI v2.1.237).
 import { expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { db } from '../src/db'
+import { db, setSetting } from '../src/db'
 import {
   ackAttention,
   bandForPct,
   buildInstanceRows,
   commandInstallOutcome,
+  commandTextHash,
   computeUsageItems,
   getOrchestratorPrompts,
   getOrchestratorSettings,
@@ -29,6 +30,7 @@ import {
   planOfAccountLabel,
   projectKeyForCwd,
   proposeArchivesForDoneSessions,
+  refreshShippedCommands,
   resetsSoon,
   reviewerHealth,
   runOrchestratorOnce,
@@ -538,6 +540,53 @@ test('command install decision: write when absent, keep an edited copy unless fo
   expect(commandInstallOutcome('shipped', 'shipped', false)).toBe('up-to-date')
   expect(commandInstallOutcome('user edited', 'shipped', false)).toBe('differs')
   expect(commandInstallOutcome('user edited', 'shipped', true)).toBe('updated')
+})
+
+// THE DISTINCTION THAT WAS MISSING. Without the fingerprint, our own stale copy and the owner's
+// edited copy are the same three-way 'differs', so the safe answer (leave it alone) applied to
+// both and a shipped rubric fix could never reach disk. Measured 2026-08-27: the installed
+// /orchestrate was a day-old shipped copy still telling the reviewer to construct chat ids the
+// way a fix in this very repo had already corrected.
+test('our own stale copy is refreshed; the owner’s edit still is not', () => {
+  const ours = commandTextHash('previously shipped')
+  // Ours, unedited, and out of date: rewriting takes nothing from the owner.
+  expect(commandInstallOutcome('previously shipped', 'shipped', false, ours)).toBe('refreshed')
+  // Same stored fingerprint, but the file no longer matches it, so a human changed it. Hands off.
+  expect(commandInstallOutcome('user edited', 'shipped', false, ours)).toBe('differs')
+  // No fingerprint recorded at all (installed before the bookkeeping existed) stays conservative.
+  expect(commandInstallOutcome('previously shipped', 'shipped', false, null)).toBe('differs')
+  // Already current: nothing to do, whatever we remember.
+  expect(commandInstallOutcome('shipped', 'shipped', false, ours)).toBe('up-to-date')
+})
+
+test('the boot refresh updates our stale copy and never creates one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-refresh-'))
+
+  // Nothing installed yet: the boot pass must not put commands into a Claude that never asked
+  // for them. It reports what it WOULD install and writes nothing.
+  const cold = refreshShippedCommands(dir)
+  expect(cold.every((f) => f.outcome === 'installed')).toBe(true)
+  expect(existsSync(join(dir, 'orchestrate.md'))).toBe(false)
+
+  // Now install for real, then simulate a release changing the shipped text by rewriting the
+  // file to an older body while leaving OUR fingerprint pointing at it.
+  installOrchestratorCommands(false, dir)
+  const path = join(dir, 'orchestrate.md')
+  const shipped = readFileSync(path, 'utf8')
+  writeFileSync(path, 'an older shipped body')
+  setSetting('orch_command_hash_orchestrate_md', commandTextHash('an older shipped body'))
+
+  const warm = refreshShippedCommands(dir)
+  expect(warm.find((f) => f.file === 'orchestrate.md')?.outcome).toBe('refreshed')
+  expect(readFileSync(path, 'utf8')).toBe(shipped)
+
+  // And an owner edit survives the same pass untouched.
+  writeFileSync(path, 'MY OWN NOTES')
+  const edited = refreshShippedCommands(dir)
+  expect(edited.find((f) => f.file === 'orchestrate.md')?.outcome).toBe('differs')
+  expect(readFileSync(path, 'utf8')).toBe('MY OWN NOTES')
+
+  rmSync(dir, { recursive: true, force: true })
 })
 
 test('installOrchestratorCommands ships all three commands and respects edits', () => {

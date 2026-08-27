@@ -43,6 +43,7 @@
 // OFF by default, like the auto-resume monitor and for the same reason: it looks at everything
 // you are doing on a timer, and that should be a choice.
 
+import { createHash } from 'node:crypto'
 import {
   closeSync,
   existsSync,
@@ -2444,6 +2445,17 @@ async function tick(): Promise<void> {
 
 export function startOrchestrator(): void {
   if (timer) return
+  // Bring OUR OWN installed command copies up to date before anything reads them. A release can
+  // change the reviewer's rubric, and until this ran nothing ever carried that change to the only
+  // file the reviewer actually opens. Never creates a file and never overwrites an edited one; see
+  // refreshShippedCommands.
+  try {
+    for (const r of refreshShippedCommands())
+      if (r.outcome === 'refreshed')
+        console.log(`[agenthydra] refreshed the shipped ${r.file} (it was our own older copy)`)
+  } catch (err) {
+    console.error('[agenthydra] shipped-command refresh failed:', err)
+  }
   // A fast heartbeat with a due-check inside, so tickSecs edits apply without a daemon restart.
   timer = setInterval(() => void tick(), 15_000)
 }
@@ -2462,17 +2474,43 @@ export function stopOrchestrator(): void {
 // explicit install endpoint. A copy the user has edited is never overwritten without force —
 // their edits are the newer intent, not drift to correct.
 
-export type CommandInstallOutcome = 'installed' | 'up-to-date' | 'differs' | 'updated'
+export type CommandInstallOutcome = 'installed' | 'up-to-date' | 'differs' | 'updated' | 'refreshed'
 
-/** Pure decision: what should happen given what is on disk. Exported for tests. */
+/** Fingerprint of a command file's text, so we can recognise our OWN last copy on disk without
+ *  keeping a second full transcript of it in the settings table. */
+export function commandTextHash(text: string): string {
+  return createHash('sha256').update(text).digest('hex')
+}
+
+/**
+ * Pure decision: what should happen given what is on disk. Exported for tests.
+ *
+ * `lastShippedHash` is the fingerprint of the text WE last wrote to that path, or null if we have
+ * never written it (or wrote it before this was recorded). It is what separates the two cases the
+ * old three-way answer ran together: a file the owner edited, whose edits are the newer intent and
+ * must never be overwritten, and a file that is simply OUR OWN previous version, left behind
+ * because a release changed the shipped text and nothing ever went back for it.
+ *
+ * That second case is not hypothetical. Measured 2026-08-27: the installed /orchestrate rubric was
+ * a shipped copy from the day before, so the live reviewer was still being told to construct chat
+ * ids as `local_<sessionId>` - the exact bug fixed in the repo and documented in this changelog,
+ * which had never reached the only file the reviewer actually reads. A fix that lands in git and
+ * not on disk is not a fix, and the route's own comment already claimed it covered "after an
+ * AgentHydra update changed them" while nothing called it.
+ */
 export function commandInstallOutcome(
   existing: string | null,
   shipped: string,
   force: boolean,
+  lastShippedHash: string | null = null,
 ): CommandInstallOutcome {
   if (existing === null) return 'installed'
   if (existing === shipped) return 'up-to-date'
-  return force ? 'updated' : 'differs'
+  if (force) return 'updated'
+  // Ours, unedited, and out of date. Rewriting it corrects our own drift; it takes nothing from
+  // the owner, because byte-for-byte this is the file we put there.
+  if (lastShippedHash && commandTextHash(existing) === lastShippedHash) return 'refreshed'
+  return 'differs'
 }
 
 /** Everything the orchestrator ships as a user-typeable command: the reviewer loop plus the
@@ -2483,9 +2521,18 @@ const SHIPPED_COMMANDS: Array<{ file: string; text: string }> = [
   { file: 'resumeo.md', text: RESUMEO_COMMAND },
 ]
 
+/** Where we remember the fingerprint of the copy WE wrote, per command file. */
+const shippedHashKey = (file: string) => `orch_command_hash_${file.replace(/[^a-z0-9]+/gi, '_')}`
+
 export function installOrchestratorCommands(
   force = false,
   commandsDir: string = join(homedir(), '.claude', 'commands'),
+  opts: {
+    /** Boot mode: bring our own stale copies up to date, but never CREATE one. Installing on a
+     *  machine that has never enabled the orchestrator would be putting commands in someone's
+     *  Claude for a feature they never switched on. */
+    existingOnly?: boolean
+  } = {},
 ): Array<{ file: string; outcome: CommandInstallOutcome; path: string }> {
   return SHIPPED_COMMANDS.map(({ file, text }) => {
     const path = join(commandsDir, file)
@@ -2495,13 +2542,38 @@ export function installOrchestratorCommands(
     } catch {
       existing = null
     }
-    const outcome = commandInstallOutcome(existing, text, force)
-    if (outcome === 'installed' || outcome === 'updated') {
+    const outcome = commandInstallOutcome(existing, text, force, getSetting(shippedHashKey(file)))
+    const write =
+      outcome === 'updated' ||
+      outcome === 'refreshed' ||
+      (outcome === 'installed' && !opts.existingOnly)
+    if (write) {
       mkdirSync(commandsDir, { recursive: true })
       writeFileSync(path, text)
+      // Recorded AFTER the write, so a failed write cannot leave us believing we own a file we
+      // never managed to put there.
+      setSetting(shippedHashKey(file), commandTextHash(text))
+    } else if (outcome === 'up-to-date' && !getSetting(shippedHashKey(file))) {
+      // Adopt a copy that already matches: it IS ours, we just predate the bookkeeping. Without
+      // this, every file installed before this change would be read as an owner edit forever.
+      setSetting(shippedHashKey(file), commandTextHash(text))
     }
     return { file, outcome, path }
   })
+}
+
+/**
+ * Boot-time refresh: update the shipped commands we ourselves installed and have since changed.
+ *
+ * Never creates a file, never touches one the owner edited. This is the step that was missing:
+ * the only automatic install ran on first enable with force off, whose own comment reads "an
+ * existing copy is never touched here", so a rubric fix shipped in a release could sit in the
+ * binary indefinitely while the reviewer kept reading last month's copy.
+ */
+export function refreshShippedCommands(
+  commandsDir?: string,
+): Array<{ file: string; outcome: CommandInstallOutcome; path: string }> {
+  return installOrchestratorCommands(false, commandsDir, { existingOnly: true })
 }
 
 /** The opt-out mirror of installOrchestratorCommands: remove the shipped /orchestrate, /delayo
