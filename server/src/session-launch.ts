@@ -37,6 +37,7 @@ import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
 import { db } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
+import { recordPlacement } from './placements'
 
 /**
  * One lineage, one continuation. A done-marked session (session_marks.done = 1) was handed off,
@@ -231,6 +232,7 @@ export async function launchTerminalSession(opts: {
       stdout: 'ignore',
       stderr: 'ignore',
     })
+    recordPlacement(opts.instanceRef ?? null, 'terminal', opts.resumeSessionId ?? null)
     return { ok: true, command: plan.command }
   } catch (err) {
     return {
@@ -657,6 +659,11 @@ export async function seedDesktopSession(opts: {
     isInstanceRunning: opts.isInstanceRunning,
   })
   if (!res.ok) return { ok: false, reason: res.reason }
+  // A seeded chat IS work placed on that account, so the ledger hears about it here rather
+  // than in the callers. Recording at the primitive is what lets balancing count a placement
+  // made by the owner clicking in the app the same as one the monitor made itself; a ledger
+  // only the polite callers wrote to would be balancing against a fiction.
+  recordPlacement(opts.instanceRef, 'seed', sessionId)
   // The title is written into metadata a RUNNING app will overwrite the moment this chat first
   // boots - seen on screen, not inferred: a freshly seeded chat with a perfectly good title
   // rendered as "General coding session" in the sidebar until it was renamed through the app.

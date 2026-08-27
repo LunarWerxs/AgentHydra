@@ -169,6 +169,20 @@ create table if not exists orchestrator_proposals (
   result        text
 );
 create index if not exists idx_orch_proposals_open on orchestrator_proposals(status, kind, session_id);
+
+-- Where work was placed, and when. The routing table is a pure function of the usage cache,
+-- and that cache refreshes about once a minute, so every placement decided inside one window
+-- saw identical numbers and picked the identical top row. Round-robin is not something a
+-- stateless sort can do. This ledger is the memory it was missing: an account that just
+-- received work sinks below its equally-loaded peers until the usage numbers catch up.
+create table if not exists orchestrator_placements (
+  id           integer primary key autoincrement,
+  instance_ref text not null,       -- normalized 'desktop:<dir>' (lowercased, no trailing slash)
+  session_id   text,
+  kind         text not null,       -- seed | terminal | migrate | queue | manual
+  at           text not null        -- ISO
+);
+create index if not exists idx_orch_placements_at on orchestrator_placements(at);
 `)
 
 // A short-lived pre-0.11 hardening change stored manually added account credentials as DPAPI
@@ -497,6 +511,15 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   orch_max_active_chats: '0',
   // ON by default: a unified manager that watched only one of the two agents was the gap.
   orch_watch_codex: '1',
+  // ON by default (owner instruction 2026-08-27). It spends no quota of its own and starts
+  // nothing: it only reorders the accounts the router was already going to choose between,
+  // and only among accounts that are equally loaded. The thing it prevents, several
+  // placements in one usage-cache window all stacking onto one account, is silent when it
+  // happens, which is why the safe default is on rather than opt-in.
+  orch_load_balance: '1',
+  // How far back a placement counts against an account. 90 minutes comfortably outlives the
+  // usage cache's refresh, which is the whole blind spot this ledger exists to cover.
+  orch_balance_window_mins: '90',
 }
 
 export function getSetting(key: string): string {

@@ -173,6 +173,7 @@ import {
   uninstallOrchestratorCommands,
 } from './orchestrator'
 import { runOrchestratorSelfTest } from './orchestrator-selftest'
+import { recentPlacements, recordPlacement } from './placements'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { decideProposal, openProposalsForSession, reportProposalExecuted } from './proposals'
@@ -2091,6 +2092,25 @@ app.post('/api/screenshot', async (c) => {
 // Safe to run at any time - every artifact it touches is one it created (sacrificial ids, a
 // throwaway metadata store), and it never reads or writes a real chat. `deep: true` additionally
 // seeds ONE real desktop chat to prove the app-facing half works, then archives it.
+// Record that work was placed on an instance, for balancing. The primitives (seed, terminal
+// launch, migrate) record themselves, so this is only for a placement made through a channel
+// AgentHydra does not own: the reviewer delivering a turn NATIVELY into an existing chat on
+// some account is real load that nothing else here can see. Without it, balancing would
+// under-count exactly the delivery path the zero-click law made the default.
+app.post('/api/orchestrator/placement', async (c) => {
+  const body = await jsonBody(c)
+  const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''
+  if (!ref.startsWith('desktop:'))
+    return c.json({ ok: false, error: "instance_ref ('desktop:<dir>') is required" }, 400)
+  const KINDS = ['seed', 'terminal', 'migrate', 'queue', 'manual'] as const
+  const rawKind = typeof body.kind === 'string' ? body.kind : ''
+  const kind = (KINDS as readonly string[]).includes(rawKind)
+    ? (rawKind as (typeof KINDS)[number])
+    : 'manual'
+  recordPlacement(ref, kind, typeof body.session_id === 'string' ? body.session_id : null)
+  const s = getOrchestratorSettings()
+  return c.json({ ok: true, counts: recentPlacements(s.balanceWindowMins) })
+})
 app.post('/api/orchestrator/selftest', async (c) => {
   const body = await jsonBody(c)
   try {

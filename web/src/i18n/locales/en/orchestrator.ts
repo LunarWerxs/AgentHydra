@@ -44,6 +44,12 @@ export default {
   maxActiveChatsHint:
     'Caps how many chats may actively work at once, fleet-wide. 0 = unlimited. Past the cap, idle chats wait their turn and the orchestrator rotates them round-robin: the chat idle longest gets the next free slot. Answers, handoffs, and revives are never blocked - only "resume working" nudges wait.',
   maxActiveChatsUnlimited: 'Unlimited',
+  loadBalanceLabel: 'Balance work across accounts',
+  loadBalanceHint:
+    'Spreads new work over your open accounts instead of stacking one. Two things change. An account whose 5-hour window is about to reset counts as free capacity rather than a busy one, because whatever it reads now is about to be wiped. And accounts that are about equally loaded are ordered by which was given work least recently, which is what stops several placements decided in the same minute from all landing on the same account - the usage numbers only refresh about once a minute, so without this they all see the same reading and all pick the same winner. It never sends work to a busier account to be fair: having headroom always wins, and balancing only breaks the tie between accounts that are already close.',
+  balanceWindowLabel: 'Balancing memory (minutes)',
+  balanceWindowHint:
+    'How long a placement keeps counting against an account when balancing. It needs to outlast the usage refresh, which is the blind spot this covers; 90 minutes is the default. Shorter reacts faster and spreads less; longer spreads harder and can keep steering away from an account whose usage has already settled.',
   handoffSurfaceLabel: 'Work surface',
   handoffSurfaceHint:
     'Where the orchestrator places ALL the work it starts or continues. Desktop: threads live as chats in your apps and the orchestrator delivers each turn through the app itself, so a chat wakes and runs where you can watch it - no clicking, no terminals, nothing headless. Terminal: visible windows you can watch live. Queue: classic headless runs.',

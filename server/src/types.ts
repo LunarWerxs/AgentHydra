@@ -1193,6 +1193,15 @@ export interface OrchestratorSettings {
   /** Watch Codex threads too, so one feed covers both agents this machine runs. Observe-only:
    *  Codex has no message channel, so those items are marked deliverable:false. */
   watchCodex: boolean
+  /** Spread work across the open accounts instead of stacking one (default ON). Two effects,
+   *  both confined to the routing table: a 5-HOUR window minutes from its reset ranks as a
+   *  dump target (the exemption weekly already had), and accounts in the same load tier are
+   *  ordered by how recently each was given work, which is what makes the rubric's
+   *  round-robin actually happen rather than merely be requested. Never promotes a hot
+   *  account over a cold one: headroom always outranks fairness. */
+  loadBalance: boolean
+  /** How far back a placement counts against an account when balancing. */
+  balanceWindowMins: number
 }
 
 /** What kind of action a proposal asks for. 'revive' covers every flavor of dead thread
@@ -1239,6 +1248,21 @@ export interface OrchestratorInstance {
   weeklyPct: number | null
   weeklyResetsAt: string | null
   sessionPct: number | null
+  /** When the 5-HOUR window resets. Present in the usage cache all along; surfaced here
+   *  because a window about to wipe is capacity, and nothing could see that before. */
+  sessionResetsAt: string | null
+  /** The 5-hour window resets within resetSoonMins, so whatever it reads now is about to
+   *  be gone. Ranked as a dump target while loadBalance is on. */
+  sessionResetsSoon: boolean
+  /** Placements made on this instance inside the balancing window (the ledger). */
+  recentPlacements: number
+  /** May work be placed here right now? Running, fresh reading, weekly not critical, and
+   *  5-hour under the high band. Computed once, here, so every caller agrees. */
+  eligible: boolean
+  /** The FIRST reason it is not eligible, in words, or null when it is. The feed states
+   *  why an account was passed over instead of leaving the reviewer to reverse-engineer
+   *  the sort. */
+  blockedWhy: string | null
   /** Banding of weeklyPct under the current thresholds ('unknown' when no reading). */
   band: 'ok' | 'elevated' | 'high' | 'critical' | 'unknown'
   resetsSoon: boolean
@@ -1312,6 +1336,20 @@ export interface OrchestratorView {
   attention: AttentionItem[]
   /** The desktop fleet with usage joined — the routing table for nudges/handoffs/launches. */
   instances: OrchestratorInstance[]
+  /** WHERE THE NEXT PIECE OF WORK SHOULD GO. The same decision the monitor's migration
+   *  target takes, resolved once here so the reviewer never has to re-derive placement
+   *  policy from the sort order and then drift from it. `blocked` says why each account
+   *  was passed over; `recent` is the ledger the balancing consulted. */
+  placement: {
+    balancing: boolean
+    windowMins: number
+    recommended: string | null
+    recommendedName: string | null
+    why: string
+    eligible: string[]
+    blocked: Array<{ ref: string; name: string; why: string | null }>
+    recent: Array<{ instanceRef: string; sessionId: string | null; kind: string; at: string }>
+  }
   /** Threads the owner parked with /delayo: the feed carries nothing for them, and the
    *  reviewer must never prompt them until /resumeo lifts the hold. */
   holds: Array<{ sessionId: string; heldAt: string; peerName?: string; cwd?: string }>

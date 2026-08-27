@@ -46,6 +46,11 @@ headless processes). Reach for these in order:
    mcp__ccd_session_mgmt__send_message tool with session_id local_<id> and exactly this
    message: <text>. Reply DONE when sent." One relay per wake per instance; the relay's DONE
    plus the target's transcript moving is your verification.
+   VERIFIED 2026-08-27, end to end: the relay reported DONE, the dormant target's transcript
+   grew, and its engine booted and answered. Two constraints learned in that test. The DONE
+   alone is NOT proof, check the target moved. And the relaying chat must be an ATTENDED
+   interactive session: `send_message` is unavailable in unattended runs (scheduled tasks,
+   remote dispatch) and cannot deliver to them either.
 4. **Nothing live in that instance** -> you cannot deliver natively right now. Leave the
    proposal approved, note "no native route into <instance> yet", and retry on later wakes
    (a chat there going live, or the owner opening one, restores rung 1-3). NEVER fall back
@@ -138,8 +143,15 @@ allowed to answer "nothing here is still worth keeping" - that is a good outcome
      `local_<sessionId>`. Instant and genuinely gone - measured, the app's own view flips to
      archived immediately. Always prefer this.
   2. **A chat elsewhere, with any live chat in that instance** -> RELAY: peer-message that live
-     chat and ask it to archive the TARGET (never itself) with its own archive tool. Same
-     mechanism, same instant effect.
+     chat and ask it to archive the TARGET (never itself) with its own archive tool.
+     **THIS RUNG IS AN ASK, NOT AN ACTUATOR** (measured 2026-08-27). Relaying a MESSAGE works
+     because sending needs no approval; `archive_session` ALWAYS prompts its user by design,
+     so the real shape is agent -> HUMAN -> agent and the relaying chat's own user is the one
+     who consents. You cannot delegate that consent, and a chat that declines is CORRECT: do
+     not press it and do not go looking for a peer who would say yes, which is laundering.
+     Treat a refusal as rung 3, not as a failure. Note also that a reviewer running in BYPASS
+     would make that call with no prompt and wrongly conclude the rung is universal; it is
+     not, and every normal-permissions instance blocks it.
   3. **No live chat there** -> `POST /api/sessions/<id>/desktop-archive {"archived": true}`.
      The response says `visibleNow: false` when that app is running, and it means it: the flag
      is on disk, the chat is STILL ON SCREEN until the app restarts, which the daemon does once
@@ -249,8 +261,21 @@ counts as healthy), then LOWEST 5-hour session %, then lowest weekly %.
   play; never boot an account (`settings.openInstances` governs the one exception).
 - Take the first eligible row; skip `band: "critical"` unless `resetsSoon`; `stale: true`
   readings are unknown, not headroom. Prefer rows the delivery ladder can reach.
-- **Load-balance 5-hour windows**: landing several things in one wake -> spread across the
-  top eligible rows round-robin, never stack one account.
+- **`placement` ALREADY DECIDED THIS. Use it.** The feed carries `placement.recommended`
+  (a ref), `placement.why` (the reason in words), `placement.eligible`, and
+  `placement.blocked` (every account passed over, with WHY). It is the same picker the
+  auto-resume monitor uses. Do not re-derive placement policy from the sort and then drift
+  from it; take `placement.recommended` unless you have a specific reason not to, and say
+  the reason. `placement.recommended: null` means nothing has headroom: WAIT, do not force it.
+- **Landing several things in one wake**: after each placement, record it with
+  `POST /api/orchestrator/placement {"instance_ref": "<ref>", "kind": "manual"}` and re-read
+  `placement` before the next one. This is not bookkeeping, it is the ONLY thing that makes
+  round-robin real: usage numbers refresh about once a minute, so without the ledger every
+  placement in that minute sees identical readings and picks the identical account. Seeds,
+  terminal launches and migrations record themselves; a NATIVE delivery into an existing chat
+  does not, and that is the one you must record by hand.
+- **`row.blockedWhy` says why an account is out**, and `row.sessionResetsSoon` says its 5-hour
+  window is about to wipe, which makes a high reading capacity rather than load.
 - **Copy the row's `ref` VERBATIM** as `instance_ref`; never build one from a display name.
 - **Your own instance** is a valid target only below `settings.reviewerReservePct` weekly;
   protect your own runway at all costs.

@@ -77,12 +77,19 @@ const defaultDeps: MonitorDeps = {
           .get(sessionId)?.n,
     }),
   pickMigrationTarget: async (excludeRef) => {
-    // The orchestrator's routing table, filtered to what a migration may land on: running, a
-    // fresh reading, weekly under the hard band, not the account that just hit its limit.
-    const { buildInstanceRows, getOrchestratorSettings } = await import('./orchestrator')
+    // ONE picker, shared with the feed's recommendation and the reviewer's rubric. This used
+    // to carry its own inline copy of the eligibility filter, which is one policy living in
+    // two places and free to drift; `pickPlacement` is now the only definition of "an account
+    // that may take work", and buildInstanceRows is handed the placement ledger so a
+    // migration lands somewhere other than wherever the last one went.
+    const { buildInstanceRows, getOrchestratorSettings, pickPlacement } = await import(
+      './orchestrator'
+    )
     const { listInstances } = await import('./core/instances')
     const { allCachedUsage } = await import('./usage-cache')
+    const { recentPlacements, recordPlacement } = await import('./placements')
     const s = getOrchestratorSettings()
+    const now = Date.now()
     const rows = buildInstanceRows(
       (await listInstances()).map((i) => ({
         dir: i.dir,
@@ -91,17 +98,11 @@ const defaultDeps: MonitorDeps = {
       })),
       allCachedUsage(),
       s,
-      Date.now(),
+      now,
+      recentPlacements(s.balanceWindowMins, now),
     )
-    const norm = (r: string | null) => r?.replace(/[\\/]+$/, '').toLowerCase() ?? null
-    const hit = rows.find(
-      (r) =>
-        r.isRunning &&
-        !r.stale &&
-        r.band !== 'critical' &&
-        (r.sessionPct ?? 0) < s.sessionHighPct &&
-        norm(r.ref) !== norm(excludeRef),
-    )
+    const hit = pickPlacement(rows, { excludeRef })
+    if (hit) recordPlacement(hit.ref, 'migrate', null, now)
     return hit ? { ref: hit.ref, name: hit.name } : null
   },
 }

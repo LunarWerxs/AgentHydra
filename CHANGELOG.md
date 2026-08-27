@@ -5,6 +5,60 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Load balancing across accounts** (`loadBalance`, ON by default). The rubric has always said
+  "spread across the top eligible rows round-robin, never stack one account", and nothing could
+  carry it out: the routing table is a pure function of the usage cache, that cache refreshes
+  about once a minute, and so every placement decided inside one window saw identical readings
+  and picked the identical account. Round-robin is not something a stateless sort can do. Three
+  changes fix it. Placements are now WRITTEN DOWN, recorded at the primitive that makes them
+  (seed, terminal launch, migrate) so a placement counts whether the monitor, the reviewer or the
+  owner made it, plus `POST /api/orchestrator/placement` for the one path the primitives cannot
+  see, a turn delivered natively into a chat that already exists. The 5-HOUR window is now read
+  the way the weekly one always was, with `sessionResetsAt`/`sessionResetsSoon` on every row, so
+  an account whose window is minutes from wiping counts as capacity rather than load (the row
+  still reports the true percentage: the exemption changes ranking, never measurement). And the
+  ledger breaks ties, ONLY ties: load is bucketed into coarse 20-point tiers and recency reorders
+  inside a tier and nowhere else, so a colder account always wins outright however recently it
+  was used. That narrowness is the safety argument, and a test named for it fails if it ever
+  stops being true. Turning the setting off restores the previous ranking exactly.
+- **One placement decision, in one place.** `pickPlacement()` is now the only definition of "an
+  account that may take work". The auto-resume monitor carried its own inline copy of that filter
+  while the reviewer carried a prose description of it in its rubric, which is one policy in
+  three places, free to drift in all of them. The feed serves the answer as `placement`: the
+  recommendation, the reason in words, and every account passed over WITH the reason, so a
+  placement can be argued with rather than merely trusted.
+
+### Fixed
+
+- **The kit-drift guard was reporting green having compared nothing.** The checkout moved down
+  into `app/`, so `check:kit` pointed one directory short of the sibling kit; and even once the
+  path was corrected, the kit's own config still described the old layout, so the app was SKIPPED
+  and the run then printed "every app copy matches the kit" and exited 0. All four kit apps were
+  affected, and one of them had already corrected its path and was still getting the false green.
+  A skipped app is no longer a passing app: under `--check --app <name>` a skip is now fatal, and
+  a fleet check names what it did not check instead of claiming full coverage. The guard now
+  really does compare 698 files across the four apps.
+
+### Documented
+
+- **The cross-instance RELAY is verified**, for the first time since it was written: there had
+  never been a live chat outside the reviewer's own instance to test it with. Relaying a MESSAGE
+  works exactly as documented, end to end, including booting the dormant target's engine.
+- **The archive ladder's relay rung was over-claimed, and is corrected.** Sending a message needs
+  no approval; archiving ALWAYS prompts its user by design. So that rung is agent to HUMAN to
+  agent: the relaying chat's own user consents, and the orchestrator cannot delegate that. A chat
+  that declines is correct, and looking for a peer who would say yes is laundering. The finding
+  came from a normal-permissions chat refusing; a reviewer in bypass would have made the same
+  call with no prompt and concluded the rung was universal, which it is not.
+- **Codex staying observe-only is a decision, not an unfinished feature.** Resuming a rollout in
+  a visible terminal cannot preserve surface purity, because a rollout carries no record of which
+  frontend wrote it and Desktop and CLI share one `CODEX_HOME`; and there is no live-writer guard
+  for Codex, so a resume could double-write a transcript the Desktop app holds open.
+
 ## [0.36.0] - 2026-08-26
 
 ### Changed

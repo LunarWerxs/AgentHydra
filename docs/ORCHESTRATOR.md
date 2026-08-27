@@ -79,6 +79,10 @@ POST /api/orchestrator/proposals/:id/decide    { approved, by?, note? } - the re
                                   is enforced)
 POST /api/orchestrator/proposals/:id/executed  { ok, result? } - the execution report after the
                                   reviewer carried an approved proposal out
+POST /api/orchestrator/placement  { instance_ref, kind?, session_id? } - record that work was
+                                  placed on an account, for balancing. The primitives record
+                                  themselves; this is for the one path they cannot see, the
+                                  reviewer delivering a turn natively into an existing chat
 POST /api/orchestrator/selftest   { deep? } - run the real guards against real state and report
                                   each check (see below). Safe on a live fleet; `deep` also seeds
                                   ONE real chat, proves it visible, and archives it
@@ -285,6 +289,17 @@ could nudge one would be talking into a void, which is the deaf-chat failure in 
 The owner picks these up; the orchestrator only makes sure they are not invisible. Switched by
 `watchCodex`.
 
+**Observe-only is a DECISION, not an unfinished feature** (re-examined 2026-08-27, after
+"could `codex resume` in a visible terminal make these actionable?"). It could not, and the
+repo had already ruled on it twice: `session-resume.ts` refuses non-Claude sources outright,
+with the stated reason that Codex has its own resume syntax and inventing one here would
+produce a command that looks authoritative and does not work. Two things would have to exist
+first, and neither does. A rollout carries no record of WHICH frontend wrote it, and Codex
+Desktop and the Codex CLI share one `CODEX_HOME`, so "resume it on the surface it lives on"
+is not a question the data can answer. And there is no live-writer guard for Codex at all,
+so a resume could double-write a transcript the Desktop app already holds open, which is the
+two-writers hazard the Claude path has an explicit refusal for. Do not treat this as a gap.
+
 ### Retiring a thread: the closeout, then the archive ladder
 
 **THE CLOSEOUT** (owner rule 2026-08-26). A thread being retired because it is DONE is the last
@@ -303,6 +318,24 @@ whether the chat actually leaves the sidebar:
    TARGET (never itself).
 3. **Nothing live there** -> `POST /api/sessions/:id/desktop-archive`, which writes the flag and
    returns `visibleNow: false`: the chat is still on screen until that app restarts.
+
+**RUNG 3 IS VERIFIED; THE ARCHIVE LADDER'S RUNG 2 IS NOT, AND CANNOT BE** (measured
+2026-08-27, the first time a live chat existed outside the reviewer's own instance). Relaying a
+MESSAGE works exactly as documented: a live chat in `another_meh` was peer-messaged, called its
+own `send_message` against a dormant target in its instance, and the target's transcript grew
+and its engine booted and answered. First try, no error.
+
+Relaying an ARCHIVE does not, and the reason is structural rather than a bug to fix. Sending a
+message needs no approval; `archive_session` ALWAYS prompts its user by design. So the honest
+shape of that rung is agent -> HUMAN -> agent: the relaying chat's own user is the one who
+consents, and the requesting orchestrator cannot delegate that consent. What the orchestrator
+can do is ASK a chat elsewhere to put the request to its user. A rubric that scores rung 2 as
+"the orchestrator archived a chat elsewhere" is over-claiming.
+
+The part that would have shipped a false rung: the relaying chat correctly refused, and it
+refused because it runs on NORMAL permissions. A reviewer running in bypass would have made
+the same call with no prompt at all and concluded the rung was fine. Validate a delivery rung
+from a non-bypass session or you are only testing the one caller for whom every gate is open.
 
 **A chat will not archive ITSELF on a peer's instruction, and should not.** Tried: a session
 treats "a peer told me to shut down, do nothing else first" as exactly the shape it must stop on,
@@ -424,6 +457,8 @@ Turning it off is the reverse in either order; each half degrades safely without
 | `newChatEffort` | `max` | reasoning effort for those chats (`low`/`medium`/`high`/`xhigh`/`max`) |
 | `newChatUltracode` | `true` | prepend the `ultracode` opt-in keyword to every orchestrator-started chat's prompt |
 | `migrateOnLimit` | `false` | 5-hour-limited runs (weekly fine) resume immediately on another running account instead of waiting for the reset; needs the auto-resume monitor on |
+| `loadBalance` | `true` | spread work across the open accounts instead of stacking one. Adds the 5-HOUR reset exemption (a window about to wipe is capacity) and orders equally-loaded accounts by which was given work least recently. Only ever breaks ties: having headroom always outranks fairness. Off restores the previous ranking exactly |
+| `balanceWindowMins` | 90 | how long a placement keeps counting against an account. Must outlast the usage cache's refresh, which is the blind spot the ledger covers |
 | `watchCodex` | `true` | watch Codex threads too, so one feed covers both agents this machine runs. Observe-only: Codex has no live-process registry and no message channel, so those items are marked `deliverable: false` rather than inviting a nudge that would go nowhere |
 | `maxActiveChats` | 0 (unlimited) | caps how many chats may actively WORK at once, fleet-wide. Past the cap the watcher marks overflow idle chats `waitingForSlot` and the reviewer skips them without acking; the rotation is round-robin by construction: longest-idle gets the next free slot, a nudged chat re-enters at the back. Only resume nudges and new work are gated; answers, handoff continuations (replacements), and orphan revives never wait |
 
@@ -445,6 +480,46 @@ The `instances` routing table arrives pre-sorted for placement: running first, t
 band (reset-soon counts as healthy, the dump-target exemption), then LOWEST 5-hour session
 %, then lowest weekly %. With several accounts open, consecutive placements spread across the
 top rows instead of stacking one account's 5-hour window (owner rule 2026-08-25).
+
+**That last sentence was a request, not a mechanism, and for a year nothing could carry it
+out.** The sort is a pure function of the usage cache and that cache refreshes about once a
+minute, so every placement decided inside one refresh window saw byte-identical readings and
+therefore chose the identical top row. Round-robin is not something a stateless sort can do:
+nothing in the system remembered that it had just placed work somewhere. Land four handoffs in
+one wake and all four went to one account, which is exactly the stacking the rule forbids.
+
+`loadBalance` (ON by default, owner instruction 2026-08-27) closes it with three changes:
+
+- **A placement is written down.** `orchestrator_placements` records every placement at the
+  PRIMITIVE that makes it (seed a desktop chat, launch a terminal, migrate a chat), not at the
+  callers, so a placement counts whether the monitor made it, the reviewer made it, or the
+  owner made it by clicking Migrate in the app. A ledger only the polite callers wrote to
+  would be balancing against a fiction. `POST /api/orchestrator/placement` records the one
+  case the primitives cannot see: the reviewer delivering a turn NATIVELY into a chat that
+  already exists, which is real load and, since the zero-click law, the common path.
+- **The 5-hour window is read the way the weekly one always was.** `sessionResetsAt` and
+  `sessionResetsSoon` are now on every row. An account whose 5-hour window resets within
+  `resetSoonMins` ranks as a dump target, because whatever it reads now is about to be wiped.
+  The row still reports the TRUE `sessionPct`: the exemption changes ranking, never the
+  measurement, so the feed can never restate a number it did not take.
+- **The ledger breaks ties, and ONLY ties.** Load is bucketed into coarse 20-point tiers and
+  the ledger reorders inside a tier and nowhere else. An account at 12% and one at 25% are not
+  peers, so the colder one wins outright however recently it was used; 12% and 19% are peers,
+  and there the one that has not just been handed work goes first. The narrowness is the whole
+  safety argument: if spreading work could outrank having headroom, a balancer would cheerfully
+  feed an account toward its own wall in the name of fairness. There is a test named for this
+  that fails if it ever stops being true.
+
+Turning `loadBalance` off restores the previous ranking exactly, reset exemption included.
+
+**One decision, one place.** `pickPlacement()` is now the only definition of "an account that
+may take work": running, fresh reading, weekly not critical, 5-hour under the high band. The
+auto-resume monitor's migration target used to carry its own inline copy of that filter while
+the reviewer carried a prose description of it in its rubric, which is one policy living in
+three places and free to drift in all of them. Both now call it. The feed serves the result as
+`placement`: the recommendation, the reason in words, the eligible refs, every blocked account
+with WHY it was passed over, and the recent ledger, so a placement can be argued with instead
+of merely trusted.
 
 ### Removing it
 

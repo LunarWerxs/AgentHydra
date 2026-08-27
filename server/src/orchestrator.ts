@@ -72,6 +72,7 @@ import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { isSessionActive } from './dispatch'
 import { findDesktopChat, instanceRefForSession, sessionMetaMap } from './instance-sessions'
+import { listRecentPlacements, normalizeRef, prunePlacements, recentPlacements } from './placements'
 import { listProposalsForView, maintainProposals, proposeAction } from './proposals'
 import { classifyEnding, type SessionEnding } from './session-ending'
 import { desktopChatArchiveState, sweepUntitledDesktopChats } from './session-launch'
@@ -128,6 +129,8 @@ export function getOrchestratorSettings(): OrchestratorSettings {
     migrateOnLimit: getSetting('orch_migrate_on_limit') === '1',
     maxActiveChats: num('orch_max_active_chats', 0, 0, 500),
     watchCodex: getSetting('orch_watch_codex') !== '0',
+    loadBalance: getSetting('orch_load_balance') !== '0',
+    balanceWindowMins: num('orch_balance_window_mins', 90, 5, 24 * 60),
   }
 }
 
@@ -179,6 +182,9 @@ export function setOrchestratorSettings(
   clamp('orch_max_active_chats', patch.maxActiveChats, 0, 500)
   if (typeof patch.watchCodex === 'boolean')
     setSetting('orch_watch_codex', patch.watchCodex ? '1' : '0')
+  if (typeof patch.loadBalance === 'boolean')
+    setSetting('orch_load_balance', patch.loadBalance ? '1' : '0')
+  clamp('orch_balance_window_mins', patch.balanceWindowMins, 5, 24 * 60)
   return getOrchestratorSettings()
 }
 
@@ -905,6 +911,7 @@ export function buildInstanceRows(
   cache: Record<string, UsageSnapshot>,
   s: OrchestratorSettings,
   nowMs: number,
+  placements: Record<string, number> = {},
 ): OrchestratorInstance[] {
   const rows: OrchestratorInstance[] = instances.map((i) => {
     const ref = desktopKey(i.dir)
@@ -912,6 +919,26 @@ export function buildInstanceRows(
     const capturedMs = Date.parse(snap?.capturedAt ?? '')
     const stale = !snap || Number.isNaN(capturedMs) || nowMs - capturedMs > 24 * 3600 * 1000
     const wk = stale ? null : (snap?.weekAll ?? null)
+    const sess = stale ? null : (snap?.session ?? null)
+    const sessionPct = sess?.pct ?? null
+    const sessionResetsSoon = sess ? resetsSoon(sess.resetsAt ?? null, nowMs, s) : false
+    const band: OrchestratorInstance['band'] =
+      wk && typeof wk.pct === 'number' ? bandForPct(wk.pct, s) : 'unknown'
+    // The figure the ROUTER reasons with. A 5-hour window minutes from its reset is capacity,
+    // not load, exactly as a weekly one is: whatever it reads now is about to be wiped. The
+    // row still reports the true reading in sessionPct, so the feed never restates a
+    // measurement it did not take. Gated on loadBalance so switching balancing off restores
+    // the previous ranking exactly.
+    const effective = s.loadBalance && sessionResetsSoon ? 0 : (sessionPct ?? 101)
+    const blockedWhy = !i.isRunning
+      ? 'not running'
+      : stale
+        ? 'usage reading is stale (older than a day)'
+        : band === 'critical'
+          ? `weekly at ${wk?.pct ?? '?'}% (critical)`
+          : effective >= s.sessionHighPct
+            ? `5-hour window at ${sessionPct ?? '?'}%`
+            : null
     return {
       ref,
       name: i.name,
@@ -920,8 +947,13 @@ export function buildInstanceRows(
       plan: planOfAccountLabel(snap?.account),
       weeklyPct: wk?.pct ?? null,
       weeklyResetsAt: wk?.resetsAt ?? null,
-      sessionPct: stale ? null : (snap?.session?.pct ?? null),
-      band: wk && typeof wk.pct === 'number' ? bandForPct(wk.pct, s) : 'unknown',
+      sessionPct: stale ? null : sessionPct,
+      sessionResetsAt: sess?.resetsAt ?? null,
+      sessionResetsSoon,
+      recentPlacements: placements[normalizeRef(ref) ?? ''] ?? 0,
+      eligible: blockedWhy === null,
+      blockedWhy,
+      band,
       resetsSoon: wk ? resetsSoon(wk.resetsAt ?? null, nowMs, s) : false,
       stale,
     }
@@ -933,14 +965,56 @@ export function buildInstanceRows(
   // with the healthy ones — its week is about to wipe, the standing dump-target exemption.
   const bandRank = (r: OrchestratorInstance): number =>
     r.resetsSoon ? 0 : { ok: 0, elevated: 1, high: 2, critical: 3, unknown: 4 }[r.band]
+  const eff = (r: OrchestratorInstance): number =>
+    s.loadBalance && r.sessionResetsSoon ? 0 : (r.sessionPct ?? 101)
+  // BALANCING ONLY EVER BREAKS TIES. Load is bucketed into coarse 20-point tiers, and the
+  // ledger reorders inside a tier and nowhere else. An account at 12% and one at 25% are not
+  // peers, so the colder one still wins outright no matter who was used last; 12% and 19% are
+  // peers, and there the account that has not just been handed work goes first. That is the
+  // whole mechanism, and its narrowness is the point: spreading work must never outrank
+  // having headroom, or balancing would cheerfully feed an account toward its own wall.
+  const tier = (r: OrchestratorInstance): number => Math.floor(Math.min(100, eff(r)) / 20)
   return rows.sort((a, b) => {
     if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1
     const br = bandRank(a) - bandRank(b)
     if (br !== 0) return br
-    const sp = (a.sessionPct ?? 101) - (b.sessionPct ?? 101)
+    if (s.loadBalance) {
+      const t = tier(a) - tier(b)
+      if (t !== 0) return t
+      const rp = a.recentPlacements - b.recentPlacements
+      if (rp !== 0) return rp
+    }
+    const sp = eff(a) - eff(b)
     if (sp !== 0) return sp
     return (a.weeklyPct ?? 101) - (b.weeklyPct ?? 101)
   })
+}
+
+/**
+ * THE ONE PLACEMENT DECISION. Every question of the form "which account should this land on"
+ * resolves here: migrate-on-limit, a handoff continuation, a chip, a fresh chat the reviewer
+ * starts. Before this existed the monitor carried its own copy of the eligibility filter and
+ * the reviewer carried a prose description of it in its rubric, which is two places for one
+ * policy to drift.
+ *
+ * Returns the reason as well as the target, because a placement the reviewer cannot explain
+ * is a placement the owner cannot audit.
+ */
+export function pickPlacement(
+  rows: OrchestratorInstance[],
+  opts: { excludeRef?: string | null } = {},
+): { ref: string; name: string; why: string } | null {
+  const exclude = normalizeRef(opts.excludeRef ?? null)
+  const hit = rows.find((r) => r.eligible && normalizeRef(r.ref) !== exclude)
+  if (!hit) return null
+  const why = [
+    hit.weeklyPct === null ? 'weekly unknown' : `weekly ${hit.weeklyPct}%`,
+    hit.sessionPct === null
+      ? '5-hour unknown'
+      : `5-hour ${hit.sessionPct}%${hit.sessionResetsSoon ? ' (resets soon, so it is a dump target)' : ''}`,
+    `${hit.recentPlacements} placement(s) in the balancing window`,
+  ].join(', ')
+  return { ref: hit.ref, name: hit.name, why }
 }
 
 // --- the pass ---------------------------------------------------------------
@@ -1563,7 +1637,13 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
 
   // -- the desktop fleet as a routing table -----------------------------------
   try {
-    state.instances = buildInstanceRows(await deps.desktopInstances(), cache, s, started)
+    state.instances = buildInstanceRows(
+      await deps.desktopInstances(),
+      cache,
+      s,
+      started,
+      recentPlacements(s.balanceWindowMins, started),
+    )
   } catch (err) {
     console.error('[agenthydra] orchestrator instance listing failed:', err)
     state.instances = []
@@ -1676,6 +1756,9 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     } catch (err) {
       console.error('[agenthydra] visibility sweep failed:', err)
     }
+    // The placement ledger is pruned on the same 14-day horizon as decided proposals, in the
+    // same pass, so neither can grow without bound on a machine that never restarts.
+    prunePlacements(started)
     try {
       await restartAppsForArchiveVisibility()
     } catch (err) {
@@ -1930,6 +2013,26 @@ export function orchestratorView(): OrchestratorView {
     proposals,
     attention: state.attention,
     instances: state.instances,
+    // WHERE THE NEXT PIECE OF WORK SHOULD GO, decided once here rather than re-derived from
+    // the sort by every reader. `blocked` states why each passed-over account was passed
+    // over, so a placement can be argued with instead of merely trusted, and `recent` is the
+    // ledger the balancing actually consulted.
+    placement: (() => {
+      const s = getOrchestratorSettings()
+      const pick = pickPlacement(state.instances)
+      return {
+        balancing: s.loadBalance,
+        windowMins: s.balanceWindowMins,
+        recommended: pick?.ref ?? null,
+        recommendedName: pick?.name ?? null,
+        why: pick?.why ?? 'no running instance has headroom right now',
+        eligible: state.instances.filter((r) => r.eligible).map((r) => r.ref),
+        blocked: state.instances
+          .filter((r) => !r.eligible)
+          .map((r) => ({ ref: r.ref, name: r.name, why: r.blockedWhy })),
+        recent: listRecentPlacements(20, Date.now()),
+      }
+    })(),
     holds: listSessionHolds().map((h) => ({
       ...h,
       peerName: lastNames.get(h.sessionId)?.name,

@@ -145,6 +145,7 @@ const form = reactive({
   staleTaskMins: 0,
   nudgeCooldownMins: 0,
   maxActiveChats: 0,
+  balanceWindowMins: 0,
 })
 
 function adopt(v: OrchestratorView) {
@@ -165,6 +166,7 @@ function adopt(v: OrchestratorView) {
   form.staleTaskMins = v.settings.staleTaskMins
   form.nudgeCooldownMins = v.settings.nudgeCooldownMins
   form.maxActiveChats = v.settings.maxActiveChats
+  form.balanceWindowMins = v.settings.balanceWindowMins
   for (const k of PROMPT_KEYS) promptForm[k] = v.prompts[k]
 }
 
@@ -192,6 +194,7 @@ function saveNumbers() {
     staleTaskMins: Number(form.staleTaskMins),
     nudgeCooldownMins: Number(form.nudgeCooldownMins),
     maxActiveChats: Number(form.maxActiveChats),
+    balanceWindowMins: Number(form.balanceWindowMins),
   })
 }
 
@@ -279,6 +282,38 @@ onMounted(async () => {
             <Switch
               :model-value="view?.settings.migrateOnLimit ?? false"
               @update:model-value="(v: boolean) => save({ migrateOnLimit: v })"
+            />
+          </template>
+        </SettingsRow>
+
+        <SettingsRow :icon="Bot" :label="$t('orchestrator.loadBalanceLabel')">
+          <template #info>
+            <InfoHint :text="$t('orchestrator.loadBalanceHint')" />
+          </template>
+          <template #control>
+            <Switch
+              :model-value="view?.settings.loadBalance ?? true"
+              @update:model-value="(v: boolean) => save({ loadBalance: v })"
+            />
+          </template>
+        </SettingsRow>
+
+        <SettingsRow
+          v-if="view?.settings.loadBalance"
+          :icon="Bot"
+          :label="$t('orchestrator.balanceWindowLabel')"
+        >
+          <template #info>
+            <InfoHint :text="$t('orchestrator.balanceWindowHint')" />
+          </template>
+          <template #control>
+            <Input
+              v-model="form.balanceWindowMins"
+              type="number"
+              min="5"
+              max="1440"
+              class="w-24"
+              @change="saveNumbers"
             />
           </template>
         </SettingsRow>
