@@ -493,7 +493,7 @@ Turning it off is the reverse in either order; each half degrades safely without
 |---|---|---|
 | `enabled` | `false` | master switch for the watcher |
 | `tickSecs` | 60 | pass interval (30–600) |
-| `idleQuietSecs` | 150 | quiet time before a live chat counts as pending |
+| `idleQuietSecs` | 150 | quiet time before a live chat counts as pending. A chat with a TOOL IN FLIGHT gets four of these (floor 10 min) before it counts, because quiet time measures the transcript and a gate that prints nothing looks exactly like a chat waiting for input |
 | `ctxHandoffTokens` | 700000 | context size that turns a nudge into a handoff |
 | `softPct` / `warnPct` / `hardPct` | 80 / 85 / 90 | weekly-band thresholds |
 | `sessionHighPct` | 90 | 5-hour band threshold reported alongside |

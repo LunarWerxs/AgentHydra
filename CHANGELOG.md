@@ -44,6 +44,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A session running a long command was reported as idle, and the reviewer told it to move
+  on.** Field report from the reviewer itself: it was handed a session as idle while that
+  session was mid-commit-and-push, and "resume working on whatever you recommend next" is an
+  actively damaging thing to say to a session halfway through a push. Quiet time measures the
+  TRANSCRIPT, so a gate that prints nothing until it finishes (that repo's test run is ~130s
+  against a 150s idle threshold) is indistinguishable from a chat waiting for input. The
+  evidence to tell them apart was already computed and only annotated, so a chat with a tool
+  in flight now gets four idle windows of grace, floor ten minutes, before it counts as
+  pending at all. A blanket suppression was tried first and was wrong: it also hid a session
+  quiet for three hours whose task was still writing, which is exactly what the feed is for.
+
 - **A launched terminal could hang forever while reporting success. Fixed, and the cause was a
   slash.** Starting the orchestrator's reviewer opened a window, asked whether the folder was
   trusted, and waited on a keypress that by the zero-click law can never come, while the API

@@ -636,6 +636,65 @@ test('an acked item is suppressed, and re-arms when the transcript moves after t
   )
 })
 
+test('a tool in flight is WORK: a briefly quiet mid-tool session is not an attention item', async () => {
+  // Field report from the reviewer, 2026-08-27: it was handed a session as idle while that
+  // session was mid-commit-and-push, and told it to "resume working on whatever you recommend
+  // next" - an actively damaging thing to say to a session halfway through a push. Quiet time
+  // measures the TRANSCRIPT, so a gate that prints nothing (that repo's test run is ~130s) looks
+  // exactly like a chat waiting for input once it passes the 150s idle threshold.
+  const busyTail: TailInfo = {
+    ending: 'complete',
+    lastAssistantText: 'Running the test suite.',
+    ctxTokens: 100_000,
+    midTurn: true,
+    pendingTool: 'Bash',
+    recapDetected: false,
+    handoffDetected: false,
+    chips: [],
+    lastHumanText: null,
+    lastHumanAt: null,
+    lastEventAt: null,
+    unreadable: false,
+  }
+  const base = Date.now() + 9 * 3600 * 1000
+
+  // Quiet 5 minutes: past the 150s idle threshold, well inside the mid-tool grace. Working.
+  const { deps: busy } = fakeDeps({
+    tail: busyTail,
+    nowMs: () => base,
+    mtime: base - 5 * 60_000,
+    taskActivity: () => null,
+  })
+  await runOrchestratorOnce(busy)
+  expect(
+    orchestratorView().attention.find((i: AttentionItem) => i.key === 'idle:sess-1'),
+  ).toBeUndefined()
+
+  // Quiet 30 minutes: past the grace, so it IS worth a look even though nothing says it died.
+  const { deps: longer } = fakeDeps({
+    tail: busyTail,
+    nowMs: () => base,
+    mtime: base - 30 * 60_000,
+    taskActivity: () => null,
+  })
+  await runOrchestratorOnce(longer)
+  expect(
+    orchestratorView().attention.find((i: AttentionItem) => i.key === 'idle:sess-1'),
+  ).toBeDefined()
+
+  // A session NOT mid-tool gets no grace at all - it really is waiting on a human.
+  const { deps: waiting } = fakeDeps({
+    tail: { ...busyTail, midTurn: false, pendingTool: null },
+    nowMs: () => base,
+    mtime: base - 5 * 60_000,
+    taskActivity: () => null,
+  })
+  await runOrchestratorOnce(waiting)
+  expect(
+    orchestratorView().attention.find((i: AttentionItem) => i.key === 'idle:sess-1'),
+  ).toBeDefined()
+})
+
 test('dead background tasks: silent waiting flags for intervention; live tasks do not', async () => {
   const waitingTail: TailInfo = {
     ending: 'complete',

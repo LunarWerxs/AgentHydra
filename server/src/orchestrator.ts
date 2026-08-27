@@ -1433,6 +1433,26 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       detail.permissionMode = perm
       detail.pendingTool = tail.pendingTool
       detail.approvalStall = approvalStall
+      // A TOOL IN FLIGHT IS WORK, NOT SILENCE. `midTurn` means the transcript ends on a tool
+      // call with no result yet, so the session is inside something right now. Quiet time
+      // measures the transcript, and a test suite that prints nothing for two minutes looks
+      // identical to a chat waiting for input - which is how the reviewer came to be told a
+      // session mid-commit-and-push was idle (field report 2026-08-27; that repo's own test
+      // run is ~130s against a 150s idle threshold, so it would have happened on every run).
+      // Nudging there interrupts real work, and 'resume working on whatever you recommend
+      // next' is a genuinely damaging thing to say to a session halfway through a push.
+      //
+      // So a tool in flight buys GRACE, not silence forever: four idle windows, floor ten
+      // minutes. Under that a mid-tool session is simply working and is not raised at all.
+      // Over it, it is worth a look even if something is still alive, and past the stale
+      // threshold the same evidence means the opposite again (nothing ever came back). A
+      // blanket suppression up to the stale threshold was tried first and was wrong: it also
+      // hid a session quiet for three hours whose task was still writing, which is exactly
+      // the kind of thing the feed exists to show. A crashed session also ends mid-tool and
+      // is NOT lost here: the orphan and stranded detectors own that case, keyed on a dead
+      // or absent process rather than on silence.
+      const midTurnGraceSecs = Math.max(s.idleQuietSecs * 4, 600)
+      if (tail.midTurn && !staleTasks && quietSecs < midTurnGraceSecs) continue
       items.push({
         ...base,
         key: `idle:${sess.sessionId}`,
