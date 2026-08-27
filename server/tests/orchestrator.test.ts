@@ -657,6 +657,37 @@ test('installing removes OUR retired command copies, and keeps an edited one', (
   setSetting('orch_command_hash_resumeo_md', '')
 })
 
+// CAUGHT ON THE REAL DEPLOY, not by these tests. The boot pass runs with existingOnly, which used
+// to be read per FILE: create nothing that is not already there. On the /delayo -> /orcstop rename
+// it therefore deleted its own retired copies and then refused to write the successors, because
+// those did not exist YET, and the machine was left with neither. An upgrade that removes a
+// capability and gives nothing back is worse than one that never ran.
+test('the boot pass completes a renamed pair instead of leaving the machine with neither', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-boot-'))
+  // A machine mid-upgrade: it has the OLD pair (ours) and nothing else.
+  writeFileSync(join(dir, 'delayo.md'), 'the old shipped delayo text')
+  setSetting('orch_command_hash_delayo_md', commandTextHash('the old shipped delayo text'))
+
+  refreshShippedCommands(dir)
+
+  expect(existsSync(join(dir, 'delayo.md'))).toBe(false)
+  expect(existsSync(join(dir, 'orcstop.md'))).toBe(true)
+  expect(existsSync(join(dir, 'orcstart.md'))).toBe(true)
+
+  rmSync(dir, { recursive: true, force: true })
+  setSetting('orch_command_hash_delayo_md', '')
+})
+
+test('the boot pass still puts nothing on a machine that uses none of these commands', () => {
+  // The case existingOnly exists to protect, and the fix above must not weaken it.
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-virgin-'))
+  const out = refreshShippedCommands(dir)
+  expect(out.every((f) => f.outcome === 'installed')).toBe(true)
+  expect(existsSync(join(dir, 'orcstop.md'))).toBe(false)
+  expect(existsSync(join(dir, 'orchestrate.md'))).toBe(false)
+  rmSync(dir, { recursive: true, force: true })
+})
+
 test('uninstalling sweeps the retired names too, or it has not uninstalled anything', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-uninst-'))
   installOrchestratorCommands(false, dir)

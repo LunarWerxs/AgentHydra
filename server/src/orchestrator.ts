@@ -2596,22 +2596,41 @@ export function installOrchestratorCommands(
   force = false,
   commandsDir: string = join(homedir(), '.claude', 'commands'),
   opts: {
-    /** Boot mode: bring our own stale copies up to date, but never CREATE one. Installing on a
-     *  machine that has never enabled the orchestrator would be putting commands in someone's
-     *  Claude for a feature they never switched on. */
+    /** Boot mode: keep an EXISTING install correct, but never put commands on a machine that has
+     *  none. Installing on a machine that never enabled the orchestrator would be adding commands
+     *  to someone's Claude for a feature they never switched on. */
     existingOnly?: boolean
   } = {},
 ): Array<{ file: string; outcome: CommandInstallOutcome; path: string }> {
   // Sweep away our own copies of commands we no longer ship, before writing the current set. A
   // retired command file is not inert: it still works, so leaving one behind means the machine
   // offers both the old and the new name for the same action indefinitely.
-  for (const r of removeRetiredCommands(commandsDir))
+  const retired = removeRetiredCommands(commandsDir)
+  for (const r of retired)
     if (r.outcome === 'removed')
       console.log(`[agenthydra] removed the retired /${r.file.replace(/\.md$/, '')} command`)
     else if (r.outcome === 'kept-edited')
       console.log(
         `[agenthydra] kept /${r.file.replace(/\.md$/, '')}: it is retired but you edited it`,
       )
+
+  /**
+   * Does this machine already USE these commands?
+   *
+   * This is what `existingOnly` is really asking, and reading it per-FILE was wrong in exactly the
+   * case a rename creates. Caught live on the /delayo -> /orcstop deploy: the boot pass correctly
+   * deleted its own retired copies and then refused to write the successors, because those files
+   * did not exist yet, so the upgrade took the pair away and gave nothing back. An upgrade that
+   * removes a capability is worse than one that never ran.
+   *
+   * A retired file we just removed counts as evidence too: it could only have been there because
+   * we put it there. A machine with nothing at all still gets nothing, which is the case the flag
+   * exists to protect.
+   */
+  const alreadyInstalled =
+    retired.some((r) => r.outcome !== 'missing') ||
+    SHIPPED_COMMANDS.some(({ file }) => existsSync(join(commandsDir, file)))
+
   return SHIPPED_COMMANDS.map(({ file, text }) => {
     const path = join(commandsDir, file)
     let existing: string | null = null
@@ -2624,7 +2643,7 @@ export function installOrchestratorCommands(
     const write =
       outcome === 'updated' ||
       outcome === 'refreshed' ||
-      (outcome === 'installed' && !opts.existingOnly)
+      (outcome === 'installed' && (!opts.existingOnly || alreadyInstalled))
     if (write) {
       mkdirSync(commandsDir, { recursive: true })
       writeFileSync(path, text)
