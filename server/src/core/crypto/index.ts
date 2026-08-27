@@ -111,6 +111,51 @@ function utf8DecodeOrNull(bytes: Uint8Array): string | null {
  *   bad base64, unsupported/missing version prefix, truncated blob, decrypt failure, bad
  *   UTF-8). Never throws.
  */
+/** The win32 branch of decryptSafeStorage: v10 only, AES-GCM under DPAPI's key. */
+async function decryptWin32(
+  version: string,
+  afterPrefix: Uint8Array,
+  instanceDir: string,
+): Promise<string | null> {
+  if (version !== 'v10') return null // Windows only ever produces v10.
+  const key = await getWindowsMasterKey(instanceDir)
+  if (key?.length !== 32) return null
+  const plain = await decryptAesGcm(key, afterPrefix)
+  return plain ? utf8DecodeOrNull(plain) : null
+}
+
+/** The darwin branch of decryptSafeStorage: v10 only, AES-CBC under the Keychain-derived key. */
+async function decryptDarwin(
+  version: string,
+  afterPrefix: Uint8Array,
+  instanceDir: string,
+): Promise<string | null> {
+  if (version !== 'v10') return null // macOS only ever produces v10.
+  const key = await getMacMasterKey(instanceDir)
+  if (key?.length !== 16) return null
+  const plain = await decryptAesCbc(key, afterPrefix)
+  return plain ? utf8DecodeOrNull(plain) : null
+}
+
+/** The Linux (and other-platform) branch: v10 (peanuts-or-secret) or v11 (keyring secret), with a
+ *  fallback retry against an empty-string-derived key for the historical v11 empty-key bug
+ *  (PLAN.md §7) — also covers the case where the resolved secret was simply wrong. */
+async function decryptLinux(afterPrefix: Uint8Array, instanceDir: string): Promise<string | null> {
+  const key = await getLinuxMasterKey(instanceDir)
+  if (key && key.length === 16) {
+    const plain = await decryptAesCbc(key, afterPrefix)
+    const decoded = plain ? utf8DecodeOrNull(plain) : null
+    if (decoded) return decoded
+  }
+  const emptyKey = await getLinuxMasterKey(instanceDir, { forceEmptyPassword: true })
+  if (emptyKey && emptyKey.length === 16) {
+    const plain = await decryptAesCbc(emptyKey, afterPrefix)
+    const decoded = plain ? utf8DecodeOrNull(plain) : null
+    if (decoded) return decoded
+  }
+  return null
+}
+
 export async function decryptSafeStorage(
   base64Blob: string,
   instanceDir: string,
@@ -132,42 +177,9 @@ export async function decryptSafeStorage(
     const afterPrefix = raw.subarray(3)
     const platform = process.platform
 
-    if (platform === 'win32') {
-      if (version !== 'v10') return null // Windows only ever produces v10.
-      const key = await getWindowsMasterKey(instanceDir)
-      if (key?.length !== 32) return null
-      const plain = await decryptAesGcm(key, afterPrefix)
-      if (!plain) return null
-      return utf8DecodeOrNull(plain)
-    }
-
-    if (platform === 'darwin') {
-      if (version !== 'v10') return null // macOS only ever produces v10.
-      const key = await getMacMasterKey(instanceDir)
-      if (key?.length !== 16) return null
-      const plain = await decryptAesCbc(key, afterPrefix)
-      if (!plain) return null
-      return utf8DecodeOrNull(plain)
-    }
-
-    // Linux (and any other platform) — v10 (peanuts-or-secret) or v11 (keyring secret).
-    const key = await getLinuxMasterKey(instanceDir)
-    if (key && key.length === 16) {
-      const plain = await decryptAesCbc(key, afterPrefix)
-      const decoded = plain ? utf8DecodeOrNull(plain) : null
-      if (decoded) return decoded
-    }
-
-    // PLAN.md §7: historical v11 empty-key bug — retry with an empty-string-derived key before
-    // giving up. Also covers the case where the resolved secret was simply wrong.
-    const emptyKey = await getLinuxMasterKey(instanceDir, { forceEmptyPassword: true })
-    if (emptyKey && emptyKey.length === 16) {
-      const plain = await decryptAesCbc(emptyKey, afterPrefix)
-      const decoded = plain ? utf8DecodeOrNull(plain) : null
-      if (decoded) return decoded
-    }
-
-    return null
+    if (platform === 'win32') return decryptWin32(version, afterPrefix, instanceDir)
+    if (platform === 'darwin') return decryptDarwin(version, afterPrefix, instanceDir)
+    return decryptLinux(afterPrefix, instanceDir)
   } catch {
     return null
   }

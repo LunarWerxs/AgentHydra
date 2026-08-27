@@ -70,6 +70,76 @@ function stripComments(text) {
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*/;
 
+/** Every top-level identifier declared by a named `export { a, b as c, type T }` clause on one
+ *  line, folded into `values` (or an `unsupported` entry when the clause never closes). Kit uses
+ *  single-line clauses; `line` (the untouched trimmed line) is joined in defensively when a `}`
+ *  is missing on `rest` alone. Split out of declaredValueExports's per-line loop, where this was
+ *  its own inner loop nested inside that one. */
+function collectNamedClauseExports(rest, line, values, unsupported) {
+  let clause = rest;
+  if (!clause.includes("}")) clause += " " + line; // best-effort; flagged below if still open
+  const inner = clause.slice(clause.indexOf("{") + 1, clause.indexOf("}"));
+  if (clause.indexOf("}") === -1) {
+    unsupported.push("multi-line `export { ... }` clause is not analyzable");
+    return;
+  }
+  for (const specRaw of inner.split(",")) {
+    const spec = specRaw.trim();
+    if (!spec || spec.startsWith("type ") || spec === "type") continue; // inline type export
+    const asMatch = spec.match(/\bas\s+([A-Za-z_$][A-Za-z0-9_$]*)/);
+    const name = asMatch ? asMatch[1] : (spec.match(IDENT)?.[0] ?? null);
+    if (name) values.add(name);
+  }
+}
+
+/** A value declaration — function / class / enum / const / let / var — folded into `values`.
+ *  Strips the keyword, then the name is the leading identifier (before any `<generic>` or `(`);
+ *  `export const a: T, b: T` also captures further top-level declarators. Returns whether a
+ *  recognized keyword was found at all, the caller's cue that this line is fully handled. Split
+ *  out of declaredValueExports's per-line loop for the same reason as collectNamedClauseExports. */
+function collectValueDeclarationExports(rest, values) {
+  const kw = rest.match(/^(function\*?|class|enum|const|let|var|abstract\s+class)\s+/);
+  if (!kw) return false;
+  const after = rest.slice(kw[0].length).trimStart();
+  const name = after.match(IDENT)?.[0];
+  if (name) values.add(name);
+  if (/^(const|let|var)\b/.test(kw[1])) {
+    for (const part of after.split(",").slice(1)) {
+      const n = part.trim().match(IDENT)?.[0];
+      if (n) values.add(n);
+    }
+  }
+  return true;
+}
+
+/** Classify one trimmed `export ...` line of a .d.mts (the leading `export` still confirmed by
+ *  the caller) into whatever it declares, folding value names into `values` or pushing an
+ *  `unsupported` entry when the form can't be analyzed. Split out of declaredValueExports, which
+ *  otherwise nested this whole chain one level deeper — inside its own per-line loop — for every
+ *  line in the file. */
+function processExportLine(line, values, unsupported) {
+  let rest = line.slice("export".length);
+  if (!/^\s/.test(rest) && !rest.startsWith("{") && !rest.startsWith("*")) return; // `exported` etc.
+  rest = rest.trimStart();
+  rest = rest.replace(/^declare\s+/, "").replace(/^async\s+/, "");
+
+  if (/^(interface|type)\b/.test(rest)) return; // type-only: `type X =` and `type { ... }`
+  if (rest.startsWith("*")) {
+    unsupported.push("`export *` re-export is not analyzable — enumerate it or exclude the file");
+    return;
+  }
+  if (rest.startsWith("default")) {
+    values.add("default");
+    return;
+  }
+  if (rest.startsWith("{")) {
+    collectNamedClauseExports(rest, line, values, unsupported);
+    return;
+  }
+  if (collectValueDeclarationExports(rest, values)) return;
+  unsupported.push(`unrecognized export form: \`${line.slice(0, 60)}\``);
+}
+
 /**
  * Value export names declared in a .d.mts, plus any export form we cannot analyze (returned as
  * `unsupported` so it becomes a loud finding, never a silent skip). Type-only declarations are
@@ -84,58 +154,10 @@ function declaredValueExports(file) {
   // Top-level exports in a .d.mts begin a line (optional indent). Continuation lines of a
   // multi-line signature never start with `export`, so a first-line scan sees every declaration.
   const lines = text.split(/\r?\n/);
-  for (let raw of lines) {
+  for (const raw of lines) {
     const line = raw.trim();
     if (!line.startsWith("export")) continue;
-    let rest = line.slice("export".length);
-    if (!/^\s/.test(rest) && !rest.startsWith("{") && !rest.startsWith("*")) continue; // `exported` etc.
-    rest = rest.trimStart();
-    rest = rest.replace(/^declare\s+/, "").replace(/^async\s+/, "");
-
-    if (/^(interface|type)\b/.test(rest)) continue; // type-only: `type X =` and `type { ... }`
-    if (rest.startsWith("*")) {
-      unsupported.push("`export *` re-export is not analyzable — enumerate it or exclude the file");
-      continue;
-    }
-    if (rest.startsWith("default")) {
-      values.add("default");
-      continue;
-    }
-    if (rest.startsWith("{")) {
-      // Named clause. Kit uses single-line clauses; join forward defensively if a `}` is missing.
-      let clause = rest;
-      if (!clause.includes("}")) clause += " " + line; // best-effort; flagged below if still open
-      const inner = clause.slice(clause.indexOf("{") + 1, clause.indexOf("}"));
-      if (clause.indexOf("}") === -1) {
-        unsupported.push("multi-line `export { ... }` clause is not analyzable");
-        continue;
-      }
-      for (const specRaw of inner.split(",")) {
-        const spec = specRaw.trim();
-        if (!spec || spec.startsWith("type ") || spec === "type") continue; // inline type export
-        const asMatch = spec.match(/\bas\s+([A-Za-z_$][A-Za-z0-9_$]*)/);
-        const name = asMatch ? asMatch[1] : (spec.match(IDENT)?.[0] ?? null);
-        if (name) values.add(name);
-      }
-      continue;
-    }
-    // Value declaration: function / class / enum / const / let / var. Strip the keyword, then the
-    // name is the leading identifier (before any `<generic>` or `(`).
-    const kw = rest.match(/^(function\*?|class|enum|const|let|var|abstract\s+class)\s+/);
-    if (kw) {
-      const after = rest.slice(kw[0].length).trimStart();
-      const name = after.match(IDENT)?.[0];
-      if (name) values.add(name);
-      // `export const a: T, b: T` — capture further top-level declarators for const/let/var.
-      if (/^(const|let|var)\b/.test(kw[1])) {
-        for (const part of after.split(",").slice(1)) {
-          const n = part.trim().match(IDENT)?.[0];
-          if (n) values.add(n);
-        }
-      }
-      continue;
-    }
-    unsupported.push(`unrecognized export form: \`${line.slice(0, 60)}\``);
+    processExportLine(line, values, unsupported);
   }
   return { values, unsupported };
 }

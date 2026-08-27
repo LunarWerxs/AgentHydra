@@ -502,6 +502,98 @@ export function resumeSurfaceFor(
   return handoffSurface === 'desktop' && instanceRef?.startsWith('desktop:') ? 'native' : 'terminal'
 }
 
+/** The `native` branch of dispatchDueResumes's per-row body: hand the due resume to the reviewer
+ *  as a revive proposal, delivered through the desktop app's own message channel. Split out
+ *  because this branch and its terminal sibling were two full try/catch blocks nested inside the
+ *  same `if`; awaited by the caller exactly as the inline try/catch was (never fire-and-forget). */
+async function deliverNativeResume(q: QueueItem): Promise<void> {
+  try {
+    const { proposeAction } = await import('./proposals')
+    proposeAction({
+      kind: 'revive',
+      sessionId: q.session_id,
+      instanceRef: q.instance_ref,
+      title: baseTitle(q.title),
+      summary: `${baseTitle(q.title)} stopped at a usage limit and its window has reset — deliver the resume turn`,
+      evidence: {
+        flavor: 'limit-reset',
+        resumePrompt: q.prompt,
+        cwd: q.cwd,
+        scheduledFor: q.not_before ?? null,
+      },
+      evidenceAt: new Date().toISOString(),
+    })
+    // Same honesty as the terminal branch below: this row's job (actioning the scheduled
+    // resume) is done, but nothing has RUN yet - a proposal is waiting for the reviewer to
+    // decide it. An exit code of 0 would claim a clean finish for work that has not started.
+    db.query('update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?').run(
+      'completed',
+      new Date().toISOString(),
+      null,
+      q.id,
+    )
+    db.query('update monitor_state set message = ?, updated_at = ? where resume_item_id = ?').run(
+      'window reset — handed to the reviewer as a revive proposal',
+      new Date().toISOString(),
+      q.id,
+    )
+  } catch (err) {
+    console.error('[agenthydra] revive-proposal handoff failed:', err)
+  }
+}
+
+/** The `terminal` branch of dispatchDueResumes's per-row body: open a visible terminal running the
+ *  resume. Fire-and-forget by design (the caller does `void deliverTerminalResume(q)`, matching
+ *  the original inline `void (async () => {...})()`) — launchTerminalSession returns the instant
+ *  the window spawns, so the loop must not wait on the turn itself. */
+async function deliverTerminalResume(q: QueueItem): Promise<void> {
+  try {
+    const { launchTerminalSession } = await import('./session-launch')
+    const res = await launchTerminalSession({
+      cwd: q.cwd,
+      prompt: q.prompt,
+      instanceRef: q.instance_ref,
+      model: q.model,
+      effort: q.effort,
+      resumeSessionId: q.session_id,
+      // NOBODY IS WATCHING THIS WINDOW. It opens on a timer while the owner is away,
+      // so a per-command approval prompt is a silent deadlock rather than a
+      // safeguard - measured 2026-08-27: a session started without this loaded its
+      // instructions, issued one shell command and froze for good. Same posture
+      // AgentHydra already stamps on every chat it seeds.
+      permissionMode: 'bypassPermissions',
+    })
+    // WHAT `completed` MEANS HERE, AND WHAT IT MUST NOT BE READ AS. This row is the
+    // SCHEDULED RESUME, and its job genuinely is finished once the resume has been
+    // actioned. The WORK has not finished: launchTerminalSession returns the instant the
+    // window is spawned (it pipes nothing and waits for nothing), so ok means "a terminal
+    // is open", never "the turn ran".
+    //
+    // So there is deliberately NO exit code. Writing 0 claimed a clean finish for work
+    // that had not begun, which is the failure this codebase already names in types.ts:
+    // conflating "the work finished" with "you can see it" is exactly how something goes
+    // missing while nothing looks wrong. A launch we could not make IS our own outcome,
+    // so that one keeps a real non-zero code.
+    db.query('update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?').run(
+      res.ok ? 'completed' : 'failed',
+      new Date().toISOString(),
+      res.ok ? null : 1,
+      q.id,
+    )
+    // Say which of the two happened, the way the native branch above does. Without this
+    // the row looked identical whether a window opened or the launch failed outright.
+    db.query('update monitor_state set message = ?, updated_at = ? where resume_item_id = ?').run(
+      res.ok
+        ? 'window reset - resumed in a visible terminal; the run itself is not tracked here'
+        : `window reset - could not open a terminal: ${res.reason ?? 'unknown'}`,
+      new Date().toISOString(),
+      q.id,
+    )
+  } catch (err) {
+    console.error('[agenthydra] visible auto-resume failed:', err)
+  }
+}
+
 async function dispatchDueResumes(): Promise<void> {
   // Same boot-window guard as the scheduler (boot-state.ts): a run that survived the previous
   // daemon isn't in `active` until reattachRuns() settles, so isSessionActive() below could miss
@@ -554,93 +646,120 @@ async function dispatchDueResumes(): Promise<void> {
       // decision itself is resumeSurfaceFor(), pure and tested, because a routing policy that can
       // only be exercised by actually launching something is a policy nothing checks.
       if (resumeSurfaceFor(getOrchestratorSettings().handoffSurface, q.instance_ref) === 'native') {
-        try {
-          const { proposeAction } = await import('./proposals')
-          proposeAction({
-            kind: 'revive',
-            sessionId: q.session_id,
-            instanceRef: q.instance_ref,
-            title: baseTitle(q.title),
-            summary: `${baseTitle(q.title)} stopped at a usage limit and its window has reset — deliver the resume turn`,
-            evidence: {
-              flavor: 'limit-reset',
-              resumePrompt: q.prompt,
-              cwd: q.cwd,
-              scheduledFor: q.not_before ?? null,
-            },
-            evidenceAt: new Date().toISOString(),
-          })
-          // Same honesty as the terminal branch below: this row's job (actioning the scheduled
-          // resume) is done, but nothing has RUN yet - a proposal is waiting for the reviewer to
-          // decide it. An exit code of 0 would claim a clean finish for work that has not started.
-          db.query(
-            'update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?',
-          ).run('completed', new Date().toISOString(), null, q.id)
-          db.query(
-            'update monitor_state set message = ?, updated_at = ? where resume_item_id = ?',
-          ).run(
-            'window reset — handed to the reviewer as a revive proposal',
-            new Date().toISOString(),
-            q.id,
-          )
-        } catch (err) {
-          console.error('[agenthydra] revive-proposal handoff failed:', err)
-        }
+        await deliverNativeResume(q)
       } else {
-        void (async () => {
-          try {
-            const { launchTerminalSession } = await import('./session-launch')
-            const res = await launchTerminalSession({
-              cwd: q.cwd,
-              prompt: q.prompt,
-              instanceRef: q.instance_ref,
-              model: q.model,
-              effort: q.effort,
-              resumeSessionId: q.session_id,
-              // NOBODY IS WATCHING THIS WINDOW. It opens on a timer while the owner is away,
-              // so a per-command approval prompt is a silent deadlock rather than a
-              // safeguard - measured 2026-08-27: a session started without this loaded its
-              // instructions, issued one shell command and froze for good. Same posture
-              // AgentHydra already stamps on every chat it seeds.
-              permissionMode: 'bypassPermissions',
-            })
-            // WHAT `completed` MEANS HERE, AND WHAT IT MUST NOT BE READ AS. This row is the
-            // SCHEDULED RESUME, and its job genuinely is finished once the resume has been
-            // actioned. The WORK has not finished: launchTerminalSession returns the instant the
-            // window is spawned (it pipes nothing and waits for nothing), so ok means "a terminal
-            // is open", never "the turn ran".
-            //
-            // So there is deliberately NO exit code. Writing 0 claimed a clean finish for work
-            // that had not begun, which is the failure this codebase already names in types.ts:
-            // conflating "the work finished" with "you can see it" is exactly how something goes
-            // missing while nothing looks wrong. A launch we could not make IS our own outcome,
-            // so that one keeps a real non-zero code.
-            db.query(
-              'update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?',
-            ).run(
-              res.ok ? 'completed' : 'failed',
-              new Date().toISOString(),
-              res.ok ? null : 1,
-              q.id,
-            )
-            // Say which of the two happened, the way the native branch above does. Without this
-            // the row looked identical whether a window opened or the launch failed outright.
-            db.query(
-              'update monitor_state set message = ?, updated_at = ? where resume_item_id = ?',
-            ).run(
-              res.ok
-                ? 'window reset - resumed in a visible terminal; the run itself is not tracked here'
-                : `window reset - could not open a terminal: ${res.reason ?? 'unknown'}`,
-              new Date().toISOString(),
-              q.id,
-            )
-          } catch (err) {
-            console.error('[agenthydra] visible auto-resume failed:', err)
-          }
-        })()
+        void deliverTerminalResume(q)
       }
     }
   }
+}
+
+/** One rate-limited stop's whole decision pipeline (opt-out, attempt cap, usage gate, migrate,
+ *  schedule) — split out of processRateLimited's `for` loop, which was the same guard-clause chain
+ *  applied uniformly to every item. Each `continue` in the original loop is a `return` here at the
+ *  identical point, so the decision order and every state write are unchanged. */
+async function processOneRateLimitedStop(
+  item: RateLimitedStop,
+  meta: ReturnType<typeof sessionMetaMap>,
+  now: string,
+  settings: MonitorSettings,
+  deps: MonitorDeps,
+): Promise<void> {
+  if (meta.get(item.session_id)?.archived) return
+  const existing = getState(item.id)
+
+  // Already resolved for this exact stop — skip, except a blocked_weekly re-arms once its
+  // re-check time passes (to reconsider after the weekly window resets).
+  if (existing) {
+    if (existing.state !== 'blocked_weekly') return
+    if (existing.next_check_at && existing.next_check_at > now) return
+  }
+
+  // Per-account opt-out.
+  if (item.account_id && !monitorEnabledForAccount(item.account_id)) return
+
+  const priorAttempts = existing?.resume_attempts ?? sessionAttempts(item.session_id)
+
+  // Idempotent: a live resume already pending for this session.
+  if (hasPendingResume(item.session_id)) return
+
+  // Attempt cap (per session).
+  if (priorAttempts >= settings.maxAttempts) {
+    upsertState(item, {
+      state: 'needs_human',
+      message: `hit the ${settings.maxAttempts}-resume cap for this session`,
+      resumeItemId: null,
+      attempts: priorAttempts,
+    })
+    return
+  }
+
+  // The usage gate — the crux. Read the run's quota fresh, from whichever credential it actually
+  // ran under: a named dispatch account, or (the DEFAULT) the ambient CLI login. Hard-refusing the
+  // ambient case made the monitor inert for anyone who never pasted a token in, which is everyone
+  // by default: it parked every real stop at "needs you — no dispatch account" and resumed nothing.
+  const snap = await deps.readUsage(item.account_id)
+  const wk = snap.weekAll
+  if (!wk) {
+    // Unknown usage is NOT "plenty left" — refuse to resume blindly.
+    upsertState(item, {
+      state: 'needs_human',
+      message: 'could not read usage — not resuming without a reading',
+      resumeItemId: null,
+      attempts: priorAttempts,
+    })
+    return
+  }
+  if (wk.pct >= 100) {
+    const resetIso = parseResetTime(wk.resets)
+    upsertState(item, {
+      state: 'blocked_weekly',
+      message: `blocked: weekly maxed (resets ${wk.resets})`,
+      resumeItemId: null,
+      attempts: priorAttempts,
+      nextCheckAt: resetIso ?? isoIn(60),
+    })
+    return
+  }
+
+  // Weekly has room. A 5-hour stop with the migrate toggle on doesn't wait for the reset at
+  // all: it resumes NOW on another running account with headroom (owner directive 2026-08-25 —
+  // "if the chat seems like it should still be running, migrate it and keep working"). The
+  // original account rejoins the routing pool naturally once its window resets. Falls back to
+  // the scheduled resume when no viable target exists.
+  if (getOrchestratorSettings().migrateOnLimit) {
+    let target: { ref: string; name: string } | null = null
+    try {
+      target = (await deps.pickMigrationTarget?.(item.instance_ref ?? null)) ?? null
+    } catch (err) {
+      console.error('[agenthydra] migration target pick failed:', err)
+    }
+    if (target) {
+      const resumeId = enqueueResume(item, new Date().toISOString(), target.ref)
+      upsertState(item, {
+        state: 'scheduled',
+        message: `migrated to ${target.name} until the 5h resets`,
+        resumeItemId: resumeId,
+        attempts: priorAttempts + 1,
+        nextCheckAt: null,
+      })
+      return
+    }
+  }
+
+  // Schedule the resume just after the 5-hour session reset (+ buffer). If the
+  // 5h reset can't be parsed, fall back to now + 5h (the worst-case window length).
+  const sessIso = snap.session ? parseResetTime(snap.session.resets) : null
+  const base = sessIso ? new Date(sessIso) : new Date(Date.now() + 5 * 3600 * 1000)
+  const notBefore = new Date(base.getTime() + settings.resumeBufferMin * 60_000).toISOString()
+  const resumeId = enqueueResume(item, notBefore)
+  upsertState(item, {
+    state: 'scheduled',
+    message: `resumes ~${fmtLocalTime(notBefore)}`,
+    resumeItemId: resumeId,
+    attempts: priorAttempts + 1,
+    nextCheckAt: null,
+  })
 }
 
 async function processRateLimited(deps: MonitorDeps): Promise<void> {
@@ -665,101 +784,7 @@ async function processRateLimited(deps: MonitorDeps): Promise<void> {
   const meta = sessionMetaMap()
 
   for (const item of [...dispatched, ...found]) {
-    if (meta.get(item.session_id)?.archived) continue
-    const existing = getState(item.id)
-
-    // Already resolved for this exact stop — skip, except a blocked_weekly re-arms once its
-    // re-check time passes (to reconsider after the weekly window resets).
-    if (existing) {
-      if (existing.state !== 'blocked_weekly') continue
-      if (existing.next_check_at && existing.next_check_at > now) continue
-    }
-
-    // Per-account opt-out.
-    if (item.account_id && !monitorEnabledForAccount(item.account_id)) continue
-
-    const priorAttempts = existing?.resume_attempts ?? sessionAttempts(item.session_id)
-
-    // Idempotent: a live resume already pending for this session.
-    if (hasPendingResume(item.session_id)) continue
-
-    // Attempt cap (per session).
-    if (priorAttempts >= settings.maxAttempts) {
-      upsertState(item, {
-        state: 'needs_human',
-        message: `hit the ${settings.maxAttempts}-resume cap for this session`,
-        resumeItemId: null,
-        attempts: priorAttempts,
-      })
-      continue
-    }
-
-    // The usage gate — the crux. Read the run's quota fresh, from whichever credential it actually
-    // ran under: a named dispatch account, or (the DEFAULT) the ambient CLI login. Hard-refusing the
-    // ambient case made the monitor inert for anyone who never pasted a token in, which is everyone
-    // by default: it parked every real stop at "needs you — no dispatch account" and resumed nothing.
-    const snap = await deps.readUsage(item.account_id)
-    const wk = snap.weekAll
-    if (!wk) {
-      // Unknown usage is NOT "plenty left" — refuse to resume blindly.
-      upsertState(item, {
-        state: 'needs_human',
-        message: 'could not read usage — not resuming without a reading',
-        resumeItemId: null,
-        attempts: priorAttempts,
-      })
-      continue
-    }
-    if (wk.pct >= 100) {
-      const resetIso = parseResetTime(wk.resets)
-      upsertState(item, {
-        state: 'blocked_weekly',
-        message: `blocked: weekly maxed (resets ${wk.resets})`,
-        resumeItemId: null,
-        attempts: priorAttempts,
-        nextCheckAt: resetIso ?? isoIn(60),
-      })
-      continue
-    }
-
-    // Weekly has room. A 5-hour stop with the migrate toggle on doesn't wait for the reset at
-    // all: it resumes NOW on another running account with headroom (owner directive 2026-08-25 —
-    // "if the chat seems like it should still be running, migrate it and keep working"). The
-    // original account rejoins the routing pool naturally once its window resets. Falls back to
-    // the scheduled resume when no viable target exists.
-    if (getOrchestratorSettings().migrateOnLimit) {
-      let target: { ref: string; name: string } | null = null
-      try {
-        target = (await deps.pickMigrationTarget?.(item.instance_ref ?? null)) ?? null
-      } catch (err) {
-        console.error('[agenthydra] migration target pick failed:', err)
-      }
-      if (target) {
-        const resumeId = enqueueResume(item, new Date().toISOString(), target.ref)
-        upsertState(item, {
-          state: 'scheduled',
-          message: `migrated to ${target.name} until the 5h resets`,
-          resumeItemId: resumeId,
-          attempts: priorAttempts + 1,
-          nextCheckAt: null,
-        })
-        continue
-      }
-    }
-
-    // Schedule the resume just after the 5-hour session reset (+ buffer). If the
-    // 5h reset can't be parsed, fall back to now + 5h (the worst-case window length).
-    const sessIso = snap.session ? parseResetTime(snap.session.resets) : null
-    const base = sessIso ? new Date(sessIso) : new Date(Date.now() + 5 * 3600 * 1000)
-    const notBefore = new Date(base.getTime() + settings.resumeBufferMin * 60_000).toISOString()
-    const resumeId = enqueueResume(item, notBefore)
-    upsertState(item, {
-      state: 'scheduled',
-      message: `resumes ~${fmtLocalTime(notBefore)}`,
-      resumeItemId: resumeId,
-      attempts: priorAttempts + 1,
-      nextCheckAt: null,
-    })
+    await processOneRateLimitedStop(item, meta, now, settings, deps)
   }
 }
 

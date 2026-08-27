@@ -375,66 +375,80 @@ function resolveSearchFiles(opts: SearchOptions): TranscriptFile[] {
   return files.slice().sort((a, b) => b.mtime_ms - a.mtime_ms)
 }
 
-export async function searchSessionBodies(opts: SearchOptions): Promise<SessionSearchResponse> {
-  const query = opts.query.trim()
-  if (!query) return EMPTY_RESPONSE
+/**
+ * The fast path: let the conversation index say WHICH sessions, then read only those. Split out of
+ * searchSessionBodies, which otherwise had this whole block ahead of (and at the same nesting
+ * level as) the scan loop below. Returns null when the index isn't ready or the mode forces a
+ * scan, meaning the caller must fall through to searchViaScan — exactly like the original `if`
+ * that fell out the bottom without returning.
+ *
+ * The index holds no text of its own, so snippets and match counts still come from the real
+ * transcripts. That keeps one source of truth for what a match looks like, and it is why the
+ * index is 12 MB rather than 12 MB plus a copy of everything it covers.
+ *
+ * Narrowing by the substring matcher afterwards is deliberate, not redundant: the index matches
+ * words case-insensitively, so it OVER-selects relative to a substring search, and running the
+ * real matcher over the candidates keeps the answer identical in shape to what a scan would say.
+ */
+async function searchViaIndex(
+  opts: SearchOptions,
+  query: string,
+  matcher: Matcher,
+  files: TranscriptFile[],
+  found: SessionSearchResult[],
+  limit: number,
+  perFileLimit: number,
+  deadline: number,
+  budgetMs: number,
+): Promise<SessionSearchResponse | null> {
+  if ((opts.mode ?? 'auto') !== 'auto' || files.length === 0) return null
+  const coverage = searchIndexCoverage(files)
+  const ready = coverage.covered / files.length >= INDEX_READY_RATIO
+  if (!ready) warmIndexInBackground(files)
+  const candidates = ready
+    ? searchIndexCandidates(query, { regex: opts.regex, source: opts.source })
+    : null
+  if (!candidates) return null
 
-  const matcher = buildMatcher(opts)
-  const limit = opts.limit ?? DEFAULT_LIMIT
-  const perFileLimit = opts.perFileLimit ?? DEFAULT_PER_FILE_LIMIT
-  const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS
-  const deadline = performance.now() + budgetMs
-
-  const files = resolveSearchFiles(opts)
-
-  const found: SessionSearchResult[] = []
-  const includeOpenCode = (!opts.source || opts.source === 'opencode') && !opts.instance
-  if (includeOpenCode) found.push(...searchOpenCode(matcher, perFileLimit, limit))
-
-  // --- fast path: let the conversation index say WHICH sessions, then read only those ----------
-  //
-  // The index holds no text of its own, so snippets and match counts still come from the real
-  // transcripts. That keeps one source of truth for what a match looks like, and it is why the
-  // index is 12 MB rather than 12 MB plus a copy of everything it covers.
-  //
-  // Narrowing by the substring matcher afterwards is deliberate, not redundant: the index matches
-  // words case-insensitively, so it OVER-selects relative to a substring search, and running the
-  // real matcher over the candidates keeps the answer identical in shape to what a scan would say.
-  if ((opts.mode ?? 'auto') === 'auto' && files.length > 0) {
-    const coverage = searchIndexCoverage(files)
-    const ready = coverage.covered / files.length >= INDEX_READY_RATIO
-    if (!ready) warmIndexInBackground(files)
-    const candidates = ready
-      ? searchIndexCandidates(query, { regex: opts.regex, source: opts.source })
-      : null
-    if (candidates) {
-      const hits = files
-        .filter((f) => candidates.has(`${f.source}:${f.session_id}`))
-        .slice(0, Math.max(0, limit - found.length))
-      const outcomes = await pooledMap(hits, CONCURRENCY, (tf) =>
-        searchOneFile(tf, matcher, perFileLimit, deadline),
-      )
-      let ranOut = false
-      for (const o of outcomes) {
-        if (o.stoppedEarly) ranOut = true
-        if (o.hit) found.push(o.hit)
-      }
-      return {
-        results: sortByActivity(found).slice(0, limit),
-        searched: 'index',
-        // The honest caveat: complete over what was SAID, silent about tool output.
-        conversationOnly: true,
-        budgetExhausted: ranOut,
-        limitReached: candidates.size > hits.length,
-        // The index covered every session; `hits.length` is only how many transcripts had to be
-        // re-read for snippets. Reporting the smaller number here would tell an agent the search
-        // reached 5 of 1,359 sessions, which is the opposite of what happened.
-        filesSearched: files.length,
-        filesTotal: files.length,
-        budgetMs,
-      }
-    }
+  const hits = files
+    .filter((f) => candidates.has(`${f.source}:${f.session_id}`))
+    .slice(0, Math.max(0, limit - found.length))
+  const outcomes = await pooledMap(hits, CONCURRENCY, (tf) =>
+    searchOneFile(tf, matcher, perFileLimit, deadline),
+  )
+  let ranOut = false
+  for (const o of outcomes) {
+    if (o.stoppedEarly) ranOut = true
+    if (o.hit) found.push(o.hit)
   }
+  return {
+    results: sortByActivity(found).slice(0, limit),
+    searched: 'index',
+    // The honest caveat: complete over what was SAID, silent about tool output.
+    conversationOnly: true,
+    budgetExhausted: ranOut,
+    limitReached: candidates.size > hits.length,
+    // The index covered every session; `hits.length` is only how many transcripts had to be
+    // re-read for snippets. Reporting the smaller number here would tell an agent the search
+    // reached 5 of 1,359 sessions, which is the opposite of what happened.
+    filesSearched: files.length,
+    filesTotal: files.length,
+    budgetMs,
+  }
+}
+
+/** The slow path: a newest-first batch scan over every file in scope, stopping once `limit` is
+ *  hit or the clock runs out. Split out of searchSessionBodies for the same reason as
+ *  searchViaIndex — this was the other half sitting at the same nesting level. */
+async function searchViaScan(
+  files: TranscriptFile[],
+  matcher: Matcher,
+  found: SessionSearchResult[],
+  limit: number,
+  perFileLimit: number,
+  deadline: number,
+  budgetMs: number,
+): Promise<SessionSearchResponse> {
   // Process in newest-first batches so we can stop dispatching more work once `limit` is hit,
   // without giving up the pool's cross-file concurrency within each batch.
   const batchSize = CONCURRENCY * 3
@@ -485,4 +499,36 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
     filesTotal: files.length,
     budgetMs,
   }
+}
+
+export async function searchSessionBodies(opts: SearchOptions): Promise<SessionSearchResponse> {
+  const query = opts.query.trim()
+  if (!query) return EMPTY_RESPONSE
+
+  const matcher = buildMatcher(opts)
+  const limit = opts.limit ?? DEFAULT_LIMIT
+  const perFileLimit = opts.perFileLimit ?? DEFAULT_PER_FILE_LIMIT
+  const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS
+  const deadline = performance.now() + budgetMs
+
+  const files = resolveSearchFiles(opts)
+
+  const found: SessionSearchResult[] = []
+  const includeOpenCode = (!opts.source || opts.source === 'opencode') && !opts.instance
+  if (includeOpenCode) found.push(...searchOpenCode(matcher, perFileLimit, limit))
+
+  const indexResult = await searchViaIndex(
+    opts,
+    query,
+    matcher,
+    files,
+    found,
+    limit,
+    perFileLimit,
+    deadline,
+    budgetMs,
+  )
+  if (indexResult) return indexResult
+
+  return searchViaScan(files, matcher, found, limit, perFileLimit, deadline, budgetMs)
 }

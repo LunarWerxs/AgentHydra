@@ -190,6 +190,50 @@ export function buildArgv(item: QueueItem): string[] {
 // A normal `claude` stream-json line. Runner marker lines ({"__dispatch":…}) are peeled off by the
 // tail loop before this runs, so this only ever sees genuine Claude output — identical parsing to
 // the pre-detach inline reader.
+
+/** The `assistant`/`user` branch of handleLine: record every tail event and, from a TRUSTED one
+ *  (the CLI's own synthetic error notice, never model prose/tool IO), fold in whatever limit it
+ *  names. Split out because this branch alone carried its own loop and two independent flags. */
+function handleTurnLine(rt: RunRuntime | undefined, id: string, ev: any) {
+  // Only the CLI's own synthetic error notice counts (see isApiErrorEvent) — never model prose,
+  // tool inputs, or tool results, which is what a run about rate limits is full of.
+  const trusted = isApiErrorEvent(ev)
+  for (const te of eventToTailEvents(ev)) {
+    if (rt && trusted) rt.limitKind = classifyLimit(te.text) ?? rt.limitKind
+    // A real turn from the model. This is what makes a retry unsafe (see shouldRetryTransient):
+    // the CLI's own error notice is synthetic and carries no work, so it never counts.
+    if (rt && !trusted) rt.sawOutput = true
+    // A run's stored event log has no 'thinking' kind and is not getting one: it is what the queue
+    // replays, and reasoning is neither replayable nor worth the rows. eventToTailEvents drops
+    // those blocks unless asked, and this call never asks, so the guard is only here to keep that
+    // fact checked by the compiler rather than assumed.
+    if (te.kind !== 'thinking') recordEvent(id, te.role, te.kind, te.text, te.tool_name)
+  }
+}
+
+/** The `rate_limit_event` branch of handleLine — the CLI's first-class wall signal. */
+function handleRateLimitLine(rt: RunRuntime | undefined, id: string, ev: any) {
+  // The CLI's FIRST-CLASS wall signal, and the only one that needs no regex:
+  //   {"type":"rate_limit_event","rate_limit_info":{"status":"rejected",
+  //     "rateLimitType":"seven_day","resetsAt":1785225600, …}}
+  // `status` is one of allowed | allowed_warning | rejected — only 'rejected' is a wall, the other
+  // two ride along on perfectly healthy runs. Structured, so it holds even when the wording of the
+  // human notice changes; both window types (five_hour, seven_day) are the same quota answer.
+  const info = ev.rate_limit_info
+  if (rt && info?.status === 'rejected') {
+    rt.limitKind = 'quota'
+    const resetsAt = typeof info.resetsAt === 'number' ? new Date(info.resetsAt * 1000) : null
+    const window = info.rateLimitType === 'seven_day' ? 'weekly' : 'session'
+    recordEvent(
+      id,
+      'system',
+      'meta',
+      `${window} limit reached on this run's account${resetsAt ? ` — resets ${resetsAt.toLocaleString()}` : ''}.`,
+      null,
+    )
+  }
+}
+
 function handleLine(id: string, line: string) {
   if (!line) return
   let ev: any
@@ -201,40 +245,9 @@ function handleLine(id: string, line: string) {
   const rt = runtime.get(id)
   const t = ev.type
   if (t === 'assistant' || t === 'user') {
-    // Only the CLI's own synthetic error notice counts (see isApiErrorEvent) — never model prose,
-    // tool inputs, or tool results, which is what a run about rate limits is full of.
-    const trusted = isApiErrorEvent(ev)
-    for (const te of eventToTailEvents(ev)) {
-      if (rt && trusted) rt.limitKind = classifyLimit(te.text) ?? rt.limitKind
-      // A real turn from the model. This is what makes a retry unsafe (see shouldRetryTransient):
-      // the CLI's own error notice is synthetic and carries no work, so it never counts.
-      if (rt && !trusted) rt.sawOutput = true
-      // A run's stored event log has no 'thinking' kind and is not getting one: it is what the queue
-      // replays, and reasoning is neither replayable nor worth the rows. eventToTailEvents drops
-      // those blocks unless asked, and this call never asks, so the guard is only here to keep that
-      // fact checked by the compiler rather than assumed.
-      if (te.kind !== 'thinking') recordEvent(id, te.role, te.kind, te.text, te.tool_name)
-    }
+    handleTurnLine(rt, id, ev)
   } else if (t === 'rate_limit_event') {
-    // The CLI's FIRST-CLASS wall signal, and the only one that needs no regex:
-    //   {"type":"rate_limit_event","rate_limit_info":{"status":"rejected",
-    //     "rateLimitType":"seven_day","resetsAt":1785225600, …}}
-    // `status` is one of allowed | allowed_warning | rejected — only 'rejected' is a wall, the other
-    // two ride along on perfectly healthy runs. Structured, so it holds even when the wording of the
-    // human notice changes; both window types (five_hour, seven_day) are the same quota answer.
-    const info = ev.rate_limit_info
-    if (rt && info?.status === 'rejected') {
-      rt.limitKind = 'quota'
-      const resetsAt = typeof info.resetsAt === 'number' ? new Date(info.resetsAt * 1000) : null
-      const window = info.rateLimitType === 'seven_day' ? 'weekly' : 'session'
-      recordEvent(
-        id,
-        'system',
-        'meta',
-        `${window} limit reached on this run's account${resetsAt ? ` — resets ${resetsAt.toLocaleString()}` : ''}.`,
-        null,
-      )
-    }
+    handleRateLimitLine(rt, id, ev)
   } else if (t === 'result') {
     const text = typeof ev.result === 'string' ? ev.result : JSON.stringify(ev)
     // A `result` mirrors the model's final summary, so its text is only evidence when the CLI also

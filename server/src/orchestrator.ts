@@ -1441,6 +1441,95 @@ function classifyOrphanSession(
 }
 
 /**
+ * The final `else` branch of classifyLiveSession — a session that isn't unreadable, held,
+ * unmapped, live-but-deaf, interrupted, limit-stopped, or errored, so its only remaining question
+ * is whether it is genuinely idle. Split out because this one branch carried its own cluster of
+ * decisions (background-task staleness, an approval-stall diagnosis, and the mid-turn grace
+ * window) that don't touch any of classifyLiveSession's other tail.ending cases.
+ *
+ * Mutates `detail` in place — the same object the caller pushes — exactly as the inline code did.
+ * Returns null when the session is still inside its mid-turn grace window: the caller must return
+ * early WITHOUT pushing anything, matching the original inline `return { items, cwdEntry }`.
+ */
+function buildIdleClassification(
+  sess: LiveSession,
+  s: OrchestratorSettings,
+  deps: OrchestratorDeps,
+  tail: TailInfo,
+  detail: Record<string, unknown>,
+  quietSecs: number,
+  started: number,
+  metaMap: Map<
+    string,
+    { instance: string; archived: boolean; permissionMode?: string | null; chatId?: string | null }
+  >,
+): { kind: 'handoff_due' | 'idle_pending'; summary: string } | null {
+  const handoffDue = typeof tail.ctxTokens === 'number' && tail.ctxTokens >= s.ctxHandoffTokens
+  // "Waiting on a background task" only excuses a session while the task shows signs of
+  // life. Transcript AND task outputs both silent past the threshold means the tasks are
+  // dead (or their completion never woke the session) — flagged so the reviewer intervenes
+  // instead of waiting forever (measured: sessions sat "waiting" 9-12h on silent tasks).
+  const taskMtime = deps.taskActivity(sess.cwd, sess.sessionId)
+  const taskAgeSec = taskMtime === null ? null : Math.round((started - taskMtime) / 1000)
+  const staleSecs = s.staleTaskMins * 60
+  const staleTasks =
+    tail.midTurn && quietSecs >= staleSecs && (taskAgeSec === null || taskAgeSec >= staleSecs)
+  detail.taskNewestAgeSec = taskAgeSec
+  detail.staleTasks = staleTasks
+  // FROZEN AT AN APPROVAL PROMPT, the same evidence read correctly. A chat stuck mid-tool
+  // used to be reported as "waiting on dead background tasks", which is the wrong diagnosis
+  // and the wrong fix. Measured 2026-08-26: five revived chats each ran one Bash call and
+  // froze for good at a permission prompt the remote owner could never click - alive,
+  // ~300MB, no CPU, nothing in any log. It is indistinguishable from thinking unless you
+  // ask the one question that separates them: does this chat's permission mode prompt for
+  // the tool it is sitting on? The app creates imported chats as 'acceptEdits', which
+  // auto-approves edits and prompts on every shell command, so a dangling Bash there is an
+  // approval stall; under 'bypassPermissions' the same dangling Bash is simply a long build.
+  const perm = metaMap.get(sess.sessionId)?.permissionMode ?? null
+  const promptsForPendingTool =
+    perm !== null && perm !== 'bypassPermissions' && SHELL_TOOLS.has(tail.pendingTool ?? '')
+  const approvalStall = staleTasks && promptsForPendingTool
+  detail.permissionMode = perm
+  detail.pendingTool = tail.pendingTool
+  detail.approvalStall = approvalStall
+  // A TOOL IN FLIGHT IS WORK, NOT SILENCE. `midTurn` means the transcript ends on a tool
+  // call with no result yet, so the session is inside something right now. Quiet time
+  // measures the transcript, and a test suite that prints nothing for two minutes looks
+  // identical to a chat waiting for input - which is how the reviewer came to be told a
+  // session mid-commit-and-push was idle (field report 2026-08-27; that repo's own test
+  // run is ~130s against a 150s idle threshold, so it would have happened on every run).
+  // Nudging there interrupts real work, and 'resume working on whatever you recommend
+  // next' is a genuinely damaging thing to say to a session halfway through a push.
+  //
+  // So a tool in flight buys GRACE, not silence forever: four idle windows, floor ten
+  // minutes. Under that a mid-tool session is simply working and is not raised at all.
+  // Over it, it is worth a look even if something is still alive, and past the stale
+  // threshold the same evidence means the opposite again (nothing ever came back). A
+  // blanket suppression up to the stale threshold was tried first and was wrong: it also
+  // hid a session quiet for three hours whose task was still writing, which is exactly
+  // the kind of thing the feed exists to show. A crashed session also ends mid-tool and
+  // is NOT lost here: the orphan and stranded detectors own that case, keyed on a dead
+  // or absent process rather than on silence.
+  const midTurnGraceSecs = Math.max(s.idleQuietSecs * 4, 600)
+  if (tail.midTurn && !staleTasks && quietSecs < midTurnGraceSecs) return null
+  return {
+    kind: handoffDue ? 'handoff_due' : 'idle_pending',
+    summary: `${sess.name} idle ${fmtQuiet(quietSecs)}${idleSummarySuffix({
+      recapDetected: tail.recapDetected,
+      approvalStall,
+      pendingTool: tail.pendingTool,
+      permissionMode: perm,
+      quietSecs,
+      staleTasks,
+      taskAgeSec,
+      midTurn: tail.midTurn,
+      handoffDue,
+      ctxTokens: tail.ctxTokens,
+    })}`,
+  }
+}
+
+/**
  * Classify one live session into the attention items it produces, plus the byCwd/runningChats
  * bookkeeping the caller folds in. Pure aside from calling `deps`' read-only accessors (mtimeMs,
  * instanceRef, tailInfo, usage, taskActivity) — no writes, no awaits — split out of
@@ -1607,70 +1696,15 @@ function classifyLiveSession(
       detail,
     })
   } else {
-    const handoffDue = typeof tail.ctxTokens === 'number' && tail.ctxTokens >= s.ctxHandoffTokens
-    // "Waiting on a background task" only excuses a session while the task shows signs of
-    // life. Transcript AND task outputs both silent past the threshold means the tasks are
-    // dead (or their completion never woke the session) — flagged so the reviewer intervenes
-    // instead of waiting forever (measured: sessions sat "waiting" 9-12h on silent tasks).
-    const taskMtime = deps.taskActivity(sess.cwd, sess.sessionId)
-    const taskAgeSec = taskMtime === null ? null : Math.round((started - taskMtime) / 1000)
-    const staleSecs = s.staleTaskMins * 60
-    const staleTasks =
-      tail.midTurn && quietSecs >= staleSecs && (taskAgeSec === null || taskAgeSec >= staleSecs)
-    detail.taskNewestAgeSec = taskAgeSec
-    detail.staleTasks = staleTasks
-    // FROZEN AT AN APPROVAL PROMPT, the same evidence read correctly. A chat stuck mid-tool
-    // used to be reported as "waiting on dead background tasks", which is the wrong diagnosis
-    // and the wrong fix. Measured 2026-08-26: five revived chats each ran one Bash call and
-    // froze for good at a permission prompt the remote owner could never click - alive,
-    // ~300MB, no CPU, nothing in any log. It is indistinguishable from thinking unless you
-    // ask the one question that separates them: does this chat's permission mode prompt for
-    // the tool it is sitting on? The app creates imported chats as 'acceptEdits', which
-    // auto-approves edits and prompts on every shell command, so a dangling Bash there is an
-    // approval stall; under 'bypassPermissions' the same dangling Bash is simply a long build.
-    const perm = metaMap.get(sess.sessionId)?.permissionMode ?? null
-    const promptsForPendingTool =
-      perm !== null && perm !== 'bypassPermissions' && SHELL_TOOLS.has(tail.pendingTool ?? '')
-    const approvalStall = staleTasks && promptsForPendingTool
-    detail.permissionMode = perm
-    detail.pendingTool = tail.pendingTool
-    detail.approvalStall = approvalStall
-    // A TOOL IN FLIGHT IS WORK, NOT SILENCE. `midTurn` means the transcript ends on a tool
-    // call with no result yet, so the session is inside something right now. Quiet time
-    // measures the transcript, and a test suite that prints nothing for two minutes looks
-    // identical to a chat waiting for input - which is how the reviewer came to be told a
-    // session mid-commit-and-push was idle (field report 2026-08-27; that repo's own test
-    // run is ~130s against a 150s idle threshold, so it would have happened on every run).
-    // Nudging there interrupts real work, and 'resume working on whatever you recommend
-    // next' is a genuinely damaging thing to say to a session halfway through a push.
-    //
-    // So a tool in flight buys GRACE, not silence forever: four idle windows, floor ten
-    // minutes. Under that a mid-tool session is simply working and is not raised at all.
-    // Over it, it is worth a look even if something is still alive, and past the stale
-    // threshold the same evidence means the opposite again (nothing ever came back). A
-    // blanket suppression up to the stale threshold was tried first and was wrong: it also
-    // hid a session quiet for three hours whose task was still writing, which is exactly
-    // the kind of thing the feed exists to show. A crashed session also ends mid-tool and
-    // is NOT lost here: the orphan and stranded detectors own that case, keyed on a dead
-    // or absent process rather than on silence.
-    const midTurnGraceSecs = Math.max(s.idleQuietSecs * 4, 600)
-    if (tail.midTurn && !staleTasks && quietSecs < midTurnGraceSecs) return { items, cwdEntry }
+    const idle = buildIdleClassification(sess, s, deps, tail, detail, quietSecs, started, metaMap)
+    // null means the session is still inside its mid-turn grace window: the ORIGINAL inline code
+    // returned right there without pushing anything, and this preserves that exact early exit.
+    if (idle === null) return { items, cwdEntry }
     items.push({
       ...base,
       key: `idle:${sess.sessionId}`,
-      kind: handoffDue ? 'handoff_due' : 'idle_pending',
-      summary: `${sess.name} idle ${fmtQuiet(quietSecs)}${idleSummarySuffix({
-        recapDetected: tail.recapDetected,
-        approvalStall,
-        pendingTool: tail.pendingTool,
-        permissionMode: perm,
-        quietSecs,
-        staleTasks,
-        taskAgeSec,
-        midTurn: tail.midTurn,
-        handoffDue,
-        ctxTokens: tail.ctxTokens,
-      })}`,
+      kind: idle.kind,
+      summary: idle.summary,
       detail,
     })
   }

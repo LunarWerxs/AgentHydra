@@ -1309,6 +1309,64 @@ export interface TailFilter {
  *  - user `tool_result` -> collapsed tool_result event
  *  - a plain-string user message -> text event
  */
+/** One content-array block from a message, turned into its TailEvent (or none — a block that
+ *  produces no visible text, or a thinking block dropped by the filter, is skipped). Split out of
+ *  eventToTailEvents's `for` loop so each block kind is a flat branch here instead of nested two
+ *  levels deep (array check, then loop, then this chain) inside that function. */
+function blockToTailEvent(
+  block: any,
+  r: 'user' | 'assistant',
+  ts: string | null,
+  filter: TailFilter,
+): TailEvent | null {
+  if (!block || typeof block !== 'object') return null
+  const bt = block.type
+  if (bt === 'thinking' || bt === 'redacted_thinking') {
+    // <- the filter. `redacted_thinking` carries an encrypted `data` field and no readable
+    // text, so asking for thinking still shows nothing for it: there is nothing to show.
+    if (!filter.thinking) return null
+    const t = compact(typeof block.thinking === 'string' ? block.thinking : '')
+    return t
+      ? {
+          role: 'assistant',
+          kind: 'thinking',
+          text: truncate(t, 6000),
+          tool_name: null,
+          timestamp: ts,
+        }
+      : null
+  }
+  if (bt === 'text' && typeof block.text === 'string') {
+    const t = compact(block.text)
+    return t
+      ? { role: r, kind: 'text', text: truncate(t, 6000), tool_name: null, timestamp: ts }
+      : null
+  }
+  if (bt === 'tool_use') {
+    const input = block.input ? truncate(compact(JSON.stringify(block.input)), 1200) : ''
+    return {
+      role: 'assistant',
+      kind: 'tool_use',
+      text: input,
+      tool_name: block.name ?? 'tool',
+      timestamp: ts,
+    }
+  }
+  if (bt === 'tool_result') {
+    const t = compact(stringifyToolResult(block.content))
+    return t
+      ? {
+          role: 'user',
+          kind: 'tool_result',
+          text: truncate(t, 2000),
+          tool_name: null,
+          timestamp: ts,
+        }
+      : null
+  }
+  return null
+}
+
 export function eventToTailEvents(ev: any, filter: TailFilter = {}): TailEvent[] {
   const message = ev?.message
   const role: string | undefined = message?.role ?? ev?.type
@@ -1330,53 +1388,8 @@ export function eventToTailEvents(ev: any, filter: TailFilter = {}): TailEvent[]
 
   if (Array.isArray(content)) {
     for (const block of content) {
-      if (!block || typeof block !== 'object') continue
-      const bt = block.type
-      if (bt === 'thinking' || bt === 'redacted_thinking') {
-        // <- the filter. `redacted_thinking` carries an encrypted `data` field and no readable
-        // text, so asking for thinking still shows nothing for it: there is nothing to show.
-        if (!filter.thinking) continue
-        const t = compact(typeof block.thinking === 'string' ? block.thinking : '')
-        if (t)
-          out.push({
-            role: 'assistant',
-            kind: 'thinking',
-            text: truncate(t, 6000),
-            tool_name: null,
-            timestamp: ts,
-          })
-        continue
-      }
-      if (bt === 'text' && typeof block.text === 'string') {
-        const t = compact(block.text)
-        if (t)
-          out.push({
-            role: r,
-            kind: 'text',
-            text: truncate(t, 6000),
-            tool_name: null,
-            timestamp: ts,
-          })
-      } else if (bt === 'tool_use') {
-        const input = block.input ? truncate(compact(JSON.stringify(block.input)), 1200) : ''
-        out.push({
-          role: 'assistant',
-          kind: 'tool_use',
-          text: input,
-          tool_name: block.name ?? 'tool',
-          timestamp: ts,
-        })
-      } else if (bt === 'tool_result') {
-        const t = compact(stringifyToolResult(block.content))
-        if (t)
-          out.push({
-            role: 'user',
-            kind: 'tool_result',
-            text: truncate(t, 2000),
-            tool_name: null,
-            timestamp: ts,
-          })
-      }
+      const te = blockToTailEvent(block, r, ts, filter)
+      if (te) out.push(te)
     }
   }
   return out
