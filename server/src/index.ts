@@ -160,9 +160,11 @@ import {
 import { openUi } from './open-ui'
 import {
   ackAttention,
+  clearPendingRename,
   getOrchestratorPrompts,
   getOrchestratorSettings,
   installOrchestratorCommands,
+  listPendingRenames,
   noteArchiveVisibilityPending,
   orchestratorView,
   runOrchestratorOnce,
@@ -2097,6 +2099,16 @@ app.post('/api/screenshot', async (c) => {
 // AgentHydra does not own: the reviewer delivering a turn NATIVELY into an existing chat on
 // some account is real load that nothing else here can see. Without it, balancing would
 // under-count exactly the delivery path the zero-click law made the default.
+// The reviewer reports a NATIVE rename done, so the chat leaves the pending list. Renaming
+// through the app is the only rename a running app cannot overwrite; the janitor's disk write
+// is a fallback for closed instances, not a substitute for this.
+app.post('/api/orchestrator/renamed', async (c) => {
+  const body = await jsonBody(c)
+  const id = typeof body.session_id === 'string' ? body.session_id.trim() : ''
+  if (!id) return c.json({ ok: false, error: 'session_id is required' }, 400)
+  const cleared = clearPendingRename(id)
+  return c.json({ ok: true, cleared, pending: listPendingRenames() })
+})
 app.post('/api/orchestrator/placement', async (c) => {
   const body = await jsonBody(c)
   const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''

@@ -460,7 +460,14 @@ export function desktopChatArchiveState(
 export function sweepUntitledDesktopChats(
   lookupTitle: (cliSessionId: string) => string | null,
   roots?: string[],
-): { fixed: number; profiles: string[] } {
+): {
+  fixed: number
+  profiles: string[]
+  /** Every chat renamed, with the profile it lives in. The COUNT was enough while the only
+   *  follow-up was restarting the app; naming them lets the caller hand the ones in running
+   *  instances to the reviewer, which renames through the app instantly instead. */
+  renamed: Array<{ profile: string; sessionId: string; title: string }>
+} {
   const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
   const searchRoots = roots ?? [
     join(appData, 'Claude'),
@@ -481,6 +488,7 @@ export function sweepUntitledDesktopChats(
   // restarts, so the janitor hands these to the sidebar-visibility restart (owner rule: names
   // appear automatically, not at some future restart).
   const renamedProfiles = new Set<string>()
+  const renamed: Array<{ profile: string; sessionId: string; title: string }> = []
   for (const profile of searchRoots) {
     const store = join(profile, 'claude-code-sessions')
     if (!existsSync(store)) continue
@@ -508,6 +516,7 @@ export function sweepUntitledDesktopChats(
               writeFileSync(path, JSON.stringify(meta))
               fixed++
               renamedProfiles.add(profile)
+              renamed.push({ profile, sessionId: sid, title: better })
             } catch {
               // one unreadable metadata file must not stop the sweep
             }
@@ -518,7 +527,7 @@ export function sweepUntitledDesktopChats(
       // an unreadable store just contributes nothing
     }
   }
-  return { fixed, profiles: [...renamedProfiles] }
+  return { fixed, profiles: [...renamedProfiles], renamed }
 }
 
 export async function importSessionToDesktop(opts: {

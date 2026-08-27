@@ -1350,6 +1350,11 @@ export interface OrchestratorView {
     blocked: Array<{ ref: string; name: string; why: string | null }>
     recent: Array<{ instanceRef: string; sessionId: string | null; kind: string; at: string }>
   }
+  /** Chats the title janitor renamed ON DISK inside a RUNNING app, where that write does not
+   *  reach the sidebar until the app restarts. The reviewer renames these through the app's
+   *  own rename tool, which is instant and which the app cannot overwrite, then reports each
+   *  one done. The restart remains the fallback for a fleet with no reviewer running. */
+  renames: Array<{ ref: string; sessionId: string; title: string; at: string }>
   /** Threads the owner parked with /delayo: the feed carries nothing for them, and the
    *  reviewer must never prompt them until /resumeo lifts the hold. */
   holds: Array<{ sessionId: string; heldAt: string; peerName?: string; cwd?: string }>

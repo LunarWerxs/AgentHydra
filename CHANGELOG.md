@@ -32,6 +32,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   recommendation, the reason in words, and every account passed over WITH the reason, so a
   placement can be argued with rather than merely trusted.
 
+- **The reviewer owns renames for anything it can reach.** The title janitor writes a name to
+  disk, which is the durable answer for a CLOSED instance and futile for a running one: the
+  app holds its chat list in memory and re-saves the file when the chat next boots, so only an
+  app restart made the name appear. It now reports WHICH chats it renamed inside a running
+  app, and those are served in the feed as `renames` for the reviewer to rename through the
+  app itself, which is instant and which the app cannot overwrite. The restart stays as the
+  fallback, so a fleet with no reviewer running is no worse off. The list is persisted rather
+  than recomputed, because the sweep only reports what it changed and a recomputed list would
+  empty itself within one cycle.
+
 ### Fixed
 
 - **The kit-drift guard was reporting green having compared nothing.** The checkout moved down

@@ -81,11 +81,17 @@ proves nothing (registry-live is not running).
    legitimate reviewer path through it.
 3. Act on attention items by the rubric, then ack each:
    `POST /api/orchestrator/ack {"key", "action"}`.
-4. Keep one-shot idle subscriptions armed on busy peers (`SendMessage {to,
+4. **Clear `renames`.** Each entry is a chat the janitor renamed ON DISK inside a RUNNING
+   app, where that write does not reach the sidebar until the app restarts. Rename it
+   through the app (your own `set_session_title` for your instance, a relay for another),
+   then `POST /api/orchestrator/renamed {"session_id": "<id>"}`. A file-written title is a
+   hint; the app's rename is a fact, and it is the only one the app cannot overwrite. If you
+   cannot reach that instance, leave the entry: the restart fallback still lands it.
+5. Keep one-shot idle subscriptions armed on busy peers (`SendMessage {to,
    notify_when_idle: true}`, no message body). Never poll in a tight loop.
-5. Reschedule yourself with ScheduleWakeup, prompt exactly `/orchestrate`: acted this wake
+6. Reschedule yourself with ScheduleWakeup, prompt exactly `/orchestrate`: acted this wake
    -> 90s; feed quiet -> 600s; overnight/no sessions -> 1800s. `noop` accordingly.
-6. If AgentHydra is unreachable 3 wakes in a row, tell the user once, then retry every 600s.
+7. If AgentHydra is unreachable 3 wakes in a row, tell the user once, then retry every 600s.
 
 ## First wake only (setup)
 

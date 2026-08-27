@@ -323,6 +323,73 @@ function kvDelete(key: string): void {
   db.query('delete from orchestrator_kv where key = ?').run(key)
 }
 
+// --- pending native renames -------------------------------------------------
+// A title written to disk is DURABLE for a closed instance and futile for a running one: the
+// app holds its chat list in memory and re-saves the file when the chat next boots, so the
+// sidebar keeps the old name until that app restarts (measured 2026-08-26: five chats imported
+// with correct titles, all five wiped seconds after they were first messaged). Restarting the
+// owner's app to fix a NAME is a heavy way to do something the app does instantly on request.
+//
+// So the janitor now parks those chats here and the reviewer renames them through the app's own
+// rename tool, which the app cannot overwrite. The list is persisted rather than recomputed
+// because the sweep only reports what it CHANGED: once the title is on disk the next sweep
+// correctly skips that chat, so a recomputed list would empty itself within one cycle and the
+// reviewer would miss the window. Entries clear when the reviewer reports the rename done, when
+// the owning instance is no longer running (a restart made the disk title stick by itself), or
+// after a week.
+
+export interface PendingRename {
+  ref: string
+  sessionId: string
+  title: string
+  at: string
+}
+
+const RENAME_KV = 'pendingRenames'
+
+export function listPendingRenames(): PendingRename[] {
+  try {
+    const raw = JSON.parse(kvGet(RENAME_KV) ?? '[]')
+    return Array.isArray(raw) ? (raw as PendingRename[]) : []
+  } catch {
+    return []
+  }
+}
+
+/** The reviewer reports a native rename done (or the owner renamed it by hand). */
+export function clearPendingRename(sessionId: string): number {
+  const before = listPendingRenames()
+  const after = before.filter((r) => r.sessionId !== sessionId)
+  kvSet(RENAME_KV, JSON.stringify(after))
+  return before.length - after.length
+}
+
+/** Add this sweep's renames, then drop everything that no longer needs a native rename:
+ *  instances that are not running (the disk title will simply be read at their next start,
+ *  or already was) and anything older than a week. */
+export function reconcilePendingRenames(
+  added: Array<{ ref: string; sessionId: string; title: string }>,
+  runningRefs: Set<string>,
+  nowMs: number,
+): PendingRename[] {
+  const byId = new Map<string, PendingRename>()
+  for (const r of listPendingRenames()) byId.set(r.sessionId, r)
+  const nowIso = new Date(nowMs).toISOString()
+  for (const a of added) {
+    // Keep the ORIGINAL timestamp when a chat is re-swept, so the week-long expiry measures
+    // how long the rename has been outstanding rather than resetting on every pass.
+    const prev = byId.get(a.sessionId)
+    byId.set(a.sessionId, { ...a, at: prev?.at ?? nowIso })
+  }
+  const kept = [...byId.values()].filter((r) => {
+    if (!runningRefs.has(normalizeRef(r.ref) ?? '')) return false
+    const age = nowMs - Date.parse(r.at)
+    return !Number.isNaN(age) && age < 7 * 24 * 3600 * 1000
+  })
+  kvSet(RENAME_KV, JSON.stringify(kept))
+  return kept
+}
+
 // --- holds (/delayo and /resumeo) -------------------------------------------
 // A held thread is one the owner has parked: lower priority right now, too much else running.
 // The watcher drops every session-scoped item for it, so the reviewer never sees it to nudge.
@@ -1103,6 +1170,7 @@ const defaultDeps: OrchestratorDeps = {
 interface TickState {
   attention: AttentionItem[]
   instances: OrchestratorInstance[]
+  renames: PendingRename[]
   lastTickAt: string | null
   lastTickMs: number | null
   liveSessions: number
@@ -1114,6 +1182,7 @@ interface TickState {
 const state: TickState = {
   attention: [],
   instances: [],
+  renames: [],
   lastTickAt: null,
   lastTickMs: null,
   liveSessions: 0,
@@ -1736,9 +1805,26 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       if (titled.fixed > 0) {
         console.log(`[agenthydra] title janitor named ${titled.fixed} desktop chat(s)`)
         // New names must APPEAR, not wait for some future restart (owner rule) — same
-        // sidebar-visibility restart the archive flow uses.
+        // sidebar-visibility restart the archive flow uses. Kept as the FALLBACK: it is what
+        // lands the name when no reviewer is running, so removing it would trade a slow rename
+        // for no rename at all.
         for (const p of titled.profiles) noteArchiveVisibilityPending(p)
       }
+      // Anything renamed inside a RUNNING app is handed to the reviewer, which renames through
+      // the app itself: instant, and the app cannot overwrite it. Chats in closed instances are
+      // NOT listed, because the disk write is already the durable answer for those.
+      const running = new Set(
+        state.instances.filter((i) => i.isRunning).map((i) => normalizeRef(i.ref) ?? ''),
+      )
+      state.renames = reconcilePendingRenames(
+        titled.renamed.map((r) => ({
+          ref: desktopKey(r.profile),
+          sessionId: r.sessionId,
+          title: r.title,
+        })),
+        running,
+        started,
+      )
     } catch (err) {
       console.error('[agenthydra] title janitor failed:', err)
     }
@@ -2013,6 +2099,9 @@ export function orchestratorView(): OrchestratorView {
     proposals,
     attention: state.attention,
     instances: state.instances,
+    // Chats the janitor renamed ON DISK inside a RUNNING app, where that write does not show
+    // until the app restarts. The reviewer renames these natively and reports them done.
+    renames: listPendingRenames(),
     // WHERE THE NEXT PIECE OF WORK SHOULD GO, decided once here rather than re-derived from
     // the sort by every reader. `blocked` states why each passed-over account was passed
     // over, so a placement can be argued with instead of merely trusted, and `recent` is the

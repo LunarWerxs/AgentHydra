@@ -79,6 +79,8 @@ POST /api/orchestrator/proposals/:id/decide    { approved, by?, note? } - the re
                                   is enforced)
 POST /api/orchestrator/proposals/:id/executed  { ok, result? } - the execution report after the
                                   reviewer carried an approved proposal out
+POST /api/orchestrator/renamed    { session_id } - the reviewer reports a NATIVE rename done,
+                                  dropping that chat from the feed's `renames` list
 POST /api/orchestrator/placement  { instance_ref, kind?, session_id? } - record that work was
                                   placed on an account, for balancing. The primitives record
                                   themselves; this is for the one path they cannot see, the
@@ -551,6 +553,18 @@ enable (or the install endpoint) away.
   rename tool (which the app cannot overwrite), and the title janitor remains the slow
   fallback for instances that are closed or later restart. Same shape as the archive caveat
   below, and the same cause: while an app is running, its metadata files are its own.
+
+  **The janitor now says WHICH chats it renamed into a running app**, instead of only how
+  many, and those are served in the feed as `renames` for the reviewer to rename natively.
+  Restarting the owner's app to make a NAME appear is a heavy way to do something the app
+  does instantly on request; the restart stays as the fallback, so a fleet with no reviewer
+  running is no worse off than before. The list is PERSISTED rather than recomputed each
+  pass, and that detail is load-bearing: the sweep only reports what it CHANGED, so once the
+  title is on disk the next sweep correctly skips that chat and a recomputed list would
+  empty itself within one cycle, with the reviewer never seeing the work. An entry leaves
+  when the reviewer reports it done (`POST /api/orchestrator/renamed`), when the owning
+  instance stops running (its app will read the disk title at its next start), or after a
+  week.
 - **Desktop archiving works, with one honest caveat.** The desktop keeps a per-chat metadata
   flag, and `POST /api/sessions/:id/desktop-archive` flips it in every profile that carries the
   chat. For an instance whose app is RUNNING, the sidebar reflects it only after that app next
