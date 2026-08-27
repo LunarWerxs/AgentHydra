@@ -85,7 +85,10 @@ Two things make this survive contact with reality:
   a repo left dirty, an account near its weekly wall, a thread killed by a restart. A reviewer
   chat you keep open makes the calls and does the work. Every action it wants to take, from
   reviving a dead chat to archiving a finished one, is checked by that reviewer before it
-  happens, and nothing is ever continued somewhere you cannot see it. Off by default.
+  happens, and nothing is ever continued somewhere you cannot see it. New work is spread
+  across the accounts that have room rather than stacking one, counting the 5-hour window and
+  when it resets, and it never sends work to a busier account for the sake of fairness. Off by
+  default.
 - **A rate limit is not a dead end.** Sessions stopped by a 5-hour limit can resume themselves once
   the window resets, gated on your weekly usage so it does not spend everything the moment it can.
   With several accounts signed in, it can instead move the run to one that still has headroom and
