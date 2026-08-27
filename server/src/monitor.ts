@@ -570,9 +570,12 @@ async function dispatchDueResumes(): Promise<void> {
             },
             evidenceAt: new Date().toISOString(),
           })
+          // Same honesty as the terminal branch below: this row's job (actioning the scheduled
+          // resume) is done, but nothing has RUN yet - a proposal is waiting for the reviewer to
+          // decide it. An exit code of 0 would claim a clean finish for work that has not started.
           db.query(
             'update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?',
-          ).run('completed', new Date().toISOString(), 0, q.id)
+          ).run('completed', new Date().toISOString(), null, q.id)
           db.query(
             'update monitor_state set message = ?, updated_at = ? where resume_item_id = ?',
           ).run(
@@ -601,9 +604,36 @@ async function dispatchDueResumes(): Promise<void> {
               // AgentHydra already stamps on every chat it seeds.
               permissionMode: 'bypassPermissions',
             })
+            // WHAT `completed` MEANS HERE, AND WHAT IT MUST NOT BE READ AS. This row is the
+            // SCHEDULED RESUME, and its job genuinely is finished once the resume has been
+            // actioned. The WORK has not finished: launchTerminalSession returns the instant the
+            // window is spawned (it pipes nothing and waits for nothing), so ok means "a terminal
+            // is open", never "the turn ran".
+            //
+            // So there is deliberately NO exit code. Writing 0 claimed a clean finish for work
+            // that had not begun, which is the failure this codebase already names in types.ts:
+            // conflating "the work finished" with "you can see it" is exactly how something goes
+            // missing while nothing looks wrong. A launch we could not make IS our own outcome,
+            // so that one keeps a real non-zero code.
             db.query(
               'update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?',
-            ).run(res.ok ? 'completed' : 'failed', new Date().toISOString(), res.ok ? 0 : 1, q.id)
+            ).run(
+              res.ok ? 'completed' : 'failed',
+              new Date().toISOString(),
+              res.ok ? null : 1,
+              q.id,
+            )
+            // Say which of the two happened, the way the native branch above does. Without this
+            // the row looked identical whether a window opened or the launch failed outright.
+            db.query(
+              'update monitor_state set message = ?, updated_at = ? where resume_item_id = ?',
+            ).run(
+              res.ok
+                ? 'window reset - resumed in a visible terminal; the run itself is not tracked here'
+                : `window reset - could not open a terminal: ${res.reason ?? 'unknown'}`,
+              new Date().toISOString(),
+              q.id,
+            )
           } catch (err) {
             console.error('[agenthydra] visible auto-resume failed:', err)
           }

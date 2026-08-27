@@ -52,6 +52,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   than recomputed, because the sweep only reports what it changed and a recomputed list would
   empty itself within one cycle.
 
+### Fixed
+
+- **A handed-off resume reported itself finished before the work started.** Opening a visible
+  terminal returns the instant the window is spawned, because nothing is piped and nothing is
+  waited on, and the monitor wrote that result straight into the queue row as
+  `status = completed, exit_code = 0, finished_at = now`. So a resume was recorded as a clean
+  successful run at the moment it began, and the same fabricated zero went in on the native
+  branch, where all that had happened was a proposal being raised for the reviewer to decide.
+  Redirecting more traffic onto those branches to satisfy the no-headless law made an existing
+  lie louder rather than causing it.
+
+  The row's own job, actioning a scheduled resume, genuinely is finished, so `completed` stays.
+  The exit code does not: there is no exit code for work we handed off and stopped watching, so
+  it is null now, and the UI already renders that as simply no badge. A launch that FAILED keeps
+  a real non-zero code, because that outcome is ours. The terminal branch also records which of
+  the two happened, the way the native branch already did; before this the row read identically
+  whether a window opened or the launch failed outright. This codebase had already named the
+  failure in `types.ts`: conflating "the work finished" with "you can see it" is exactly how
+  something goes missing while nothing looks wrong.
+
 ### Changed
 
 - **An auto-resume can no longer be scheduled somewhere it can never run.** Banning headless runs
