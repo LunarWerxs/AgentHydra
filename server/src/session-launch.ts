@@ -30,12 +30,13 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { resolveClaudeExe } from './config'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
 import { db } from './db'
+import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
 
 /**
  * One lineage, one continuation. A done-marked session (session_marks.done = 1) was handed off,
@@ -369,6 +370,7 @@ export async function archiveDesktopChat(
       }
       meta.isArchived = archived
       writeFileSync(found, JSON.stringify(meta))
+      invalidateSessionMetaCache() // the index now holds the flag we just replaced
       hits.push({
         profile,
         wasRunning: await isInstanceRunning(profile).catch(() => false),
@@ -407,6 +409,18 @@ export function desktopChatArchiveState(
       }
     })(),
   ]
+  // The cached index answers this for the real store in microseconds and matches both on-disk
+  // shapes. The walk below stays for injected roots (tests) and as the fallback when a chat is
+  // genuinely absent from the index. Without this, the archive janitor asked one uncached
+  // full-store walk PER done-marked chat, which is what made the janitor take 8.5 seconds.
+  if (!roots) {
+    // The index is built from these exact stores, under both naming shapes, so a MISS is an
+    // answer and not a reason to go looking again. That distinction is the whole cost here:
+    // most done-marked chats no longer exist in any store, and treating each miss as "walk
+    // everything to be sure" is what made the archive sweep 1.7 seconds by itself.
+    const hit = findDesktopChat(sessionId)
+    return hit ? { found: true, archived: hit.archived } : { found: false, archived: false }
+  }
   let found = false
   let allArchived = true
   for (const profile of searchRoots) {
@@ -690,6 +704,21 @@ export async function desktopHomeFor(sessionId: string): Promise<string | null> 
 export async function findDesktopEntryFile(
   sessionId: string,
 ): Promise<{ instanceDir: string; path: string; cliSessionId: string | null } | null> {
+  // The cached index is keyed by BOTH the filename id and the cliSessionId, so it already
+  // answers the roll-proof question this function was written for - without a process scan
+  // (listInstances) and a full store walk per call. The visibility sweep asks this once per
+  // completed queue row, which is where that cost showed up.
+  const hit = findDesktopChat(sessionId)
+  if (hit?.path) {
+    const marker = `${sep}claude-code-sessions${sep}`
+    const cut = hit.path.indexOf(marker)
+    if (cut > 0)
+      return {
+        instanceDir: hit.path.slice(0, cut),
+        path: hit.path,
+        cliSessionId: hit.cliSessionId,
+      }
+  }
   const { listInstances } = await import('./core/instances')
   for (const inst of await listInstances()) {
     const store = join(inst.dir, 'claude-code-sessions')
@@ -717,28 +746,6 @@ export async function findDesktopEntryFile(
   return null
 }
 
-/** The chat's title from the instance's own metadata store. The orchestrator's auto-revive reads
- *  it so the revive turn it queues comes back into the app under the thread's real name instead of
- *  a plumbing title (see baseTitle in monitor.ts for the other half of that). */
-export function readDesktopChatTitle(instanceDir: string, sessionId: string): string | null {
-  const store = join(instanceDir, 'claude-code-sessions')
-  try {
-    for (const org of readdirSync(store, { withFileTypes: true })) {
-      if (!org.isDirectory()) continue
-      for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
-        if (!user.isDirectory()) continue
-        const p = join(store, org.name, user.name, `local_${sessionId}.json`)
-        if (!existsSync(p)) continue
-        const title = (JSON.parse(readFileSync(p, 'utf8')) as { title?: string }).title
-        return typeof title === 'string' && title.trim() ? title.trim() : null
-      }
-    }
-  } catch {
-    // No store or unreadable metadata: no safe search key.
-  }
-  return null
-}
-
 /**
  * Stamp the automation posture onto a desktop chat's metadata: `bypassPermissions`.
  *
@@ -761,6 +768,7 @@ export function applyDesktopChatAutomation(instanceDir: string, sessionId: strin
     const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
     meta.permissionMode = 'bypassPermissions'
     writeFileSync(metaPath, JSON.stringify(meta))
+    invalidateSessionMetaCache() // the index now holds the value we just replaced
     return true
   } catch {
     return false
@@ -778,7 +786,11 @@ export function applyDesktopChatAutomation(instanceDir: string, sessionId: strin
  * found by the orchestration self-test on its first real run, in the same week the identical
  * blindness was fixed in the surface guard.
  */
-export function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
+function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
+  // Cached index first: it already knows this file's path under either naming shape, and the
+  // walk below re-reads every metadata file in the store when the filename does not match.
+  const hit = findDesktopChat(sessionId)
+  if (hit?.path?.startsWith(instanceDir)) return hit.path
   const store = join(instanceDir, 'claude-code-sessions')
   try {
     for (const org of readdirSync(store, { withFileTypes: true })) {
@@ -843,6 +855,7 @@ export function applyDesktopChatTitle(
     meta.title = title
     meta.titleSource = 'tool'
     writeFileSync(metaPath, JSON.stringify(meta))
+    invalidateSessionMetaCache() // the index now holds the value we just replaced
     return 'titled'
   } catch {
     return 'failed'

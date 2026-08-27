@@ -26,6 +26,17 @@ import { AMBIENT_RUN_AS } from './types'
 export interface SessionMeta {
   instance: string
   archived: boolean
+  /** The metadata file itself. Carried so every writer (archive, rename, automation stamp) can
+   *  locate a chat from this ONE cached scan instead of walking the store again: six functions
+   *  each did their own walk, and after the both-shapes fix each walk read every file in the
+   *  store, which turned the 10-minute janitor into an 8.5-second stall. */
+  path: string
+  /** The chat's display name, or null when the app has not given it one. */
+  title: string | null
+  /** The transcript id recorded INSIDE the file. Differs from the key when the entry was found
+   *  by filename - which is exactly how a chat that has rolled onto a new transcript is still
+   *  reachable by the id its filename kept. */
+  cliSessionId: string | null
   /** The app's per-chat automation posture. 'bypassPermissions' runs unattended; anything else
    *  (the app creates imported chats as 'acceptEdits') raises an approval prompt for at least
    *  some tools, which under the zero-click law is a silent deadlock rather than a safeguard.
@@ -59,11 +70,28 @@ function scanStore(
   const glob = new Bun.Glob('*/*/local_*.json')
   for (const rel of glob.scanSync({ cwd: dir, onlyFiles: true })) {
     try {
-      const meta = JSON.parse(readFileSync(join(dir, rel), 'utf8'))
+      const path = join(dir, rel)
+      const meta = JSON.parse(readFileSync(path, 'utf8'))
       const id = meta?.cliSessionId
       const archived = !!meta.isArchived
       const permissionMode = typeof meta.permissionMode === 'string' ? meta.permissionMode : null
-      if (typeof id === 'string' && id) map.set(id, { instance: label, archived, permissionMode })
+      const title = typeof meta?.title === 'string' && meta.title.trim() ? meta.title.trim() : null
+      const entry: SessionMeta = {
+        instance: label,
+        archived,
+        permissionMode,
+        path,
+        title,
+        cliSessionId: typeof id === 'string' && id ? id : null,
+      }
+      // TWO KEYS, one scan. A chat IMPORTED into the app is filed as `local_<cliSessionId>.json`,
+      // so its filename IS the session id; a chat CREATED in the app is filed under the app's own
+      // id and names the session only INSIDE, as cliSessionId. Indexing both means every lookup
+      // resolves from cache whichever shape it meets - and a chat that has rolled onto a new
+      // cliSessionId is still findable by the original id its filename kept.
+      if (typeof id === 'string' && id) map.set(id, entry)
+      const fileId = rel.slice(rel.lastIndexOf('local_') + 'local_'.length, -'.json'.length)
+      if (fileId && !map.has(fileId)) map.set(fileId, entry)
       if (typeof meta?.cwd === 'string' && meta.cwd && typeof meta?.createdAt === 'number')
         origins.push({ instance: label, archived, cwd: meta.cwd, createdAt: meta.createdAt })
     } catch {
@@ -136,7 +164,14 @@ export function resolveInstanceByOrigin(cwd: string, createdAt: number | null): 
     // The origin join answers WHOSE account ran this, from (cwd, created-instant) alone; it
     // never sees a metadata row for this session, so the automation posture is genuinely
     // unknown here rather than absent.
-    found ??= { instance: row.instance, archived: row.archived, permissionMode: null }
+    found ??= {
+      instance: row.instance,
+      archived: row.archived,
+      permissionMode: null,
+      path: '',
+      title: null,
+      cliSessionId: null,
+    }
   }
   return found
 }
@@ -157,6 +192,18 @@ function originRows(): OriginRow[] {
  *  (dispatch.ts) consults this map on a hot path, so the TTL is not something to shorten. */
 export function invalidateSessionMetaCache(): void {
   cache = null
+}
+
+/**
+ * One chat's desktop metadata, from the cached index, matching EITHER on-disk shape.
+ *
+ * This is what every archive/rename/residency lookup should ask, rather than walking the store
+ * itself. Returns null for a session the store does not carry - and for a caller that must be
+ * certain (a write, or a test driving injected roots), the walkers in session-launch.ts still
+ * exist as the uncached second opinion.
+ */
+export function findDesktopChat(sessionId: string): SessionMeta | null {
+  return sessionMetaMap().get(sessionId) ?? null
 }
 
 function scanAll(): { map: Map<string, SessionMeta>; origins: OriginRow[] } {

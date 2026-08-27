@@ -103,10 +103,9 @@ function resolve(cwd: string, createdAt: number | null): unknown {
 test(
   'a unique origin resolves to its account',
   () => {
-    expect(resolve('D:\\PublicProjects', CREATED)).toEqual({
+    expect(resolve('D:\\PublicProjects', CREATED)).toMatchObject({
       instance: 'work',
       archived: false,
-      permissionMode: null,
     })
   },
   SPAWNS_A_CHILD_BUN,
@@ -117,10 +116,9 @@ test(
   () => {
     // Desktop writes "D:\\PublicProjects" and a transcript can carry "d:\\publicprojects" for the
     // same folder; a case-sensitive compare would silently drop the match on half the store.
-    expect(resolve('d:\\publicprojects', CREATED)).toEqual({
+    expect(resolve('d:\\publicprojects', CREATED)).toMatchObject({
       instance: 'work',
       archived: false,
-      permissionMode: null,
     })
   },
   SPAWNS_A_CHILD_BUN,
@@ -130,10 +128,9 @@ test(
   'a small clock gap between the two records still counts as one birth',
   () => {
     // Desktop stamps createdAt as it opens the chat; the CLI stamps its first turn a moment later.
-    expect(resolve('D:\\PublicProjects', CREATED + 1500)).toEqual({
+    expect(resolve('D:\\PublicProjects', CREATED + 1500)).toMatchObject({
       instance: 'work',
       archived: false,
-      permissionMode: null,
     })
   },
   SPAWNS_A_CHILD_BUN,
@@ -155,10 +152,9 @@ test(
     // sessions with zero wrong answers, with the first ambiguity at 120s and the first WRONG answer
     // at 240s. Pinned in both directions so widening it has to be a decision someone makes on
     // purpose, with the cross-check re-run, rather than a number that drifts.
-    expect(resolve('D:\\PublicProjects', CREATED + 59_000)).toEqual({
+    expect(resolve('D:\\PublicProjects', CREATED + 59_000)).toMatchObject({
       instance: 'work',
       archived: false,
-      permissionMode: null,
     })
     expect(resolve('D:\\PublicProjects', CREATED + 61_000)).toBeNull()
   },
@@ -178,11 +174,7 @@ test(
 test(
   'two rows from the SAME account are agreement, not ambiguity',
   () => {
-    expect(resolve('D:\\Twins', CREATED)).toEqual({
-      instance: 'work',
-      archived: true,
-      permissionMode: null,
-    })
+    expect(resolve('D:\\Twins', CREATED)).toMatchObject({ instance: 'work', archived: true })
   },
   SPAWNS_A_CHILD_BUN,
 )

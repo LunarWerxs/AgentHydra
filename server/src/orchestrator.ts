@@ -71,7 +71,7 @@ import {
 import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { isSessionActive } from './dispatch'
-import { instanceRefForSession, sessionMetaMap } from './instance-sessions'
+import { findDesktopChat, instanceRefForSession, sessionMetaMap } from './instance-sessions'
 import { listProposalsForView, maintainProposals, proposeAction } from './proposals'
 import { classifyEnding, type SessionEnding } from './session-ending'
 import { desktopChatArchiveState, sweepUntitledDesktopChats } from './session-launch'
@@ -1786,11 +1786,16 @@ export async function proposeArchivesForDoneSessions(roots?: string[]): Promise<
     try {
       const state = desktopChatArchiveState(r.session_id, roots)
       if (!state.found || state.archived) continue
+      // The chat's own metadata title, from the cached index, is both the right name (it is
+      // what the sidebar shows) and free. scannerTitleFor is the fallback and is deliberately
+      // called AT MOST ONCE: its query cannot use an index, so it scans the whole scan-cache
+      // table, and calling it twice per row is what made this sweep 1.6 seconds on its own.
+      const title = findDesktopChat(r.session_id)?.title ?? scannerTitleFor(r.session_id)
       const id = proposeAction({
         kind: 'archive',
         sessionId: r.session_id,
-        title: scannerTitleFor(r.session_id),
-        summary: `done-marked chat ${scannerTitleFor(r.session_id) ?? r.session_id.slice(0, 8)} still sits un-archived in a desktop sidebar — retire its entries`,
+        title,
+        summary: `done-marked chat ${title ?? r.session_id.slice(0, 8)} still sits un-archived in a desktop sidebar — retire its entries`,
         evidence: { doneMarkedAt: new Date(r.updated_at).toISOString() },
         evidenceAt: new Date(r.updated_at).toISOString(),
       })

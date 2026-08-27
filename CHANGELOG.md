@@ -63,6 +63,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   MIGRATED thread is not asked, because it is continuing rather than ending. The wording is
   an editable prompt like all the others.
 
+### Changed
+
+- **One cached index instead of six separate walks of the chat store, and the housekeeping
+  sweep is six times faster** (8.5s to 1.4s; the archive sweep alone went from 1.7s to 7ms).
+  Measured, not guessed: an ordinary watch pass was already 132ms, so the time was all in the
+  ten-minute housekeeping - and specifically in a regression from teaching the lookup to match
+  both on-disk chat shapes, which made every miss re-read all 2,130 metadata files. The scan
+  was already cached and already reading every file; it now keeps what the callers need and
+  indexes each chat under both of its possible ids, so one scan answers every question.
+
 ### Fixed
 
 - **A newly created chat showed as "General coding session" until renamed.** Seeding writes a
