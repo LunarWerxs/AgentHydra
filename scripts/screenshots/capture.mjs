@@ -363,10 +363,10 @@ async function main() {
   procs.push(chrome);
 
   const ws = new WebSocket(await pageTargetWs(await readDevtoolsPort()));
-  await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = () => reject(new Error('could not attach to Chrome'));
-  });
+  const { promise: wsOpen, resolve: wsOpened, reject: wsFailed } = Promise.withResolvers();
+  ws.onopen = wsOpened;
+  ws.onerror = () => wsFailed(new Error('could not attach to Chrome'));
+  await wsOpen;
   const send = cdp(ws);
 
   await send('Page.enable');
