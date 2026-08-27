@@ -595,30 +595,30 @@ function zedMessageToTailEvent(m: Record<string, unknown>, at: string): TailEven
 }
 
 function zedRead(virtualPath: string): TailEvent[] {
-    const hash = virtualPath.lastIndexOf('#')
-    if (hash < 0) return []
-    const path = virtualPath.slice(0, hash)
-    const id = virtualPath.slice(hash + 1)
-    const db = zedDb(path)
-    if (!db) return []
-    try {
-      const row = db.query('select data, updated_at from threads where id = ?').get(id) as
-        | { data: string | null; updated_at: string | null }
-        | undefined
-      if (!row?.data) return []
-      const at = row.updated_at ? iso(Date.parse(row.updated_at)) : iso(mtimeOf(path))
-      const parsed = JSON.parse(row.data) as { messages?: Array<Record<string, unknown>> }
-      const out: TailEvent[] = []
-      for (const m of parsed.messages ?? []) {
-        const ev = zedMessageToTailEvent(m, at)
-        if (ev) out.push(ev)
-      }
-      return out
-    } catch {
-      return []
-    } finally {
-      db.close()
+  const hash = virtualPath.lastIndexOf('#')
+  if (hash < 0) return []
+  const path = virtualPath.slice(0, hash)
+  const id = virtualPath.slice(hash + 1)
+  const db = zedDb(path)
+  if (!db) return []
+  try {
+    const row = db.query('select data, updated_at from threads where id = ?').get(id) as
+      | { data: string | null; updated_at: string | null }
+      | undefined
+    if (!row?.data) return []
+    const at = row.updated_at ? iso(Date.parse(row.updated_at)) : iso(mtimeOf(path))
+    const parsed = JSON.parse(row.data) as { messages?: Array<Record<string, unknown>> }
+    const out: TailEvent[] = []
+    for (const m of parsed.messages ?? []) {
+      const ev = zedMessageToTailEvent(m, at)
+      if (ev) out.push(ev)
     }
+    return out
+  } catch {
+    return []
+  } finally {
+    db.close()
+  }
 }
 
 /** Adapter per catalog tool id. A tool with `format: 'foreign'` and no entry here reads as empty,
