@@ -20,6 +20,7 @@ import {
   type MonitorDeps,
   monitorEnabledForAccount,
   monitorStatus,
+  resumeSurfaceFor,
   runMonitorOnce,
   setMonitorForAccount,
   setMonitorSettings,
@@ -395,5 +396,53 @@ describe('settings', () => {
     setSetting('monitor_max_attempts', '3')
     setSetting('monitor_resume_buffer_min', '3')
     expect(getSetting('monitor_max_attempts')).toBe('3')
+  })
+})
+
+// --- where a due resume is delivered ------------------------------------------
+// Owner law 2026-08-27: "We should never have any headless chats. No headless." Two branches of
+// this routing used to fall through to a headless dispatch. The first was the `queue` preference,
+// the classic invisible run. The second was the one doing real damage and is easy to miss: a
+// `desktop` preference over a thread with no `desktop:` instance ref cannot be delivered natively,
+// and rather than say so it went headless. After the ban those resumes were scheduled, dispatched
+// and refused on every attempt, which is a resume that can never happen.
+//
+// The function returns a two-member type with no headless answer in it, so the law holds by
+// construction rather than by a branch someone could put back.
+// Forward slashes on purpose. The function only inspects the `desktop:` prefix, so the rest of the
+// path is irrelevant to what is being tested, and a Windows-style literal here would be pure
+// escaping hazard for no coverage. usage-probe.test.ts builds its backslashes with
+// String.fromCharCode(92) where they genuinely matter; here they do not.
+const DESKTOP_REF = 'desktop:C:/Users/x/.claude-instances/work'
+
+describe('resume surface', () => {
+  test('a desktop thread the reviewer can reach is woken natively in its own app', () => {
+    expect(resumeSurfaceFor('desktop', DESKTOP_REF)).toBe('native')
+  })
+
+  test('a desktop preference over a thread it cannot reach opens a terminal, never headless', () => {
+    // The regression that motivated this: a CLI instance, or no ref at all, under the DEFAULT
+    // setting. Both used to go invisible.
+    expect(resumeSurfaceFor('desktop', 'cli:some-instance')).toBe('terminal')
+    expect(resumeSurfaceFor('desktop', null)).toBe('terminal')
+    expect(resumeSurfaceFor('desktop', undefined)).toBe('terminal')
+    expect(resumeSurfaceFor('desktop', '')).toBe('terminal')
+  })
+
+  test('the queue preference no longer means invisible; it means the nearest watchable thing', () => {
+    expect(resumeSurfaceFor('queue', DESKTOP_REF)).toBe('terminal')
+    expect(resumeSurfaceFor('queue', 'cli:some-instance')).toBe('terminal')
+    expect(resumeSurfaceFor('queue', null)).toBe('terminal')
+  })
+
+  test('an explicit terminal preference is honoured everywhere', () => {
+    expect(resumeSurfaceFor('terminal', DESKTOP_REF)).toBe('terminal')
+    expect(resumeSurfaceFor('terminal', null)).toBe('terminal')
+  })
+
+  test('an unrecognised preference falls to the visible surface, not the invisible one', () => {
+    // A setting that arrives corrupt, or from a newer build, must fail towards being watchable.
+    expect(resumeSurfaceFor('', null)).toBe('terminal')
+    expect(resumeSurfaceFor('something-new', DESKTOP_REF)).toBe('terminal')
   })
 })

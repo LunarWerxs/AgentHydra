@@ -23,7 +23,10 @@
 
 import { isDispatchReady } from './boot-state'
 import { coerceQueueItem, db, getSetting, setSetting } from './db'
-import { dispatchItem, isActive, isSessionActive } from './dispatch'
+// No dispatchItem import any more, and that absence is load-bearing: since the no-headless law
+// the auto-resume monitor has no way to start an invisible run at all, rather than merely
+// choosing not to. The compiler is the guard.
+import { isActive, isSessionActive } from './dispatch'
 import { sessionMetaMap } from './instance-sessions'
 import { getOrchestratorSettings } from './orchestrator'
 import { discoverPendingStops, type RateLimitedStop } from './rate-limit-discovery'
@@ -474,6 +477,31 @@ async function tick(deps: MonitorDeps): Promise<void> {
 
 /** Fire OUR scheduled resumes the moment they're due — independent of the global scheduler switch,
  *  since auto-resume is its own opt-in and shouldn't require the main scheduler to be on. */
+/**
+ * Where a due resume is delivered. There are exactly two answers and neither is invisible, which
+ * is the whole point: the type has no headless member to return, so the no-headless law is
+ * enforced here by construction rather than by a branch someone could add back.
+ *
+ * `native` means the reviewer wakes the thread inside its own desktop app. `terminal` opens a
+ * visible window. Everything that is not reachable natively takes the terminal, INCLUDING the
+ * `queue` preference, which used to mean headless dispatch and now means the closest thing to
+ * what it asked for that a person can actually watch.
+ *
+ * Pure and exported so the policy can be checked without launching anything, the same reason
+ * commandInstallOutcome in orchestrator.ts is.
+ */
+export type ResumeSurface = 'native' | 'terminal'
+
+export function resumeSurfaceFor(
+  handoffSurface: string,
+  instanceRef: string | null | undefined,
+): ResumeSurface {
+  // A native delivery needs BOTH: the owner wanting desktop, and a thread that actually lives in a
+  // desktop app we can address. A `desktop` preference over a CLI-instance thread is the case that
+  // used to fall through to headless rather than admit it could not be done natively.
+  return handoffSurface === 'desktop' && instanceRef?.startsWith('desktop:') ? 'native' : 'terminal'
+}
+
 async function dispatchDueResumes(): Promise<void> {
   // Same boot-window guard as the scheduler (boot-state.ts): a run that survived the previous
   // daemon isn't in `active` until reattachRuns() settles, so isSessionActive() below could miss
@@ -505,19 +533,27 @@ async function dispatchDueResumes(): Promise<void> {
     const due = !q.not_before || q.not_before <= now
     if (q.status === 'queued' && due && !isActive(q.id) && !isSessionActive(q.session_id)) {
       // Placement follows the owner's surface preference (standing rule 2026-08-25: match the
-      // preference; 'desktop' means no terminals and nothing headless). 'terminal' opens a
-      // visible window continuing the thread; 'queue' keeps the classic headless dispatch for
-      // owners who chose it. 'desktop' hands the due resume to the ACTION GATE (owner law
-      // 2026-08-26): a revive proposal the reviewer decides and then delivers through the
-      // desktop app's own message channel — the thread wakes VISIBLY in its app, never
-      // headless, never as a deaf re-import.
-      const surface = getOrchestratorSettings().handoffSurface
-      if (
-        surface === 'queue' ||
-        (surface === 'desktop' && !q.instance_ref?.startsWith('desktop:'))
-      ) {
-        void dispatchItem(q)
-      } else if (surface === 'desktop') {
+      // preference; 'desktop' means no terminals and nothing headless). 'desktop' hands the due
+      // resume to the ACTION GATE (owner law 2026-08-26): a revive proposal the reviewer decides
+      // and then delivers through the desktop app's own message channel — the thread wakes
+      // VISIBLY in its app, never headless, never as a deaf re-import.
+      //
+      // NO HEADLESS (owner law 2026-08-27). Two branches used to fall through to dispatchItem
+      // here and both are gone. The first was `surface === 'queue'`, the classic headless
+      // dispatch "for owners who chose it"; it is no longer a thing anyone can choose, so it now
+      // means the same as 'terminal', which is the nearest thing to what it asked for that a
+      // person can actually watch. The second was subtler and was the one doing real damage: a
+      // 'desktop' preference whose thread has no `desktop:` instance ref (a CLI instance, or no
+      // ref at all) cannot be delivered natively, and it quietly fell back to headless rather
+      // than admitting that. Since the ban those resumes were scheduled, dispatched and refused
+      // on every attempt, which is a resume that can never happen.
+      //
+      // So the rule is now total and has no fallthrough: deliver natively when the thread lives
+      // in a desktop app we can reach, and otherwise open a VISIBLE terminal. Both are proven
+      // paths that were already here; nothing new had to be invented to close the hole. The
+      // decision itself is resumeSurfaceFor(), pure and tested, because a routing policy that can
+      // only be exercised by actually launching something is a policy nothing checks.
+      if (resumeSurfaceFor(getOrchestratorSettings().handoffSurface, q.instance_ref) === 'native') {
         try {
           const { proposeAction } = await import('./proposals')
           proposeAction({

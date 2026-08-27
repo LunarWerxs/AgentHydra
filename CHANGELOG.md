@@ -54,6 +54,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **An auto-resume can no longer be scheduled somewhere it can never run.** Banning headless runs
+  closed the door; it did not tell the auto-resume monitor to stop walking into it. Two of that
+  monitor's routing branches fell through to a headless dispatch, so after the ban those resumes
+  were scheduled, dispatched and refused on every single attempt, which is a resume that can never
+  happen. One branch was the `queue` preference, the classic invisible run, and that one at least
+  was an explicit choice. The other was doing quiet damage under the DEFAULT setting: a `desktop`
+  preference over a thread with no `desktop:` instance ref, a CLI-instance thread or one with no
+  ref at all, cannot be delivered natively, and rather than say so it went invisible.
+
+  The rule is total now and has no fallthrough: a due resume either wakes the thread natively in
+  its own app, or it opens a visible terminal. Both paths already existed and are proven, so
+  nothing had to be invented to close the hole; `queue` simply resolves to the nearest thing that
+  can be watched. The decision is a pure `resumeSurfaceFor()`, exported and tested, whose return
+  type has only those two members, so the law holds by construction rather than by a branch
+  someone could add back. `monitor.ts` no longer imports `dispatchItem` at all, and that absence
+  is the real guard: the monitor now has no way to start an invisible run, rather than merely
+  choosing not to.
+
 - **No headless chats, at all** (owner law, 2026-08-27: "We should never have any headless chats.
   No headless."). The surface-purity guard added the day before was the weaker half of this: it
   asked only whether a thread already lived in a desktop app, so an orphaned CLI thread, a
