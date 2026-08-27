@@ -174,8 +174,8 @@ html.theme-transitioning *::after {
   --animate-collapsible-up: collapsible-up 0.2s ease-out;
 }
 
-@keyframes collapsible-down { from { height: 0; } to { height: var(--reka-collapsible-content-height); } }
-@keyframes collapsible-up { from { height: var(--reka-collapsible-content-height); } to { height: 0; } }
+@keyframes collapsible-down { from { height: 0; } to { height: var(--reka-collapsible-content-height, auto); } }
+@keyframes collapsible-up { from { height: var(--reka-collapsible-content-height, auto); } to { height: 0; } }
 
 @layer base {
   * {
