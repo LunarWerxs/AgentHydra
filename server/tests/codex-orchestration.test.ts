@@ -9,11 +9,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  listRecentCodexThreads,
-  parseCodexTail,
-  readCodexCwd,
-} from '../src/codex-orchestration'
+import { listRecentCodexThreads, parseCodexTail, readCodexCwd } from '../src/codex-orchestration'
 
 const line = (o: unknown) => JSON.stringify(o)
 const ev = (type: string, extra: Record<string, unknown> = {}) =>
@@ -22,7 +18,9 @@ const ev = (type: string, extra: Record<string, unknown> = {}) =>
 test('a finished Codex turn reads as complete, and its recap is captured', () => {
   const raw = [
     ev('task_started'),
-    ev('agent_message', { message: '## What I did\n- shipped the parser\n## Am I 100% done?\n- yes' }),
+    ev('agent_message', {
+      message: '## What I did\n- shipped the parser\n## Am I 100% done?\n- yes',
+    }),
     ev('task_complete'),
     // token_count records land AFTER the real events and are pure bookkeeping; reading one as
     // "the newest thing that happened" would make every finished thread look mid-turn.
@@ -38,7 +36,10 @@ test('a finished Codex turn reads as complete, and its recap is captured', () =>
 test('an interrupted Codex turn is interrupted, not merely finished', () => {
   // The human pressed stop. Same distinction the Claude side draws, and for the same reason:
   // an interrupted thread must never be auto-resumed.
-  const raw = [ev('agent_message', { message: 'working' }), ev('turn_aborted', { reason: 'interrupted' })].join('\n')
+  const raw = [
+    ev('agent_message', { message: 'working' }),
+    ev('turn_aborted', { reason: 'interrupted' }),
+  ].join('\n')
   expect(parseCodexTail(raw).ending).toBe('interrupted')
   // Aborted for any OTHER reason is a completed turn, not a human stop.
   const other = [ev('turn_aborted', { reason: 'replaced' })].join('\n')
