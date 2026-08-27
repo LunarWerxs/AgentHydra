@@ -1,8 +1,37 @@
 #!/bin/sh
-# AgentHydra pre-commit gate: refuse a kit-synced file edited away from the kit.
-# Enable once with:  git config core.hooksPath .githooks
+# AgentHydra pre-commit gate.
+# Enable once with:  git config core.hooksPath .githooks   (package.json's prepare does this)
 # Bypass a single commit with:  git commit --no-verify
+#
+# 1. Refuse a kit-synced file edited away from the kit.
+# 2. Refuse a commit whose own staged files fail Biome.
+#
+# WHY (2): main was broken three separate times on 2026-08-27 alone by commits that had never had
+# the gates run against them, and every one was caught later by a human doing a clean-export check
+# before pushing. The last was pure formatter drift in a refactor: no behaviour change, whitespace
+# only, and it would still have turned a PUBLIC repo's CI red the moment anyone pushed. The repo
+# already owned the check; nothing ran it at the moment it could still be cheap to fix.
+#
+# ⛔ --staged IS LOAD-BEARING, DO NOT WIDEN IT TO THE WHOLE REPO. This working tree routinely has
+# 10 to 20 agent sessions editing their own files at once, so a repo-wide `biome check .` would
+# fail on somebody else's half-written file and block every OTHER session's commits until they
+# finished. A gate that punishes you for a neighbour's work in progress gets --no-verify'd within
+# the hour, and then it is protecting nothing. Judge a commit by what that commit contains.
 if command -v node >/dev/null 2>&1; then
   echo "› kit-sync guard…"
   node .githooks/check-kit-sync-staged.mjs agenthydra || exit 1
+fi
+
+# Biome ships as a devDependency, so this runs the local copy and does not reach the network.
+# Skipped silently when it is absent (a fresh clone before `bun install`), because a hook that
+# blocks the first commit on a machine that has not installed yet is a hook people turn off.
+if [ -x node_modules/.bin/biome ] || [ -f node_modules/.bin/biome ]; then
+  echo "› biome (staged files only)…"
+  if ! node_modules/.bin/biome check --staged --no-errors-on-unmatched; then
+    echo ""
+    echo "Biome rejected files in THIS commit. Fix with:"
+    echo "    bun run format   (then re-stage)"
+    echo "Nothing above is about anyone else's uncommitted work: only your staged files were read."
+    exit 1
+  fi
 fi
