@@ -56,10 +56,10 @@ jobs:
             os: ubuntu-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
 
@@ -133,7 +133,7 @@ jobs:
           rm -rf "$stage"
           ls -la out
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-${{ matrix.target }}
           path: |
@@ -173,7 +173,7 @@ jobs:
             bin: agenthydra
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-${{ matrix.target }}
           path: out
@@ -181,7 +181,7 @@ jobs:
       # linux-arm64 runs inside an arm64 container via binfmt/QEMU emulation on the x64 runner.
       - name: Set up QEMU (arm64 emulation)
         if: matrix.qemu
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
         with:
           platforms: arm64
 
@@ -265,7 +265,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Extract release notes from CHANGELOG
         shell: bash
@@ -303,7 +303,7 @@ jobs:
           Both self-update. Everything else is identical.
           NOTE
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: release-*
           merge-multiple: true
