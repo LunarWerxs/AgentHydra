@@ -79,6 +79,18 @@ function inline(escaped: string): string {
   return out + escaped.slice(last)
 }
 
+/**
+ * Read fence body lines starting at `start` up to (not including) the closing ``` line, or EOF if
+ * the fence is never closed. Returns the body lines and the index the closing fence was found at
+ * (or `lines.length` if it was not).
+ */
+function readFenceBody(lines: string[], start: number): { body: string[]; end: number } {
+  const body: string[] = []
+  let i = start
+  while (i < lines.length && !/^\s*```\s*$/.test(lines[i] ?? '')) body.push(lines[i++] ?? '')
+  return { body, end: i }
+}
+
 /** Render one fenced block: a language chip plus highlighted, already-escaped code. */
 function renderFence(label: string, lang: Language, code: string): string {
   const chip = label ? `<span class="md-lang">${escapeHtml(label)}</span>` : ''
@@ -124,6 +136,19 @@ export function renderMarkdown(source: string): string {
     closeList()
     closeQuote()
   }
+  const openQuote = () => {
+    if (!quoting) {
+      out.push('<blockquote class="md-quote">')
+      quoting = true
+    }
+  }
+  const openList = (kind: 'ul' | 'ol') => {
+    if (listKind !== kind) {
+      closeList()
+      out.push(`<${kind} class="md-list">`)
+      listKind = kind
+    }
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? ''
@@ -132,11 +157,10 @@ export function renderMarkdown(source: string): string {
     if (fence) {
       closeAll()
       const label = fence[1] ?? ''
-      const body: string[] = []
-      i++
       // An unterminated fence (a truncated transcript, a message still streaming) renders as a code
       // block to the end rather than swallowing the rest of the message into nothing.
-      while (i < lines.length && !/^\s*```\s*$/.test(lines[i] ?? '')) body.push(lines[i++] ?? '')
+      const { body, end } = readFenceBody(lines, i + 1)
+      i = end
       out.push(renderFence(label, normalizeLanguage(label), body.join('\n')))
       continue
     }
@@ -165,10 +189,7 @@ export function renderMarkdown(source: string): string {
     if (quote) {
       flushParagraph()
       closeList()
-      if (!quoting) {
-        out.push('<blockquote class="md-quote">')
-        quoting = true
-      }
+      openQuote()
       out.push(`<p>${inline(quote[1] ?? '')}</p>`)
       continue
     }
@@ -178,12 +199,7 @@ export function renderMarkdown(source: string): string {
     const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line)
     if (bullet || numbered) {
       flushParagraph()
-      const kind = bullet ? 'ul' : 'ol'
-      if (listKind !== kind) {
-        closeList()
-        out.push(`<${kind} class="md-list">`)
-        listKind = kind
-      }
+      openList(bullet ? 'ul' : 'ol')
       out.push(`<li>${inline((bullet ?? numbered)?.[1] ?? '')}</li>`)
       continue
     }
