@@ -97,6 +97,32 @@ interface IndependentTotals {
   records: number
 }
 
+/** One assistant record's contribution to the running totals, or `null` when it is a stale replay
+ *  of a request already counted at an output size at least as large. Split out of
+ *  `countClaudeFile` purely to keep that loop flat; the accounting rules are unchanged. */
+function resolveClaudeUsageDelta(
+  rec: Record<string, unknown>,
+  message: Record<string, unknown> | undefined,
+  usage: Record<string, number>,
+  seen: Map<string, number>,
+): { tokensDelta: number; requestsDelta: number } | null {
+  const output = usage.output_tokens ?? 0
+  const fullSum =
+    (usage.input_tokens ?? 0) +
+    output +
+    (usage.cache_read_input_tokens ?? 0) +
+    (usage.cache_creation_input_tokens ?? 0)
+  const id = `${message?.id ?? ''}|${rec.requestId ?? ''}`
+  const key = rec.requestId ? id : ''
+  if (!key) return { tokensDelta: fullSum, requestsDelta: 1 }
+  const applied = seen.get(key)
+  if (applied !== undefined && output <= applied) return null
+  const requestsDelta = applied === undefined ? 1 : 0
+  seen.set(key, output)
+  if (applied !== undefined) return { tokensDelta: output - applied, requestsDelta: 0 }
+  return { tokensDelta: fullSum, requestsDelta }
+}
+
 /** Claude and its forks: one JSON object per line, `type: "assistant"` carrying `message.usage`.
  *  A request may be written several times; its tokens are counted once, at its largest output. */
 function countClaudeFile(text: string, seen: Map<string, number>): IndependentTotals {
@@ -116,26 +142,10 @@ function countClaudeFile(text: string, seen: Map<string, number>): IndependentTo
     const usage = message?.usage as Record<string, number> | undefined
     if (!usage) continue
     records++
-    const id = `${message?.id ?? ''}|${rec.requestId ?? ''}`
-    const output = usage.output_tokens ?? 0
-    const key = rec.requestId ? id : ''
-    if (key) {
-      const applied = seen.get(key)
-      if (applied !== undefined && output <= applied) continue
-      if (applied === undefined) requests++
-      seen.set(key, output)
-      if (applied !== undefined) {
-        tokens += output - applied
-        continue
-      }
-    } else {
-      requests++
-    }
-    tokens +=
-      (usage.input_tokens ?? 0) +
-      output +
-      (usage.cache_read_input_tokens ?? 0) +
-      (usage.cache_creation_input_tokens ?? 0)
+    const delta = resolveClaudeUsageDelta(rec, message, usage, seen)
+    if (!delta) continue
+    tokens += delta.tokensDelta
+    requests += delta.requestsDelta
   }
   return { tokens, requests, records }
 }
@@ -281,6 +291,80 @@ const UNACCOUNTED_SAMPLE = 20
  */
 const FILE_ACCOUNTED: ReadonlyArray<string | null> = ['claude', 'codex']
 
+/** Mutable accounting shared across one store's file walk, so the per-format helpers below can
+ *  update it without each carrying its own copy of the same five parameters. */
+interface FileAccountingState {
+  out: StoreReconciliation
+  exclude: (reason: ExclusionReason) => void
+  claudeSeen: Map<string, number>
+  codexBySession: Map<string, number>
+}
+
+function accountForCodexFile(
+  text: string,
+  isSession: boolean,
+  isSibling: boolean,
+  state: FileAccountingState,
+): void {
+  const sessionId = codexSessionIdOf(text)
+  const counted = countCodexFile(text)
+  if (!isSession && !isSibling) {
+    // Every non-row Codex rollout must be a replay of a conversation we DO have. That is the
+    // decision, and it is recorded here rather than left implicit.
+    state.exclude('codex-subagent-replay')
+  }
+  if (sessionId)
+    state.codexBySession.set(
+      sessionId,
+      Math.max(state.codexBySession.get(sessionId) ?? 0, counted.tokens),
+    )
+}
+
+function accountForClaudeFile(
+  path: string,
+  text: string,
+  isSession: boolean,
+  isSibling: boolean,
+  state: FileAccountingState,
+): void {
+  if (!isSession && !isSibling) state.out.unaccounted.push(path)
+  state.out.tokensIndependent += countClaudeFile(text, state.claudeSeen).tokens
+}
+
+/** One file's contribution to a store's reconciliation. Split out of `reconcileStore` so the
+ *  per-format branches (codex/claude/other) each read as their own small function rather than
+ *  one loop body doing all three; the decisions made are unchanged. */
+function accountForFile(
+  path: string,
+  tool: AgentTool,
+  view: IndexView,
+  state: FileAccountingState,
+): void {
+  const isSession = view.sessions.has(path)
+  const isSibling = view.siblings.has(path)
+  if (isSession) state.out.sessions++
+  else if (isSibling) state.out.siblings++
+
+  if (!TRANSCRIPT_EXT.test(path)) {
+    if (!isSession && !isSibling) state.exclude('not-a-transcript')
+    return
+  }
+
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch {
+    return
+  }
+
+  if (tool.format === 'codex') return accountForCodexFile(text, isSession, isSibling, state)
+  if (tool.format === 'claude') return accountForClaudeFile(path, text, isSession, isSibling, state)
+
+  // A store with no token model of its own (foreign) or one whose totals come from its own
+  // columns (opencode): file accounting still applies, token accounting does not.
+  if (!isSession && !isSibling) state.exclude('not-a-transcript')
+}
+
 function reconcileStore(tool: AgentTool, view: IndexView): StoreReconciliation | null {
   const roots = rootsFor(tool)
   if (roots.length === 0) return null
@@ -323,48 +407,9 @@ function reconcileStore(tool: AgentTool, view: IndexView): StoreReconciliation |
   // session id and only the furthest reading of each is kept.
   const codexBySession = new Map<string, number>()
   const claudeSeen = new Map<string, number>()
+  const state: FileAccountingState = { out, exclude, claudeSeen, codexBySession }
 
-  for (const path of files) {
-    const isSession = view.sessions.has(path)
-    const isSibling = view.siblings.has(path)
-    if (isSession) out.sessions++
-    else if (isSibling) out.siblings++
-
-    if (!TRANSCRIPT_EXT.test(path)) {
-      if (!isSession && !isSibling) exclude('not-a-transcript')
-      continue
-    }
-
-    let text: string
-    try {
-      text = readFileSync(path, 'utf8')
-    } catch {
-      continue
-    }
-
-    if (tool.format === 'codex') {
-      const sessionId = codexSessionIdOf(text)
-      const counted = countCodexFile(text)
-      if (!isSession && !isSibling) {
-        // Every non-row Codex rollout must be a replay of a conversation we DO have. That is the
-        // decision, and it is recorded here rather than left implicit.
-        exclude('codex-subagent-replay')
-      }
-      if (sessionId)
-        codexBySession.set(sessionId, Math.max(codexBySession.get(sessionId) ?? 0, counted.tokens))
-      continue
-    }
-
-    if (tool.format === 'claude') {
-      if (!isSession && !isSibling) out.unaccounted.push(path)
-      out.tokensIndependent += countClaudeFile(text, claudeSeen).tokens
-      continue
-    }
-
-    // A store with no token model of its own (foreign) or one whose totals come from its own
-    // columns (opencode): file accounting still applies, token accounting does not.
-    if (!isSession && !isSibling) exclude('not-a-transcript')
-  }
+  for (const path of files) accountForFile(path, tool, view, state)
 
   if (tool.format === 'codex') for (const v of codexBySession.values()) out.tokensIndependent += v
 
@@ -397,22 +442,11 @@ function codexSessionIdOf(text: string): string {
  * have been fully warmed; a half-warmed store legitimately reports less, and calling that drift
  * would make the check cry wolf until every scan finished.
  */
-export function reconcile(opts: { requireWarm?: boolean } = {}): Reconciliation {
-  const view = indexView()
-  const stores: StoreReconciliation[] = []
-  for (const tool of AGENT_TOOLS) {
-    const r = reconcileStore(tool, view)
-    if (r) stores.push(r)
-  }
-
-  // Tokens are compared PER READER, not per tool: several products share one reader and the
-  // analytics tables key on the reader, so Cowork's tokens land in the same bucket as Claude
-  // Code's. Comparing a single tool's independent count against that shared bucket is the kind of
-  // apples-to-oranges the first version of this file got wrong, loudly.
-  // Every indexed session recomputed at the current version. Below that the totals are a partial
-  // read of the store and comparing them would be comparing progress, not correctness.
-  const warm = view.indexed > 0 && view.scanned >= view.indexed
-
+/** Independent token totals, summed PER READER (not per tool): several products share one reader
+ *  and the analytics tables key on the reader, so Cowork's tokens land in the same bucket as
+ *  Claude Code's. Comparing a single tool's independent count against that shared bucket is the
+ *  kind of apples-to-oranges the first version of this file got wrong, loudly. */
+function computeIndependentBySource(stores: StoreReconciliation[]): Map<SessionSource, number> {
   const independentBySource = new Map<SessionSource, number>()
   for (const tool of AGENT_TOOLS) {
     if (!FILE_ACCOUNTED.includes(tool.format) || !tool.format) continue
@@ -423,6 +457,17 @@ export function reconcile(opts: { requireWarm?: boolean } = {}): Reconciliation 
       (independentBySource.get(tool.format) ?? 0) + s.tokensIndependent,
     )
   }
+  return independentBySource
+}
+
+/** Fills in each store's `tokensReported`/`drift` against the shared per-reader totals. Mutates
+ *  `stores` in place, same as the loop this was extracted from. */
+function applyDriftComparisons(
+  stores: StoreReconciliation[],
+  view: IndexView,
+  warm: boolean,
+  independentBySource: Map<SessionSource, number>,
+): void {
   for (const s of stores) {
     const tool = AGENT_TOOLS.find((t) => t.id === s.tool)
     if (!tool?.format || !FILE_ACCOUNTED.includes(tool.format)) continue
@@ -431,7 +476,15 @@ export function reconcile(opts: { requireWarm?: boolean } = {}): Reconciliation 
     s.tokensReported = reported
     if (reported !== null && independent > 0) s.drift = (reported - independent) / independent
   }
+}
 
+function collectProblems(
+  stores: StoreReconciliation[],
+  independentBySource: Map<SessionSource, number>,
+  opts: { requireWarm?: boolean },
+  warm: boolean,
+  view: IndexView,
+): string[] {
   const problems: string[] = []
   const driftSeen = new Set<string>()
   for (const s of stores) {
@@ -459,5 +512,23 @@ export function reconcile(opts: { requireWarm?: boolean } = {}): Reconciliation 
       `tokens not compared: ${view.scanned} of ${view.indexed} sessions have been scanned at the ` +
         `current extraction version, so the reported totals are progress rather than an answer`,
     )
+  return problems
+}
+
+export function reconcile(opts: { requireWarm?: boolean } = {}): Reconciliation {
+  const view = indexView()
+  const stores: StoreReconciliation[] = []
+  for (const tool of AGENT_TOOLS) {
+    const r = reconcileStore(tool, view)
+    if (r) stores.push(r)
+  }
+
+  // Every indexed session recomputed at the current version. Below that the totals are a partial
+  // read of the store and comparing them would be comparing progress, not correctness.
+  const warm = view.indexed > 0 && view.scanned >= view.indexed
+
+  const independentBySource = computeIndependentBySource(stores)
+  applyDriftComparisons(stores, view, warm, independentBySource)
+  const problems = collectProblems(stores, independentBySource, opts, warm, view)
   return { at: Date.now(), stores, ok: problems.length === 0, problems, warm }
 }
