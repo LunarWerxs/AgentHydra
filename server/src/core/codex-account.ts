@@ -489,6 +489,28 @@ export interface CodexAccountResult {
  * The plan here comes from a token claim, so it is snapshot data — resolveCodexAccount replaces it
  * with the live value whenever the network answers. See codexPlanLabel.
  */
+/** The identity fields that fall back to the cache when the live claims don't carry them —
+ *  factored out of localCodexAccount so the cache-or-claims choice is made in one place per
+ *  field instead of six parallel ternaries inline. */
+function mergeCachedCodexIdentity(
+  local: LocalIdentity,
+  cached: CodexCacheFile[string] | undefined,
+  usable: boolean,
+): Pick<
+  LocalIdentity,
+  'email' | 'name' | 'planType' | 'userId' | 'orgTitle' | 'subscriptionActiveUntil'
+> {
+  return {
+    email: local.email ?? (usable ? cached?.email : null) ?? null,
+    name: local.name ?? (usable ? cached?.name : null) ?? null,
+    planType: local.planType ?? (usable ? cached?.planType : null) ?? null,
+    userId: local.userId ?? (usable ? (cached?.userId ?? null) : null),
+    orgTitle: local.orgTitle ?? (usable ? (cached?.orgTitle ?? null) : null),
+    subscriptionActiveUntil:
+      local.subscriptionActiveUntil ?? (usable ? (cached?.subscriptionActiveUntil ?? null) : null),
+  }
+}
+
 export function localCodexAccount(codexHome: string, source = 'offline'): CodexAccount {
   try {
     const auth = readCodexAuth(codexHome)
@@ -521,25 +543,21 @@ export function localCodexAccount(codexHome: string, source = 'offline'): CodexA
     )
     if (cached && !usable) deleteCodexCacheEntry(codexHome)
 
-    const email = local.email ?? (usable ? cached?.email : null) ?? null
-    const name = local.name ?? (usable ? cached?.name : null) ?? null
-    const planType = local.planType ?? (usable ? cached?.planType : null) ?? null
-    const planLabel = codexPlanLabel(planType)
+    const fields = mergeCachedCodexIdentity(local, cached, usable)
+    const planLabel = codexPlanLabel(fields.planType)
     return newCodexAccount({
       status: usable ? 'cache' : 'offline',
       authMode: 'chatgpt',
-      email,
-      name,
-      planType,
+      email: fields.email,
+      name: fields.name,
+      planType: fields.planType,
       planLabel,
       accountId,
-      userId: local.userId ?? (usable ? (cached?.userId ?? null) : null),
-      orgTitle: local.orgTitle ?? (usable ? (cached?.orgTitle ?? null) : null),
-      subscriptionActiveUntil:
-        local.subscriptionActiveUntil ??
-        (usable ? (cached?.subscriptionActiveUntil ?? null) : null),
+      userId: fields.userId,
+      orgTitle: fields.orgTitle,
+      subscriptionActiveUntil: fields.subscriptionActiveUntil,
       source,
-      label: buildLabel(name, email, planLabel),
+      label: buildLabel(fields.name, fields.email, planLabel),
     })
   } catch {
     return newCodexAccount({ status: 'unknown', label: '(not logged in / unreadable)' })

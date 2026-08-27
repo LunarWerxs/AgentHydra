@@ -223,6 +223,36 @@ export interface TerminalLaunchResult {
  * is chosen by the CLI itself; within seconds the session appears in ~/.claude/sessions, which
  * is where the orchestrator watcher (and anyone else) picks it up.
  */
+type InstanceEnvResolution =
+  | { ok: true; env: Record<string, string>; exe: string | null }
+  | { ok: false; reason: string }
+
+/** Turn an `instanceRef` ("cli:<id>" / "desktop:<dir>" / null) into the env vars and (optional
+ *  override) executable a launch needs. Pulled out of launchTerminalSession so the three-way ref
+ *  dispatch isn't inline in the middle of the launch sequence — same await ordering, same checks,
+ *  just named. */
+async function resolveInstanceEnv(ref: string | null): Promise<InstanceEnvResolution> {
+  const env: Record<string, string> = {}
+  let exe: string | null = null
+  if (ref?.startsWith('cli:')) {
+    const configDir = getCliInstance(ref.slice('cli:'.length))?.configDir
+    if (!configDir) return { ok: false, reason: 'cli-instance-not-found' }
+    env.CLAUDE_CONFIG_DIR = configDir
+  } else if (ref?.startsWith('desktop:')) {
+    const dir = ref.slice('desktop:'.length)
+    const grant = await resolveInstanceToken(dir)
+    // A pinned launch must never silently fall back to the ambient login — the exact rule
+    // dispatch.ts enforces pre-launch, for the exact reason (wrong account pays).
+    if (!grant) return { ok: false, reason: 'instance-token-unavailable' }
+    env.CLAUDE_CODE_OAUTH_TOKEN = grant.token
+    if (grant.scopes) env.CLAUDE_CODE_OAUTH_SCOPES = grant.scopes
+    exe = bundledClaudeExe(dir) // see bundledClaudeExe: the peer-capable CLI wins
+  } else if (ref) {
+    return { ok: false, reason: `malformed instance ref (${ref})` }
+  }
+  return { ok: true, env, exe }
+}
+
 export async function launchTerminalSession(opts: {
   cwd: string
   prompt: string
@@ -258,25 +288,10 @@ export async function launchTerminalSession(opts: {
         'session-live: that thread already has a running process (it is open in an app or a terminal) — resuming it here would put two writers on one transcript',
       command: '',
     }
-  const env: Record<string, string> = {}
   const ref = opts.instanceRef?.trim() || null
-  let exe: string | null = null
-  if (ref?.startsWith('cli:')) {
-    const configDir = getCliInstance(ref.slice('cli:'.length))?.configDir
-    if (!configDir) return { ok: false, reason: 'cli-instance-not-found', command: '' }
-    env.CLAUDE_CONFIG_DIR = configDir
-  } else if (ref?.startsWith('desktop:')) {
-    const dir = ref.slice('desktop:'.length)
-    const grant = await resolveInstanceToken(dir)
-    // A pinned launch must never silently fall back to the ambient login — the exact rule
-    // dispatch.ts enforces pre-launch, for the exact reason (wrong account pays).
-    if (!grant) return { ok: false, reason: 'instance-token-unavailable', command: '' }
-    env.CLAUDE_CODE_OAUTH_TOKEN = grant.token
-    if (grant.scopes) env.CLAUDE_CODE_OAUTH_SCOPES = grant.scopes
-    exe = bundledClaudeExe(dir) // see bundledClaudeExe: the peer-capable CLI wins
-  } else if (ref) {
-    return { ok: false, reason: `malformed instance ref (${ref})`, command: '' }
-  }
+  const resolved = await resolveInstanceEnv(ref)
+  if (!resolved.ok) return { ok: false, reason: resolved.reason, command: '' }
+  const { env, exe } = resolved
 
   // THE TRUST PRE-FLIGHT. Without it the window opens, asks 'do you trust this folder', and
   // waits forever on a keypress nobody can give, while this function has already returned

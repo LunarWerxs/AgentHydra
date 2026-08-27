@@ -41,6 +41,29 @@ const ROOT = join(homedir(), '.claude-instances')
  *  the whole census: it separates chats AgentHydra placed from chats the owner started. */
 const isImported = (m) => m.sessionId === `local_${m.cliSessionId}`
 
+/** Every chat metadata file directly under one user dir, read as census rows. Pulled out of
+ *  readChats so the instance/org/user walk isn't nested four loops deep. */
+function readUserChats(dir, instanceName) {
+  const out = []
+  for (const f of readdirSync(dir)) {
+    if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+    try {
+      const m = JSON.parse(readFileSync(join(dir, f), 'utf8'))
+      out.push({
+        instance: instanceName,
+        imported: isImported(m),
+        mode: m.permissionMode ?? '(none)',
+        cwd: m.cwd ?? m.originCwd ?? '',
+        createdAt: m.createdAt ?? 0,
+        archived: !!m.isArchived,
+      })
+    } catch {
+      // One unreadable metadata file must not stop the census.
+    }
+  }
+  return out
+}
+
 function readChats() {
   const out = []
   if (!existsSync(ROOT)) return out
@@ -52,23 +75,7 @@ function readChats() {
       if (!org.isDirectory()) continue
       for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
         if (!user.isDirectory()) continue
-        const dir = join(store, org.name, user.name)
-        for (const f of readdirSync(dir)) {
-          if (!f.startsWith('local_') || !f.endsWith('.json')) continue
-          try {
-            const m = JSON.parse(readFileSync(join(dir, f), 'utf8'))
-            out.push({
-              instance: inst.name,
-              imported: isImported(m),
-              mode: m.permissionMode ?? '(none)',
-              cwd: m.cwd ?? m.originCwd ?? '',
-              createdAt: m.createdAt ?? 0,
-              archived: !!m.isArchived,
-            })
-          } catch {
-            // One unreadable metadata file must not stop the census.
-          }
-        }
+        out.push(...readUserChats(join(store, org.name, user.name), inst.name))
       }
     }
   }

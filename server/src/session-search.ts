@@ -172,6 +172,43 @@ function searchForeignFile(
       }
 }
 
+/** One line's contribution to a file search: the cwd it revealed (if any, first-hit-wins so the
+ *  caller only adopts it when it doesn't already have one), how many matches it added, and the
+ *  snippets worth keeping. Pulled out of searchOneFile so the per-line parse/match branching
+ *  doesn't live inside the streaming loop. */
+function matchSearchLine(
+  rawLine: string,
+  tf: TranscriptFile,
+  matcher: Matcher,
+  perFileLimit: number,
+  snippetsSoFar: number,
+): { cwd: string | null; matches: number; snippets: string[] } | null {
+  const line = rawLine.trim()
+  if (!line) return null
+  let ev: any
+  try {
+    ev = JSON.parse(line)
+  } catch {
+    return null
+  }
+  const cwd =
+    (typeof ev?.cwd === 'string' && ev.cwd) ||
+    (typeof ev?.payload?.cwd === 'string' && ev.payload.cwd) ||
+    null
+
+  const snippets: string[] = []
+  let matches = 0
+  for (const text of displayableText(tf, ev)) {
+    const idx = matcher(text)
+    if (idx === -1) continue
+    matches++
+    if (snippetsSoFar + snippets.length < perFileLimit)
+      snippets.push(snippetAround(text, idx, SNIPPET_LEN))
+    break // one match counted per event line is enough signal; avoid double-counting blocks
+  }
+  return { cwd, matches, snippets }
+}
+
 export async function searchOneFile(
   tf: TranscriptFile,
   matcher: Matcher,
@@ -191,25 +228,11 @@ export async function searchOneFile(
         stoppedEarly = true
         break
       }
-      const line = rawLine.trim()
-      if (!line) continue
-      let ev: any
-      try {
-        ev = JSON.parse(line)
-      } catch {
-        continue
-      }
-      if (!cwd && typeof ev?.cwd === 'string') cwd = ev.cwd
-      if (!cwd && typeof ev?.payload?.cwd === 'string') cwd = ev.payload.cwd
-
-      const texts = displayableText(tf, ev)
-      for (const text of texts) {
-        const idx = matcher(text)
-        if (idx === -1) continue
-        matchCount++
-        if (snippets.length < perFileLimit) snippets.push(snippetAround(text, idx, SNIPPET_LEN))
-        break // one match counted per event line is enough signal; avoid double-counting blocks
-      }
+      const result = matchSearchLine(rawLine, tf, matcher, perFileLimit, snippets.length)
+      if (!result) continue
+      if (!cwd && result.cwd) cwd = result.cwd
+      matchCount += result.matches
+      snippets.push(...result.snippets)
       if (snippets.length >= perFileLimit && matchCount >= perFileLimit * 4) break // this file is clearly a hit; stop early
     }
   } catch {

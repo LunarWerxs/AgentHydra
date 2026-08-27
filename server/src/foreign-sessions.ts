@@ -571,7 +571,30 @@ const zed: Adapter = {
       db.close()
     }
   },
-  read(virtualPath) {
+  read: zedRead,
+}
+
+/** One Zed thread message → a TailEvent, or null when it's not a role we display or carries no
+ *  text after compacting. Pulled out of the zed adapter's `read` so the per-message shape
+ *  wrangling isn't inline inside the row-mapping loop. */
+function zedMessageToTailEvent(m: Record<string, unknown>, at: string): TailEvent | null {
+  const role = m.role === 'user' || m.role === 'assistant' ? m.role : null
+  if (!role) return null
+  const segments = m.segments
+  const text = Array.isArray(segments)
+    ? segments
+        .map((s) =>
+          s && typeof s === 'object' ? ((s as { text?: string }).text ?? '') : String(s ?? ''),
+        )
+        .join('\n')
+    : typeof m.text === 'string'
+      ? m.text
+      : ''
+  const t = compact(text)
+  return t ? { role, kind: 'text', text: truncate(t), tool_name: null, timestamp: at } : null
+}
+
+function zedRead(virtualPath: string): TailEvent[] {
     const hash = virtualPath.lastIndexOf('#')
     if (hash < 0) return []
     const path = virtualPath.slice(0, hash)
@@ -587,21 +610,8 @@ const zed: Adapter = {
       const parsed = JSON.parse(row.data) as { messages?: Array<Record<string, unknown>> }
       const out: TailEvent[] = []
       for (const m of parsed.messages ?? []) {
-        const role = m.role === 'user' || m.role === 'assistant' ? m.role : null
-        if (!role) continue
-        const text = Array.isArray(m.segments)
-          ? m.segments
-              .map((s) =>
-                s && typeof s === 'object'
-                  ? ((s as { text?: string }).text ?? '')
-                  : String(s ?? ''),
-              )
-              .join('\n')
-          : typeof m.text === 'string'
-            ? m.text
-            : ''
-        const t = compact(text)
-        if (t) out.push({ role, kind: 'text', text: truncate(t), tool_name: null, timestamp: at })
+        const ev = zedMessageToTailEvent(m, at)
+        if (ev) out.push(ev)
       }
       return out
     } catch {
@@ -609,7 +619,6 @@ const zed: Adapter = {
     } finally {
       db.close()
     }
-  },
 }
 
 /** Adapter per catalog tool id. A tool with `format: 'foreign'` and no entry here reads as empty,

@@ -200,6 +200,83 @@ function candidateUserDataDirs(
   return dirs
 }
 
+interface EnvSignalResult {
+  clue: SelfIdentityClue | null
+  ruledOut: string
+}
+
+/** Stage 1 — CODEX_HOME names its own home outright. */
+function checkCodexHomeSignal(env: Record<string, string | undefined>): EnvSignalResult {
+  const codexHome = env.CODEX_HOME?.trim()
+  if (codexHome) {
+    return {
+      clue: {
+        method: 'codex-home-env',
+        kind: 'codex',
+        configDir: codexHome,
+        proof: `CODEX_HOME=${codexHome}`,
+      },
+      ruledOut: '',
+    }
+  }
+  return { clue: null, ruledOut: 'CODEX_HOME is unset (not a Codex instance)' }
+}
+
+/** Stage 2 — CLAUDE_CONFIG_DIR, set by every AgentHydra-launched CLI instance. Wins over any
+ *  desktop signal: when it is set, the `claude` binary uses THOSE credentials, even if the
+ *  terminal happens to have been opened from inside a Desktop instance. */
+function checkClaudeConfigDirSignal(env: Record<string, string | undefined>): EnvSignalResult {
+  const cfgDir = env.CLAUDE_CONFIG_DIR?.trim()
+  if (cfgDir) {
+    return {
+      clue: {
+        method: 'claude-config-dir-env',
+        kind: 'cli',
+        configDir: cfgDir,
+        proof: `CLAUDE_CONFIG_DIR=${cfgDir}`,
+      },
+      ruledOut: '',
+    }
+  }
+  return {
+    clue: null,
+    ruledOut: 'CLAUDE_CONFIG_DIR is unset (not a CLI instance — a Desktop session never sets it)',
+  }
+}
+
+/** Stage 3 — CLAUDE_CODE_EXECPATH, present for hooks and Bash-tool children, absent inside MCP. */
+function checkExecPathSignal(
+  env: Record<string, string | undefined>,
+  exists: (p: string) => boolean,
+): EnvSignalResult {
+  const execPath = env.CLAUDE_CODE_EXECPATH?.trim()
+  if (!execPath) {
+    return {
+      clue: null,
+      ruledOut:
+        'CLAUDE_CODE_EXECPATH is unset (expected inside an MCP server — it is only set for hooks and Bash-tool children)',
+    }
+  }
+  const dir = userDataDirFromAgentExe(execPath)
+  if (dir && looksLikeUserDataDir(dir, exists)) {
+    return {
+      clue: {
+        method: 'execpath-env',
+        kind: 'desktop',
+        configDir: dir,
+        proof: `CLAUDE_CODE_EXECPATH=${execPath}`,
+      },
+      ruledOut: '',
+    }
+  }
+  return {
+    clue: null,
+    ruledOut: dir
+      ? `CLAUDE_CODE_EXECPATH points at ${dir}, which is not a Claude user-data dir (no config.json / Local State)`
+      : `CLAUDE_CODE_EXECPATH=${execPath} has no claude-code/<version>/ segment to derive an instance from`,
+  }
+}
+
 /**
  * Work out which instance THIS process belongs to.
  *
@@ -232,58 +309,14 @@ export async function detectSelfIdentity(
   const ruledOut: string[] = []
   const add = (clue: SelfIdentityClue) => clues.push(clue)
 
-  // --- 1. CODEX_HOME — a Codex instance names its own home outright. -----------------------------
-  const codexHome = env.CODEX_HOME?.trim()
-  if (codexHome) {
-    add({
-      method: 'codex-home-env',
-      kind: 'codex',
-      configDir: codexHome,
-      proof: `CODEX_HOME=${codexHome}`,
-    })
-  } else {
-    ruledOut.push('CODEX_HOME is unset (not a Codex instance)')
-  }
-
-  // --- 2. CLAUDE_CONFIG_DIR — set by every AgentHydra-launched CLI instance. ---------------------
-  // This wins over any desktop signal below: when it is set, the `claude` binary uses THOSE
-  // credentials, even if the terminal happens to have been opened from inside a Desktop instance.
-  const cfgDir = env.CLAUDE_CONFIG_DIR?.trim()
-  if (cfgDir) {
-    add({
-      method: 'claude-config-dir-env',
-      kind: 'cli',
-      configDir: cfgDir,
-      proof: `CLAUDE_CONFIG_DIR=${cfgDir}`,
-    })
-  } else {
-    ruledOut.push(
-      'CLAUDE_CONFIG_DIR is unset (not a CLI instance — a Desktop session never sets it)',
-    )
-  }
-
-  // --- 3. CLAUDE_CODE_EXECPATH — present for hooks and Bash-tool children, absent inside MCP. ----
-  const execPath = env.CLAUDE_CODE_EXECPATH?.trim()
-  if (execPath) {
-    const dir = userDataDirFromAgentExe(execPath)
-    if (dir && looksLikeUserDataDir(dir, exists)) {
-      add({
-        method: 'execpath-env',
-        kind: 'desktop',
-        configDir: dir,
-        proof: `CLAUDE_CODE_EXECPATH=${execPath}`,
-      })
-    } else {
-      ruledOut.push(
-        dir
-          ? `CLAUDE_CODE_EXECPATH points at ${dir}, which is not a Claude user-data dir (no config.json / Local State)`
-          : `CLAUDE_CODE_EXECPATH=${execPath} has no claude-code/<version>/ segment to derive an instance from`,
-      )
-    }
-  } else {
-    ruledOut.push(
-      'CLAUDE_CODE_EXECPATH is unset (expected inside an MCP server — it is only set for hooks and Bash-tool children)',
-    )
+  // --- 1-3. Env signals — CODEX_HOME / CLAUDE_CONFIG_DIR / CLAUDE_CODE_EXECPATH. ------------------
+  for (const result of [
+    checkCodexHomeSignal(env),
+    checkClaudeConfigDirSignal(env),
+    checkExecPathSignal(env, exists),
+  ]) {
+    if (result.clue) add(result.clue)
+    else ruledOut.push(result.ruledOut)
   }
 
   // --- 4. CLAUDE_CODE_HOST_SESSION_ID → the instance dir that holds this session's own file. -----

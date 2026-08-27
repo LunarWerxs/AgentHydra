@@ -1412,6 +1412,38 @@ export function tailKeeper(opts: TailOptions): (e: TailEvent) => boolean {
   return () => true
 }
 
+/** Parse a raw transcript tail newest-line-first into up to `limit` filtered event groups, plus
+ *  whatever cwd the scanned lines revealed. Pulled out of tailTranscript's default (non-foreign,
+ *  non-opencode) path so the byte-tail parsing loop isn't nested inside the source-branch chain. */
+function collectTailEventsFromRaw(
+  raw: string,
+  source: SessionSource,
+  filter: TailFilter,
+  keep: (e: TailEvent) => boolean,
+  limit: number,
+): { events: TailEvent[]; cwd: string } {
+  const lines = raw.split('\n')
+  const collected: TailEvent[][] = []
+  let cwd = ''
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim()
+    if (!line) continue
+    let ev: any
+    try {
+      ev = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!cwd && typeof ev?.cwd === 'string') cwd = ev.cwd
+    if (!cwd && typeof ev?.payload?.cwd === 'string') cwd = ev.payload.cwd
+    const tes = eventToTailEventsForSource(source, ev, filter).filter(keep)
+    if (tes.length === 0) continue
+    collected.push(tes)
+    if (collected.length >= limit) break
+  }
+  return { events: collected.reverse().flat(), cwd }
+}
+
 /** Read the last `limit` real turns of a session's transcript, thinking filtered out. */
 export async function tailTranscript(
   sessionId: string,
@@ -1471,30 +1503,9 @@ export async function tailTranscript(
     }
   }
   const raw = await readTailBytes(tf.path, 6 * 1024 * 1024)
-  const lines = raw.split('\n')
-  const collected: TailEvent[][] = []
-  let title = opts.title ?? ''
-  let cwd = opts.cwd ?? ''
-
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].trim()
-    if (!line) continue
-    let ev: any
-    try {
-      ev = JSON.parse(line)
-    } catch {
-      continue
-    }
-    if (!cwd && typeof ev?.cwd === 'string') cwd = ev.cwd
-    if (!cwd && typeof ev?.payload?.cwd === 'string') cwd = ev.payload.cwd
-    const tes = eventToTailEventsForSource(tf.source, ev, filter).filter(keep)
-    if (tes.length === 0) continue
-    collected.push(tes)
-    if (collected.length >= limit) break
-  }
-
-  const events = collected.reverse().flat()
-  if (!title) title = sessionId
+  const { events, cwd: rawCwd } = collectTailEventsFromRaw(raw, tf.source, filter, keep, limit)
+  const title = opts.title || sessionId
+  const cwd = opts.cwd || rawCwd
   return {
     session_id: sessionId,
     source: tf.source,

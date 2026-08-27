@@ -423,37 +423,43 @@ function pickBestInferenceGrant(
   return best
 }
 
+/** Load and decrypt an instance's stored token cache blob, or null on any failure along the way
+ *  (missing config, unreadable/malformed JSON, no cache field, decrypt failure). Pulled out of
+ *  resolveInstanceToken so the file-read/parse/decrypt chain isn't inline in the main function. */
+async function loadDecryptedTokenCache(instanceDir: string): Promise<string | null> {
+  const configPath = path.join(instanceDir, 'config.json')
+  if (!existsSync(configPath)) return null
+
+  let config: Record<string, unknown> | null = null
+  try {
+    const raw = readFileSync(configPath, 'utf8')
+    if (raw?.trim()) config = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return null
+  }
+  if (!config) return null
+
+  const b64 =
+    typeof config['oauth:tokenCacheV2'] === 'string' && config['oauth:tokenCacheV2']
+      ? (config['oauth:tokenCacheV2'] as string)
+      : typeof config['oauth:tokenCache'] === 'string' && config['oauth:tokenCache']
+        ? (config['oauth:tokenCache'] as string)
+        : null
+  if (!b64) return null
+
+  try {
+    return await decryptSafeStorage(b64, instanceDir)
+  } catch {
+    return null
+  }
+}
+
 export async function resolveInstanceToken(
   instanceDir: string,
 ): Promise<{ token: string; scopes: string } | null> {
   try {
     if (!instanceDir?.trim()) return null
-    const configPath = path.join(instanceDir, 'config.json')
-    if (!existsSync(configPath)) return null
-
-    let config: Record<string, unknown> | null = null
-    try {
-      const raw = readFileSync(configPath, 'utf8')
-      if (raw?.trim()) config = JSON.parse(raw) as Record<string, unknown>
-    } catch {
-      return null
-    }
-    if (!config) return null
-
-    const b64 =
-      typeof config['oauth:tokenCacheV2'] === 'string' && config['oauth:tokenCacheV2']
-        ? (config['oauth:tokenCacheV2'] as string)
-        : typeof config['oauth:tokenCache'] === 'string' && config['oauth:tokenCache']
-          ? (config['oauth:tokenCache'] as string)
-          : null
-    if (!b64) return null
-
-    let decrypted: string | null = null
-    try {
-      decrypted = await decryptSafeStorage(b64, instanceDir)
-    } catch {
-      return null
-    }
+    const decrypted = await loadDecryptedTokenCache(instanceDir)
     if (!decrypted) return null
 
     // Pick the grant that can actually read usage: the desktop app keeps TWO grants — a full CLI
