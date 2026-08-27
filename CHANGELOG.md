@@ -54,6 +54,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **One swept probe transcript could blank the whole session list.** The `/usage` probe's sweep
+  and the session scanner race by construction: `pruneUsageProbeTranscripts()` deletes .jsonl
+  files out of a project folder that the scanner also enumerates, so the daemon routinely
+  removes files it is itself part-way through reading, and there is no lock to take or ordering
+  to arrange because the probe runs on its own timer. The read threw on the miss, and the throw
+  escaped into `/api/sessions`, killing the request and every row already parsed for it. Seen in
+  the live daemon log on 2026-08-27 as `ENOENT ... at async parseMeta`, whose two anonymous
+  frames are `toSummary` and `mapPooled`'s worker, which is the list path exactly. The warm-up
+  at the bottom of sessions.ts had always caught this ("an unreadable transcript just stays
+  uncached"); the list path and `getSession` had not. `scanMeta` now returns
+  `ScannedMeta | null`, so a vanished transcript is simply not a session and its row is omitted,
+  and the type is what forces all three call sites to say so rather than a comment asking them
+  to. A miss is never cached, so a file that reappears parses normally on the next pass.
+
 - **The reviewer was told to build chat ids, so it addressed chats that do not exist.** Its
   first real shift landed 0 of 4 relayed deliveries: the rubric said to target
   `local_<sessionId>`, which is right only for IMPORTED chats, while a chat the app created is
