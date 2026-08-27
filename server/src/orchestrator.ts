@@ -328,6 +328,50 @@ function kvDelete(key: string): void {
   db.query('delete from orchestrator_kv where key = ?').run(key)
 }
 
+// --- is anyone actually reviewing? ------------------------------------------
+// The watcher cannot detect its own uselessness. It keeps ticking, keeps writing proposals,
+// and the feed keeps looking healthy, whether or not anything is reading it. This session
+// began with the owner discovering 19 proposals queued and nobody deciding them, and it
+// happened a second time the same night: a reviewer worked one shift and its window went
+// away, after which everything still LOOKED fine for five hours.
+//
+// Liveness is measured by WORK DONE, not by a process existing. Every ruling, execution
+// report and ack stamps this. That needs no cooperation from the reviewer, and it cannot be
+// satisfied by a reviewer that booted and then froze at an approval prompt, which is the
+// exact failure most worth catching.
+
+const REVIEWER_KV = 'lastReviewerAt'
+
+export function noteReviewerActivity(nowMs: number = Date.now()): void {
+  kvSet(REVIEWER_KV, new Date(nowMs).toISOString())
+}
+
+export function reviewerHealth(
+  nowMs: number,
+  pending: number,
+): { lastSeenAt: string | null; quietMins: number | null; stalled: boolean; why: string } {
+  const raw = kvGet(REVIEWER_KV)
+  const at = raw ? Date.parse(raw) : Number.NaN
+  const quietMins = Number.isNaN(at) ? null : Math.round((nowMs - at) / 60_000)
+  // Only a BACKLOG makes silence meaningful. A reviewer with nothing to decide is quiet
+  // because there is nothing to do, and calling that stalled would cry wolf until nobody
+  // read it - the same way a check that fires on healthy input stops being a check.
+  const stalled = pending > 0 && (quietMins === null || quietMins >= 30)
+  const why = !pending
+    ? 'nothing is waiting to be decided, so silence here means idle rather than absent'
+    : quietMins === null
+      ? `${pending} proposal(s) waiting and NO reviewer has ever acted on this machine`
+      : stalled
+        ? `${pending} proposal(s) waiting and no reviewer has acted for ${quietMins}m - start one`
+        : `${pending} proposal(s) waiting, a reviewer acted ${quietMins}m ago`
+  return {
+    lastSeenAt: Number.isNaN(at) ? null : new Date(at).toISOString(),
+    quietMins,
+    stalled,
+    why,
+  }
+}
+
 // --- pending native renames -------------------------------------------------
 // A title written to disk is DURABLE for a closed instance and futile for a running one: the
 // app holds its chat list in memory and re-saves the file when the chat next boots, so the
@@ -2285,6 +2329,10 @@ export function orchestratorView(): OrchestratorView {
       usageAgeSecs: state.usageAgeSecs,
       runningChats: state.runningChats,
       slotsFree: state.slotsFree,
+      reviewer: reviewerHealth(
+        Date.now(),
+        proposals.filter((p) => p.status === 'proposed' || p.status === 'approved').length,
+      ),
       proposalsPending: proposals.filter((p) => p.status === 'proposed' || p.status === 'approved')
         .length,
     },

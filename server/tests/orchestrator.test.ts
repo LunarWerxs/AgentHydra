@@ -21,6 +21,7 @@ import {
   installOrchestratorCommands,
   isInjectedUserText,
   type LiveSession,
+  noteReviewerActivity,
   type OrchestratorDeps,
   type OrphanSession,
   orchestratorView,
@@ -29,6 +30,7 @@ import {
   projectKeyForCwd,
   proposeArchivesForDoneSessions,
   resetsSoon,
+  reviewerHealth,
   runOrchestratorOnce,
   samePath,
   setOrchestratorPrompts,
@@ -334,6 +336,36 @@ test('a proposal whose chat was archived after it was raised is retired, not off
   // Retiring something with nothing open is a no-op, not an error: the sweep runs every tick
   // over every archived chat on the machine, which is overwhelmingly chats with no proposals.
   expect(retireProposalsForSessions(['retire-me', 'never-seen'], Date.now(), 'x')).toBe(0)
+})
+
+test('a dead reviewer is visible, and a quiet one with nothing to do is not an alarm', () => {
+  // This session opened with the owner discovering 19 proposals queued and nobody deciding them,
+  // and the same thing happened again the same night: a reviewer worked one shift, its window went
+  // away, and the feed looked healthy for five hours afterwards. The watcher cannot detect its own
+  // uselessness - it is the half that never fails, so the other half failing reads as calm.
+  const now = Date.parse('2026-08-27T12:00:00Z')
+
+  // NOTHING WAITING is the case that must never fire. A reviewer with an empty queue is quiet
+  // because there is nothing to do, and a check that cries wolf on healthy input stops being read.
+  noteReviewerActivity(now - 8 * 3600 * 1000)
+  expect(reviewerHealth(now, 0).stalled).toBe(false)
+
+  // A backlog plus a long silence is the real thing.
+  const dead = reviewerHealth(now, 19)
+  expect(dead.stalled).toBe(true)
+  expect(dead.quietMins).toBe(480)
+  expect(dead.why).toContain('19 proposal(s)')
+
+  // A backlog with someone actually working it is fine: a reviewer mid-shift has a queue by
+  // definition, so "has a backlog" alone must not be the trigger.
+  noteReviewerActivity(now - 5 * 60_000)
+  const working = reviewerHealth(now, 19)
+  expect(working.stalled).toBe(false)
+  expect(working.quietMins).toBe(5)
+
+  // Liveness is measured by WORK, not by a process existing, so it survives the case that matters
+  // most: a reviewer that booted and then froze at an approval prompt never stamps.
+  expect(reviewerHealth(now, 19).lastSeenAt).toBe(new Date(now - 5 * 60_000).toISOString())
 })
 
 test('plan parses off the account label; absent suffix is null', () => {

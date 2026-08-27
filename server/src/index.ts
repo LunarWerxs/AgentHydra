@@ -166,6 +166,7 @@ import {
   installOrchestratorCommands,
   listPendingRenames,
   noteArchiveVisibilityPending,
+  noteReviewerActivity,
   orchestratorView,
   runOrchestratorOnce,
   setOrchestratorPrompts,
@@ -2073,6 +2074,7 @@ app.post('/api/orchestrator/ack', async (c) => {
     body.action,
     typeof body.cooldownMins === 'number' ? body.cooldownMins : undefined,
   )
+  noteReviewerActivity()
   return c.json({ ok: true, settings: getOrchestratorSettings() })
 })
 // Force one watcher pass now.
@@ -2144,6 +2146,7 @@ app.post('/api/orchestrator/proposals/:id/decide', async (c) => {
   const by = typeof body.by === 'string' && body.by.trim() ? body.by.trim() : 'reviewer'
   const note = typeof body.note === 'string' ? body.note : null
   const res = decideProposal(c.req.param('id'), body.approved, by, note)
+  noteReviewerActivity()
   if (!res.ok)
     return c.json({ ok: false, error: res.reason }, res.reason === 'not-found' ? 404 : 409)
   return c.json({ ok: true, proposal: res.proposal })
@@ -2151,6 +2154,7 @@ app.post('/api/orchestrator/proposals/:id/decide', async (c) => {
 app.post('/api/orchestrator/proposals/:id/executed', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.ok !== 'boolean') return c.json({ error: 'ok (boolean) is required' }, 400)
+  noteReviewerActivity()
   const res = reportProposalExecuted(
     c.req.param('id'),
     body.ok,

@@ -506,6 +506,21 @@ onto a second spelling of the same folder is normalization, inventing one is not
 Turning it off is the reverse in either order; each half degrades safely without the other
 (the feed just accumulates; the reviewer just finds an empty feed).
 
+**But losing the reviewer by ACCIDENT used to be invisible, and that is the failure this whole
+feature keeps having.** The watcher cannot detect its own uselessness: it keeps ticking, keeps
+writing proposals, and the feed keeps looking healthy whether or not anything is reading it.
+This document's own maintenance session opened with the owner discovering 19 proposals queued
+and nobody deciding them, and it recurred the same night - a reviewer worked one full shift,
+its window went away, and everything still looked fine for five hours. The half that reports
+is the half that cannot fail, so the other half failing reads as calm.
+
+So `meta.reviewer` answers it directly: `lastSeenAt`, `quietMins`, `stalled`, and `why` in
+words. Liveness is measured by WORK DONE - every ruling, execution report and ack stamps it -
+and never by a process existing, because the failure most worth catching is a reviewer that
+booted and then froze at an approval prompt, which is alive and useless. `stalled` fires only
+when there is a BACKLOG: a reviewer with an empty queue is quiet because there is nothing to
+do, and a signal that cries wolf on healthy input stops being read.
+
 ## Settings (all `POST /api/orchestrator`)
 
 | key | default | meaning |

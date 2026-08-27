@@ -9,6 +9,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The feed now says whether anyone is actually reviewing.** The watcher cannot detect its own
+  uselessness: it keeps ticking and the feed keeps looking healthy whether or not anything
+  reads it. This project's maintenance session opened with 19 proposals queued and nobody
+  deciding them, and it happened again the same night, with a reviewer working one shift and
+  then vanishing while everything looked fine for five hours afterwards. `meta.reviewer`
+  reports when a reviewer last DID something, in words. Liveness is measured by work (rulings,
+  execution reports, acks) rather than by a process existing, so a reviewer that booted and
+  then froze at an approval prompt does not count as present, and it only flags a problem when
+  there is a backlog, because silence with an empty queue is just idle.
+
 - **Load balancing across accounts** (`loadBalance`, ON by default). The rubric has always said
   "spread across the top eligible rows round-robin, never stack one account", and nothing could
   carry it out: the routing table is a pure function of the usage cache, that cache refreshes

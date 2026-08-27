@@ -1371,5 +1371,16 @@ export interface OrchestratorView {
     slotsFree: number | null
     /** Open proposals (proposed + approved-not-yet-executed) awaiting the reviewer. */
     proposalsPending: number
+    /** IS ANYONE ACTUALLY REVIEWING? The watcher cannot detect its own uselessness: it keeps
+     *  ticking and the feed keeps looking healthy whether or not anything reads it. Measured
+     *  by work done (rulings, execution reports, acks), never by a process existing, so a
+     *  reviewer that booted and then froze does not count as present. `stalled` only ever
+     *  fires when there is a BACKLOG, because silence with an empty queue is just idle. */
+    reviewer: {
+      lastSeenAt: string | null
+      quietMins: number | null
+      stalled: boolean
+      why: string
+    }
   }
 }
