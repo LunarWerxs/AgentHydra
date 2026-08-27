@@ -24,31 +24,27 @@
 
 export type Language = 'js' | 'python' | 'json' | 'shell' | 'plain'
 
+const LANGUAGE_BY_LABEL: Record<string, Language> = {
+  js: 'js',
+  jsx: 'js',
+  javascript: 'js',
+  ts: 'js',
+  tsx: 'js',
+  typescript: 'js',
+  py: 'python',
+  python: 'python',
+  json: 'json',
+  jsonc: 'json',
+  sh: 'shell',
+  bash: 'shell',
+  zsh: 'shell',
+  shell: 'shell',
+  console: 'shell',
+}
+
 /** Map a fence's label onto one of the families we actually support. */
 export function normalizeLanguage(label: string): Language {
-  switch (label.trim().toLowerCase()) {
-    case 'js':
-    case 'jsx':
-    case 'javascript':
-    case 'ts':
-    case 'tsx':
-    case 'typescript':
-      return 'js'
-    case 'py':
-    case 'python':
-      return 'python'
-    case 'json':
-    case 'jsonc':
-      return 'json'
-    case 'sh':
-    case 'bash':
-    case 'zsh':
-    case 'shell':
-    case 'console':
-      return 'shell'
-    default:
-      return 'plain'
-  }
+  return LANGUAGE_BY_LABEL[label.trim().toLowerCase()] ?? 'plain'
 }
 
 const KEYWORDS: Record<Exclude<Language, 'plain' | 'json'>, Set<string>> = {

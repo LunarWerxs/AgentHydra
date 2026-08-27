@@ -65,6 +65,23 @@ interface RegistryFile {
  *  never poison the next read with a half-filled "empty". */
 const empty = (): RegistryFile => ({ next: 1, byRef: {} })
 
+/** Validate and collect the `byRef` rows of a stored registry, tracking the highest number seen. */
+function collectValidRefs(source: unknown): { byRef: Record<string, number>; highest: number } {
+  const byRef: Record<string, number> = {}
+  let highest = 0
+  if (!source || typeof source !== 'object') return { byRef, highest }
+  for (const [ref, value] of Object.entries(source as Record<string, unknown>)) {
+    const n = typeof value === 'number' ? Math.floor(value) : Number.NaN
+    // Drop anything that is not a usable positive integer rather than letting a corrupt row
+    // hand out `NaN` as a number forever.
+    if (!Number.isFinite(n) || n < 1) continue
+    if (!parseInstanceRef(ref)) continue
+    byRef[ref] = n
+    if (n > highest) highest = n
+  }
+  return { byRef, highest }
+}
+
 function read(): RegistryFile {
   try {
     const file = instanceNumbersFile()
@@ -73,20 +90,7 @@ function read(): RegistryFile {
     if (!raw?.trim()) return empty()
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object') return empty()
-    const source = (parsed as { byRef?: unknown }).byRef
-    const byRef: Record<string, number> = {}
-    let highest = 0
-    if (source && typeof source === 'object') {
-      for (const [ref, value] of Object.entries(source as Record<string, unknown>)) {
-        const n = typeof value === 'number' ? Math.floor(value) : Number.NaN
-        // Drop anything that is not a usable positive integer rather than letting a corrupt row
-        // hand out `NaN` as a number forever.
-        if (!Number.isFinite(n) || n < 1) continue
-        if (!parseInstanceRef(ref)) continue
-        byRef[ref] = n
-        if (n > highest) highest = n
-      }
-    }
+    const { byRef, highest } = collectValidRefs((parsed as { byRef?: unknown }).byRef)
     const storedNext = (parsed as { next?: unknown }).next
     const next =
       typeof storedNext === 'number' && storedNext > highest ? Math.floor(storedNext) : highest + 1
