@@ -2,7 +2,7 @@
 //
 // A daemon started from a checkout used to keep its state in `server/data` while the installed one
 // kept it under `~/.agenthydra/data`, so the same app read two different sqlite files: settings,
-// the run queue, orchestrator acks, `/delayo` holds and the done-mark ledger all diverged. Nothing
+// the run queue, orchestrator acks, `/orcstop` holds and the done-mark ledger all diverged. Nothing
 // crashes when that happens, which is the problem - the daemon boots happily onto whichever half it
 // found and every conclusion drawn from it is confidently wrong. So the cases pinned here are the
 // ones that fail SILENTLY: state left behind by a move that did not happen, state discarded by one

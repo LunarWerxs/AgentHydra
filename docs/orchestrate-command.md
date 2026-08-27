@@ -313,7 +313,7 @@ counts as healthy), then LOWEST 5-hour session %, then lowest weekly %.
 - **Copy the row's `ref` VERBATIM** as `instance_ref`; never build one from a display name.
 - **Your own instance** is a valid target only below `settings.reviewerReservePct` weekly;
   protect your own runway at all costs.
-- **Held threads** (`holds`, parked via /delayo) are untouchable until /resumeo lifts them.
+- **Held threads** (`holds`, parked via /orcstop) are untouchable until /orcstart lifts them.
 
 ## Verifying what the OWNER can actually see (you are the only half that can)
 

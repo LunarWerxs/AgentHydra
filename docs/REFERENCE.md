@@ -179,7 +179,7 @@ this daemon actually using" by looking rather than by inference.
 **One state directory, both modes.** A source checkout used to keep its state in the repo's
 `server/data` while a packaged build used `~/.agenthydra/data`, so `bun run start` and the
 installed daemon were the same app reading two different sqlite files: settings, the run queue,
-orchestrator acks, `/delayo` holds and the done-mark ledger all diverged, silently, and forensics
+orchestrator acks, `/orcstop` holds and the done-mark ledger all diverged, silently, and forensics
 run against the wrong one answered confidently and wrongly. Both modes now resolve to
 `~/.agenthydra/data`, and a checkout's existing `server/data` is moved across on first run (by
 copy when the two live on different volumes, which is the normal Windows layout). If BOTH already
@@ -189,7 +189,7 @@ the one nobody is told about.
 
 **What the first real migration proved (2026-08-26).** A live fleet's state moved 33 MB from a
 checkout on `D:` to a profile on `C:`, verified row-for-row afterwards: 22/22 done-marks, 27/27
-monitor rows, 46/46 settings and both `/delayo` holds present at the destination, `dataDirNotice`
+monitor rows, 46/46 settings and both `/orcstop` holds present at the destination, `dataDirNotice`
 null. Two things only surfaced by running it rather than designing it. `renameSync` throws `EXDEV`
 across volumes, and repo-on-`D:` with profile-on-`C:` is the *normal* Windows layout here, so a
 rename-only migration would have silently never run for exactly the people who have the split. The

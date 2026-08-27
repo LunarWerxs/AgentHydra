@@ -754,7 +754,7 @@ export const updateOrchestrator = (
     prompts?: Partial<Record<OrchestratorPromptKey, string>>
   },
 ) => j<OrchestratorView>('/api/orchestrator', { method: 'POST', body: JSON.stringify(b) })
-/** (Re)install the shipped /orchestrate, /delayo, /resumeo commands into ~/.claude/commands. */
+/** (Re)install the shipped /orchestrate, /orcstop, /orcstart commands into ~/.claude/commands. */
 export const installOrchestratorCommands = (force = false) =>
   j<{ ok: boolean; files: Array<{ file: string; outcome: string; path: string }> }>(
     '/api/orchestrator/install-command',
@@ -767,7 +767,7 @@ export const uninstallOrchestratorCommands = () =>
     disabled: boolean
     files: Array<{ file: string; outcome: string; path: string }>
   }>('/api/orchestrator/uninstall-command', { method: 'POST', body: JSON.stringify({}) })
-/** Park (or unpark) one thread — the same switch `/delayo` and `/resumeo` throw from inside a
+/** Park (or unpark) one thread — the same switch `/orcstop` and `/orcstart` throw from inside a
  *  chat. Returns the fresh holds list so a caller can adopt the server's answer rather than
  *  guessing at it. */
 export const setOrchestratorHold = (sessionId: string, held: boolean) =>

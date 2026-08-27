@@ -608,8 +608,8 @@ test('installOrchestratorCommands ships all three commands and respects edits', 
   const first = installOrchestratorCommands(false, dir)
   expect(first.map((f) => [f.file, f.outcome])).toEqual([
     ['orchestrate.md', 'installed'],
-    ['delayo.md', 'installed'],
-    ['resumeo.md', 'installed'],
+    ['orcstop.md', 'installed'],
+    ['orcstart.md', 'installed'],
   ])
   const orch = first[0]
   const written = readFileSync(orch.path, 'utf8')
@@ -626,6 +626,48 @@ test('installOrchestratorCommands ships all three commands and respects edits', 
   expect(readFileSync(orch.path, 'utf8')).toContain('local tweak')
   expect(installOrchestratorCommands(true, dir)[0].outcome).toBe('updated')
   expect(readFileSync(orch.path, 'utf8')).toBe(written)
+})
+
+// The pair was renamed on 2026-08-27 (/delayo -> /orcstop, /resumeo -> /orcstart) so it says what
+// it does to the orchestrator rather than rhyming. A leftover from the old names is NOT inert: the
+// old file is a complete, working command that still posts a hold, so a machine that kept both
+// would offer four commands for two actions, with the retired pair working forever and nothing
+// maintaining it.
+test('installing removes OUR retired command copies, and keeps an edited one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-retired-'))
+  const ours = join(dir, 'delayo.md')
+  const edited = join(dir, 'resumeo.md')
+  writeFileSync(ours, 'the old shipped delayo text')
+  writeFileSync(edited, 'MY OWN VERSION')
+  // Only the first is recorded as something WE wrote; the second is therefore someone's edit.
+  setSetting('orch_command_hash_delayo_md', commandTextHash('the old shipped delayo text'))
+  setSetting('orch_command_hash_resumeo_md', commandTextHash('a different text we once shipped'))
+
+  installOrchestratorCommands(false, dir)
+
+  expect(existsSync(ours)).toBe(false)
+  expect(existsSync(edited)).toBe(true)
+  expect(readFileSync(edited, 'utf8')).toBe('MY OWN VERSION')
+  // And the new pair is what actually landed.
+  expect(existsSync(join(dir, 'orcstop.md'))).toBe(true)
+  expect(existsSync(join(dir, 'orcstart.md'))).toBe(true)
+
+  rmSync(dir, { recursive: true, force: true })
+  setSetting('orch_command_hash_delayo_md', '')
+  setSetting('orch_command_hash_resumeo_md', '')
+})
+
+test('uninstalling sweeps the retired names too, or it has not uninstalled anything', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-uninst-'))
+  installOrchestratorCommands(false, dir)
+  writeFileSync(join(dir, 'delayo.md'), 'a leftover that still works')
+  const removed = uninstallOrchestratorCommands(dir)
+    .filter((f) => f.outcome === 'removed')
+    .map((f) => f.file)
+  expect(removed).toContain('orcstop.md')
+  expect(removed).toContain('delayo.md')
+  expect(existsSync(join(dir, 'delayo.md'))).toBe(false)
+  rmSync(dir, { recursive: true, force: true })
 })
 
 test('a held session produces NO feed items; lifting the hold restores them', async () => {
@@ -1000,7 +1042,16 @@ test('prompts: defaults resolve, edits override, blank or default-text saves res
 test('uninstall removes the shipped commands; a second pass reports them missing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ah-cmds-'))
   installOrchestratorCommands(false, dir)
-  expect(uninstallOrchestratorCommands(dir).every((f) => f.outcome === 'removed')).toBe(true)
+  // Uninstall also sweeps the RETIRED names, which a freshly installed dir does not have, so
+  // "everything came back removed" is no longer the right shape: what matters is that every
+  // command actually PRESENT was removed, and nothing present survived.
+  const first = uninstallOrchestratorCommands(dir)
+  expect(
+    first
+      .filter((f) => f.outcome === 'removed')
+      .map((f) => f.file)
+      .sort(),
+  ).toEqual(['orchestrate.md', 'orcstart.md', 'orcstop.md'])
   expect(uninstallOrchestratorCommands(dir).every((f) => f.outcome === 'missing')).toBe(true)
 })
 

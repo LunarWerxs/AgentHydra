@@ -119,7 +119,7 @@ async function unpark(sessionId: string) {
   unparking.value = sessionId
   try {
     // Adopt the server's list rather than splicing locally: a hold could have been lifted from
-    // inside the chat (/resumeo) since this view was fetched, and the server is the truth.
+    // inside the chat (/orcstart) since this view was fetched, and the server is the truth.
     const r = await api.setOrchestratorHold(sessionId, false)
     if (view.value) view.value = { ...view.value, holds: r.holds }
   } finally {
@@ -401,9 +401,9 @@ onMounted(async () => {
         </SettingsRow>
 
         <!-- Parked threads, listed only when there ARE any. A hold has no expiry and the count in
-             the status line above cannot tell you WHICH thread you parked, so a /delayo typed days
+             the status line above cannot tell you WHICH thread you parked, so a /orcstop typed days
              ago was effectively unfindable from the app: the only way back was to remember the chat
-             and type /resumeo inside it. This is that memory, plus the way out. -->
+             and type /orcstart inside it. This is that memory, plus the way out. -->
         <template v-if="holds.length">
           <SettingsRow
             :icon="PauseCircle"

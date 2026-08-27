@@ -73,7 +73,7 @@ GET  /api/orchestrator            settings + attention feed + the instances rout
 POST /api/orchestrator            patch settings ({ enabled: true } is the on switch)
 POST /api/orchestrator/ack        { key, action, cooldownMins? } - reviewer marks an item handled
 POST /api/orchestrator/check      run one pass now
-POST /api/orchestrator/hold       { session_id, held } - park/unpark one thread (/delayo, /resumeo)
+POST /api/orchestrator/hold       { session_id, held } - park/unpark one thread (/orcstop, /orcstart)
 POST /api/orchestrator/proposals/:id/decide    { approved, by?, note? } - the reviewer's ruling
                                   on one proposed action (the action gate; decide-then-execute
                                   is enforced)
@@ -172,8 +172,8 @@ an undelivered chat wears a badge, so a waiting or abandoned delivery is visible
 inferred. A spawn that lands but cannot write the chat's title is `done`, not pending: the
 conversation is in the app, which is the delivery, and re-firing would not name it any better.
 
-**Parking a thread**: type `/delayo` in any chat and the orchestrator stops prompting it -
-no resumes, no handoffs, no hygiene nudges - until you type `/resumeo` there. The watcher
+**Parking a thread**: type `/orcstop` in any chat and the orchestrator stops prompting it -
+no resumes, no handoffs, no hygiene nudges - until you type `/orcstart` there. The watcher
 drops a held thread's items entirely and the feed's `holds` list shows what is parked, so a
 delayed thread is invisible to the reviewer but never forgotten. Holds persist across daemon
 restarts and have no expiry.
@@ -181,7 +181,7 @@ restarts and have no expiry.
 Because they never expire, the Orchestrator settings group **lists the parked threads** (name,
 repo, how long ago) with an Unpark button on each, appearing only when there are any. The status
 line's count alone could not tell you WHICH thread you parked, so the only way back out was to
-remember the chat and type `/resumeo` inside it - which is a poor guarantee for a hold with no
+remember the chat and type `/orcstart` inside it - which is a poor guarantee for a hold with no
 expiry. Unparking adopts the server's returned list rather than splicing locally, since the same
 hold can be lifted from inside the chat at any moment.
 
@@ -192,7 +192,7 @@ not resumable and not the orchestrator's to touch (the first live run undercount
 inferring openness from which chats existed; this table is the fix).
 
 Over MCP: `get_orchestrator`, `set_orchestrator`, `orchestrator_ack`,
-`orchestrator_check`, plus `orchestrator_hold` (park/unpark one thread, the /delayo pair) and
+`orchestrator_check`, plus `orchestrator_hold` (park/unpark one thread, the /orcstop pair) and
 `orchestrator_install_command` / `orchestrator_uninstall_command`.
 
 **Every revive proposal carries `evidence.chatId`, the id the app's own tools take.** It is the

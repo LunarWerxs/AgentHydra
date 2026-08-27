@@ -60,9 +60,9 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 // Text imports: bundled into compiled builds, so a packaged AgentHydra can still install the
 // commands on a machine that has no checkout and no docs/ directory.
-import DELAYO_COMMAND from '../../docs/delayo-command.md' with { type: 'text' }
 import ORCHESTRATE_COMMAND from '../../docs/orchestrate-command.md' with { type: 'text' }
-import RESUMEO_COMMAND from '../../docs/resumeo-command.md' with { type: 'text' }
+import ORCSTART_COMMAND from '../../docs/orcstart-command.md' with { type: 'text' }
+import ORCSTOP_COMMAND from '../../docs/orcstop-command.md' with { type: 'text' }
 import {
   type CodexTail,
   type CodexThread,
@@ -468,10 +468,10 @@ export function reconcilePendingRenames(
   return kept
 }
 
-// --- holds (/delayo and /resumeo) -------------------------------------------
+// --- holds (/orcstop and /orcstart) -------------------------------------------
 // A held thread is one the owner has parked: lower priority right now, too much else running.
 // The watcher drops every session-scoped item for it, so the reviewer never sees it to nudge.
-// No expiry — a hold stands until /resumeo lifts it (parking for days is a legitimate use).
+// No expiry — a hold stands until /orcstart lifts it (parking for days is a legitimate use).
 
 const HOLD_PREFIX = 'hold:'
 
@@ -1696,7 +1696,7 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   const sessions = deps.registry(deps.claudeHome())
   state.liveSessions = sessions.length
 
-  // Held threads (/delayo): no session-scoped item may be generated for them at all — the
+  // Held threads (/orcstop): no session-scoped item may be generated for them at all — the
   // reviewer cannot nudge what it never sees. They still count for git grouping (a held chat's
   // repo is still that repo), but are never chosen as a nudge addressee.
   const holdSet = new Set(listSessionHolds().map((h) => h.sessionId))
@@ -2547,12 +2547,47 @@ export function commandInstallOutcome(
 }
 
 /** Everything the orchestrator ships as a user-typeable command: the reviewer loop plus the
- *  per-thread park/unpark pair (/delayo marks a thread "not now", /resumeo lifts it). */
+ *  per-thread stop/start pair (/orcstop means "not now", /orcstart lifts it). */
 const SHIPPED_COMMANDS: Array<{ file: string; text: string }> = [
   { file: 'orchestrate.md', text: ORCHESTRATE_COMMAND },
-  { file: 'delayo.md', text: DELAYO_COMMAND },
-  { file: 'resumeo.md', text: RESUMEO_COMMAND },
+  { file: 'orcstop.md', text: ORCSTOP_COMMAND },
+  { file: 'orcstart.md', text: ORCSTART_COMMAND },
 ]
+
+/**
+ * Names we used to ship and no longer do (renamed 2026-08-27: /orcstop -> /orcstop, /orcstart ->
+ * /orcstart, so the pair says what it does to the orchestrator rather than rhyming).
+ *
+ * These MUST be cleaned up, because a leftover is not inert: the old file is a complete, working
+ * command that still posts a hold, so a machine that kept both would offer four commands for two
+ * actions and the retired pair would keep working forever with nothing maintaining it.
+ *
+ * Only OUR OWN unedited copy is removed, matched by the fingerprint recorded when we wrote it.
+ * A copy someone edited is left alone and reported: their edit is the newer intent, and the same
+ * rule already governs a refresh. See commandInstallOutcome.
+ */
+const RETIRED_COMMANDS = ['delayo.md', 'resumeo.md']
+
+/** Remove our own copies of commands we no longer ship. Never touches an edited one. */
+function removeRetiredCommands(
+  commandsDir: string,
+): Array<{ file: string; outcome: 'removed' | 'kept-edited' | 'missing' }> {
+  return RETIRED_COMMANDS.map((file) => {
+    const path = join(commandsDir, file)
+    let existing: string | null = null
+    try {
+      existing = readFileSync(path, 'utf8')
+    } catch {
+      return { file, outcome: 'missing' as const }
+    }
+    const known = getSetting(shippedHashKey(file))
+    if (!known || commandTextHash(existing) !== known)
+      return { file, outcome: 'kept-edited' as const }
+    rmSync(path, { force: true })
+    setSetting(shippedHashKey(file), '')
+    return { file, outcome: 'removed' as const }
+  })
+}
 
 /** Where we remember the fingerprint of the copy WE wrote, per command file. */
 const shippedHashKey = (file: string) => `orch_command_hash_${file.replace(/[^a-z0-9]+/gi, '_')}`
@@ -2567,6 +2602,16 @@ export function installOrchestratorCommands(
     existingOnly?: boolean
   } = {},
 ): Array<{ file: string; outcome: CommandInstallOutcome; path: string }> {
+  // Sweep away our own copies of commands we no longer ship, before writing the current set. A
+  // retired command file is not inert: it still works, so leaving one behind means the machine
+  // offers both the old and the new name for the same action indefinitely.
+  for (const r of removeRetiredCommands(commandsDir))
+    if (r.outcome === 'removed')
+      console.log(`[agenthydra] removed the retired /${r.file.replace(/\.md$/, '')} command`)
+    else if (r.outcome === 'kept-edited')
+      console.log(
+        `[agenthydra] kept /${r.file.replace(/\.md$/, '')}: it is retired but you edited it`,
+      )
   return SHIPPED_COMMANDS.map(({ file, text }) => {
     const path = join(commandsDir, file)
     let existing: string | null = null
@@ -2609,14 +2654,17 @@ export function refreshShippedCommands(
   return installOrchestratorCommands(false, commandsDir, { existingOnly: true })
 }
 
-/** The opt-out mirror of installOrchestratorCommands: remove the shipped /orchestrate, /delayo
- *  and /resumeo files from the user's commands directory. Removes edited copies too — "remove
- *  the orchestrator and its commands" means gone, and the shipped texts are always one
- *  reinstall away. A file that is not there reports 'missing' rather than erroring. */
+/** The opt-out mirror of installOrchestratorCommands: remove the shipped /orchestrate, /orcstop
+ *  and /orcstart files from the user's commands directory, plus any RETIRED name still lying
+ *  around (an uninstall that leaves a working /orcstop behind has not uninstalled anything).
+ *  Removes edited copies too — "remove the orchestrator and its commands" means gone, and the
+ *  shipped texts are always one reinstall away. A file that is not there reports 'missing'
+ *  rather than erroring. */
 export function uninstallOrchestratorCommands(
   commandsDir: string = join(homedir(), '.claude', 'commands'),
 ): Array<{ file: string; outcome: 'removed' | 'missing'; path: string }> {
-  return SHIPPED_COMMANDS.map(({ file }) => {
+  const all = [...SHIPPED_COMMANDS.map((c) => c.file), ...RETIRED_COMMANDS]
+  return all.map((file) => {
     const path = join(commandsDir, file)
     if (!existsSync(path)) return { file, outcome: 'missing' as const, path }
     rmSync(path, { force: true })

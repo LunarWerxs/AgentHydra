@@ -171,7 +171,7 @@ export interface DataDirResolution {
  * even starts), so releases keep state under CONFIG_DIR. Source checkouts kept theirs beside the
  * code instead, and the two arrangements together are one app reading two DIFFERENT databases:
  * `bun run start` and the installed tray daemon diverged on settings, the run queue, orchestrator
- * acks, `/delayo` holds and the done-mark ledger. That ledger is the orchestrator's guarantee that
+ * acks, `/orcstop` holds and the done-mark ledger. That ledger is the orchestrator's guarantee that
  * one thread gets one continuation, and a guarantee kept in two places is not one. Worse, the split
  * is invisible while you debug it: forensics run against the wrong file answer confidently and
  * wrongly ("that table does not exist", "the mark was never written"). One directory, both modes.

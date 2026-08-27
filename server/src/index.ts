@@ -2035,7 +2035,7 @@ app.post('/api/orchestrator', async (c) => {
   return c.json(orchestratorView())
 })
 // Install (or with {"force": true}, refresh) the shipped orchestrator commands
-// (/orchestrate, /delayo, /resumeo) into ~/.claude/commands — for a new machine, or after an
+// (/orchestrate, /orcstop, /orcstart) into ~/.claude/commands — for a new machine, or after an
 // AgentHydra update changed them.
 app.post('/api/orchestrator/install-command', async (c) => {
   const body = await jsonBody(c)
@@ -2046,7 +2046,7 @@ app.post('/api/orchestrator/install-command', async (c) => {
   }
 })
 // The opt-out: turn the orchestrator off and remove its shipped commands (/orchestrate,
-// /delayo, /resumeo) from ~/.claude/commands. Edited copies are removed too — a reinstall is
+// /orcstop, /orcstart) from ~/.claude/commands. Edited copies are removed too — a reinstall is
 // one click (or one enable) away. Pass {"keep_enabled": true} to remove only the files.
 app.post('/api/orchestrator/uninstall-command', async (c) => {
   const body = await jsonBody(c)
@@ -2061,7 +2061,7 @@ app.post('/api/orchestrator/uninstall-command', async (c) => {
     return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
   }
 })
-// Park/unpark one thread (/delayo and /resumeo call this with their own session id). A held
+// Park/unpark one thread (/orcstop and /orcstart call this with their own session id). A held
 // thread gets no orchestrator prompts of any kind until the hold is lifted.
 app.post('/api/orchestrator/hold', async (c) => {
   const body = await jsonBody(c)

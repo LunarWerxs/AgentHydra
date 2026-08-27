@@ -1,8 +1,8 @@
 ---
-description: Unpark this thread - the orchestrator may prompt it again
+description: Start the orchestrator on this thread again after /orcstop
 ---
 
-Lift this session's orchestrator delay, then stop.
+Lift this session's orchestrator hold, then stop.
 
 1. Read this session's id from the `CLAUDE_CODE_SESSION_ID` environment variable
    (`$env:CLAUDE_CODE_SESSION_ID` in PowerShell, `$CLAUDE_CODE_SESSION_ID` in bash).

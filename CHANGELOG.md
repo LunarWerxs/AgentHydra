@@ -89,6 +89,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **`/delayo` and `/resumeo` are now `/orcstop` and `/orcstart`** (owner request). The pair
+  stops and starts the orchestrator on the thread you type it in, and the new names say that
+  instead of rhyming; nothing about what they do has changed.
+
+  The old files are REMOVED rather than left behind, because a retired command is not inert: the
+  old file is complete and still posts a hold, so a machine that kept both would offer four
+  commands for two actions and the retired pair would keep working forever with nothing
+  maintaining it. Only our OWN unedited copy is deleted, matched against the fingerprint recorded
+  when we wrote it; a copy you edited is kept and reported, on the same rule that governs a
+  refresh. Uninstalling sweeps the old names too, since an uninstall that leaves a working
+  `/delayo` behind has not uninstalled anything.
+
 - **An auto-resume can no longer be scheduled somewhere it can never run.** Banning headless runs
   closed the door; it did not tell the auto-resume monitor to stop walking into it. Two of that
   monitor's routing branches fell through to a headless dispatch, so after the ban those resumes

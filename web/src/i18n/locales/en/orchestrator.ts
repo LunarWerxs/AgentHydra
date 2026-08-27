@@ -4,11 +4,11 @@ export default {
   hint: 'Watches every live chat and publishes the attention feed the /orchestrate reviewer acts on: who is idle and pending, what needs a handoff, where usage stands.',
   enabledLabel: 'Watch the fleet',
   enabledHint:
-    'The watcher only reads local state on a timer. The judgment half is an interactive chat running /orchestrate; enabling here also installs the /orchestrate, /delayo and /resumeo commands.',
+    'The watcher only reads local state on a timer. The judgment half is an interactive chat running /orchestrate; enabling here also installs the /orchestrate, /orcstop and /orcstart commands.',
   statusLine: '{live} live chats · {items} pending · {holds} parked',
   holdsLabel: 'Parked threads ({n})',
   holdsHint:
-    'Threads you parked with /delayo. The orchestrator never prompts a parked thread - no resumes, no handoffs, no hygiene nudges - and a hold has no expiry, so it waits here until you lift it. /resumeo inside the chat does the same thing.',
+    'Threads you parked with /orcstop. The orchestrator never prompts a parked thread - no resumes, no handoffs, no hygiene nudges - and a hold has no expiry, so it waits here until you lift it. /orcstart inside the chat does the same thing.',
   holdsUnpark: 'Unpark',
   newChatModelLabel: 'New-chat model & effort',
   newChatModelHint:
@@ -37,7 +37,7 @@ export default {
   prompt_migrationNotice: 'Account-migration notice',
   commandsLabel: 'Slash commands',
   commandsHint:
-    'The orchestrator installs /orchestrate, /delayo and /resumeo into ~/.claude/commands when enabled. Remove deletes those files and turns the orchestrator off; Reinstall puts the shipped versions back (overwriting local edits).',
+    'The orchestrator installs /orchestrate, /orcstop and /orcstart into ~/.claude/commands when enabled. Remove deletes those files and turns the orchestrator off; Reinstall puts the shipped versions back (overwriting local edits).',
   commandsReinstall: 'Reinstall',
   commandsRemove: 'Remove & disable',
   maxActiveChatsLabel: 'Max running chats',
