@@ -61,6 +61,19 @@ import ORCHESTRATE_COMMAND from '../../docs/orchestrate-command.md' with { type:
 import ORCSTART_COMMAND from '../../docs/orcstart-command.md' with { type: 'text' }
 import ORCSTOP_COMMAND from '../../docs/orcstop-command.md' with { type: 'text' }
 import {
+  type BacklogItem,
+  type BacklogMemory,
+  type BacklogScan,
+  backlogFailures,
+  backlogGateIsGreen,
+  backlogLastScanAt,
+  backlogResolved,
+  MAX_ITEM_FAILURES,
+  noteBacklogFailure,
+  resolveBacklogItem,
+  scanBacklog,
+} from './backlog'
+import {
   type CodexTail,
   type CodexThread,
   listRecentCodexThreads,
@@ -142,6 +155,14 @@ export function getOrchestratorSettings(): OrchestratorSettings {
     watchCodex: getSetting('orch_watch_codex') !== '0',
     loadBalance: getSetting('orch_load_balance') !== '0',
     balanceWindowMins: num('orch_balance_window_mins', 90, 5, 24 * 60),
+    // FULL MODE. Off unless explicitly turned on ('/orchestrate full', or the toggle in
+    // Settings): the reactive orchestrator is what an owner opted into, and starting chats
+    // against repositories nobody asked about is a different, larger thing to consent to.
+    workMode: getSetting('orch_work_mode') === 'full' ? 'full' : 'react',
+    backlogRoots: getSetting('orch_backlog_roots') || '',
+    backlogScanMins: num('orch_backlog_scan_mins', 30, 5, 24 * 60),
+    backlogMaxOpen: num('orch_backlog_max_open', 3, 1, 20),
+    backlogIncludeTodoMarkers: getSetting('orch_backlog_todo_markers') === '1',
   }
 }
 
@@ -196,6 +217,24 @@ export function setOrchestratorSettings(
   if (typeof patch.loadBalance === 'boolean')
     setSetting('orch_load_balance', patch.loadBalance ? '1' : '0')
   clamp('orch_balance_window_mins', patch.balanceWindowMins, 5, 24 * 60)
+  if (patch.workMode === 'full' || patch.workMode === 'react')
+    setSetting('orch_work_mode', patch.workMode)
+  if (typeof patch.backlogRoots === 'string')
+    // One path per line. Normalised on the way in so the stored value is what a reader expects
+    // rather than whatever a textarea happened to hold.
+    setSetting(
+      'orch_backlog_roots',
+      patch.backlogRoots
+        .split(/[\r\n;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(0, 100)
+        .join('\n'),
+    )
+  clamp('orch_backlog_scan_mins', patch.backlogScanMins, 5, 24 * 60)
+  clamp('orch_backlog_max_open', patch.backlogMaxOpen, 1, 20)
+  if (typeof patch.backlogIncludeTodoMarkers === 'boolean')
+    setSetting('orch_backlog_todo_markers', patch.backlogIncludeTodoMarkers ? '1' : '0')
   return getOrchestratorSettings()
 }
 
@@ -263,6 +302,36 @@ export const ORCHESTRATOR_PROMPT_DEFAULTS = {
    *  [orchestrator] marker so transcript parsers classify it as plumbing, never as the human's
    *  standing instruction (a marker-less version once made every migrated thread read as
    *  human-held, and the reviewer politely never touched them again). */
+  /** The opening turn of a chat FULL MODE started to clear a backlog item. Everything about this
+   *  text is a fence. The chat is running on work nobody asked for by hand, in a tree other
+   *  chats may be standing in, so it says what the job is, then says what the job is NOT: no
+   *  dependency reinstall (npm ci deletes node_modules out from under a live neighbour), no
+   *  sweeping commit (git add -A buries someone else's half-finished edit), no push of a public
+   *  repo, nothing irreversible. The last line matters as much as the first: finding that the
+   *  item is not worth doing is a correct outcome, and a chat that feels obliged to change
+   *  something will change something.
+   *
+   *  `<commands>` is the item's `evidence.commands`, and it is NOT optional decoration. A review
+   *  found the first version omitted it: the chat was told a gate existed and never WHICH gate,
+   *  so it would guess a check, pass its own guess, and the reviewer would then record that
+   *  commit as green - a false green with nothing left to re-raise it, since a gate only re-arms
+   *  when the code next moves. The repo's real gate has to travel with the request. */
+  workStart:
+    '[orchestrator] Outstanding work in <cwd>, picked up automatically. THE ITEM: <summary>\n\n' +
+    'RUN THESE FIRST, in order, all of them: <commands>\n\n' +
+    'Do this one item and stop. Verify what you claim - run the check, read the file, look at ' +
+    'the actual output - and report what you VERIFIED versus what you assumed. If a command ' +
+    'above will not run here, say which and why rather than substituting one you like better and ' +
+    'calling the result green.\n\n' +
+    'Rails for this run, all of them: other chats may be working in this same tree, so commit ' +
+    'ONLY files you touched, path-scoped (never git add -A, never git commit -am). Do NOT run ' +
+    'dependency installs or clean/reset commands (npm ci, rm -rf, git clean, git reset --hard) - ' +
+    'they destroy work belonging to whoever else is in this repo. Do NOT push a PUBLIC repo, ' +
+    'delete real data, spend money, or touch credentials; if the item needs one of those, say so ' +
+    'and stop rather than doing it. Stay on main; no new branches, no worktrees.\n\n' +
+    'If this item turns out to be already done, not worth doing, or wrong, say so plainly in one ' +
+    'line and stop - that is a good answer, not a failure. Finish with: what you changed, what ' +
+    'you verified, and whether the item is now closed.',
   migrationNotice:
     '[orchestrator] You are being migrated to a different account and this thread will appear ' +
     "in the owner's desktop app shortly. In a few lines: state what this thread is working on, " +
@@ -283,6 +352,7 @@ const PROMPT_SETTING_KEYS: Record<OrchestratorPromptKey, string> = {
   branchNudge: 'orch_prompt_branch_nudge',
   orphanRevive: 'orch_prompt_orphan_revive',
   closeoutDocs: 'orch_prompt_closeout_docs',
+  workStart: 'orch_prompt_work_start',
   migrationNotice: 'orch_prompt_migration_notice',
 }
 
@@ -2092,6 +2162,10 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   maintainOrphanProposals(ctx)
   applyAckSuppressionAndPublish(ctx)
   await runPeriodicTitleJanitor(ctx)
+  // Full mode only, and on its own much slower clock (backlogScanMins, not tickSecs): sweeping
+  // repositories is disk and git work, and outstanding work does not appear by the second. In
+  // 'react' mode this returns immediately without touching a repo.
+  await runBacklogSweep().catch(() => null)
 }
 
 // The headless auto-revive driver that used to live here (v0.35: a one-turn `--resume`
@@ -2554,6 +2628,260 @@ export function unreachableInstances(
   return out
 }
 
+// --- full mode: the backlog sweep -------------------------------------------
+//
+// The reactive orchestrator only ever asks questions about chats that already exist, so a fleet
+// whose every chat is healthy reads as a fleet with nothing left to do — while the repositories
+// carry unticked task boxes, FIXMEs added last week, and gates that have not been run since the
+// code changed. Full mode (settings.workMode === 'full') adds the missing question.
+//
+// The split is the same one the rest of this file lives by. server/src/backlog.ts DISCOVERS,
+// read-only and mechanically; this section decides what is worth OFFERING; the reviewer decides
+// each offer and starts a visible chat to do it. Nothing here acts on a repository, and nothing
+// here runs a repository's own scripts.
+
+/** The scanner's memory, on the orchestrator KV: marker baselines, recorded green shas, and the
+ *  per-item failure counter. Persisted so a daemon restart does not re-announce a decade of
+ *  accumulated HACK comments as news. */
+const backlogMemory: BacklogMemory = { get: kvGet, set: kvSet }
+
+/** Bounds the scanner cannot exceed regardless of settings. Deliberately constants rather than
+ *  knobs: they exist to make a badly chosen root survivable, and a knob that can be widened is
+ *  not a bound. */
+const BACKLOG_MAX_REPOS = 200
+/** A gate item waits until HEAD has been still this long — a commit from a minute ago belongs to
+ *  whoever is still typing, not to a chat we are about to start underneath them. */
+const BACKLOG_GATE_SETTLE_MINS = 30
+
+let lastBacklogScan: BacklogScan | null = null
+
+/** Every cwd AgentHydra has ever indexed a session in — the default answer to "which repos does
+ *  this fleet actually work in", so full mode is useful with no configuration at all. */
+function knownSessionCwds(): string[] {
+  try {
+    return db
+      .query<{ cwd: string }, []>(
+        "select cwd, max(last_activity_at) as la from session_scan_cache where cwd <> '' group by cwd order by la desc limit 400",
+      )
+      .all()
+      .map((r) => r.cwd)
+  } catch {
+    return []
+  }
+}
+
+/** Repos a live chat is standing in right now. A backlog chat started here would be a second
+ *  writer in one tree, which is the collision the feed's `collisions` block exists to prevent —
+ *  enforced HERE, in code, rather than left as a line of rubric the reviewer has to remember. */
+function busyRepos(): Set<string> {
+  const out = new Set<string>()
+  for (const c of collisionsFor(readLiveRegistry(join(homedir(), '.claude')))) {
+    out.add(c.where.toLowerCase())
+  }
+  for (const s of readLiveRegistry(join(homedir(), '.claude'))) {
+    if (!s.cwd || isUsageProbeCwd(s.cwd)) continue
+    const root = repoRootForCwd(s.cwd) ?? s.cwd
+    out.add(root.toLowerCase())
+  }
+  return out
+}
+
+/**
+ * Run a sweep and offer what it found, capped.
+ *
+ * `force` skips the interval (the API's manual scan, and the moment full mode is switched on —
+ * waiting half an hour to find out whether the mode does anything would be its own bug).
+ */
+export async function runBacklogSweep(force = false): Promise<BacklogScan | null> {
+  // SINGLE-FLIGHT. Three callers can ask for a sweep - the tick, the manual scan route, and the
+  // moment full mode is switched on - and a sweep takes as long as `git grep` over every repo, so
+  // overlapping runs are ordinary rather than exotic. Two of them interleaved would double-write
+  // every marker baseline and race each other's result into `lastBacklogScan`. A second asker
+  // joins the run already in progress instead.
+  if (sweepInFlight) return sweepInFlight
+  sweepInFlight = runBacklogSweepOnce(force).finally(() => {
+    sweepInFlight = null
+  })
+  return sweepInFlight
+}
+
+let sweepInFlight: Promise<BacklogScan | null> | null = null
+
+async function runBacklogSweepOnce(force: boolean): Promise<BacklogScan | null> {
+  const s = getOrchestratorSettings()
+  if (!s.enabled) return null
+  if (s.workMode !== 'full' && !force) return null
+  const nowMs = Date.now()
+  // The interval only holds while there is something to serve. `lastBacklogScan` is process
+  // state, so a restarted daemon has none of it, while the timestamp in the KV survives - and
+  // taken alone that pair means the feed reads "backlog: nothing" for up to half an hour after
+  // every restart, which is exactly the "found nothing" / "never looked" confusion the block was
+  // shaped to prevent. A fresh process sweeps once, then falls back onto the interval.
+  if (!force && lastBacklogScan) {
+    const last = backlogLastScanAt(backlogMemory)
+    if (last !== null && nowMs - last < s.backlogScanMins * 60_000) return lastBacklogScan
+  }
+  const busy = busyRepos()
+  try {
+    lastBacklogScan = await scanBacklog({
+      roots: s.backlogRoots
+        .split(/[\r\n;]+/)
+        .map((x) => x.trim())
+        .filter(Boolean),
+      fallbackCwds: knownSessionCwds(),
+      repoRootFor: repoRootForCwd,
+      includeTodoMarkers: s.backlogIncludeTodoMarkers,
+      maxRepos: BACKLOG_MAX_REPOS,
+      skipRepos: [...busy],
+      gateSettleMins: BACKLOG_GATE_SETTLE_MINS,
+      nowMs,
+      memory: backlogMemory,
+    })
+  } catch (err) {
+    console.error('[agenthydra] backlog sweep failed:', err)
+    return lastBacklogScan
+  }
+  // Work the reviewer has already dealt with, dropped before anything can see it. The scanner
+  // finds facts and has no idea what was done about them; keeping that knowledge here means a
+  // resolved item is gone from BOTH the offer and the feed, in one place, rather than being
+  // filtered out of one and quietly re-offered by the other.
+  lastBacklogScan = {
+    ...lastBacklogScan,
+    items: lastBacklogScan.items.filter((i) => !backlogResolved(backlogMemory, i.key)),
+  }
+  // Only offer work while the mode is actually on. A forced scan in 'react' mode is a look, not
+  // an instruction — the Settings screen and the API can both ask "what would this find?"
+  // without that question starting anything.
+  if (s.workMode === 'full') offerBacklogWork(lastBacklogScan, s)
+  return lastBacklogScan
+}
+
+/** Turn the top of the ranked backlog into proposals, respecting the open cap. */
+function offerBacklogWork(scan: BacklogScan, s: OrchestratorSettings): void {
+  const open = listProposalsForView(Date.now()).filter(
+    (p) => p.kind === 'work' && (p.status === 'proposed' || p.status === 'approved'),
+  )
+  let room = Math.max(0, s.backlogMaxOpen - open.length)
+  if (room === 0) return
+  const already = new Set(open.map((p) => p.sessionId))
+  const busy = busyRepos()
+  for (const item of scan.items) {
+    if (room === 0) break
+    const sessionId = `work:${item.key}`
+    if (already.has(sessionId)) continue
+    // Handed to the owner rather than retried forever: an item nothing can fix would otherwise
+    // be re-proposed on every sweep, which looks like diligence and is a loop.
+    if (backlogFailures(backlogMemory, item.key) >= MAX_ITEM_FAILURES) continue
+    // EVERY CHECK IS RE-RUN HERE, AGAINST NOW, not against the snapshot the sweep began with.
+    // A sweep over sixty repositories takes long enough for the world to move under it: the
+    // reviewer can resolve an item, or start a chat in one of these repos, while the scan is
+    // still working through the rest. Found by review: without the green-sha re-read, a gate
+    // resolved mid-sweep was re-proposed the moment that sweep finished, because its snapshot
+    // predated the resolution and its proposal had just been retired.
+    if (backlogResolved(backlogMemory, item.key)) continue
+    if (item.kind === 'gate' && backlogGateIsGreen(backlogMemory, item)) continue
+    if (busy.has(item.repo.toLowerCase())) continue
+    const id = proposeAction({
+      kind: 'work',
+      sessionId,
+      instanceRef: null, // repository-scoped: the reviewer places it from the routing table
+      title: item.title,
+      summary: item.summary,
+      evidence: {
+        backlogKey: item.key,
+        backlogKind: item.kind,
+        severity: item.severity,
+        cwd: item.repo,
+        repoName: item.repoName,
+        ...item.evidence,
+      },
+      evidenceAt: item.evidenceAt,
+    })
+    if (id) room--
+  }
+}
+
+/** The feed's backlog block. Serves the LAST sweep rather than scanning on request: a GET that
+ *  shells out to git across sixty repositories is a GET that times out. */
+function backlogView(s: OrchestratorSettings): OrchestratorView['backlog'] {
+  const open = listProposalsForView(Date.now()).filter(
+    (p) => p.kind === 'work' && (p.status === 'proposed' || p.status === 'approved'),
+  )
+  const byKey = new Map(open.map((p) => [p.sessionId, p.id]))
+  const busy = busyRepos()
+  const scan = lastBacklogScan
+  return {
+    mode: s.workMode,
+    lastScanAt: scan?.scannedAt ?? null,
+    scanMins: s.backlogScanMins,
+    repos: scan?.repos ?? [],
+    skipped: scan?.skipped ?? [],
+    items: (scan?.items ?? []).map((item: BacklogItem) => {
+      const failures = backlogFailures(backlogMemory, item.key)
+      return {
+        key: item.key,
+        kind: item.kind,
+        severity: item.severity,
+        repo: item.repo,
+        repoName: item.repoName,
+        title: item.title,
+        summary: item.summary,
+        evidence: item.evidence,
+        proposalId: byKey.get(`work:${item.key}`) ?? null,
+        busy: busy.has(item.repo.toLowerCase()),
+        needsOwner: failures >= MAX_ITEM_FAILURES,
+        failures,
+      }
+    }),
+    openWork: open.length,
+    maxOpen: s.backlogMaxOpen,
+  }
+}
+
+/** The reviewer's report on a backlog item it finished (or could not). A `gate` item resolves
+ *  with the sha it was green at, so nothing is raised again for that repo until the code moves;
+ *  everything else simply stops being found. `ok: false` counts against the item's retry budget. */
+export function reportBacklogOutcome(
+  key: string,
+  ok: boolean,
+  sha?: string | null,
+): {
+  ok: boolean
+  failures: number
+  needsOwner: boolean
+} {
+  if (ok) {
+    resolveBacklogItem(backlogMemory, key, sha)
+    // Drop it from the served list immediately: the reviewer has acted, and an item that still
+    // shows as outstanding invites a second chat onto work that is already done.
+    if (lastBacklogScan)
+      lastBacklogScan = {
+        ...lastBacklogScan,
+        items: lastBacklogScan.items.filter((i) => i.key !== key),
+      }
+    // ...and retire its proposal, if one is still open. Found in live testing: an item resolved
+    // WITHOUT its proposal also being reported executed left the row sitting open, holding a slot
+    // against backlogMaxOpen until it expired 48 hours later, so a fleet that finished three
+    // items was offered nothing further. In the normal flow the reviewer reports both, and this
+    // is idempotent there (an executed row is not open); it exists for the flow where it does
+    // not, because a cap that silently fails closed is worse than no cap.
+    retireProposalsForSessions([`work:${key}`], Date.now(), 'backlog item resolved')
+    return { ok: true, failures: 0, needsOwner: false }
+  }
+  const failures = noteBacklogFailure(backlogMemory, key)
+  const needsOwner = failures >= MAX_ITEM_FAILURES
+  // "Stops being offered" has to mean the STANDING offer too, not merely the next one. Leaving
+  // the open row would keep asking the reviewer to start a fourth attempt at something three
+  // chats could not fix, and would hold a slot against backlogMaxOpen while doing it.
+  if (needsOwner)
+    retireProposalsForSessions(
+      [`work:${key}`],
+      Date.now(),
+      `backlog item failed ${failures} times - for the owner`,
+    )
+  return { ok: true, failures, needsOwner }
+}
+
 function fmtQuiet(secs: number): string {
   if (secs < 90) return `${secs}s`
   if (secs < 90 * 60) return `${Math.round(secs / 60)}m`
@@ -2629,6 +2957,9 @@ export function orchestratorView(): OrchestratorView {
       peerName: lastNames.get(h.sessionId)?.name,
       cwd: lastNames.get(h.sessionId)?.cwd,
     })),
+    // WORK NOBODY HAS STARTED. Present in both modes so "the sweep found nothing" and "the sweep
+    // never ran" can never look alike — the same care the rest of this feed takes everywhere.
+    backlog: backlogView(getOrchestratorSettings()),
     meta: {
       lastTickAt: state.lastTickAt,
       lastTickMs: state.lastTickMs,
@@ -2846,10 +3177,23 @@ export function installOrchestratorCommands(
       // Recorded AFTER the write, so a failed write cannot leave us believing we own a file we
       // never managed to put there.
       setSetting(shippedHashKey(file), commandTextHash(text))
-    } else if (outcome === 'up-to-date' && !getSetting(shippedHashKey(file))) {
-      // Adopt a copy that already matches: it IS ours, we just predate the bookkeeping. Without
-      // this, every file installed before this change would be read as an owner edit forever.
-      setSetting(shippedHashKey(file), commandTextHash(text))
+    } else if (outcome === 'up-to-date') {
+      // Adopt a copy that already matches, ALWAYS - not only when we have no fingerprint on file.
+      //
+      // The condition here used to be `&& !getSetting(...)`, which adopts a file we predate but
+      // leaves a STALE fingerprint stale, and a stale fingerprint is a time bomb: the file reads
+      // as up-to-date and nothing corrects the record, then the next release changes the shipped
+      // text and the same file suddenly reads as `differs` - an owner edit - so it is never
+      // refreshed again. Measured on the author's own machine 2026-08-28: the installed
+      // /orchestrate rubric was byte-identical to the shipped text while the recorded hash named
+      // some older version, so the next doc change would silently have failed to reach the only
+      // file the reviewer actually opens. That is the exact failure `refreshed` exists to prevent,
+      // arriving through the one branch that did not maintain the record.
+      //
+      // Adopting unconditionally is safe by construction: the bytes on disk ARE the shipped text,
+      // so there is no owner edit to lose, whoever put them there.
+      const h = commandTextHash(text)
+      if (getSetting(shippedHashKey(file)) !== h) setSetting(shippedHashKey(file), h)
     }
     return { file, outcome, path }
   })

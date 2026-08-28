@@ -173,6 +173,8 @@ import {
   noteArchiveVisibilityPending,
   noteReviewerActivity,
   orchestratorView,
+  reportBacklogOutcome,
+  runBacklogSweep,
   runOrchestratorOnce,
   setOrchestratorPrompts,
   setOrchestratorSettings,
@@ -2005,6 +2007,8 @@ app.post('/api/orchestrator', async (c) => {
     'staleTaskMins',
     'nudgeCooldownMins',
     'maxActiveChats',
+    'backlogScanMins',
+    'backlogMaxOpen',
   ] as const) {
     if (typeof body[k] === 'number') patch[k] = body[k]
   }
@@ -2016,11 +2020,16 @@ app.post('/api/orchestrator', async (c) => {
     'handoffSurface',
     'newChatModel',
     'newChatEffort',
+    'workMode',
+    'backlogRoots',
   ] as const) {
     if (typeof body[k] === 'string') patch[k] = body[k]
   }
   if (typeof body.newChatUltracode === 'boolean') patch.newChatUltracode = body.newChatUltracode
   if (typeof body.migrateOnLimit === 'boolean') patch.migrateOnLimit = body.migrateOnLimit
+  if (typeof body.backlogIncludeTodoMarkers === 'boolean')
+    patch.backlogIncludeTodoMarkers = body.backlogIncludeTodoMarkers
+  const wasFull = getOrchestratorSettings().workMode === 'full'
   setOrchestratorSettings(patch)
   // Prompt edits ride the same route: {"prompts": {resumeNudge: "...", ...}}. Blank (or the
   // default text verbatim) clears the override for that key.
@@ -2036,7 +2045,33 @@ app.post('/api/orchestrator', async (c) => {
       console.error('[agenthydra] orchestrator command install failed:', err)
     }
   }
+  // Switching FULL MODE on sweeps immediately rather than at the next interval. Half an hour of
+  // "did that do anything?" is its own bug, and the first sweep is also the one that baselines
+  // each repo's existing markers, so it wants to happen while someone is watching.
+  if (!wasFull && getOrchestratorSettings().workMode === 'full')
+    await runBacklogSweep(true).catch(() => null)
   return c.json(orchestratorView())
+})
+// --- full mode: the backlog (docs/ORCHESTRATOR.md, "Full mode") --------------
+// Sweep now instead of at the next interval. Read-only: it reads task files, greps tracked
+// source for markers, and asks git for HEAD — it never runs a repository's own scripts, which is
+// the work chat's job precisely because it is real work with judgment attached.
+app.post('/api/orchestrator/backlog/scan', async (c) => {
+  const scan = await runBacklogSweep(true)
+  return c.json({ ok: true, scan, backlog: orchestratorView().backlog })
+})
+// The reviewer's outcome report for one backlog item. A `gate` item resolves with the sha it was
+// green at, so that repository stays quiet until its code moves; the rest simply stop being
+// found. {"ok": false} counts against the item's retry budget, and an item that fails enough
+// times stops being offered and becomes a line for the owner instead of an infinite loop.
+app.post('/api/orchestrator/backlog/resolved', async (c) => {
+  const body = await jsonBody(c)
+  const key = typeof body.key === 'string' ? body.key.trim() : ''
+  if (!key) return c.json({ error: 'key is required' }, 400)
+  const ok = body.ok !== false
+  noteReviewerActivity()
+  const res = reportBacklogOutcome(key, ok, typeof body.sha === 'string' ? body.sha : null)
+  return c.json({ ...res, backlog: orchestratorView().backlog })
 })
 // Install (or with {"force": true}, refresh) the shipped orchestrator commands
 // (/orchestrate, /orcstop, /orcstart) into ~/.claude/commands — for a new machine, or after an

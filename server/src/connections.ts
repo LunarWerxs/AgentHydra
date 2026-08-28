@@ -117,6 +117,15 @@ export const PREF_KEYS = [
   // merging two machines' placements would have each one balancing against the other's load.
   'orch_load_balance',
   'orch_balance_window_mins',
+  // Full mode's tuning, which is cadence and ceilings rather than autonomy: none of it does
+  // anything unless `orch_work_mode` was set to full on THIS machine, and that switch is in
+  // NEVER_SYNCED for exactly that reason. What counts as a marker is owner policy and should
+  // read the same everywhere; how often to sweep and how much to have in flight at once are the
+  // same shape as the thresholds above. `orch_backlog_roots` does NOT sync: it is a list of
+  // absolute paths on one computer.
+  'orch_backlog_scan_mins',
+  'orch_backlog_max_open',
+  'orch_backlog_todo_markers',
   // The owner's edited orchestrator prompts: policy text, same on every machine. Blank = the
   // shipped default, so only real edits ever sync.
   'orch_prompt_resume_nudge',
@@ -128,6 +137,7 @@ export const PREF_KEYS = [
   'orch_prompt_branch_nudge',
   'orch_prompt_orphan_revive',
   'orch_prompt_closeout_docs',
+  'orch_prompt_work_start',
   'orch_prompt_migration_notice',
   // Notifications, including the SMTP endpoint — but never its password, which lives in
   // NEVER_SYNCED. Telling you something is not the same as acting for you, so unlike the
@@ -171,6 +181,9 @@ export const NEVER_SYNCED = [
   'app_ping_reported',
   // '' means auto-detect; anything else is an ABSOLUTE PATH to an editor on this machine.
   'transcript_editor',
+  // Same reason: absolute paths to repositories on THIS computer. A laptop that syncs a desktop's
+  // drive letters would sweep a list of directories none of which exist there.
+  'orch_backlog_roots',
   // Which providers exist HERE. A laptop without the Codex desktop app should not be told it has
   // one because the desktop does.
   'provider_chatgpt_handoff',
@@ -190,6 +203,11 @@ export const NEVER_SYNCED = [
   // Same family: migrate-on-limit spends OTHER accounts' quota unattended. Each machine decides
   // for itself, like the switches above.
   'orch_migrate_on_limit',
+  // And full mode, which is the largest of them: it is what makes the orchestrator go LOOKING for
+  // work in repositories nobody asked it about, and start chats to do it. Everything downstream
+  // of the switch is capped and AI-checked, but the decision to have the machinery hunt for work
+  // at all belongs to the machine it will run on, not to whichever one it was turned on from.
+  'orch_work_mode',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

@@ -88,6 +88,23 @@ After EVERY delivery, verify the ENGINE: the target's transcript is growing now 
 advancing, `GET /api/sessions/<id>/tail`), or you watched it stream. A process existing
 proves nothing (registry-live is not running).
 
+## The argument: `/orchestrate full`
+
+`/orchestrate` takes ONE optional word, and it sets a mode that is stored on the SERVER, not in
+this chat. That is not an implementation detail you can ignore: you reschedule yourself with the
+bare literal `/orchestrate` (step 6), so an argument held in your own head is gone on your next
+wake. The server is the only place it survives.
+
+- **`full`** (also accepted: `all`, `forward`) -> `POST /api/orchestrator {"workMode": "full"}`.
+- **`off`** (also accepted: `react`) -> `POST /api/orchestrator {"workMode": "react"}`.
+- **`status`** -> report `settings.workMode` and the `backlog` block in one line. Change nothing.
+- **no argument** -> the normal wake. Whatever mode is stored stays stored; NEVER reset it.
+- anything else -> say those are the four words and carry on with a normal wake.
+
+Set the mode FIRST, before the feed read, so this wake already runs under it (turning `full` on
+sweeps immediately rather than waiting for the interval). Then say in ONE line which mode is now
+in force, and get on with the wake.
+
 ## Every wake
 
 0. **FIRST, EVERY WAKE, BEFORE THE CURL: make sure AgentHydra is actually running.**
@@ -107,7 +124,10 @@ proves nothing (registry-live is not running).
    `proposals` (decide these FIRST), `attention` (judgment calls), `instances` (the routing
    table), `prompts` (the owner's message texts - ALWAYS send `prompts.<name>` from this
    feed, with `<angle-bracket>` placeholders filled; the texts in this file are defaults and
-   may be older than the owner's edits).
+   may be older than the owner's edits), and `backlog` (FULL MODE's outstanding work - see the
+   `work` rubric. In react mode it reads `mode: "react"` with an empty list and you ignore it;
+   an empty list is never the same thing as a sweep that never ran, which is why the block is
+   always present).
 2. **Decide every open proposal** (rubric below):
    `POST /api/orchestrator/proposals/<id>/decide {"approved": true|false, "by": "<your
    session id>", "note": "<one line of reasoning>"}` - then EXECUTE approved ones and report:
@@ -233,6 +253,57 @@ imported chat you wake is always one shell command away from a prompt nobody can
 is a silent deadlock: alive, idle, no error anywhere. Word the revive so the work it resumes
 can be done with Read/Write/Edit/Grep, and if the task genuinely needs a shell, say so and
 surface it rather than starting something that will hang.
+
+**`work`** (FULL MODE ONLY - it does not exist in react mode): a repository has work outstanding
+that nobody is doing. This is the ONE kind that is about a REPO rather than a chat, so its
+`sessionId` is the synthetic `work:<backlogKey>` - never look it up in the registry, and never
+message it. Everything you need is in `evidence`: `cwd` (the repo), `backlogKind`, `severity`,
+and the kind-specific payload.
+
+- `gate` (severity `breaking`) - the repo has its own quality gate and HEAD has not been recorded
+  green since the code moved. `evidence.commands` is the ordered list the work chat should run;
+  `evidence.resolveWith` is what you report back when it passes.
+- `marker` (severity `warning`) - FIXME/HACK/BUG/XXX comments that were NOT there at the previous
+  sweep. Anything older was baselined and is deliberately never raised.
+- `todo` (severity `chore`) - unticked `- [ ]` boxes in that repo's task files.
+
+**Decide it like any other proposal, on the evidence, and REJECT freely** - the daemon found a
+fact, not a priority, and some of what it finds is work that should not be done now:
+- REJECT when the repo appears in `collisions`, or the item says `busy` - a second chat in one
+  tree is how work gets overwritten. The daemon already skips busy repos at scan time, but a chat
+  can start in the minutes between the sweep and this wake, so check again.
+- REJECT when `placement.recommended` is null (nothing has headroom), when `meta.slotsFree` is 0,
+  or when the fleet is already busy with the owner's own work. Backlog work is the lowest-priority
+  thing in this system: it must never displace a revive, a handoff, or anything a human started.
+- REJECT a `todo` item whose boxes are somebody's roadmap rather than pending work, and any item
+  whose only honest next step is a TRUE BLOCKER (publishing, pushing a public repo, deleting real
+  data, spending, credentials). Say which, in the note.
+- APPROVE otherwise, then EXECUTE exactly as for new work below: seed a desktop chat at
+  `evidence.cwd`, rename it through the app, and deliver `newChatPrefix` + `prompts.workStart`
+  with all THREE placeholders filled from the proposal. Record the placement. Report executed.
+  - `<cwd>` -> `evidence.cwd`, `<summary>` -> the proposal's `summary`.
+  - `<commands>` -> `evidence.commands`, joined with `, then `. **This one is load-bearing and it
+    is the easiest to skip.** A gate item's summary says a gate EXISTS; only `evidence.commands`
+    says which. A chat told to "run the gate" with no command list guesses one, passes its own
+    guess, and you then record that commit green - and a gate only ever re-arms when the code
+    moves, so nothing will raise it again. If `evidence.commands` is absent (a `todo` or `marker`
+    item), write `none given - work out what this repo needs and say what you ran`.
+
+**Then report the OUTCOME, once the chat has actually finished** (not when you delivered it):
+`POST /api/orchestrator/backlog/resolved {"key": "<evidence.backlogKey>", "ok": true|false,
+"sha": "<evidence.resolveWith.sha, gate items only>"}`. This is what stops the same item coming
+back forever: a gate resolved with its sha stays quiet until that repo's code moves again, and an
+item reported failed three times stops being offered and becomes a line for the owner instead of
+an infinite loop that looks like diligence. A rejected proposal needs no resolve call.
+
+⛔ **`ok: true` on a gate means the LISTED commands ran and passed, nothing weaker.** Not "the chat
+said it was fine", not "a check I substituted passed". A green sha is the strongest claim in this
+whole feature - it silences that repository's gate until its code next moves - so if the chat could
+not run what `evidence.commands` listed, report `ok: false` and say which command and why. Reporting
+a green you did not see is the one mistake here with no recovery.
+
+**One backlog chat at a time per repo, and never more than `backlog.maxOpen` in flight.** The
+server caps what it offers; you are the one who starts them.
 
 **`import`**: a finished session is visible in no sidebar (owner rule: no chat is ever
 invisible).
@@ -453,6 +524,11 @@ view rather than the file on disk. So:
   Done-marked = a successor owns it = never revive the old copy (the API 409s; `force` is
   the owner's, not yours). Done-mark the moment a handoff is collected, BEFORE the
   successor starts. Never hand one task to two chats.
+- **BACKLOG WORK IS THE LOWEST-PRIORITY THING IN THIS SYSTEM.** A `work` proposal never displaces
+  a revive, a handoff, an attention item, or anything a human started, and never lands in a repo
+  another chat is standing in. If the fleet has no room, the backlog waits - it has waited this
+  long. Full mode changes what is FOUND, never who decides: every item still passes the action
+  gate, and a chat it starts is a visible desktop chat like any other.
 - The human outranks everything; recent human activity in a chat means you stay out.
 - A live registry session gets SendMessage only; NEVER queue a `--resume` against a live
   session (two writers, one transcript).

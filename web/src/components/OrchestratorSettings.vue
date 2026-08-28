@@ -13,6 +13,7 @@ import {
   MessageSquareText,
   PauseCircle,
   Play,
+  Radar,
   SlidersHorizontal,
   Trash2,
 } from '@lucide/vue'
@@ -54,6 +55,7 @@ const PROMPT_KEYS: OrchestratorPromptKey[] = [
   'branchNudge',
   'orphanRevive',
   'closeoutDocs',
+  'workStart',
   'migrationNotice',
 ]
 // Static key map (not a template literal) so the i18n usage checker can see each key.
@@ -67,6 +69,7 @@ const PROMPT_LABEL_KEYS: Record<OrchestratorPromptKey, string> = {
   branchNudge: 'orchestrator.prompt_branchNudge',
   orphanRevive: 'orchestrator.prompt_orphanRevive',
   closeoutDocs: 'orchestrator.prompt_closeoutDocs',
+  workStart: 'orchestrator.prompt_workStart',
   migrationNotice: 'orchestrator.prompt_migrationNotice',
 }
 const promptForm = reactive<Record<string, string>>({})
@@ -146,7 +149,29 @@ const form = reactive({
   nudgeCooldownMins: 0,
   maxActiveChats: 0,
   balanceWindowMins: 0,
+  backlogRoots: '',
+  backlogScanMins: 0,
+  backlogMaxOpen: 0,
 })
+
+// Full mode's manual sweep. It answers "what would this find?" without starting anything: a scan
+// asked for while the mode is OFF is a look, never an instruction (the server only turns findings
+// into proposals while workMode is 'full').
+const scanBusy = ref(false)
+const scanNote = ref('')
+async function scanBacklogNow() {
+  scanBusy.value = true
+  try {
+    const r = await api.scanOrchestratorBacklog()
+    scanNote.value = `${r.backlog.items.length} item(s) across ${r.backlog.repos.length} repo(s)`
+    view.value = await api.getOrchestrator()
+    adopt(view.value)
+  } catch {
+    scanNote.value = 'daemon unreachable'
+  } finally {
+    scanBusy.value = false
+  }
+}
 
 function adopt(v: OrchestratorView) {
   view.value = v
@@ -167,6 +192,9 @@ function adopt(v: OrchestratorView) {
   form.nudgeCooldownMins = v.settings.nudgeCooldownMins
   form.maxActiveChats = v.settings.maxActiveChats
   form.balanceWindowMins = v.settings.balanceWindowMins
+  form.backlogRoots = v.settings.backlogRoots
+  form.backlogScanMins = v.settings.backlogScanMins
+  form.backlogMaxOpen = v.settings.backlogMaxOpen
   for (const k of PROMPT_KEYS) promptForm[k] = v.prompts[k]
 }
 
@@ -195,6 +223,8 @@ function saveNumbers() {
     nudgeCooldownMins: Number(form.nudgeCooldownMins),
     maxActiveChats: Number(form.maxActiveChats),
     balanceWindowMins: Number(form.balanceWindowMins),
+    backlogScanMins: Number(form.backlogScanMins),
+    backlogMaxOpen: Number(form.backlogMaxOpen),
   })
 }
 
@@ -270,6 +300,113 @@ onMounted(async () => {
             <Switch
               :model-value="view?.settings.newChatUltracode ?? true"
               @update:model-value="(v: boolean) => save({ newChatUltracode: v })"
+            />
+          </template>
+        </SettingsRow>
+
+        <!-- FULL MODE. The one setting here that changes what the orchestrator LOOKS FOR rather
+             than how it behaves toward chats that already exist, so it sits with the headline
+             switches and not behind the advanced disclosure. -->
+        <SettingsRow :icon="Radar" :label="$t('orchestrator.workModeLabel')">
+          <template #info>
+            <InfoHint :text="$t('orchestrator.workModeHint')" />
+          </template>
+          <template #control>
+            <span v-if="view?.backlog.lastScanAt" class="text-xs text-muted-foreground">
+              {{
+                $t('orchestrator.backlogStatusLine', {
+                  items: view.backlog.items.length,
+                  repos: view.backlog.repos.length,
+                  open: view.backlog.openWork,
+                })
+              }}
+            </span>
+            <Switch
+              :model-value="view?.settings.workMode === 'full'"
+              @update:model-value="(v: boolean) => save({ workMode: v ? 'full' : 'react' })"
+            />
+          </template>
+        </SettingsRow>
+
+        <SettingsRow
+          v-if="view?.settings.workMode === 'full'"
+          :icon="Radar"
+          :label="$t('orchestrator.backlogRootsLabel')"
+        >
+          <template #info>
+            <InfoHint :text="$t('orchestrator.backlogRootsHint')" />
+          </template>
+          <template #control>
+            <div class="flex w-full flex-col items-end gap-1.5">
+              <Textarea
+                v-model="form.backlogRoots"
+                :rows="3"
+                class="w-full text-xs"
+                :placeholder="$t('orchestrator.backlogRootsPlaceholder')"
+                @change="save({ backlogRoots: form.backlogRoots })"
+              />
+              <div class="flex items-center gap-2">
+                <span v-if="scanNote" class="text-xs text-muted-foreground">{{ scanNote }}</span>
+                <Button size="sm" variant="outline" :disabled="scanBusy" @click="scanBacklogNow">
+                  {{ $t('orchestrator.backlogScanNow') }}
+                </Button>
+              </div>
+            </div>
+          </template>
+        </SettingsRow>
+
+        <SettingsRow
+          v-if="view?.settings.workMode === 'full'"
+          :icon="Radar"
+          :label="$t('orchestrator.backlogScanMinsLabel')"
+        >
+          <template #info>
+            <InfoHint :text="$t('orchestrator.backlogScanMinsHint')" />
+          </template>
+          <template #control>
+            <Input
+              v-model="form.backlogScanMins"
+              type="number"
+              min="5"
+              max="1440"
+              class="w-24"
+              @change="saveNumbers"
+            />
+          </template>
+        </SettingsRow>
+
+        <SettingsRow
+          v-if="view?.settings.workMode === 'full'"
+          :icon="Radar"
+          :label="$t('orchestrator.backlogMaxOpenLabel')"
+        >
+          <template #info>
+            <InfoHint :text="$t('orchestrator.backlogMaxOpenHint')" />
+          </template>
+          <template #control>
+            <Input
+              v-model="form.backlogMaxOpen"
+              type="number"
+              min="1"
+              max="20"
+              class="w-24"
+              @change="saveNumbers"
+            />
+          </template>
+        </SettingsRow>
+
+        <SettingsRow
+          v-if="view?.settings.workMode === 'full'"
+          :icon="Radar"
+          :label="$t('orchestrator.backlogTodoMarkersLabel')"
+        >
+          <template #info>
+            <InfoHint :text="$t('orchestrator.backlogTodoMarkersHint')" />
+          </template>
+          <template #control>
+            <Switch
+              :model-value="view?.settings.backlogIncludeTodoMarkers ?? false"
+              @update:model-value="(v: boolean) => save({ backlogIncludeTodoMarkers: v })"
             />
           </template>
         </SettingsRow>

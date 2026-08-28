@@ -1202,13 +1202,46 @@ export interface OrchestratorSettings {
   loadBalance: boolean
   /** How far back a placement counts against an account when balancing. */
   balanceWindowMins: number
+  /**
+   * REACT or FULL — how much of the job the orchestrator does.
+   *
+   * 'react' (the default) is everything it has always done: watch the chats that exist and
+   * propose things about them. It is entirely blind to work nobody has started, so a fleet whose
+   * every chat is healthy reads as a fleet with nothing left to do.
+   *
+   * 'full' additionally sweeps the repositories themselves for outstanding work — a gate that has
+   * not been green since the code moved, FIXMEs that appeared since the last sweep, unticked task
+   * boxes — and proposes each as a 'work' item the reviewer starts a visible chat for. It changes
+   * what is DISCOVERED, never who decides: every item still passes the action gate.
+   *
+   * Persisted rather than passed, because the reviewer reschedules itself with the bare literal
+   * "/orchestrate" and an argument would be lost on its next wake.
+   */
+  workMode: 'react' | 'full'
+  /** Where full mode looks, one path per line. A path that is itself a repo is taken as-is; one
+   *  that is not is expanded ONE level to the repos directly inside it. EMPTY (the default) means
+   *  "the repos this fleet actually works in", derived from the cwds AgentHydra has seen, so the
+   *  mode needs no configuration to be useful. */
+  backlogRoots: string
+  /** Minutes between backlog sweeps. The sweep is read-only and cheap, but it is not free, and
+   *  outstanding work does not appear by the second. */
+  backlogScanMins: number
+  /** Ceiling on 'work' proposals open at once, fleet-wide. The backlog is discovered in full and
+   *  ranked; this caps how much of it is offered to the reviewer at a time so a first sweep of a
+   *  60-repo fleet cannot bury the feed the fleet's own chats depend on. */
+  backlogMaxOpen: number
+  /** Report bare `TODO:` comments as markers too. Off by default: FIXME/HACK/XXX/BUG are the
+   *  author saying something is wrong, whereas TODO is usually just a note. */
+  backlogIncludeTodoMarkers: boolean
 }
 
 /** What kind of action a proposal asks for. 'revive' covers every flavor of dead thread
  *  (crash orphan, stranded, live-but-deaf, usage-window reset); 'archive' retires a finished
  *  or superseded chat's desktop entries; 'import' lands an invisible finished session as a
- *  visible desktop chat. */
-export type ProposalKind = 'revive' | 'archive' | 'import'
+ *  visible desktop chat; 'work' is FULL MODE's outstanding-work item (a gate that has not been
+ *  green since the code moved, new FIXMEs, unticked task boxes) and is the one kind that is
+ *  about a REPOSITORY rather than about a chat — see the note on OrchestratorProposal.sessionId. */
+export type ProposalKind = 'revive' | 'archive' | 'import' | 'work'
 
 /** One action the machinery wants to take, awaiting (or carrying) the AI's ruling. The owner
  *  law (2026-08-26): every action is checked by the orchestrator AI before it is made. The
@@ -1216,6 +1249,11 @@ export type ProposalKind = 'revive' | 'archive' | 'import'
 export interface OrchestratorProposal {
   id: string
   kind: ProposalKind
+  /** The thread this is about — and, for kind 'work', a SYNTHETIC id of the form
+   *  `work:<backlogItemKey>` rather than a real session. The proposals table treats this column
+   *  as an opaque dedup key (one open row per kind+id) and never resolves it to a chat, which is
+   *  exactly the property a repository-scoped item needs. Nothing may look a 'work' row's
+   *  sessionId up in the registry. */
   sessionId: string
   instanceRef: string | null
   title: string | null
@@ -1322,6 +1360,7 @@ export type OrchestratorPromptKey =
   | 'orphanRevive'
   | 'closeoutDocs'
   | 'migrationNotice'
+  | 'workStart'
 
 export interface OrchestratorView {
   settings: OrchestratorSettings
@@ -1389,6 +1428,47 @@ export interface OrchestratorView {
   /** Threads the owner parked with /orcstop: the feed carries nothing for them, and the
    *  reviewer must never prompt them until /orcstart lifts the hold. */
   holds: Array<{ sessionId: string; heldAt: string; peerName?: string; cwd?: string }>
+  /** WORK NOBODY HAS STARTED — full mode's half of the feed (settings.workMode === 'full').
+   *
+   *  In 'react' mode this block still appears, with mode:'react' and an empty list, so a reader
+   *  can always tell "the sweep found nothing" apart from "the sweep never ran" — the same
+   *  distinction the rest of this feed is careful about everywhere else. */
+  backlog: {
+    mode: 'react' | 'full'
+    /** ISO of the last completed sweep, or null when none has run in this mode yet. */
+    lastScanAt: string | null
+    scanMins: number
+    /** Repository roots the last sweep actually covered. */
+    repos: string[]
+    /** Roots asked for and not used, with the reason. A silently dropped root reads exactly like
+     *  a clean one, which is the failure this exists to prevent. */
+    skipped: Array<{ path: string; why: string }>
+    /** The ranked findings — breaking first, then warnings, then chores. Includes items that are
+     *  NOT currently proposed (over the cap, repo busy, or retired to the owner), each saying so,
+     *  so the reviewer sees the whole backlog rather than only the slice it may act on. */
+    items: Array<{
+      key: string
+      kind: 'todo' | 'marker' | 'gate'
+      severity: 'breaking' | 'warning' | 'chore'
+      repo: string
+      repoName: string
+      title: string
+      summary: string
+      evidence: Record<string, unknown>
+      /** Open proposal id for this item, when one exists. */
+      proposalId: string | null
+      /** A live chat is standing in this repo right now, so it is not offered. */
+      busy: boolean
+      /** Reported failed MAX_ITEM_FAILURES times: it stops being proposed and becomes a status
+       *  line for the owner. An item nothing can fix must not be an infinite loop that looks
+       *  like diligence. */
+      needsOwner: boolean
+      failures: number
+    }>
+    /** Open 'work' proposals right now, and the ceiling they are capped at. */
+    openWork: number
+    maxOpen: number
+  }
   meta: {
     lastTickAt: string | null
     lastTickMs: number | null

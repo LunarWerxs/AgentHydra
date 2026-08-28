@@ -85,6 +85,14 @@ POST /api/orchestrator/placement  { instance_ref, kind?, session_id? } - record 
                                   placed on an account, for balancing. The primitives record
                                   themselves; this is for the one path they cannot see, the
                                   reviewer delivering a turn natively into an existing chat
+POST /api/orchestrator/backlog/scan      sweep the repositories for outstanding work NOW instead
+                                  of at the next interval (full mode; read-only). A scan asked
+                                  for while the mode is OFF answers "what would this find?" and
+                                  starts nothing
+POST /api/orchestrator/backlog/resolved  { key, ok?, sha? } - the reviewer's outcome report for
+                                  one backlog item. A `gate` item resolved with its sha stays
+                                  quiet until that repo's code moves; `ok: false` counts against
+                                  the item's retry budget
 POST /api/orchestrator/selftest   { deep? } - run the real guards against real state and report
                                   each check (see below). Safe on a live fleet; `deep` also seeds
                                   ONE real chat, proves it visible, and archives it
@@ -570,12 +578,95 @@ do, and a signal that cries wolf on healthy input stops being read.
 | `balanceWindowMins` | 90 | how long a placement keeps counting against an account. Must outlast the usage cache's refresh, which is the blind spot the ledger covers |
 | `watchCodex` | `true` | watch Codex threads too, so one feed covers both agents this machine runs. Observe-only: Codex has no live-process registry and no message channel, so those items are marked `deliverable: false` rather than inviting a nudge that would go nowhere |
 | `maxActiveChats` | 0 (unlimited) | caps how many chats may actively WORK at once, fleet-wide. Past the cap the watcher marks overflow idle chats `waitingForSlot` and the reviewer skips them without acking; the rotation is round-robin by construction: longest-idle gets the next free slot, a nudged chat re-enters at the back. Only resume nudges and new work are gated; answers, handoff continuations (replacements), and orphan revives never wait |
+| `workMode` | `react` | `react` watches only the chats that exist; `full` also sweeps the repositories for outstanding work (see Full mode, below). Persisted server-side because the reviewer reschedules itself with the bare literal `/orchestrate`, so an argument would not survive its next wake |
+| `backlogRoots` | `''` | where full mode looks, one path per line. A path that is itself a repo is swept as-is; one that is not expands ONE level to the repos directly inside it. Empty means "the repos this machine has actually worked in", derived from the session index |
+| `backlogScanMins` | 30 | minutes between sweeps (5–1440). Turning full mode on always sweeps immediately rather than waiting for the first interval |
+| `backlogMaxOpen` | 3 | ceiling on `work` proposals open at once (1–20). The backlog is always discovered in full and ranked; this caps how much is offered at a time so a first sweep of a large fleet cannot bury the feed the fleet's own chats depend on |
+| `backlogIncludeTodoMarkers` | `false` | report bare `TODO:` comments as markers too. Off because FIXME/HACK/XXX/BUG are the author saying something is wrong, while TODO is usually a note |
+
+## Full mode: work nobody has started
+
+Everything above is REACTIVE. The watcher asks questions about chats that already exist (is this
+one dead, has that one finished, is anyone reviewing) and it is entirely blind to the other
+question: **is there work outstanding that nobody is doing right now?** A fleet whose every chat is
+healthy therefore reads as a fleet with nothing left to do, while the repositories themselves carry
+unticked task boxes, FIXMEs added last week, and gates that have not been run since the code
+changed.
+
+`/orchestrate full` (or the toggle in Settings, or `POST /api/orchestrator {"workMode":"full"}`)
+adds that question. `/orchestrate off` takes it away again. The word is stored on the server, not
+in the reviewer's chat, because the reviewer reschedules itself with the bare literal
+`/orchestrate` and an argument would be gone by its next wake.
+
+**The split is the same one the rest of this feature lives by.** `server/src/backlog.ts` DISCOVERS,
+read-only. The reviewer DECIDES and starts a visible chat. Nothing new acts on its own, and full
+mode changes what is FOUND, never who rules on it.
+
+### What it looks for
+
+| detector | severity | what it is |
+|---|---|---|
+| `gate` | `breaking` | the repo declares a quality gate (package.json `check`/`typecheck`/`lint`/`test`, `.arkitect`, `Cargo.toml`, `.github/workflows`) and HEAD has not been recorded green since the code moved. The item carries the ordered command list a work chat should run |
+| `marker` | `warning` | `FIXME` / `HACK` / `BUG` / `XXX` comments in tracked source that were NOT there at the previous sweep (`TODO:` too, opt-in) |
+| `todo` | `chore` | unticked `- [ ]` boxes in that repo's task files (`TODO.md`, `PROGRESS.md`, `ROADMAP.md`, `PLAN.md`, `BURNDOWN*.md`, `docs/todo/*.md`, …). ONE item per repo, never one per box |
+
+**It never runs the repository's own scripts.** Not `bun run check`, not `cargo clippy`, not
+`localci`. A daemon that executes arbitrary repo scripts on a timer reinstalls dependencies under
+a chat that is mid-edit, burns a core forever on a sixty-repo fleet, and runs whatever a freshly
+pulled `package.json` happens to say. Running a gate is real work with real judgment attached, so
+it belongs to the seeded chat, which is visible, supervised, and can tell a genuine failure from
+a missing local secret. All the sweep does is notice that a gate exists and that HEAD has moved.
+
+**Nothing old is ever "new".** The obvious way to kill the marker detector would be to report every
+`HACK:` in a mature codebase every thirty minutes. So markers are BASELINED per repository on first
+sight (the first sweep records what is already there and says nothing) and only ever reported
+afterwards, keyed by (file, token, text-hash) rather than by line, so moving code does not fake a
+new one.
+
+**Secret hygiene.** `.env*`, `*secret*`, `*credential*`, `*token*`, `*.pem`, `*.key` and friends are
+excluded at the git-pathspec level, so they are never opened. What does come back is redacted of
+anything value-shaped (`token = …`, long opaque strings) before it reaches the feed.
+
+### The rails on the work itself
+
+The generated chat is a chat like any other, visible, on an account with headroom, running the
+owner's own model settings, and `prompts.workStart` fences it: one item, path-scoped commits only,
+no dependency installs or clean/reset commands (they destroy a neighbour's work), no public-repo
+push, nothing irreversible, and an explicit licence to answer "this is not worth doing" and stop.
+
+Four more limits, all enforced in code rather than left to the reviewer to remember:
+
+- **Never a repo someone is standing in.** Repos with a live chat are skipped at scan time and
+  flagged `busy` in the feed if one arrives afterwards.
+- **`backlogMaxOpen` in flight**, fleet-wide. The whole backlog is still discovered and ranked;
+  only the offer is capped.
+- **A settling period.** A `gate` item waits until HEAD has been still for 30 minutes. A commit
+  from a minute ago belongs to whoever is still typing.
+- **A retry budget.** An item reported failed three times stops being offered and becomes a line
+  for the owner. An item nothing can fix (a flaky test, a missing local credential) would
+  otherwise be re-proposed forever, which looks like diligence and is a loop.
+
+There is deliberately **no expiry on the mode itself**. It stays on until it is turned off, because
+every individual item still passes the action gate, lands in a visible chat, and is capped, and a
+mode that silently stopped working after a while would be worse than one that is simply on.
+
+### What it deliberately does not do
+
+**No "you have unpushed commits" detector.** Deliberately unpushed work is ordinary (not scrubbed
+yet, not ready, held back on purpose) and nothing mechanical can tell that from forgotten. It is
+also the one detector that would brush against the public-repo push rule, which is a readiness
+judgment that must not be made on a timer.
+
+**No integration with the owner's own fleet tools.** `localci`, `odin` and friends live on one
+person's machine; AgentHydra ships to anyone. The sweep reads only what a repository itself
+declares. The work CHAT is welcome to use those tools; that is what the `gate` item's command
+list is for.
 
 ### Prompts (editable, defaults shipped)
 
 Every message the machinery sends into a chat is a named template: `resumeNudge`,
 `handoffRequest`, `staleTaskNudge`, `hardCutoff`, `overloadNudge`, `commitNudge`,
-`branchNudge`, `orphanRevive`, `closeoutDocs`, `migrationNotice`. The shipped texts are the defaults; the
+`branchNudge`, `orphanRevive`, `closeoutDocs`, `workStart`, `migrationNotice`. The shipped texts are the defaults; the
 owner edits any of them under Settings -> Automation -> Orchestrator -> Prompts (or
 `POST /api/orchestrator {"prompts": {...}}`), and a blank edit (or saving the default text
 verbatim) restores the default so future shipped improvements still land. `GET
@@ -722,6 +813,14 @@ enable (or the install endpoint) away.
 
 - The reviewer must be an interactive session; a scheduled task or headless run cannot carry
   the loop (no peer tools there - measured, not guessed).
+- **Full mode's "never a repo someone is in" rule is enforced everywhere except the very last
+  step.** The sweep skips busy repos, the offer re-checks at proposal time, and the feed marks
+  every item `busy` from a live reading. But the act that actually starts the chat is
+  `POST /api/sessions/seed-desktop`, which is shared with handoffs and chips and does not take a
+  view on collisions - a handoff continuation deliberately lands in the repo it came from, so a
+  blanket refusal there would be wrong. That leaves a window of seconds between the reviewer
+  reading the feed and seeding, and closing it is the rubric's job rather than the code's. It is
+  the one place in this feature where the guarantee is prose.
 - Headless continuation of a DESKTOP chat is not merely avoided, it is refused in code
   (dispatch.ts, at the one chokepoint every run passes through). The transcript would advance
   under a renderer that may not show it, and the owner's report was blunter than that: those

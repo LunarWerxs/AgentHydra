@@ -9,6 +9,37 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **`/orchestrate full`: the orchestrator can now find work nobody has started.** Until now it
+  was entirely reactive. It asked questions about the chats that already existed (is this one
+  dead, has that one finished) and never the other question, so a fleet whose every chat was
+  healthy read as a fleet with nothing left to do, while the repositories themselves carried
+  unticked task boxes, FIXMEs added last week, and gates that had not been run since the code
+  changed. Full mode adds a slow, read-only sweep of the repositories and turns what it finds
+  into ordinary proposals: a quality gate the repo declares and that has not been green since
+  HEAD moved (`breaking`), FIXME/HACK/BUG/XXX comments that were not there at the previous
+  sweep (`warning`), and unticked `- [ ]` boxes in a repo's task files (`chore`). The reviewer
+  rules on each one and starts a visible desktop chat to do it, exactly as it does for every
+  other kind of work.
+
+  Turn it on with `/orchestrate full` (`all` and `forward` also work), off with
+  `/orchestrate off`, or with the toggle in Settings. The mode is stored server-side rather
+  than in the chat, because the reviewer reschedules itself with the bare literal
+  `/orchestrate` and an argument would not survive its next wake.
+
+  Four things it deliberately does NOT do, each of which would have been the easy version.
+  It never runs a repository's own scripts: a daemon that executes arbitrary repo commands on
+  a timer reinstalls dependencies under a chat that is mid-edit and runs whatever a freshly
+  pulled package.json says, so running the gate belongs to the visible chat, which can also
+  tell a real failure from a missing local secret. It never reports an old marker as new:
+  every repo is baselined on first sight, keyed by content rather than line number, so years
+  of accumulated `HACK:` comments never arrive as news. It never starts work in a repository
+  another chat is standing in, enforced in code and re-checked by the reviewer. And an item
+  reported failed three times stops being offered and becomes a line for the owner, because an
+  item nothing can fix would otherwise be re-proposed forever, which looks like diligence and
+  is a loop. New settings: `workMode`, `backlogRoots`, `backlogScanMins`, `backlogMaxOpen`,
+  `backlogIncludeTodoMarkers`; new prompt template `workStart`; new endpoints
+  `POST /api/orchestrator/backlog/scan` and `.../backlog/resolved`.
+
 - **The feed now says whether anyone is actually reviewing.** The watcher cannot detect its own
   uselessness: it keeps ticking and the feed keeps looking healthy whether or not anything
   reads it. This project's maintenance session opened with 19 proposals queued and nobody
@@ -53,6 +84,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   empty itself within one cycle.
 
 ### Fixed
+
+- **A stale command fingerprint could permanently freeze the installed `/orchestrate` rubric.**
+  The boot refresh tells our own out-of-date copy apart from a copy you edited by comparing the
+  file against the fingerprint of what AgentHydra last wrote. That record was only ever adopted
+  when it was missing entirely, so a file that already matched the shipped text while the record
+  named an older version stayed mis-recorded. Nothing looked wrong until the next release changed
+  the rubric, at which point the same file read as your edit and was never refreshed again. Found
+  on a real machine: the installed `/orchestrate` was byte-identical to what shipped, and the
+  recorded hash was not. A file whose bytes ARE the shipped text is now always adopted, which is
+  safe by construction because there is no edit of yours to lose.
 
 - **A six-hour-dead reviewer reported as merely idle.** The health check counted only PROPOSALS as
   work waiting, so with none open it said "nothing is waiting to be decided, so silence here means

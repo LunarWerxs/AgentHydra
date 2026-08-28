@@ -89,6 +89,14 @@ Two things make this survive contact with reality:
   across the accounts that have room rather than stacking one, counting the 5-hour window and
   when it resets, and it never sends work to a busier account for the sake of fairness. Off by
   default.
+- **And it can find the work nobody started.** Watching your chats only ever answers questions
+  about chats that exist, so a fleet where everything is healthy looks like a fleet with nothing
+  left to do. Turn on **full mode** (`/orchestrate full`, or the toggle in Settings) and it also
+  sweeps your repositories: a quality gate that has not passed since the code last changed, new
+  FIXME comments, unticked task boxes. Each one becomes a normal proposal, so the reviewer still
+  rules on it before anything starts, and the chat it opens is one you can watch. The sweep only
+  reads, never runs your repo's scripts, never reports a marker that was already there, and never
+  works in a repo another chat is in. Off by default.
 - **A rate limit is not a dead end.** Sessions stopped by a 5-hour limit can resume themselves once
   the window resets, gated on your weekly usage so it does not spend everything the moment it can.
   With several accounts signed in, it can instead move the run to one that still has headroom and

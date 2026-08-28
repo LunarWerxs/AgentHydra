@@ -9,7 +9,7 @@ import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { db, setSetting } from '../src/db'
+import { db, getSetting, setSetting } from '../src/db'
 import {
   ackAttention,
   bandForPct,
@@ -600,6 +600,32 @@ test('the boot refresh updates our stale copy and never creates one', () => {
   const edited = refreshShippedCommands(dir)
   expect(edited.find((f) => f.file === 'orchestrate.md')?.outcome).toBe('differs')
   expect(readFileSync(path, 'utf8')).toBe('MY OWN NOTES')
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
+// A STALE FINGERPRINT IS A TIME BOMB, and it used to be one this pass walked straight past.
+// Adoption on 'up-to-date' was conditional on having NO fingerprint, so a file that matched the
+// shipped text while the record named some older version stayed mis-recorded. Nothing looked
+// wrong - until the next release changed the shipped text, at which point that same file read as
+// an owner edit and could never be refreshed again. Found on the author's own machine 2026-08-28:
+// the installed /orchestrate was byte-identical to what shipped and its recorded hash was not.
+test('a file that matches the shipped text is adopted even when the record is stale', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-adopt-'))
+  installOrchestratorCommands(false, dir)
+  const path = join(dir, 'orchestrate.md')
+  const shipped = readFileSync(path, 'utf8')
+
+  // The bomb: on-disk IS the shipped text, but the record points somewhere else entirely.
+  setSetting('orch_command_hash_orchestrate_md', commandTextHash('some much older body'))
+  const pass = installOrchestratorCommands(false, dir)
+  expect(pass.find((f) => f.file === 'orchestrate.md')?.outcome).toBe('up-to-date')
+  expect(getSetting('orch_command_hash_orchestrate_md')).toBe(commandTextHash(shipped))
+
+  // ...so the NEXT shipped change still reaches disk instead of being read as an owner edit.
+  writeFileSync(path, shipped)
+  const after = refreshShippedCommands(dir)
+  expect(after.find((f) => f.file === 'orchestrate.md')?.outcome).toBe('up-to-date')
 
   rmSync(dir, { recursive: true, force: true })
 })
