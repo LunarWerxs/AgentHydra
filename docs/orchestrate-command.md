@@ -91,7 +91,10 @@ proves nothing (registry-live is not running).
 ## Every wake
 
 0. **FIRST, EVERY WAKE, BEFORE THE CURL: make sure AgentHydra is actually running.**
-   `powershell -NoProfile -File "D:\PublicProjects\AgentHydra\app\misc\Ensure-Daemon.ps1"`
+   `powershell -NoProfile -ExecutionPolicy Bypass -File "D:\PublicProjects\AgentHydra\app\misc\Ensure-Daemon.ps1"`
+   (**`-ExecutionPolicy Bypass` is load-bearing**, not decoration: without it Windows PowerShell
+   5.1 refuses the file outright - "running scripts is disabled on this system" - and the wake
+   starts against a daemon nobody checked. Measured 2026-08-28, one command apart.)
    It is an ENSURE, not a restart: a healthy daemon of ours is left completely alone (exit 0,
    no kill, no dropped requests), and only a dead one is started - via `Restart-Daemon.ps1`,
    which relaunches the TRAY HOST detached through WMI, so the tray icon comes back and the app
@@ -293,7 +296,15 @@ surfaces.
 - **`idle_pending`**: `waitingForSlot` -> skip WITHOUT acking (the cap's rotation handles
   it; never nudge more than `meta.slotsFree` per wake). `staleTasks` -> read the tail first
   (it is a hint, not a verdict); genuinely stuck -> `prompts.staleTaskNudge`, ack
-  `stale-task-nudge` 60. `midTurn` (not stale) -> ack `waiting-on-task` 30. Human active in
+  `stale-task-nudge` 60.
+  ⛔ **`taskNewestAgeSec` IS NOT A DEATH CERTIFICATE, and do not fire the stale nudge early on
+  it** (measured 2026-08-28: I nudged a chat at 47 minutes quiet because its newest task output
+  was 56 minutes old, and it came back with evidence that all three of its agents were alive,
+  one lane already committed - a wasted turn and an interrupted run). A chat driving a WORKFLOW
+  or long sequential sub-agents writes output when a stage COMPLETES, not while it works, so an
+  hour of silence is the normal shape of heavy work rather than a dead task. Wait for the
+  daemon's own `staleTasks` (120 min) unless the tail shows something a timer cannot: a tool
+  call with no result, an error, or the chat itself saying it is blocked. `midTurn` (not stale) -> ack `waiting-on-task` 30. Human active in
   the last 30 min -> ack `human-active` 30. Recap with safe recommendations ->
   `prompts.resumeNudge` verbatim; mixed -> name the safe subset. Asked a question -> the
   standing answer below. Fully closed out -> ack `closed-out` 120.
