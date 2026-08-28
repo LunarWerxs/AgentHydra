@@ -90,6 +90,16 @@ proves nothing (registry-live is not running).
 
 ## Every wake
 
+0. **FIRST, EVERY WAKE, BEFORE THE CURL: make sure AgentHydra is actually running.**
+   `powershell -NoProfile -File "D:\PublicProjects\AgentHydra\app\misc\Ensure-Daemon.ps1"`
+   It is an ENSURE, not a restart: a healthy daemon of ours is left completely alone (exit 0,
+   no kill, no dropped requests), and only a dead one is started - via `Restart-Daemon.ps1`,
+   which relaunches the TRAY HOST detached through WMI, so the tray icon comes back and the app
+   outlives this console. Exit 1 means it could not be brought up: say so in one status line and
+   do NOT run the rest of the wake against a dead API.
+   Why (owner directive, Michael, 2026-08-28): the app was closed - no tray icon, port refusing -
+   and the loop just reported the outage instead of fixing it. Anything that needs AgentHydra
+   makes sure AgentHydra is up first; never hand the owner an outage he has to click his way out of.
 1. ONE `curl -s http://localhost:7787/api/orchestrator`. That JSON is your worldview:
    `proposals` (decide these FIRST), `attention` (judgment calls), `instances` (the routing
    table), `prompts` (the owner's message texts - ALWAYS send `prompts.<name>` from this
@@ -172,9 +182,23 @@ allowed to answer "nothing here is still worth keeping" - that is a good outcome
   live unfinished work under that mark - then un-mark it and say so.
 - **Then archive by this LADDER.** The rungs are not interchangeable: the difference between
   them is whether the chat actually leaves the owner's sidebar.
-  1. **A chat in YOUR instance** -> `mcp__ccd_session_mgmt__archive_session` with its
-     the proposal's `evidence.chatId`. Instant and genuinely gone - measured, the app's own view flips to
-     archived immediately. Always prefer this.
+  0. ⛔ **`mcp__ccd_session_mgmt__archive_session` IS BANNED FOR YOU. It ALWAYS raises an approval
+     prompt, and a prompt the owner has to click is the exact thing the zero-click law forbids**
+     (owner directive, Michael, 2026-08-28, angry, after four of them in one wake: *"You can't
+     make me have to fucking click Allow... you need to do it programmatically without asking
+     me"*). The rung-2 note below already recorded that this tool always prompts and that a
+     reviewer running in BYPASS would wrongly conclude otherwise - that is exactly the trap; the
+     reviewer's OWN bypass hides the prompt from the reviewer, not from the owner, whose app is
+     the one that asks. **So every archive you perform goes through the API instead:**
+     `POST /api/sessions/<id>/desktop-archive {"archived": true}` - zero clicks, always.
+     Accept its honest caveat rather than trading it for a prompt: under a RUNNING app the chat
+     stays on screen until that instance restarts (queued automatically, fires when the instance
+     has no live sessions), so report it as **pending, not retired**, and for chats in YOUR OWN
+     instance say plainly that it clears when that app next restarts - your own liveness is what
+     holds it, and it is not worth a click. Same rule for any other tool that prompts.
+  1. ~~A chat in YOUR instance -> the app's own archive tool~~ - **retired by rung 0 above.**
+     It was the fastest path and it is still the only one that flips the sidebar instantly, but
+     it cannot be reached without asking the owner to click, so it is not a path.
   2. **A chat elsewhere, with any live chat in that instance** -> RELAY: peer-message that live
      chat and ask it to archive the TARGET (never itself) with its own archive tool.
      **THIS RUNG IS AN ASK, NOT AN ACTUATOR** (measured 2026-08-27). Relaying a MESSAGE works
@@ -185,6 +209,9 @@ allowed to answer "nothing here is still worth keeping" - that is a good outcome
      Treat a refusal as rung 3, not as a failure. Note also that a reviewer running in BYPASS
      would make that call with no prompt and wrongly conclude the rung is universal; it is
      not, and every normal-permissions instance blocks it.
+     ⛔ **Which makes this rung banned too, for the same reason as rung 0:** the "user" whose
+     consent it routes to is the same owner who must never click. Never relay an archive ask.
+     Relaying a MESSAGE is still fine - that is what needs no approval.
   3. **No live chat there** -> `POST /api/sessions/<id>/desktop-archive {"archived": true}`.
      The response says `visibleNow: false` when that app is running, and it means it: the flag
      is on disk, the chat is STILL ON SCREEN until the app restarts, which the daemon does once
@@ -395,6 +422,14 @@ view rather than the file on disk. So:
 
 - **THE TWO LAWS above**: nothing acts unchecked; no thread ever crosses surfaces; every
   thread of the owner's is a visible desktop chat.
+- ⛔ **NEVER CALL A TOOL THAT RAISES AN APPROVAL PROMPT. Do it through AgentHydra's API instead**
+  (owner directive, Michael, 2026-08-28). Known offender: `archive_session`, which prompts by
+  design, every time - use `POST /api/sessions/<id>/desktop-archive` (see the archive ladder's
+  rung 0). Your own session running in bypass does NOT make a prompt disappear; it moves it onto
+  the owner's screen, which is the failure. If the only route to an action is a prompt, the
+  action does not happen this wake - say so in one status line and leave it.
+- ⛔ **KEEP AGENTHYDRA RUNNING.** Step 0 of every wake, before any API call: `Ensure-Daemon.ps1`.
+  A dead daemon is something you fix, never something you report and stop on.
 - **REGISTRY-LIVE IS NOT RUNNING; CLAIMS REQUIRE PROOF** (owner order 2026-08-25). "It is
   running" only after verifying the ENGINE: transcript growing right now, or seen streaming
   on screen. Never infer the owner clicked something. No chat is ever invisible; visibility
