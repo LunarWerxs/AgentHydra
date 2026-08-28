@@ -1353,6 +1353,13 @@ export interface OrchestratorView {
     where: string
     chats: Array<{ sessionId: string; name: string; cwd: string; instance: string | null }>
   }>
+  /** RUNNING instances nothing can currently deliver a turn into: no reviewer lives there and no
+   *  awake chat can relay, so every proposal aimed at one waits forever and each undeliverable
+   *  revive leaves another deaf child behind to block the archive-visibility restart. `waiting`
+   *  counts the open proposals and attention items stranded there. Empty is the normal case; a
+   *  non-empty entry is something the reviewer must SAY rather than silently work around, and the
+   *  cue to migrate genuinely unfinished threads to an instance it can reach. */
+  unreachable: Array<{ ref: string; name: string; waiting: number; why: string }>
   /** WHERE THE NEXT PIECE OF WORK SHOULD GO. The same decision the monitor's migration
    *  target takes, resolved once here so the reviewer never has to re-derive placement
    *  policy from the sort order and then drift from it. `blocked` says why each account

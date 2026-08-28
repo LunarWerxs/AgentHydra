@@ -93,6 +93,7 @@ import type {
   OrchestratorView,
   UsageSnapshot,
 } from './types'
+import { usageProbeCwd } from './usage'
 import { allCachedUsage } from './usage-cache'
 import { desktopKey } from './usage-service'
 
@@ -1642,6 +1643,12 @@ function initOnceCtx(deps: OrchestratorDeps): OnceCtx {
  *  done-marked ones included: a busy chat holds a concurrency slot no matter its bookkeeping. */
 function classifySessions(ctx: OnceCtx): void {
   for (const sess of ctx.sessions) {
+    // OUR OWN /usage PROBE IS NOT ONE OF THE OWNER'S CHATS. It runs in a scratch cwd we create,
+    // deliberately leaves no transcript behind (see usageProbeCwd + the cleanup beside it), and so
+    // classified as "live session: transcript not found on disk" - an errored row the reviewer is
+    // told to escalate to the owner, about the daemon's own plumbing, arriving as often as the
+    // probe runs. A feed that cries wolf about itself teaches the reviewer to skim.
+    if (isUsageProbeCwd(sess.cwd)) continue
     const result = classifyLiveSession(sess, {
       deps: ctx.deps,
       s: ctx.s,
@@ -2249,6 +2256,49 @@ async function isDirHostedByLiveProcess(dir: string, live: LiveSession[]): Promi
   return false
 }
 
+/**
+ * Is this live session a DEAF PASSIVE process - a pid that exists but has never run a turn?
+ *
+ * Exactly the signal the live-but-deaf attention item uses, and deliberately not a cheaper proxy
+ * for it: the newest EVENT inside the transcript predates the process start, and it has since sat
+ * quiet past the same 30-minute floor. File mtime was the first cut and it is WRONG - the app
+ * rewrites a chat's transcript when it boots the child, so mtime advances while no turn has run,
+ * and every deaf child then reads as awake. Measured 2026-08-28: that version reported the Martin
+ * instance perfectly reachable while its one live session was the deaf child blocking it.
+ *
+ * WHY THE RESTART GUARD NEEDS THIS (owner-reported, 2026-08-28): the guard below refuses to quit
+ * an app while any live session is hosted there, which is right for a chat mid-turn and exactly
+ * WRONG for these. An unreachable instance accumulates deaf children - every revive proposal the
+ * reviewer cannot execute leaves one - and each of them then blocks the restart that is the only
+ * way an archived chat leaves that app's sidebar. Three finished chats sat visible in the Martin
+ * instance for hours behind precisely that loop, looking to the owner like stuck work. A process
+ * that has never run a turn has no turn to interrupt, so it is not "someone working in there".
+ *
+ * Deliberately conservative in every direction that could hurt: no transcript path, an unreadable
+ * tail, or no parseable event at all returns false (keeps the session blocking), because absence
+ * of evidence must never read as evidence of deadness - that inversion is what once quit an app
+ * under a live chat mid-turn.
+ */
+export function isDeafPassiveSession(
+  s: LiveSession,
+  now = Date.now(),
+  /** Seam for tests; the default reads the real transcript tail. */
+  readTail: (path: string) => { lastEventAt: string | null } = readTailInfo,
+): boolean {
+  if (!s.transcriptPath || s.startedAt <= 0) return false
+  let lastEventAt: string | null
+  try {
+    lastEventAt = readTail(s.transcriptPath).lastEventAt
+  } catch {
+    return false
+  }
+  if (!lastEventAt) return false
+  const last = Date.parse(lastEventAt)
+  if (!Number.isFinite(last)) return false
+  if (last >= s.startedAt) return false // it HAS run a turn since spawning - a real, working chat
+  return now - last >= 30 * 60_000 // and it has since sat, same floor the deaf detector uses
+}
+
 /** One pending archive-visibility restart, evaluated and (if safe) carried out. Split out of
  *  restartAppsForArchiveVisibility so that function reads as the plan and this reads as the
  *  per-directory ownership test + action. */
@@ -2264,8 +2314,24 @@ async function restartOneArchivePendingDir(
     const r = instanceRefForSession(s.sessionId)
     return r !== null && samePath(r.slice('desktop:'.length), dir)
   })
-  if (owned.length > 0) return // someone is working in there — the flag waits
-  if (await isDirHostedByLiveProcess(dir, live)) return
+  // A deaf passive child is not someone working in there (see isDeafPassiveSession) - it is the
+  // residue of a revive nobody could deliver, and letting it hold the sidebar hostage is how
+  // finished chats stayed on screen for hours.
+  const deafHere = new Set(owned.filter((s) => isDeafPassiveSession(s)).map((s) => s.sessionId))
+  if (owned.length - deafHere.size > 0) return // someone is working in there — the flag waits
+  if (deafHere.size > 0)
+    console.log(
+      `[agenthydra] archive-visibility restart proceeding for ${dir}: its ${deafHere.size} live session(s) are deaf passive children that have never run a turn`,
+    )
+  // Layer 3 gets the same exemption and nothing more: every OTHER live session still counts,
+  // mapped or not, so an app hosting real work is still protected by process evidence.
+  if (
+    await isDirHostedByLiveProcess(
+      dir,
+      live.filter((s) => !deafHere.has(s.sessionId)),
+    )
+  )
+    return
   try {
     const { openInstance, quitInstance } = await import('./core/instances')
     const q = await quitInstance(dir)
@@ -2404,6 +2470,67 @@ export function collisionsFor(live: LiveSession[]): Collision[] {
     .sort((a, b) => b.chats.length - a.chats.length || a.where.localeCompare(b.where))
 }
 
+/** Is this cwd the scratch directory our own `/usage` probe runs in? Asked of the ONE function
+ *  that creates it, so the two can never drift apart. */
+function isUsageProbeCwd(cwd: string): boolean {
+  const probe = usageProbeCwd()
+  return !!probe && !!cwd && samePath(cwd, probe)
+}
+
+/** A running instance the reviewer has no way to put a turn into. */
+export interface UnreachableInstance {
+  ref: string
+  name: string
+  /** Open proposals plus attention items pointing at this instance - work that cannot move. */
+  waiting: number
+  why: string
+}
+
+/**
+ * Which running instances NOTHING can currently deliver into.
+ *
+ * The only actuator that puts a turn into a desktop chat is a reviewer session's own message tool,
+ * and it reaches only the instance that reviewer runs in. So an instance is reachable when it has
+ * at least one live chat that has actually run a turn - the reviewer itself, or any working chat
+ * that can relay. An instance whose only live sessions are deaf passive children (or which has
+ * none at all) is a dead end: every revive proposed there waits forever, and each undeliverable
+ * revive leaves behind another deaf child.
+ *
+ * WHY IT IS A FEED FIELD (owner-reported, 2026-08-28): the reviewer had no signal for this. It
+ * rejected or shelved proposals one at a time, each with a sensible-looking reason, while the
+ * owner watched three chats sit in the Martin instance and reasonably concluded they were stuck
+ * work. Silence is the worst possible report for "cannot be done from here". An empty array is
+ * the normal case; a non-empty one is a fact the reviewer must state out loud, and the cue to
+ * migrate anything genuinely unfinished to an instance it can reach.
+ */
+export function unreachableInstances(
+  live: LiveSession[],
+  rows: OrchestratorInstance[],
+  waitingFor: (ref: string) => number,
+  now = Date.now(),
+): UnreachableInstance[] {
+  const out: UnreachableInstance[] = []
+  for (const row of rows) {
+    if (!row.isRunning) continue // a stopped instance is out of play, not unreachable
+    const here = live.filter((s) => {
+      const r = instanceRefForSession(s.sessionId)
+      return r !== null && samePath(r.slice('desktop:'.length), row.ref.slice('desktop:'.length))
+    })
+    const awake = here.filter((s) => !isDeafPassiveSession(s, now))
+    if (awake.length > 0) continue
+    out.push({
+      ref: row.ref,
+      name: row.name,
+      waiting: waitingFor(row.ref),
+      why:
+        here.length === 0
+          ? 'no live chat there at all - no reviewer, no relay'
+          : `its ${here.length} live session(s) are deaf passive children that have never run a turn - no relay`,
+    })
+  }
+  return out
+}
+
 function fmtQuiet(secs: number): string {
   if (secs < 90) return `${secs}s`
   if (secs < 90 * 60) return `${Math.round(secs / 60)}m`
@@ -2436,6 +2563,21 @@ export function orchestratorView(): OrchestratorView {
     // Placement used to consider only account headroom, which is why two chats could be pointed
     // at one repo and overwrite each other. Empty is the normal case and means nothing to avoid.
     collisions: collisionsFor(readLiveRegistry(join(homedir(), '.claude'))),
+    // WHERE THE REVIEWER CANNOT REACH. Delivery only works inside an instance that has a live,
+    // awake chat; without this field an unreachable instance is indistinguishable from a quiet
+    // one, and its chats simply never move (owner-reported, 2026-08-28).
+    unreachable: (() => {
+      const live = readLiveRegistry(join(homedir(), '.claude'))
+      const open = proposals.filter((p) => p.status === 'proposed' || p.status === 'approved')
+      return unreachableInstances(live, state.instances, (ref) => {
+        const same = (r: string | null | undefined) =>
+          !!r && samePath(r.slice('desktop:'.length), ref.slice('desktop:'.length))
+        return (
+          open.filter((p) => same(p.instanceRef)).length +
+          state.attention.filter((a) => same(a.instanceRef)).length
+        )
+      })
+    })(),
     // WHERE THE NEXT PIECE OF WORK SHOULD GO, decided once here rather than re-derived from
     // the sort by every reader. `blocked` states why each passed-over account was passed
     // over, so a placement can be argued with instead of merely trusted, and `recent` is the

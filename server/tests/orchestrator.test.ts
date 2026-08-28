@@ -20,6 +20,7 @@ import {
   getOrchestratorPrompts,
   getOrchestratorSettings,
   installOrchestratorCommands,
+  isDeafPassiveSession,
   isInjectedUserText,
   type LiveSession,
   noteReviewerActivity,
@@ -1273,6 +1274,55 @@ test('samePath survives the exact casing mismatch that let the daemon kill a liv
   ).toBe(true)
   expect(samePath('C:\\A\\work\\', 'c:\\a\\work')).toBe(true)
   expect(samePath('C:\\A\\work', 'C:\\A\\work2')).toBe(false)
+})
+
+test('a deaf passive child does not count as someone working in an instance', () => {
+  // 2026-08-28, owner-reported: three FINISHED chats sat visible in the Martin instance for
+  // hours. Their archive flags were on disk, but each archived chat had left behind a deaf
+  // passive child (a revive proposal the reviewer had no route to deliver), and the restart
+  // guard counted those children as live work - so the one thing that makes an archive visible
+  // could never run. A process that has never written a turn has no turn to interrupt.
+  const now = Date.parse('2026-08-28T18:00:00.000Z')
+  const base: LiveSession = {
+    pid: 4242,
+    sessionId: 's1',
+    cwd: 'D:\\NEWProjects',
+    name: 'newprojects-x1',
+    startedAt: now - 20 * 60_000,
+    transcriptPath: 'D:\\fake\\transcript.jsonl',
+  }
+  const at = (ms: number) => () => ({ lastEventAt: new Date(ms).toISOString() })
+
+  // No event has landed since the process spawned, and it has since sat well past the floor.
+  expect(isDeafPassiveSession(base, now, at(now - 90 * 60_000))).toBe(true)
+
+  // It ran a turn AFTER spawning: a real chat between turns, and it must still block the restart.
+  expect(isDeafPassiveSession(base, now, at(now - 5 * 60_000))).toBe(false)
+
+  // The floor: last event predates the spawn, but only just - too soon to call it abandoned.
+  expect(
+    isDeafPassiveSession({ ...base, startedAt: now - 6 * 60_000 }, now, at(now - 10 * 60_000)),
+  ).toBe(false)
+
+  // MTIME IS NOT THIS SIGNAL, and the cheap proxy looks right until it isn't. The first cut
+  // compared file mtime against the spawn; the app rewrites a chat's transcript when it boots the
+  // child, so a freshly touched file whose newest EVENT was hours old read as awake - and the
+  // Martin instance reported perfectly reachable while its only live session was the deaf child
+  // blocking it. Measured 2026-08-28, against the live daemon, one build apart.
+  expect(isDeafPassiveSession(base, now, at(now - 8 * 3600_000))).toBe(true)
+
+  // No evidence is never evidence of deadness - each of these must keep the session BLOCKING,
+  // because reading absence as "safe to quit" is the inversion that killed a live chat in August.
+  expect(isDeafPassiveSession({ ...base, transcriptPath: null }, now, at(now - 90 * 60_000))).toBe(
+    false,
+  )
+  expect(isDeafPassiveSession({ ...base, startedAt: 0 }, now, at(now - 90 * 60_000))).toBe(false)
+  expect(isDeafPassiveSession(base, now, () => ({ lastEventAt: null }))).toBe(false)
+  expect(
+    isDeafPassiveSession(base, now, () => {
+      throw new Error('unreadable transcript')
+    }),
+  ).toBe(false)
 })
 
 test('a chat frozen at a permission prompt is diagnosed as that, not as dead background tasks', async () => {
