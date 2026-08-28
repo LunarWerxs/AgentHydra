@@ -62,6 +62,16 @@ headless processes). Reach for these in order:
    (a chat there going live, or the owner opening one, restores rung 1-3). NEVER fall back
    to a headless resume, a terminal window (unless the surface IS terminal), or UI typing.
 
+⛔ **RUNG 1 IS *ONLY* FOR YOUR OWN INSTANCE, AND GETTING THAT WRONG BILLS THE WRONG ACCOUNT.**
+Your session tool does not route to another instance - handed a chat that lives elsewhere it
+**re-creates a pointer for it in YOUR profile, on `acceptEdits`, and boots it on YOUR account**,
+then reports success. Measured 2026-08-28: five freshly-moved chats were woken on the account the
+move existed to get off, and every surface said it worked. Before rung 1, confirm the chat's
+metadata file sits under YOUR instance's signed-in account folder. If it does not, you are on
+rung 2/3 or you cannot deliver at all - never substitute your own `send_message`. After any
+delivery verify WHICH ACCOUNT ran the turn, not merely that the transcript grew. Full write-up:
+[MOVING-CHATS-BETWEEN-ACCOUNTS.md](MOVING-CHATS-BETWEEN-ACCOUNTS.md).
+
 **NEVER BUILD A CHAT ID. USE `evidence.chatId` VERBATIM.** `local_<sessionId>` is correct only
 for IMPORTED chats. A chat the APP created is filed under the app's OWN id and stores the
 session id inside, and 98.7% of this fleet is that shape - so a constructed id addresses a

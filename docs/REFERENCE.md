@@ -56,22 +56,22 @@ tool description says the default out loud so it knows to:
 
 - `period: "24h" | "7d" | "30d" | "all"`, or explicit `since` / `until` bounds (epoch ms or an ISO
   date) for a real date range.
-- `offset`, for paging past the 500-row ceiling. Pages are contiguous — `offset: 500, limit: 500` is
-  exactly page 2 of the same ordering — because the offset is counted in returned rows rather than
+- `offset`, for paging past the 500-row ceiling. Pages are contiguous: `offset: 500, limit: 500` is
+  exactly page 2 of the same ordering, because the offset is counted in returned rows rather than
   in index entries, which would skip an unknown number of them.
 - `project`, a case-insensitive substring of the working directory or project key.
-- `list_projects {}` — every folder that has conversations in it, with a session count and a
+- `list_projects {}` lists every folder that has conversations in it, with a session count and a
   per-provider breakdown. Read from the transcript index, never a transcript, so it is cheap. This
   is the index of the index: start here to find out what "all" contains, then scope a real query.
 
 ### Chats a usage limit cut off
 
 `list_rate_limited_sessions { pendingOnly?, period?, project?, limit? }` lists the conversations a
-quota wall ended — "You've hit your weekly limit · resets 3am". Every session row also carries the
+quota wall ended: "You've hit your weekly limit · resets 3am". Every session row also carries the
 same verdict as `limit_stop`, and `rateLimited: "only" | "pending"` narrows `list_sessions` the same
 way; the web UI exposes it as **List options -> Usage limits**.
 
-`pending: true` means nothing followed the notice, so that session is *still* stopped there — the
+`pending: true` means nothing followed the notice, so that session is *still* stopped there, the
 actionable half. `pending: false` means it was resumed afterwards and is history. Pending-ness is a
 pure function of the file, recomputed on every scan: the CLI cannot resume a session that died on an
 API error without appending its own bookkeeping, so any resume flips it on its own.
@@ -85,10 +85,10 @@ the auto-resume monitor, so the badge and the resume queue cannot disagree.
 
 ### Why a thread is called what it is called
 
-Every session row carries `title_source` — `custom` (a saved title the writing app displays), `ai`
+Every session row carries `title_source`: `custom` (a saved title the writing app displays), `ai`
 (the model's own summary), `store` (the provider handed us one as a field), `envelope`, `message`
 (the first thing said) or `id`. `envelope` is the one worth knowing about: the first turn arrived
-wrapped in a pseudo-tag carrying a `name` attribute — `<scheduled-task name="nightly-sweep">` — and
+wrapped in a pseudo-tag carrying a `name` attribute, `<scheduled-task name="nightly-sweep">`, and
 that name became the title, so the string was chosen by whatever wrote the wrapper (a scheduler, a
 hook, a harness) and may match nothing you have ever named. `title_tag` names that tag, and the web
 UI prints it beside the title. This exists because threads turned up under a name their owner did
@@ -135,6 +135,13 @@ check its own quota before a heavy multi-agent fan-out and pace accordingly, rou
 whichever account has the lowest weekly %.
 
 ## Claude Desktop session mapping
+
+> **Moving a chat to another account?** Read
+> [MOVING-CHATS-BETWEEN-ACCOUNTS.md](MOVING-CHATS-BETWEEN-ACCOUNTS.md) first. The store is keyed by
+> `<accountUuid>/<orgUuid>`, so re-logging an instance orphans its chats where the new account
+> cannot see them; migrate leaves a pointer in BOTH profiles; a session with no metadata entry can
+> never be archived and shows as live forever; and a session tool's `send_message` silently steals
+> a chat onto the caller's own account. Each of those produced a wrong result that looked correct.
 
 Claude Desktop and the `claude` CLI write the same transcript store under
 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Desktop separately keeps per-chat metadata
