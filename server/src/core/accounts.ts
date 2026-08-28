@@ -539,6 +539,168 @@ export function resolveCliConfigDirToken(
   }
 }
 
+// Shared fallback path for resolveAccount's Step 3 (no usable token) and Step 4 (the profile
+// call itself failed) — both resolve identity from the cache/config, never from a live call.
+function fallbackAccountFromCache(
+  instanceDir: string,
+  lastKnownAccountUuid: string,
+  bestGrant: Grant | null,
+) {
+  return accountFromCache(instanceDir, {
+    currentUuid: lastKnownAccountUuid,
+    fallbackUuid: lastKnownAccountUuid,
+    fallbackOrgUuid: bestGrant?.orgUuid ?? null,
+    fallbackPlan: bestGrant?.subscriptionType ?? null,
+    fallbackTier: bestGrant?.rateLimitTier ?? null,
+  })
+}
+
+// resolveAccount's Step 1: the cheap pre-check. Pulled out so its try/catch scores against
+// this small function instead of resolveAccount's — see fallbackAccountFromCache above.
+function loadAccountConfig(instanceDir: string): {
+  config: Record<string, unknown> | null
+  lastKnownAccountUuid: string | null
+} {
+  const configPath = path.join(instanceDir, 'config.json')
+  let config: Record<string, unknown> | null = null
+  if (existsSync(configPath)) {
+    try {
+      const raw = readFileSync(configPath, 'utf8')
+      if (raw?.trim()) config = JSON.parse(raw) as Record<string, unknown>
+    } catch (err) {
+      log(
+        'warn',
+        `resolveAccount: failed to read/parse config.json at '${configPath}': ${String(err)}`,
+      )
+      config = null
+    }
+  }
+  const lastKnownAccountUuid =
+    config && typeof config.lastKnownAccountUuid === 'string' ? config.lastKnownAccountUuid : null
+  return { config, lastKnownAccountUuid }
+}
+
+// resolveAccount's Step 2: decrypt the token cache (v2, falling back to v1) and pick the best
+// grant out of it. Pulled out, see loadAccountConfig above.
+async function resolveBestGrant(
+  config: Record<string, unknown>,
+  instanceDir: string,
+): Promise<Grant | null> {
+  let tokenCacheB64: string | null = null
+  let usedV1 = false
+  if (typeof config['oauth:tokenCacheV2'] === 'string' && config['oauth:tokenCacheV2']) {
+    tokenCacheB64 = config['oauth:tokenCacheV2'] as string
+  } else if (typeof config['oauth:tokenCache'] === 'string' && config['oauth:tokenCache']) {
+    tokenCacheB64 = config['oauth:tokenCache'] as string
+    usedV1 = true
+  }
+  if (!tokenCacheB64) {
+    log(
+      'info',
+      `resolveAccount: no oauth token cache (v1 or v2) present in config.json for '${instanceDir}'.`,
+    )
+    return null
+  }
+  try {
+    const decrypted = await decryptSafeStorage(tokenCacheB64, instanceDir)
+    if (!decrypted) {
+      log(
+        'warn',
+        `resolveAccount: could not decrypt token cache (${usedV1 ? 'v1' : 'v2'}) for '${instanceDir}'.`,
+      )
+      return null
+    }
+    return pickBestGrant(decrypted)
+  } catch (err) {
+    log('warn', `resolveAccount: decryptSafeStorage threw for '${instanceDir}': ${String(err)}`)
+    return null
+  }
+}
+
+// resolveAccount's Step 4 field derivation: plan/tier/label from a successful profile call.
+// Pulled out, see loadAccountConfig above.
+function deriveAccountFields(
+  profile: NonNullable<Awaited<ReturnType<typeof fetchProfile>>>,
+  bestGrant: Grant | null,
+  lastKnownAccountUuid: string,
+) {
+  const email = profile.account?.email ?? null
+  const fullName = profile.account?.full_name ?? null
+  const accountUuid = profile.account?.uuid ?? lastKnownAccountUuid
+  const orgUuid = profile.organization?.uuid ?? bestGrant?.orgUuid ?? null
+  const orgName = profile.organization?.name ?? null
+  // The plan family, and the only signal that is actually current: Anthropic recomputes
+  // organization_type on every profile call. Everything else here is either a mint-time snapshot
+  // (the grant) or entitlement history (has_claude_max/pro).
+  const orgType = profile.organization?.organization_type ?? null
+
+  // Tier: the ORGANIZATION's rate_limit_tier — same freshness as organization_type. The grant's
+  // copy is only a gap-filler now, because it is demonstrably stale in both directions: a free
+  // account still carrying `default_claude_max_20x` grants is what produced the "Max 20×" row
+  // this replaces, and two paid accounts carry `max_5x` grants while their org says `max_20x`
+  // (measured 2026-08-07 across 11 accounts; see resolvePlanLabel). The tier now only refines a
+  // Max family into 5×/20×, so a generic `default_claude_ai` here is harmless.
+  const rawTier = profile.organization?.rate_limit_tier ?? bestGrant?.rateLimitTier ?? null
+
+  // Plan: the GRANT's subscriptionType. Kept as the offline/legacy fallback and as a DTO field,
+  // but it no longer decides the label whenever orgType is known. has_claude_max/pro are
+  // entitlement HISTORY — they stay true for an account that lapsed back to free (owner-confirmed
+  // 2026-07-22) — so they are consulted only when there is no grant to ask.
+  let plan = bestGrant?.subscriptionType ?? null
+  if (!plan) {
+    if (profile.account?.has_claude_max) plan = 'max'
+    else if (profile.account?.has_claude_pro) plan = 'pro'
+  }
+
+  const tier = prettyTier(rawTier)
+  const planLabel = resolvePlanLabel(plan, tier, orgType)
+  const label = buildLabel(fullName, email, planLabel)
+  return {
+    email,
+    fullName,
+    accountUuid,
+    orgUuid,
+    orgName,
+    orgType,
+    rawTier,
+    plan,
+    tier,
+    planLabel,
+    label,
+  }
+}
+
+// Write identity ONLY (never the token) to the cache — and only when the identity we just
+// resolved is the account config.json says this instance is signed into. Caching an identity
+// that contradicts lastKnownAccountUuid would be immediately discarded by the stale-login guard
+// in accountFromCache on the next offline read, so the entry would only ever churn. Pulled out,
+// see loadAccountConfig above.
+function maybeCacheAccountIdentity(
+  instanceDir: string,
+  lastKnownAccountUuid: string,
+  fields: ReturnType<typeof deriveAccountFields>,
+): void {
+  const { accountUuid, email, fullName, plan, rawTier, orgUuid, orgName, orgType } = fields
+  if (!accountUuid || !lastKnownAccountUuid || accountUuid === lastKnownAccountUuid) {
+    writeAccountsCacheEntry(instanceDir, {
+      email,
+      name: fullName,
+      plan,
+      rateLimitTier: rawTier,
+      uuid: accountUuid,
+      orgUuid,
+      orgName,
+      orgType,
+      resolvedAt: new Date().toISOString(),
+    })
+  } else {
+    log(
+      'warn',
+      `resolveAccount: profile identity (${accountUuid}) disagrees with config.json's lastKnownAccountUuid (${lastKnownAccountUuid}) for '${instanceDir}' — not caching.`,
+    )
+  }
+}
+
 /**
  * Resolves the real account identity (email/name/plan/rate-limit tier) that an isolated
  * Claude Desktop instance is logged into, with graceful offline/cache fallback. Never throws.
@@ -553,26 +715,7 @@ export async function resolveAccount(
       return newAccount({ status: 'unknown', label: '(not logged in / unreadable)' })
     }
 
-    const configPath = path.join(instanceDir, 'config.json')
-
-    // ---- Step 1: cheap pre-check --------------------------------------------------------
-    let config: Record<string, unknown> | null = null
-    if (existsSync(configPath)) {
-      try {
-        const raw = readFileSync(configPath, 'utf8')
-        if (raw?.trim()) config = JSON.parse(raw) as Record<string, unknown>
-      } catch (err) {
-        log(
-          'warn',
-          `resolveAccount: failed to read/parse config.json at '${configPath}': ${String(err)}`,
-        )
-        config = null
-      }
-    }
-
-    const lastKnownAccountUuid =
-      config && typeof config.lastKnownAccountUuid === 'string' ? config.lastKnownAccountUuid : null
-
+    const { config, lastKnownAccountUuid } = loadAccountConfig(instanceDir)
     if (!config || !lastKnownAccountUuid) {
       log(
         'info',
@@ -581,43 +724,9 @@ export async function resolveAccount(
       return newAccount({ status: 'loggedout', label: '(not logged in)' })
     }
 
-    // ---- Step 2: decrypt the token cache (v2, falling back to v1) -----------------------
-    let tokenCacheB64: string | null = null
-    let usedV1 = false
-    if (typeof config['oauth:tokenCacheV2'] === 'string' && config['oauth:tokenCacheV2']) {
-      tokenCacheB64 = config['oauth:tokenCacheV2'] as string
-    } else if (typeof config['oauth:tokenCache'] === 'string' && config['oauth:tokenCache']) {
-      tokenCacheB64 = config['oauth:tokenCache'] as string
-      usedV1 = true
-    }
+    const bestGrant = await resolveBestGrant(config, instanceDir)
 
-    let bestGrant: Grant | null = null
-
-    if (tokenCacheB64) {
-      let decrypted: string | null = null
-      try {
-        decrypted = await decryptSafeStorage(tokenCacheB64, instanceDir)
-      } catch (err) {
-        log('warn', `resolveAccount: decryptSafeStorage threw for '${instanceDir}': ${String(err)}`)
-        decrypted = null
-      }
-
-      if (decrypted) {
-        bestGrant = pickBestGrant(decrypted)
-      } else {
-        log(
-          'warn',
-          `resolveAccount: could not decrypt token cache (${usedV1 ? 'v1' : 'v2'}) for '${instanceDir}'.`,
-        )
-      }
-    } else {
-      log(
-        'info',
-        `resolveAccount: no oauth token cache (v1 or v2) present in config.json for '${instanceDir}'.`,
-      )
-    }
-
-    // ---- Step 3: decide whether to go live or fall back ----------------------------------
+    // ---- decide whether to go live or fall back ----------------------------------
     const nowMs = Date.now()
     const expiresAt = bestGrant?.expiresAt ?? 0
     const expired = expiresAt <= 0 || expiresAt < nowMs
@@ -631,101 +740,35 @@ export async function resolveAccount(
           ? 'no usable access token decrypted'
           : 'access token expired'
       log('info', `resolveAccount: resolving '${instanceDir}' from cache/offline (${reason}).`)
-
-      return accountFromCache(instanceDir, {
-        currentUuid: lastKnownAccountUuid,
-        fallbackUuid: lastKnownAccountUuid,
-        fallbackOrgUuid: bestGrant?.orgUuid ?? null,
-        fallbackPlan: bestGrant?.subscriptionType ?? null,
-        fallbackTier: bestGrant?.rateLimitTier ?? null,
-      })
+      return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, bestGrant)
     }
 
-    // ---- Step 4: live profile call --------------------------------------------------------
+    // ---- live profile call --------------------------------------------------------
     const profile = await fetchProfile(token as string)
     // Token was only ever held in this local `token`/`bestGrant` binding; nothing persists it.
 
     if (!profile) {
       log('warn', `resolveAccount: profile API call failed for '${instanceDir}'.`)
-      return accountFromCache(instanceDir, {
-        currentUuid: lastKnownAccountUuid,
-        fallbackUuid: lastKnownAccountUuid,
-        fallbackOrgUuid: bestGrant?.orgUuid ?? null,
-        fallbackPlan: bestGrant?.subscriptionType ?? null,
-        fallbackTier: bestGrant?.rateLimitTier ?? null,
-      })
+      return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, bestGrant)
     }
 
-    const email = profile.account?.email ?? null
-    const fullName = profile.account?.full_name ?? null
-    const accountUuid = profile.account?.uuid ?? lastKnownAccountUuid
-    const orgUuid = profile.organization?.uuid ?? bestGrant?.orgUuid ?? null
-    const orgName = profile.organization?.name ?? null
-    // The plan family, and the only signal that is actually current: Anthropic recomputes
-    // organization_type on every profile call. Everything else here is either a mint-time snapshot
-    // (the grant) or entitlement history (has_claude_max/pro).
-    const orgType = profile.organization?.organization_type ?? null
-
-    // Tier: the ORGANIZATION's rate_limit_tier — same freshness as organization_type. The grant's
-    // copy is only a gap-filler now, because it is demonstrably stale in both directions: a free
-    // account still carrying `default_claude_max_20x` grants is what produced the "Max 20×" row
-    // this replaces, and two paid accounts carry `max_5x` grants while their org says `max_20x`
-    // (measured 2026-08-07 across 11 accounts; see resolvePlanLabel). The tier now only refines a
-    // Max family into 5×/20×, so a generic `default_claude_ai` here is harmless.
-    const rawTier = profile.organization?.rate_limit_tier ?? bestGrant?.rateLimitTier ?? null
-
-    // Plan: the GRANT's subscriptionType. Kept as the offline/legacy fallback and as a DTO field,
-    // but it no longer decides the label whenever orgType is known. has_claude_max/pro are
-    // entitlement HISTORY — they stay true for an account that lapsed back to free (owner-confirmed
-    // 2026-07-22) — so they are consulted only when there is no grant to ask.
-    let plan = bestGrant?.subscriptionType ?? null
-    if (!plan) {
-      if (profile.account?.has_claude_max) plan = 'max'
-      else if (profile.account?.has_claude_pro) plan = 'pro'
-    }
-
-    const tier = prettyTier(rawTier)
-    const planLabel = resolvePlanLabel(plan, tier, orgType)
-    const label = buildLabel(fullName, email, planLabel)
-
-    // Write identity ONLY (never the token) to the cache — and only when the identity we just
-    // resolved is the account config.json says this instance is signed into. Caching an identity
-    // that contradicts lastKnownAccountUuid would be immediately discarded by the stale-login
-    // guard in accountFromCache on the next offline read, so the entry would only ever churn.
-    if (!accountUuid || !lastKnownAccountUuid || accountUuid === lastKnownAccountUuid) {
-      writeAccountsCacheEntry(instanceDir, {
-        email,
-        name: fullName,
-        plan,
-        rateLimitTier: rawTier,
-        uuid: accountUuid,
-        orgUuid,
-        orgName,
-        orgType,
-        resolvedAt: new Date().toISOString(),
-      })
-    } else {
-      log(
-        'warn',
-        `resolveAccount: profile identity (${accountUuid}) disagrees with config.json's lastKnownAccountUuid (${lastKnownAccountUuid}) for '${instanceDir}' — not caching.`,
-      )
-    }
-
-    log('info', `resolveAccount: resolved '${instanceDir}' live -> ${label}`)
+    const fields = deriveAccountFields(profile, bestGrant, lastKnownAccountUuid)
+    maybeCacheAccountIdentity(instanceDir, lastKnownAccountUuid, fields)
+    log('info', `resolveAccount: resolved '${instanceDir}' live -> ${fields.label}`)
 
     return newAccount({
       status: 'live',
-      email,
-      name: fullName,
-      plan,
-      rateLimitTier: tier,
-      orgType,
-      planLabel,
-      accountUuid,
-      orgUuid,
-      orgName,
+      email: fields.email,
+      name: fields.fullName,
+      plan: fields.plan,
+      rateLimitTier: fields.tier,
+      orgType: fields.orgType,
+      planLabel: fields.planLabel,
+      accountUuid: fields.accountUuid,
+      orgUuid: fields.orgUuid,
+      orgName: fields.orgName,
       source: 'live',
-      label,
+      label: fields.label,
     })
   } catch (err) {
     log('error', `resolveAccount: unexpected error for '${instanceDir}': ${String(err)}`)

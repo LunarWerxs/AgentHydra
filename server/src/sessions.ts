@@ -347,6 +347,101 @@ function parseForeignOrOpenCodeMeta(tf: TranscriptFile, key: string): ScannedMet
  *
  * A miss is never cached, so a file that reappears is parsed normally on the next pass.
  */
+/** Everything one JSONL record can update while scanning a transcript for parseMeta. Bundled so
+ *  the per-line logic can move to its own function instead of closing over fourteen loose locals. */
+interface MetaAccumulator {
+  customTitle: string
+  aiTitle: string
+  lastPrompt: string
+  firstUser: string
+  cwd: string
+  gitBranch: string | null
+  messageCount: number
+  firstTs: number | null
+  lastTs: number | null
+  lastRole: 'user' | 'assistant' | null
+  lastPreview: string | null
+  substantive: number
+  threadKey: string | null
+  ending: SessionEnding | null
+}
+
+// One JSONL record's worth of parseMeta's scan. Pulled out so this branching scores against
+// this function instead of parseMeta's — see this file's parseForeignOrOpenCodeMeta neighbour
+// for the same "one function per source" split already used here.
+function applyMetaLine(
+  acc: MetaAccumulator,
+  tf: TranscriptFile,
+  ev: any,
+  limits: ReturnType<typeof createLimitStopTracker> | null,
+): void {
+  switch (ev.type) {
+    case 'custom-title':
+      if (typeof ev.customTitle === 'string') acc.customTitle = ev.customTitle
+      return
+    case 'ai-title':
+      if (typeof ev.aiTitle === 'string') acc.aiTitle = ev.aiTitle
+      return
+    case 'last-prompt':
+      // Same rule as firstUser below: a slash command's `<command-name>` echo lands here too,
+      // and it describes the plumbing rather than the work.
+      if (typeof ev.lastPrompt === 'string' && !isCommandWrapperText(ev.lastPrompt))
+        acc.lastPrompt = ev.lastPrompt
+      return
+  }
+  if (typeof ev.cwd === 'string' && !acc.cwd) acc.cwd = ev.cwd
+  if (typeof ev.payload?.cwd === 'string' && !acc.cwd) acc.cwd = ev.payload.cwd
+  if (typeof ev.gitBranch === 'string' && ev.gitBranch) acc.gitBranch = ev.gitBranch
+  // Before the display filtering below, and deliberately: the wall notice is a `<synthetic>`
+  // assistant record and a terminal `result` is not a message at all, so anything that reads only
+  // what the UI would show is blind to exactly the records this needs.
+  limits?.observe(ev, toEpoch(ev.timestamp))
+  if (!acc.threadKey && typeof ev.uuid === 'string' && ev.uuid) acc.threadKey = ev.uuid
+  if (tf.source === 'claude') acc.ending = classifyEnding(ev, endingText(ev)) ?? acc.ending
+
+  applyMetaMessage(acc, tf, ev)
+}
+
+// The message-shaped half of applyMetaLine: message count, first/last timestamps, and the
+// title/preview candidates a Claude or Codex user/assistant turn contributes. Pulled out so
+// this branching scores against this small function instead of applyMetaLine's.
+function applyMetaMessage(acc: MetaAccumulator, tf: TranscriptFile, ev: any): void {
+  const role = ev.message?.role ?? ev.type
+  const tes = eventToTailEventsForSource(tf.source, ev)
+  const isClaudeMessage = role === 'user' || role === 'assistant'
+  const isCodexMessage =
+    tf.source === 'codex' &&
+    ev.type === 'response_item' &&
+    ev.payload?.type === 'message' &&
+    (ev.payload?.role === 'user' || ev.payload?.role === 'assistant')
+  if (!(isClaudeMessage || isCodexMessage)) return
+  if (isCodexMessage && tes.length === 0) return
+  acc.messageCount++
+  const t = toEpoch(ev.timestamp)
+  if (t !== null) {
+    if (acc.firstTs === null) acc.firstTs = t
+    acc.lastTs = t
+  }
+  // eventToTailEvents is the ONE place that knows what is real: it drops thinking blocks and
+  // the CLI's own resume bookkeeping (isMeta / <synthetic> self-talk). Reading
+  // `ev.message.content` straight off the event bypassed all of that, which is exactly how the
+  // `isMeta` local-command caveat became the title of 103 of the newest 200 sessions.
+  const real = tes.filter((e) => e.text && !isCommandWrapperText(e.text))
+  if (real.length > 0) acc.substantive++
+  const visibleRole = isCodexMessage ? ev.payload.role : role
+  if (!acc.firstUser && visibleRole === 'user') {
+    acc.firstUser = real.find((e) => e.kind === 'text')?.text ?? ''
+  }
+  const textEv = [...tes].reverse().find((e) => e.kind === 'text')
+  if (textEv) {
+    acc.lastRole = textEv.role
+    acc.lastPreview = oneLine(textEv.text)
+  } else if (tes.length > 0) {
+    acc.lastRole = role
+    acc.lastPreview = acc.lastPreview ?? oneLine(tes[tes.length - 1].text)
+  }
+}
+
 async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta | null> {
   if (tf.source === 'opencode' || tf.source === 'foreign') {
     return parseForeignOrOpenCodeMeta(tf, key)
@@ -362,18 +457,22 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
     return null
   }
 
-  let customTitle = ''
-  let aiTitle = ''
-  let lastPrompt = ''
-  let firstUser = ''
-  let cwd = ''
-  let gitBranch: string | null = null
-  let messageCount = 0
-  let firstTs: number | null = null
-  let lastTs: number | null = null
-  let lastRole: 'user' | 'assistant' | null = null
-  let lastPreview: string | null = null
-  let substantive = 0
+  const acc: MetaAccumulator = {
+    customTitle: '',
+    aiTitle: '',
+    lastPrompt: '',
+    firstUser: '',
+    cwd: '',
+    gitBranch: null,
+    messageCount: 0,
+    firstTs: null,
+    lastTs: null,
+    lastRole: null,
+    lastPreview: null,
+    substantive: 0,
+    threadKey: null,
+    ending: null,
+  }
   /**
    * "Did this conversation stop at a usage wall?", answered on the way past.
    *
@@ -389,22 +488,13 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
    * exactly like a provider that never hits limits.
    */
   const limits = tf.source === 'claude' ? createLimitStopTracker() : null
-  /**
-   * The uuid of this transcript's FIRST message — the conversation's identity, not the file's.
-   *
-   * Interrupt a chat and resume it and the CLI opens a new transcript, replays the history and
-   * carries on, so one conversation ends up as two or three files with different session ids and
-   * the same opening message. That first uuid is the cheapest exact way to recognise them as each
-   * other, and it costs nothing here because this loop is already reading every record.
-   *
-   * The first uuid rather than a whole-file comparison on purpose: a uuid is unique, so two files
-   * whose first message is the same message necessarily share that history. Comparing every uuid
-   * would answer the same question after reading two files instead of none.
-   */
-  let threadKey: string | null = null
-  /** Why this transcript stopped — the last meaningful record wins, because that is the one that
-   *  ended it. See session-ending.ts for what the answers mean and how often each occurs. */
-  let ending: SessionEnding | null = null
+  // acc.threadKey: the uuid of this transcript's FIRST message — the conversation's identity, not
+  // the file's. Interrupt a chat and resume it and the CLI opens a new transcript, replays the
+  // history and carries on, so one conversation ends up as two or three files with different
+  // session ids and the same opening message; that first uuid is the cheapest exact way to
+  // recognise them as each other, and it costs nothing here because this loop already reads every
+  // record. acc.ending: why this transcript stopped — the last meaningful record wins, because
+  // that is the one that ended it. See session-ending.ts for what the answers mean.
 
   // Walked by index rather than `text.split('\n')`: on a 12 MB transcript that split materialises
   // ~100k line strings and holds every one of them alive for the whole loop, roughly doubling the
@@ -422,89 +512,34 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
     } catch {
       continue
     }
-    switch (ev.type) {
-      case 'custom-title':
-        if (typeof ev.customTitle === 'string') customTitle = ev.customTitle
-        continue
-      case 'ai-title':
-        if (typeof ev.aiTitle === 'string') aiTitle = ev.aiTitle
-        continue
-      case 'last-prompt':
-        // Same rule as firstUser below: a slash command's `<command-name>` echo lands here too,
-        // and it describes the plumbing rather than the work.
-        if (typeof ev.lastPrompt === 'string' && !isCommandWrapperText(ev.lastPrompt))
-          lastPrompt = ev.lastPrompt
-        continue
-    }
-    if (typeof ev.cwd === 'string' && !cwd) cwd = ev.cwd
-    if (typeof ev.payload?.cwd === 'string' && !cwd) cwd = ev.payload.cwd
-    if (typeof ev.gitBranch === 'string' && ev.gitBranch) gitBranch = ev.gitBranch
-    // Before the display filtering below, and deliberately: the wall notice is a `<synthetic>`
-    // assistant record and a terminal `result` is not a message at all, so anything that reads only
-    // what the UI would show is blind to exactly the records this needs.
-    limits?.observe(ev, toEpoch(ev.timestamp))
-    if (!threadKey && typeof ev.uuid === 'string' && ev.uuid) threadKey = ev.uuid
-    if (tf.source === 'claude') ending = classifyEnding(ev, endingText(ev)) ?? ending
-
-    const role = ev.message?.role ?? ev.type
-    const tes = eventToTailEventsForSource(tf.source, ev)
-    const isClaudeMessage = role === 'user' || role === 'assistant'
-    const isCodexMessage =
-      tf.source === 'codex' &&
-      ev.type === 'response_item' &&
-      ev.payload?.type === 'message' &&
-      (ev.payload?.role === 'user' || ev.payload?.role === 'assistant')
-    if (isClaudeMessage || isCodexMessage) {
-      if (isCodexMessage && tes.length === 0) continue
-      messageCount++
-      const t = toEpoch(ev.timestamp)
-      if (t !== null) {
-        if (firstTs === null) firstTs = t
-        lastTs = t
-      }
-      // eventToTailEvents is the ONE place that knows what is real: it drops thinking blocks and
-      // the CLI's own resume bookkeeping (isMeta / <synthetic> self-talk). Reading
-      // `ev.message.content` straight off the event bypassed all of that, which is exactly how the
-      // `isMeta` local-command caveat became the title of 103 of the newest 200 sessions.
-      const real = tes.filter((e) => e.text && !isCommandWrapperText(e.text))
-      if (real.length > 0) substantive++
-      const visibleRole = isCodexMessage ? ev.payload.role : role
-      if (!firstUser && visibleRole === 'user') {
-        firstUser = real.find((e) => e.kind === 'text')?.text ?? ''
-      }
-      const textEv = [...tes].reverse().find((e) => e.kind === 'text')
-      if (textEv) {
-        lastRole = textEv.role
-        lastPreview = oneLine(textEv.text)
-      } else if (tes.length > 0) {
-        lastRole = role
-        lastPreview = lastPreview ?? oneLine(tes[tes.length - 1].text)
-      }
-    }
+    applyMetaLine(acc, tf, ev, limits)
   }
 
   // describeTaggedText (formerly unwrapTaggedText) only touches the two derived-from-a-turn
   // sources: an explicit custom/AI title is already a label and must never be second-guessed.
-  const turn = describeTaggedText(lastPrompt || firstUser || '')
-  const title = oneLine(customTitle || aiTitle || tf.title || turn.label || tf.session_id, 120)
+  const turn = describeTaggedText(acc.lastPrompt || acc.firstUser || '')
+  const title = oneLine(
+    acc.customTitle || acc.aiTitle || tf.title || turn.label || tf.session_id,
+    120,
+  )
   // Same precedence as the line above, kept in step with it: whichever term won, names itself.
   // This is what lets a row explain a title nobody recognises instead of just displaying it.
-  const titleSource: TitleSource = resolveTitleSource(customTitle, aiTitle, tf.title, turn)
+  const titleSource: TitleSource = resolveTitleSource(acc.customTitle, acc.aiTitle, tf.title, turn)
   const meta: ScannedMeta = {
     title,
-    cwd: cwd || decodeProjectKey(tf.project),
-    git_branch: gitBranch,
-    message_count: messageCount,
-    created_at: firstTs,
-    last_activity_at: lastTs ?? tf.mtime_ms,
-    last_role: lastRole,
-    last_text_preview: lastPreview,
-    substantive_turns: substantive,
+    cwd: acc.cwd || decodeProjectKey(tf.project),
+    git_branch: acc.gitBranch,
+    message_count: acc.messageCount,
+    created_at: acc.firstTs,
+    last_activity_at: acc.lastTs ?? tf.mtime_ms,
+    last_role: acc.lastRole,
+    last_text_preview: acc.lastPreview,
+    substantive_turns: acc.substantive,
     limit_stop: limits?.verdict() ?? null,
     title_source: titleSource,
     title_tag: titleSource === 'envelope' ? turn.tag : null,
-    thread_key: threadKey,
-    ended_because: ending,
+    thread_key: acc.threadKey,
+    ended_because: acc.ending,
   }
   return rememberScan(tf, key, meta)
 }

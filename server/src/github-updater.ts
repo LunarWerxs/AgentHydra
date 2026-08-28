@@ -415,6 +415,82 @@ function fail(message: string): UpdateApplyResult {
   }
 }
 
+/**
+ * Everything up to having a verified, ready-to-install executable on disk: staging dir setup,
+ * download-with-progress, extraction, and a version self-check. Nothing here has touched the
+ * INSTALLED app yet, so a thrown error is safe to let applyUpdate's own try/catch handle —
+ * there is nothing to roll back. Pulled out of applyUpdate, see fail() above for why every
+ * early return (here, as a returned UpdateApplyResult rather than a throw) still goes through it.
+ */
+async function downloadAndVerifyUpdate(
+  asset: GhAsset,
+  remoteVersion: string,
+  staging: string,
+  bundledExeName: string,
+  exeName: string,
+  output: string[],
+): Promise<{ newExe: string; bundleDirPath: string | null } | UpdateApplyResult> {
+  rmSync(staging, { recursive: true, force: true })
+  mkdirSync(staging, { recursive: true }) // tar -C needs it to exist; Expand-Archive/Bun.write are fine either way
+  const archivePath = join(staging, asset.name)
+  const totalMb = Math.round(asset.size / 1048576)
+  output.push(`downloading ${asset.name} (${totalMb} MB)`)
+  setUpdatePhase('downloading', `Downloading v${remoteVersion} (${totalMb} MB)…`)
+  const dl = await fetch(asset.browser_download_url, {
+    headers: { accept: 'application/octet-stream', 'user-agent': `${SERVICE_NAME}/${VERSION}` },
+    redirect: 'follow',
+  })
+  if (!dl.ok) return fail(`download failed (HTTP ${dl.status})`)
+  // Streamed rather than `Bun.write(path, response)` so the bytes can be COUNTED as they land.
+  // This is the step the "it just sat there spinning" report was actually about: a ~100 MB
+  // release over a normal connection is tens of seconds during which the old code emitted
+  // nothing at all, and a slow download was indistinguishable from a dead one.
+  await writeWithProgress(dl, archivePath, asset.size)
+
+  output.push('extracting')
+  setUpdatePhase('extracting', 'Extracting the update…')
+  await extract(archivePath, staging)
+
+  // Updater bundles retain the versioned wrapper directory expected by older releases, while
+  // containing only the executable now. Also accept a flat archive if one is ever published.
+  const entries = readdirSync(staging, { withFileTypes: true })
+  const bundleDirEntry = entries.find((e) => e.isDirectory() && e.name.startsWith('AgentHydra-'))
+  const bundleDirPath = bundleDirEntry ? join(staging, bundleDirEntry.name) : null
+  const newExe = bundleDirPath ? join(bundleDirPath, bundledExeName) : join(staging, bundledExeName)
+  if (!existsSync(newExe)) return fail(`the update bundle has no ${exeName}`)
+
+  output.push('verifying the new binary runs')
+  setUpdatePhase('verifying', 'Checking that the downloaded build runs…')
+  if (!(await verifyExeVersion(newExe, remoteVersion))) {
+    return fail('the downloaded binary failed its version self-check — not swapping it in')
+  }
+  return { newExe, bundleDirPath }
+}
+
+// The swap above moves ONE file, which is right for the daemon but would freeze misc/ at
+// whatever version first installed it. The tray host is a separate executable with its own
+// bugs (an icon that did not survive an Explorer restart, most recently), so without this a
+// fixed launcher would never reach anyone who updates in place. These are app-owned launcher
+// files, not user data: the shortcut lives at the install root and is untouched. Best-effort,
+// and deliberately non-fatal: the daemon is already updated and working, and a locked
+// lunarwerx-tray.exe (the running tray host holds its own image) must not roll back an
+// otherwise-good update. The next update retries. Pulled out of applyUpdate, see fail() above.
+function refreshTrayToolkit(
+  bundleDirPath: string | null,
+  staging: string,
+  installDir: string,
+  output: string[],
+): void {
+  const bundledMisc = bundleDirPath ? join(bundleDirPath, 'misc') : join(staging, 'misc')
+  if (!existsSync(bundledMisc)) return
+  try {
+    cpSync(bundledMisc, join(installDir, 'misc'), { recursive: true })
+    output.push('refreshed the tray toolkit')
+  } catch {
+    output.push('could not refresh misc/ (in use?) — the app itself is updated')
+  }
+}
+
 export async function applyUpdate(): Promise<UpdateApplyResult> {
   beginUpdateProgress('Checking for the latest release…')
   const status = await checkForUpdate({ fresh: true })
@@ -446,41 +522,16 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
   let exeMovedAside: string | null = null
 
   try {
-    rmSync(staging, { recursive: true, force: true })
-    mkdirSync(staging, { recursive: true }) // tar -C needs it to exist; Expand-Archive/Bun.write are fine either way
-    const archivePath = join(staging, asset.name)
-    const totalMb = Math.round(asset.size / 1048576)
-    output.push(`downloading ${asset.name} (${totalMb} MB)`)
-    setUpdatePhase('downloading', `Downloading v${remoteVersion} (${totalMb} MB)…`)
-    const dl = await fetch(asset.browser_download_url, {
-      headers: { accept: 'application/octet-stream', 'user-agent': `${SERVICE_NAME}/${VERSION}` },
-      redirect: 'follow',
-    })
-    if (!dl.ok) return fail(`download failed (HTTP ${dl.status})`)
-    // Streamed rather than `Bun.write(path, response)` so the bytes can be COUNTED as they land.
-    // This is the step the "it just sat there spinning" report was actually about: a ~100 MB
-    // release over a normal connection is tens of seconds during which the old code emitted
-    // nothing at all, and a slow download was indistinguishable from a dead one.
-    await writeWithProgress(dl, archivePath, asset.size)
-
-    output.push('extracting')
-    setUpdatePhase('extracting', 'Extracting the update…')
-    await extract(archivePath, staging)
-
-    // Updater bundles retain the versioned wrapper directory expected by older releases, while
-    // containing only the executable now. Also accept a flat archive if one is ever published.
-    const entries = readdirSync(staging, { withFileTypes: true })
-    const bundleDir = entries.find((e) => e.isDirectory() && e.name.startsWith('AgentHydra-'))
-    const newExe = bundleDir
-      ? join(staging, bundleDir.name, bundledExeName)
-      : join(staging, bundledExeName)
-    if (!existsSync(newExe)) return fail(`the update bundle has no ${exeName}`)
-
-    output.push('verifying the new binary runs')
-    setUpdatePhase('verifying', 'Checking that the downloaded build runs…')
-    if (!(await verifyExeVersion(newExe, remoteVersion))) {
-      return fail('the downloaded binary failed its version self-check — not swapping it in')
-    }
+    const prepared = await downloadAndVerifyUpdate(
+      asset,
+      remoteVersion,
+      staging,
+      bundledExeName,
+      exeName,
+      output,
+    )
+    if (!('newExe' in prepared)) return prepared
+    const { newExe, bundleDirPath } = prepared
     setUpdatePhase('installing', `Installing v${remoteVersion}…`)
 
     // --- swap the exe (rename-aside is allowed on a running Windows image) ---
@@ -496,24 +547,7 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
     }
     output.push(`installed v${remoteVersion}`)
 
-    // --- refresh the tray toolkit, when the bundle carries one ---
-    // The swap above moves ONE file, which is right for the daemon but would freeze misc/ at
-    // whatever version first installed it. The tray host is a separate executable with its own
-    // bugs (an icon that did not survive an Explorer restart, most recently), so without this a
-    // fixed launcher would never reach anyone who updates in place. These are app-owned launcher
-    // files, not user data: the shortcut lives at the install root and is untouched.
-    const bundledMisc = bundleDir ? join(staging, bundleDir.name, 'misc') : join(staging, 'misc')
-    if (existsSync(bundledMisc)) {
-      try {
-        cpSync(bundledMisc, join(installDir, 'misc'), { recursive: true })
-        output.push('refreshed the tray toolkit')
-      } catch {
-        // Best-effort, and deliberately non-fatal: the daemon is already updated and working, and
-        // a locked lunarwerx-tray.exe (the running tray host holds its own image) must not roll
-        // back an otherwise-good update. The next update retries.
-        output.push('could not refresh misc/ (in use?) — the app itself is updated')
-      }
-    }
+    refreshTrayToolkit(bundleDirPath, staging, installDir, output)
 
     rmSync(staging, { recursive: true, force: true })
     cached = null // force the next check to re-read the (now-current) version

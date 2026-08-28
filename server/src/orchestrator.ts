@@ -45,13 +45,10 @@
 
 import { createHash } from 'node:crypto'
 import {
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readdirSync,
   readFileSync,
-  readSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -74,6 +71,13 @@ import { db, getSetting, setSetting } from './db'
 import { isSessionActive } from './dispatch'
 import { findDesktopChat, instanceRefForSession, sessionMetaMap } from './instance-sessions'
 import { NEW_CHAT_ULTRACODE_KEY, newChatUltracodeEnabled } from './new-chat-opening'
+import {
+  type ChipInTail,
+  isInjectedUserText,
+  parseTranscriptTail,
+  readTailInfo,
+  type TailInfo,
+} from './orchestrator-transcript-tail'
 import { listRecentPlacements, normalizeRef, prunePlacements, recentPlacements } from './placements'
 import {
   listProposalsForView,
@@ -81,7 +85,6 @@ import {
   proposeAction,
   retireProposalsForSessions,
 } from './proposals'
-import { classifyEnding, type SessionEnding } from './session-ending'
 import { desktopChatArchiveState, sweepUntitledDesktopChats } from './session-launch'
 import type {
   AttentionItem,
@@ -682,214 +685,9 @@ function cleanOrphanFiles(orphan: OrphanSession): void {
 }
 
 // --- transcript tail parsing (pure; exported for tests) ---------------------
-
-export interface ChipInTail {
-  id: string
-  title: string
-  prompt: string
-}
-
-export interface TailInfo {
-  /** What ended the last meaningful record, per session-ending.ts. */
-  ending: SessionEnding | null
-  /** Last assistant text (the recap, when there is one). */
-  lastAssistantText: string | null
-  /** Context tokens at the last assistant event (input + cache read + cache creation). */
-  ctxTokens: number | null
-  /** The last turn's final assistant record ended on tool_use with nothing after it. */
-  midTurn: boolean
-  /** WHICH tool that dangling call was, when midTurn came from an assistant tool_use. The
-   *  difference between "waiting on a long build" and "frozen at an approval prompt" starts
-   *  here: only some tools prompt, and only in some permission modes. */
-  pendingTool: string | null
-  /** A "What I did / Am I 100% done / Do I recommend" recap block is present. */
-  recapDetected: boolean
-  /** The tail mentions a handoff prompt (the context-rollover protocol's deliverable). */
-  handoffDetected: boolean
-  /** spawn_task chips offered in the tail window. */
-  chips: ChipInTail[]
-  /** Last message typed by the actual human (injected/cross-session/tool traffic excluded). */
-  lastHumanText: string | null
-  /** ISO timestamp of that human message, when the record carried one. */
-  lastHumanAt: string | null
-  /** ISO timestamp of the newest record in the window — when the ENGINE last did anything.
-   *  Compared against the live registry's process startedAt, this is the deterministic deaf
-   *  test: a process with NO record newer than its own spawn has never run a turn. */
-  lastEventAt: string | null
-  /** No parseable user/assistant record found in the window that was read. */
-  unreadable: boolean
-}
-
-function textOf(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content))
-    return content
-      .filter((b) => (b as { type?: string }).type === 'text')
-      .map((b) => (b as { text?: string }).text ?? '')
-      .join('\n')
-  return ''
-}
-
-/** True for user records that were not typed by the human: cross-session mail, task
- *  notifications, command output echoes, tool results, interrupt bookkeeping. */
-export function isInjectedUserText(text: string): boolean {
-  const t = text.trimStart()
-  return (
-    t.startsWith('Another Claude session sent a message') ||
-    t.startsWith('<cross-session-message') ||
-    t.startsWith('<task-notification>') ||
-    t.startsWith('<local-command-stdout>') ||
-    t.startsWith('<command-name>') ||
-    t.startsWith('<system-reminder>') ||
-    t.startsWith('[Request interrupted') ||
-    // Orchestrator plumbing (migration notices, revive prompts, reviewer nudges) is marked with
-    // this prefix by convention. Counting it as "the human said something" made every migrated
-    // thread read as human-held, so the reviewer never touched it again.
-    t.startsWith('[orchestrator]')
-  )
-}
-
-export function parseTranscriptTail(raw: string): TailInfo {
-  const lines = raw.split('\n').filter((l) => l.trim())
-  const info: TailInfo = {
-    ending: null,
-    lastAssistantText: null,
-    ctxTokens: null,
-    midTurn: false,
-    pendingTool: null,
-    recapDetected: false,
-    handoffDetected: false,
-    chips: [],
-    lastHumanText: null,
-    lastHumanAt: null,
-    lastEventAt: null,
-    unreadable: true,
-  }
-  let isNewestMeaningful = true
-  // Newest record last on disk, so walk backwards; the first line of a byte-window is often a
-  // truncated JSON line, which the parse guard simply skips.
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let ev: {
-      type?: string
-      timestamp?: string
-      message?: { content?: unknown; usage?: Record<string, number> }
-    }
-    try {
-      ev = JSON.parse(lines[i])
-    } catch {
-      continue
-    }
-    const type = ev?.type
-    if (type !== 'user' && type !== 'assistant' && type !== 'result') continue
-    info.unreadable = false
-    const newest = isNewestMeaningful
-    isNewestMeaningful = false
-    if (newest && typeof ev.timestamp === 'string') info.lastEventAt = ev.timestamp
-    const text = textOf(ev.message?.content)
-    if (info.ending === null) {
-      const e = classifyEnding(ev, text)
-      if (e !== null) info.ending = e
-    }
-    if (type === 'assistant' && ev.message) {
-      const usage = ev.message.usage
-      if (info.ctxTokens === null && usage) {
-        info.ctxTokens =
-          (usage.input_tokens || 0) +
-          (usage.cache_read_input_tokens || 0) +
-          (usage.cache_creation_input_tokens || 0)
-      }
-      const content = ev.message.content
-      if (Array.isArray(content)) {
-        for (const b of content as Array<{
-          type?: string
-          id?: string
-          name?: string
-          input?: { title?: string; prompt?: string }
-        }>) {
-          if (b.type === 'tool_use' && /spawn_task$/.test(b.name ?? '')) {
-            info.chips.push({
-              id: b.id ?? `${i}`,
-              title: (b.input?.title ?? '').slice(0, 120),
-              prompt: (b.input?.prompt ?? '').slice(0, 1500),
-            })
-          }
-        }
-        const dangling = newest
-          ? (content as Array<{ type?: string; name?: string }>).find((b) => b.type === 'tool_use')
-          : undefined
-        if (dangling) {
-          // The newest record overall is an assistant record that ends in a tool call: the runtime
-          // is (or was) mid-turn, waiting on that tool. Distinct from "finished and waiting".
-          info.midTurn = true
-          info.pendingTool = dangling.name ?? null
-        }
-      }
-      if (info.lastAssistantText === null) {
-        const t = text.trim()
-        if (t) info.lastAssistantText = t.slice(-4000)
-      }
-    } else {
-      if (
-        newest &&
-        type === 'user' &&
-        Array.isArray(ev.message?.content) &&
-        (ev.message.content as Array<{ type?: string }>).some((b) => b.type === 'tool_result')
-      ) {
-        // The newest record is a tool result with no assistant turn after it yet: the runtime is
-        // between a tool finishing and the model's next step — also mid-turn.
-        info.midTurn = true
-      }
-      if (type === 'user' && info.lastHumanText === null) {
-        const t = text.trim()
-        if (t && !isInjectedUserText(t)) {
-          info.lastHumanText = t.slice(0, 400)
-          info.lastHumanAt = typeof ev.timestamp === 'string' ? ev.timestamp : null
-        }
-      }
-    }
-    if (
-      info.lastAssistantText !== null &&
-      info.lastHumanText !== null &&
-      info.ctxTokens !== null &&
-      info.ending !== null
-    )
-      break
-  }
-  if (info.lastAssistantText) {
-    info.recapDetected = /##\s*(What I did|Am I 100% done|Do I recommend)/i.test(
-      info.lastAssistantText,
-    )
-    info.handoffDetected = /handoff prompt/i.test(info.lastAssistantText)
-  }
-  return info
-}
-
-/** Read the last `bytes` of a file. Some transcripts carry multi-megabyte single lines (pasted
- *  logs, giant tool results), so callers escalate the window until a record parses. */
-function tailOfFile(path: string, bytes: number): string {
-  const size = statSync(path).size
-  const start = Math.max(0, size - bytes)
-  const fd = openSync(path, 'r')
-  try {
-    const buf = Buffer.alloc(size - start)
-    readSync(fd, buf, 0, buf.length, start)
-    return buf.toString('utf8')
-  } finally {
-    closeSync(fd)
-  }
-}
-
-const TAIL_WINDOWS = [256 * 1024, 2 * 1024 * 1024, 8 * 1024 * 1024]
-
-function readTailInfo(path: string): TailInfo {
-  let info: TailInfo | null = null
-  const size = statSync(path).size
-  for (const w of TAIL_WINDOWS) {
-    info = parseTranscriptTail(tailOfFile(path, w))
-    if (!info.unreadable || w >= size) return info
-  }
-  return info as TailInfo
-}
+// Moved to ./orchestrator-transcript-tail — this file was already over the oversized-file gate.
+// Re-exported here so existing importers of these four names from './orchestrator' keep working.
+export { type ChipInTail, isInjectedUserText, parseTranscriptTail, readTailInfo, type TailInfo }
 
 // --- git hygiene ------------------------------------------------------------
 
@@ -1067,6 +865,118 @@ export function planOfAccountLabel(account: string | null | undefined): string |
   return m ? m[1].trim() : null
 }
 
+// Why (if any) an instance is blocked from placement — checked in priority order. Pulled out
+// of buildInstanceRow's ternary chain, see buildInstanceRow below for why.
+function instanceBlockedWhy(
+  isRunning: boolean,
+  stale: boolean,
+  band: OrchestratorInstance['band'],
+  wk: { pct: number } | null,
+  effective: number,
+  sessionPct: number | null,
+  sessionHighPct: number,
+): string | null {
+  if (!isRunning) return 'not running'
+  if (stale) return 'usage reading is stale (older than a day)'
+  if (band === 'critical') return `weekly at ${wk?.pct ?? '?'}% (critical)`
+  if (effective >= sessionHighPct) return `5-hour window at ${sessionPct ?? '?'}%`
+  return null
+}
+
+// One instance's row: usage staleness, band, and why (if any) it is blocked from placement.
+// Pulled out of buildInstanceRows's .map() callback — a nested closure's branches roll up into
+// the enclosing function no matter what it's named, so this had to become a true module-level
+// function to actually leave buildInstanceRows's score.
+function buildInstanceRow(
+  i: { dir: string; name: string; isRunning: boolean },
+  cache: Record<string, UsageSnapshot>,
+  s: OrchestratorSettings,
+  nowMs: number,
+  placements: Record<string, number>,
+): OrchestratorInstance {
+  const ref = desktopKey(i.dir)
+  const snap = cache[ref]
+  const capturedMs = Date.parse(snap?.capturedAt ?? '')
+  const stale = !snap || Number.isNaN(capturedMs) || nowMs - capturedMs > 24 * 3600 * 1000
+  const wk = stale ? null : (snap?.weekAll ?? null)
+  const sess = stale ? null : (snap?.session ?? null)
+  const sessionPct = sess?.pct ?? null
+  const sessionResetsSoon = sess ? resetsSoon(sess.resetsAt ?? null, nowMs, s) : false
+  const band: OrchestratorInstance['band'] =
+    wk && typeof wk.pct === 'number' ? bandForPct(wk.pct, s) : 'unknown'
+  // The figure the ROUTER reasons with. A 5-hour window minutes from its reset is capacity,
+  // not load, exactly as a weekly one is: whatever it reads now is about to be wiped. The
+  // row still reports the true reading in sessionPct, so the feed never restates a
+  // measurement it did not take. Gated on loadBalance so switching balancing off restores
+  // the previous ranking exactly.
+  const effective = s.loadBalance && sessionResetsSoon ? 0 : (sessionPct ?? 101)
+  const blockedWhy = instanceBlockedWhy(
+    i.isRunning,
+    stale,
+    band,
+    wk,
+    effective,
+    sessionPct,
+    s.sessionHighPct,
+  )
+  return {
+    ref,
+    name: i.name,
+    isRunning: i.isRunning,
+    account: snap?.account ?? null,
+    plan: planOfAccountLabel(snap?.account),
+    weeklyPct: wk?.pct ?? null,
+    weeklyResetsAt: wk?.resetsAt ?? null,
+    sessionPct: stale ? null : sessionPct,
+    sessionResetsAt: sess?.resetsAt ?? null,
+    sessionResetsSoon,
+    recentPlacements: placements[normalizeRef(ref) ?? ''] ?? 0,
+    eligible: blockedWhy === null,
+    blockedWhy,
+    band,
+    resetsSoon: wk ? resetsSoon(wk.resetsAt ?? null, nowMs, s) : false,
+    stale,
+  }
+}
+
+// Running first, then the router's preference order. The 5-HOUR window is the tiebreak inside
+// a weekly band (owner rule 2026-08-25: with several accounts open, spread work so no one
+// account's 5-hour window gets hammered): the weekly band decides who is ELIGIBLE, the session
+// pct decides who is NEXT, and weekly pct settles the rest. An account resetting soon ranks
+// with the healthy ones — its week is about to wipe, the standing dump-target exemption.
+//
+// BALANCING ONLY EVER BREAKS TIES. Load is bucketed into coarse 20-point tiers, and the ledger
+// reorders inside a tier and nowhere else. An account at 12% and one at 25% are not peers, so
+// the colder one still wins outright no matter who was used last; 12% and 19% are peers, and
+// there the account that has not just been handed work goes first. That is the whole mechanism,
+// and its narrowness is the point: spreading work must never outrank having headroom, or
+// balancing would cheerfully feed an account toward its own wall.
+//
+// Pulled out of buildInstanceRows's .sort() comparator, see buildInstanceRow above for why.
+function compareInstanceRows(
+  a: OrchestratorInstance,
+  b: OrchestratorInstance,
+  s: OrchestratorSettings,
+): number {
+  const bandRank = (r: OrchestratorInstance): number =>
+    r.resetsSoon ? 0 : { ok: 0, elevated: 1, high: 2, critical: 3, unknown: 4 }[r.band]
+  const eff = (r: OrchestratorInstance): number =>
+    s.loadBalance && r.sessionResetsSoon ? 0 : (r.sessionPct ?? 101)
+  const tier = (r: OrchestratorInstance): number => Math.floor(Math.min(100, eff(r)) / 20)
+  if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1
+  const br = bandRank(a) - bandRank(b)
+  if (br !== 0) return br
+  if (s.loadBalance) {
+    const t = tier(a) - tier(b)
+    if (t !== 0) return t
+    const rp = a.recentPlacements - b.recentPlacements
+    if (rp !== 0) return rp
+  }
+  const sp = eff(a) - eff(b)
+  if (sp !== 0) return sp
+  return (a.weeklyPct ?? 101) - (b.weeklyPct ?? 101)
+}
+
 /**
  * Join the desktop instance list with the usage cache. A RUNNING instance with zero chats is
  * still open capacity — the first live run counted "open accounts" from the session registry
@@ -1079,81 +989,8 @@ export function buildInstanceRows(
   nowMs: number,
   placements: Record<string, number> = {},
 ): OrchestratorInstance[] {
-  const rows: OrchestratorInstance[] = instances.map((i) => {
-    const ref = desktopKey(i.dir)
-    const snap = cache[ref]
-    const capturedMs = Date.parse(snap?.capturedAt ?? '')
-    const stale = !snap || Number.isNaN(capturedMs) || nowMs - capturedMs > 24 * 3600 * 1000
-    const wk = stale ? null : (snap?.weekAll ?? null)
-    const sess = stale ? null : (snap?.session ?? null)
-    const sessionPct = sess?.pct ?? null
-    const sessionResetsSoon = sess ? resetsSoon(sess.resetsAt ?? null, nowMs, s) : false
-    const band: OrchestratorInstance['band'] =
-      wk && typeof wk.pct === 'number' ? bandForPct(wk.pct, s) : 'unknown'
-    // The figure the ROUTER reasons with. A 5-hour window minutes from its reset is capacity,
-    // not load, exactly as a weekly one is: whatever it reads now is about to be wiped. The
-    // row still reports the true reading in sessionPct, so the feed never restates a
-    // measurement it did not take. Gated on loadBalance so switching balancing off restores
-    // the previous ranking exactly.
-    const effective = s.loadBalance && sessionResetsSoon ? 0 : (sessionPct ?? 101)
-    const blockedWhy = !i.isRunning
-      ? 'not running'
-      : stale
-        ? 'usage reading is stale (older than a day)'
-        : band === 'critical'
-          ? `weekly at ${wk?.pct ?? '?'}% (critical)`
-          : effective >= s.sessionHighPct
-            ? `5-hour window at ${sessionPct ?? '?'}%`
-            : null
-    return {
-      ref,
-      name: i.name,
-      isRunning: i.isRunning,
-      account: snap?.account ?? null,
-      plan: planOfAccountLabel(snap?.account),
-      weeklyPct: wk?.pct ?? null,
-      weeklyResetsAt: wk?.resetsAt ?? null,
-      sessionPct: stale ? null : sessionPct,
-      sessionResetsAt: sess?.resetsAt ?? null,
-      sessionResetsSoon,
-      recentPlacements: placements[normalizeRef(ref) ?? ''] ?? 0,
-      eligible: blockedWhy === null,
-      blockedWhy,
-      band,
-      resetsSoon: wk ? resetsSoon(wk.resetsAt ?? null, nowMs, s) : false,
-      stale,
-    }
-  })
-  // Running first, then the router's preference order. The 5-HOUR window is the tiebreak inside
-  // a weekly band (owner rule 2026-08-25: with several accounts open, spread work so no one
-  // account's 5-hour window gets hammered): the weekly band decides who is ELIGIBLE, the session
-  // pct decides who is NEXT, and weekly pct settles the rest. An account resetting soon ranks
-  // with the healthy ones — its week is about to wipe, the standing dump-target exemption.
-  const bandRank = (r: OrchestratorInstance): number =>
-    r.resetsSoon ? 0 : { ok: 0, elevated: 1, high: 2, critical: 3, unknown: 4 }[r.band]
-  const eff = (r: OrchestratorInstance): number =>
-    s.loadBalance && r.sessionResetsSoon ? 0 : (r.sessionPct ?? 101)
-  // BALANCING ONLY EVER BREAKS TIES. Load is bucketed into coarse 20-point tiers, and the
-  // ledger reorders inside a tier and nowhere else. An account at 12% and one at 25% are not
-  // peers, so the colder one still wins outright no matter who was used last; 12% and 19% are
-  // peers, and there the account that has not just been handed work goes first. That is the
-  // whole mechanism, and its narrowness is the point: spreading work must never outrank
-  // having headroom, or balancing would cheerfully feed an account toward its own wall.
-  const tier = (r: OrchestratorInstance): number => Math.floor(Math.min(100, eff(r)) / 20)
-  return rows.sort((a, b) => {
-    if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1
-    const br = bandRank(a) - bandRank(b)
-    if (br !== 0) return br
-    if (s.loadBalance) {
-      const t = tier(a) - tier(b)
-      if (t !== 0) return t
-      const rp = a.recentPlacements - b.recentPlacements
-      if (rp !== 0) return rp
-    }
-    const sp = eff(a) - eff(b)
-    if (sp !== 0) return sp
-    return (a.weeklyPct ?? 101) - (b.weeklyPct ?? 101)
-  })
+  const rows = instances.map((i) => buildInstanceRow(i, cache, s, nowMs, placements))
+  return rows.sort((a, b) => compareInstanceRows(a, b, s))
 }
 
 /**
