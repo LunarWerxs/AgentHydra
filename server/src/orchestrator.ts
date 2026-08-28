@@ -2357,7 +2357,15 @@ async function restartAppsForArchiveVisibility(): Promise<void> {
     .query<{ key: string }, []>("select key from orchestrator_kv where key like 'archPending:%'")
     .all()
   if (pending.length === 0) return
-  const live = readLiveRegistry(join(homedir(), '.claude'))
+  // OUR OWN /usage PROBES ARE NOT SOMEONE'S WORK, and leaving them in was jamming this whole
+  // mechanism. A probe is a live session in a scratch cwd that belongs to no desktop app, so it
+  // lands in `unmapped` below and trips the "cannot prove any app is empty" bail - for every
+  // instance, every time a probe happens to be running. The daemon's own log shows the archive
+  // flags being deferred that way again and again while the owner watched finished chats sit in a
+  // sidebar (2026-08-28: 09:48, 18:02, 18:21, each naming 1-3 unmapped sessions). Excluding them
+  // costs the guard nothing: we KNOW what they are, which is the one thing `unmapped` cannot say
+  // about anything else.
+  const live = readLiveRegistry(join(homedir(), '.claude')).filter((s) => !isUsageProbeCwd(s.cwd))
   // GUARD HISTORY (2026-08-26, the self-kill): the old ownership test compared
   // instanceRefForSession's real-cased ref against the marker's LOWERCASED dir with `===`,
   // which matched NOTHING — so "zero live sessions" was always true and the restart quit the
@@ -2567,7 +2575,10 @@ export function orchestratorView(): OrchestratorView {
     // awake chat; without this field an unreachable instance is indistinguishable from a quiet
     // one, and its chats simply never move (owner-reported, 2026-08-28).
     unreachable: (() => {
-      const live = readLiveRegistry(join(homedir(), '.claude'))
+      // Same exclusion as the restart planner: a probe of ours is not a chat that could relay.
+      const live = readLiveRegistry(join(homedir(), '.claude')).filter(
+        (s) => !isUsageProbeCwd(s.cwd),
+      )
       const open = proposals.filter((p) => p.status === 'proposed' || p.status === 'approved')
       return unreachableInstances(live, state.instances, (ref) => {
         const same = (r: string | null | undefined) =>
