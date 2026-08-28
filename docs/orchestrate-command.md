@@ -46,7 +46,20 @@ the server's job now, not yours.
    delivery as done. Your DONE is not evidence; the transcript moving is.
 5. **Reschedule** with ScheduleWakeup, prompt exactly `/orchestrate`: acted this wake -> 90s;
    quiet -> 600s; overnight/no sessions -> 1800s. `noop` accordingly.
-6. Daemon unreachable 3 wakes in a row -> tell the user once, then retry every 600s.
+6. **KEEP THE DEAD-MAN SWITCH ARMED** (owner directive, Michael, 2026-08-28, after the loop died
+   silently twice: *"figure out whatever keeps making you stop and make it stop"*).
+   ScheduleWakeup is a ONE-SHOT chain: if a single call errors - and one did, with an internal
+   error the reviewer could not retry - no wake ever fires again and the loop is dead until a
+   human notices. So the pacing chain is never the only thing keeping you alive: keep a standing
+   CronCreate job firing the literal prompt `/orchestrate` every ~13 minutes. A duplicate wake is
+   a cheap no-op (the worklist is idempotent and an empty one costs one call); a missing wake is
+   a dead fleet. Check it with CronList on any wake where you have not already confirmed it this
+   session, and re-create it when absent - cron jobs are session-only and auto-expire after 7
+   days, so "I made one once" is not "one exists".
+   Honest residual: the cron lives inside this session, so it does not survive the session
+   itself dying (app restart, crash). That case still needs a chat opened and `/orchestrate`
+   typed once - the bootstrap limit the feed's `unreachable.fix` already names.
+7. Daemon unreachable 3 wakes in a row -> tell the user once, then retry every 600s.
 
 ## Judgment guidance (the only part that is yours)
 

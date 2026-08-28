@@ -401,6 +401,22 @@ function markSessionDone(sessionId: string): void {
   ).run(sessionMarkKey('claude', sessionId), 1, Date.now(), 1, Date.now())
 }
 
+/** The newest event timestamp in a session's transcript, or null. Companion to
+ *  transcriptMovedSince for callers that need the quiet test, not just the moved test. */
+export function lastEventAtOf(
+  sessionId: string,
+  readTail: (path: string) => { lastEventAt: string | null } = readTailInfo,
+  lookup: (sessionId: string) => { path: string } | null = (id) => findTranscript(id, 'claude'),
+): string | null {
+  const t = lookup(sessionId)
+  if (!t) return null
+  try {
+    return readTail(t.path).lastEventAt
+  } catch {
+    return null
+  }
+}
+
 /** Did the target's transcript gain an event after `afterIso`? The only honest meaning of "the
  *  delivery ran": a process existing proves nothing, and a reviewer's DONE is a claim. Seam for
  *  tests. */
@@ -1250,6 +1266,20 @@ export async function verifyWorkItem(
     const live = readLiveRegistry(join(homedir(), '.claude'))
     const anchor = anchorRefusal(st.targetSessionId, itemId, live, orchestratorView())
     if (anchor) return { ok: false, state: 'pending', detail: anchor }
+    // AND the chat must be QUIET, not merely moved. Flipping the flag while the closeout turn
+    // is still finishing loses the archive: the app's end-of-turn metadata save rewrites the
+    // entry un-archived, the janitor proposes it again, and the closeout re-boots the chat -
+    // a resurrection loop measured live (the same finished thread came back three times on
+    // 2026-08-28 before this gate existed; the adversarial review had flagged the ordering).
+    const last = lastEventAtOf(st.targetSessionId, readTail)
+    if (last && Date.now() - Date.parse(last) < 120_000)
+      return {
+        ok: false,
+        state: 'pending',
+        detail:
+          'closeout ran but the turn may still be finishing - waiting for 2 quiet minutes so ' +
+          "the app's final save cannot overwrite the archive flag",
+      }
     const res = await archiveDesktopChat(st.targetSessionId, true)
     for (const h of res.hits ?? [])
       if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
