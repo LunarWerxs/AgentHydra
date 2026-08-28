@@ -2492,6 +2492,12 @@ export interface UnreachableInstance {
   /** Open proposals plus attention items pointing at this instance - work that cannot move. */
   waiting: number
   why: string
+  /** What it costs while it lasts, and the one action that ends it. Carried on the row rather
+   *  than left to the reader, because the consequence is the part that gets missed: an account
+   *  nothing can start a turn on is an account the fleet cannot spread load onto, so every
+   *  orchestrated chat funnels through the instances that DO have a reviewer. */
+  consequence: string
+  fix: string
 }
 
 /**
@@ -2534,6 +2540,15 @@ export function unreachableInstances(
         here.length === 0
           ? 'no live chat there at all - no reviewer, no relay'
           : `its ${here.length} live session(s) are deaf passive children that have never run a turn - no relay`,
+      consequence:
+        'no work can be started on this account, so load cannot be spread onto it and any ' +
+        'chat left here is stranded - move threads out rather than leaving them',
+      // The honest bootstrap. Measured 2026-08-28: `claude://resume` can make a chat VISIBLE in
+      // any instance, but an imported chat is deaf until a person interacts with it, and the
+      // app's message channel - the one actuator that boots a dormant chat - is reachable only
+      // from a session already inside that instance. So the first live chat in an empty app is
+      // the one thing the machinery genuinely cannot start for itself.
+      fix: 'open one chat in this account and run /orchestrate in it - a reviewer inside the instance is the only thing that can start a turn there',
     })
   }
   return out

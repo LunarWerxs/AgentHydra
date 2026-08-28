@@ -1359,7 +1359,14 @@ export interface OrchestratorView {
    *  counts the open proposals and attention items stranded there. Empty is the normal case; a
    *  non-empty entry is something the reviewer must SAY rather than silently work around, and the
    *  cue to migrate genuinely unfinished threads to an instance it can reach. */
-  unreachable: Array<{ ref: string; name: string; waiting: number; why: string }>
+  unreachable: Array<{
+    ref: string
+    name: string
+    waiting: number
+    why: string
+    consequence: string
+    fix: string
+  }>
   /** WHERE THE NEXT PIECE OF WORK SHOULD GO. The same decision the monitor's migration
    *  target takes, resolved once here so the reviewer never has to re-derive placement
    *  policy from the sort order and then drift from it. `blocked` says why each account
