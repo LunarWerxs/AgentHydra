@@ -21,6 +21,7 @@ import {
   isSessionSuperseded,
   launchTerminalSession,
   seedDesktopSession,
+  stampImportedChat,
   sweepUntitledDesktopChats,
 } from '../src/session-launch'
 
@@ -171,6 +172,52 @@ test('imported chats are stamped bypassPermissions, not left to deadlock on a sh
   expect(meta.permissionMode).toBe('bypassPermissions')
   expect(meta.cliSessionId).toBe('sess-perm-1') // nothing else disturbed
   expect(applyDesktopChatAutomation(profile, 'sess-nope')).toBe(false)
+})
+
+test('an UNTITLED import is still stamped bypassPermissions', async () => {
+  // The regression this pins: the stamping step used to start `if (!title) return`, placed BEFORE
+  // the automation stamp, so an import with no title kept the app's `acceptEdits` default and then
+  // deadlocked on its first shell call with nobody there to approve it. Both import routes can
+  // pass an empty title, and no test reached this code because every other import test stops at a
+  // guard long before the spawn. Measured 2026-08-28 moving 13 chats between accounts.
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-untitled-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  const metaPath = join(store, 'local_sess-untitled.json')
+  writeFileSync(
+    metaPath,
+    JSON.stringify({ cliSessionId: 'sess-untitled', permissionMode: 'acceptEdits' }),
+  )
+
+  for (const noTitle of [undefined, null, '   ']) {
+    writeFileSync(
+      metaPath,
+      JSON.stringify({ cliSessionId: 'sess-untitled', permissionMode: 'acceptEdits' }),
+    )
+    const titled = await stampImportedChat(profile, 'sess-untitled', noTitle)
+    expect(titled).toBe(false) // no title was written...
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+    expect(meta.permissionMode).toBe('bypassPermissions') // ...but the posture WAS stamped
+    expect(meta.title).toBeUndefined()
+  }
+
+  // and a titled import still does both
+  const titled = await stampImportedChat(profile, 'sess-untitled', 'Real title')
+  expect(titled).toBe(true)
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+  expect(meta.title).toBe('Real title')
+  expect(meta.permissionMode).toBe('bypassPermissions')
+})
+
+test('stampImportedChat gives up at its deadline instead of blocking forever', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-stamp-deadline-'))
+  mkdirSync(join(profile, 'claude-code-sessions', 'org-1', 'user-1'), { recursive: true })
+  let slept = 0
+  const titled = await stampImportedChat(profile, 'never-created', 'x', 1200, async (ms) => {
+    slept += ms
+  })
+  expect(titled).toBe(false)
+  expect(slept).toBeGreaterThan(0) // it really did poll rather than bail on the first miss
 })
 
 test('archiveDesktopChat flips the metadata flag by filename across profiles', async () => {

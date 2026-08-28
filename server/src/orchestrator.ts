@@ -54,7 +54,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 // Text imports: bundled into compiled builds, so a packaged AgentHydra can still install the
 // commands on a machine that has no checkout and no docs/ directory.
 import ORCHESTRATE_COMMAND from '../../docs/orchestrate-command.md' with { type: 'text' }
@@ -2329,6 +2329,81 @@ function scannerTitleFor(cliSessionId: string): string | null {
   return row?.title ?? null
 }
 
+/**
+ * The repository a working directory belongs to, or null when it is not in one.
+ *
+ * Two adjustments make this answer the question the reviewer actually has. A `.git` that is a FILE
+ * rather than a directory is a linked worktree, and a worktree of a repo is the same repo for
+ * clobbering purposes: two chats editing `repo` and `repo/.claude/worktrees/x` share a history and
+ * an origin even though their paths do not overlap. And the walk stops at the first `.git` above
+ * the cwd, so a chat working in a subfolder still reports the repo root.
+ *
+ * Cached for the process lifetime: repo roots do not move, and this runs once per live chat per
+ * tick.
+ */
+const repoRootCache = new Map<string, string | null>()
+export function repoRootForCwd(cwd: string): string | null {
+  const hit = repoRootCache.get(cwd)
+  if (hit !== undefined) return hit
+  let dir = cwd
+  let out: string | null = null
+  for (let i = 0; i < 40; i++) {
+    if (existsSync(join(dir, '.git'))) {
+      // A linked worktree lives at <repo>/.claude/worktrees/<name>; fold it back onto <repo> so
+      // the two do not read as unrelated places.
+      const marker = `${sep}.claude${sep}worktrees${sep}`
+      const at = dir.toLowerCase().indexOf(marker.toLowerCase())
+      out = at >= 0 ? dir.slice(0, at) : dir
+      break
+    }
+    const up = dirname(dir)
+    if (!up || up === dir) break
+    dir = up
+  }
+  repoRootCache.set(cwd, out)
+  return out
+}
+
+/** Live chats that are working in the same repository right now. */
+export interface Collision {
+  /** The shared repository root, or the shared cwd when neither chat is in a repo. */
+  where: string
+  chats: Array<{ sessionId: string; name: string; cwd: string; instance: string | null }>
+}
+
+/**
+ * Which live chats are standing on each other's feet.
+ *
+ * The orchestrator places work and delivers nudges without any notion of what the OTHER chats are
+ * doing, so two threads land in one repo and overwrite each other - the owner has been told by his
+ * own chats that "work was overridden by other chats" (2026-08-25), and the commit nudge makes it
+ * worse by telling chat A to commit a tree chat B is halfway through editing.
+ *
+ * This is deliberately the cheap 90% of the answer rather than a file-level dependency graph:
+ * group the live registry by repository root. Same repo means they CAN clobber, which is all the
+ * reviewer needs to route around it. It costs one existsSync walk per live chat per tick, cached,
+ * and it cannot go stale in a harmful direction: a collision that has ended simply stops appearing.
+ */
+export function collisionsFor(live: LiveSession[]): Collision[] {
+  const groups = new Map<string, Collision>()
+  for (const s of live) {
+    if (!s.cwd) continue
+    const where = repoRootForCwd(s.cwd) ?? s.cwd
+    const key = where.toLowerCase()
+    const g = groups.get(key) ?? { where, chats: [] }
+    g.chats.push({
+      sessionId: s.sessionId,
+      name: s.name,
+      cwd: s.cwd,
+      instance: instanceRefForSession(s.sessionId),
+    })
+    groups.set(key, g)
+  }
+  return [...groups.values()]
+    .filter((g) => g.chats.length > 1)
+    .sort((a, b) => b.chats.length - a.chats.length || a.where.localeCompare(b.where))
+}
+
 function fmtQuiet(secs: number): string {
   if (secs < 90) return `${secs}s`
   if (secs < 90 * 60) return `${Math.round(secs / 60)}m`
@@ -2357,6 +2432,10 @@ export function orchestratorView(): OrchestratorView {
     // to read a boolean and remember a rule, and a rule only a reader can apply is a rule that
     // gets forgotten. Concatenate it; when the opt-in is off it is the empty string.
     newChatPrefix: newChatUltracodeEnabled() ? 'ultracode\n\n' : '',
+    // WHO IS STANDING WHERE, so work can be routed around a repo someone else is already in.
+    // Placement used to consider only account headroom, which is why two chats could be pointed
+    // at one repo and overwrite each other. Empty is the normal case and means nothing to avoid.
+    collisions: collisionsFor(readLiveRegistry(join(homedir(), '.claude'))),
     // WHERE THE NEXT PIECE OF WORK SHOULD GO, decided once here rather than re-derived from
     // the sort by every reader. `blocked` states why each passed-over account was passed
     // over, so a placement can be argued with instead of merely trusted, and `recent` is the

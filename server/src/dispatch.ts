@@ -729,10 +729,17 @@ export async function attemptDesktopImport(id: string, importer?: DesktopImporte
     result = { ok: false, reason: err instanceof Error ? err.message : 'import-threw' }
   }
   if (result.ok) {
+    // Only a row that ASKED for a title can fail to get one. `titled` used to be undefined for a
+    // titleless import and is now always a boolean, so testing it alone would file "the title
+    // could not be written" against every row that never wanted one - a failure notice for work
+    // nobody requested.
+    const titleWanted = !!row.import_title?.trim()
     setImportState(
       id,
       'done',
-      result.titled === false ? 'delivered, but the chat title could not be written' : null,
+      titleWanted && result.titled === false
+        ? 'delivered, but the chat title could not be written'
+        : null,
     )
     return
   }
@@ -761,10 +768,26 @@ export async function deliverPendingImports(importer?: DesktopImporter): Promise
 }
 
 let importTimer: ReturnType<typeof setInterval> | null = null
+/** True while a sweep is in flight. See the guard in startImportSweep. */
+let importSweepRunning = false
 
 export function startImportSweep(): void {
   if (importTimer) return
-  importTimer = setInterval(() => void deliverPendingImports().catch(() => {}), IMPORT_SWEEP_MS)
+  // RE-ENTRANCY GUARD, and it is load-bearing. Each import waits for the target app to create the
+  // chat's metadata file, up to 20 seconds, and the sweep walks its rows SERIALLY - so three
+  // pending rows against an app that never creates them takes a minute, which is the sweep
+  // interval. setInterval does not await the previous callback, so without this a slow sweep
+  // overlaps the next one and the same queue rows get imported twice concurrently: rows stay
+  // 'pending' until attemptDesktopImport marks them, so both passes see identical work.
+  importTimer = setInterval(() => {
+    if (importSweepRunning) return
+    importSweepRunning = true
+    void deliverPendingImports()
+      .catch(() => {})
+      .finally(() => {
+        importSweepRunning = false
+      })
+  }, IMPORT_SWEEP_MS)
 }
 
 export function stopImportSweep(): void {

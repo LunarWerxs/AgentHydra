@@ -583,6 +583,30 @@ verbatim) restores the default so future shipped improvements still land. `GET
 always sends `prompts.<name>` from the feed, and the daemon uses `migrationNotice` itself for
 migrate flows. Placeholders in `<angle brackets>` are substituted at send time.
 
+### Collision awareness (who is already in that repo)
+
+Placement answers "which ACCOUNT has room" and nothing else. It has never known whether anyone is
+already WORKING where the new thread is about to land, which is how two chats came to edit one
+repository and overwrite each other, reported by the owner's own chats: *work was overridden by
+other chats* (2026-08-25).
+
+The feed's `collisions` array closes the gap cheaply. Each entry is a repository root plus every
+LIVE chat currently inside it (`sessionId`, peer `name`, `cwd`, owning `instance`). A linked
+worktree is folded onto its parent repo, since `repo` and `repo/.claude/worktrees/x` are one
+history reached by two paths, and a group of one is never reported: an empty array is the normal
+case, and a watcher that cried collision over every solo chat would be ignored exactly when it was
+right.
+
+It is repository-level on purpose. Same repo means two chats CAN clobber, which is all the reviewer
+needs to route around it; a file-level dependency graph would be more precise, would go stale
+between ticks, and would not change the decision being made. Cost is one cached directory walk per
+live chat per tick.
+
+The reviewer is required to use it when placing work, when sending commit or branch nudges (never
+into a repo that appears here - "commit your files" to a tree someone else is mid-edit in is an
+instruction to sweep up unfinished work), and when reviving a thread whose repo is contested. See
+[orchestrate-command.md](orchestrate-command.md).
+
 ### Load balancing (5-hour windows)
 
 The `instances` routing table arrives pre-sorted for placement: running first, then weekly

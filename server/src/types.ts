@@ -1342,6 +1342,17 @@ export interface OrchestratorView {
    *  reach; serving the literal string means it concatenates rather than remembering a rule.
    *  Empty when the opt-in is off. */
   newChatPrefix: string
+  /** LIVE CHATS SHARING A REPOSITORY RIGHT NOW - who could clobber whom.
+   *
+   *  Placement weighs account headroom and nothing else, so two chats could be pointed at one
+   *  repo and overwrite each other; the owner has been told exactly that by his own chats. This
+   *  is the cheap 90% of the answer: same repo root (a linked worktree folded onto its parent)
+   *  means they CAN collide, which is all the reviewer needs to route around it. Empty is the
+   *  normal case and means there is nothing to avoid. */
+  collisions: Array<{
+    where: string
+    chats: Array<{ sessionId: string; name: string; cwd: string; instance: string | null }>
+  }>
   /** WHERE THE NEXT PIECE OF WORK SHOULD GO. The same decision the monitor's migration
    *  target takes, resolved once here so the reviewer never has to re-derive placement
    *  policy from the sort order and then drift from it. `blocked` says why each account

@@ -17,7 +17,7 @@
 // default (non-isolated) install labels as "default", and anything unmapped is a
 // plain CLI / unknown session. The same files also carry `isArchived`, Claude
 // Desktop's own archive flag, so one scan gives both the label and that.
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { defaultClaudeUserDataDir, instancesRoot } from './core/paths'
 import { AMBIENT_RUN_AS } from './types'
@@ -66,6 +66,51 @@ interface OriginRow {
   createdAt: number
 }
 
+/**
+ * Index one chat under one key, resolving the case where TWO profiles both carry it.
+ *
+ * That collision is routine, not exotic: a migrate ARCHIVES the source profile's metadata rather
+ * than deleting it, so the moment a chat is moved, two stores describe it. This used to be a plain
+ * `map.set`, which meant last-scanned-wins over a `readdirSync` ordering nobody controls - so the
+ * winner was usually the stale ARCHIVED copy on the old account, and the live chat on its new
+ * account vanished from every `archived: 'hide'` listing while the dashboard cheerfully attributed
+ * it to the account it had just left. Measured 2026-08-28: 13 migrated chats, all reported as
+ * archived on the source, all actually live on the target.
+ *
+ * Preference order, most decisive first:
+ *   1. a LIVE entry beats an ARCHIVED one - an archived pointer is a tombstone, not a location;
+ *   2. otherwise the more recently written file wins, the best available proxy for "the profile
+ *      that actually touched this chat last";
+ *   3. and on an exact tie, the lower path wins - NOT because that is meaningful, but because the
+ *      alternative is scan order. Equal mtimes are real (two files stamped in one operation) and
+ *      so is a stat that throws for both, and falling through to "keep whatever was visited
+ *      first" would let a chat's reported account flip between two 15-second scans with nothing
+ *      about it having changed. An arbitrary answer is tolerable; an unstable one is not.
+ *
+ * The `statSync` only runs on an actual collision, so the common single-entry path is unchanged.
+ */
+function setPreferred(map: Map<string, SessionMeta>, key: string, entry: SessionMeta): void {
+  const existing = map.get(key)
+  if (!existing) {
+    map.set(key, entry)
+    return
+  }
+  if (existing.archived !== entry.archived) {
+    if (existing.archived) map.set(key, entry)
+    return
+  }
+  const mtime = (p: string): number => {
+    try {
+      return statSync(p).mtimeMs
+    } catch {
+      return 0
+    }
+  }
+  const a = mtime(entry.path)
+  const b = mtime(existing.path)
+  if (a > b || (a === b && entry.path.localeCompare(existing.path) < 0)) map.set(key, entry)
+}
+
 function scanStore(
   userDataDir: string,
   label: string,
@@ -101,8 +146,14 @@ function scanStore(
       // id and names the session only INSIDE, as cliSessionId. Indexing both means every lookup
       // resolves from cache whichever shape it meets - and a chat that has rolled onto a new
       // cliSessionId is still findable by the original id its filename kept.
-      if (typeof id === 'string' && id) map.set(id, entry)
+      if (typeof id === 'string' && id) setPreferred(map, id, entry)
       const fileId = rel.slice(rel.lastIndexOf('local_') + 'local_'.length, -'.json'.length)
+      // The FILENAME key deliberately keeps its original first-wins rule rather than adopting
+      // setPreferred. It exists so a chat that has rolled onto a new cliSessionId is still
+      // reachable by the id its filename kept, which means it can legitimately point at a
+      // DIFFERENT chat's key - and letting it overwrite there would mix two conversations up.
+      // The duplicate-profile collision this commit fixes happens on the cliSessionId key above,
+      // so nothing is lost by leaving this one alone.
       if (fileId && !map.has(fileId)) map.set(fileId, entry)
       if (typeof meta?.cwd === 'string' && meta.cwd && typeof meta?.createdAt === 'number')
         origins.push({ instance: label, archived, cwd: meta.cwd, createdAt: meta.createdAt })

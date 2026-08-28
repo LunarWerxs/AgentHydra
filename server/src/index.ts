@@ -140,7 +140,11 @@ import {
   updateInstanceInfo,
   writeInstanceInfo,
 } from './instance'
-import { instanceRefForSession, resolveRunAsRef } from './instance-sessions'
+import {
+  instanceRefForSession,
+  invalidateSessionMetaCache,
+  resolveRunAsRef,
+} from './instance-sessions'
 import { initFileLogging } from './log-file.mjs'
 import { isLoopbackOrigin, loopbackGuard } from './loopback-guard.mjs'
 import {
@@ -2438,6 +2442,11 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     force: body.force === true,
   })
   if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
+  // The move rewrote metadata in TWO stores (archived in the source, created in the target), and
+  // the scan behind every session listing caches for 15s. Without this the very next read serves
+  // the pre-migrate rows: the caller sees the chat still on the old account, and setPreferred
+  // never gets to pick the live copy over the source's fresh tombstone.
+  invalidateSessionMetaCache()
   return c.json({
     ok: true,
     surface: 'desktop',

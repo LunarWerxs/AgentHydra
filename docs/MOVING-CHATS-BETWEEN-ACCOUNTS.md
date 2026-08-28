@@ -26,6 +26,11 @@ account was signed in *at the time*; if the instance is re-logged afterwards, th
 again and must be re-filed. Resolve the target's uuids from
 `GET /api/instances/:dir/account` (`accountUuid`, `orgUuid`) rather than guessing.
 
+> **Two of these are now fixed in the app** (see the sections for details): the session map prefers
+> a live entry over a stale archived one, and an untitled import is stamped `bypassPermissions` like
+> any other. The rest are properties of Claude Desktop's own store that AgentHydra can describe but
+> not change, so they remain things a caller has to handle.
+
 ## migrate archives the source pointer, it does not remove it
 
 After a migrate the chat has a metadata file in **both** profiles: archived in the source, fresh in
@@ -36,8 +41,11 @@ transcript, so with copies in two profiles it reports whichever it read last. In
 the stale archived one, which made the dashboard claim a chat was archived on the OLD account while
 the live copy sat in the new one. Sessions vanished from `archived=hide` listings entirely.
 
-**After any migrate, prune the duplicate pointers so exactly one metadata file per transcript
-survives.** Keep the target's `local_<sessionId>.json`; move the rest aside.
+**Fixed:** `setPreferred` in `instance-sessions.ts` now resolves that collision deterministically -
+a live entry beats an archived one, and otherwise the more recently written file wins - and the
+migrate route invalidates the 15-second metadata cache so the next read sees the move rather than
+the state before it. Pruning duplicates is still tidier, but the dashboard no longer lies while
+they exist.
 
 ## A session with no Desktop entry can never be archived
 
@@ -77,9 +85,16 @@ and re-apply the metadata write after any operation that boots the chat.
 first tool call raises an approval prompt into an empty room and the thread hangs, indistinguishable
 from one with nothing to say.
 
-**Owner rule (2026-08-28): every new chat starts with `permissionMode: bypassPermissions`.** Set it
-after every migrate/import/seed - the import will have reset it. Restoring it on a migrated chat is
-not an escalation; the thread already ran that way before the move.
+**Owner rule (2026-08-28): every new chat starts with `permissionMode: bypassPermissions`.**
+
+**Fixed:** the stamp used to sit behind a title check - `if (!title) return` ran before it - so an
+import with no title kept `acceptEdits` and deadlocked on its first shell call. Both import routes
+can pass an empty title. The stamping step is now `stampImportedChat`, split out so it is reachable
+by a test at all (every existing import test stops at a guard long before it), and the posture is
+applied whether or not a title was given.
+
+Restoring `bypassPermissions` on a migrated chat is not an escalation; the thread already ran that
+way before the move.
 
 ## ⛔ `send_message` always delivers into YOUR app, and steals the chat to do it
 

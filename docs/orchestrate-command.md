@@ -330,6 +330,35 @@ counts as healthy), then LOWEST 5-hour session %, then lowest weekly %.
   protect your own runway at all costs.
 - **Held threads** (`holds`, parked via /orcstop) are untouchable until /orcstart lifts them.
 
+## `collisions` - do not put two chats on the same repo
+
+`placement` answers "which ACCOUNT has room". It says nothing about whether anyone is already
+working there, and for a long time neither did you - which is how two threads ended up editing one
+repository and overwriting each other, reported by the owner's own chats: *work was overridden by
+other chats*.
+
+The feed now carries `collisions`: every group of LIVE chats sharing a repository root right now,
+each with its `sessionId`, peer `name`, `cwd` and owning `instance`. A linked worktree is folded
+onto its parent repo, because `repo` and `repo/.claude/worktrees/x` are one history reached by two
+paths. An empty array is the normal case and means there is nothing to avoid.
+
+Use it for three decisions, every wake:
+
+1. **Placing new work.** Prefer a repo nobody is in. If the work MUST go where someone already is,
+   say so out loud in your report and say why it is safe (different subtree, read-only, the other
+   chat is finishing).
+2. **Commit and branch nudges.** Never send `commitNudge` into a repo that appears in `collisions`.
+   "Commit your files" to a tree a second chat is mid-edit in is an instruction to sweep up
+   someone else's unfinished work, and the path-scoped rule cannot save a chat that does not know
+   the other chat exists. Wait for the repo to clear, or tell the two chats about each other.
+3. **Reviving or migrating a thread.** A revived chat resumes with a stale picture of its files.
+   If its repo is in `collisions`, tell it so in the revive message rather than letting it discover
+   the conflict by overwriting something.
+
+It is repo-level on purpose. Same repo means they CAN clobber, which is enough to route around;
+a file-level dependency graph would be more precise, go stale between ticks, and buy nothing for
+the decision actually being made.
+
 ## Verifying what the OWNER can actually see (you are the only half that can)
 
 The daemon's self-test (`POST /api/orchestrator/selftest`) checks DISK: the flag flipped, the
