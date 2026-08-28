@@ -1105,6 +1105,29 @@ export async function resolveWorkItem(opts: {
     case 'archive': {
       const anchor = anchorRefusal(p.sessionId, p.id, live, view)
       if (anchor) return { ok: false, reason: anchor }
+      // ONE CLOSEOUT PER LINEAGE, EVER. The ledger is the memory: if an archive for this session
+      // already EXECUTED once, its closeout landed in that cycle, and delivering another one is
+      // what keeps the thread alive - the closeout boots the chat, the boot rewrites its
+      // metadata un-archived, the janitor proposes again, forever (measured: three resurrections
+      // of the same three finished threads on 2026-08-28). Re-archives flip the flag directly;
+      // the entry leaves the sidebar when that app restarts, and nothing re-boots the chat.
+      const priorArchive = db
+        .query<{ c: number }, [string]>(
+          "select count(*) as c from orchestrator_proposals where kind = 'archive' and session_id = ? and status = 'executed'",
+        )
+        .get(p.sessionId)?.c
+      if (priorArchive) {
+        const res = await archiveDesktopChat(p.sessionId, true)
+        for (const h of res.hits ?? [])
+          if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
+        invalidateSessionMetaCache()
+        reportProposalExecuted(
+          itemId,
+          true,
+          're-archived without a new closeout (one landed in a prior cycle); flag on disk, clears at that app restart',
+        )
+        return { ok: true, completed: true, result: 're-archived; no re-boot' }
+      }
       // Closeout-before-archive, enforced: reachable chats get the closeout turn and the flag
       // flips only after verify() sees the transcript move. Unreachable chats are archived now,
       // honestly recorded as un-closed-out.
