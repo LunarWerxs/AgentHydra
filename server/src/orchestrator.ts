@@ -683,7 +683,7 @@ function scanRegistry(claudeHome: string): { live: LiveSession[]; orphans: Orpha
   return { live, orphans }
 }
 
-function readLiveRegistry(claudeHome: string): LiveSession[] {
+export function readLiveRegistry(claudeHome: string): LiveSession[] {
   return scanRegistry(claudeHome).live
 }
 

@@ -495,7 +495,16 @@ export type ResumeSurface = 'native' | 'terminal'
 export function resumeSurfaceFor(
   handoffSurface: string,
   instanceRef: string | null | undefined,
+  /** Does this thread LIVE in a desktop app right now? Passed in so the policy stays pure. */
+  livesInDesktop?: boolean,
 ): ResumeSurface {
+  // SURFACE PURITY (owner law, restated 2026-08-28: desktop stays desktop, console stays
+  // console; never cross-contaminate). A thread that lives in a desktop app resumes NATIVELY,
+  // full stop - the global handoffSurface is a preference about NEW work and must never convert
+  // an existing desktop thread into a terminal window. Before this, handoffSurface='terminal'
+  // would have moved every desktop resume into a console, which is exactly the contamination
+  // the owner banned.
+  if (livesInDesktop) return 'native'
   // A native delivery needs BOTH: the owner wanting desktop, and a thread that actually lives in a
   // desktop app we can address. A `desktop` preference over a CLI-instance thread is the case that
   // used to fall through to headless rather than admit it could not be done natively.
@@ -645,7 +654,15 @@ async function dispatchDueResumes(): Promise<void> {
       // paths that were already here; nothing new had to be invented to close the hole. The
       // decision itself is resumeSurfaceFor(), pure and tested, because a routing policy that can
       // only be exercised by actually launching something is a policy nothing checks.
-      if (resumeSurfaceFor(getOrchestratorSettings().handoffSurface, q.instance_ref) === 'native') {
+      const { desktopHomeFor } = await import('./session-launch')
+      const livesInDesktop = (await desktopHomeFor(q.session_id).catch(() => null)) !== null
+      if (
+        resumeSurfaceFor(
+          getOrchestratorSettings().handoffSurface,
+          q.instance_ref,
+          livesInDesktop,
+        ) === 'native'
+      ) {
         await deliverNativeResume(q)
       } else {
         void deliverTerminalResume(q)

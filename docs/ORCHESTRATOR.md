@@ -463,6 +463,58 @@ POST /api/orchestrator/install-command {"force": true}   overwrite your copy wit
 (also the `orchestrator_install_command` MCP tool). A copy you have edited is never silently
 overwritten - your edits are newer intent, not drift.
 
+### The worklist engine (ground-up reorganization, 2026-08-28)
+
+The reviewer no longer consumes the raw feed against a prose rubric. The owner's ruling that
+forced the change: too much was left to AI interpretation - the reviewer composed every message,
+picked delivery routes by hand, was trusted to remember orderings (closeout-before-archive,
+rename-after-boot), did its own bookkeeping (acks, placements), and then SELF-REPORTED that it
+had done all of it, which the server never verified. Every one of those drifted in practice.
+
+`server/src/orchestrator-worklist.ts` moves all of it into code. Three endpoints:
+
+```
+GET  /api/orchestrator/worklist?reviewer=<sessionId>   typed WorkItems - one judgment question each
+POST /api/orchestrator/items/:id/resolve               {reviewer, decision, note, messageOverride?}
+POST /api/orchestrator/items/:id/verify                server re-checks the world, then closes the ledger
+```
+
+What the server now owns, enforced rather than described:
+
+- **Composition.** Every message is written server-side from the prompt templates: the
+  `[orchestrator]` prefix, the file-tools-only line whenever the target's recorded permission
+  mode prompts, the collision warning when a second chat shares the repo, the ultracode prefix
+  on new-chat openings. `messageOverride` narrows scope; it cannot strip the prefix.
+- **Routing.** The old four-rung prose ladder is `computeRoute()`: live target -> direct peer
+  send by registry NAME; dormant in the reviewer's instance -> `send_message` with the REAL
+  `chatId` from metadata (never constructed); dormant elsewhere -> a relay through an awake chat
+  in that instance; otherwise honestly `unreachable`. The two measured routing failures (the
+  0-of-4 constructed-id relay round; rung 1 booting another instance's chat on the wrong
+  account) are structurally impossible for the reviewer to repeat, and are pinned by tests.
+- **Ordering.** Closeout-before-archive is a state machine: approving an archive delivers the
+  closeout, and the flag flips only after `verify` sees the transcript move. Unreachable chats
+  archive immediately and are RECORDED as un-closed-out. The anchor rule refuses to retire the
+  last awake chat of an instance that still has work aimed at it.
+- **Bookkeeping.** No-action attention kinds (human-active, interrupted, mid-turn, see-proposal
+  twins, non-cutoff usage alerts, the reviewer's own session) are auto-acked during the build and
+  never reach the reviewer. Placements are recorded on verified deliveries. Commit nudges are
+  suppressed in code while the repo has two live chats.
+- **Verification.** "Executed" stopped being a self-report. The ledger closes when the SERVER
+  observes the outcome: the target's transcript gained an event after the step was handed out, the
+  archive flag is set, the app's metadata carries the title. A reviewer's DONE is a claim; the
+  transcript moving is evidence.
+- **Surface purity** (owner law: desktop stays desktop, console stays console). Enforced at both
+  actuation points: monitor resume dispatch routes by where the thread LIVES, not by the global
+  `handoffSurface` preference, and `migrate` refuses to convert a desktop thread into a terminal.
+
+What remains with the reviewer, by physical necessity: judgment (approve/reject + the note that
+is the audit trail), and at most one exact tool call per item - only a session inside a desktop
+app can boot that app's dormant chats, and only a live session can receive a peer message. Those
+steps arrive fully composed and are performed verbatim.
+
+The legacy loop below (raw feed + decide/executed + hand acks) still works and the endpoints
+remain for compatibility, but the worklist is the contract the shipped command file teaches.
+
 What the loop does, per wake:
 
 1. `GET /api/orchestrator` (one call). Decide every open PROPOSAL first (approve/reject with

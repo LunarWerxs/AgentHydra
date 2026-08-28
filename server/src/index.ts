@@ -183,6 +183,7 @@ import {
   uninstallOrchestratorCommands,
 } from './orchestrator'
 import { runOrchestratorSelfTest } from './orchestrator-selftest'
+import { buildWorklist, resolveWorkItem, verifyWorkItem } from './orchestrator-worklist'
 import { recentPlacements, recordPlacement } from './placements'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
@@ -2212,6 +2213,42 @@ app.post('/api/orchestrator/proposals/:id/executed', async (c) => {
     return c.json({ ok: false, error: res.reason }, res.reason === 'not-found' ? 404 : 409)
   return c.json({ ok: true, proposal: res.proposal })
 })
+// --- THE WORKLIST: the reviewer's whole wake, computed (owner directive 2026-08-28) -------------
+// The raw feed + prose rubric asked an AI to compose messages, pick delivery routes, remember
+// orderings and do bookkeeping. These three endpoints move all of that server-side: the reviewer
+// GETs typed items with one judgment question each, POSTs a ruling, performs at most one exact
+// tool call handed back verbatim, and the server VERIFIES the outcome itself before closing the
+// ledger. See server/src/orchestrator-worklist.ts for the contract.
+app.get('/api/orchestrator/worklist', async (c) => {
+  const reviewer = c.req.query('reviewer')?.trim()
+  if (!reviewer) return c.json({ error: 'reviewer (your session id) is required' }, 400)
+  noteReviewerActivity()
+  return c.json(buildWorklist(reviewer))
+})
+app.post('/api/orchestrator/items/:id/resolve', async (c) => {
+  const body = await jsonBody(c)
+  const reviewer = typeof body.reviewer === 'string' ? body.reviewer.trim() : ''
+  const decision = body.decision
+  if (!reviewer) return c.json({ error: 'reviewer (your session id) is required' }, 400)
+  if (decision !== 'approve' && decision !== 'reject')
+    return c.json({ error: "decision must be 'approve' or 'reject'" }, 400)
+  if (typeof body.note !== 'string' || !body.note.trim())
+    return c.json({ error: 'note (one line of reasoning) is required' }, 400)
+  noteReviewerActivity()
+  const res = await resolveWorkItem({
+    itemId: c.req.param('id'),
+    reviewerSessionId: reviewer,
+    decision,
+    note: body.note.trim(),
+    messageOverride: typeof body.messageOverride === 'string' ? body.messageOverride : undefined,
+  })
+  return c.json(res, res.ok ? 200 : 409)
+})
+app.post('/api/orchestrator/items/:id/verify', async (c) => {
+  noteReviewerActivity()
+  const res = await verifyWorkItem(c.req.param('id'))
+  return c.json(res, res.state === 'not-found' ? 404 : 200)
+})
 // Start a NEW interactive Claude session in a VISIBLE terminal window, pinned to an instance's
 // account. This is the handoff-continuation surface: unlike a headless queue run it is on the
 // user's screen and joins the live registry, so the orchestrator can keep orchestrating it.
@@ -2447,8 +2484,12 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
 
   // Placement follows the owner's chosen surface (their standing rule: match the preference,
-  // and 'desktop' means no terminals and nothing headless).
-  const surface = getOrchestratorSettings().handoffSurface
+  // and 'desktop' means no terminals and nothing headless) - EXCEPT that surface purity outranks
+  // the preference (owner law, restated 2026-08-28: desktop stays desktop, console stays console,
+  // never cross-contaminate). A thread that lives in a desktop app migrates desktop-to-desktop
+  // regardless of what handoffSurface says about NEW work.
+  const livesInDesktop = (await desktopHomeFor(sessionId).catch(() => null)) !== null
+  const surface = livesInDesktop ? 'desktop' : getOrchestratorSettings().handoffSurface
   if (surface === 'terminal') {
     const launched = await launchTerminalSession({
       cwd: s.cwd,
