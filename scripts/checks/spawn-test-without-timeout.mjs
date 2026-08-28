@@ -127,6 +127,60 @@ const REGEX_OPENS_AFTER = new Set(
 const REGEX_OPENS_AFTER_KEYWORD =
   /\b(?:return|typeof|instanceof|case|in|of|new|delete|void|do|else|yield|await)$/
 
+/** One scanner step while inside a string/template literal opened by `quote`. Blanks the current
+ *  char (or escape pair) in `out` in place. Returns the next index, the string state (null once
+ *  the closing quote is consumed), and `prev` (unchanged except on close, matching the scanner's
+ *  original behavior of only tracking `prev` outside strings). */
+function advanceInString(text, out, i, quote, prev) {
+  const ch = text[i]
+  if (ch === '\\') {
+    // Blank the escape pair, but never a newline: line numbering depends on them surviving.
+    if (text[i] !== '\n') out[i] = ' '
+    if (text[i + 1] !== '\n') out[i + 1] = ' '
+    return { i: i + 2, inString: quote, prev }
+  }
+  if (ch === quote) {
+    return { i: i + 1, inString: null, prev: ch }
+  }
+  if (ch !== '\n') out[i] = ' '
+  return { i: i + 1, inString: quote, prev }
+}
+
+/** One scanner step outside a string: opens a string, blanks a line/block comment or a regex
+ *  literal, or (for ordinary code) advances one character while tracking `prev` — the last
+ *  non-whitespace char, used to tell a regex-opening `/` from a division operator. */
+function advanceCode(text, out, i, prev) {
+  const ch = text[i]
+  if (ch === '"' || ch === "'" || ch === '`') {
+    return { i: i + 1, inString: ch, prev }
+  }
+  if (ch === '/' && text[i + 1] === '/') {
+    let j = i
+    while (j < text.length && text[j] !== '\n') out[j++] = ' '
+    return { i: j, inString: null, prev }
+  }
+  if (ch === '/' && text[i + 1] === '*') {
+    const end = text.indexOf('*/', i + 2)
+    const stop = end === -1 ? text.length : end + 2
+    for (let j = i; j < stop; j++) if (text[j] !== '\n') out[j] = ' '
+    return { i: stop, inString: null, prev }
+  }
+  if (
+    ch === '/' &&
+    (prev === '' ||
+      REGEX_OPENS_AFTER.has(prev) ||
+      REGEX_OPENS_AFTER_KEYWORD.test(text.slice(0, i).trimEnd()))
+  ) {
+    const end = endOfRegex(text, i)
+    if (end !== -1) {
+      for (let j = i; j < end; j++) if (text[j] !== '\n') out[j] = ' '
+      return { i: end, inString: null, prev: '/' }
+    }
+  }
+  const nextPrev = /\s/.test(ch) ? prev : ch
+  return { i: i + 1, inString: null, prev: nextPrev }
+}
+
 /** Blank comments and the INTERIOR of every string/template literal, replacing them with spaces so
  *  that every surviving character keeps its original index (line numbers are computed against the
  *  untouched text). Quotes and braces are preserved so call spans still balance. A spawn cannot
@@ -138,55 +192,10 @@ function blankNonCode(text) {
   let prev = ''
   let i = 0
   while (i < text.length) {
-    const ch = text[i]
-    if (inString) {
-      if (ch === '\\') {
-        // Blank the escape pair, but never a newline: line numbering depends on them surviving.
-        if (text[i] !== '\n') out[i] = ' '
-        if (text[i + 1] !== '\n') out[i + 1] = ' '
-        i += 2
-        continue
-      }
-      if (ch === inString) {
-        inString = null
-        prev = ch
-        i++
-        continue
-      }
-      if (ch !== '\n') out[i] = ' '
-      i++
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      inString = ch
-      i++
-      continue
-    }
-    if (ch === '/' && text[i + 1] === '/') {
-      while (i < text.length && text[i] !== '\n') out[i++] = ' '
-      continue
-    }
-    if (ch === '/' && text[i + 1] === '*') {
-      const end = text.indexOf('*/', i + 2)
-      const stop = end === -1 ? text.length : end + 2
-      for (; i < stop; i++) if (text[i] !== '\n') out[i] = ' '
-      continue
-    }
-    if (
-      ch === '/' &&
-      (prev === '' ||
-        REGEX_OPENS_AFTER.has(prev) ||
-        REGEX_OPENS_AFTER_KEYWORD.test(text.slice(0, i).trimEnd()))
-    ) {
-      const end = endOfRegex(text, i)
-      if (end !== -1) {
-        for (; i < end; i++) if (text[i] !== '\n') out[i] = ' '
-        prev = '/'
-        continue
-      }
-    }
-    if (!/\s/.test(ch)) prev = ch
-    i++
+    const step = inString ? advanceInString(text, out, i, inString, prev) : advanceCode(text, out, i, prev)
+    i = step.i
+    inString = step.inString
+    prev = step.prev
   }
   return out.join('')
 }

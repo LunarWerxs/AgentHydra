@@ -581,6 +581,80 @@ export function desktopChatArchiveState(
  * writes only when the scanner has something better than an id or a generic label. Metadata
  * writes show in a RUNNING app after its next restart — the standing caveat.
  */
+const GENERIC_TITLE = /^(untitled|general coding session|new (chat|session))$/i
+// AgentHydra's own seed preamble. A seeded chat's first user message is fabricated so the
+// chat has something to boot from, and the title scanner derives titles from the first user
+// message, so without this the plumbing NAMES the chat. Observed on the owner's sidebar
+// 2026-08-27: '[orchestrator] This thread was seeded by AgentHydra for a new task. The task
+// prompt arrives as the next...'. Such a title is replaceable, and never writable.
+const PLUMBING_TITLE = /^\[orchestrator\]/i
+
+/** If `path`'s stored title is empty/generic/plumbing AND the scanner has something real for it,
+ *  write the better title in place and report the rename. Returns null when nothing needed
+ *  fixing (a real title already, or no better replacement) - one unreadable metadata file must
+ *  not stop the sweep, so a parse failure returns null too. */
+function renameIfUntitled(
+  path: string,
+  filename: string,
+  lookupTitle: (cliSessionId: string) => string | null,
+): { sessionId: string; title: string } | null {
+  try {
+    const meta = JSON.parse(readFileSync(path, 'utf8'))
+    const current = typeof meta.title === 'string' ? meta.title.trim() : ''
+    if (current && !GENERIC_TITLE.test(current) && !PLUMBING_TITLE.test(current)) return null
+    const sid =
+      typeof meta.cliSessionId === 'string' && meta.cliSessionId
+        ? meta.cliSessionId
+        : filename.slice('local_'.length, -'.json'.length)
+    const better = lookupTitle(sid)?.trim()
+    if (!better || GENERIC_TITLE.test(better) || PLUMBING_TITLE.test(better) || better === sid)
+      return null
+    meta.title = better
+    meta.titleSource = 'tool'
+    writeFileSync(path, JSON.stringify(meta))
+    return { sessionId: sid, title: better }
+  } catch {
+    // one unreadable metadata file must not stop the sweep
+    return null
+  }
+}
+
+/** Every `local_*.json` metadata file directly under one user's session directory, renamed where
+ *  untitled/generic/plumbing and the scanner knows something better. */
+function sweepUserDir(
+  dir: string,
+  lookupTitle: (cliSessionId: string) => string | null,
+): Array<{ sessionId: string; title: string }> {
+  const out: Array<{ sessionId: string; title: string }> = []
+  for (const f of readdirSync(dir)) {
+    if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+    const hit = renameIfUntitled(join(dir, f), f, lookupTitle)
+    if (hit) out.push(hit)
+  }
+  return out
+}
+
+/** Every user directory under one profile's session store, walked org by org. Isolated so an
+ *  unreadable store contributes nothing rather than aborting the whole sweep. */
+function sweepProfileStore(
+  store: string,
+  lookupTitle: (cliSessionId: string) => string | null,
+): Array<{ sessionId: string; title: string }> {
+  const out: Array<{ sessionId: string; title: string }> = []
+  try {
+    for (const org of readdirSync(store, { withFileTypes: true })) {
+      if (!org.isDirectory()) continue
+      for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+        if (!user.isDirectory()) continue
+        out.push(...sweepUserDir(join(store, org.name, user.name), lookupTitle))
+      }
+    }
+  } catch {
+    // an unreadable store just contributes nothing
+  }
+  return out
+}
+
 export function sweepUntitledDesktopChats(
   lookupTitle: (cliSessionId: string) => string | null,
   roots?: string[],
@@ -606,13 +680,6 @@ export function sweepUntitledDesktopChats(
       }
     })(),
   ]
-  const GENERIC = /^(untitled|general coding session|new (chat|session))$/i
-  // AgentHydra's own seed preamble. A seeded chat's first user message is fabricated so the
-  // chat has something to boot from, and the title scanner derives titles from the first user
-  // message, so without this the plumbing NAMES the chat. Observed on the owner's sidebar
-  // 2026-08-27: '[orchestrator] This thread was seeded by AgentHydra for a new task. The task
-  // prompt arrives as the next...'. Such a title is replaceable, and never writable.
-  const PLUMBING = /^\[orchestrator\]/i
   let fixed = 0
   // Profiles that had at least one rename: a RUNNING app keeps showing the old name until it
   // restarts, so the janitor hands these to the sidebar-visibility restart (owner rule: names
@@ -622,40 +689,10 @@ export function sweepUntitledDesktopChats(
   for (const profile of searchRoots) {
     const store = join(profile, 'claude-code-sessions')
     if (!existsSync(store)) continue
-    try {
-      for (const org of readdirSync(store, { withFileTypes: true })) {
-        if (!org.isDirectory()) continue
-        for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
-          if (!user.isDirectory()) continue
-          const dir = join(store, org.name, user.name)
-          for (const f of readdirSync(dir)) {
-            if (!f.startsWith('local_') || !f.endsWith('.json')) continue
-            const path = join(dir, f)
-            try {
-              const meta = JSON.parse(readFileSync(path, 'utf8'))
-              const current = typeof meta.title === 'string' ? meta.title.trim() : ''
-              if (current && !GENERIC.test(current) && !PLUMBING.test(current)) continue
-              const sid =
-                typeof meta.cliSessionId === 'string' && meta.cliSessionId
-                  ? meta.cliSessionId
-                  : f.slice('local_'.length, -'.json'.length)
-              const better = lookupTitle(sid)?.trim()
-              if (!better || GENERIC.test(better) || PLUMBING.test(better) || better === sid)
-                continue
-              meta.title = better
-              meta.titleSource = 'tool'
-              writeFileSync(path, JSON.stringify(meta))
-              fixed++
-              renamedProfiles.add(profile)
-              renamed.push({ profile, sessionId: sid, title: better })
-            } catch {
-              // one unreadable metadata file must not stop the sweep
-            }
-          }
-        }
-      }
-    } catch {
-      // an unreadable store just contributes nothing
+    for (const hit of sweepProfileStore(store, lookupTitle)) {
+      fixed++
+      renamedProfiles.add(profile)
+      renamed.push({ profile, sessionId: hit.sessionId, title: hit.title })
     }
   }
   return { fixed, profiles: [...renamedProfiles], renamed }

@@ -774,6 +774,159 @@ export function stopImportSweep(): void {
   }
 }
 
+const TAIL_POLL_MS = 250
+const TAIL_START_GRACE_MS = 20_000 // status file must appear within this, else the runner never launched
+// After `claude` (childPid) goes non-alive, wait this long for the runner's trailing flush + exit
+// marker to land before giving up. Generous because the runner drains stdout/stderr AFTER the child
+// exits, then writes the marker; a large final chunk + slow disk (AV scan) can stretch that out.
+const TAIL_DEAD_GRACE_MS = 4000
+
+/** The mutable state one tailRun poll loop threads through its five steps: the byte offset and
+ *  decoded-but-unterminated tail of the log, whether the runner's status file has ever been seen,
+ *  and how long nothing has looked alive. Bundled so each step takes one parameter instead of a
+ *  growing list of locals closed over by the loop. */
+interface TailState {
+  offset: number
+  buf: string
+  sawStatus: boolean
+  deadFor: number
+}
+
+/** Step 1: learn the child pid from the runner's status file (fresh runs only, once). */
+function learnChildPid(id: string, entry: ActiveEntry, state: TailState): void {
+  if (entry.childPid !== null) return
+  const st = readStatus(id)
+  if (!st) return
+  // The file EXISTING is what proves the runner launched (step 5), regardless of whether we
+  // may trust the pid inside it — so record that either way.
+  state.sawStatus = true
+  // ...but only adopt the pid while the runner is live. reattachRuns deliberately refuses a
+  // dead runner's pid; re-reading the same stale file here would hand it straight back.
+  if (entry.runnerLive && typeof st.childPid === 'number') {
+    entry.childPid = st.childPid
+    db.query('update queue_items set pid = ? where id = ?').run(st.childPid, id)
+    publish(id, {
+      type: 'status',
+      data: { id, status: 'running', exit_code: null, pid: st.childPid },
+    })
+  }
+}
+
+/** Step 2: read any new log bytes since `state.offset` and process every complete line. Returns
+ *  true once the run's terminal exit marker was seen (and finalize() already called for it),
+ *  telling the poll loop to stop. */
+function readAndProcessLog(
+  id: string,
+  entry: ActiveEntry,
+  logPath: string,
+  decoder: TextDecoder,
+  state: TailState,
+): boolean {
+  let size = 0
+  try {
+    size = statSync(logPath).size
+  } catch {
+    size = 0 // not created yet
+  }
+  // Defensive: the log is append-only in this design, but if it ever shrank (truncated/replaced)
+  // our byte offset would run past EOF and we'd read nothing forever — resync to the new size.
+  if (size < state.offset) state.offset = size
+  if (size <= state.offset) return false
+
+  let fd: number | null = null
+  try {
+    fd = openSync(logPath, 'r')
+    const len = size - state.offset
+    const b = Buffer.allocUnsafe(len)
+    const read = readSync(fd, b, 0, len, state.offset)
+    state.offset += read
+    state.buf += decoder.decode(b.subarray(0, read), { stream: true })
+  } catch {
+    // transient read error; try again next poll
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+  let idx = state.buf.indexOf('\n')
+  while (idx >= 0) {
+    const line = state.buf.slice(0, idx).trim()
+    state.buf = state.buf.slice(idx + 1)
+    if (line) {
+      const marker = parseMarker(line)
+      if (marker?.kind === 'exit') {
+        finalize(id, marker.code, { canceled: entry.canceled })
+        return true
+      }
+      if (marker?.kind === 'stderr') {
+        const rt = runtime.get(id)
+        if (rt) rt.limitKind = classifyLimit(marker.text) ?? rt.limitKind
+        recordEvent(id, 'system', 'meta', `stderr: ${marker.text.slice(0, 2000)}`, null)
+      } else {
+        handleLine(id, line)
+      }
+    }
+    idx = state.buf.indexOf('\n')
+  }
+  return false
+}
+
+/** Step 3: cancel path - kill the child once we know its pid; the runner then writes the exit
+ *  marker. */
+async function maybeKillCanceled(entry: ActiveEntry): Promise<void> {
+  if (entry.canceled && entry.childPid && !entry.killed) {
+    entry.killed = true
+    await killTree(entry.childPid)
+  }
+}
+
+/** Step 4: nothing left that could still finish this run → fail after a short grace, so a marker
+ *  already in flight still wins. Two ways to arrive here:
+ *    · we were watching a child and it died without writing a terminal marker (runner crashed);
+ *    · we reattached onto a runner that was ALREADY gone, so there is no child to watch at
+ *      all — the log replayed in step 2 is everything that will ever exist, and if it held a
+ *      marker step 2 already returned there. This branch is what reattachRuns means by "fails
+ *      after its grace"; it used to work only because step 1 re-adopted the dead runner's stale
+ *      pid and this step then found it dead, which is the same read that strands the run
+ *      outright when the pid has been recycled by something still alive.
+ *  A fresh run is neither: runnerLive is true and its child pid simply hasn't appeared yet
+ *  (step 5's START_GRACE covers a runner that never launches). Returns true once finalize() has
+ *  been called for a lost run, telling the poll loop to stop. */
+function checkNothingLeftToWatch(id: string, entry: ActiveEntry, state: TailState): boolean {
+  const nothingLeftToWatch = entry.childPid !== null ? !isAlive(entry.childPid) : !entry.runnerLive
+  if (!nothingLeftToWatch) {
+    state.deadFor = 0
+    return false
+  }
+  state.deadFor += TAIL_POLL_MS
+  if (state.deadFor <= TAIL_DEAD_GRACE_MS) return false
+  // Say WHY. exit -1 is our own synthetic code for "we lost the process", not something
+  // `claude` reported, and without this line the run reads as a bare red "failed, exit -1"
+  // with no hint that the work up to this point actually happened and landed on disk.
+  if (!entry.canceled)
+    recordEvent(
+      id,
+      'system',
+      'meta',
+      'run interrupted: the claude process exited without finishing this turn (killed, or AgentHydra restarted under it). Work it had already completed is on disk — open the session to see how far it got.',
+      null,
+    )
+  finalize(id, -1, { canceled: entry.canceled })
+  return true
+}
+
+/** Step 5: the runner never launched (no status file, no output) → fail. Returns true once
+ *  finalize() has been called, telling the poll loop to stop. */
+function checkNeverLaunched(
+  id: string,
+  entry: ActiveEntry,
+  state: TailState,
+  startedWaiting: number,
+): boolean {
+  if (state.sawStatus || Date.now() - startedWaiting <= TAIL_START_GRACE_MS) return false
+  recordEvent(id, 'system', 'meta', 'run did not start (dispatch runner failed to launch)', null)
+  finalize(id, -1, { canceled: entry.canceled })
+  return true
+}
+
 /**
  * Tail the run's log until the terminal marker (then finalize), the child dies without one (fail),
  * or the run is canceled. Handles BOTH a fresh run (childPid learned from the status file once the
@@ -784,139 +937,22 @@ export function stopImportSweep(): void {
 async function tailRun(id: string, entry: ActiveEntry): Promise<void> {
   const logPath = logPathFor(id)
   const decoder = new TextDecoder()
-  let offset = 0
-  let buf = ''
-  let sawStatus = entry.childPid !== null // reattach already read the status file
-  let deadFor = 0
-  const POLL_MS = 250
-  const START_GRACE_MS = 20_000 // status file must appear within this, else the runner never launched
-  // After `claude` (childPid) goes non-alive, wait this long for the runner's trailing flush + exit
-  // marker to land before giving up. Generous because the runner drains stdout/stderr AFTER the child
-  // exits, then writes the marker; a large final chunk + slow disk (AV scan) can stretch that out.
-  const DEAD_GRACE_MS = 4000
+  const state: TailState = {
+    offset: 0,
+    buf: '',
+    sawStatus: entry.childPid !== null, // reattach already read the status file
+    deadFor: 0,
+  }
   const startedWaiting = Date.now()
 
   for (;;) {
-    // 1. Learn the child pid from the runner's status file (fresh runs only, once).
-    if (entry.childPid === null) {
-      const st = readStatus(id)
-      if (st) {
-        // The file EXISTING is what proves the runner launched (step 5), regardless of whether we
-        // may trust the pid inside it — so record that either way.
-        sawStatus = true
-        // ...but only adopt the pid while the runner is live. reattachRuns deliberately refuses a
-        // dead runner's pid; re-reading the same stale file here would hand it straight back.
-        if (entry.runnerLive && typeof st.childPid === 'number') {
-          entry.childPid = st.childPid
-          db.query('update queue_items set pid = ? where id = ?').run(st.childPid, id)
-          publish(id, {
-            type: 'status',
-            data: { id, status: 'running', exit_code: null, pid: st.childPid },
-          })
-        }
-      }
-    }
+    learnChildPid(id, entry, state)
+    if (readAndProcessLog(id, entry, logPath, decoder, state)) return
+    await maybeKillCanceled(entry)
+    if (checkNothingLeftToWatch(id, entry, state)) return
+    if (checkNeverLaunched(id, entry, state, startedWaiting)) return
 
-    // 2. Read + process any new log bytes.
-    let size = 0
-    try {
-      size = statSync(logPath).size
-    } catch {
-      size = 0 // not created yet
-    }
-    // Defensive: the log is append-only in this design, but if it ever shrank (truncated/replaced)
-    // our byte offset would run past EOF and we'd read nothing forever — resync to the new size.
-    if (size < offset) offset = size
-    if (size > offset) {
-      let fd: number | null = null
-      try {
-        fd = openSync(logPath, 'r')
-        const len = size - offset
-        const b = Buffer.allocUnsafe(len)
-        const read = readSync(fd, b, 0, len, offset)
-        offset += read
-        buf += decoder.decode(b.subarray(0, read), { stream: true })
-      } catch {
-        // transient read error; try again next poll
-      } finally {
-        if (fd !== null) closeSync(fd)
-      }
-      let idx = buf.indexOf('\n')
-      while (idx >= 0) {
-        const line = buf.slice(0, idx).trim()
-        buf = buf.slice(idx + 1)
-        if (line) {
-          const marker = parseMarker(line)
-          if (marker?.kind === 'exit') {
-            finalize(id, marker.code, { canceled: entry.canceled })
-            return
-          }
-          if (marker?.kind === 'stderr') {
-            const rt = runtime.get(id)
-            if (rt) rt.limitKind = classifyLimit(marker.text) ?? rt.limitKind
-            recordEvent(id, 'system', 'meta', `stderr: ${marker.text.slice(0, 2000)}`, null)
-          } else {
-            handleLine(id, line)
-          }
-        }
-        idx = buf.indexOf('\n')
-      }
-    }
-
-    // 3. Cancel: kill the child once we know its pid; the runner then writes the exit marker.
-    if (entry.canceled && entry.childPid && !entry.killed) {
-      entry.killed = true
-      await killTree(entry.childPid)
-    }
-
-    // 4. Nothing left that could still finish this run → fail after a short grace, so a marker
-    //    already in flight still wins. Two ways to arrive here:
-    //      · we were watching a child and it died without writing a terminal marker (runner crashed);
-    //      · we reattached onto a runner that was ALREADY gone, so there is no child to watch at
-    //        all — the log we replayed in step 2 is everything that will ever exist, and if it held
-    //        a marker we returned there. This branch is what reattachRuns means by "fails after its
-    //        grace"; it used to work only because step 1 re-adopted the dead runner's stale pid and
-    //        step 4 then found it dead, which is the same read that strands the run outright when
-    //        the pid has been recycled by something still alive.
-    //    A fresh run is neither: runnerLive is true and its child pid simply hasn't appeared yet
-    //    (step 5's START_GRACE covers a runner that never launches).
-    const nothingLeftToWatch =
-      entry.childPid !== null ? !isAlive(entry.childPid) : !entry.runnerLive
-    if (nothingLeftToWatch) {
-      deadFor += POLL_MS
-      if (deadFor > DEAD_GRACE_MS) {
-        // Say WHY. exit -1 is our own synthetic code for "we lost the process", not something
-        // `claude` reported, and without this line the run reads as a bare red "failed, exit -1"
-        // with no hint that the work up to this point actually happened and landed on disk.
-        if (!entry.canceled)
-          recordEvent(
-            id,
-            'system',
-            'meta',
-            'run interrupted: the claude process exited without finishing this turn (killed, or AgentHydra restarted under it). Work it had already completed is on disk — open the session to see how far it got.',
-            null,
-          )
-        finalize(id, -1, { canceled: entry.canceled })
-        return
-      }
-    } else {
-      deadFor = 0
-    }
-
-    // 5. Runner never launched (no status file, no output) → fail.
-    if (!sawStatus && Date.now() - startedWaiting > START_GRACE_MS) {
-      recordEvent(
-        id,
-        'system',
-        'meta',
-        'run did not start (dispatch runner failed to launch)',
-        null,
-      )
-      finalize(id, -1, { canceled: entry.canceled })
-      return
-    }
-
-    await Bun.sleep(POLL_MS)
+    await Bun.sleep(TAIL_POLL_MS)
   }
 }
 

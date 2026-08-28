@@ -205,52 +205,56 @@ function endOfRegex(text, start) {
  *  spawn survived. A desync here inverts code and string wholesale, so it produces FALSE POSITIVES,
  *  not misses — the expensive direction, and the reason this tracks more than the naive scanner in
  *  extractCall does. */
+/** One scanner step while inside a string/template literal opened by `quote`. String CONTENT is
+ *  left untouched here (only comments get blanked, in advanceCode); this only tracks where the
+ *  string ends so a quote or `//` inside it is never mistaken for real code. `prev` is unchanged
+ *  except on close, matching the original scanner's behavior of only tracking it outside strings. */
+function advanceInString(text, i, quote, prev) {
+  const ch = text[i]
+  if (ch === '\\') return { i: i + 2, inString: quote, prev } // an escape can never end the string
+  if (ch === quote) return { i: i + 1, inString: null, prev: ch }
+  return { i: i + 1, inString: quote, prev }
+}
+
+/** One scanner step outside a string: opens a string, blanks a line/block comment, skips a regex
+ *  literal whole (so any quote it carries never reaches the string tracker), or (for ordinary
+ *  code) advances one character while tracking `prev` — the last non-whitespace character seen,
+ *  the regex-vs-division discriminator used above. A closing quote counts (`"a" / 2` is
+ *  division); characters inside strings and comments never do. */
+function advanceCode(text, out, i, prev) {
+  const ch = text[i]
+  if (ch === '"' || ch === "'" || ch === '`') {
+    return { i: i + 1, inString: ch, prev }
+  }
+  if (ch === '/' && text[i + 1] === '/') {
+    let j = i
+    while (j < text.length && text[j] !== '\n') out[j++] = ' '
+    return { i: j, inString: null, prev }
+  }
+  if (ch === '/' && text[i + 1] === '*') {
+    const end = text.indexOf('*/', i + 2)
+    const stop = end === -1 ? text.length : end + 2
+    for (let j = i; j < stop; j++) if (text[j] !== '\n') out[j] = ' '
+    return { i: stop, inString: null, prev }
+  }
+  if (ch === '/' && (prev === '' || REGEX_OPENS_AFTER.has(prev) || REGEX_OPENS_AFTER_KEYWORD.test(text.slice(0, i).trimEnd()))) {
+    const end = endOfRegex(text, i)
+    if (end !== -1) return { i: end, inString: null, prev: '/' }
+  }
+  const nextPrev = /\s/.test(ch) ? prev : ch
+  return { i: i + 1, inString: null, prev: nextPrev }
+}
+
 function blankComments(text) {
   const out = text.split('')
   let inString = null
-  // Last non-whitespace character of CODE seen, the regex-vs-division discriminator above. A closing
-  // quote counts (`"a" / 2` is division); characters inside strings and comments never do.
   let prev = ''
   let i = 0
   while (i < text.length) {
-    const ch = text[i]
-    if (inString) {
-      if (ch === '\\') {
-        i += 2 // an escaped character, whatever it is, can never end the string
-        continue
-      }
-      if (ch === inString) {
-        inString = null
-        prev = ch
-      }
-      i++
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      inString = ch
-      i++
-      continue
-    }
-    if (ch === '/' && text[i + 1] === '/') {
-      while (i < text.length && text[i] !== '\n') out[i++] = ' '
-      continue
-    }
-    if (ch === '/' && text[i + 1] === '*') {
-      const end = text.indexOf('*/', i + 2)
-      const stop = end === -1 ? text.length : end + 2
-      for (; i < stop; i++) if (text[i] !== '\n') out[i] = ' '
-      continue
-    }
-    if (ch === '/' && (prev === '' || REGEX_OPENS_AFTER.has(prev) || REGEX_OPENS_AFTER_KEYWORD.test(text.slice(0, i).trimEnd()))) {
-      const end = endOfRegex(text, i)
-      if (end !== -1) {
-        i = end // skipped whole; any quote it carried never reaches the string tracker
-        prev = '/'
-        continue
-      }
-    }
-    if (!/\s/.test(ch)) prev = ch
-    i++
+    const step = inString ? advanceInString(text, i, inString, prev) : advanceCode(text, out, i, prev)
+    i = step.i
+    inString = step.inString
+    prev = step.prev
   }
   return out.join('')
 }

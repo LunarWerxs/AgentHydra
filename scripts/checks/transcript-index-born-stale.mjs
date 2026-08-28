@@ -46,6 +46,52 @@ const ID = 'transcript-index-born-stale'
 const TARGET = 'server/src/transcript.ts'
 const MIN_TTL_MS = 10_000
 
+/** Consume a `//` line comment starting at `i`, blanking it to spaces (the newline that ends it is
+ *  left for the main loop). Returns the blanked chunk and the index just past it. */
+function skipLineComment(text, i, n) {
+  let out = ''
+  while (i < n && text[i] !== '\n') {
+    out += ' '
+    i++
+  }
+  return { chunk: out, i }
+}
+
+/** Consume a `/* ... *\/` block comment starting at `i`, blanking it to spaces while keeping any
+ *  newlines inside it. Returns the blanked chunk and the index just past the closing `*\/`. */
+function skipBlockComment(text, i, n) {
+  let out = ''
+  while (i < n && text.slice(i, i + 2) !== '*/') {
+    out += text[i] === '\n' ? '\n' : ' '
+    i++
+  }
+  out += '  '
+  return { chunk: out, i: i + 2 }
+}
+
+/** Consume a quoted string/template literal opened by `quote` at `i`, blanking its interior
+ *  (escape pairs included, newlines kept) while preserving the delimiter quotes so call spans
+ *  still balance. Returns the blanked chunk and the index just past the closing quote. */
+function skipString(text, i, n, quote) {
+  let out = quote
+  i++
+  while (i < n && text[i] !== quote) {
+    if (text[i] === '\\') {
+      out += ' '
+      i++
+    }
+    if (i < n) {
+      out += text[i] === '\n' ? '\n' : ' '
+      i++
+    }
+  }
+  if (i < n) {
+    out += quote
+    i++
+  }
+  return { chunk: out, i }
+}
+
 /** Blank out comments and string bodies, keeping offsets and newlines so line numbers stay honest.
  *  This check's own header DISCUSSES every pattern below in prose, and prose cannot rebuild an
  *  index; spawn-console-window.mjs shipped once reading a sentence as a call. */
@@ -56,39 +102,22 @@ function blankNonCode(text) {
   while (i < n) {
     const two = text.slice(i, i + 2)
     if (two === '//') {
-      while (i < n && text[i] !== '\n') {
-        out += ' '
-        i++
-      }
+      const step = skipLineComment(text, i, n)
+      out += step.chunk
+      i = step.i
       continue
     }
     if (two === '/*') {
-      while (i < n && text.slice(i, i + 2) !== '*/') {
-        out += text[i] === '\n' ? '\n' : ' '
-        i++
-      }
-      out += '  '
-      i += 2
+      const step = skipBlockComment(text, i, n)
+      out += step.chunk
+      i = step.i
       continue
     }
     const ch = text[i]
     if (ch === '"' || ch === "'" || ch === '`') {
-      out += ch
-      i++
-      while (i < n && text[i] !== ch) {
-        if (text[i] === '\\') {
-          out += ' '
-          i++
-        }
-        if (i < n) {
-          out += text[i] === '\n' ? '\n' : ' '
-          i++
-        }
-      }
-      if (i < n) {
-        out += ch
-        i++
-      }
+      const step = skipString(text, i, n, ch)
+      out += step.chunk
+      i = step.i
       continue
     }
     out += ch

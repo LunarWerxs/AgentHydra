@@ -1558,12 +1558,41 @@ function classifyLiveSession(
   return { items, cwdEntry }
 }
 
-export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps): Promise<void> {
+/** Everything the phases of one orchestrator tick read or accumulate into, bundled so each phase
+ *  takes one parameter instead of a growing list of locals. Mutated in place by design - `items`,
+ *  `byCwd` and `runningChats` are written by several phases in sequence, the same way the single
+ *  function used to thread them through one shared scope. */
+interface OnceCtx {
+  deps: OrchestratorDeps
+  started: number
+  s: OrchestratorSettings
+  nowIso: string
+  items: AttentionItem[]
+  sessions: LiveSession[]
+  holdSet: Set<string>
+  doneSet: Set<string>
+  metaMap: Map<
+    string,
+    {
+      instance: string
+      archived: boolean
+      permissionMode?: string | null
+      chatId?: string | null
+    }
+  >
+  byCwd: Map<string, { session: LiveSession; quietSecs: number; held: boolean }[]>
+  runningChats: number
+  liveIds: Set<string>
+  cache: Record<string, UsageSnapshot>
+}
+
+/** Everything a tick needs before any phase can run: settings, the live registry, the hold/done
+ *  sets a session-scoped item must respect, and desktop metadata (which sidebar, archived, its
+ *  automation posture) read once because the per-session loop needs it too. */
+function initOnceCtx(deps: OrchestratorDeps): OnceCtx {
   const started = deps.nowMs()
   const s = getOrchestratorSettings()
   const nowIso = new Date(started).toISOString()
-  const items: AttentionItem[] = []
-
   const sessions = deps.registry(deps.claudeHome())
   state.liveSessions = sessions.length
 
@@ -1585,58 +1614,62 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   )
   for (const sess of sessions) lastNames.set(sess.sessionId, { name: sess.name, cwd: sess.cwd })
 
-  // Desktop metadata for every chat: which sidebar it lives in, whether it is archived, and its
-  // automation posture. Read ONCE, before the per-session loop, because the loop now needs the
-  // posture too (see the approval-stall diagnosis below) and the scan is cached anyway.
-  let metaMap: Map<
-    string,
-    {
-      instance: string
-      archived: boolean
-      permissionMode?: string | null
-      chatId?: string | null
-    }
-  > = new Map()
+  let metaMap: OnceCtx['metaMap'] = new Map()
   try {
     metaMap = deps.sessionMeta()
   } catch {
     // No desktop metadata just means the owner-archived and stranded checks skip this tick.
   }
 
-  // -- per-session ------------------------------------------------------------
-  // Chats actively WORKING right now (transcript fresher than the idle threshold). Held and
-  // done-marked ones included: a busy chat holds a concurrency slot no matter its bookkeeping.
-  let runningChats = 0
-  const byCwd = new Map<string, { session: LiveSession; quietSecs: number; held: boolean }[]>()
-  for (const sess of sessions) {
+  return {
+    deps,
+    started,
+    s,
+    nowIso,
+    items: [],
+    sessions,
+    holdSet,
+    doneSet,
+    metaMap,
+    byCwd: new Map(),
+    runningChats: 0,
+    liveIds: new Set(sessions.map((x) => x.sessionId)),
+    cache: {},
+  }
+}
+
+/** Chats actively WORKING right now (transcript fresher than the idle threshold). Held and
+ *  done-marked ones included: a busy chat holds a concurrency slot no matter its bookkeeping. */
+function classifySessions(ctx: OnceCtx): void {
+  for (const sess of ctx.sessions) {
     const result = classifyLiveSession(sess, {
-      deps,
-      s,
-      started,
-      nowIso,
-      holdSet,
-      doneSet,
-      metaMap,
+      deps: ctx.deps,
+      s: ctx.s,
+      started: ctx.started,
+      nowIso: ctx.nowIso,
+      holdSet: ctx.holdSet,
+      doneSet: ctx.doneSet,
+      metaMap: ctx.metaMap,
     })
-    items.push(...result.items)
+    ctx.items.push(...result.items)
     if (result.cwdEntry) {
-      if (result.cwdEntry.running) runningChats++
-      const list = byCwd.get(sess.cwd) ?? []
+      if (result.cwdEntry.running) ctx.runningChats++
+      const list = ctx.byCwd.get(sess.cwd) ?? []
       list.push({ session: sess, quietSecs: result.cwdEntry.quietSecs, held: result.cwdEntry.held })
-      byCwd.set(sess.cwd, list)
+      ctx.byCwd.set(sess.cwd, list)
     }
   }
+}
 
-  // -- orphaned sessions: died mid-process (computer restart, crash, kill) -----
-  // A graceful CLI exit deletes its own ~/.claude/sessions/<pid>.json; a registry file whose
-  // pid is dead means the session was killed with its thread unfinished — the owner's restart
-  // scenario (2026-08-25). Mid-process death is a RESUMABLE scenario, so each one gets an
-  // attention item; superseded/finished residue is cleaned instead, so a revived chat's stale
-  // file never shadows its live successor (self-healing once the owner clicks the chat back
-  // to life or a resume lands).
-  const liveIds = new Set(sessions.map((x) => x.sessionId))
+/** Sessions that died mid-process (computer restart, crash, kill). A graceful CLI exit deletes
+ *  its own ~/.claude/sessions/<pid>.json; a registry file whose pid is dead means the session
+ *  was killed with its thread unfinished — the owner's restart scenario (2026-08-25). Mid-process
+ *  death is a RESUMABLE scenario, so each one gets an attention item; superseded/finished residue
+ *  is cleaned instead, so a revived chat's stale file never shadows its live successor
+ *  (self-healing once the owner clicks the chat back to life or a resume lands). */
+function classifyOrphans(ctx: OnceCtx): void {
   const newestOrphan = new Map<string, OrphanSession>()
-  for (const o of deps.orphans(deps.claudeHome())) {
+  for (const o of ctx.deps.orphans(ctx.deps.claudeHome())) {
     const prevO = newestOrphan.get(o.sessionId)
     if (!prevO) {
       newestOrphan.set(o.sessionId, o)
@@ -1650,51 +1683,53 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   }
   for (const orphan of newestOrphan.values()) {
     const item = classifyOrphanSession(orphan, {
-      deps,
-      liveIds,
-      doneSet,
-      holdSet,
-      metaMap,
-      started,
-      nowIso,
-      idleQuietSecs: s.idleQuietSecs,
+      deps: ctx.deps,
+      liveIds: ctx.liveIds,
+      doneSet: ctx.doneSet,
+      holdSet: ctx.holdSet,
+      metaMap: ctx.metaMap,
+      started: ctx.started,
+      nowIso: ctx.nowIso,
+      idleQuietSecs: ctx.s.idleQuietSecs,
     })
-    if (item) items.push(item)
+    if (item) ctx.items.push(item)
   }
+}
 
-  // -- stranded desktop chats: killed GRACEFULLY mid-work, so no residue -------
-  // A PC restart shuts sessions down cleanly, and a clean exit deletes its own registry file —
-  // the orphan pass above then has nothing to read, while the chat still sits un-archived in a
-  // desktop sidebar with a transcript that ends mid-turn. Found live 2026-08-25: the owner's
-  // "CLICK TO RESUME" architect chat sat pending through a restart precisely this way. Scan
-  // recent transcripts (48h window; the store scan is ~60ms) and surface any non-live,
-  // non-done, non-held, non-archived DESKTOP chat whose tail is mid-work as the same
-  // 'orphaned' scenario. midTurn-only keeps precision: a finished chat idling in a sidebar is
-  // the sidebar's normal state, not a stranding.
+/** Desktop chats killed GRACEFULLY mid-work, so no residue. A PC restart shuts sessions down
+ *  cleanly, and a clean exit deletes its own registry file — the orphan pass above then has
+ *  nothing to read, while the chat still sits un-archived in a desktop sidebar with a transcript
+ *  that ends mid-turn. Found live 2026-08-25: the owner's "CLICK TO RESUME" architect chat sat
+ *  pending through a restart precisely this way. Scan recent transcripts (48h window; the store
+ *  scan is ~60ms) and surface any non-live, non-done, non-held, non-archived DESKTOP chat whose
+ *  tail is mid-work as the same 'orphaned' scenario. midTurn-only keeps precision: a finished
+ *  chat idling in a sidebar is the sidebar's normal state, not a stranding. Must run AFTER
+ *  classifyOrphans, whose flagged sessions this deliberately does not duplicate. */
+function classifyStrandedDesktopChats(ctx: OnceCtx): void {
   const orphanFlagged = new Set(
-    items.filter((i) => i.kind === 'orphaned').map((i) => i.sessionId as string),
+    ctx.items.filter((i) => i.kind === 'orphaned').map((i) => i.sessionId as string),
   )
-  for (const t of deps.recentTranscripts(deps.claudeHome(), started)) {
-    if (liveIds.has(t.sessionId) || orphanFlagged.has(t.sessionId)) continue
-    if (doneSet.has(t.sessionId) || holdSet.has(t.sessionId)) continue
-    const meta = metaMap.get(t.sessionId)
+  for (const t of ctx.deps.recentTranscripts(ctx.deps.claudeHome(), ctx.started)) {
+    if (ctx.liveIds.has(t.sessionId) || orphanFlagged.has(t.sessionId)) continue
+    if (ctx.doneSet.has(t.sessionId) || ctx.holdSet.has(t.sessionId)) continue
+    const meta = ctx.metaMap.get(t.sessionId)
     if (!meta || meta.archived) continue // only chats that live in a desktop sidebar
-    if (deps.dispatchActive(t.sessionId)) continue // an in-flight headless run is not stranded
-    const quietSecs = Math.max(0, Math.round((started - t.mtimeMs) / 1000))
-    if (quietSecs < s.idleQuietSecs) continue
+    if (ctx.deps.dispatchActive(t.sessionId)) continue // an in-flight headless run is not stranded
+    const quietSecs = Math.max(0, Math.round((ctx.started - t.mtimeMs) / 1000))
+    if (quietSecs < ctx.s.idleQuietSecs) continue
     let tail: TailInfo
     try {
-      tail = deps.tailInfo(t.path)
+      tail = ctx.deps.tailInfo(t.path)
     } catch {
       continue
     }
     if (!tail.midTurn) continue
     const title = scannerTitleFor(t.sessionId)
-    items.push({
+    ctx.items.push({
       key: `orphan:${t.sessionId}`,
       kind: 'orphaned',
       sessionId: t.sessionId,
-      instanceRef: deps.instanceRef(t.sessionId) ?? undefined,
+      instanceRef: ctx.deps.instanceRef(t.sessionId) ?? undefined,
       tailSnippet: tail.lastAssistantText ?? undefined,
       summary: `${title ?? t.sessionId.slice(0, 8)} is STRANDED mid-work ${fmtQuiet(quietSecs)} ago — no process (graceful shutdown/restart left no residue), still open in the ${meta.instance} app's sidebar; revive per the surface preference`,
       detail: {
@@ -1707,66 +1742,80 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
         lastHumanText: tail.lastHumanText,
         lastHumanAt: tail.lastHumanAt,
       },
-      firstSeenAt: nowIso,
+      firstSeenAt: ctx.nowIso,
       seenCount: 1,
     })
   }
+}
 
-  // -- Codex threads (the other half of a unified manager) --------------------
-  // Observe-only by construction: Codex exposes no live-process registry and no message
-  // channel, so these items tell the owner what is waiting without pretending the reviewer can
-  // drive it. Every one carries source:'codex' and deliverable:false for exactly that reason -
-  // a reviewer that nudged one would be talking into a void, the same failure the deaf-chat
-  // rail exists to stop.
-  if (s.watchCodex) {
-    try {
-      for (const t of deps.codexThreads(started)) {
-        if (doneSet.has(t.sessionId) || holdSet.has(t.sessionId)) continue
-        const quietSecs = Math.max(0, Math.round((started - t.mtimeMs) / 1000))
-        if (quietSecs < s.idleQuietSecs) continue
-        const tail = deps.codexTail(t.path)
-        if (tail.unreadable) continue
-        if (t.cwd) {
-          const list = byCwd.get(t.cwd) ?? []
-          byCwd.set(t.cwd, list) // its repo still counts for git hygiene, even unmessageable
-        }
-        const kind: AttentionItem['kind'] =
-          tail.ending === 'interrupted' ? 'interrupted' : 'idle_pending'
-        items.push({
-          key: `codex:${t.sessionId}`,
-          kind,
-          sessionId: t.sessionId,
-          cwd: t.cwd ?? undefined,
-          tailSnippet: tail.lastAgentText ?? undefined,
-          summary: `[codex] ${t.sessionId.slice(0, 8)} ${
-            tail.ending === 'interrupted'
-              ? 'was interrupted'
-              : tail.ending === 'mid-turn'
-                ? 'stopped mid-turn'
-                : 'finished'
-          } ${fmtQuiet(quietSecs)} ago${tail.recapDetected ? ' with a recap' : ''} - Codex cannot be messaged, so this is for the owner to pick up`,
-          detail: {
-            source: 'codex',
-            deliverable: false,
-            quietSecs,
-            ending: tail.ending,
-            recapDetected: tail.recapDetected,
-            rolloutPath: t.path,
-          },
-          firstSeenAt: nowIso,
-          seenCount: 1,
-        })
-      }
-    } catch (err) {
-      console.error('[agenthydra] codex scan failed:', err)
-    }
+/** Build the attention item for one Codex thread already past the idle threshold and readable.
+ *  Split out of classifyCodexThreads so the nested ending->text ternary and the item literal
+ *  don't roll their weight into the scanning loop that calls this. */
+function codexItemFor(
+  t: CodexThread,
+  tail: CodexTail,
+  quietSecs: number,
+  nowIso: string,
+): AttentionItem {
+  const kind: AttentionItem['kind'] = tail.ending === 'interrupted' ? 'interrupted' : 'idle_pending'
+  const endingText =
+    tail.ending === 'interrupted'
+      ? 'was interrupted'
+      : tail.ending === 'mid-turn'
+        ? 'stopped mid-turn'
+        : 'finished'
+  return {
+    key: `codex:${t.sessionId}`,
+    kind,
+    sessionId: t.sessionId,
+    cwd: t.cwd ?? undefined,
+    tailSnippet: tail.lastAgentText ?? undefined,
+    summary: `[codex] ${t.sessionId.slice(0, 8)} ${endingText} ${fmtQuiet(quietSecs)} ago${tail.recapDetected ? ' with a recap' : ''} - Codex cannot be messaged, so this is for the owner to pick up`,
+    detail: {
+      source: 'codex',
+      deliverable: false,
+      quietSecs,
+      ending: tail.ending,
+      recapDetected: tail.recapDetected,
+      rolloutPath: t.path,
+    },
+    firstSeenAt: nowIso,
+    seenCount: 1,
   }
+}
 
-  // -- git hygiene, one look per distinct cwd ---------------------------------
-  for (const [cwd, sess] of byCwd) {
+/** Codex threads (the other half of a unified manager). Observe-only by construction: Codex
+ *  exposes no live-process registry and no message channel, so these items tell the owner what
+ *  is waiting without pretending the reviewer can drive it. Every one carries source:'codex' and
+ *  deliverable:false for exactly that reason - a reviewer that nudged one would be talking into
+ *  a void, the same failure the deaf-chat rail exists to stop. */
+function classifyCodexThreads(ctx: OnceCtx): void {
+  if (!ctx.s.watchCodex) return
+  try {
+    for (const t of ctx.deps.codexThreads(ctx.started)) {
+      if (ctx.doneSet.has(t.sessionId) || ctx.holdSet.has(t.sessionId)) continue
+      const quietSecs = Math.max(0, Math.round((ctx.started - t.mtimeMs) / 1000))
+      if (quietSecs < ctx.s.idleQuietSecs) continue
+      const tail = ctx.deps.codexTail(t.path)
+      if (tail.unreadable) continue
+      if (t.cwd) {
+        const list = ctx.byCwd.get(t.cwd) ?? []
+        ctx.byCwd.set(t.cwd, list) // its repo still counts for git hygiene, even unmessageable
+      }
+      ctx.items.push(codexItemFor(t, tail, quietSecs, ctx.nowIso))
+    }
+  } catch (err) {
+    console.error('[agenthydra] codex scan failed:', err)
+  }
+}
+
+/** Git hygiene, one look per distinct cwd: flag a repo off main, and one dirty for long enough
+ *  with every session in it idle. */
+async function applyGitHygiene(ctx: OnceCtx): Promise<void> {
+  for (const [cwd, sess] of ctx.byCwd) {
     let g: GitInfo | null = null
     try {
-      g = await deps.git(cwd)
+      g = await ctx.deps.git(cwd)
     } catch {
       g = null
     }
@@ -1775,13 +1824,13 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       continue
     }
     if (g.detached || (g.branch && g.branch !== 'main' && g.branch !== 'master')) {
-      items.push({
+      ctx.items.push({
         key: `branch:${cwd}`,
         kind: 'branch_off_main',
         cwd,
         summary: `${cwd} is on ${g.detached ? 'a detached HEAD' : `branch '${g.branch}'`} — standing rule is main only`,
         detail: { branch: g.branch, detached: g.detached },
-        firstSeenAt: nowIso,
+        firstSeenAt: ctx.nowIso,
         seenCount: 1,
       })
     }
@@ -1789,13 +1838,13 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       const k = `dirtySince:${cwd}`
       let since = Number(kvGet(k))
       if (!Number.isFinite(since) || since <= 0) {
-        since = started
-        kvSet(k, String(started))
+        since = ctx.started
+        kvSet(k, String(ctx.started))
       }
-      const dirtyMins = Math.round((started - since) / 60_000)
-      const allIdle = sess.every((x) => x.quietSecs >= s.idleQuietSecs)
-      if (dirtyMins >= s.dirtyMins && allIdle) {
-        items.push({
+      const dirtyMins = Math.round((ctx.started - since) / 60_000)
+      const allIdle = sess.every((x) => x.quietSecs >= ctx.s.idleQuietSecs)
+      if (dirtyMins >= ctx.s.dirtyMins && allIdle) {
+        ctx.items.push({
           key: `dirty:${cwd}`,
           kind: 'repo_dirty',
           cwd,
@@ -1811,7 +1860,7 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
             branch: g.branch,
             aheadCount: g.aheadCount,
           },
-          firstSeenAt: nowIso,
+          firstSeenAt: ctx.nowIso,
           seenCount: 1,
         })
       }
@@ -1819,52 +1868,60 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
       kvDelete(`dirtySince:${cwd}`)
     }
   }
+}
 
-  // -- usage ------------------------------------------------------------------
-  const cache = deps.usage()
+/** Usage snapshots: stamp their age, diff against the previous pass for threshold items, and
+ *  stash the cache on ctx - the fleet-routing phase right after this one needs it too. */
+function applyUsage(ctx: OnceCtx): void {
+  const cache = ctx.deps.usage()
+  ctx.cache = cache
   let newestCapture = 0
   for (const snap of Object.values(cache)) {
     const t = Date.parse(snap.capturedAt ?? '')
     if (!Number.isNaN(t) && t > newestCapture) newestCapture = t
   }
-  state.usageAgeSecs = newestCapture ? Math.round((started - newestCapture) / 1000) : null
+  state.usageAgeSecs = newestCapture ? Math.round((ctx.started - newestCapture) / 1000) : null
   let prev: Record<string, UsagePrev> = {}
   try {
     prev = JSON.parse(kvGet('usagePrev') ?? '{}')
   } catch {
     prev = {}
   }
-  const usage = computeUsageItems(cache, prev, s, started, nowIso)
+  const usage = computeUsageItems(cache, prev, ctx.s, ctx.started, ctx.nowIso)
   kvSet('usagePrev', JSON.stringify(usage.next))
-  items.push(...usage.items)
+  ctx.items.push(...usage.items)
+}
 
-  // -- the desktop fleet as a routing table -----------------------------------
+/** The desktop fleet as a routing table. */
+async function applyFleetInstances(ctx: OnceCtx): Promise<void> {
   try {
     state.instances = buildInstanceRows(
-      await deps.desktopInstances(),
-      cache,
-      s,
-      started,
-      recentPlacements(s.balanceWindowMins, started),
+      await ctx.deps.desktopInstances(),
+      ctx.cache,
+      ctx.s,
+      ctx.started,
+      recentPlacements(ctx.s.balanceWindowMins, ctx.started),
     )
   } catch (err) {
     console.error('[agenthydra] orchestrator instance listing failed:', err)
     state.instances = []
   }
+}
 
-  // -- the concurrency cap (round-robin rotation) -----------------------------
-  // maxActiveChats caps how many chats may WORK at once, fleet-wide (0 = unlimited, the
-  // default). Busy chats hold the slots; free slots are offered to idle chats LONGEST-IDLE
-  // FIRST, and that ordering IS the round-robin: a nudged chat goes busy, and when it next
-  // idles it re-enters at the back of the line (freshest mtime), so every waiting chat cycles
-  // through fairly with no extra bookkeeping. The overflow is marked waiting-for-slot; the
-  // reviewer skips those WITHOUT acking, so they resurface the moment a slot frees. Handoffs,
-  // answers, and orphan revives are never gated here — only resume nudges are, since those are
-  // what actually multiply concurrent work.
-  state.runningChats = runningChats
-  state.slotsFree = s.maxActiveChats > 0 ? Math.max(0, s.maxActiveChats - runningChats) : null
-  if (s.maxActiveChats > 0) {
-    const resumable = items
+/** The concurrency cap (round-robin rotation). maxActiveChats caps how many chats may WORK at
+ *  once, fleet-wide (0 = unlimited, the default). Busy chats hold the slots; free slots are
+ *  offered to idle chats LONGEST-IDLE FIRST, and that ordering IS the round-robin: a nudged chat
+ *  goes busy, and when it next idles it re-enters at the back of the line (freshest mtime), so
+ *  every waiting chat cycles through fairly with no extra bookkeeping. The overflow is marked
+ *  waiting-for-slot; the reviewer skips those WITHOUT acking, so they resurface the moment a
+ *  slot frees. Handoffs, answers, and orphan revives are never gated here — only resume nudges
+ *  are, since those are what actually multiply concurrent work. */
+function applyConcurrencyCap(ctx: OnceCtx): void {
+  state.runningChats = ctx.runningChats
+  state.slotsFree =
+    ctx.s.maxActiveChats > 0 ? Math.max(0, ctx.s.maxActiveChats - ctx.runningChats) : null
+  if (ctx.s.maxActiveChats > 0) {
+    const resumable = ctx.items
       .filter((i) => i.kind === 'idle_pending')
       .sort(
         (a, b) =>
@@ -1874,33 +1931,35 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
     for (const [idx, item] of resumable.entries()) {
       if (idx < (state.slotsFree ?? 0)) continue
       item.detail = { ...item.detail, waitingForSlot: true }
-      item.summary += ` — WAITING FOR A SLOT (${runningChats}/${s.maxActiveChats} running); do not nudge`
+      item.summary += ` — WAITING FOR A SLOT (${ctx.runningChats}/${ctx.s.maxActiveChats} running); do not nudge`
     }
   }
+}
 
-  // Every orphaned item is an ACTION WANTED (a revive). Captured BEFORE ack suppression — an
-  // ack shapes the reviewer's reading list, never the action ledger (found live 2026-08-25:
-  // an acked orphan blindfolded the old reviver for exactly the chat that most needed it) —
-  // and written as a PROPOSAL, never acted on here (owner law 2026-08-26: the AI checks every
-  // action first; the reviewer decides these and executes the approved ones itself).
-  maintainProposals(started)
-  // A PROPOSAL CAN OUTLIVE ITS TARGET. Open rows stand for up to 48 hours, and the chat
-  // underneath can be archived in that time - which is exactly what happened on 2026-08-27,
-  // when four approved revives pointed at retired threads and the reviewer spent a relay round
-  // finding out. The detectors already refuse to propose for an archived chat; this applies the
-  // same test to rows already on the books.
+/** Every orphaned item is an ACTION WANTED (a revive). Captured BEFORE ack suppression — an ack
+ *  shapes the reviewer's reading list, never the action ledger (found live 2026-08-25: an acked
+ *  orphan blindfolded the old reviver for exactly the chat that most needed it) — and written as
+ *  a PROPOSAL, never acted on here (owner law 2026-08-26: the AI checks every action first; the
+ *  reviewer decides these and executes the approved ones itself). Also retires proposals whose
+ *  target was archived out from under them: open rows stand for up to 48 hours, and the chat
+ *  underneath can be archived in that time - which is exactly what happened on 2026-08-27, when
+ *  four approved revives pointed at retired threads and the reviewer spent a relay round finding
+ *  out. The detectors already refuse to propose for an archived chat; this applies the same test
+ *  to rows already on the books. */
+function maintainOrphanProposals(ctx: OnceCtx): void {
+  maintainProposals(ctx.started)
   {
     const archivedNow: string[] = []
-    for (const [id, meta] of metaMap) if (meta.archived) archivedNow.push(id)
+    for (const [id, meta] of ctx.metaMap) if (meta.archived) archivedNow.push(id)
     const retired = retireProposalsForSessions(
       archivedNow,
-      started,
+      ctx.started,
       'target was archived after this was proposed; retired rather than offered as work',
     )
     if (retired > 0)
       console.log(`[agenthydra] retired ${retired} proposal(s) whose chat has been archived`)
   }
-  for (const item of items) {
+  for (const item of ctx.items) {
     if (item.kind !== 'orphaned' || !item.sessionId) continue
     const quiet = typeof item.detail?.quietSecs === 'number' ? item.detail.quietSecs : 0
     proposeAction({
@@ -1916,97 +1975,116 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
         // pick a revive that can actually run. Anything other than 'bypassPermissions' prompts
         // for shell commands, and a revive prompt that sends such a chat straight at `git` or
         // `cargo` just re-freezes it at an approval nobody can click.
-        permissionMode: metaMap.get(item.sessionId)?.permissionMode ?? null,
+        permissionMode: ctx.metaMap.get(item.sessionId)?.permissionMode ?? null,
         // THE ID THE APP'S TOOLS TAKE. Not `local_<sessionId>`: that form is correct only
         // for imported chats, and 98.7% of this fleet was created IN the app and is filed
         // under a different id. The reviewer had no way to know that and addressed four
         // deliveries at chats that do not exist (2026-08-27). Use this verbatim for
         // send_message, rename, archive, and for any relay request.
-        chatId: metaMap.get(item.sessionId)?.chatId ?? null,
+        chatId: ctx.metaMap.get(item.sessionId)?.chatId ?? null,
         cwd: item.cwd ?? null,
         peerName: item.peerName ?? null,
         tailSnippet: item.tailSnippet?.slice(0, 600) ?? null,
       },
-      evidenceAt: new Date(started - quiet * 1000).toISOString(),
+      evidenceAt: new Date(ctx.started - quiet * 1000).toISOString(),
     })
   }
+}
 
-  // -- ack suppression --------------------------------------------------------
-  const acks = activeAcks(started)
-  const visible = items.filter((i) => {
+/** Ack suppression, then publish this tick's attention list and timing to `state`. */
+function applyAckSuppressionAndPublish(ctx: OnceCtx): void {
+  const acks = activeAcks(ctx.started)
+  const visible = ctx.items.filter((i) => {
     const ack = acks.get(i.key)
     if (!ack) return true
     // A session item whose transcript moved after the ack is a NEW situation — re-arm it.
     if (i.sessionId) {
-      const sess = sessions.find((x) => x.sessionId === i.sessionId)
-      const mtime = sess?.transcriptPath ? deps.mtimeMs(sess.transcriptPath) : null
+      const sess = ctx.sessions.find((x) => x.sessionId === i.sessionId)
+      const mtime = sess?.transcriptPath ? ctx.deps.mtimeMs(sess.transcriptPath) : null
       if (mtime !== null && mtime > Date.parse(ack.acked_at)) return true
     }
     return false
   })
 
   state.attention = withContinuity(visible)
-  state.lastTickAt = nowIso
-  state.lastTickMs = deps.nowMs() - started
+  state.lastTickAt = ctx.nowIso
+  state.lastTickMs = ctx.deps.nowMs() - ctx.started
+}
 
-  // -- the title janitor (every ~10 min) --------------------------------------
-  // Plumbing-created desktop chats (imports, migrations) land "Untitled" or with a generic AI
-  // name; the owner's requirement is standing name management, not one-time fixes. The scanner
-  // already derives real titles for every transcript — hand them to any desktop entry that has
-  // none. Only in the real pass (default deps), never in tests driving injected deps.
-  if (deps === defaultDeps && started - lastTitleSweepMs > 10 * 60_000) {
-    lastTitleSweepMs = started
-    try {
-      const titled = sweepUntitledDesktopChats(scannerTitleFor)
-      if (titled.fixed > 0) {
-        console.log(`[agenthydra] title janitor named ${titled.fixed} desktop chat(s)`)
-        // New names must APPEAR, not wait for some future restart (owner rule) — same
-        // sidebar-visibility restart the archive flow uses. Kept as the FALLBACK: it is what
-        // lands the name when no reviewer is running, so removing it would trade a slow rename
-        // for no rename at all.
-        for (const p of titled.profiles) noteArchiveVisibilityPending(p)
-      }
-      // Anything renamed inside a RUNNING app is handed to the reviewer, which renames through
-      // the app itself: instant, and the app cannot overwrite it. Chats in closed instances are
-      // NOT listed, because the disk write is already the durable answer for those.
-      const running = new Set(
-        state.instances.filter((i) => i.isRunning).map((i) => normalizeRef(i.ref) ?? ''),
-      )
-      state.renames = reconcilePendingRenames(
-        titled.renamed.map((r) => ({
-          ref: desktopKey(r.profile),
-          sessionId: r.sessionId,
-          title: r.title,
-        })),
-        running,
-        started,
-      )
-    } catch (err) {
-      console.error('[agenthydra] title janitor failed:', err)
+/** The title janitor (every ~10 min). Plumbing-created desktop chats (imports, migrations) land
+ *  "Untitled" or with a generic AI name; the owner's requirement is standing name management,
+ *  not one-time fixes. The scanner already derives real titles for every transcript — hand them
+ *  to any desktop entry that has none. Only in the real pass (default deps), never in tests
+ *  driving injected deps. */
+async function runPeriodicTitleJanitor(ctx: OnceCtx): Promise<void> {
+  if (ctx.deps !== defaultDeps || ctx.started - lastTitleSweepMs <= 10 * 60_000) return
+  lastTitleSweepMs = ctx.started
+  try {
+    const titled = sweepUntitledDesktopChats(scannerTitleFor)
+    if (titled.fixed > 0) {
+      console.log(`[agenthydra] title janitor named ${titled.fixed} desktop chat(s)`)
+      // New names must APPEAR, not wait for some future restart (owner rule) — same
+      // sidebar-visibility restart the archive flow uses. Kept as the FALLBACK: it is what
+      // lands the name when no reviewer is running, so removing it would trade a slow rename
+      // for no rename at all.
+      for (const p of titled.profiles) noteArchiveVisibilityPending(p)
     }
-    try {
-      const asks = await proposeArchivesForDoneSessions()
-      if (asks > 0)
-        console.log(`[agenthydra] archive janitor proposed retiring ${asks} finished chat(s)`)
-    } catch (err) {
-      console.error('[agenthydra] archive janitor failed:', err)
-    }
-    try {
-      const asks = await proposeInvisibleChats()
-      if (asks > 0)
-        console.log(`[agenthydra] visibility sweep proposed importing ${asks} invisible chat(s)`)
-    } catch (err) {
-      console.error('[agenthydra] visibility sweep failed:', err)
-    }
-    // The placement ledger is pruned on the same 14-day horizon as decided proposals, in the
-    // same pass, so neither can grow without bound on a machine that never restarts.
-    prunePlacements(started)
-    try {
-      await restartAppsForArchiveVisibility()
-    } catch (err) {
-      console.error('[agenthydra] archive-visibility restart failed:', err)
-    }
+    // Anything renamed inside a RUNNING app is handed to the reviewer, which renames through
+    // the app itself: instant, and the app cannot overwrite it. Chats in closed instances are
+    // NOT listed, because the disk write is already the durable answer for those.
+    const running = new Set(
+      state.instances.filter((i) => i.isRunning).map((i) => normalizeRef(i.ref) ?? ''),
+    )
+    state.renames = reconcilePendingRenames(
+      titled.renamed.map((r) => ({
+        ref: desktopKey(r.profile),
+        sessionId: r.sessionId,
+        title: r.title,
+      })),
+      running,
+      ctx.started,
+    )
+  } catch (err) {
+    console.error('[agenthydra] title janitor failed:', err)
   }
+  try {
+    const asks = await proposeArchivesForDoneSessions()
+    if (asks > 0)
+      console.log(`[agenthydra] archive janitor proposed retiring ${asks} finished chat(s)`)
+  } catch (err) {
+    console.error('[agenthydra] archive janitor failed:', err)
+  }
+  try {
+    const asks = await proposeInvisibleChats()
+    if (asks > 0)
+      console.log(`[agenthydra] visibility sweep proposed importing ${asks} invisible chat(s)`)
+  } catch (err) {
+    console.error('[agenthydra] visibility sweep failed:', err)
+  }
+  // The placement ledger is pruned on the same 14-day horizon as decided proposals, in the
+  // same pass, so neither can grow without bound on a machine that never restarts.
+  prunePlacements(ctx.started)
+  try {
+    await restartAppsForArchiveVisibility()
+  } catch (err) {
+    console.error('[agenthydra] archive-visibility restart failed:', err)
+  }
+}
+
+export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps): Promise<void> {
+  const ctx = initOnceCtx(deps)
+
+  classifySessions(ctx)
+  classifyOrphans(ctx)
+  classifyStrandedDesktopChats(ctx)
+  classifyCodexThreads(ctx)
+  await applyGitHygiene(ctx)
+  applyUsage(ctx)
+  await applyFleetInstances(ctx)
+  applyConcurrencyCap(ctx)
+  maintainOrphanProposals(ctx)
+  applyAckSuppressionAndPublish(ctx)
+  await runPeriodicTitleJanitor(ctx)
 }
 
 // The headless auto-revive driver that used to live here (v0.35: a one-turn `--resume`
