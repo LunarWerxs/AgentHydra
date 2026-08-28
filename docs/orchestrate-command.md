@@ -62,6 +62,24 @@ headless processes). Reach for these in order:
    (a chat there going live, or the owner opening one, restores rung 1-3). NEVER fall back
    to a headless resume, a terminal window (unless the surface IS terminal), or UI typing.
 
+⛔ **KEEP AN ANCHOR ALIVE IN EVERY RUNNING INSTANCE - RUNG 4 IS A HOLE YOU DIG YOURSELF**
+(owner directive, Michael, 2026-08-28: *"one account will manage all of the others... I will not
+have it so I am required to type orchestrate into each chat"*). One reviewer DOES manage every
+account, and it does not need a reviewer in each: peer messaging runs over per-SESSION named
+pipes (`cc-msg-<hash>`) that are machine-wide, not per-app, so rung 2/3 reaches any LIVE chat in
+any instance. Proven end to end 2026-08-28 - a chat seeded into Martin was started through a relay
+and ran on Martin's account, zero owner clicks.
+The ONLY thing that breaks it is an instance whose app is open with **no live chat at all**: no
+pipe exists, so there is nothing to relay through, and an imported chat does not drain peer
+messages until a person interacts with it. That state is usually SELF-INFLICTED - it is what
+happens when you retire the last live chat in an instance, which is exactly what emptied Martin
+earlier that day. So:
+- **Before retiring the LAST live chat in a running instance, land its replacement first.** Seed
+  the next piece of work there and start it through the chat you are about to retire, then retire.
+- If there is genuinely no work to place, let it go cold and say so - `unreachable.waiting` is
+  the honest measure of whether that costs anything (0 = nobody is stranded).
+- Never treat "open a chat there yourself" as the fix. It is the owner doing the machinery's job.
+
 ⛔ **RUNG 1 IS *ONLY* FOR YOUR OWN INSTANCE, AND GETTING THAT WRONG BILLS THE WRONG ACCOUNT.**
 Your session tool does not route to another instance - handed a chat that lives elsewhere it
 **re-creates a pointer for it in YOUR profile, on `acceptEdits`, and boots it on YOUR account**,
