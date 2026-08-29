@@ -740,6 +740,13 @@ export async function importSessionToDesktop(opts: {
     return { ok: false, reason: err instanceof Error ? err.message : 'spawn-failed' }
   }
   const titled = await stampImportedChat(opts.instanceDir, opts.sessionId, opts.title)
+  // The stamp just written measurably LOSES to the running app (and the guard above means the
+  // app is always running here): the app re-saves this chat's metadata from memory — where the
+  // import handler put 'acceptEdits' — on its first boot, which erases the stamp from disk and
+  // leaves the file lying about the mode at the app's next restart too. The bounded watch keeps
+  // the disk copy converged so that restart makes the stamp permanent; fire-and-forget, because
+  // an import must not block minutes on a babysitter (see reassertChatAutomation).
+  void reassertChatAutomation(opts.instanceDir, opts.sessionId)
   // `titleDurable` is the honest half of the answer. Writing the metadata file works, and then a
   // RUNNING app overwrites it from memory the moment that chat next boots - measured 2026-08-26:
   // five chats imported with correct titles all came back `title: undefined`, which the sidebar
@@ -997,6 +1004,19 @@ export async function findDesktopEntryFile(
  * Best-effort, and honest about it: like the title, a value written from outside a RUNNING app
  * can be overwritten when that chat next boots. It costs one small write and removes the most
  * common way a revived chat dies quietly.
+ *
+ * HOW IT LOSES, measured twice (the 2026-08-27 experiment in ORCHESTRATOR.md, then live
+ * 2026-08-29 01:58 UTC when seeded chat 95fe512c froze at its FIRST PowerShell prompt ~15s
+ * after seeding): the running app's IN-MEMORY chat record is authoritative. The import handler
+ * creates that record with 'acceptEdits', every chat boot re-saves it over this file, and the
+ * engine takes its mode from the record, not from disk — so a file stamp is invisible to the
+ * app until the one moment it re-reads the store, which is ITS OWN boot. That is why this
+ * write alone cannot prevent the first-wake deadlock, and why two convergence mechanisms sit
+ * beside it: reassertChatAutomation (bounded watch after each import, so the app's re-saves
+ * stop erasing the stamp from disk) and reassertAutomationStamps (the app-restart quit→reopen
+ * window, the one write that provably enters app memory — same window 4499079 proved for
+ * archive flags). Once a restart has read the stamp, the app itself re-saves
+ * 'bypassPermissions' forever after, and the chat is durably unattended.
  */
 export function applyDesktopChatAutomation(instanceDir: string, sessionId: string): boolean {
   const metaPath = findChatMetaPath(instanceDir, sessionId)
@@ -1010,6 +1030,123 @@ export function applyDesktopChatAutomation(instanceDir: string, sessionId: strin
   } catch {
     return false
   }
+}
+
+/**
+ * Keep an imported chat's automation stamp true ON DISK across the app's re-saves: a bounded
+ * watch that rewrites `bypassPermissions` whenever the running app flips the metadata back.
+ *
+ * Why a watcher at all, given the app's memory wins while it runs (see
+ * applyDesktopChatAutomation): because the DISK copy is what the app loads at its next boot.
+ * Without this, the chat's first wake re-saves 'acceptEdits' over the stamp and the file then
+ * testifies to the wrong mode forever — so even an app restart, the one event that could have
+ * made the stamp durable, reads the clobbered value and the chat stays deadlock-prone for
+ * life (measured 2026-08-29 01:58 UTC: seeded chat 95fe512c booted ~15s after seeding, froze
+ * at its first shell prompt, and the dossier read 'acceptEdits' back off disk). With it, the
+ * file converges back to 'bypassPermissions' after every flip, and the next app boot — owner
+ * restart, app update, or the orchestrator's own archive-visibility restart, which also runs
+ * reassertAutomationStamps in its quit→reopen window — makes the stamp permanent.
+ *
+ * Bounded three ways, so it can never fight the app forever or scan a store forever: a hard
+ * time window, a cap on restores (a tug-of-war that reaches the cap is the app's to win), and
+ * a cap on consecutive ticks where no metadata file resolves (an import that never produced a
+ * chat leaves nothing to guard). Non-throwing; returns how many times it restored the stamp.
+ */
+export async function reassertChatAutomation(
+  instanceDir: string,
+  sessionId: string,
+  opts?: {
+    windowMs?: number
+    intervalMs?: number
+    maxRestores?: number
+    maxMisses?: number
+    sleep?: (ms: number) => Promise<void>
+    now?: () => number
+  },
+): Promise<number> {
+  const windowMs = opts?.windowMs ?? 10 * 60_000
+  const intervalMs = opts?.intervalMs ?? 1_500
+  const maxRestores = opts?.maxRestores ?? 8
+  const maxMisses = opts?.maxMisses ?? 40
+  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = opts?.now ?? Date.now
+  const deadline = now() + windowMs
+  let restores = 0
+  let misses = 0
+  // Resolved once and then read directly each tick: findChatMetaPath falls back to a full
+  // store walk on a cache miss, and a watcher must stay cheap enough to forget about.
+  let metaPath: string | null = null
+  while (now() < deadline && restores < maxRestores) {
+    await sleep(intervalMs)
+    try {
+      if (!metaPath || !existsSync(metaPath)) metaPath = findChatMetaPath(instanceDir, sessionId)
+      if (!metaPath) {
+        if (++misses >= maxMisses) return restores
+        continue
+      }
+      misses = 0
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+      if (meta.permissionMode === 'bypassPermissions') continue
+      meta.permissionMode = 'bypassPermissions'
+      writeFileSync(metaPath, JSON.stringify(meta))
+      invalidateSessionMetaCache()
+      restores++
+      console.log(
+        `[agenthydra] re-asserted bypassPermissions on ${sessionId} (the app's re-save had reverted it)`,
+      )
+    } catch {
+      // a contended or half-written pass says nothing about the next tick
+    }
+  }
+  return restores
+}
+
+/**
+ * Stamp `bypassPermissions` onto every IMPORT-SHAPE chat in one profile's store whose file
+ * says otherwise. Import shape means the file is named after the CLI id
+ * (`local_<cliSessionId>.json`) — the one shape only OUR imports and seeds produce; a chat
+ * the app created for itself is filed under the app's own id and is left strictly alone,
+ * because an 'acceptEdits' there could be the owner's deliberate choice in the UI.
+ *
+ * This is the durable half of the stamp (owner rule 2026-08-28: every new chat runs
+ * bypassPermissions). Written from outside, the stamp only ever reaches the app's
+ * authoritative in-memory record when the app READS the store, which is its own boot — so the
+ * caller is the archive-visibility restart, in the same quit→reopen window where 4499079
+ * proved a daemon write cannot lose. It also heals every import clobbered before this
+ * mechanism existed (census 2026-08-27: 26 of 30 imports fleet-wide had lost the stamp).
+ * Idempotent, non-throwing; returns how many files it changed.
+ */
+export function reassertAutomationStamps(profileDir: string): number {
+  const store = join(profileDir, 'claude-code-sessions')
+  let stamped = 0
+  try {
+    for (const org of readdirSync(store, { withFileTypes: true })) {
+      if (!org.isDirectory()) continue
+      for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
+        if (!user.isDirectory()) continue
+        const dir = join(store, org.name, user.name)
+        for (const f of readdirSync(dir)) {
+          if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+          try {
+            const p = join(dir, f)
+            const meta = JSON.parse(readFileSync(p, 'utf8'))
+            if (typeof meta.cliSessionId !== 'string' || f !== `local_${meta.cliSessionId}.json`)
+              continue // app-created shape, or unreadable identity: not ours to touch
+            if (meta.permissionMode === 'bypassPermissions') continue
+            meta.permissionMode = 'bypassPermissions'
+            writeFileSync(p, JSON.stringify(meta))
+            stamped++
+          } catch {
+            // one unreadable metadata file says nothing about the others
+          }
+        }
+      }
+    }
+  } catch {
+    return stamped // no store in this profile
+  }
+  if (stamped > 0) invalidateSessionMetaCache()
+  return stamped
 }
 
 /**

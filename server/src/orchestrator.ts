@@ -101,6 +101,7 @@ import {
 import {
   archiveDesktopChat,
   desktopChatArchiveState,
+  reassertAutomationStamps,
   sweepUntitledDesktopChats,
 } from './session-launch'
 import type {
@@ -2472,6 +2473,16 @@ async function restartOneArchivePendingDir(
     if (reasserted > 0)
       console.log(
         `[agenthydra] archive-visibility restart: re-asserted ${reasserted} archive flag(s) the app's quit-save had erased in ${dir}`,
+      )
+    // Same window, same mechanism, the OTHER flag the app erases: permissionMode. The app
+    // re-saves 'acceptEdits' over an imported chat's bypassPermissions stamp on every boot of
+    // that chat (measured 2026-08-29: a seeded chat froze at its first shell prompt 15s after
+    // seeding), and a file write only enters the app's authoritative memory when the app reads
+    // the store fresh — which is now. After the reopen these chats are durably unattended.
+    const restamped = reassertAutomationStamps(dir)
+    if (restamped > 0)
+      console.log(
+        `[agenthydra] archive-visibility restart: re-stamped bypassPermissions on ${restamped} imported chat(s) in ${dir}`,
       )
     const o = await openInstance(dir)
     kvSet(cooldownKey, new Date().toISOString())

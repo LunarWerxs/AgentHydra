@@ -20,6 +20,8 @@ import {
   importSessionToDesktop,
   isSessionSuperseded,
   launchTerminalSession,
+  reassertAutomationStamps,
+  reassertChatAutomation,
   seedDesktopSession,
   stampImportedChat,
   sweepUntitledDesktopChats,
@@ -207,6 +209,124 @@ test('an UNTITLED import is still stamped bypassPermissions', async () => {
   const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
   expect(meta.title).toBe('Real title')
   expect(meta.permissionMode).toBe('bypassPermissions')
+})
+
+test('the stamp survives the app boot re-save: the watcher rewrites what the app flips back', async () => {
+  // The regression this pins, measured 2026-08-29 01:58 UTC: a freshly seeded chat (stamped
+  // bypassPermissions) was booted via send_message ~15s later, the app's boot re-save rewrote
+  // the metadata from memory — 'acceptEdits' again — and the chat froze forever at its first
+  // PowerShell approval prompt. The watcher must restore the stamp after the flip, so the file
+  // stops testifying to the wrong mode at the app's next store read.
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-reassert-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  const metaPath = join(store, 'local_sess-boot-1.json')
+  // As stampImportedChat leaves a seeded chat: stamped, titled, not yet booted.
+  const seeded = { cliSessionId: 'sess-boot-1', permissionMode: 'bypassPermissions', title: 'S' }
+  writeFileSync(metaPath, JSON.stringify(seeded))
+  let ticks = 0
+  const restores = await reassertChatAutomation(profile, 'sess-boot-1', {
+    windowMs: 10_000,
+    intervalMs: 1_000,
+    now: () => ticks * 1_000,
+    sleep: async () => {
+      ticks++
+      // Tick 2 is the app's boot re-save: the whole record rewritten from memory, where the
+      // import handler put acceptEdits.
+      if (ticks === 2)
+        writeFileSync(metaPath, JSON.stringify({ ...seeded, permissionMode: 'acceptEdits' }))
+    },
+  })
+  expect(restores).toBe(1) // restored once, then left alone — no tug-of-war on a settled file
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+  expect(meta.permissionMode).toBe('bypassPermissions')
+  expect(meta.title).toBe('S') // the restore rewrites the mode, not the record
+  // Idempotence: a second watch over an already-correct file writes nothing.
+  ticks = 0
+  const again = await reassertChatAutomation(profile, 'sess-boot-1', {
+    windowMs: 3_000,
+    intervalMs: 1_000,
+    now: () => ticks * 1_000,
+    sleep: async () => {
+      ticks++
+    },
+  })
+  expect(again).toBe(0)
+})
+
+test('the watcher is bounded: a restore cap against a hostile flipper, a miss cap for a chat that never appears', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-reassert-bound-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  const metaPath = join(store, 'local_sess-fight.json')
+  const record = { cliSessionId: 'sess-fight', permissionMode: 'acceptEdits' }
+  writeFileSync(metaPath, JSON.stringify(record))
+  let ticks = 0
+  // The app "wins" every tick: the watcher restores maxRestores times and stands down long
+  // before its window, instead of fighting forever.
+  const restores = await reassertChatAutomation(profile, 'sess-fight', {
+    windowMs: 600_000,
+    intervalMs: 1_000,
+    maxRestores: 3,
+    now: () => ticks * 1_000,
+    sleep: async () => {
+      ticks++
+      writeFileSync(metaPath, JSON.stringify(record))
+    },
+  })
+  expect(restores).toBe(3)
+  expect(ticks).toBe(3)
+  // A session whose metadata never appears (the import failed): give up at the miss cap, not
+  // at the far window — there is nothing to guard.
+  let missTicks = 0
+  const none = await reassertChatAutomation(profile, 'sess-never-created', {
+    windowMs: 600_000,
+    intervalMs: 1_000,
+    maxMisses: 5,
+    now: () => missTicks * 1_000,
+    sleep: async () => {
+      missTicks++
+    },
+  })
+  expect(none).toBe(0)
+  expect(missTicks).toBe(5)
+})
+
+test('reassertAutomationStamps restamps clobbered imports only, never app-created chats', () => {
+  // The durable half: run in the archive-visibility restart's quit→reopen window, the one
+  // moment a daemon write provably enters the app's memory (same window 4499079 proved for
+  // archive flags). Import shape = file named after the CLI id; an app-created chat is filed
+  // under the app's own id and its mode may be the owner's deliberate UI choice.
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-restamp-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  const read = (n: string) => JSON.parse(readFileSync(join(store, n), 'utf8'))
+  // A seeded import whose stamp the app's boot re-save erased.
+  writeFileSync(
+    join(store, 'local_imp-clobbered.json'),
+    JSON.stringify({ cliSessionId: 'imp-clobbered', permissionMode: 'acceptEdits', title: 'T' }),
+  )
+  // An import still carrying its stamp: left byte-identical (idempotence).
+  writeFileSync(
+    join(store, 'local_imp-fine.json'),
+    JSON.stringify({ cliSessionId: 'imp-fine', permissionMode: 'bypassPermissions' }),
+  )
+  // An app-created chat (filed under the app's own id, CLI id inside) on acceptEdits: NOT ours.
+  writeFileSync(
+    join(store, 'local_app-own-id.json'),
+    JSON.stringify({ cliSessionId: 'cli-elsewhere', permissionMode: 'acceptEdits' }),
+  )
+  // A corrupt file must not stop the sweep.
+  writeFileSync(join(store, 'local_broken.json'), '{not json')
+  expect(reassertAutomationStamps(profile)).toBe(1)
+  expect(read('local_imp-clobbered.json').permissionMode).toBe('bypassPermissions')
+  expect(read('local_imp-clobbered.json').title).toBe('T')
+  expect(read('local_imp-fine.json').permissionMode).toBe('bypassPermissions')
+  expect(read('local_app-own-id.json').permissionMode).toBe('acceptEdits')
+  // Second pass: everything already converged, nothing rewritten.
+  expect(reassertAutomationStamps(profile)).toBe(0)
+  // A profile with no store is a no-op, not a throw.
+  expect(reassertAutomationStamps(join(profile, 'no-such-dir'))).toBe(0)
 })
 
 test('stampImportedChat gives up at its deadline instead of blocking forever', async () => {

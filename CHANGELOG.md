@@ -85,6 +85,30 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **The `bypassPermissions` stamp on a seeded chat no longer stays lost after the app's boot
+  re-save: the disk copy is kept true and made permanent at the next app restart.** A seeded or
+  imported chat is created by the app with `acceptEdits`, which prompts on every shell command,
+  and the app's in-memory record is authoritative while it runs: on the chat's first wake it
+  re-saves that record over our stamp and the engine runs unstamped. Measured 2026-08-29
+  01:58 UTC: a freshly seeded chat was booted ~15 seconds after seeding, invoked its skill
+  correctly, and froze forever at its FIRST PowerShell approval prompt, the zero-click deadlock
+  the stamp exists to prevent, and the same disk-vs-app-memory race as the archive-flag fix
+  before it. That broke reviewer bootstrap and every full-mode work seed whose opening prompt
+  runs shell.
+
+  Two convergence mechanisms now close it as far as it can be closed from outside the app. Every
+  import starts a bounded watch (`reassertChatAutomation`) that rewrites the stamp whenever the
+  running app flips it back, bounded by a time window, a restore cap and a miss cap, so the file
+  stops testifying to the wrong mode. And the archive-visibility restart's quit-then-reopen
+  window, the one moment a daemon write provably enters app memory, now re-stamps every
+  import-shape chat in the store (`reassertAutomationStamps`); app-created chats are never
+  touched, since their mode can be the owner's deliberate UI choice. After that restart the app
+  itself re-saves `bypassPermissions`, so the stamp is durable for life; this also heals the
+  imports clobbered before the mechanism existed (census 2026-08-27: 26 of 30 fleet-wide). What
+  remains app-owned, stated in ORCHESTRATOR.md: a chat woken before any app restart still runs
+  its first turn on `acceptEdits`, because no external write can reach the app's memory sooner.
+  The import URL and the message channel expose no permission surface (both checked).
+
 - **A stale command fingerprint could permanently freeze the installed `/orchestrate` rubric.**
   The boot refresh tells our own out-of-date copy apart from a copy you edited by comparing the
   file against the fingerprint of what AgentHydra last wrote. That record was only ever adopted

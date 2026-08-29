@@ -945,6 +945,23 @@ enable (or the install endpoint) away.
   posture for reviving an imported chat**, and the rubric says so. Closing this properly needs
   something the app owns: a setting, a launch flag, or an import that lands as an app-created
   chat rather than an import. Run the census before believing any future change fixed it.
+
+  **Partially closed 2026-08-28, and the boundary of the fix stated exactly.** The deadlock hit
+  live again (2026-08-29 01:58 UTC: a seeded reviewer-bootstrap chat booted ~15s after seeding
+  froze at its first PowerShell prompt), and two convergence mechanisms now run. Every import
+  starts a bounded watch (`reassertChatAutomation`) that rewrites the stamp each time the
+  running app's re-save flips it back, so the FILE stays true even though the app's memory does
+  not read it yet. And the archive-visibility restart re-stamps every import-shape chat in the
+  store (`reassertAutomationStamps`) in its quit-then-reopen window, the same
+  proven-can't-lose window the archive flags use; after that reopen the stamp IS the app's
+  in-memory record and the app re-saves `bypassPermissions` itself from then on, permanently.
+  App-created chats are never touched (an `acceptEdits` there can be the owner's own UI
+  choice). What this does NOT fix, per everything above: a chat woken before any app restart
+  still runs that first turn on `acceptEdits`, because no external write reaches the app's
+  memory sooner. The import URL takes only a session id and `send_message` takes only a message
+  body (both checked 2026-08-28), so there is still no surface to hand the mode to the app
+  directly, and the engine runs inside the app's own Node service (no argv to inspect or set).
+  The census remains the arbiter of "fixed".
 - Context-size numbers come from the last assistant event's token usage - accurate enough for
   a handoff threshold, not an accounting tool.
 - **Synthetic UI input is a dead end, not an unbuilt fallback.** A pre-v0.36 revive path drove
