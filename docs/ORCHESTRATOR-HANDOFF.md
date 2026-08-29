@@ -3,10 +3,14 @@
 The copy-paste brief for whoever picks this up next, plus the state it is being handed over in.
 Paste the fenced block into a fresh session; everything above and below it is context for a human.
 
-**Last updated 2026-08-28 very late.** Written at the close of the night the owner said "it's
-still royally fucking up", which ended with three new read-only surfaces, two owner bans, four
-landed fixes, three chats migrated off a capped account, and the reviewer loop run from the
-owner's own diagnostic chat for two hours without a silent death.
+**Last updated 2026-08-29.** The agent-chat courier (the relay replacement, law 5) landed as
+9f48041: code-complete, test-pinned, both localci legs green, pushed. Concurrent sessions then
+extended the ladder with the courier-TASK line (orchestrator-courier.ts + desktop-tasks.ts,
+37210ab..bebc457): deliveries into an instance with nothing awake queue for a scheduled task
+the app fires itself - proven live in 18 accounts. Everything below from 2026-08-28 stands.
+
+**Amended 2026-08-29 ~04:30Z** at the closeout of the reviewer-journal session: both survey
+tier-1 items are SHIPPED and green on CI (see the state update inside the block).
 
 ---
 
@@ -33,10 +37,13 @@ READ FIRST, all current:
    view, or the dossier. Disk is not the screen, and the ledger is not the sidebar.
 5. NO RELAY (owner ban, 2026-08-28, verbatim: "remove the relay task functionality... don't
    just message other chats"). A working chat is NEVER a courier for another chat's delivery.
-   computeRoute no longer composes relay steps; a dormant chat in another instance parks.
-   The sanctioned replacement (chip in flight) is a dedicated orchestrator-OWNED agent chat
-   per instance. Direct-to-TARGET messages (nudges, closeouts, resumes to the chat being
-   managed) remain the core job.
+   The sanctioned replacement LANDED 2026-08-29 (9f48041): a dedicated orchestrator-OWNED
+   agent chat per instance, marker-titled "Orchestrator agent - do not use"
+   (server/src/orch-agent.ts). computeRoute composes cross-instance courier steps ONLY to a
+   live marker-titled chat - a test pins that a working chat there never routes. With nothing
+   awake at all the delivery QUEUES for that instance's scheduled courier task instead
+   (orchestrator-courier.ts; landed after 9f48041). seed-agent proposals stand down where the
+   courier task covers the instance (c916bbb). Direct-to-TARGET messages remain the core job.
 6. ALWAYS BYPASS (owner rule, 2026-08-28: "all chats should always have bypass permissions").
    Every migrated or seeded chat MUST read back permissionMode bypassPermissions from the
    dossier BEFORE its boot message is sent; POST /api/sessions/:id/automation re-stamps.
@@ -78,6 +85,47 @@ BEFORE ANY PUSH, verify a CLEAN EXPORT of HEAD, never the working tree - 10-20 c
 sessions edit this tree. Commit path-scoped only. THIS REPO IS PUBLIC: announce that in the
 reply before any push, every time.
 
+## CLOSEOUT NOTE from the agent-chat chip thread (2026-08-29)
+
+- Its whole contribution is ONE commit, 9f48041: orch-agent.ts (the marker + composers), the
+  computeRoute agent-chat rung, seed-agent proposals + executor (bypass verified via fresh
+  metadata before boot, kv stamp, lost-title -> pending rename), monitor/janitor/repo-occupancy
+  exclusions, dry-run "agent chat:" line, 13 pinning tests (orchestrator-agent-chat.test.ts).
+  Verified at landing: 906 tests, typecheck, biome, localci BOTH legs, GitHub push clean.
+- What it could NOT verify: any LIVE agent-chat delivery (none had been seeded when it closed),
+  and whether a courier agent chat obeys its verbatim-payload brief - that is prompt-level, so
+  WATCH THE FIRST LIVE agent-chat DELIVERY. The courier-TASK line that landed after it
+  (37210ab..bebc457) is other threads' work; this thread only reconciled the docs to it.
+- Known accepted quirk: seeding an agent chat records a 'seed' placement in the balancing
+  ledger (one row per courier, deliberate - reusing the proven seeder was worth it).
+
+## STATE UPDATE (2026-08-29 ~04:30Z) - reviewer mortality is solved in code
+
+- HEAD b83b5b6 on origin/main, CI green BOTH legs (run 33233211236). Two commits landed
+  overnight by two concurrent sessions sharing this tree:
+  - 20cedde  THE REVIEWER IS A ROLE, NOT A CHAT (survey tier-1 #1). GET
+    /api/orchestrator/reviewer-journal = compact successor briefing (recent rulings with
+    notes, in-flight wl: items WITH their saved verbatim steps, standing context). GET
+    /api/orchestrator/reviewer-seed (?format=text) = ready-to-paste prompt that briefs ANY
+    fresh chat as the successor; ends with the /orchestrate invocation. reviewerHealth now
+    returns `fix` (stalled only) naming the seed endpoint. NEITHER endpoint stamps
+    lastReviewerAt, on purpose. Reviving a dead reviewer = boot a fresh chat with the seed;
+    NEVER resurrect the dead chat.
+  - b83b5b6  THE CIRCUIT BREAKER (survey tier-1 #2, built by the concurrent session):
+    attempt caps at proposal creation, revive-delivery backoff, repeat-hash on rulings;
+    trips become one owner-facing loop_break attention item. Its docs live in
+    docs/ORCHESTRATOR.md "The circuit breaker".
+- VERIFIED for 20cedde (this session did it): full bun test 1461/0, web+server typecheck,
+  biome clean, all six CI guardrails, web build - all against the exact commit in a detached
+  worktree, then GitHub CI green. The three new tests pin the resolve+verify round-trip
+  reaching the journal, the seed carrying in-flight ids + the /orchestrate literal, and the
+  stalled-only fix line.
+- NOT yet done: the RUNNING daemon predates both commits - a -DaemonOnly restart is needed
+  before the journal/seed endpoints and the breaker are live (see DEPLOYING above). Also
+  neither new endpoint has an MCP tool mirror (dryrun has one; these need curl for now).
+- At this closeout two further untracked files (desktop-tasks.ts, orchestrator-courier.ts)
+  sat in the tree - the concurrent session still mid-build. Do not sweep them into a commit.
+
 ## STATE AT HANDOFF (2026-08-28 ~22:45 CT)
 
 - HEAD 24a7d26, main green (CI run 33230579959), everything of this session's pushed.
@@ -110,12 +158,16 @@ reply before any push, every time.
 ## OPEN ITEMS, most important first
 
 1. THE PHANTOM ARCHIVER. Something archived the reviewer chat "Orchestrate" at ~01:03-01:07Z
-   on 2026-08-29 with NO ledger row, NO tool call, and the owner says he did not do it. Until
-   found, the loop can be silently decapitated again. Hunt: what writes isArchived into app
-   memory without the engine or the UI.
-2. REVIEWER MORTALITY. The loop still lives in one chat; the cron dead-man is session-local.
-   The per-instance agent-chat design (chip in flight) is one leg; a daemon-side loud alarm
-   when no reviewer has polled in N minutes is the other, still unbuilt.
+   on 2026-08-29 with NO ledger row, NO tool call, and the owner says he did not do it. Still
+   unfound - but since 20cedde its blast radius is a briefing, not a decapitation: a fresh
+   chat seeded from GET /api/orchestrator/reviewer-seed IS the recovery. Hunt continues:
+   what writes isArchived into app memory without the engine or the UI.
+2. REVIEWER MORTALITY - CLOSED IN CODE (20cedde, 2026-08-29). The reviewer is a role:
+   reviewerHealth.fix names the seed endpoint whenever items wait and no reviewer has acted
+   for 30m, and the seed briefs any fresh chat as the successor (in-flight ids to verify
+   first, settled rulings, /orchestrate). Residual, by physical necessity: SOMETHING must
+   still boot one chat - the daemon has no actuator into an empty app. That bootstrap step
+   is the only surviving manual act.
 3. BOOT-UNDER-RUNNING-APP RACE. Disk converges to bypass now, but a chat booted seconds after
    seeding can still start acceptEdits from app memory and freeze. Verify-before-boot (law 6)
    is the working mitigation.
@@ -136,7 +188,13 @@ reply before any push, every time.
   seeds race (law 6).
 - A "quiet" background poll that fetches the worklist with a fake reviewer id stamps
   lastReviewerAt and masks a dead loop. The dry run exists so probes never need to touch
-  the worklist.
+  the worklist. The reviewer-journal and reviewer-seed endpoints deliberately do NOT stamp.
+- scripts/checks/wmi-commandline-query-self-match.mjs goes FALSELY RED when run from a cwd
+  whose CASING differs from the on-disk dir name (measured 2026-08-29 in a scratchpad
+  worktree): Bun canonicalizes import.meta.url to disk casing, path.resolve() keeps the cwd
+  string, so its exact-string self-exclusion fails and it flags its own file (lines 4, 93).
+  Re-run from the canonically-cased path ((Get-Item $p).FullName) before believing it. Fix
+  chip filed (compare case-insensitively on win32); unfixed as of this writing.
 
 ## HOUSE RULES
 

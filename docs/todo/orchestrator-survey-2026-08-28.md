@@ -40,6 +40,16 @@ own metadata. Owner ask: "see if you can find any better ways to do things we're
    to an owner status line, exponential backoff on revives into the same window, and a
    repeat-hash check that flags an alive reviewer re-litigating one item.
 
+Tier-1 closeout (2026-08-29): item 1 landed as commit 20cedde, item 2 as b83b5b6; both pushed,
+GitHub CI run 33233211236 concluded SUCCESS, full suite 1465 pass / 0 fail locally. One gotcha a
+future session would rediscover: running this repo's gates while ANOTHER session runs its own
+gates in the same tree produces phantom failures (measured: "Cannot find module '@lucide/vue'"
+in web tests plus a log-file test error, both vanishing 8/8 once the tree was quiet) - before
+believing a local red here, check for concurrent bun/typecheck processes first. Breaker tuning
+knobs (4 asks/6h, 3 repeat rulings, 2->30min backoff) are named constants in
+server/src/orchestrator-breaker.ts, deliberately not settings - retune there if fleets prove
+them wrong.
+
 ## Tier 2 - cheap wins, roughly ranked
 
 3. **Typed degraded states + account failover table** (Claude Agent SDK error signaling):

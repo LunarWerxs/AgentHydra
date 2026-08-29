@@ -9,6 +9,31 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The agent-chat courier: the sanctioned replacement for the banned relay rung** (9f48041).
+  The relay ban (5505a09) honestly parked every delivery into another instance's dormant
+  chats; the owner's follow-up was that the removal must not cripple any functionality. Each
+  instance now gets ONE system-owned courier chat, marker-titled "Orchestrator agent - do not
+  use" (`server/src/orch-agent.ts`), whose only job is performing composed delivery steps
+  inside its own instance. `computeRoute` gained the rung: target dormant elsewhere AND that
+  instance has a LIVE agent chat -> a `SendMessage` to the AGENT chat carrying the target's
+  real chatId and a fenced verbatim payload. Admission is the title marker and nothing else;
+  a working chat there is never a route, and a test now pins the ban itself. The janitor
+  sweep surfaces "instance X has no agent chat" as `seed-agent` proposals through the normal
+  action gate; the executor seeds into the instance's own profile dir, records a kv stamp,
+  and verifies bypassPermissions against the app-boot re-save race (4d17558) before the boot
+  step goes out. Rails: the monitor never counts the courier as a working chat (no idle/
+  nudge/handoff items, no concurrency slot), it never occupies a repo, the janitor and the
+  archive executor refuse to retire it while its instance still has other chats, a courier
+  whose title the app wiped gets a pending rename back instead of a duplicate, and its
+  deliveries verify by the same contract as every delivery: the TARGET's transcript must
+  move. The dry run prints an `agent chat:` line per instance so "no courier" and "quiet
+  instance" can never look alike. Extended the same night by the courier-TASK line
+  (`orchestrator-courier.ts` + `desktop-tasks.ts`, 37210ab..bebc457, concurrent sessions):
+  an instance with nothing awake at all now QUEUES the delivery for a scheduled courier task
+  the app itself fires inside that account, so the agent-chat rung is the live-courier fast
+  path and the parked-forever case is gone; seed-agent proposals stand down where the
+  courier task covers the instance (c916bbb).
+
 - **The circuit breaker: live loops now trip to ONE owner escalation instead of running
   forever.** Measured 2026-08-28: the same finished chat was re-archived four times in one
   evening (every archive executed and verified; the running app re-saved the entry un-archived
