@@ -2004,14 +2004,18 @@ export function renderDryRunText(d: DryRun): string {
       L.push(`    - ${title} - ${state}${done} - last ${c.lastActivityAt ?? '?'}${cwd}`)
     }
     if (i.archivedCount) L.push(`    (+${i.archivedCount} archived)`)
-    // The courier line, always printed: "no agent chat" and "quiet instance" must never look
-    // alike - that hole is exactly what the seed-agent item exists to fill.
+    // The delivery line, always printed. It USED to say "no route from outside" when an
+    // instance had no live agent chat, and since the scheduled courier task landed
+    // (2026-08-28) that is simply false: every instance is deliverable, the only difference is
+    // whether a message lands instantly or on the courier's next tick. A stale "no route" line
+    // is worse than no line, because it tells the owner to go do something by hand - the one
+    // thing the whole mechanism exists to stop.
     L.push(
-      i.agentChat === null
-        ? '    agent chat: NONE - dormant chats here have no delivery route from outside (see the seed-agent item)'
-        : i.agentChat.live
-          ? '    agent chat: LIVE - courier available for deliveries into this instance'
-          : '    agent chat: seeded but not live - boot it from inside this instance (open it in the app)',
+      i.agentChat?.live
+        ? '    delivery: INSTANT - a live agent chat is standing by in this instance'
+        : `    delivery: scheduled courier task (this app fires it itself, ~11 min)${
+            i.agentChat ? ' - its agent chat is seeded and will boot on the next tick' : ''
+          }`,
     )
   }
   L.push('')

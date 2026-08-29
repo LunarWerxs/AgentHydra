@@ -88,7 +88,7 @@ describe('renderDryRunText', () => {
     expect(text).toContain('(+3 archived)')
     // The courier line is ALWAYS printed: "no agent chat" and "quiet instance" must never look
     // alike - that hole is what the seed-agent item exists to fill.
-    expect(text).toContain('agent chat: NONE')
+    expect(text).toContain('delivery: scheduled courier task')
     expect(text).toContain('WOULD ASK THE REVIEWER (1)')
     // The three-state law leads the report: what needs HIM is never buried in a total.
     expect(text).toContain('STATES: 1 waiting on YOU')
