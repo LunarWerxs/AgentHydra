@@ -2280,8 +2280,23 @@ export function sweepCourierTasks(): number {
     const dir = join(root, entry.name)
     const taskId = courierTaskId(entry.name)
     // A courier already installed is left exactly as it is: rewriting its row every tick would
-    // churn a file the app reads, and the prompt only changes when this code does.
-    if (hasDesktopTask(dir, taskId)) continue
+    // churn a file the app reads, and the prompt only changes when this code does. But INSTALLED
+    // IS NOT PICKED UP: a running app read its task list at startup and does not poll it
+    // (measured 2026-08-29 - a courier written under a running app sat inert through three of
+    // its own cron windows). So the pickup restart is queued ONCE per install, keyed by a
+    // marker, rather than only on the tick that happened to do the writing - the bug that made
+    // the first live test fail was exactly this line skipping before the restart was queued.
+    if (hasDesktopTask(dir, taskId)) {
+      const pickupKey = `courierPickup:${desktopKey(dir)}`
+      if (!kvGet(pickupKey)) {
+        kvSet(pickupKey, new Date().toISOString())
+        noteArchiveVisibilityPending(dir)
+        console.log(
+          `[agenthydra] courier task present for ${entry.name} but its app has not read it - pickup restart queued (fires when that instance has nothing live)`,
+        )
+      }
+      continue
+    }
     const res = installDesktopTask({
       instanceDir: dir,
       taskId,
@@ -2295,12 +2310,13 @@ export function sweepCourierTasks(): number {
     if (res.ok) {
       installed++
       console.log(`[agenthydra] courier task installed for ${entry.name} (${res.filePath})`)
-      // A RUNNING app read its task list at startup, so a task written underneath it may not be
+      // A RUNNING app read its task list at startup, so a task written underneath it is not
       // noticed until it restarts - the same class of problem as an archive flag written from
       // outside, and it gets the same proven answer: queue the visibility restart, which only
       // ever fires when that instance has nothing live to interrupt. Without this a freshly
-      // installed courier could sit inert until the owner happened to restart the app, which is
-      // a finger, which is banned.
+      // installed courier sits inert until the owner happens to restart the app, which is a
+      // finger, which is banned.
+      kvSet(`courierPickup:${desktopKey(dir)}`, new Date().toISOString())
       noteArchiveVisibilityPending(dir)
     } else if (res.reason !== 'no signed-in account folder found for instance') {
       // A signed-out instance is normal and silent; anything else is worth one line.
