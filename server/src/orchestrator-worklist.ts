@@ -74,6 +74,7 @@ import {
   resolutionTrip,
   reviveBackoffRefusal,
 } from './orchestrator-breaker'
+import { enqueueDelivery } from './orchestrator-courier'
 import { readTailInfo } from './orchestrator-transcript-tail'
 import { decideProposal, getProposal, reportProposalExecuted } from './proposals'
 import {
@@ -132,7 +133,15 @@ export interface WorkItem {
   constraintsApplied: string[]
   /** True when approving can complete entirely server-side (no reviewer step). */
   serverOnly: boolean
-  /** Present when delivery is impossible right now - approving parks the item. */
+  /** THE LAST-RESORT STATE, and it is now nearly unreachable itself.
+   *
+   *  OWNER LAW (Michael, 2026-08-28, verbatim: "There is never any... Unreachable.. You fix..
+   *  Unreachable or find a way around."): a chat is RUNNING, WAITING ON THE OWNER, or ARCHIVED.
+   *  "Parked because nothing is awake over there" was none of those, and it is gone: every
+   *  desktop chat is now deliverable through its instance's scheduled courier task, which the
+   *  app fires itself (desktop-tasks.ts). This field survives only for the residue where there
+   *  is genuinely nothing on disk to address - no desktop entry AND no live process - which is
+   *  a terminal-surface thread (launched directly instead) or a dead id, never a waiting chat. */
   unreachable?: string
 }
 
@@ -235,6 +244,36 @@ function clearState(itemId: string): void {
   db.query('delete from orchestrator_kv where key = ?').run(stateKey(itemId))
 }
 
+/**
+ * The courier-task rung, applied uniformly: when a route resolved to `courier-task`, QUEUE the
+ * delivery for that instance's own scheduled courier and stamp the movement baseline so
+ * verify() closes the ledger the same way it does for every other rung - by re-reading the
+ * target's transcript, never by trusting the courier.
+ *
+ * Returns a finished ResolveResult when it handled the route, or null when the caller should
+ * carry on with its own logic. Every delivery path calls this BEFORE its unreachable branch,
+ * which is what turns "nothing is awake there, parked" into "the app will deliver it itself".
+ */
+function queueIfCourier(
+  itemId: string,
+  route: Route,
+  targetSessionId: string,
+  message: string,
+): ResolveResult | null {
+  if (route.mode !== 'courier-task' || !route.queue) return null
+  enqueueDelivery(route.queue.instanceDir, {
+    itemId,
+    chatId: route.queue.chatId,
+    message,
+  })
+  saveState(itemId, { phase: 'delivered', at: new Date().toISOString(), targetSessionId })
+  return {
+    ok: true,
+    reason: `queued for ${route.queue.instanceDir}'s courier task - its app fires that task on its own schedule, so this lands with no reviewer step and no owner action; verify closes the ledger when the transcript moves`,
+    reviewerSteps: [],
+  }
+}
+
 // --- surface purity ------------------------------------------------------------------------------
 
 /** Where a thread LIVES, derived from evidence rather than stored preference. 'desktop' when any
@@ -286,9 +325,12 @@ export function composeRevive(opts: {
 // --- routing -------------------------------------------------------------------------------------
 
 export interface Route {
-  mode: 'direct-live' | 'own-instance' | 'agent-chat' | 'none'
+  mode: 'direct-live' | 'own-instance' | 'agent-chat' | 'courier-task' | 'none'
   step?: ReviewerStep
   whyNone?: string
+  /** courier-task only: what the CALLER must enqueue. computeRoute stays pure (the dry run
+   *  calls it too), so the write belongs to resolveWorkItem, never here. */
+  queue?: { instanceDir: string; chatId: string }
 }
 
 /** The metadata slice routing reads per session, injectable for tests. */
@@ -388,9 +430,22 @@ export function computeRoute(opts: {
         },
       }
   }
+  // NOTHING IS AWAKE THERE - and that is no longer a dead end (owner directive, Michael,
+  // 2026-08-28: "Without me having to do ANY work. Lift zero fingers."). The delivery is handed
+  // to that instance's COURIER TASK, which lives in the Claude Desktop app's OWN scheduler and
+  // which the app fires by itself, inside that account, with nothing else awake and no human
+  // present (see desktop-tasks.ts for the measured mechanism, orchestrator-courier.ts for the
+  // queue). The caller enqueues; this function stays pure so the dry run can compute the same
+  // plan without writing anything.
+  if (targetInstance && meta.chatId)
+    return {
+      mode: 'courier-task',
+      queue: { instanceDir: targetInstance.slice('desktop:'.length), chatId: meta.chatId },
+      whyNone: `dormant in ${targetInstance} with nothing awake there - queued for that instance's courier task, which its app fires on its own schedule (no reviewer step, no owner action)`,
+    }
   return {
     mode: 'none',
-    whyNone: `dormant in ${targetInstance ?? 'an unknown instance'} with no live orchestrator agent chat there - deliverable once its agent chat is live (the seed-agent item), or by a reviewer inside that instance; relaying through its working chats is banned by owner directive (2026-08-28)`,
+    whyNone: `dormant in ${targetInstance ?? 'an unknown instance'} and no desktop entry to address - nothing can be queued`,
   }
 }
 
@@ -657,7 +712,13 @@ function proposalToItem(
       // is still allowed (a ruling is never overridden), execution just parks until the clock.
       const backoff = reviveBackoffRefusal(p.sessionId)
       if (backoff) constraints.push(`⏳ ${backoff}`)
+      // 'courier-task' is NOT unreachable: the delivery is queued and the target instance's own
+      // scheduled task performs it. Only genuine nothing-to-address ('none') is flagged.
       if (route.mode === 'none') unreachable = route.whyNone
+      if (route.mode === 'courier-task')
+        constraints.push(
+          "delivery routes through that instance's scheduled courier task (its app fires it; no reviewer step, no owner action)",
+        )
       question =
         'Is this lineage genuinely unfinished and not superseded, so it should get its next turn?'
       break
@@ -1299,6 +1360,8 @@ export async function resolveWorkItem(opts: {
           collisionLine: collisionLineFor(p.sessionId, view),
         })
       const route = computeRoute({ targetSessionId: p.sessionId, reviewerSessionId, message, live })
+      const queuedRevive = queueIfCourier(itemId, route, p.sessionId, message)
+      if (queuedRevive) return queuedRevive
       if (route.mode === 'none' || !route.step) {
         // SURFACE PURITY gives the fallback, not a preference: a thread with no desktop home is
         // a TERMINAL thread, and its revive is a visible terminal window the server launches
@@ -1398,6 +1461,18 @@ export async function resolveWorkItem(opts: {
         message: closeout,
         live,
       })
+      // The closeout is a DELIVERY like any other: if nothing is awake there, the instance's own
+      // courier task takes it, and the archive flag still waits for verify() to see the
+      // transcript move. Archiving un-closed-out is now the LAST resort, not the second.
+      const queuedCloseout = queueIfCourier(itemId, route, p.sessionId, closeout)
+      if (queuedCloseout) {
+        saveState(itemId, {
+          phase: 'closeout-delivered',
+          at: new Date().toISOString(),
+          targetSessionId: p.sessionId,
+        })
+        return queuedCloseout
+      }
       if (route.mode === 'none' || !route.step) {
         const res = await archiveDesktopChat(p.sessionId, true)
         for (const h of res.hits ?? [])
@@ -1489,6 +1564,8 @@ export async function resolveWorkItem(opts: {
         at: new Date().toISOString(),
         targetSessionId: seeded.sessionId,
       })
+      const queuedWork = queueIfCourier(itemId, route, seeded.sessionId, opening)
+      if (queuedWork) return queuedWork
       if (route.mode === 'none' || !route.step)
         return {
           ok: true,
@@ -1552,6 +1629,18 @@ export async function resolveWorkItem(opts: {
         message: ORCH_AGENT_BOOT,
         live,
       })
+      // A courier chat seeded into a SLEEPING instance used to be the one thing nobody could
+      // boot. Now its own boot is queued for that instance's scheduled courier task, so the
+      // bootstrap closes itself with no owner action (owner directive, 2026-08-28).
+      const queuedAgentBoot = queueIfCourier(itemId, route, seeded.sessionId, ORCH_AGENT_BOOT)
+      if (queuedAgentBoot) {
+        reportProposalExecuted(
+          itemId,
+          true,
+          `seeded ${seeded.sessionId}; boot queued for the instance's scheduled courier task${bypassOk ? '' : ' (bypass stamp unconfirmed - the janitor sweep re-asserts it)'}`,
+        )
+        return queuedAgentBoot
+      }
       if (route.mode === 'none' || !route.step) {
         // Seeding another instance's courier is completable from here; BOOTING it is not (the
         // same bootstrap limit the unreachable feed names). Honest completion, stating what

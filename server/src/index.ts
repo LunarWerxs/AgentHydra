@@ -183,6 +183,7 @@ import {
   startOrchestrator,
   uninstallOrchestratorCommands,
 } from './orchestrator'
+import { clearDelivery, noteDeliveryAttempt, pendingDeliveries } from './orchestrator-courier'
 import { buildReviewerJournal, composeReviewerSeed } from './orchestrator-reviewer-journal'
 import { runOrchestratorSelfTest } from './orchestrator-selftest'
 import {
@@ -2244,6 +2245,30 @@ app.get('/api/orchestrator/worklist', async (c) => {
   if (!reviewer) return c.json({ error: 'reviewer (your session id) is required' }, 400)
   noteReviewerActivity()
   return c.json(buildWorklist(reviewer))
+})
+// THE COURIER ENDPOINTS. A courier task, fired by a Desktop app's own scheduler inside its
+// account, drains its instance's delivery queue through these two calls. This is the rung that
+// removed the last human touch from the system (owner directive, 2026-08-28: "lift zero
+// fingers") - no session needs to be awake in an instance for the orchestrator to reach it.
+app.get('/api/orchestrator/courier/pending', (c) => {
+  const instance = c.req.query('instance')?.trim()
+  if (!instance) return c.json({ error: 'instance (the instance dir) is required' }, 400)
+  return c.json({ deliveries: pendingDeliveries(instance) })
+})
+app.post('/api/orchestrator/courier/done', async (c) => {
+  const body = await jsonBody(c)
+  const instance = typeof body.instance === 'string' ? body.instance.trim() : ''
+  const itemId = typeof body.itemId === 'string' ? body.itemId.trim() : ''
+  if (!instance || !itemId) return c.json({ error: 'instance and itemId are required' }, 400)
+  // A REPORTED send is not a verified one: the queue row is cleared so the courier stops
+  // re-sending, and the ledger still closes only when verify() sees the transcript move. A
+  // failure leaves the row queued and counts an attempt, which the breaker reads.
+  if (body.ok === false) {
+    const attempts = noteDeliveryAttempt(instance, itemId)
+    return c.json({ ok: true, requeued: true, attempts, error: body.error ?? null })
+  }
+  clearDelivery(instance, itemId)
+  return c.json({ ok: true, cleared: true, note: 'verify() closes the ledger, not this report' })
 })
 // The owner's dry run (asked 2026-08-28): what WOULD the orchestrator do with every chat and
 // every open window, as a read-only plan - the same item builders as the worklist, but nothing

@@ -634,6 +634,54 @@ warns about everywhere else.
    tool). Defaults are sane; tune later.
 2. Reviewer side: open a fresh chat on a quiet account and type `/orchestrate`.
 
+## THE THREE STATES (owner law, Michael, 2026-08-28)
+
+Verbatim: *"Chats should only have 3 states. You can't resume... Because I am needed to answer a
+question. Running.. Or archive. Period.. When the orchestrator is running. If a chat is too long
+you migrate. If a question is pending you answer. If the chat is complete you archive."*
+
+So while the orchestrator runs, every chat is in exactly one of:
+
+1. **RUNNING** - it has work and it is doing it. Idle-with-a-recap is not a fourth state, it is
+   a running chat that needs its next turn delivered. Context too large is not a state either:
+   that is a MIGRATE, which keeps it running on another account.
+2. **WAITING ON THE OWNER** - and only for something no agent can decide: a credential, a spend,
+   a publish, a real-data deletion, a genuine product judgment. This is the ONLY state allowed
+   to sit still, and it must be visible as a status line, never as a silent park.
+3. **ARCHIVED** - closed out and retired.
+
+Everything that used to be a fourth state is now a transition to one of these three:
+
+- ~~"unreachable / parked because nothing is awake in that app"~~ - **deleted 2026-08-28.** Every
+  desktop chat is deliverable through its instance's scheduled COURIER TASK (below), which the
+  app fires itself. `Route.unreachable` now covers only the residue where nothing exists on
+  disk to address at all (a terminal-surface thread, launched directly instead).
+- ~~"waiting for a slot / cooldown"~~ - that is RUNNING with a delayed next turn, and the delay
+  is the breaker's business, not a state the owner should ever be shown as stuck.
+- ~~"needs the owner to type something so automation can proceed"~~ - not a legal state. If a
+  mechanism needs a human keystroke to work, the mechanism is the bug.
+
+## Zero-touch delivery: the courier task (added 2026-08-28)
+
+**The owner directive that forced it:** *"Without me having to do ANY work. Lift zero fingers."*
+
+Claude Desktop keeps a per-account task scheduler on disk at
+`<instanceDir>/claude-code-sessions/<accountUuid>/<orgUuid>/scheduled-tasks.json`, pointing at
+ordinary `SKILL.md` prompt files under `~/.claude/scheduled-tasks/<id>/`. The app fires those
+tasks **by itself, inside that account, with no session awake and no human present** - and runs
+a task whose time passed while the app was closed on the next launch, so it self-heals.
+
+`server/src/desktop-tasks.ts` writes into that scheduler (only ids prefixed `orch-`, so an
+owner-authored task can never be touched); `server/src/orchestrator-courier.ts` holds the queue
+and the courier's prompt; the janitor (`sweepCourierTasks`) installs one courier per instance.
+A delivery into an instance with nothing awake is now QUEUED, and that instance's courier task
+drains it on its own schedule: fetch queue, `send_message` each payload verbatim into its own
+app's dormant chat, report, stop. Nothing is asked of a working chat (the relay ban holds), and
+nothing is asked of the owner.
+
+Verification is unchanged and still does not trust the courier: the ledger closes only when
+`verify()` re-reads the target transcript and sees it move.
+
 ## Seeing before doing: the dry run and the dossier (added 2026-08-28)
 
 Two read-only views exist because the owner asked to SEE the plan before anything runs, and

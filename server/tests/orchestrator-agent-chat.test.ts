@@ -81,9 +81,18 @@ test('a dormant target in another instance NEVER routes through its working chat
       { 'dorm-1': INST_X, 'worker-1': INST_X, 'rev-1': INST_Y },
     ),
   })
-  expect(route.mode).toBe('none')
+  // The ban is intact and the shape it produces changed on 2026-08-28: no live agent chat means
+  // the delivery goes to that instance's SCHEDULED COURIER TASK (its own app fires it), never to
+  // the working chat sitting right there. What must never happen is a step addressed to
+  // `martin-repo-work` - pinned below - and there must be no dead end either (owner law: no
+  // "unreachable" resting state).
+  expect(route.mode).toBe('courier-task')
   expect(route.step).toBeUndefined()
-  expect(route.whyNone).toContain('agent chat')
+  expect(route.queue).toEqual({
+    instanceDir: INST_X.slice('desktop:'.length),
+    chatId: 'local_dorm',
+  })
+  expect(JSON.stringify(route)).not.toContain('martin-repo-work')
 })
 
 // --- the courier rung ----------------------------------------------------------------------------
@@ -136,11 +145,16 @@ test('the rung admits by TITLE MARKER only - lookalike titles and other instance
       ),
     })
   }
-  expect(mk('General coding session').mode).toBe('none')
-  expect(mk('agent orchestrator').mode).toBe('none') // marker is a PREFIX, not a bag of words
-  expect(mk(null).mode).toBe('none')
+  // A non-marked candidate never admits. Since 2026-08-28 the fallback is the instance's own
+  // scheduled courier task rather than a dead end, so 'courier-task' here means EXACTLY "this
+  // chat was refused" - the assertions below prove no step was composed to it at all.
+  for (const r of [mk('General coding session'), mk('agent orchestrator'), mk(null)]) {
+    expect(r.mode).toBe('courier-task') // marker is a PREFIX, not a bag of words
+    expect(r.step).toBeUndefined()
+    expect(JSON.stringify(r)).not.toContain('martin-cand')
+  }
   // The marked chat in the WRONG instance is not a route into this one.
-  expect(mk(ORCH_AGENT_TITLE, INST_Y).mode).toBe('none')
+  expect(mk(ORCH_AGENT_TITLE, INST_Y).mode).toBe('courier-task')
   // The marker admits; owner-tweaked suffixes stay recognized.
   expect(mk(ORCH_AGENT_TITLE).mode).toBe('agent-chat')
   expect(mk('Orchestrator agent (Martin) - do not use').mode).toBe('agent-chat')

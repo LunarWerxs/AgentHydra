@@ -79,8 +79,11 @@ import {
   listRecentCodexThreads,
   readCodexTail,
 } from './codex-orchestration'
+import { PORT } from './config'
 import { listInstances } from './core/instances'
+import { instancesRoot } from './core/paths'
 import { db, getSetting, setSetting } from './db'
+import { hasDesktopTask, installDesktopTask } from './desktop-tasks'
 import { isSessionActive } from './dispatch'
 import {
   findDesktopChat,
@@ -91,6 +94,7 @@ import {
 import { NEW_CHAT_ULTRACODE_KEY, newChatUltracodeEnabled } from './new-chat-opening'
 import { agentChatKvKey, isOrchAgentTitle, ORCH_AGENT_TITLE } from './orch-agent'
 import { tripAttentionItems } from './orchestrator-breaker'
+import { courierTaskId, courierTaskPrompt } from './orchestrator-courier'
 import {
   type ChipInTail,
   isInjectedUserText,
@@ -2245,6 +2249,58 @@ function runAutomationJanitor(ctx: OnceCtx): void {
   } catch (err) {
     console.error('[agenthydra] automation janitor failed:', err)
   }
+  try {
+    sweepCourierTasks()
+  } catch (err) {
+    console.error('[agenthydra] courier-task janitor failed:', err)
+  }
+}
+
+/**
+ * THE COURIER-TASK JANITOR: every instance gets a delivery courier in the app's OWN scheduler.
+ *
+ * WHY (owner directive, Michael, 2026-08-28: "Without me having to do ANY work. Lift zero
+ * fingers."): before this, reaching a dormant chat needed something already awake in that
+ * instance, so an app with all its chats asleep could only be unblocked by a human typing in
+ * it. Claude Desktop's own scheduler fires tasks with no session awake and no human present,
+ * and runs a task whose time passed while the app was closed on the next launch - so an
+ * installed courier is a standing delivery capability per account that also self-heals.
+ *
+ * Installed everywhere rather than on demand, deliberately: an instance that acquires queued
+ * work at 3am must not wait for a janitor to notice and a cron to come round twice. The task
+ * is idempotent, costs a run only when its queue is non-empty (it fetches, sees nothing, and
+ * stops), and is removable only by us (the `orch-` id prefix guard in desktop-tasks.ts).
+ */
+export function sweepCourierTasks(): number {
+  let installed = 0
+  const root = instancesRoot()
+  if (!existsSync(root)) return 0
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const dir = join(root, entry.name)
+    const taskId = courierTaskId(entry.name)
+    // A courier already installed is left exactly as it is: rewriting its row every tick would
+    // churn a file the app reads, and the prompt only changes when this code does.
+    if (hasDesktopTask(dir, taskId)) continue
+    const res = installDesktopTask({
+      instanceDir: dir,
+      taskId,
+      description: `AgentHydra delivery courier for the ${entry.name} account - system plumbing`,
+      prompt: courierTaskPrompt(dir, PORT),
+      // Every ~11 minutes, off the hour: a queued delivery lands within one cron period, and
+      // the offset keeps 18 accounts from firing in the same second.
+      cronExpression: '*/11 * * * *',
+      cwd: dir,
+    })
+    if (res.ok) {
+      installed++
+      console.log(`[agenthydra] courier task installed for ${entry.name} (${res.filePath})`)
+    } else if (res.reason !== 'no signed-in account folder found for instance') {
+      // A signed-out instance is normal and silent; anything else is worth one line.
+      console.log(`[agenthydra] courier task NOT installed for ${entry.name}: ${res.reason}`)
+    }
+  }
+  return installed
 }
 
 /**
