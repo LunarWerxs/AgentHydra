@@ -9,6 +9,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Orchestrator rebuild, piece 3: git hygiene** (`git` key on `GET /api/fleet`,
+  server/src/fleet-git.ts; owner-picked). Deterministic and read-only: for every repo the live
+  sessions work in (deduped by `rev-parse --show-toplevel`), the branch, detached state,
+  offMain flag (work happens on main - standing owner rule), `status --porcelain` dirty count,
+  and commits ahead of upstream (null when no upstream). Every fact is git's own answer, never
+  an inference; a git failure yields nulls plus the error string - "0 dirty" and "could not
+  ask" must not look alike - and each command carries a 3s timeout so a lock contest with a
+  concurrent session cannot wedge the endpoint. Dirtiest first, deterministic. Verified: 8
+  tests against REAL git fixtures (non-repo, clean main, dirty+feature branch, detached HEAD,
+  cwd dedupe, real-upstream ahead=2, failure honesty, ordering; all with explicit spawn
+  timeouts) plus a live read matching direct `git status` counts exactly (216ms for the fleet).
+
 - **Orchestrator rebuild, piece 2: per-account usage bands** (`usage` key on `GET /api/fleet`,
   server/src/fleet-usage.ts; owner-picked). Deterministic and read-only over the existing
   usage cache - no probes, no network, zero AI. Bands are the proven vocabulary (ok < 80 <=
