@@ -9,18 +9,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
-- **misc/Archive-DesktopChat.ps1: archive a chat in a RUNNING desktop app, immediately and
-  durably, by driving the app's own sidebar UI** (owner's mechanism, 2026-08-29). Wakes the
-  Electron accessibility tree (MSAA poke on the render widgets - a UIA query alone sees bare
-  panes), finds the row and its "More options" kebab by accessible name, and clicks with a
-  real cursor because InvokePattern is not exposed through the bridge. Every click is
-  point-verified (the OS must resolve the cursor's position back to the intended element)
-  since Delete sits directly under Archive in that menu; on any verification failure it
-  presses Esc and aborts rather than guessing. The app performs the archive itself, so the
-  row leaves the sidebar instantly and the flag survives the app's metadata re-saves - the
-  two things the disk-flag path could never give under a running app. Proven live on the
-  5claude instance; -DryRun proves reachability without archiving. The desktop-archive
-  endpoint's running-app note now names it.
+- **misc/Archive-DesktopChat.ps1: archive a chat in a RUNNING desktop app - immediately,
+  durably, and FOCUS-FREE - by driving the app's own sidebar controls** (owner's mechanism,
+  2026-08-29). Wakes the Electron accessibility tree (MSAA poke on the render widgets - a UIA
+  query alone sees bare panes), then opens the row's "More options" menu via
+  `ExpandCollapsePattern.Expand()` and fires "Archive" via `InvokePattern.Invoke()`. Both are
+  pure UI-Automation calls: no SetForegroundWindow, no cursor, and Invoke targets that exact
+  element so it can never hit the "Delete" item beneath Archive (safer than the coordinate-
+  click first cut it replaced). The app performs the archive itself, so the row leaves the
+  sidebar instantly and the flag survives the app's memory re-saves - what the disk-flag path
+  could never give under a running app. Two measured limits: reach is RENDERED rows only
+  (collapsed/virtualized rows aren't in the tree; the tool expands the chat's group to help,
+  and reports exit 3 rather than faking it); and CDP is not an alternative - Claude Desktop
+  EXITS when launched with `--remote-debugging-port` (proven A/B), so it refuses remote
+  debugging. Proven live on 5claude (disk flag flipped, verified); `-List` enumerates rendered
+  rows. The desktop-archive endpoint's running-app note now names it.
 
 ### Removed
 

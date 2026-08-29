@@ -38,13 +38,29 @@ General primitives the orchestrator merely used, which stand on their own:
 ## Archiving under a running app, solved properly (2026-08-29, same day)
 
 V1 papered over "archived but still in the sidebar" with a queued idle-restart. The real
-mechanism (owner's call) is driving the running app's OWN archive control:
-`misc/Archive-DesktopChat.ps1` wakes the app's accessibility tree, finds the chat row by
-title, opens its "More options" menu, point-verifies the cursor is on Archive (never the
-Delete directly beneath it), clicks, and verifies the row left the sidebar. Because the app
-itself performs the archive, the flag is immediate AND survives the app's metadata re-saves -
-the two things a disk write could never give. Proven live on the 5claude instance. The disk
-flag remains correct for closed instances; a restart is needed by nothing.
+mechanism (owner's call) is driving the running app's OWN archive control, and the final form
+is FOCUS-FREE - no foreground steal, no mouse. `misc/Archive-DesktopChat.ps1` wakes the app's
+accessibility tree (an MSAA poke - Electron builds the tree lazily), finds the chat row by
+title, opens its "More options" menu via `ExpandCollapsePattern.Expand()`, and fires the
+"Archive" item via `InvokePattern.Invoke()`. Both are pure UI-Automation pattern calls: no
+SetForegroundWindow, no cursor. `Invoke` targets that exact element, so it can never land on
+the "Delete" item beneath Archive - safer than the coordinate-click first cut it replaced.
+Because the app itself performs the archive, the flag is immediate AND survives the app's
+metadata re-saves. Proven live on the 5claude instance (disk flag flipped, verified).
+
+Two honest boundaries, both measured the same day:
+
+- **Reach = rendered rows only.** The accessibility tree contains only sidebar rows the app has
+  rendered; a chat in a collapsed group or scrolled out of the virtualized list is not present.
+  The tool expands the chat's folder group (focus-free) to help, but a deeply-scrolled row in a
+  virtualized viewport cannot be brought in focus-free (Chromium's scroll container is not
+  reliably drivable). So this reliably archives a *currently-visible* chat; an off-screen one
+  must be scrolled into view first, or archived from its own window.
+- **CDP is blocked.** A Chrome DevTools Protocol route (`--remote-debugging-port`) would bypass
+  rendering entirely, but Claude Desktop EXITS when launched with a debug port (proven A/B:
+  same instance, plain launch runs, debug launch quits). The app refuses remote debugging.
+
+The disk flag remains correct for CLOSED instances; nothing needs a restart.
 
 ## What is inert but not deleted
 

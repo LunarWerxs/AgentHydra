@@ -1,184 +1,139 @@
-# misc/Archive-DesktopChat.ps1 - archive a chat in a RUNNING Claude desktop app by driving
-# the app's OWN sidebar UI, so the row disappears immediately and the app itself writes the
-# archive flag (which therefore survives the app's metadata re-saves - the write is the app's).
+# misc/Archive-DesktopChat.ps1 - archive a chat in a RUNNING Claude desktop app WITHOUT stealing
+# focus and WITHOUT moving the mouse, by invoking the app's own sidebar controls through the
+# Windows UI Automation patterns they expose.
 #
-# WHY THIS EXISTS (owner directive, Michael, 2026-08-29): a running app holds its chat list in
-# memory, so a flag flipped on DISK stays on screen until that app restarts - and restarting is
-# not an option. The app's own archive control is the one channel that is immediate AND durable
-# on a live app. This automates exactly that: find the row, open its "More options" menu, click
-# Archive. Proven live 2026-08-29 on the 5claude instance (row gone instantly, disk flag flipped
-# by the app within a second).
+# WHY THIS EXISTS (owner directive, Michael, 2026-08-29): a running Electron app holds its chat
+# list in memory, so a flag flipped on DISK stays on screen until the app restarts - and
+# restarting is not an option. The app's OWN archive action is the one channel that is both
+# immediate AND durable (the app makes the write, so its later memory->disk re-saves cannot undo
+# it). This drives that action with zero focus theft.
 #
-# MECHANICS worth knowing before editing:
-#   - Chromium/Electron builds its accessibility tree LAZILY. A UIA query alone can see only
-#     bare panes; the MSAA poke (AccessibleObjectFromWindow on each Chrome_RenderWidgetHostHWND)
-#     is what switches the full tree on. Without it every Find returns nothing.
-#   - Sidebar rows are named "<State> <Title>" (e.g. "Idle My chat", "Running My chat",
-#     "Unread response My chat"); the kebab is literally named "More options for <Title>".
-#   - InvokePattern is NOT exposed through the bridge, so this clicks with a real cursor.
-#     EVERY click is point-verified first (AutomationElement.FromPoint must resolve to the
-#     element we intend) because the menu's Archive item sits directly above Delete - a blind
-#     click that lands one item off would destroy a chat instead of archiving it. On any
-#     verification failure the script presses Esc and aborts; it never guesses.
-#   - Clicking needs the window on top: the script foregrounds the app (and restores it if
-#     minimized), which briefly steals focus and moves the real cursor (restored afterwards).
-#     Fine unattended; intrusive mid-use - do not run it while the owner is actively typing.
+# THE MECHANISM, measured 2026-08-29 (do not "simplify" back to cursor clicks):
+#   - The row's kebab ("More options for <Title>") is exposed as an ExpandCollapse control, NOT
+#     an Invoke one. `ExpandCollapsePattern.Expand()` opens its context menu - focus-free.
+#   - The "Archive" context-menu item exposes InvokePattern. `Invoke()` fires it - focus-free,
+#     and it targets that EXACT element, so unlike a coordinate click it can never land on the
+#     "Delete" item that sits directly beneath Archive. No point-verification needed.
+#   - Neither call moves the mouse or calls SetForegroundWindow. (A cursor-and-foreground variant
+#     was the first cut; this replaced it - it is both safer and genuinely focus-free.)
+#   - Chromium/Electron builds its accessibility tree LAZILY. A UIA query alone sees only bare
+#     panes; the MSAA poke (AccessibleObjectFromWindow on each Chrome_RenderWidgetHostHWND) is
+#     what switches the full tree on. Without it every Find returns nothing.
+#
+# REACH LIMIT, stated honestly because it is fundamental, not a bug here: the accessibility tree
+# contains only RENDERED sidebar rows. A chat in a collapsed folder group, or scrolled out of the
+# virtualized list, is not present and cannot be actioned - this script reports that (exit 3)
+# rather than pretending. It reliably archives a chat that is currently visible in the sidebar
+# (the common "I just finished with this chat" case). It will try to expand the chat's own folder
+# group first (focus-free) to bring it into view. Bringing a deeply-scrolled row into a virtualized
+# viewport focus-free is not solved (Chromium's scroll container is not reliably drivable), so for
+# an off-screen chat, scroll it into view first or archive it from its own window.
+#
+# NOT AVAILABLE, and why (measured 2026-08-29): a Chrome DevTools Protocol route (--remote-
+# debugging-port) would sidestep rendering entirely, but Claude Desktop EXITS when launched with a
+# debug port (proven A/B: same instance, plain launch runs, debug launch quits). The app refuses
+# remote debugging, so CDP is not an option.
 #
 # USAGE
 #   powershell -File misc/Archive-DesktopChat.ps1 -Title "Exact chat title"
-#   powershell -File misc/Archive-DesktopChat.ps1 -Title "Exact chat title" -Instance 5claude
-#   powershell -File misc/Archive-DesktopChat.ps1 -Title "..." -DryRun   # prove reachability, Esc out
+#   powershell -File misc/Archive-DesktopChat.ps1 -Title "..." -Instance 5claude
+#   powershell -File misc/Archive-DesktopChat.ps1 -Title "..." -Action Unarchive   # (only reaches
+#                                              a currently-rendered archived row)
+#   powershell -File misc/Archive-DesktopChat.ps1 -List -Instance 5claude          # rendered rows
 #
-# Exit codes: 0 archived (or DryRun reachable) · 1 not found / not verifiable · 2 clicked but
-# the row did not disappear (report it - do not retry blind).
+# Exit: 0 done (row left the sidebar) - 1 error - 2 invoked but row still present - 3 not rendered.
 param(
-  [Parameter(Mandatory = $true)][string]$Title,
-  # Substring of the instance's --user-data-dir (e.g. "5claude"). Omitted = search every
-  # running Claude desktop window until the chat row is found.
+  [string]$Title,
   [string]$Instance = '',
-  [switch]$DryRun
+  [ValidateSet('Archive', 'Unarchive')][string]$Action = 'Archive',
+  [switch]$List
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $src = @'
-using System;
-using System.Runtime.InteropServices;
-using System.Collections.Generic;
-using System.Text;
-public static class Native {
-  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hWnd, EnumFunc cb, IntPtr lp);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
-  [DllImport("oleacc.dll")] public static extern int AccessibleObjectFromWindow(IntPtr hwnd, uint id, ref Guid iid, [In, Out, MarshalAs(UnmanagedType.IUnknown)] ref object ppv);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
-  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
-  public delegate bool EnumFunc(IntPtr hWnd, IntPtr lp);
-  public static List<IntPtr> RenderWidgets(IntPtr top) {
-    var found = new List<IntPtr>();
-    EnumChildWindows(top, (h, l) => {
-      var sb = new StringBuilder(256);
-      GetClassName(h, sb, 256);
-      if (sb.ToString().Contains("Chrome_RenderWidgetHostHWND")) found.Add(h);
-      return true;
-    }, IntPtr.Zero);
-    return found;
+using System;using System.Runtime.InteropServices;using System.Collections.Generic;using System.Text;
+public static class Ax{
+  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr h, EnumFunc cb, IntPtr l);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int m);
+  [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [In,Out,MarshalAs(UnmanagedType.IUnknown)] ref object p);
+  delegate bool EnumFunc(IntPtr h, IntPtr l);
+  public static void Wake(IntPtr top){
+    Guid g = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
+    var ws = new List<IntPtr>();
+    EnumChildWindows(top, (h,l) => { var sb = new StringBuilder(256); GetClassName(h, sb, 256); if (sb.ToString().Contains("Chrome_RenderWidgetHostHWND")) ws.Add(h); return true; }, IntPtr.Zero);
+    foreach (var w in ws) { object a = null; AccessibleObjectFromWindow(w, 0xFFFFFFFC, ref g, ref a); }
   }
-  public static void WakeAccessibility(IntPtr top) {
-    Guid iidAcc = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
-    foreach (var w in RenderWidgets(top)) { object acc = null; AccessibleObjectFromWindow(w, 0xFFFFFFFC, ref iidAcc, ref acc); }
-  }
-  public static void Click() {
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
-    System.Threading.Thread.Sleep(70);
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-  }
-  public static void Escape() { keybd_event(0x1B, 0, 0, UIntPtr.Zero); keybd_event(0x1B, 0, 2, UIntPtr.Zero); }
 }
 '@
 Add-Type -TypeDefinition $src
 
-function Find-Named([System.Windows.Automation.AutomationElement]$scope, [string]$name) {
-  $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name)
-  return $scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
-}
-# Move the cursor to an element's center and confirm the OS resolves that exact point back to
-# an element of the expected name. The only way a click is allowed to happen.
-function Approach([System.Windows.Automation.AutomationElement]$el, [string]$expectName) {
-  $r = $el.Current.BoundingRectangle
-  if ($r.Width -le 0 -or $r.Height -le 0) { return $false }
-  $x = [int]($r.X + $r.Width / 2); $y = [int]($r.Y + $r.Height / 2)
-  [void][Native]::SetCursorPos($x, $y)
-  Start-Sleep -Milliseconds 350
-  try { $under = [System.Windows.Automation.AutomationElement]::FromPoint((New-Object System.Windows.Point($x, $y))) } catch { return $false }
-  return ($under.Current.Name -eq $expectName)
-}
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$TREE = [System.Windows.Automation.TreeScope]::Descendants
+$BTN = [System.Windows.Automation.ControlType]::Button
 
-# The chat's desktop instances: every main claude.exe with a --user-data-dir.
+function Wake([IntPtr]$hwnd) { [Ax]::Wake($hwnd); Start-Sleep -Milliseconds 800; return [System.Windows.Automation.AutomationElement]::FromHandle($hwnd) }
+function ByName($scope, $name) { $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name); return $scope.FindFirst($TREE, $c) }
+function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch { return $null } }
+
+# Running Claude desktop instances (main process = has --user-data-dir, no --type=).
 $mains = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
   Where-Object { $_.CommandLine -match '--user-data-dir=("?)([^"]+?)\1(\s|$)' -and $_.CommandLine -notmatch '--type=' } |
-  ForEach-Object { [pscustomobject]@{ ProcId = $_.ProcessId; DataDir = ([regex]::Match($_.CommandLine, '--user-data-dir=("?)([^"]+?)\1(\s|$)').Groups[2].Value) } }
-if ($Instance) { $mains = @($mains | Where-Object { $_.DataDir -like "*$Instance*" }) }
+  ForEach-Object { [pscustomobject]@{ ProcId = $_.ProcessId; Dir = ([regex]::Match($_.CommandLine, '--user-data-dir=("?)([^"]+?)\1(\s|$)').Groups[2].Value) } }
+if ($Instance) { $mains = @($mains | Where-Object { $_.Dir -like "*$Instance*" }) }
 if (-not $mains) { Write-Output "FAIL: no running Claude desktop instance matches '$Instance'"; exit 1 }
-
-$saved = New-Object Native+POINT; [void][Native]::GetCursorPos([ref]$saved)
-$root = [System.Windows.Automation.AutomationElement]::RootElement
-$STATES = @('Idle', 'Running', 'Unread response')
 
 foreach ($m in $mains) {
   $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$m.ProcId)
   $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
   if (-not $win) { continue }
-  $hwnd = [IntPtr]$win.Current.NativeWindowHandle
-  if ([Native]::IsIconic($hwnd)) { [void][Native]::ShowWindow($hwnd, 9); Start-Sleep -Milliseconds 600 } # SW_RESTORE
-  [Native]::WakeAccessibility($hwnd)
+  $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
+
+  if ($List) {
+    Write-Output "== $($m.Dir) (pid $($m.ProcId)) rendered chats =="
+    $bc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
+    foreach ($b in $el.FindAll($TREE, $bc)) { if ($b.Current.Name -like 'More options for *') { '  ' + $b.Current.Name.Substring('More options for '.Length) } }
+    continue
+  }
+
+  if (-not $Title) { Write-Output 'FAIL: -Title is required (or use -List)'; exit 1 }
+
+  $kebab = ByName $el "More options for $Title"
+  if (-not $kebab) {
+    # Try to bring it into view by expanding its folder group(s) (focus-free), then re-look.
+    foreach ($e in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+      $ec = TryPattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+      if ($ec -and $ec.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed -and $e.Current.Name -notlike 'More options for *' -and $e.Current.Name -and $e.Current.Name.Length -lt 40) {
+        try { $ec.Expand(); Start-Sleep -Milliseconds 250 } catch { }
+      }
+    }
+    $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
+    $kebab = ByName $el "More options for $Title"
+  }
+  if (-not $kebab) { continue }  # not in this instance; try the next
+
+  Write-Output "found '$Title' in $($m.Dir)"
+  $ec = TryPattern $kebab ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+  if (-not $ec) { Write-Output 'FAIL: kebab does not expose ExpandCollapse (app UI changed?)'; exit 1 }
+  $ec.Expand()
   Start-Sleep -Milliseconds 800
 
-  # The row: state-prefixed name, or bare title as fallback.
-  $row = $null
-  foreach ($s in $STATES) { $row = Find-Named $win "$s $Title"; if ($row) { break } }
-  if (-not $row) { $row = Find-Named $win $Title }
-  if (-not $row) { continue }
-  Write-Output "row found in instance '$($m.DataDir)' (pid $($m.ProcId))"
-
-  [void][Native]::SetForegroundWindow($hwnd)
-  Start-Sleep -Milliseconds 300
-
-  # The kebab may be hover-revealed: hover the row first when it has no rect.
-  $kebabName = "More options for $Title"
-  $kebab = Find-Named $win $kebabName
-  if (-not $kebab -or $kebab.Current.BoundingRectangle.Width -le 0) {
-    $rr = $row.Current.BoundingRectangle
-    [void][Native]::SetCursorPos([int]($rr.X + $rr.Width / 2), [int]($rr.Y + $rr.Height / 2))
-    Start-Sleep -Milliseconds 500
-    $kebab = Find-Named $win $kebabName
-  }
-  if (-not $kebab) { Write-Output 'FAIL: kebab (More options) not exposed'; exit 1 }
-  if (-not (Approach $kebab $kebabName)) { Write-Output 'FAIL: could not verify cursor on the kebab'; exit 1 }
-  $kr = $kebab.Current.BoundingRectangle
-  [Native]::Click()
-  # Park the cursor OFF the menu immediately: left where it is, it hovers the first item
-  # ("Open in"), whose fly-out submenu can cover Archive and fail the point-verify below.
-  [void][Native]::SetCursorPos([int]($kr.X - 350), [int]$kr.Y)
-  Start-Sleep -Milliseconds 700
-
-  # The context menu, freshly enumerated. Point-verified: an unverified click here could hit
-  # Delete, which sits directly under Archive. Verified with retries - the menu needs a beat
-  # to settle before FromPoint resolves its items.
-  $archive = $null
+  $item = $null
   foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
-    $h = Find-Named $t 'Archive'
-    if ($h -and $h.Current.ControlType.ProgrammaticName -eq 'ControlType.MenuItem') { $archive = $h; break }
+    $h = ByName $t $Action
+    if ($h -and $h.Current.ControlType.ProgrammaticName -eq 'ControlType.MenuItem') { $item = $h; break }
   }
-  if (-not $archive) { Write-Output 'FAIL: menu opened but no Archive item found'; [Native]::Escape(); exit 1 }
-  $onArchive = $false
-  for ($try = 1; $try -le 3 -and -not $onArchive; $try++) {
-    $onArchive = Approach $archive 'Archive'
-    if (-not $onArchive) { Start-Sleep -Milliseconds 450 }
-  }
-  if (-not $onArchive) { Write-Output 'FAIL: cursor did not verify on Archive - aborting, nothing clicked'; [Native]::Escape(); exit 1 }
-  if ($DryRun) {
-    Write-Output 'DRYRUN OK: Archive item reachable and point-verified; closing menu untouched'
-    [Native]::Escape()
-    [void][Native]::SetCursorPos($saved.X, $saved.Y)
-    exit 0
-  }
-  [Native]::Click()
+  if (-not $item) { try { $ec.Collapse() } catch { }; Write-Output "FAIL: menu opened but no '$Action' item"; exit 1 }
+  $inv = TryPattern $item ([System.Windows.Automation.InvokePattern]::Pattern)
+  if (-not $inv) { Write-Output "FAIL: '$Action' item does not expose Invoke"; exit 1 }
+  $inv.Invoke()
   Start-Sleep -Milliseconds 1200
 
-  # Verify: the row must be gone. (The app also rewrites the metadata file itself within ~1s;
-  # callers wanting the disk proof can hit GET /api/chats/dossier afterwards.)
-  $still = $null
-  foreach ($s in $STATES) { $still = Find-Named $win "$s $Title"; if ($still) { break } }
-  [void][Native]::SetCursorPos($saved.X, $saved.Y)
-  if ($still) { Write-Output 'CLICKED BUT ROW STILL PRESENT - report this, do not blind-retry'; exit 2 }
-  Write-Output "ARCHIVED: '$Title' left the sidebar of '$($m.DataDir)'"
+  $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
+  $still = [bool](ByName $el "More options for $Title")
+  if ($Action -eq 'Archive' -and $still) { Write-Output 'INVOKED but row still present - report this, do not blind-retry'; exit 2 }
+  Write-Output "$Action done for '$Title' (focus-free: no SetForegroundWindow, no cursor)"
   exit 0
 }
-Write-Output "FAIL: chat row '$Title' not found in any searched running instance"
-[void][Native]::SetCursorPos($saved.X, $saved.Y)
-exit 1
+if ($List) { exit 0 }
+Write-Output "FAIL: '$Title' not rendered in any searched running instance (collapsed group or virtualized out - scroll it into view, then retry)"
+exit 3
