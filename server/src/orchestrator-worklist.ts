@@ -1019,7 +1019,17 @@ export function buildWorklist(reviewerSessionId: string): Worklist {
       autoAcked.push(acked)
       continue
     }
-    if (a.kind === 'idle_pending' && (a.detail as Record<string, unknown>)?.waitingForSlot) continue
+    // A CHAT PARKED BY THE CONCURRENCY CAP IS STILL A CHAT NOBODY IS COMING FOR. It used to be
+    // dropped with a bare `continue`: no item, no counter, no line anywhere, so a chat could sit
+    // waiting for a rotation slot indefinitely and neither the reviewer nor the owner would ever
+    // see it. The dry run already printed this; the LIVE worklist did not. Suppression is
+    // allowed, silence is not - it rides the same `suppressed` channel the breaker uses.
+    if (a.kind === 'idle_pending' && (a.detail as Record<string, unknown>)?.waitingForSlot) {
+      suppressed.push(
+        `${a.key} -> waiting for a rotation slot (concurrency cap); not offered until a slot frees`,
+      )
+      continue
+    }
     if (resolutionTrip(`att:${a.key}`, Date.now(), true)) continue
     const item = attentionToItem(a, view)
     if (item) items.push(item)
@@ -1234,6 +1244,23 @@ export async function resolveWorkItem(opts: {
         live,
       })
       ackAttention(key, 'handoff-continued', 720)
+      // A DORMANT TARGET IS NOT A DEAD END: queue the opening for that instance's scheduled
+      // courier, the same rung every other seed-and-deliver path uses. Without this a handoff
+      // into a sleeping instance seeded a successor that nothing would ever boot.
+      const queuedHandoff = queueIfCourier(itemId, route, seeded.sessionId, opening)
+      if (queuedHandoff) return queuedHandoff
+      // SAVE ONLY WHAT ACTUALLY HAPPENED. This used to stamp 'handoff-continued' BEFORE the
+      // route was checked, so an unreachable target left the item permanently "in flight":
+      // verify() waits for a transcript that will never move, the predecessor is already
+      // done-marked, and no re-proposal can reach it because the state says a delivery is
+      // pending. Persisting a delivery that did not occur is the purest form of the phantom
+      // state - the ledger says running, the world says nothing.
+      if (route.mode === 'none' || !route.step)
+        return {
+          ok: true,
+          reason: `seeded ${seeded.sessionId} but no route to boot it yet: ${route.whyNone} - NOT recorded as delivered, so this item returns next wake instead of hanging in flight`,
+          reviewerSteps: [],
+        }
       // The movement baseline is stamped AFTER the seed, or the seed's own bootstrap records
       // would satisfy verify with the opening never delivered (found by review).
       saveState(itemId, {
@@ -1242,12 +1269,6 @@ export async function resolveWorkItem(opts: {
         targetSessionId: seeded.sessionId,
         oldSessionId: a.sessionId,
       })
-      if (route.mode === 'none' || !route.step)
-        return {
-          ok: true,
-          reason: `seeded ${seeded.sessionId} but no route to boot it yet: ${route.whyNone}`,
-          reviewerSteps: [],
-        }
       return { ok: true, reviewerSteps: [route.step] }
     }
     let message: string
@@ -1677,19 +1698,27 @@ export async function resolveWorkItem(opts: {
       })
       // Stamped AFTER the seed, or the seed's own bootstrap records verify the delivery that
       // never happened (found by review - this was a blocker).
+      // The seeded chat exists now, so the metadata index must be told before anything looks it
+      // up (the seed-agent path already does this; without it a lookup can miss the new row).
+      invalidateSessionMetaCache()
+      const queuedWork = queueIfCourier(itemId, route, seeded.sessionId, opening)
+      if (queuedWork) return queuedWork
+      // Same save-before-check bug as the handoff path, same consequence: an unreachable target
+      // used to be recorded as DELIVERED, leaving a seeded chat nothing would boot and an item
+      // verify() could never close. Record only a delivery that happened.
+      if (route.mode === 'none' || !route.step)
+        return {
+          ok: true,
+          reason: `seeded ${seeded.sessionId} but no route to boot it: ${route.whyNone} - NOT recorded as delivered, so this returns next wake instead of hanging in flight`,
+          reviewerSteps: [],
+        }
+      // Stamped AFTER the seed, or the seed's own bootstrap records verify the delivery that
+      // never happened (found by review - this was a blocker).
       saveState(itemId, {
         phase: 'delivered',
         at: new Date().toISOString(),
         targetSessionId: seeded.sessionId,
       })
-      const queuedWork = queueIfCourier(itemId, route, seeded.sessionId, opening)
-      if (queuedWork) return queuedWork
-      if (route.mode === 'none' || !route.step)
-        return {
-          ok: true,
-          reason: `seeded ${seeded.sessionId} but no route to boot it: ${route.whyNone}`,
-          reviewerSteps: [],
-        }
       return { ok: true, reviewerSteps: [route.step] }
     }
     case 'seed-agent': {
@@ -1805,6 +1834,12 @@ export async function resolveWorkItem(opts: {
  * handed out; an archive when the closeout landed and the flag flipped; a rename when the app's
  * own metadata carries the title.
  */
+/** How long a delivery may sit unverified before the item is released from "in flight".
+ *  Generous on purpose: a real chat can take a long time to produce its first event, and
+ *  declaring failure early would re-deliver into a thread that is merely slow. Three hours is
+ *  far beyond any honest first-turn latency and far short of "nobody is ever coming". */
+const VERIFY_GIVE_UP_MS = 3 * 3600_000
+
 export async function verifyWorkItem(
   itemId: string,
   readTail: (path: string) => { lastEventAt: string | null } = readTailInfo,
@@ -1822,12 +1857,35 @@ export async function verifyWorkItem(
     return { ok: false, state: 'pending', detail: 'title not visible in app metadata yet' }
   }
   const moved = transcriptMovedSince(st.targetSessionId, st.at, readTail)
-  if (!moved)
+  if (!moved) {
+    // PENDING MUST NOT BE FOREVER. Every phase here waits for evidence that may never arrive
+    // (a target that died before its turn, a courier whose account went critical, an app that
+    // never reloaded), and with no upper bound the item stays "in flight" permanently: the
+    // reviewer is told to check again next wake, forever, while the chat sits in exactly the
+    // state the three-state law bans. After the bound the delivery is declared unverified and
+    // the state CLEARED, which returns the item to the ordinary proposed/approved cycle where a
+    // fresh proposal or a rejection can act on it - and the breaker sees the repeat.
+    const ageMs = Date.now() - Date.parse(st.at)
+    if (Number.isFinite(ageMs) && ageMs > VERIFY_GIVE_UP_MS) {
+      clearState(itemId)
+      if (!itemId.startsWith('att:') && !itemId.startsWith('rename:'))
+        reportProposalExecuted(
+          itemId,
+          false,
+          `delivery unverified after ${Math.round(ageMs / 3600_000)}h - the target's transcript never moved; released from in-flight so it can be re-proposed or ruled again`,
+        )
+      return {
+        ok: false,
+        state: 'not-found',
+        detail: `gave up after ${Math.round(ageMs / 3600_000)}h with no transcript movement - the item is no longer in flight and returns to the normal cycle`,
+      }
+    }
     return {
       ok: false,
       state: 'pending',
       detail: 'transcript has not moved since delivery - engine not confirmed yet',
     }
+  }
   if (st.phase === 'handoff-continued') {
     // The successor's engine is proven; NOW the predecessor leaves the sidebar. Doing this any
     // earlier risks retiring a thread whose continuation never started.

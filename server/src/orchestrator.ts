@@ -95,7 +95,12 @@ import {
 import { NEW_CHAT_ULTRACODE_KEY, newChatUltracodeEnabled } from './new-chat-opening'
 import { agentChatKvKey, isOrchAgentTitle, ORCH_AGENT_TITLE } from './orch-agent'
 import { tripAttentionItems } from './orchestrator-breaker'
-import { courierTaskId, courierTaskPrompt, isCourierRunTitle } from './orchestrator-courier'
+import {
+  courierTaskId,
+  courierTaskPrompt,
+  isCourierRunTitle,
+  pendingDeliveries,
+} from './orchestrator-courier'
 import {
   type ChipInTail,
   isInjectedUserText,
@@ -1564,7 +1569,27 @@ function classifyLiveSession(
     return { items, cwdEntry: null }
   }
   const mtime = deps.mtimeMs(sess.transcriptPath)
-  if (mtime === null) return { items, cwdEntry: null }
+  if (mtime === null) {
+    // THE SAME FAILURE AS THE BRANCH ABOVE, and it used to be silent. A live session whose
+    // transcript path is set but cannot be stat'd (locked, deleted under a live pid, a
+    // disconnected drive) returned nothing at all: no item, no log, and cwdEntry:null so it did
+    // not even count toward the concurrency cap. The process is RUNNING and the orchestrator
+    // could not see it anywhere - the most complete phantom state available, since being live
+    // also excludes it from every dead-chat detector.
+    items.push({
+      key: `unreadable:${sess.sessionId}`,
+      kind: 'errored',
+      sessionId: sess.sessionId,
+      peerName: sess.name,
+      cwd: sess.cwd,
+      summary: `live session ${sess.name}: transcript path is set but unreadable (${sess.transcriptPath}) - the chat is running and invisible to every detector until this clears`,
+      detail: { ending: 'error', unreadableTranscript: true },
+      firstSeenAt: nowIso,
+      seenCount: 1,
+    })
+    // Still counted as a running chat: it holds a real process and a real concurrency slot.
+    return { items, cwdEntry: { quietSecs: 0, held: holdSet.has(sess.sessionId), running: true } }
+  }
   const quietSecs = Math.max(0, Math.round((started - mtime) / 1000))
   const running = quietSecs < s.idleQuietSecs
   // A done-marked session is treated like a held one from here down: it still anchors its
@@ -2415,6 +2440,15 @@ export function sweepCourierTasks(): number {
           `[agenthydra] courier task removed for ${entry.name}: account is in the critical usage band, so a run would spend quota polling an empty queue`,
         )
       }
+      // ANYTHING ALREADY QUEUED HERE NOW HAS NO DRAINER, and a queue with no drainer is a
+      // silent stall by construction: the delivery waits for a courier that was just removed,
+      // nobody is told, and the target chat sits in the state the three-state law bans. Say so
+      // once, loudly, so the reviewer can re-route or the owner can see why a chat is stuck.
+      const stranded = pendingDeliveries(dir)
+      if (stranded.length)
+        console.log(
+          `[agenthydra] ⚠ ${stranded.length} queued delivery(ies) for ${entry.name} have no courier while the account is critical (items: ${stranded.map((s) => s.itemId).join(', ')}) - they resume when its usage band recovers`,
+        )
       continue
     }
     const prompt = courierTaskPrompt(dir, PORT)
@@ -2652,8 +2686,15 @@ export async function proposeArchivesForDoneSessions(
         evidenceAt: new Date(r.updated_at).toISOString(),
       })
       if (id) proposed++
-    } catch {
-      // one broken store must not stop the sweep
+    } catch (err) {
+      // One broken store must not stop the sweep - but it must not be SILENT either. This was
+      // the only swallowing catch in this file without a log line, and the archive janitor is
+      // the sole mechanism that retires a done-marked chat: a row that throws every tick is a
+      // chat that never gets proposed, never gets archived, and leaves no trace explaining why.
+      console.error(
+        `[agenthydra] archive janitor could not evaluate ${r.session_id} (it stays done-marked and un-retired until this clears):`,
+        err,
+      )
     }
   }
   return proposed
