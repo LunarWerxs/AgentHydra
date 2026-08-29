@@ -318,11 +318,13 @@ number back rather than holding a conversation. See `server/src/headless-policy.
 **The native actuator** (proven live 2026-08-26): the desktop app itself delivers messages
 into its chats, and a delivery BOOTS a dormant chat's engine and runs the turn visibly in
 the app - zero clicks, zero headless processes. A session hosted in an instance reaches that
-instance's chats via `mcp__ccd_session_mgmt__send_message`; the reviewer reaches other
-instances via peer messages to live chats, or a RELAY (ask a live chat in the target
-instance to run its own send_message). The delivery ladder in the command file orders these;
-when no native route exists into an instance, the action WAITS visibly instead of falling
-back to anything headless.
+instance's chats via `mcp__ccd_session_mgmt__send_message`; live chats anywhere are reachable
+directly by peer message. **The RELAY rung - asking a live working chat in another instance to
+run its own send_message as a courier - is BANNED (owner directive, Michael, 2026-08-28:
+"remove the relay task functionality... don't just message other chats").** A working chat is
+someone's thread of work, not the orchestrator's errand runner; `computeRoute` no longer
+composes relay steps. When no native route exists into an instance, the action WAITS visibly
+instead of falling back to anything headless or borrowing a working chat.
 
 ### Codex threads, in the same feed
 
@@ -371,9 +373,11 @@ whether the chat actually leaves the sidebar:
    rung raises a dialog, which under the zero-click law is a dead end. Same shape as the relay
    rung below, and the same warning: a ladder validated only from a bypass session looks
    universal and is not.
-2. **Elsewhere, with any live chat in that instance** -> relay: ask that chat to archive the
-   TARGET (never itself).
-3. **Nothing live there** -> `POST /api/sessions/:id/desktop-archive`, which writes the flag and
+2. ~~Elsewhere, with any live chat in that instance -> relay~~ **REMOVED (owner ban,
+   2026-08-28): the orchestrator never borrows a working chat as a courier, for archives or
+   for anything else.** The history below is kept because it measured WHY this rung was
+   already broken before it was banned.
+3. **Elsewhere** -> `POST /api/sessions/:id/desktop-archive`, which writes the flag and
    returns `visibleNow: false`: the chat is still on screen until that app restarts.
 
 **RUNG 3 IS VERIFIED; THE ARCHIVE LADDER'S RUNG 2 IS NOT, AND CANNOT BE** (measured
@@ -487,10 +491,11 @@ What the server now owns, enforced rather than described:
   on new-chat openings. `messageOverride` narrows scope; it cannot strip the prefix.
 - **Routing.** The old four-rung prose ladder is `computeRoute()`: live target -> direct peer
   send by registry NAME; dormant in the reviewer's instance -> `send_message` with the REAL
-  `chatId` from metadata (never constructed); dormant elsewhere -> a relay through an awake chat
-  in that instance; otherwise honestly `unreachable`. The two measured routing failures (the
-  0-of-4 constructed-id relay round; rung 1 booting another instance's chat on the wrong
-  account) are structurally impossible for the reviewer to repeat, and are pinned by tests.
+  `chatId` from metadata (never constructed); dormant elsewhere -> honestly `unreachable`
+  (the relay rung was REMOVED 2026-08-28 by owner ban - working chats are never couriers).
+  The two measured routing failures (the 0-of-4 constructed-id relay round; rung 1 booting
+  another instance's chat on the wrong account) are structurally impossible for the reviewer
+  to repeat, and are pinned by tests.
 - **Ordering.** Closeout-before-archive is a state machine: approving an archive delivers the
   closeout, and the flag flips only after `verify` sees the transcript move. Unreachable chats
   archive immediately and are RECORDED as un-closed-out. The anchor rule refuses to retire the
@@ -522,10 +527,10 @@ What the loop does, per wake:
    the rubric in the command file, act, `ack`.
 2. Delivery is NATIVE (the delivery ladder): own-instance chats via the app's
    send_message tool (works on dormant chats - it boots the engine), live chats elsewhere
-   via peer `SendMessage`, dormant chats elsewhere via a relay through a live chat in that
-   instance. New work (chips, handoff continuations) is seeded as a visible desktop chat
-   (`POST /api/sessions/seed-desktop`) and delivered the same way - nothing of the owner's
-   ever runs headless.
+   via peer `SendMessage`. Dormant chats elsewhere are UNREACHABLE and wait - the relay
+   through a live chat was banned by the owner on 2026-08-28. New work (chips, handoff
+   continuations) is seeded as a visible desktop chat (`POST /api/sessions/seed-desktop`)
+   and delivered the same way - nothing of the owner's ever runs headless.
 3. Pacing: it does not poll at a fixed 60s. `notify_when_idle` gives push notifications the
    moment a peer finishes its turn - *faster* than polling - and a long heartbeat covers
    usage/git/chips. Idle cost is a few small requests per hour.

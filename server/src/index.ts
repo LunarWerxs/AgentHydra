@@ -208,6 +208,7 @@ import { captureScreen } from './screenshot'
 import { dropSearchIndex, searchIndexStatus } from './search-index'
 import { type ExportFormat, exportSession, scanSessionSecrets } from './session-export'
 import {
+  applyDesktopChatAutomation,
   archiveDesktopChat,
   desktopHomeFor,
   importSessionToDesktop,
@@ -2395,6 +2396,26 @@ app.post('/api/sessions/seed-desktop', async (c) => {
     )
   const result = await seedDesktopSession({ cwd, title, instanceRef: ref })
   return c.json(result, result.ok ? 200 : 422)
+})
+// Stamp a desktop chat's automation posture to bypassPermissions (owner rule, restated
+// 2026-08-28: every migrated chat MUST be bypass before it starts; all chats default to
+// bypass). Same running-app caveat as every metadata write: verify via the dossier before
+// booting and re-stamp when the app re-saved the old mode.
+app.post('/api/sessions/:id/automation', async (c) => {
+  const sessionId = c.req.param('id')
+  const home = await desktopHomeFor(sessionId).catch(() => null)
+  if (!home) return c.json({ ok: false, error: 'no desktop entry for this session' }, 404)
+  const stamped = applyDesktopChatAutomation(home, sessionId)
+  invalidateSessionMetaCache()
+  return c.json(
+    {
+      ok: stamped,
+      mode: 'bypassPermissions',
+      caveat:
+        'a RUNNING app may re-save the old mode; verify via the dossier before booting and re-stamp if needed',
+    },
+    stamped ? 200 : 422,
+  )
 })
 // Archive (or unarchive) a chat in the DESKTOP app by flipping its metadata flag across every
 // profile that carries it. Honest caveat in the response: for a profile whose app was running,

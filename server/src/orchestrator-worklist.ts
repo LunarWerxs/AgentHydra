@@ -224,7 +224,7 @@ export function composeRevive(opts: {
 // --- routing -------------------------------------------------------------------------------------
 
 export interface Route {
-  mode: 'direct-live' | 'own-instance' | 'relay' | 'none'
+  mode: 'direct-live' | 'own-instance' | 'none'
   step?: ReviewerStep
   whyNone?: string
 }
@@ -274,37 +274,15 @@ export function computeRoute(opts: {
       },
     }
   }
-  // Another instance: relay through any awake live chat that lives there.
-  const relayVia = opts.live.find((s) => {
-    if (s.sessionId === opts.reviewerSessionId) return false
-    if (isDeafPassiveSession(s, now)) return false
-    const ref = instanceRefForSession(s.sessionId)
-    return (
-      !!ref &&
-      !!targetInstance &&
-      samePath(ref.slice('desktop:'.length), targetInstance.slice('desktop:'.length))
-    )
-  })
-  if (relayVia) {
-    const inner = opts.message.replace(/\r?\n/g, '\n')
-    return {
-      mode: 'relay',
-      step: {
-        tool: 'SendMessage',
-        args: {
-          to: relayVia.name,
-          message:
-            `[orchestrator] Relay request: call your mcp__ccd_session_mgmt__send_message tool with ` +
-            `session_id ${meta.chatId} and exactly this message (everything between the BEGIN/END ` +
-            `markers, markers excluded):\n--BEGIN--\n${inner}\n--END--\nReply DONE when sent.`,
-        },
-        why: `target is dormant in ${targetInstance ?? 'another instance'}; ${relayVia.name} is awake there and can boot it on the right account`,
-      },
-    }
-  }
+  // Another instance: NO route. The relay rung - commandeering an awake working chat there as a
+  // courier - existed here until 2026-08-28 and is BANNED by owner directive (Michael, verbatim:
+  // "REMOVE THE RELAY TASK FUNCTIONALITY... Don't just message other chats"). A working chat is
+  // someone's thread of work, not the orchestrator's errand runner. A dormant chat in another
+  // instance is deliverable only by a reviewer inside that instance; until one exists, parking
+  // honestly is the whole answer.
   return {
     mode: 'none',
-    whyNone: `dormant in ${targetInstance ?? 'an unknown instance'} with no awake chat there to relay through - retry when one exists`,
+    whyNone: `dormant in ${targetInstance ?? 'an unknown instance'} - deliverable only by a reviewer inside that instance (relaying through its working chats is banned by owner directive, 2026-08-28)`,
   }
 }
 
