@@ -99,6 +99,7 @@ import {
   retireProposalsForSessions,
 } from './proposals'
 import {
+  applyDesktopChatAutomation,
   archiveDesktopChat,
   desktopChatArchiveState,
   reassertAutomationStamps,
@@ -1189,6 +1190,10 @@ export interface OrchestratorDeps {
       archived: boolean
       permissionMode?: string | null
       chatId?: string | null
+      /** The metadata file itself. The automation janitor stamps through it; injected test
+       *  fakes carry no path, so the janitor skips them by construction. */
+      path?: string | null
+      cliSessionId?: string | null
     }
   >
   tailInfo: (path: string) => TailInfo
@@ -1701,6 +1706,8 @@ interface OnceCtx {
       archived: boolean
       permissionMode?: string | null
       chatId?: string | null
+      path?: string | null
+      cliSessionId?: string | null
     }
   >
   byCwd: Map<string, { session: LiveSession; quietSecs: number; held: boolean }[]>
@@ -2202,6 +2209,55 @@ async function runPeriodicTitleJanitor(ctx: OnceCtx): Promise<void> {
   }
 }
 
+/**
+ * The automation janitor (every tick). Owner rule 2026-08-28, verbatim: "All chats. Should
+ * always have. Bypass permissions." — anything else deadlocks unattended work at an approval
+ * prompt nobody can click (a freshly seeded chat froze forever at its FIRST shell approval
+ * because the app filed it 'acceptEdits'). The bounded post-import watchers guard fresh
+ * imports; this is the standing fleet-wide net behind them: every NON-archived desktop chat in
+ * any instance whose metadata says anything but 'bypassPermissions' is re-stamped. Convergence,
+ * not one-shot — a RUNNING app can re-save the old mode over the stamp, so the sweep repeats
+ * and the app's next boot is what makes a stamp durable. Cheap by construction: it reads the
+ * tick's own cached metadata scan and writes only on drift. Archived chats are left alone (a
+ * pointless write to a retired entry), and plain CLI sessions never appear in the map at all.
+ */
+function runAutomationJanitor(ctx: OnceCtx): void {
+  if (ctx.deps !== defaultDeps) return // never sweep against injected test deps
+  try {
+    sweepAutomationDrift(ctx.metaMap)
+  } catch (err) {
+    console.error('[agenthydra] automation janitor failed:', err)
+  }
+}
+
+/**
+ * One automation-janitor pass over a metadata map: re-stamp `bypassPermissions` onto every
+ * non-archived chat whose mode says otherwise, one log line per corrected chat. The map indexes
+ * most chats under TWO keys (session id and filename id) sharing one row, so writes dedupe on
+ * the metadata path; rows without a path (injected fakes, row-derived fallbacks) are skipped.
+ * Same idempotence discipline as archiveDesktopChat's already-in-state short-circuit: an
+ * already-bypass row is filtered out before any write. Returns how many chats were corrected.
+ */
+export function sweepAutomationDrift(metaMap: OnceCtx['metaMap']): number {
+  const marker = `${sep}claude-code-sessions${sep}`
+  const seenPaths = new Set<string>()
+  let fixed = 0
+  for (const [id, meta] of metaMap) {
+    if (meta.archived || meta.permissionMode === 'bypassPermissions') continue
+    if (!meta.path || seenPaths.has(meta.path)) continue
+    seenPaths.add(meta.path)
+    const cut = meta.path.lastIndexOf(marker)
+    if (cut <= 0) continue // not a session-store path this janitor understands
+    const sessionId = meta.cliSessionId ?? id
+    if (!applyDesktopChatAutomation(meta.path.slice(0, cut), sessionId)) continue
+    fixed++
+    console.log(
+      `[agenthydra] automation janitor re-stamped bypassPermissions on ${sessionId} (${meta.instance}: was ${meta.permissionMode ?? 'unset'})`,
+    )
+  }
+  return fixed
+}
+
 export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps): Promise<void> {
   const ctx = initOnceCtx(deps)
 
@@ -2215,6 +2271,9 @@ export async function runOrchestratorOnce(deps: OrchestratorDeps = defaultDeps):
   applyConcurrencyCap(ctx)
   maintainOrphanProposals(ctx)
   applyAckSuppressionAndPublish(ctx)
+  // Stamps land BEFORE the title janitor's archive-visibility restart, so a restart in this
+  // same tick already reads the corrected mode — the one write that provably enters app memory.
+  runAutomationJanitor(ctx)
   await runPeriodicTitleJanitor(ctx)
   // Full mode only, and on its own much slower clock (backlogScanMins, not tickSecs): sweeping
   // repositories is disk and git work, and outstanding work does not appear by the second. In
