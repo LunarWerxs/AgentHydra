@@ -31,6 +31,7 @@ import {
   planOfAccountLabel,
   projectKeyForCwd,
   proposeArchivesForDoneSessions,
+  reassertArchivedFlags,
   refreshShippedCommands,
   resetsSoon,
   reviewerHealth,
@@ -510,6 +511,66 @@ test('the archive janitor PROPOSES retiring done-marked chats, and never flips f
   // ...and once every entry is archived, the sweep has nothing left to propose.
   expect(await proposeArchivesForDoneSessions([profile])).toBe(0)
   db.query('update session_marks set done = 0 where session_id = ?').run('done-sess-1')
+})
+
+test('the quit-save cannot erase an archive: executed-ledger flags are re-asserted onto the store', async () => {
+  // 2026-08-29 incident, measured 01:00–01:07 UTC: the engine archived a finished chat and the
+  // RUNNING app's bulk metadata re-save rewrote the file isArchived:false seven minutes later.
+  // The visibility restart then made it worse, not better: QUITTING the app triggers the same
+  // save-from-memory, so the restart meant to reveal the archive erased it instead, and the
+  // janitor re-proposed the same archive forever (no chat boot is involved, so the one-closeout
+  // rule never fires). This pins the repair: after the quit-save has landed, the daemon
+  // re-asserts every archive it owns — executed ledger row, lineage still done-marked — onto the
+  // store the app will read at reopen.
+  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-quitsave-'))
+  const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
+  mkdirSync(store, { recursive: true })
+  const meta = (sid: string, archived: boolean) =>
+    writeFileSync(
+      join(store, `local_${sid}.json`),
+      JSON.stringify({ cliSessionId: sid, isArchived: archived }),
+    )
+  const mark = (sid: string, done: number) =>
+    db
+      .query(
+        'insert into session_marks (session_id, done, updated_at) values (?, ?, ?) on conflict(session_id) do update set done = excluded.done',
+      )
+      .run(sid, done, Date.now())
+  const executedArchive = (sid: string) => {
+    const id = proposeAction({
+      kind: 'archive',
+      sessionId: sid,
+      summary: 'retire it',
+      evidence: {},
+    })
+    if (!id) throw new Error('archive proposal unexpectedly suppressed')
+    expect(decideProposal(id, true, 'test-reviewer', 'retire it').ok).toBe(true)
+    expect(reportProposalExecuted(id, true, 'archived').ok).toBe(true)
+  }
+
+  // The daemon archived this chat, and the app's quit-save has just rewritten it un-archived.
+  mark('quitsave-victim', 1)
+  executedArchive('quitsave-victim')
+  meta('quitsave-victim', false)
+  // Never archived by the daemon: the quit-save's word stands, whatever it says.
+  meta('quitsave-bystander', false)
+  // Archived once, but the lineage was since revived (done-mark lifted): the owner's call wins,
+  // exactly as it does for the janitor, which also keys on the done-mark.
+  mark('quitsave-revived', 1)
+  executedArchive('quitsave-revived')
+  mark('quitsave-revived', 0)
+  meta('quitsave-revived', false)
+
+  expect(await reassertArchivedFlags(profile)).toBe(1)
+  const read = (sid: string) => JSON.parse(readFileSync(join(store, `local_${sid}.json`), 'utf8'))
+  expect(read('quitsave-victim').isArchived).toBe(true)
+  expect(read('quitsave-bystander').isArchived).toBe(false)
+  expect(read('quitsave-revived').isArchived).toBe(false)
+  // Idempotent: the store now agrees with the ledger, so a second pass rewrites nothing.
+  expect(await reassertArchivedFlags(profile)).toBe(0)
+
+  db.query('update session_marks set done = 0 where session_id = ?').run('quitsave-victim')
+  rmSync(profile, { recursive: true, force: true })
 })
 
 test('the proposal gate: decide-then-execute is enforced, rejections stay quiet on old evidence', () => {

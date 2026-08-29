@@ -98,7 +98,11 @@ import {
   proposeAction,
   retireProposalsForSessions,
 } from './proposals'
-import { desktopChatArchiveState, sweepUntitledDesktopChats } from './session-launch'
+import {
+  archiveDesktopChat,
+  desktopChatArchiveState,
+  sweepUntitledDesktopChats,
+} from './session-launch'
 import type {
   AttentionItem,
   OrchestratorInstance,
@@ -2373,6 +2377,52 @@ export function isDeafPassiveSession(
   return now - last >= 30 * 60_000 // and it has since sat, same floor the deaf detector uses
 }
 
+/**
+ * Re-assert the daemon's own archives onto one instance's on-disk store. A RUNNING app keeps its
+ * chat list in memory and periodically re-saves every chat's metadata from that picture, so a
+ * flag flipped from outside can be silently erased — measured 2026-08-29 01:00–01:07 UTC: the
+ * engine archived cliSessionId 95828d43 at 01:00:36 and the app's bulk re-save rewrote the file
+ * isArchived:false at 01:07:15. Worse, QUITTING the app triggers the same save-from-memory, so
+ * the visibility restart below could erase the very flags it exists to reveal, and the janitor
+ * then re-proposed the same archive forever (the one-closeout rule stops re-BOOTS, not
+ * re-proposals — no chat boot is involved, so that ledger check never fires). The one window
+ * where a daemon write cannot lose is after the quit-save has landed (the app is dead) and
+ * before the reopen reads the store fresh — which is exactly when the restart calls this.
+ *
+ * Which sessions: the executed archive ledger rows — the daemon's durable memory of what it
+ * archived — intersected with the sessions still done-marked, so a lineage the owner has since
+ * revived (done-mark lifted) is left alone: the janitor stands down for those, and so does this.
+ * Idempotent (an entry already archived is reported unchanged, not rewritten) and non-throwing:
+ * a failure here must never leave the instance quit without its reopen.
+ */
+export async function reassertArchivedFlags(profileDir: string): Promise<number> {
+  let rows: Array<{ session_id: string }>
+  try {
+    rows = db
+      .query<{ session_id: string }, []>(
+        `select distinct p.session_id
+           from orchestrator_proposals p
+           join session_marks m on m.session_id = p.session_id and m.done = 1
+          where p.kind = 'archive' and p.status = 'executed'`,
+      )
+      .all()
+  } catch {
+    return 0
+  }
+  let reasserted = 0
+  for (const r of rows) {
+    try {
+      // Scoped to THIS profile's store; the app is down, so isInstanceRunning is answered, not
+      // probed. Sessions that never lived in this store simply report no hits.
+      const res = await archiveDesktopChat(r.session_id, true, [profileDir], async () => false)
+      if (res.ok && res.hits.some((h) => h.changed)) reasserted++
+    } catch {
+      // one unwritable entry must not stop the others
+    }
+  }
+  return reasserted
+}
+
 /** One pending archive-visibility restart, evaluated and (if safe) carried out. Split out of
  *  restartAppsForArchiveVisibility so that function reads as the plan and this reads as the
  *  per-directory ownership test + action. */
@@ -2415,6 +2465,14 @@ async function restartOneArchivePendingDir(
       return
     }
     await new Promise((r) => setTimeout(r, 2500))
+    // The quit itself just saved the app's IN-MEMORY chat list over the store, which can erase
+    // the very archive flags this restart exists to reveal (see reassertArchivedFlags). The app
+    // is dead and the reopen has not read the store yet: re-assert the daemon's archives now.
+    const reasserted = await reassertArchivedFlags(dir)
+    if (reasserted > 0)
+      console.log(
+        `[agenthydra] archive-visibility restart: re-asserted ${reasserted} archive flag(s) the app's quit-save had erased in ${dir}`,
+      )
     const o = await openInstance(dir)
     kvSet(cooldownKey, new Date().toISOString())
     kvDelete(row.key)
