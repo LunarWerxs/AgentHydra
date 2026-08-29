@@ -133,6 +133,12 @@ export interface WorkItem {
   constraintsApplied: string[]
   /** True when approving can complete entirely server-side (no reviewer step). */
   serverOnly: boolean
+  /** THE THREE STATES (owner law, Michael, 2026-08-28: "Chats should only have 3 states...
+   *  Running.. Or archive. Period."). Derived, never stored: the item KINDS are internal
+   *  mechanics (nudge/answer/stale/handoff are all "a running chat needs its next turn"), and
+   *  this is what the owner is actually shown. `waiting-on-owner` is the only state allowed to
+   *  sit still, and it must always name what is wanted from him. */
+  state: 'running' | 'waiting-on-owner' | 'archived'
   /** THE LAST-RESORT STATE, and it is now nearly unreachable itself.
    *
    *  OWNER LAW (Michael, 2026-08-28, verbatim: "There is never any... Unreachable.. You fix..
@@ -764,7 +770,19 @@ function proposalToItem(
     constraintsApplied: constraints,
     serverOnly,
     unreachable,
+    state: stateOf(p.kind, unreachable),
   }
+}
+
+/**
+ * The three-state projection. An ARCHIVE item is a transition to archived; anything the system
+ * cannot deliver at all is the residue that genuinely needs the owner; everything else is a
+ * RUNNING chat awaiting its next turn, which the orchestrator delivers by itself.
+ */
+export function stateOf(kind: string, unreachable?: string): WorkItem['state'] {
+  if (kind === 'archive') return 'archived'
+  if (unreachable) return 'waiting-on-owner'
+  return 'running'
 }
 
 /**
@@ -827,6 +845,10 @@ function attentionToItemBase(
     title: a.summary.slice(0, 120),
     evidence: { ...d, tail: a.tailSnippet ?? null, peerName: a.peerName ?? null },
     serverOnly: false,
+    // EVERY attention item is a RUNNING chat awaiting its next turn - that is what nudge,
+    // answer, stale, handoff, cutoff and the git nudges all are, under the three-state law
+    // (owner, 2026-08-28). None of them is a resting state; the orchestrator delivers them.
+    state: 'running' as const,
   }
   switch (a.kind) {
     case 'idle_pending': {
@@ -1993,9 +2015,20 @@ export function renderDryRunText(d: DryRun): string {
     )
   }
   L.push('')
+  // THE THREE STATES, counted first (owner law, 2026-08-28). WAITING ON YOU is the only line
+  // that should ever make him do something, so it leads and it is never merged into a total.
+  const waiting = d.wouldAsk.filter((w) => w.state === 'waiting-on-owner')
+  const running = d.wouldAsk.filter((w) => w.state === 'running')
+  const archiving = d.wouldAsk.filter((w) => w.state === 'archived')
+  L.push(
+    `STATES: ${waiting.length} waiting on YOU · ${running.length} running (the orchestrator handles these) · ${archiving.length} being archived`,
+  )
+  if (waiting.length)
+    for (const w of waiting) L.push(`  WAITING ON YOU: ${w.title} - ${w.unreachable ?? w.question}`)
+  L.push('')
   L.push(`WOULD ASK THE REVIEWER (${d.wouldAsk.length})`)
   d.wouldAsk.forEach((w, n) => {
-    L.push(`  ${n + 1}. [${w.kind}] ${w.title}`)
+    L.push(`  ${n + 1}. [${w.state}/${w.kind}] ${w.title}`)
     L.push(`     ${w.question}`)
     const summary = (w.evidence as Record<string, unknown>)?.summary
     if (typeof summary === 'string') L.push(`     evidence: ${summary}`)

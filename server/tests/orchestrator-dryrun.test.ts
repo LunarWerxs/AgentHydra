@@ -69,6 +69,7 @@ describe('renderDryRunText', () => {
           evidence: { summary: 'died 22m ago' },
           constraintsApplied: [],
           serverOnly: false,
+          state: 'waiting-on-owner',
           unreachable: 'no live chat in that app',
         },
       ],
@@ -89,7 +90,10 @@ describe('renderDryRunText', () => {
     // alike - that hole is what the seed-agent item exists to fill.
     expect(text).toContain('agent chat: NONE')
     expect(text).toContain('WOULD ASK THE REVIEWER (1)')
-    expect(text).toContain('[revive] Dead chat')
+    // The three-state law leads the report: what needs HIM is never buried in a total.
+    expect(text).toContain('STATES: 1 waiting on YOU')
+    expect(text).toContain('WAITING ON YOU: Dead chat - no live chat in that app')
+    expect(text).toContain('[waiting-on-owner/revive] Dead chat')
     expect(text).toContain('UNREACHABLE: no live chat in that app')
     expect(text).toContain('WOULD HANDLE ITSELF, NO REVIEWER INVOLVED (1)')
     expect(text).toContain('WOULD SUPPRESS (1)')
