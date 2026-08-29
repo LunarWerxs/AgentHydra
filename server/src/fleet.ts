@@ -22,6 +22,7 @@
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { instanceRefForSession } from './instance-sessions'
 import { type LiveSession, readLiveRegistry } from './live-registry'
 import { classifyEnding, type SessionEnding } from './session-ending'
 import { usageProbeCwd } from './usage'
@@ -46,6 +47,10 @@ export interface FleetSession {
   sessionId: string
   cwd: string
   startedAt: number
+  /** Which desktop instance hosts this session ('desktop:<dir>'), when the desktop metadata
+   *  says so; null for terminal/CLI sessions with no desktop home. Identity attribution
+   *  (piece 4): joins a live session to the account it runs on via fleet-instances refs. */
+  instanceRef: string | null
   /** null when the registry entry carries no transcript path (nothing to read yet). */
   transcript: FleetTranscriptState | null
 }
@@ -173,6 +178,8 @@ export interface FleetDeps {
   registry?: (claudeHome: string) => LiveSession[]
   /** Seam for tests; the default is the real usage-probe scratch dir. */
   probeCwd?: () => string | null
+  /** Seam for tests; the default is the real desktop-metadata attribution. */
+  attribute?: (sessionId: string) => string | null
 }
 
 /** The whole fleet, observed fresh. Read-only and cheap: one registry scan plus one tail read
@@ -182,15 +189,23 @@ export function fleetStatus(deps: FleetDeps = {}): FleetStatus {
   const nowMs = deps.nowMs ?? Date.now()
   const registry = deps.registry ?? readLiveRegistry
   const probe = (deps.probeCwd ?? usageProbeCwd)()
+  const attribute = deps.attribute ?? instanceRefForSession
   const sessions: FleetSession[] = []
   for (const s of registry(claudeHome)) {
     if (samePathLoose(s.cwd, probe)) continue
+    let instanceRef: string | null = null
+    try {
+      instanceRef = attribute(s.sessionId)
+    } catch {
+      // Attribution is a join, not a gate: an unreadable metadata store must not hide a session.
+    }
     sessions.push({
       name: s.name,
       pid: s.pid,
       sessionId: s.sessionId,
       cwd: s.cwd,
       startedAt: s.startedAt,
+      instanceRef,
       transcript: s.transcriptPath
         ? { path: s.transcriptPath, ...classifyTranscriptTail(s.transcriptPath, nowMs) }
         : null,

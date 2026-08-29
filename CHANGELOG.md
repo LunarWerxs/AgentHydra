@@ -9,6 +9,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Orchestrator rebuild, piece 4: account identity** (`instances` key on `GET /api/fleet`,
+  server/src/fleet-instances.ts, plus per-session `instanceRef` attribution in fleet.ts;
+  owner-picked). Deterministic, read-only, ZERO NETWORK: every desktop instance with its
+  permanent #num, name/label, dir, 'desktop:<dir>' ref, running state + pid, fresh loginUuid
+  (who is signed in RIGHT NOW), and the cached token-free identity (email/plan) from
+  resolveAccount's no-network path. `identityStale` flags an instance re-logged into a
+  different account than the cache describes - reported, never hidden. Live sessions now carry
+  which instance hosts them, closing the identity joint between sessions, usage refs and
+  instances. Start/stop deliberately stays with the existing tested primitives
+  (openInstance/quitInstance and their routes); observation observes. Verified: 5 fixture
+  tests (identity join, stale flag, unknown honesty, resolver-failure tolerance, #num
+  ordering), a live identity read (18 instances, each with email+plan, 498ms, running set
+  matching the process list), and a live lifecycle drill on instance #2: identified ->
+  started (pid confirmed, identity unchanged) -> quit (8 processes, graceful) -> confirmed
+  closed.
+
 - **Piece 3 hardened by adversarial review (3 confirmed bugs fixed before the piece counts as
   done).** Sequential git calls stacked their 3s timeouts (measured ~48s worst case across four
   hung repos); all calls now run concurrently - across cwds, across repos, and the three facts
