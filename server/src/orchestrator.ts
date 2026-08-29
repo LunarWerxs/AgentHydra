@@ -2376,7 +2376,8 @@ export function sweepCourierTasks(): number {
     // on the quota least able to afford it (measured 2026-08-29: couriers running every 30
     // minutes on accounts at 94% and 98%). Its task is REMOVED while critical and reinstalled
     // when the band recovers, so the account is reachable again the moment it can afford to be.
-    const band = state.instances.find((i) => samePath(i.ref.slice('desktop:'.length), dir))?.band
+    const instRow = state.instances.find((i) => samePath(i.ref.slice('desktop:'.length), dir))
+    const band = instRow?.band
     if (band === 'critical') {
       if (hasDesktopTask(dir, taskId)) {
         removeDesktopTask(dir, taskId)
@@ -2399,7 +2400,11 @@ export function sweepCourierTasks(): number {
       const pickupKey = `courierPickup:${desktopKey(dir)}`
       if (!kvGet(pickupKey)) {
         kvSet(pickupKey, new Date().toISOString())
-        noteArchiveVisibilityPending(dir)
+        // ONLY a RUNNING app needs a pickup restart. A closed one reads its task list when the
+        // owner next opens it, which is the moment it was always going to see the courier -
+        // queueing a restart for it is how this janitor threw all 18 accounts open at once
+        // (owner directive, 2026-08-29: never open an account unless you absolutely must).
+        if (instRow?.isRunning) noteArchiveVisibilityPending(dir)
         console.log(
           `[agenthydra] courier task present for ${entry.name} but its app has not read it - pickup restart queued (fires when that instance has nothing live)`,
         )
@@ -2419,15 +2424,15 @@ export function sweepCourierTasks(): number {
     if (res.ok) {
       installed++
       console.log(`[agenthydra] courier task installed for ${entry.name} (${res.filePath})`)
-      // A RUNNING app read its task list at startup, so a task written underneath it is not
-      // noticed until it restarts - the same class of problem as an archive flag written from
-      // outside, and it gets the same proven answer: queue the visibility restart, which only
-      // ever fires when that instance has nothing live to interrupt. Without this a freshly
-      // installed courier sits inert until the owner happens to restart the app, which is a
-      // finger, which is banned.
+      // A RUNNING app read its task list at startup and does not poll it, so a task written
+      // underneath one is inert until it restarts - queue the visibility restart, which only
+      // fires when that instance has nothing live to interrupt. A CLOSED app gets NOTHING: it
+      // reads the store when the owner next opens it, and restarting it would mean OPENING it,
+      // which is banned (owner, 2026-08-29: "only supposed to open an account if you absolutely
+      // MUST"). That single missing condition is what threw all 18 accounts open at once.
       kvSet(versionKey, version)
       kvSet(`courierPickup:${desktopKey(dir)}`, new Date().toISOString())
-      noteArchiveVisibilityPending(dir)
+      if (instRow?.isRunning) noteArchiveVisibilityPending(dir)
     } else if (res.reason !== 'no signed-in account folder found for instance') {
       // A signed-out instance is normal and silent; anything else is worth one line.
       console.log(`[agenthydra] courier task NOT installed for ${entry.name}: ${res.reason}`)
@@ -2869,6 +2874,27 @@ async function restartOneArchivePendingDir(
   live: LiveSession[],
 ): Promise<void> {
   const dir = row.key.slice('archPending:'.length)
+  // ⛔ NEVER OPEN AN APP THAT IS CLOSED (owner directive, Michael, 2026-08-29, after this
+  // machinery threw all 18 accounts open at once: "You're only supposed to open an account if
+  // you absolutely MUST. Bc all open ones aren't accessible.").
+  //
+  // This function is a RE-start: its whole purpose is making an already-visible sidebar redraw.
+  // For a CLOSED app there is nothing to redraw and nothing to reveal - the flags on disk are
+  // simply what it reads next time the owner opens it - so quitting a dead app and calling
+  // openInstance() was pure harm: it spent his screen, and it walked past the standing
+  // `openInstances: never` setting, which exists to say exactly this.
+  //
+  // The bug that made it fleet-wide: the courier janitor queued a pickup restart for EVERY
+  // instance, closed ones included. A closed app needs no pickup at all - the app reads its
+  // task list at launch, which is the one moment it was always going to see the new courier.
+  const needle = dir.replace(/[\\/]+$/, '').toLowerCase()
+  const isRunning = (await listInstances()).some(
+    (i) => i.isRunning && i.dir.replace(/[\\/]+$/, '').toLowerCase() === needle,
+  )
+  if (!isRunning) {
+    kvDelete(row.key)
+    return
+  }
   const cooldownKey = `archRestart:${desktopKey(dir)}`
   const last = kvGet(cooldownKey)
   if (last && Date.now() - Date.parse(last) < 3600_000) return
