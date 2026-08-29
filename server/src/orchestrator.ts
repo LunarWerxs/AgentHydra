@@ -2295,6 +2295,13 @@ export function sweepCourierTasks(): number {
     if (res.ok) {
       installed++
       console.log(`[agenthydra] courier task installed for ${entry.name} (${res.filePath})`)
+      // A RUNNING app read its task list at startup, so a task written underneath it may not be
+      // noticed until it restarts - the same class of problem as an archive flag written from
+      // outside, and it gets the same proven answer: queue the visibility restart, which only
+      // ever fires when that instance has nothing live to interrupt. Without this a freshly
+      // installed courier could sit inert until the owner happened to restart the app, which is
+      // a finger, which is banned.
+      noteArchiveVisibilityPending(dir)
     } else if (res.reason !== 'no signed-in account folder found for instance') {
       // A signed-out instance is normal and silent; anything else is worth one line.
       console.log(`[agenthydra] courier task NOT installed for ${entry.name}: ${res.reason}`)
