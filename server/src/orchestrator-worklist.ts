@@ -878,6 +878,21 @@ function attentionToItemBase(
             'emitted only past the daemon threshold - the reviewer can no longer fire this early',
           ],
         }
+      // THE SETTLED-OPEN CHAT: dead, finished its turn, and still sitting in a sidebar. Under
+      // the three-state law it is the one shape that has no legal resting place, so the question
+      // is explicitly binary and REJECT IS NOT A NO-OP: rejecting means "it is finished", which
+      // done-marks it so the archive janitor retires it. Without that, rejecting would leave it
+      // exactly where it was, which is the state the law forbids.
+      if (d.settledOpen)
+        return {
+          ...base,
+          kind: 'nudge',
+          question:
+            'This chat is open, dead, and finished its last turn. RESUME it (approve) or RETIRE it (reject - the server done-marks it for the archive janitor)? It may not simply stay open.',
+          constraintsApplied: [
+            'three-state law: approve = running, reject = archived. A reject here DONE-MARKS the chat rather than doing nothing.',
+          ],
+        }
       if (d.recapDetected)
         return {
           ...base,
@@ -1122,11 +1137,27 @@ export async function resolveWorkItem(opts: {
     const key = itemId.slice('att:'.length)
     const a = attentionByKey(key)
     if (!a) return { ok: false, reason: 'attention item no longer present' }
+    const dReject = (a.detail ?? {}) as Record<string, unknown>
     if (decision === 'reject') {
       ackAttention(key, `rejected:${note.slice(0, 60)}`, 120)
+      // A SETTLED-OPEN CHAT HAS NOWHERE TO REST (three-state law, owner 2026-08-29). For every
+      // other kind a reject means "leave it alone", which is a legal outcome. For this one it
+      // would mean leaving the chat exactly in the state the law forbids - open, dead, finished -
+      // so reject IS the retirement: done-mark it and let the archive janitor do the rest.
+      if (dReject.settledOpen && a.sessionId) {
+        db.query(
+          'insert into session_marks (session_id, done, updated_at) values (?, 1, ?) ' +
+            'on conflict(session_id) do update set done = 1, updated_at = excluded.updated_at',
+        ).run(sessionMarkKey('claude', a.sessionId), Date.now())
+        return {
+          ok: true,
+          completed: true,
+          result: 'retired: done-marked, the archive janitor proposes its retirement next tick',
+        }
+      }
       return { ok: true, completed: true, result: 'acked without action' }
     }
-    const d = (a.detail ?? {}) as Record<string, unknown>
+    const d = dReject
     // HANDOFF: two phases, both mechanical once approved. Phase 1 asks for the handoff. Phase 2
     // (the tail carries it) extracts the text, DONE-MARKS THE PREDECESSOR FIRST (one lineage,
     // one continuation - enforced here, not remembered), seeds the continuation at the placement

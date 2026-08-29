@@ -1871,30 +1871,59 @@ function classifyStrandedDesktopChats(ctx: OnceCtx): void {
     } catch {
       continue
     }
-    if (!tail.midTurn) continue
+    // NO CHAT LEFT BEHIND (owner law, Michael, 2026-08-29). This used to be `if (!tail.midTurn)
+    // continue`, on the reasoning that "a finished chat idling in a sidebar is the sidebar's
+    // normal state, not a stranding". Under the three-state law that reasoning is the bug: a
+    // chat is RUNNING, WAITING ON THE OWNER, or ARCHIVED, and "finished its turn hours ago and
+    // still sitting open" is none of them. Measured the night the law landed: 6 of 12 open chats
+    // were invisible to every detector - dead, idle 2-3.5 hours, nothing claiming them - while
+    // the worklist reported EMPTY and the owner was looking straight at them.
+    //
+    // So a completed one is surfaced too, as its own question (resume it, or retire it), with a
+    // much longer floor than the live-idle threshold: a chat that just closed is not a problem,
+    // one still sitting there half an hour later is.
+    const COMPLETE_FLOOR_SECS = 30 * 60
+    if (!tail.midTurn && quietSecs < COMPLETE_FLOOR_SECS) continue
+    if (isCourierRunTitle(meta.title)) continue // plumbing: the courier sweep retires these
     const title = scannerTitleFor(t.sessionId)
     const iref = ctx.deps.instanceRef(t.sessionId)
-    ctx.items.push({
-      key: `orphan:${t.sessionId}`,
-      kind: 'orphaned',
-      sessionId: t.sessionId,
-      instanceRef: iref ?? undefined,
-      tailSnippet: tail.lastAssistantText ?? undefined,
-      summary: `${title ?? t.sessionId.slice(0, 8)} is STRANDED mid-work ${fmtQuiet(quietSecs)} ago — no process (graceful shutdown/restart left no residue), still open in the ${meta.instance} app's sidebar; revive per the surface preference`,
-      detail: {
-        quietSecs,
-        stranded: true,
-        instance: meta.instance,
-        midTurn: tail.midTurn,
-        ending: tail.ending,
-        ctxTokens: tail.ctxTokens,
-        lastHumanText: tail.lastHumanText,
-        lastHumanAt: tail.lastHumanAt,
-        ...accountUsageEvidence(usageForInstanceRef(ctx.deps.usage(), iref)),
-      },
-      firstSeenAt: ctx.nowIso,
-      seenCount: 1,
-    })
+    const base = {
+      quietSecs,
+      stranded: true,
+      instance: meta.instance,
+      midTurn: tail.midTurn,
+      ending: tail.ending,
+      ctxTokens: tail.ctxTokens,
+      recapDetected: tail.recapDetected,
+      lastHumanText: tail.lastHumanText,
+      lastHumanAt: tail.lastHumanAt,
+      ...accountUsageEvidence(usageForInstanceRef(ctx.deps.usage(), iref)),
+    }
+    ctx.items.push(
+      tail.midTurn
+        ? {
+            key: `orphan:${t.sessionId}`,
+            kind: 'orphaned',
+            sessionId: t.sessionId,
+            instanceRef: iref ?? undefined,
+            tailSnippet: tail.lastAssistantText ?? undefined,
+            summary: `${title ?? t.sessionId.slice(0, 8)} is STRANDED mid-work ${fmtQuiet(quietSecs)} ago — no process (graceful shutdown/restart left no residue), still open in the ${meta.instance} app's sidebar; revive per the surface preference`,
+            detail: base,
+            firstSeenAt: ctx.nowIso,
+            seenCount: 1,
+          }
+        : {
+            key: `settled:${t.sessionId}`,
+            kind: 'idle_pending',
+            sessionId: t.sessionId,
+            instanceRef: iref ?? undefined,
+            tailSnippet: tail.lastAssistantText ?? undefined,
+            summary: `${title ?? t.sessionId.slice(0, 8)} has sat OPEN AND DEAD for ${fmtQuiet(quietSecs)} in the ${meta.instance} sidebar — its last turn completed and no process remains. Under the three-state law it must resume or be retired; it cannot just sit.`,
+            detail: { ...base, settledOpen: true },
+            firstSeenAt: ctx.nowIso,
+            seenCount: 1,
+          },
+    )
   }
 }
 
