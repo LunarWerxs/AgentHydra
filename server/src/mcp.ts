@@ -590,6 +590,22 @@ export const TOOLS: McpEngineTool[] = [
       ),
   },
   {
+    name: 'chat_dossier',
+    description:
+      'ONE query, everything the system knows about a chat: which desktop instance holds it, its ' +
+      'archive flag as it sits on disk RIGHT NOW, its lineage ids across auto-compact rolls, its ' +
+      'done-mark, the live process hosting it (if any), every orchestrator ledger row that ever ' +
+      'touched it (proposals, decisions, notes, results), and the orchestrator kv state naming it. ' +
+      'Use this FIRST for any "what happened to chat X / is it alive / who archived it" question — ' +
+      'it replaces hand-joining the metadata stores, the ledger, the marks table and the live ' +
+      'registry. Query by a title fragment or by ANY session/chat id, current or prior.',
+    inputSchema: S(
+      { q: { type: 'string', description: 'Title fragment or any session/chat id (substring).' } },
+      ['q'],
+    ),
+    run: (a) => api(`/api/chats/dossier${qs({ q: str(a.q) })}`),
+  },
+  {
     name: 'tail_session',
     description:
       'Tail a session transcript: the most recent turns. `limit` is applied AFTER the filters, so ' +

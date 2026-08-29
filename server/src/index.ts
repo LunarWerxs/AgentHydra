@@ -31,6 +31,7 @@ import {
   stopAutoUpdate,
 } from './auto-update'
 import { markDispatchReady } from './boot-state'
+import { chatDossier } from './chat-dossier'
 import {
   appEnv,
   CLIPBOARD_DIR,
@@ -775,6 +776,17 @@ app.get('/api/sessions/search', async (c) => {
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
   }
+})
+// ONE query, everything the system knows about a chat: metadata + archive flag as it sits on
+// disk right now, lineage ids across auto-compact rolls, done-mark, live process, every
+// orchestrator ledger row that touched it, and the kv state naming it. Built 2026-08-28 after
+// answering "what happened to the Orchestrate chat" took an hour of hand-joins across four
+// stores that this endpoint now does in one call. Query by title fragment or ANY id.
+app.get('/api/chats/dossier', (c) => {
+  const q = c.req.query('q') ?? ''
+  if (!q.trim())
+    return c.json({ error: 'q required: a title fragment or any session/chat id' }, 400)
+  return c.json(chatDossier(q.trim()))
 })
 app.get('/api/sessions/:id', async (c) => {
   const rawSource = c.req.query('source')
