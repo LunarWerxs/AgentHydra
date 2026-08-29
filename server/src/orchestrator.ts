@@ -83,7 +83,7 @@ import { PORT } from './config'
 import { listInstances } from './core/instances'
 import { instancesRoot } from './core/paths'
 import { db, getSetting, setSetting } from './db'
-import { hasDesktopTask, installDesktopTask } from './desktop-tasks'
+import { hasDesktopTask, installDesktopTask, removeDesktopTask } from './desktop-tasks'
 import { isSessionActive } from './dispatch'
 import {
   findDesktopChat,
@@ -2370,6 +2370,23 @@ export function sweepCourierTasks(): number {
     // its own cron windows). So the pickup restart is queued ONCE per install, keyed by a
     // marker, rather than only on the tick that happened to do the writing - the bug that made
     // the first live test fail was exactly this line skipping before the restart was queued.
+    // A COURIER ON A MAXED ACCOUNT IS PURE WASTE. Every run starts a real session and spends
+    // that account's quota, and an account in the critical band is one placement already
+    // refuses to send new work to - so a courier there polls a queue that will stay empty,
+    // on the quota least able to afford it (measured 2026-08-29: couriers running every 30
+    // minutes on accounts at 94% and 98%). Its task is REMOVED while critical and reinstalled
+    // when the band recovers, so the account is reachable again the moment it can afford to be.
+    const band = state.instances.find((i) => samePath(i.ref.slice('desktop:'.length), dir))?.band
+    if (band === 'critical') {
+      if (hasDesktopTask(dir, taskId)) {
+        removeDesktopTask(dir, taskId)
+        kvDelete(`courierVersion:${desktopKey(dir)}`)
+        console.log(
+          `[agenthydra] courier task removed for ${entry.name}: account is in the critical usage band, so a run would spend quota polling an empty queue`,
+        )
+      }
+      continue
+    }
     const prompt = courierTaskPrompt(dir, PORT)
     // The prompt is CODE, and code changes. A courier installed from an older build would keep
     // running yesterday's instructions forever, silently, which is exactly the class of false

@@ -74,7 +74,7 @@ import {
   resolutionTrip,
   reviveBackoffRefusal,
 } from './orchestrator-breaker'
-import { enqueueDelivery } from './orchestrator-courier'
+import { enqueueDelivery, isCourierRunTitle } from './orchestrator-courier'
 import { readTailInfo } from './orchestrator-transcript-tail'
 import { decideProposal, getProposal, reportProposalExecuted } from './proposals'
 import {
@@ -644,14 +644,22 @@ export function classifyAutoAck(
       // A hard cutoff is only actionable while chats are LIVE on that account - "tell its chats
       // to wrap up" with zero chats there is noise (measured on the first live worklist: four
       // cutoff items for four closed apps). Placement already refuses the account either way.
+      // OUR OWN PLUMBING IS NOT A CHAT TO WARN. A courier run and an agent chat are both live
+      // sessions on that account, so counting them re-offered "tell its chats to wrap up" for
+      // three maxed accounts whose only live sessions were couriers (measured 2026-08-29), and
+      // approving it would have sent an urgent wrap-up order to a delivery task. Same exclusion
+      // discipline as everywhere else: by title marker, never a heuristic.
       const anyLiveThere =
         !!a.instanceRef &&
         live.some((s) => {
           const r = instanceRefForSession(s.sessionId)
-          return (
-            !!r &&
-            samePath(r.slice('desktop:'.length), (a.instanceRef ?? '').slice('desktop:'.length))
+          if (
+            !r ||
+            !samePath(r.slice('desktop:'.length), (a.instanceRef ?? '').slice('desktop:'.length))
           )
+            return false
+          const title = findDesktopChat(s.sessionId)?.title
+          return !isCourierRunTitle(title) && !isOrchAgentTitle(title)
         })
       if (!anyLiveThere) return { action: 'auto:no-live-chats-there', cooldownMins: 60 }
       return null
