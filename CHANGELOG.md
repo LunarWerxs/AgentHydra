@@ -9,6 +9,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Orchestrator rebuild, piece 2: per-account usage bands** (`usage` key on `GET /api/fleet`,
+  server/src/fleet-usage.ts; owner-picked). Deterministic and read-only over the existing
+  usage cache - no probes, no network, zero AI. Bands are the proven vocabulary (ok < 80 <=
+  elevated < 85 <= high < 90 <= critical) as named constants, deliberately not settings until
+  a piece that ACTS on bands needs tuning. Reset times prefer the API path's exact ISO
+  timestamp over parsed text; missing data bands as 'unknown', never as fine; staleness
+  (cache entry older than 30 min = not being refreshed) is a reported fact, never a filter -
+  the real cache carries weeks-old entries and hiding them would make "no data" look like
+  "fine". Worst-first deterministic ordering. Verified: 5 fixture tests (band edges exactly
+  at 80/85/90, ISO-vs-text reset derivation, staleness incl. undated, unknown banding,
+  repeatable ordering) plus a live read of the real cache (24 entries, 1.3ms) matching the
+  raw JSON values.
+
 - **Orchestrator rebuild, piece 1: the fleet observation core** (`GET /api/fleet`,
   server/src/fleet.ts). Owner-led rebuild doctrine now binding on every piece: one feature at
   a time, comprehensively verified before the next, and as programmatic as humanly possible -

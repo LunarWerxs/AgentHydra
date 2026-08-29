@@ -132,6 +132,7 @@ import {
 import { contentDispositionAttachment, safeTranscriptFilename } from './filenames'
 import { findFreePort } from './find-free-port.mjs'
 import { fleetStatus } from './fleet'
+import { fleetUsage } from './fleet-usage'
 import { cleanupStaleUpdateArtifacts } from './github-updater'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
 import {
@@ -1976,10 +1977,11 @@ app.post('/api/monitor/check', async (c) => {
   return c.json({ ok: true, ...monitorView() })
 })
 
-// --- fleet observation (orchestrator rebuild, piece 1 - see server/src/fleet.ts) -------------
-// Deterministic and read-only: which sessions are live and what state each transcript is in.
-// Zero AI, zero writes, zero settings; the observation core every later rebuild piece reads.
-app.get('/api/fleet', (c) => c.json(fleetStatus()))
+// --- fleet observation (orchestrator rebuild - see server/src/fleet.ts) ----------------------
+// Deterministic and read-only: the observation core every later rebuild piece reads. Grows one
+// key per landed piece: sessions (piece 1, fleet.ts), usage (piece 2, fleet-usage.ts). Zero AI,
+// zero writes, zero settings.
+app.get('/api/fleet', (c) => c.json({ ...fleetStatus(), usage: fleetUsage() }))
 
 // Capture what is actually ON SCREEN, and hand back the path so the caller can LOOK at it.
 // Everything else this daemon reports is read from disk, and disk is not the screen - the gap
