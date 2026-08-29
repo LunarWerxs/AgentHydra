@@ -9,6 +9,39 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The chat dossier: one query, everything the system knows about a chat.**
+  `GET /api/chats/dossier?q=<title fragment or any id>` (MCP `chat_dossier`) joins the four
+  stores that each held a quarter of the answer - desktop metadata (archive flag read fresh
+  off disk, lineage ids across auto-compact rolls), the orchestrator ledger, done-marks, and
+  the live registry. Built after "what happened to that chat" took an hour of hand-joins;
+  it takes seconds now, and it reports disk truth beside ledger claims so their disagreement
+  is visible instead of being the lie you act on.
+
+- **The orchestrator dry run: see the plan before anything acts.**
+  `GET /api/orchestrator/dryrun` (`?format=text` for the rendered layout; MCP
+  `orchestrator_dryrun`; `/orc-dryrun` from any chat) shows every open window with its chats
+  and usage bands, every item a reviewer would be asked to rule on with its exact question
+  and evidence, what the server would handle itself, and what it would suppress - computed
+  with ZERO writes: no acks, no cooldowns, and deliberately no reviewer stamp, because a
+  probe that stamps `lastReviewerAt` once masked a dead reviewer loop for an hour. Owner
+  ask, verbatim: "tell me what it would do with every chat and every open window... so I
+  can tell you no that's wrong."
+
+- **`POST /api/sessions/:id/automation`** stamps a desktop chat's permission mode to
+  `bypassPermissions` (owner rule, 2026-08-28: every migrated chat MUST be bypass before it
+  starts; all chats default to bypass). Callers verify via the dossier and re-stamp until it
+  reads back, because a running app re-saves the old mode.
+
+### Removed
+
+- **The relay rung, by owner ban** (2026-08-28, verbatim: "REMOVE THE RELAY TASK
+  FUNCTIONALITY... Don't just fucking message other chats"). `computeRoute` no longer
+  composes courier steps that borrow a live working chat to deliver into its instance; a
+  dormant chat in another instance now parks honestly as unreachable until a reviewer exists
+  inside that instance. A working chat is someone's thread of work, not the orchestrator's
+  errand runner. The sanctioned replacement - a dedicated orchestrator-owned agent chat per
+  instance - is designed and in flight.
+
 - **`/orchestrate full`: the orchestrator can now find work nobody has started.** Until now it
   was entirely reactive. It asked questions about the chats that already existed (is this one
   dead, has that one finished) and never the other question, so a fleet whose every chat was

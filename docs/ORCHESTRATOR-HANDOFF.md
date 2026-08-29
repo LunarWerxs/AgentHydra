@@ -3,8 +3,10 @@
 The copy-paste brief for whoever picks this up next, plus the state it is being handed over in.
 Paste the fenced block into a fresh session; everything above and below it is context for a human.
 
-**Last updated 2026-08-27 late.** Written at the end of a long session that changed four laws and
-found five bugs, several of them in fixes made earlier the same day.
+**Last updated 2026-08-28 very late.** Written at the close of the night the owner said "it's
+still royally fucking up", which ended with three new read-only surfaces, two owner bans, four
+landed fixes, three chats migrated off a capped account, and the reviewer loop run from the
+owner's own diagnostic chat for two hours without a silent death.
 
 ---
 
@@ -17,119 +19,124 @@ Odin (the fleet board) is a separate program at D:\NEWProjects\shared\odin.
 READ FIRST, all current:
 - docs/ORCHESTRATOR.md          architecture, settings, API, and the laws
 - docs/orchestrate-command.md   the reviewer's rubric (also installed as /orchestrate)
-- CHANGELOG.md                  the [Unreleased] section is this session's work
+- docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md   every migration trap, all measured
+- CHANGELOG.md                  the [Unreleased] section carries this night's work
 - docs/ORCHESTRATOR-HANDOFF.md  this file
 
 ## THE STANDING LAWS, enforced in code
 
 1. ACTION GATE. The daemon never acts on a thread. It writes PROPOSALS; the reviewer decides
-   each one, executes it, and reports.
-2. NO HEADLESS CHATS (2026-08-27, supersedes the narrower "surface purity"). Nothing runs where
-   nobody can see it. dispatchItem refuses EVERY headless run and POST /api/queue refuses to
-   create a row; allow_headless no longer buys a way past. The escape hatch is the setting
-   dispatch_allow_headless, off unless deliberately set, and its polarity is inverted from every
-   other setting on purpose: absence means the ban applies.
-3. ZERO-CLICK. Michael is remote and can never click or press anything. A keypress needed today
-   is one needed forever. Nothing may wait on him.
-4. Claims about what is RUNNING or VISIBLE need proof: a growing transcript, the app's own view,
-   or a screenshot. Disk is not the screen.
+   each one; the server executes and VERIFIES before the ledger closes.
+2. NO HEADLESS CHATS. Nothing runs where nobody can see it.
+3. ZERO-CLICK. The owner never clicks. A keypress needed today is one needed forever.
+4. Claims about what is RUNNING or VISIBLE need proof: a growing transcript, the app's own
+   view, or the dossier. Disk is not the screen, and the ledger is not the sidebar.
+5. NO RELAY (owner ban, 2026-08-28, verbatim: "remove the relay task functionality... don't
+   just message other chats"). A working chat is NEVER a courier for another chat's delivery.
+   computeRoute no longer composes relay steps; a dormant chat in another instance parks.
+   The sanctioned replacement (chip in flight) is a dedicated orchestrator-OWNED agent chat
+   per instance. Direct-to-TARGET messages (nudges, closeouts, resumes to the chat being
+   managed) remain the core job.
+6. ALWAYS BYPASS (owner rule, 2026-08-28: "all chats should always have bypass permissions").
+   Every migrated or seeded chat MUST read back permissionMode bypassPermissions from the
+   dossier BEFORE its boot message is sent; POST /api/sessions/:id/automation re-stamps.
+   Stamped-and-hoped is not compliance - a running app re-saves the old mode.
+
+## THE THREE READ-ONLY SURFACES (built 2026-08-28, use them FIRST)
+
+  curl -s "http://localhost:7787/api/chats/dossier?q=<title or any id>"
+      ONE query = everything about a chat: instance, archive flag fresh off disk, lineage ids
+      across auto-compact rolls, done-mark, live pid, every ledger row. Never hand-walk stores.
+  curl -s "http://localhost:7787/api/orchestrator/dryrun?format=text"     (also /orc-dryrun)
+      What the orchestrator WOULD do with every chat and window - zero writes, no reviewer
+      stamp. The owner reviews this to veto bad calls BEFORE anything runs. Show it verbatim.
+  POST /api/sessions/:id/automation
+      Stamp bypassPermissions onto a chat's metadata (verify + re-stamp loop; see law 6).
 
 ## HOW TO VERIFY ANYTHING
 
-  curl -s -X POST http://127.0.0.1:7787/api/orchestrator/selftest -d "{}"   # 16 checks
-  curl -s http://127.0.0.1:7787/api/orchestrator                            # the feed
-  python ~/.claude/tools/localci.py --docker                                # the repo's own CI
-  cd D:\NEWProjects\shared\odin && python odin.py show agenthydra            # the board's view
+  curl -s -X POST http://127.0.0.1:7787/api/orchestrator/selftest -d "{}"
+  curl -s "http://localhost:7787/api/orchestrator/worklist?reviewer=<your session id>"
+  python ~/.claude/tools/localci.py --docker
 
-BEFORE ANY PUSH, verify a CLEAN EXPORT of HEAD, never the working tree. This tree runs 10-20
-concurrent sessions and its working tree routinely holds other people's half-finished work:
-  git archive HEAD | tar -x -C <tmp>, then bun install --frozen-lockfile, then lint, typecheck,
-  i18n, the six scripts/checks/*.mjs, build, bun test.
-Main was broken THREE times on 2026-08-27 by commits nobody had run the gates against, each
-caught by exactly this. A pre-commit hook now runs Biome on a commit's own staged files, which
-closes the formatter half; it cannot catch a type or test failure.
+BEFORE ANY PUSH, verify a CLEAN EXPORT of HEAD, never the working tree - 10-20 concurrent
+sessions edit this tree. Commit path-scoped only. THIS REPO IS PUBLIC: announce that in the
+reply before any push, every time.
 
-## STATE AT HANDOFF (2026-08-27 late)
+## STATE AT HANDOFF (2026-08-28 ~22:45 CT)
 
-- v0.36.0. main is green, CI passing, everything pushed.
-- The daemon is DEPLOYED from the current main and running on 127.0.0.1:7787, selftest 16/16.
-- THE REVIEWER IS DEAD and has been for ~14 hours. Its process is gone from
-  ~/.claude/sessions and its transcript's last line was written at 07:50. It did not crash: it
-  finished a turn cleanly and was killed, almost certainly alongside the daemon and tray host,
-  which also died silently that morning. NOTHING RESTARTS IT. Starting one spends an account's
-  quota, so it is the owner's call.
-- The feed now SAYS so ("N item(s) waiting and no reviewer has acted for Nm - start one").
-  Until today it reported a dead reviewer as merely idle, because it counted only proposals as
-  work and a pending rename was invisible to it.
-- This maintenance chat parked itself with /orcstop, so the orchestrator will not prompt it.
-  Type /orcstart in it to unpark, or leave it parked and work from the new session.
+- HEAD 24a7d26, main green (CI run 33230579959), everything of this session's pushed.
+- THE DAEMON RUNS 5505a09-era code. It does NOT yet run 24a7d26 (the always-bypass janitor):
+  the working tree was mid-edit by the agent-chat chip session at every restart window. When
+  that session lands: pull, then misc/Restart-Daemon.ps1, and the sweep goes live.
+- THE REVIEWER LOOP RAN IN THE OWNER'S DIAGNOSTIC CHAT and stops when that chat closes.
+  BOOTSTRAP: open any desktop chat and type /orchestrate. That is the whole ritual. The
+  ScheduleWakeup chain paces it; a CronCreate job every ~13 min is the dead-man switch.
+- IN FLIGHT AT CLOSE: the agent-chat chip (per-instance orchestrator agent chats, the relay
+  replacement) is editing the main tree uncommitted; the scanner chat's archive sits at the
+  2-quiet-minute gate; the old "Orchestrate" chat and three moved-off tombstones on 2uhmany
+  un-archive-flagged until their apps restart (queued).
+- THE FLEET: Gods Eye (5claude), Postal Kumo (5claude), 99 Bricks (pap3r rotate2) were
+  migrated off session-capped 2uhmany and verified live on their new accounts. 99 Bricks
+  shipped a milestone post-move. 2uhmany's 5-hour cap reset at 22:30 CT.
 
-## WHAT CHANGED TODAY, and why you should not undo it
+## WHAT CHANGED TONIGHT, and why you must not undo it
 
-- The ultracode opt-in was a toggle wired to NOTHING. Its two siblings (model, effort) are real
-  CLI flags; ultracode has no flag and no settings key, so the only way to ask for it is the word
-  in the prompt text, and nothing ever put it there. new-chat-opening.ts is now the one
-  definition; the feed serves newChatPrefix for deliveries no server code can reach.
-- /delayo and /resumeo are now /orcstop and /orcstart. The old files are REMOVED, but only our
-  own unedited copies, matched by a fingerprint recorded when we wrote them.
-- Shipped commands now refresh themselves on boot. Before this, a rubric fix could sit in the
-  binary forever while the reviewer read last month's copy, which is exactly what happened.
-- A handed-off resume no longer reports itself FINISHED before the work starts. Opening a
-  terminal returns the instant the window spawns, and that was being written as
-  status=completed, exit_code=0.
-- The queue subsystem is inert but honest: it refuses clearly rather than failing obscurely.
+- chat dossier + orchestrator dry run + /orc-move + /orc-dryrun: diagnosis and migration are
+  one query / one command now. The hour-long hand-joins they replaced are the reason the
+  owner was furious. (16ddca3, ba8459b, a5c9b53; commands in claude-memory home/commands.)
+- Relay rung DELETED from computeRoute (5505a09). Owner ban, quoted in the code. Not a bug.
+- Archive flags survive the app's quit-save (4499079): re-asserted between quit and reopen.
+- Seeded chats converge to bypassPermissions (4d17558); fleet-wide janitor sweep (24a7d26).
+- Resume evidence carries account + 5-hour window + a LIMIT RISK flag (8349b9a). This exists
+  because a resume was approved blind and ran a chat into its session cap mid-edit. Never
+  approve a resume without reading these fields.
 
-## OPEN ITEMS
+## OPEN ITEMS, most important first
 
-1. RESTARTING THE REVIEWER is the owner's call (quota). Its death is visible now; nothing acts
-   on it. This is the biggest live gap.
-2. THE QUEUE'S FUTURE is the owner's call. An audit concluded: do NOT repurpose it to open
-   visible terminals - you would keep the shell and lose live output, run history, real
-   completion, auto-retry and per-run cost. It also cannot simply be deleted, because the
-   auto-resume monitor uses queue_items as its own scheduling ledger. Giving the monitor its own
-   store is the real job.
-3. server/src/orchestrator.ts is ~2,650 lines. A split was deferred as too risky. Low priority.
-4. CODEX STAYS OBSERVE-ONLY. Re-examined and it is a decision, not a gap: a rollout carries no
-   record of which frontend wrote it and there is no live-writer guard, so a resume could
-   double-write a transcript the desktop app holds open.
+1. THE PHANTOM ARCHIVER. Something archived the reviewer chat "Orchestrate" at ~01:03-01:07Z
+   on 2026-08-29 with NO ledger row, NO tool call, and the owner says he did not do it. Until
+   found, the loop can be silently decapitated again. Hunt: what writes isArchived into app
+   memory without the engine or the UI.
+2. REVIEWER MORTALITY. The loop still lives in one chat; the cron dead-man is session-local.
+   The per-instance agent-chat design (chip in flight) is one leg; a daemon-side loud alarm
+   when no reviewer has polled in N minutes is the other, still unbuilt.
+3. BOOT-UNDER-RUNNING-APP RACE. Disk converges to bypass now, but a chat booted seconds after
+   seeding can still start acceptEdits from app memory and freeze. Verify-before-boot (law 6)
+   is the working mitigation.
+4. Alert email for the key-exposure scanner has NEVER fired in production (needs a planted
+   fake credential to prove); 8 Architect specs run nowhere (parity guard keys on filename).
+   Both Connections-side, written into that chat's closeout docs.
 
-## TRAPS THAT COST REAL HOURS
+## TRAPS THAT COST REAL HOURS (all measured, do not rediscover)
 
-- The Bash tool HALVES backslashes in its command parameter. Write/Edit do not. Anything
-  escape-heavy goes through Write/Edit. It bit repeatedly, silently.
-- Backticks in an inline Bash commit message get shell-interpreted and SILENTLY EAT the text
-  between them. Two commit messages lost content this way. Write the message to a file and use
-  git commit -F.
-- While a desktop app is running, its chat metadata files are its own and it re-asserts them on
-  EVERY boot. Titles, permission modes and archive flags all get silently reverted.
-- A chat's id is NOT local_<sessionId>. That form is right only for IMPORTED chats. Use
-  evidence.chatId from the feed, never construct one.
-- Folder trust is keyed by the literal path string, so D:\X and D:/X are two records that
-  disagree.
-- An unattended launched terminal needs permission_mode bypassPermissions or it freezes on its
-  first shell approval, alive and silent.
-- origin/HEAD is a STALE LOCAL POINTER, not the remote's truth. Pushing to it created a stray
-  master branch on the public repo. Push to the branch your local branch tracks.
+- The app's memory outranks the disk IN BOTH DIRECTIONS: archive flags flipped under a
+  running app get re-saved away, and a disk un-archive is invisible to send_message.
+- The Bash tool HALVES backslashes; Write/Edit do not. Escape-heavy content never goes
+  through Bash. Same for inline commit messages with backticks: use a here-string or -F.
+- A chat's id is NOT local_<sessionId> except for imports. Use chatId from the feed/dossier.
+- send_message to another instance's chat SILENTLY STEALS it onto your account.
+- An unattended session without bypassPermissions freezes at its first shell approval,
+  alive and silent - the launch-terminal path takes the mode as a flag (no race); desktop
+  seeds race (law 6).
+- A "quiet" background poll that fetches the worklist with a fake reviewer id stamps
+  lastReviewerAt and masks a dead loop. The dry run exists so probes never need to touch
+  the worklist.
 
 ## HOUSE RULES
 
-Work on main only. Commit path-scoped, never git add -A (10-20 other agents edit this tree).
-THIS REPO IS PUBLIC: announce that in the reply before any push, every time, even on a repeat.
-Run the clean-export checks before pushing. No em-dashes in new prose.
+Work on main only. Commit path-scoped, never git add -A. THIS REPO IS PUBLIC: announce
+before any push, every time. No em-dashes in new prose. Direct-to-target messages only;
+no relays (law 5). Read the usage fields before approving any resume.
 ```
 
 ---
 
 ## For the human reading this
 
-Two other workstreams touched the same trees today and are **not** yours unless you pick them up:
-
-- **The docs convention.** Every project in both trees now has `docs/` and `docs/todo/`, applied
-  by `odin/docs_convention.py` and measured by `odin scan`. 59 of 59 live projects comply.
-- **Odin's cleanliness score.** A 0-100 score per repo with itemised deductions, on the board as a
-  sortable `clean` column. It flags 32 scratch files committed across the fleet and 18 repos with
-  a cluttered root. Nothing has been tidied yet: the score makes the work visible, it does not do
-  it.
-
-Odin has its own separate handoff at `D:\NEWProjects\shared\odin\HANDOFF.md` for the fleet
-burn-down, which is a different job from this one.
+The night's diagnosis, verbatim complaints and all, lives in the owner's "Agent Hydra
+orchestration issues" chat. The shared-memory bank (`Lunarwerx/claude-memory`,
+`repos/agenthydra/`) carries the distilled lessons: the dossier-first rule, the
+disk-vs-app-memory disease in all three measured forms, and both owner bans with their
+whys. The /orc-move and /orc-dryrun commands are installed on both machines via
+`home/commands/`.
