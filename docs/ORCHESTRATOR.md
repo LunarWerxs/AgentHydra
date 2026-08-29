@@ -210,6 +210,24 @@ The reviewer previously had a session id and tools that wanted a chat id, with n
 them, and a relay round landed 0 of 4 addressing chats that did not exist. The bridge already
 existed inside the store scan and was being discarded.
 
+**Every session-scoped item's evidence names the account that would pay for acting on it:**
+`account`, `accountWeeklyPct`, `accountSessionPct`, `accountSessionResetsAt` - weekly AND the
+5-hour window, because the 5-hour cap is the one that kills a resume mid-turn. Until 2026-08-29
+all four read null on Windows for every chat: the usage cache is keyed through `desktopKey()`
+(normalized, lowercased) while `instanceRefForSession()` returns the real-cased dir, and the
+evidence composer indexed one with the other raw, so the join never landed. A reviewer
+blind-approved a resume on that blank evidence and the chat died 24 minutes later on "You've hit
+your session limit". The join now goes through `usageForInstanceRef()` (orchestrator.ts), and
+any resume/nudge/revive item whose account is weekly high/critical or 5-hour ≥ `sessionHighPct`
+carries a `⚠ LIMIT RISK` line in `constraintsApplied`, the same thresholds placement uses to
+refuse the account new work. Reviewers: treat that line as a strong default-reject; it is
+deliberately a WARNING, not a refusal, so a genuinely urgent nudge stays possible; tightening
+it to a hard block is a one-line policy change still open for the owner to call. Verified by
+`server/tests/orchestrator-usage-evidence.test.ts` and green CI on both legs (commits 8349b9a,
+9382512). This was the THIRD case-normalized-key-vs-real-cased-ref bug in this repo (after the
+archive-restart guard and the dry run's instance overview): any new lookup into the usage cache
+must go through `desktopKey()`/`usageForInstanceRef()`, never raw string indexing.
+
 **A proposal is retired when its target is archived.** Open rows stand for up to 48 hours and a
 chat can be retired inside that window; four approved revives once pointed at chats that had
 since been archived. The detectors already refuse to propose for an archived chat, and every
@@ -323,8 +341,24 @@ directly by peer message. **The RELAY rung - asking a live working chat in anoth
 run its own send_message as a courier - is BANNED (owner directive, Michael, 2026-08-28:
 "remove the relay task functionality... don't just message other chats").** A working chat is
 someone's thread of work, not the orchestrator's errand runner; `computeRoute` no longer
-composes relay steps. When no native route exists into an instance, the action WAITS visibly
-instead of falling back to anything headless or borrowing a working chat.
+composes relay steps to working chats.
+
+**The sanctioned courier** (same day, after the owner's follow-up that the removal "must not
+cripple any functionality"): each instance gets ONE dedicated, system-owned **orchestrator
+agent chat** - seeded through `seedDesktopSession` with the marker title `"Orchestrator agent -
+do not use"` (`server/src/orch-agent.ts`), bypass-verified against the app-boot re-save race
+before its first boot. Its only job is performing delivery steps the server composes:
+`send_message` into its own instance's dormant chats, then report. `computeRoute` gained the
+rung: target dormant in another instance AND that instance has a live agent chat -> compose the
+courier step addressed to the AGENT chat, admitted by TITLE MARKER and nothing else (a
+heuristic would readmit working chats, i.e. the banned relay under a new name). The courier is
+excluded from the monitor's idle/nudge/handoff detection and from concurrency slots, never
+counts as a repo occupant, and the janitor refuses to retire it while its instance still has
+chats. Deliveries through it verify the same way as every delivery: the TARGET's transcript
+must move. Instances without one surface as `seed-agent` proposals (the normal action gate) and
+as an always-printed `agent chat:` line in the dry run. When no courier is live and no reviewer
+is inside, the action still WAITS visibly instead of falling back to anything headless or
+borrowing a working chat.
 
 ### Codex threads, in the same feed
 
@@ -491,11 +525,13 @@ What the server now owns, enforced rather than described:
   on new-chat openings. `messageOverride` narrows scope; it cannot strip the prefix.
 - **Routing.** The old four-rung prose ladder is `computeRoute()`: live target -> direct peer
   send by registry NAME; dormant in the reviewer's instance -> `send_message` with the REAL
-  `chatId` from metadata (never constructed); dormant elsewhere -> honestly `unreachable`
-  (the relay rung was REMOVED 2026-08-28 by owner ban - working chats are never couriers).
+  `chatId` from metadata (never constructed); dormant elsewhere with a LIVE agent chat there ->
+  the courier step, addressed to that instance's marker-titled orchestrator agent chat and
+  nothing else; otherwise honestly `unreachable` (the relay rung was REMOVED 2026-08-28 by
+  owner ban - working chats are never couriers; the agent chat is the sanctioned replacement).
   The two measured routing failures (the 0-of-4 constructed-id relay round; rung 1 booting
   another instance's chat on the wrong account) are structurally impossible for the reviewer
-  to repeat, and are pinned by tests.
+  to repeat, and are pinned by tests - as is the ban itself.
 - **Ordering.** Closeout-before-archive is a state machine: approving an archive delivers the
   closeout, and the flag flips only after `verify` sees the transcript move. Unreachable chats
   archive immediately and are RECORDED as un-closed-out. The anchor rule refuses to retire the
@@ -527,10 +563,12 @@ What the loop does, per wake:
    the rubric in the command file, act, `ack`.
 2. Delivery is NATIVE (the delivery ladder): own-instance chats via the app's
    send_message tool (works on dormant chats - it boots the engine), live chats elsewhere
-   via peer `SendMessage`. Dormant chats elsewhere are UNREACHABLE and wait - the relay
-   through a live chat was banned by the owner on 2026-08-28. New work (chips, handoff
-   continuations) is seeded as a visible desktop chat (`POST /api/sessions/seed-desktop`)
-   and delivered the same way - nothing of the owner's ever runs headless.
+   via peer `SendMessage`, dormant chats elsewhere via that instance's live ORCHESTRATOR
+   AGENT CHAT (the marker-titled courier - the relay through working chats was banned by
+   the owner on 2026-08-28, and instances without a courier wait honestly). New work
+   (chips, handoff continuations) is seeded as a visible desktop chat
+   (`POST /api/sessions/seed-desktop`) and delivered the same way - nothing of the owner's
+   ever runs headless.
 3. Pacing: it does not poll at a fixed 60s. `notify_when_idle` gives push notifications the
    moment a peer finishes its turn - *faster* than polling - and a long heartbeat covers
    usage/git/chips. Idle cost is a few small requests per hour.
@@ -967,6 +1005,25 @@ enable (or the install endpoint) away.
   body (both checked 2026-08-28), so there is still no surface to hand the mode to the app
   directly, and the engine runs inside the app's own Node service (no argv to inspect or set).
   The census remains the arbiter of "fixed".
+
+  **Made fleet-wide and standing 2026-08-28** (owner, verbatim: "All chats. Should always
+  have. Bypass permissions."), as a third convergence mechanism: the automation janitor
+  (`runAutomationJanitor` / `sweepAutomationDrift`, orchestrator.ts, shipped in 24a7d26). Every
+  tick it reads the tick's own cached metadata scan and re-stamps `bypassPermissions` onto
+  every NON-archived desktop chat in ANY instance whose metadata says otherwise, one log line
+  per corrected chat, running before the title janitor so a visibility restart in the same tick
+  reads the corrected mode. Two boundaries moved and one did not. Moved: unlike
+  `reassertAutomationStamps` it covers app-created chats too: the owner's rule retired "an
+  `acceptEdits` there can be the owner's own UI choice" for every VISIBLE chat. Moved: it is
+  standing (every tick, forever), not a bounded watch or a restart-window pass. Unmoved:
+  archived chats are never written (pointless churn on retired entries), CLI sessions never
+  appear in the scan, writes happen only on drift (the already-in-state short-circuit, pinned
+  by server/tests/orchestrator-automation-janitor.test.ts with the archived/no-write cases), and
+  the unfixable window is unchanged: a chat woken before any app restart still runs that first
+  turn on `acceptEdits`, and while an app is RUNNING it may re-save the old mode over the stamp
+  once a minute until its next boot makes the stamp permanent. Verified by regression test and
+  both localci legs on 2026-08-28; NOT yet observed correcting drift on the live fleet, so the
+  census stays the arbiter there.
 - Context-size numbers come from the last assistant event's token usage - accurate enough for
   a handoff threshold, not an accounting tool.
 - **Synthetic UI input is a dead end, not an unbuilt fallback.** A pre-v0.36 revive path drove

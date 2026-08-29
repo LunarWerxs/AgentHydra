@@ -57,6 +57,7 @@ describe('renderDryRunText', () => {
               permissionMode: 'bypassPermissions',
             },
           ],
+          agentChat: null,
         },
       ],
       wouldAsk: [
@@ -84,6 +85,9 @@ describe('renderDryRunText', () => {
     expect(text).toContain('5claude (16% weekly, ok)')
     expect(text).toContain('Some chat - LIVE pid 123 - done-marked')
     expect(text).toContain('(+3 archived)')
+    // The courier line is ALWAYS printed: "no agent chat" and "quiet instance" must never look
+    // alike - that hole is what the seed-agent item exists to fill.
+    expect(text).toContain('agent chat: NONE')
     expect(text).toContain('WOULD ASK THE REVIEWER (1)')
     expect(text).toContain('[revive] Dead chat')
     expect(text).toContain('UNREACHABLE: no live chat in that app')

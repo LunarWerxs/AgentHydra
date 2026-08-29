@@ -311,10 +311,17 @@ export function instanceSessionMap(): Map<string, string> {
  * they went out as the ambient `~/.claude` login, which was genuinely maxed. Nothing was wrong with
  * the chat's own account; it was never asked.
  */
+/** The user-data dir an instance LABEL names ('default' | an ~/.claude-instances dir name).
+ *  The inverse of the labels scanAll assigns, shared so agent-chat tracking and the ref
+ *  resolution below cannot disagree about the mapping. */
+export function instanceDirForLabel(label: string): string {
+  return label === 'default' ? defaultClaudeUserDataDir() : join(instancesRoot(), label)
+}
+
 export function instanceRefForSession(sessionId: string): string | null {
   const label = sessionMetaMap().get(sessionId)?.instance
   if (!label) return null
-  const dir = label === 'default' ? defaultClaudeUserDataDir() : join(instancesRoot(), label)
+  const dir = instanceDirForLabel(label)
   // dispatch.ts fails a run pre-launch when a pinned dir is gone; resolving to a dead dir here
   // would turn "we picked this for you" into that failure, so an unusable label stays unpinned.
   return existsSync(dir) ? `desktop:${dir}` : null

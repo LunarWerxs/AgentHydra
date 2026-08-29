@@ -1240,8 +1240,11 @@ export interface OrchestratorSettings {
  *  or superseded chat's desktop entries; 'import' lands an invisible finished session as a
  *  visible desktop chat; 'work' is FULL MODE's outstanding-work item (a gate that has not been
  *  green since the code moved, new FIXMEs, unticked task boxes) and is the one kind that is
- *  about a REPOSITORY rather than about a chat — see the note on OrchestratorProposal.sessionId. */
-export type ProposalKind = 'revive' | 'archive' | 'import' | 'work'
+ *  about a REPOSITORY rather than about a chat — see the note on OrchestratorProposal.sessionId.
+ *  'seed-agent' asks to seed an instance's ORCHESTRATOR AGENT CHAT (the system-owned courier
+ *  that replaced the banned relay rung — see server/src/orch-agent.ts) and is about an
+ *  INSTANCE: its sessionId is the synthetic `agent:<label>`, an opaque dedup key like 'work'. */
+export type ProposalKind = 'revive' | 'archive' | 'import' | 'work' | 'seed-agent'
 
 /** One action the machinery wants to take, awaiting (or carrying) the AI's ruling. The owner
  *  law (2026-08-26): every action is checked by the orchestrator AI before it is made. The

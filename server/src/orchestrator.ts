@@ -82,8 +82,14 @@ import {
 import { listInstances } from './core/instances'
 import { db, getSetting, setSetting } from './db'
 import { isSessionActive } from './dispatch'
-import { findDesktopChat, instanceRefForSession, sessionMetaMap } from './instance-sessions'
+import {
+  findDesktopChat,
+  instanceDirForLabel,
+  instanceRefForSession,
+  sessionMetaMap,
+} from './instance-sessions'
 import { NEW_CHAT_ULTRACODE_KEY, newChatUltracodeEnabled } from './new-chat-opening'
+import { agentChatKvKey, isOrchAgentTitle, ORCH_AGENT_TITLE } from './orch-agent'
 import {
   type ChipInTail,
   isInjectedUserText,
@@ -1169,6 +1175,21 @@ function taskActivityMtime(cwd: string, sessionId: string): number | null {
   }
 }
 
+/** The slice of desktop-chat metadata the tick's classifiers read, one shape for every taker
+ *  (four hand-copied inline versions had already drifted apart). Structurally satisfied by the
+ *  full SessionMeta the real deps return; test fakes supply only what they exercise. `path` is
+ *  what the automation janitor stamps through (fakes carry none, so it skips them by
+ *  construction); `title` is what the agent-chat exclusion keys on (orch-agent.ts). */
+export interface SessionMetaLite {
+  instance: string
+  archived: boolean
+  permissionMode?: string | null
+  chatId?: string | null
+  path?: string | null
+  cliSessionId?: string | null
+  title?: string | null
+}
+
 export interface OrchestratorDeps {
   nowMs: () => number
   claudeHome: () => string
@@ -1183,19 +1204,7 @@ export interface OrchestratorDeps {
   codexThreads: (nowMs: number) => CodexThread[]
   codexTail: (path: string) => CodexTail
   /** Desktop-chat metadata by session id: which instance's sidebar, and its archive flag. */
-  sessionMeta: () => Map<
-    string,
-    {
-      instance: string
-      archived: boolean
-      permissionMode?: string | null
-      chatId?: string | null
-      /** The metadata file itself. The automation janitor stamps through it; injected test
-       *  fakes carry no path, so the janitor skips them by construction. */
-      path?: string | null
-      cliSessionId?: string | null
-    }
-  >
+  sessionMeta: () => Map<string, SessionMetaLite>
   tailInfo: (path: string) => TailInfo
   mtimeMs: (path: string) => number | null
   /** See taskActivityMtime. Null = the session has no background-task outputs at all. */
@@ -1342,15 +1351,7 @@ function classifyOrphanSession(
     liveIds: Set<string>
     doneSet: Set<string>
     holdSet: Set<string>
-    metaMap: Map<
-      string,
-      {
-        instance: string
-        archived: boolean
-        permissionMode?: string | null
-        chatId?: string | null
-      }
-    >
+    metaMap: Map<string, SessionMetaLite>
     started: number
     nowIso: string
     idleQuietSecs: number
@@ -1425,10 +1426,7 @@ function buildIdleClassification(
   detail: Record<string, unknown>,
   quietSecs: number,
   started: number,
-  metaMap: Map<
-    string,
-    { instance: string; archived: boolean; permissionMode?: string | null; chatId?: string | null }
-  >,
+  metaMap: Map<string, SessionMetaLite>,
 ): { kind: 'handoff_due' | 'idle_pending'; summary: string } | null {
   const handoffDue = typeof tail.ctxTokens === 'number' && tail.ctxTokens >= s.ctxHandoffTokens
   // "Waiting on a background task" only excuses a session while the task shows signs of
@@ -1513,15 +1511,7 @@ function classifyLiveSession(
     nowIso: string
     holdSet: Set<string>
     doneSet: Set<string>
-    metaMap: Map<
-      string,
-      {
-        instance: string
-        archived: boolean
-        permissionMode?: string | null
-        chatId?: string | null
-      }
-    >
+    metaMap: Map<string, SessionMetaLite>
   },
 ): {
   items: AttentionItem[]
@@ -1529,6 +1519,12 @@ function classifyLiveSession(
 } {
   const { deps, s, started, nowIso, holdSet, doneSet, metaMap } = ctx
   const items: AttentionItem[] = []
+  // The instance's ORCHESTRATOR AGENT CHAT is plumbing, never work (orch-agent.ts): it idles
+  // by design between deliveries, so counting it would nudge it awake, offer it handoffs, and
+  // burn a concurrency slot on a courier. Excluded by its title marker from every attention
+  // kind AND from the byCwd/runningChats bookkeeping (cwdEntry: null) — the tracking that says
+  // "this instance HAS a live agent chat" is the seed-agent detector's job, not the monitor's.
+  if (isOrchAgentTitle(metaMap.get(sess.sessionId)?.title)) return { items, cwdEntry: null }
   if (!sess.transcriptPath) {
     items.push({
       key: `unreadable:${sess.sessionId}`,
@@ -1699,17 +1695,7 @@ interface OnceCtx {
   sessions: LiveSession[]
   holdSet: Set<string>
   doneSet: Set<string>
-  metaMap: Map<
-    string,
-    {
-      instance: string
-      archived: boolean
-      permissionMode?: string | null
-      chatId?: string | null
-      path?: string | null
-      cliSessionId?: string | null
-    }
-  >
+  metaMap: Map<string, SessionMetaLite>
   byCwd: Map<string, { session: LiveSession; quietSecs: number; held: boolean }[]>
   runningChats: number
   liveIds: Set<string>
@@ -1850,6 +1836,7 @@ function classifyStrandedDesktopChats(ctx: OnceCtx): void {
     if (ctx.doneSet.has(t.sessionId) || ctx.holdSet.has(t.sessionId)) continue
     const meta = ctx.metaMap.get(t.sessionId)
     if (!meta || meta.archived) continue // only chats that live in a desktop sidebar
+    if (isOrchAgentTitle(meta.title)) continue // the agent chat idles by design — never stranded
     if (ctx.deps.dispatchActive(t.sessionId)) continue // an in-flight headless run is not stranded
     const quietSecs = Math.max(0, Math.round((ctx.started - t.mtimeMs) / 1000))
     if (quietSecs < ctx.s.idleQuietSecs) continue
@@ -2199,6 +2186,13 @@ async function runPeriodicTitleJanitor(ctx: OnceCtx): Promise<void> {
   } catch (err) {
     console.error('[agenthydra] visibility sweep failed:', err)
   }
+  try {
+    const asks = proposeAgentChats(state.instances)
+    if (asks > 0)
+      console.log(`[agenthydra] agent-chat sweep proposed seeding ${asks} courier chat(s)`)
+  } catch (err) {
+    console.error('[agenthydra] agent-chat sweep failed:', err)
+  }
   // The placement ledger is pruned on the same 14-day horizon as decided proposals, in the
   // same pass, so neither can grow without bound on a machine that never restarts.
   prunePlacements(ctx.started)
@@ -2372,12 +2366,23 @@ export async function proposeInvisibleChats(): Promise<number> {
  * instance, or via the desktop-archive endpoint elsewhere). Keyed on the done-mark and
  * nothing else: prose-reading guesses, and archiving wrongly hides live work.
  */
-export async function proposeArchivesForDoneSessions(roots?: string[]): Promise<number> {
+export async function proposeArchivesForDoneSessions(
+  roots?: string[],
+  lookup: {
+    titleFor?: (sessionId: string) => string | null
+    /** Does the chat's instance still hold any OTHER un-archived chat? Injectable because the
+     *  real answer comes from the machine's own metadata stores. */
+    hasOtherOpenChats?: (sessionId: string) => boolean
+  } = {},
+): Promise<number> {
   const rows = db
     .query<{ session_id: string; updated_at: number }, []>(
       'select session_id, updated_at from session_marks where done = 1',
     )
     .all()
+  const titleFor =
+    lookup.titleFor ?? ((id: string) => findDesktopChat(id)?.title ?? scannerTitleFor(id))
+  const hasOtherOpenChats = lookup.hasOtherOpenChats ?? instanceHasOtherOpenChats
   let proposed = 0
   for (const r of rows) {
     try {
@@ -2387,7 +2392,11 @@ export async function proposeArchivesForDoneSessions(roots?: string[]): Promise<
       // what the sidebar shows) and free. scannerTitleFor is the fallback and is deliberately
       // called AT MOST ONCE: its query cannot use an index, so it scans the whole scan-cache
       // table, and calling it twice per row is what made this sweep 1.6 seconds on its own.
-      const title = findDesktopChat(r.session_id)?.title ?? scannerTitleFor(r.session_id)
+      const title = titleFor(r.session_id)
+      // The ORCHESTRATOR AGENT CHAT stays as long as its instance has chats to deliver into
+      // (orch-agent.ts): retiring the courier strands every dormant chat beside it. Only once
+      // the instance is otherwise empty is the agent chat itself residue worth proposing.
+      if (isOrchAgentTitle(title) && hasOtherOpenChats(r.session_id)) continue
       const id = proposeAction({
         kind: 'archive',
         sessionId: r.session_id,
@@ -2400,6 +2409,107 @@ export async function proposeArchivesForDoneSessions(roots?: string[]): Promise<
     } catch {
       // one broken store must not stop the sweep
     }
+  }
+  return proposed
+}
+
+/** Does this chat's instance still hold any OTHER un-archived chat? The janitor's guard for
+ *  the agent chat above, and the archive executor's (the rail must hold even against a stale
+ *  proposal from before the instance filled up). The metadata map indexes each entry under up
+ *  to two keys, so entries are deduped by their file path before counting. */
+export function instanceHasOtherOpenChats(sessionId: string): boolean {
+  const self = findDesktopChat(sessionId)
+  if (!self) return false
+  const seen = new Set<string>()
+  for (const m of sessionMetaMap().values()) {
+    if (seen.has(m.path)) continue
+    seen.add(m.path)
+    if (m.archived || m.instance !== self.instance) continue
+    if (samePath(m.path, self.path)) continue
+    return true
+  }
+  return false
+}
+
+/** One instance's chats out of the deduped metadata scan, for the detector below. */
+export interface AgentSweepChat {
+  instance: string
+  archived: boolean
+  title: string | null
+  cliSessionId: string | null
+  chatId: string | null
+  path: string
+}
+
+/** The real metadata scan flattened for {@link proposeAgentChats}: every chat once, however
+ *  many keys index it. */
+export function agentSweepChats(): AgentSweepChat[] {
+  const seen = new Set<string>()
+  const out: AgentSweepChat[] = []
+  for (const m of sessionMetaMap().values()) {
+    if (seen.has(m.path)) continue
+    seen.add(m.path)
+    out.push({
+      instance: m.instance,
+      archived: m.archived,
+      title: m.title,
+      cliSessionId: m.cliSessionId,
+      chatId: m.chatId,
+      path: m.path,
+    })
+  }
+  return out
+}
+
+/**
+ * The seed-agent detector (the replacement for the banned relay rung — orch-agent.ts): which
+ * RUNNING instances have no orchestrator agent chat? Each one gets a 'seed-agent' PROPOSAL
+ * (action-gate law: the reviewer decides; the worklist executor seeds), so "instance X has no
+ * agent chat" is a visible item instead of a silent hole every delivery falls into.
+ *
+ * Two refusals keep this from spamming couriers:
+ *   · an instance with ZERO other open chats gets nothing — a courier with nobody to deliver
+ *     to is residue on arrival (and the janitor above would be entitled to retire it);
+ *   · an instance whose RECORDED agent chat (the kv stamp written at seed time) still exists
+ *     un-archived but has LOST its title marker — a running app wipes seeded titles, measured
+ *     on every seed under a running app — gets a pending RENAME that restores the marker, not
+ *     a duplicate courier beside the amnesiac one.
+ */
+export function proposeAgentChats(
+  rows: OrchestratorInstance[],
+  chats: AgentSweepChat[] = agentSweepChats(),
+  recordedAgentFor: (ref: string) => string | null = (ref) => kvGet(agentChatKvKey(ref)),
+): number {
+  let proposed = 0
+  for (const row of rows) {
+    if (!row.isRunning) continue // seeding into a closed app helps nobody yet; wait for it
+    const dir = row.ref.slice('desktop:'.length)
+    const openHere = chats.filter(
+      (c) => !c.archived && samePath(instanceDirForLabel(c.instance), dir),
+    )
+    if (openHere.some((c) => isOrchAgentTitle(c.title))) continue // already has its courier
+    const recorded = recordedAgentFor(row.ref)
+    if (recorded) {
+      const amnesiac = openHere.find(
+        (c) => c.cliSessionId === recorded || c.chatId === `local_${recorded}`,
+      )
+      if (amnesiac) {
+        addPendingRename(row.ref, recorded, ORCH_AGENT_TITLE)
+        continue
+      }
+    }
+    if (openHere.length === 0) continue // nothing to deliver into — a courier would be residue
+    const id = proposeAction({
+      kind: 'seed-agent',
+      sessionId: `agent:${row.name}`,
+      instanceRef: row.ref,
+      title: ORCH_AGENT_TITLE,
+      summary:
+        `instance ${row.name} has no orchestrator agent chat — its ${openHere.length} dormant ` +
+        'chat(s) have no delivery route from outside; seed its system-owned courier',
+      evidence: { instanceDir: dir, openChats: openHere.length },
+    })
+    if (id) proposed++
   }
   return proposed
 }
@@ -2754,12 +2864,13 @@ export interface UnreachableInstance {
 /**
  * Which running instances NOTHING can currently deliver into.
  *
- * The only actuator that puts a turn into a desktop chat is a reviewer session's own message tool,
- * and it reaches only the instance that reviewer runs in. So an instance is reachable when it has
- * at least one live chat that has actually run a turn - the reviewer itself, or any working chat
- * that can relay. An instance whose only live sessions are deaf passive children (or which has
- * none at all) is a dead end: every revive proposed there waits forever, and each undeliverable
- * revive leaves behind another deaf child.
+ * The only actuator that puts a turn into a desktop chat is a session INSIDE that instance -
+ * a reviewer's own message tool, or the instance's orchestrator agent chat performing a
+ * composed delivery step (orch-agent.ts; relaying through working chats is banned, owner
+ * directive 2026-08-28). So an instance is reachable only when it has at least one live chat
+ * that has actually run a turn. An instance whose only live sessions are deaf passive children
+ * (or which has none at all) is a dead end: every revive proposed there waits forever, and
+ * each undeliverable revive leaves behind another deaf child.
  *
  * WHY IT IS A FEED FIELD (owner-reported, 2026-08-28): the reviewer had no signal for this. It
  * rejected or shelved proposals one at a time, each with a sensible-looking reason, while the
@@ -2789,8 +2900,8 @@ export function unreachableInstances(
       waiting: waitingFor(row.ref),
       why:
         here.length === 0
-          ? 'no live chat there at all - no reviewer, no relay'
-          : `its ${here.length} live session(s) are deaf passive children that have never run a turn - no relay`,
+          ? 'no live chat there at all - no reviewer, no agent chat'
+          : `its ${here.length} live session(s) are deaf passive children that have never run a turn - nothing in there can deliver`,
       consequence:
         'no work can be started on this account, so load cannot be spread onto it and any ' +
         'chat left here is stranded - move threads out rather than leaving them',
@@ -2798,8 +2909,11 @@ export function unreachableInstances(
       // any instance, but an imported chat is deaf until a person interacts with it, and the
       // app's message channel - the one actuator that boots a dormant chat - is reachable only
       // from a session already inside that instance. So the first live chat in an empty app is
-      // the one thing the machinery genuinely cannot start for itself.
-      fix: 'open one chat in this account and run /orchestrate in it - a reviewer inside the instance is the only thing that can start a turn there',
+      // the one thing the machinery genuinely cannot start for itself. Once ANY chat there is
+      // live, the seed-agent flow gives the instance its standing courier so this never recurs.
+      fix:
+        'open one chat in this account (its seeded orchestrator agent chat, if present, is the one to click) and run a turn there - ' +
+        'once something is live inside, the agent chat keeps the instance deliverable',
     })
   }
   return out

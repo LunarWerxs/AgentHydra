@@ -39,15 +39,24 @@ import { defaultClaudeUserDataDir, instancesRoot } from './core/paths'
 import { db } from './db'
 import {
   findDesktopChat,
+  instanceDirForLabel,
   instanceRefForSession,
   invalidateSessionMetaCache,
 } from './instance-sessions'
+import {
+  agentChatKvKey,
+  composeAgentDelivery,
+  isOrchAgentTitle,
+  ORCH_AGENT_BOOT,
+  ORCH_AGENT_TITLE,
+} from './orch-agent'
 import {
   ackAttention,
   bandForPct,
   clearPendingRename,
   getOrchestratorPrompts,
   getOrchestratorSettings,
+  instanceHasOtherOpenChats,
   isDeafPassiveSession,
   type LiveSession,
   listPendingRenames,
@@ -60,6 +69,7 @@ import {
 import { readTailInfo } from './orchestrator-transcript-tail'
 import { decideProposal, getProposal, reportProposalExecuted } from './proposals'
 import {
+  applyDesktopChatAutomation,
   archiveDesktopChat,
   importSessionToDesktop,
   launchTerminalSession,
@@ -96,6 +106,7 @@ export interface WorkItem {
     | 'archive'
     | 'import'
     | 'work'
+    | 'seed-agent'
     | 'nudge'
     | 'answer'
     | 'stale'
@@ -224,9 +235,38 @@ export function composeRevive(opts: {
 // --- routing -------------------------------------------------------------------------------------
 
 export interface Route {
-  mode: 'direct-live' | 'own-instance' | 'none'
+  mode: 'direct-live' | 'own-instance' | 'agent-chat' | 'none'
   step?: ReviewerStep
   whyNone?: string
+}
+
+/** The metadata slice routing reads per session, injectable for tests. */
+export interface RouteLookup {
+  findChat?: (sessionId: string) => { chatId?: string | null; title?: string | null } | null
+  instanceRef?: (sessionId: string) => string | null
+}
+
+/**
+ * The one live session allowed to courier into `instanceRef`'s dormant chats: that instance's
+ * ORCHESTRATOR AGENT CHAT (orch-agent.ts), live and awake. Admission is the TITLE MARKER and
+ * nothing else - a heuristic ("any awake chat there") is the banned relay rung back under a
+ * new name, so a live working chat in the right instance is never a candidate no matter how
+ * convenient. A deaf agent chat (seeded, never booted) cannot run its tool yet and is skipped.
+ */
+export function findLiveOrchAgent(
+  instanceRef: string,
+  live: LiveSession[],
+  now: number,
+  lookup: Required<RouteLookup>,
+): LiveSession | null {
+  for (const s of live) {
+    if (!isOrchAgentTitle(lookup.findChat(s.sessionId)?.title)) continue
+    const r = lookup.instanceRef(s.sessionId)
+    if (!r || !samePath(r.slice('desktop:'.length), instanceRef.slice('desktop:'.length))) continue
+    if (isDeafPassiveSession(s, now)) continue
+    return s
+  }
+  return null
 }
 
 /**
@@ -242,8 +282,12 @@ export function computeRoute(opts: {
   message: string
   live: LiveSession[]
   now?: number
+  /** Seams for tests; the defaults read the real cached metadata index. */
+  lookup?: RouteLookup
 }): Route {
   const now = opts.now ?? Date.now()
+  const findChat = opts.lookup?.findChat ?? findDesktopChat
+  const instanceRef = opts.lookup?.instanceRef ?? instanceRefForSession
   const liveEntry = opts.live.find((s) => s.sessionId === opts.targetSessionId)
   if (liveEntry && !isDeafPassiveSession(liveEntry, now)) {
     return {
@@ -255,11 +299,11 @@ export function computeRoute(opts: {
       },
     }
   }
-  const meta = findDesktopChat(opts.targetSessionId)
+  const meta = findChat(opts.targetSessionId)
   if (!meta?.chatId)
     return { mode: 'none', whyNone: 'no desktop entry and no live process - nothing to address' }
-  const targetInstance = instanceRefForSession(opts.targetSessionId)
-  const reviewerInstance = instanceRefForSession(opts.reviewerSessionId)
+  const targetInstance = instanceRef(opts.targetSessionId)
+  const reviewerInstance = instanceRef(opts.reviewerSessionId)
   if (
     targetInstance &&
     reviewerInstance &&
@@ -274,15 +318,28 @@ export function computeRoute(opts: {
       },
     }
   }
-  // Another instance: NO route. The relay rung - commandeering an awake working chat there as a
-  // courier - existed here until 2026-08-28 and is BANNED by owner directive (Michael, verbatim:
-  // "REMOVE THE RELAY TASK FUNCTIONALITY... Don't just message other chats"). A working chat is
-  // someone's thread of work, not the orchestrator's errand runner. A dormant chat in another
-  // instance is deliverable only by a reviewer inside that instance; until one exists, parking
-  // honestly is the whole answer.
+  // Another instance. The relay rung - commandeering an awake WORKING chat there as a courier -
+  // existed here until 2026-08-28 and is BANNED by owner directive (Michael, verbatim: "REMOVE
+  // THE RELAY TASK FUNCTIONALITY... Don't just message other chats"). A working chat is
+  // someone's thread of work, not the orchestrator's errand runner. The sanctioned courier is
+  // the instance's own ORCHESTRATOR AGENT CHAT (orch-agent.ts): system-owned, marker-titled,
+  // whose whole job is performing composed delivery steps inside its instance. Only that chat -
+  // by marker, never by heuristic - is ever addressed.
+  if (targetInstance) {
+    const agent = findLiveOrchAgent(targetInstance, opts.live, now, { findChat, instanceRef })
+    if (agent)
+      return {
+        mode: 'agent-chat',
+        step: {
+          tool: 'SendMessage',
+          args: { to: agent.name, message: composeAgentDelivery(meta.chatId, opts.message) },
+          why: `courier: ${agent.name} is ${targetInstance}'s orchestrator agent chat - it delivers into its own instance's dormant chat and reports`,
+        },
+      }
+  }
   return {
     mode: 'none',
-    whyNone: `dormant in ${targetInstance ?? 'an unknown instance'} - deliverable only by a reviewer inside that instance (relaying through its working chats is banned by owner directive, 2026-08-28)`,
+    whyNone: `dormant in ${targetInstance ?? 'an unknown instance'} with no live orchestrator agent chat there - deliverable once its agent chat is live (the seed-agent item), or by a reviewer inside that instance; relaying through its working chats is banned by owner directive (2026-08-28)`,
   }
 }
 
@@ -372,11 +429,19 @@ function anchorRefusal(
  * exact clobber the rule exists to prevent (found by review). Root-folded so a chat working in
  * a subdirectory or linked worktree still counts as occupying the repo.
  */
-export function repoOccupied(cwd: string, live: LiveSession[]): string | null {
+export function repoOccupied(
+  cwd: string,
+  live: LiveSession[],
+  titleOf: (sessionId: string) => string | null | undefined = (id) => findDesktopChat(id)?.title,
+): string | null {
   const targetRoot = repoRootForCwd(cwd) ?? cwd
   for (const s of live) {
     if (!s.cwd) continue
     if (isDeafPassiveSession(s)) continue
+    // The orchestrator agent chat is a courier, not an occupant - it never works in a repo, so
+    // it must never veto placing real work (its cwd is its instance's own profile dir, but the
+    // marker is the rule; the cwd shape is not).
+    if (isOrchAgentTitle(titleOf(s.sessionId))) continue
     const root = repoRootForCwd(s.cwd) ?? s.cwd
     if (samePath(root, targetRoot)) return s.name
   }
@@ -560,6 +625,14 @@ function proposalToItem(
       question = 'Is this backlog item real work worth starting a visible chat for?'
       constraints.push(
         'seeding, placement recording and opening-prompt composition run server-side; the ultracode prefix is applied per settings',
+      )
+      break
+    }
+    case 'seed-agent': {
+      question =
+        'Should this instance get its orchestrator agent chat - the system-owned courier that delivers into its dormant chats?'
+      constraints.push(
+        'seed, bypass-stamp verification (the app-boot re-save race) and kv tracking run server-side; the chat is excluded from monitor and janitor jurisdiction by its title marker',
       )
       break
     }
@@ -1192,6 +1265,19 @@ export async function resolveWorkItem(opts: {
     case 'archive': {
       const anchor = anchorRefusal(p.sessionId, p.id, live, view)
       if (anchor) return { ok: false, reason: anchor }
+      // The courier rail (orch-agent.ts): never retire an instance's agent chat while the
+      // instance still has other chats - that strands every dormant chat beside it. Enforced
+      // here as well as at proposal time, because a proposal can outlive the emptiness that
+      // justified it.
+      if (
+        isOrchAgentTitle(findDesktopChat(p.sessionId)?.title) &&
+        instanceHasOtherOpenChats(p.sessionId)
+      )
+        return {
+          ok: false,
+          reason:
+            'this is the instance ORCHESTRATOR AGENT CHAT and the instance still has other chats - retiring the courier strands them; retire it only once the instance is otherwise empty',
+        }
       // ONE CLOSEOUT PER LINEAGE, EVER. The ledger is the memory: if an archive for this session
       // already EXECUTED once, its closeout landed in that cycle, and delivering another one is
       // what keeps the thread alive - the closeout boots the chat, the boot rewrites its
@@ -1324,6 +1410,96 @@ export async function resolveWorkItem(opts: {
         }
       return { ok: true, reviewerSteps: [route.step] }
     }
+    case 'seed-agent': {
+      const ref = p.instanceRef
+      if (!ref?.startsWith('desktop:'))
+        return { ok: false, reason: 'proposal carries no instance_ref' }
+      const dir = ref.slice('desktop:'.length)
+      // Execution-time re-check by the same marker the router uses: the instance may have
+      // grown its courier since the sweep proposed this (an owner rename, an earlier wake).
+      invalidateSessionMetaCache()
+      const existing = collectChats().find(
+        (c) =>
+          !c.archived &&
+          isOrchAgentTitle(c.title) &&
+          samePath(instanceDirForLabel(c.instance), dir),
+      )
+      if (existing) {
+        reportProposalExecuted(itemId, true, `agent chat already present (${existing.chatId})`)
+        return { ok: true, completed: true, result: 'agent chat already present' }
+      }
+      // The courier's cwd is the instance's own profile dir: real, unique per instance, and
+      // never a repository - so it cannot trip repo collision or occupancy machinery even
+      // before its marker-based exclusions apply.
+      const seeded = await seedDesktopSession({
+        cwd: dir,
+        title: ORCH_AGENT_TITLE,
+        instanceRef: ref,
+      })
+      if (!seeded.ok || !seeded.sessionId) {
+        reportProposalExecuted(itemId, false, seeded.reason ?? 'seed failed')
+        return { ok: false, reason: seeded.reason ?? 'seed failed' }
+      }
+      // The kv stamp is what lets the sweep recognize this chat even after a running app wipes
+      // the seeded title (measured on every seed under a running app): the janitor then parks a
+      // rename that restores the marker instead of seeding a duplicate courier.
+      db.query(
+        `insert into orchestrator_kv (key, value, updated_at) values (?, ?, ?)
+         on conflict(key) do update set value = excluded.value, updated_at = excluded.updated_at`,
+      ).run(agentChatKvKey(ref), seeded.sessionId, new Date().toISOString())
+      // THE SEEDER RACE (fixed-mostly in 4d17558): a running app's boot re-save can overwrite
+      // the bypassPermissions stamp. Verify via a fresh metadata read - the dossier's view of
+      // the store - and re-stamp BEFORE handing out the boot step, so the courier's first turn
+      // cannot deadlock on an approval prompt nobody can click.
+      invalidateSessionMetaCache()
+      let meta = findDesktopChat(seeded.sessionId)
+      if (meta?.permissionMode !== 'bypassPermissions') {
+        applyDesktopChatAutomation(dir, seeded.sessionId)
+        invalidateSessionMetaCache()
+        meta = findDesktopChat(seeded.sessionId)
+      }
+      const bypassOk = meta?.permissionMode === 'bypassPermissions'
+      const route = computeRoute({
+        targetSessionId: seeded.sessionId,
+        reviewerSessionId,
+        message: ORCH_AGENT_BOOT,
+        live,
+      })
+      if (route.mode === 'none' || !route.step) {
+        // Seeding another instance's courier is completable from here; BOOTING it is not (the
+        // same bootstrap limit the unreachable feed names). Honest completion, stating what
+        // remains and for whom - never a silent pass.
+        reportProposalExecuted(
+          itemId,
+          true,
+          `seeded ${seeded.sessionId}${
+            bypassOk
+              ? ''
+              : ' - BYPASS STAMP UNVERIFIED: re-stamp via POST /api/sessions/:id/automation and re-check the dossier before booting'
+          }; dormant until booted from inside that instance (the owner opens it, or a reviewer there delivers its boot turn)`,
+        )
+        return {
+          ok: true,
+          completed: true,
+          result: `seeded; boot pending inside that instance (${route.whyNone})`,
+        }
+      }
+      saveState(itemId, {
+        phase: 'delivered',
+        at: new Date().toISOString(),
+        targetSessionId: seeded.sessionId,
+        instanceRef: ref,
+        steps: [route.step],
+      })
+      return bypassOk
+        ? { ok: true, reviewerSteps: [route.step] }
+        : {
+            ok: true,
+            reason:
+              'bypass stamp could not be verified (running-app re-save race) - deliver the boot step, then re-stamp via POST /api/sessions/:id/automation and confirm via the dossier',
+            reviewerSteps: [route.step],
+          }
+    }
     default:
       return { ok: false, reason: `no executor for kind ${p.kind}` }
   }
@@ -1444,6 +1620,10 @@ export interface DryRun {
     band: string | null
     chats: DryRunChatRow[]
     archivedCount: number
+    /** The instance's orchestrator agent chat (orch-agent.ts), or null - the hole the
+     *  seed-agent item exists to fill. Deliveries into this instance's dormant chats route
+     *  through it and only it. */
+    agentChat: { chatId: string | null; sessionId: string | null; live: boolean } | null
   }>
   wouldAsk: WorkItem[]
   wouldAutoHandle: string[]
@@ -1460,6 +1640,18 @@ function liveByAnyId(live: LiveSession[], c: DossierChat): LiveSession | null {
   if (c.chatId?.startsWith('local_')) ids.add(c.chatId.slice('local_'.length))
   ids.delete('')
   return live.find((s) => ids.has(s.sessionId)) ?? null
+}
+
+/** The dry run's per-instance agent-chat summary: the courier's presence and liveness among an
+ *  instance's OPEN chats, or null when it has none. Split out so the tracking is testable
+ *  without a real machine store behind collectChats(). */
+export function agentChatRowFor(
+  open: DossierChat[],
+  live: LiveSession[],
+): { chatId: string | null; sessionId: string | null; live: boolean } | null {
+  const a = open.find((c) => isOrchAgentTitle(c.title))
+  if (!a) return null
+  return { chatId: a.chatId, sessionId: a.cliSessionId, live: !!liveByAnyId(live, a) }
 }
 
 export function buildDryRun(reviewerSessionId = ''): DryRun {
@@ -1521,6 +1713,7 @@ export function buildDryRun(reviewerSessionId = ''): DryRun {
           }
         }),
         archivedCount: chats.length - open.length,
+        agentChat: agentChatRowFor(open, live),
       }
     })
     .sort((a, b) => a.instance.localeCompare(b.instance))
@@ -1611,6 +1804,15 @@ export function renderDryRunText(d: DryRun): string {
       L.push(`    - ${title} - ${state}${done} - last ${c.lastActivityAt ?? '?'}${cwd}`)
     }
     if (i.archivedCount) L.push(`    (+${i.archivedCount} archived)`)
+    // The courier line, always printed: "no agent chat" and "quiet instance" must never look
+    // alike - that hole is exactly what the seed-agent item exists to fill.
+    L.push(
+      i.agentChat === null
+        ? '    agent chat: NONE - dormant chats here have no delivery route from outside (see the seed-agent item)'
+        : i.agentChat.live
+          ? '    agent chat: LIVE - courier available for deliveries into this instance'
+          : '    agent chat: seeded but not live - boot it from inside this instance (open it in the app)',
+    )
   }
   L.push('')
   L.push(`WOULD ASK THE REVIEWER (${d.wouldAsk.length})`)

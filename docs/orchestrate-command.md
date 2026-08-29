@@ -74,6 +74,13 @@ the server's job now, not yours.
 - **import** - approve unless the session is plumbing residue that should stay buried.
 - **work** (full mode) - approve when the backlog item is real work worth a visible chat. The
   server seeds, places, prefixes and refuses colliding repos.
+- **seed-agent** - approve when the instance is really running and holds chats that would
+  otherwise be undeliverable from outside. The server seeds the marker-titled courier chat
+  ("Orchestrator agent - do not use"), verifies its bypass stamp against the app-boot re-save
+  race, and hands you the boot step only when your own session can deliver it. That courier is
+  the ONLY sanctioned cross-instance channel: never message another instance's WORKING chats to
+  make a delivery (owner ban, 2026-08-28) - the server composes courier steps itself and will
+  never hand you one addressed anywhere else.
 - **nudge / answer / stale** - your judgment is whether the chat should move and with what scope.
   A recap with safe recommendations: approve. Mixed: approve with a `messageOverride` naming the
   safe subset. A question only the owner can answer: reject with the reason and surface it to
