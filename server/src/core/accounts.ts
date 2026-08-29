@@ -724,6 +724,20 @@ export async function resolveAccount(
       return newAccount({ status: 'loggedout', label: '(not logged in)' })
     }
 
+    // noNetwork resolves BEFORE any token-cache decrypt: an observation read (the fleet polls
+    // this once per instance) must not pay an OS-level safeStorage decrypt per call - found by
+    // adversarial review of the first fleet-identity cut, where 18 instances paid it on every
+    // /api/fleet read. The grant only feeds last-resort fallback fields (org/plan/tier) that
+    // the identity cache normally supplies; a never-cached instance shows nulls until a live
+    // resolve fills the cache, which is honest rather than expensive.
+    if (options.noNetwork) {
+      log(
+        'info',
+        `resolveAccount: resolving '${instanceDir}' from cache/offline (noNetwork requested).`,
+      )
+      return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, null)
+    }
+
     const bestGrant = await resolveBestGrant(config, instanceDir)
 
     // ---- decide whether to go live or fall back ----------------------------------
@@ -733,12 +747,8 @@ export async function resolveAccount(
     const token = bestGrant?.token ?? null
     const haveToken = Boolean(token?.trim())
 
-    if (options.noNetwork || !haveToken || expired) {
-      const reason = options.noNetwork
-        ? 'noNetwork requested'
-        : !haveToken
-          ? 'no usable access token decrypted'
-          : 'access token expired'
+    if (!haveToken || expired) {
+      const reason = !haveToken ? 'no usable access token decrypted' : 'access token expired'
       log('info', `resolveAccount: resolving '${instanceDir}' from cache/offline (${reason}).`)
       return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, bestGrant)
     }

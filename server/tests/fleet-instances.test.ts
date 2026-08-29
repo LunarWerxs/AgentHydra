@@ -1,7 +1,7 @@
 // server/tests/fleet-instances.test.ts - Piece 4 pinned: identity joining (list + no-network
-// account resolve), signed-in detection, the identity-stale flag (re-logged into a different
-// account than the cache describes), unknown-identity honesty, resolve-failure tolerance, and
-// deterministic #num ordering.
+// account resolve), signed-in detection, unknown-identity honesty, resolve-failure tolerance,
+// and deterministic #num ordering. (Re-login staleness is pinned where it lives:
+// accounts-stale-login.test.ts.)
 import { expect, test } from 'bun:test'
 import type { CMAccount, CMInstance } from '../src/core/shared'
 import { fleetInstances } from '../src/fleet-instances'
@@ -57,16 +57,6 @@ test('identity joins: email/plan attach, signedIn reflects loginUuid, ref is bui
   expect(r?.pid).toBe(42)
   expect(r?.account?.email).toBe('a@b.c')
   expect(r?.account?.planLabel).toBe('Max 20x')
-  expect(r?.identityStale).toBe(false)
-})
-
-test('a re-login to a DIFFERENT account than the cache describes flags identityStale', async () => {
-  const rows = await fleetInstances({
-    list: async () => [inst({ num: 1, dir: 'C:\\i\\x', loginUuid: 'uuid-NEW' })],
-    account: async () => acct({ email: 'old@b.c', accountUuid: 'uuid-OLD' }),
-  })
-  expect(rows[0]?.identityStale).toBe(true)
-  expect(rows[0]?.account?.email).toBe('old@b.c')
 })
 
 test('unknown identity is null, and a throwing resolver does not sink the list', async () => {
@@ -84,7 +74,6 @@ test('unknown identity is null, and a throwing resolver does not sink the list',
   expect(rows[0]?.account).toBe(null)
   expect(rows[1]?.account).toBe(null)
   expect(rows[0]?.signedIn).toBe(false)
-  expect(rows[0]?.identityStale).toBe(false)
 })
 
 test('ordering is by permanent #num, repeatably', async () => {

@@ -7,10 +7,12 @@
 // core/accounts.ts's resolveAccount on its noNetwork path: config.json + the identity cache on
 // disk, never a live API call. An observation read must not spend anything or block on the
 // internet; the cache is refreshed by the surfaces that already do (the UI's account resolve).
-// A cache-path identity can therefore be stale after a re-login - which is exactly what
-// `loginUuid` exists to expose: it is read fresh from config.json every list, so
-// `identityStale: true` (loginUuid != account.accountUuid) says "this instance was re-logged
-// into a DIFFERENT account than the cached identity describes" - reported, never hidden.
+// Re-login staleness is handled a layer DOWN, not here: resolveAccount's cache guard compares
+// the cached identity's uuid against config.json's fresh lastKnownAccountUuid and DISCARDS a
+// mismatched entry (accounts-stale-login.test.ts pins it), so an email this module reports is
+// never a previous login's. The first cut carried an `identityStale` flag re-deriving that
+// comparison up here; adversarial review proved it structurally unreachable - the layer below
+// has already reconciled both sides - so it was removed rather than shipped dead.
 //
 // Starting and stopping instances is NOT this module's job: openInstance/quitInstance and their
 // routes (/api/instances/:dir/open, /quit) already exist and are the tested primitives the
@@ -41,11 +43,9 @@ export interface FleetInstanceEntry {
   /** Which account is signed in RIGHT NOW (config.json, read fresh); null = signed out. */
   loginUuid: string | null
   signedIn: boolean
-  /** Cached identity (email/plan) - null when never resolved. Token-free by construction. */
+  /** Cached identity (email/plan) - null when never resolved. Token-free by construction,
+   *  and never a previous login's (see the module header on re-login staleness). */
   account: FleetInstanceIdentity | null
-  /** True when the fresh loginUuid disagrees with the cached identity's accountUuid: the
-   *  instance was re-logged into a different account than `account` describes. */
-  identityStale: boolean
 }
 
 export interface FleetInstancesDeps {
@@ -89,10 +89,6 @@ export async function fleetInstances(deps: FleetInstancesDeps = {}): Promise<Fle
         loginUuid: i.loginUuid,
         signedIn: i.loginUuid !== null,
         account: identity,
-        identityStale:
-          i.loginUuid !== null &&
-          identity?.accountUuid != null &&
-          identity.accountUuid !== i.loginUuid,
       }
     }),
   )

@@ -9,6 +9,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Piece 4 hardened by adversarial review (2 confirmed bugs fixed, 1 more taken).** The
+  `identityStale` flag was structurally unreachable - resolveAccount's cache guard already
+  discards an identity whose uuid mismatches the fresh login (accounts-stale-login.test.ts
+  pins it), so both sides of the comparison were always equal; the flag is removed rather
+  than shipped dead. resolveAccount's noNetwork path decrypted the OS token cache per call
+  before ever checking noNetwork - every fleet read paid an OS decrypt per instance; the
+  check is hoisted so noNetwork does zero decrypt (grant-derived fallback fields honestly
+  null for never-cached instances). And /api/fleet's sections now fail independently: a
+  broken store nulls its own section and names itself in `errors` instead of 500ing the
+  whole observation.
 - **Orchestrator rebuild, piece 4: account identity** (`instances` key on `GET /api/fleet`,
   server/src/fleet-instances.ts, plus per-session `instanceRef` attribution in fleet.ts;
   owner-picked). Deterministic, read-only, ZERO NETWORK: every desktop instance with its

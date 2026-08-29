@@ -1986,11 +1986,22 @@ app.post('/api/monitor/check', async (c) => {
 // AI, zero writes, zero settings.
 app.get('/api/fleet', async (c) => {
   const status = fleetStatus()
+  // Sections fail INDEPENDENTLY: one broken store must not 500 the sessions/usage that already
+  // resolved. A failed section is null plus a named entry in `errors` - reported, never hidden.
+  const errors: string[] = []
+  const section = async <T>(name: string, run: () => Promise<T>): Promise<T | null> => {
+    try {
+      return await run()
+    } catch (err) {
+      errors.push(`${name}: ${err instanceof Error ? err.message : String(err)}`)
+      return null
+    }
+  }
   const [git, instances] = await Promise.all([
-    fleetGit(status.sessions.map((s) => s.cwd)),
-    fleetInstances(),
+    section('git', () => fleetGit(status.sessions.map((s) => s.cwd))),
+    section('instances', () => fleetInstances()),
   ])
-  return c.json({ ...status, usage: fleetUsage(), git, instances })
+  return c.json({ ...status, usage: fleetUsage(), git, instances, errors })
 })
 
 // Capture what is actually ON SCREEN, and hand back the path so the caller can LOOK at it.
