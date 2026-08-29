@@ -959,6 +959,9 @@ export interface Worklist {
   /** Items the circuit breaker withheld, one loud line each (orchestrator-breaker.ts). A
    *  suppressed loop must be VISIBLE to the reviewer and the owner, never silently absent. */
   suppressed: string[]
+  /** Set when the caller's reviewer id matches no live session - the stale-id failure that
+   *  silently switches the self-filter off. Absent when the id is healthy. */
+  reviewerWarning?: string
   note: string
 }
 
@@ -1018,11 +1021,22 @@ export function buildWorklist(reviewerSessionId: string): Worklist {
         : null,
     }
   })
+  // A STALE REVIEWER ID SILENTLY DISABLES THE SELF-FILTER (measured 2026-08-29: a reviewer whose
+  // session had rolled on auto-compact kept sending its OLD id, so every guard keyed on "is this
+  // item about you?" missed, and the feed kept offering it handoffs for its own chat - one of
+  // which, approved, would have had it hand itself off mid-conversation). The id is also what the
+  // ledger attributes decisions to, so a stale one corrupts the audit trail while looking
+  // healthy. The right id cannot be inferred here, but the wrong one CAN be spotted: an id
+  // matching no live session is always a mistake, and saying so costs one lookup.
+  const reviewerWarning = live.some((s) => s.sessionId === reviewerSessionId)
+    ? undefined
+    : `WARNING: the reviewer id you sent (${reviewerSessionId}) matches no LIVE session. If your session rolled (auto-compact) you are sending a stale id: the self-filter is OFF, so items about your own chat will be offered to you, and every decision is attributed to a session that no longer exists. Re-read CLAUDE_CODE_SESSION_ID and use that.`
   return {
     items,
     autoAcked,
     renames,
     suppressed,
+    reviewerWarning,
     note:
       'Every message and route above is final - send reviewer steps verbatim, then call verify. ' +
       'Judgment (approve/reject + note) is the only input the server wants from you.',
