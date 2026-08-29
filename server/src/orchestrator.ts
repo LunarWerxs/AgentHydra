@@ -941,6 +941,53 @@ export function planOfAccountLabel(account: string | null | undefined): string |
   return m ? m[1].trim() : null
 }
 
+/**
+ * The usage snapshot for a session's instance ref, joined the way the cache is actually keyed.
+ *
+ * `instanceRefForSession` returns `desktop:<dir>` with the dir's REAL casing, while every cache
+ * write goes through desktopKey(), which normalizes (win32: resolved + lowercased). Indexing the
+ * cache with the raw ref therefore matched NOTHING on Windows: attention evidence carried
+ * account:null / accountWeeklyPct:null for chats whose instance was perfectly known, the reviewer
+ * approved a resume blind, and 24 minutes later the chat died mid-edit on the 5-hour session
+ * limit the evidence never showed (field report 2026-08-29, chat "Gods Eye View integration
+ * review" on 2uhmany). Same defect class as the archive-restart guard's case-sensitive `===`
+ * (see GUARD HISTORY in maybeRestartForArchiveVisibility): a real-cased ref against a normalized
+ * key is a join that silently never lands.
+ */
+export function usageForInstanceRef(
+  cache: Record<string, UsageSnapshot>,
+  iref: string | null | undefined,
+): UsageSnapshot | null {
+  if (!iref) return null
+  const direct = cache[iref]
+  if (direct) return direct
+  if (iref.startsWith('desktop:')) return cache[desktopKey(iref.slice('desktop:'.length))] ?? null
+  return null
+}
+
+/**
+ * The account-quota half of an attention item's evidence, built in one place so every item that
+ * can become a resume/nudge carries the SAME four fields. The 5-hour session window is included
+ * because it is the cap that actually kills a resume mid-turn — the weekly limit starves an
+ * account slowly, the session window cuts a chat off at "resets 10:30pm" — and until 2026-08-29
+ * no attention evidence carried it at all.
+ */
+export function accountUsageEvidence(snap: UsageSnapshot | null): {
+  account: string | null
+  accountWeeklyPct: number | null
+  accountSessionPct: number | null
+  accountSessionResetsAt: string | null
+} {
+  return {
+    account: snap?.account ?? null,
+    accountWeeklyPct: snap?.weekAll?.pct ?? null,
+    accountSessionPct: snap?.session?.pct ?? null,
+    // ISO when the API path supplied it; the CLI path only has the human string ('' before the
+    // window starts). Either beats null — the reviewer just needs to see WHEN relief arrives.
+    accountSessionResetsAt: snap?.session?.resetsAt ?? (snap?.session?.resets || null),
+  }
+}
+
 // Why (if any) an instance is blocked from placement — checked in priority order. Pulled out
 // of buildInstanceRow's ternary chain, see buildInstanceRow below for why.
 function instanceBlockedWhy(
@@ -1347,6 +1394,7 @@ function classifyOrphanSession(
       handoffDetected: tail.handoffDetected,
       lastHumanText: tail.lastHumanText,
       lastHumanAt: tail.lastHumanAt,
+      ...accountUsageEvidence(usageForInstanceRef(deps.usage(), iref)),
     },
     firstSeenAt: nowIso,
     seenCount: 1,
@@ -1543,8 +1591,7 @@ function classifyLiveSession(
     ending: tail.ending,
     lastHumanText: tail.lastHumanText,
     lastHumanAt: tail.lastHumanAt,
-    account: iref ? (deps.usage()[iref]?.account ?? null) : null,
-    accountWeeklyPct: iref ? (deps.usage()[iref]?.weekAll?.pct ?? null) : null,
+    ...accountUsageEvidence(usageForInstanceRef(deps.usage(), iref)),
   }
   if (tail.unreadable) {
     items.push({
@@ -1807,11 +1854,12 @@ function classifyStrandedDesktopChats(ctx: OnceCtx): void {
     }
     if (!tail.midTurn) continue
     const title = scannerTitleFor(t.sessionId)
+    const iref = ctx.deps.instanceRef(t.sessionId)
     ctx.items.push({
       key: `orphan:${t.sessionId}`,
       kind: 'orphaned',
       sessionId: t.sessionId,
-      instanceRef: ctx.deps.instanceRef(t.sessionId) ?? undefined,
+      instanceRef: iref ?? undefined,
       tailSnippet: tail.lastAssistantText ?? undefined,
       summary: `${title ?? t.sessionId.slice(0, 8)} is STRANDED mid-work ${fmtQuiet(quietSecs)} ago — no process (graceful shutdown/restart left no residue), still open in the ${meta.instance} app's sidebar; revive per the surface preference`,
       detail: {
@@ -1823,6 +1871,7 @@ function classifyStrandedDesktopChats(ctx: OnceCtx): void {
         ctxTokens: tail.ctxTokens,
         lastHumanText: tail.lastHumanText,
         lastHumanAt: tail.lastHumanAt,
+        ...accountUsageEvidence(usageForInstanceRef(ctx.deps.usage(), iref)),
       },
       firstSeenAt: ctx.nowIso,
       seenCount: 1,

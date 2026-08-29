@@ -35,6 +35,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { collectChats, type DossierChat } from './chat-dossier'
+import { defaultClaudeUserDataDir, instancesRoot } from './core/paths'
 import { db } from './db'
 import {
   findDesktopChat,
@@ -43,8 +44,10 @@ import {
 } from './instance-sessions'
 import {
   ackAttention,
+  bandForPct,
   clearPendingRename,
   getOrchestratorPrompts,
+  getOrchestratorSettings,
   isDeafPassiveSession,
   type LiveSession,
   listPendingRenames,
@@ -65,7 +68,13 @@ import {
 } from './session-launch'
 import { sessionMarkKey } from './sessions'
 import { findTranscript } from './transcript'
-import type { AttentionItem, OrchestratorProposal, OrchestratorView } from './types'
+import type {
+  AttentionItem,
+  OrchestratorProposal,
+  OrchestratorSettings,
+  OrchestratorView,
+} from './types'
+import { desktopKey } from './usage-service'
 
 // --- the contract -------------------------------------------------------------------------------
 
@@ -546,6 +555,10 @@ function proposalToItem(
         'message composed server-side (permission-mode and collision handling included)',
         `route computed: ${route.mode}`,
       )
+      // A revive is a resume: the same limit-risk flag the attention-derived items carry. The
+      // proposal's evidence inherits the account fields from the source item's detail spread.
+      const risk = usageRiskFlag(ev, getOrchestratorSettings())
+      if (risk) constraints.push(risk)
       if (route.mode === 'none') unreachable = route.whyNone
       question =
         'Is this lineage genuinely unfinished and not superseded, so it should get its next turn?'
@@ -587,7 +600,55 @@ function proposalToItem(
   }
 }
 
+/**
+ * The limit-risk line for a message-sending item, from the account fields its evidence already
+ * carries (see accountUsageEvidence in orchestrator.ts). Null when the account is healthy — or
+ * unknown: an unmapped instance is its own attention item, and a missing reading must not
+ * fabricate a warning.
+ *
+ * Mirrors instanceBlockedWhy(), the placement blocker: a weekly high/critical band and a 5-hour
+ * window at/over sessionHighPct are exactly the states in which placement refuses to hand an
+ * account NEW work — so a resume/nudge into its EXISTING chat carries at minimum a flag the
+ * reviewer cannot miss. This exists because on 2026-08-29 a reviewer blind-approved a resume
+ * whose evidence showed account:null, and 24 minutes later the chat died mid-edit on "You've
+ * hit your session limit · resets 10:30pm".
+ */
+export function usageRiskFlag(ev: Record<string, unknown>, s: OrchestratorSettings): string | null {
+  const wkPct = typeof ev.accountWeeklyPct === 'number' ? ev.accountWeeklyPct : null
+  const sessPct = typeof ev.accountSessionPct === 'number' ? ev.accountSessionPct : null
+  const parts: string[] = []
+  if (wkPct !== null) {
+    const band = bandForPct(wkPct, s)
+    if (band === 'high' || band === 'critical') parts.push(`weekly at ${wkPct}% (${band})`)
+  }
+  if (sessPct !== null && sessPct >= s.sessionHighPct) {
+    const resets =
+      typeof ev.accountSessionResetsAt === 'string' && ev.accountSessionResetsAt
+        ? `, resets ${ev.accountSessionResetsAt}`
+        : ''
+    parts.push(`5-hour window at ${sessPct}%${resets}`)
+  }
+  if (parts.length === 0) return null
+  const who = typeof ev.account === 'string' && ev.account ? ev.account : 'target account'
+  return `⚠ LIMIT RISK: ${who} ${parts.join(', ')} — a resume/nudge here can die mid-turn at the cap; approve only if it must run now, otherwise reject and let the window reset`
+}
+
 function attentionToItem(
+  a: AttentionItem,
+  view: OrchestratorView,
+  opts: { dryRun?: boolean } = {},
+): WorkItem | null {
+  const item = attentionToItemBase(a, view, opts)
+  // Every kind this builder emits sends a proceed-style message INTO the target chat except
+  // 'hard-cutoff', whose message IS "wrap up" — there the limit is the point, not a hazard.
+  if (item && item.kind !== 'hard-cutoff') {
+    const risk = usageRiskFlag(item.evidence, getOrchestratorSettings())
+    if (risk) item.constraintsApplied.push(risk)
+  }
+  return item
+}
+
+function attentionToItemBase(
   a: AttentionItem,
   view: OrchestratorView,
   opts: { dryRun?: boolean } = {},
@@ -1455,8 +1516,12 @@ export function buildDryRun(reviewerSessionId = ''): DryRun {
   }
   const instances = [...byInstance.entries()]
     .map(([instance, chats]) => {
-      const u =
-        usage[`desktop:${join(homedir(), '.claude-instances', instance).toLowerCase()}`] ?? {}
+      // usagePrev is keyed by the usage cache's own keys, which go through desktopKey() —
+      // normalized, and 'default' lives at the Claude user-data dir, not under
+      // ~/.claude-instances. The old hand-rolled `.toLowerCase()` join missed both.
+      const dir =
+        instance === 'default' ? defaultClaudeUserDataDir() : join(instancesRoot(), instance)
+      const u = usage[desktopKey(dir)] ?? {}
       const open = chats.filter((c) => !c.archived)
       open.sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''))
       return {
