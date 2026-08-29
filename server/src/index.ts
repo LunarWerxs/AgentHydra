@@ -2113,7 +2113,8 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
       note:
         'the flag is written, but that app is RUNNING and holds its chat list in memory, so ' +
         'the chat is STILL ON SCREEN until that instance next restarts. To retire it ' +
-        "immediately, archive it through the app's own UI.",
+        "immediately, archive it through the app's own UI - misc/Archive-DesktopChat.ps1 " +
+        'automates exactly that click and verifies it landed.',
     })
   return c.json(result, result.ok ? 200 : 404)
 })

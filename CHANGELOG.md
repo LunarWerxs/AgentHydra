@@ -7,6 +7,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **misc/Archive-DesktopChat.ps1: archive a chat in a RUNNING desktop app, immediately and
+  durably, by driving the app's own sidebar UI** (owner's mechanism, 2026-08-29). Wakes the
+  Electron accessibility tree (MSAA poke on the render widgets - a UIA query alone sees bare
+  panes), finds the row and its "More options" kebab by accessible name, and clicks with a
+  real cursor because InvokePattern is not exposed through the bridge. Every click is
+  point-verified (the OS must resolve the cursor's position back to the intended element)
+  since Delete sits directly under Archive in that menu; on any verification failure it
+  presses Esc and aborts rather than guessing. The app performs the archive itself, so the
+  row leaves the sidebar instantly and the flag survives the app's metadata re-saves - the
+  two things the disk-flag path could never give under a running app. Proven live on the
+  5claude instance; -DryRun proves reachability without archiving. The desktop-archive
+  endpoint's running-app note now names it.
+
 ### Removed
 
 - **The v1 orchestrator, whole** (owner order, 2026-08-29: retire it and rebuild from the

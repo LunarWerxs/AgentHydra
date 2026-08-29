@@ -35,6 +35,17 @@ General primitives the orchestrator merely used, which stand on their own:
 - The no-headless and surface-purity owner laws, which are enforced in the primitives, not in
   the orchestrator: they bind the rebuild too.
 
+## Archiving under a running app, solved properly (2026-08-29, same day)
+
+V1 papered over "archived but still in the sidebar" with a queued idle-restart. The real
+mechanism (owner's call) is driving the running app's OWN archive control:
+`misc/Archive-DesktopChat.ps1` wakes the app's accessibility tree, finds the chat row by
+title, opens its "More options" menu, point-verifies the cursor is on Archive (never the
+Delete directly beneath it), clicks, and verifies the row left the sidebar. Because the app
+itself performs the archive, the flag is immediate AND survives the app's metadata re-saves -
+the two things a disk write could never give. Proven live on the 5claude instance. The disk
+flag remains correct for closed instances; a restart is needed by nothing.
+
 ## What is inert but not deleted
 
 Existing databases keep their `orchestrator_*` tables and `orch_*` settings rows; nothing
