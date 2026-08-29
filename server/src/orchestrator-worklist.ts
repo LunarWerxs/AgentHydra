@@ -1341,6 +1341,33 @@ export async function resolveWorkItem(opts: {
     const targetLive =
       (a.sessionId ? live.find((s) => s.sessionId === a.sessionId) : undefined) ??
       (a.peerName ? live.find((s) => s.name === a.peerName) : undefined)
+    // A SETTLED-OPEN CHAT IS DEAD BY DEFINITION, so "resume it" cannot be a live peer send -
+    // and refusing here made the approve half of the three-state question undeliverable, which
+    // is worse than the state it was meant to fix (measured immediately: the first RESUME
+    // ruling failed with "target is not a live session any more"). Route it like any other
+    // dormant chat instead: own-instance send_message, else that instance's scheduled courier.
+    if (!targetLive && a.sessionId && d.settledOpen) {
+      const route = computeRoute({
+        targetSessionId: a.sessionId,
+        reviewerSessionId,
+        message,
+        live,
+      })
+      const queued = queueIfCourier(itemId, route, a.sessionId, message)
+      if (queued) {
+        ackAttention(key, 'settled-open-resume-queued', 60)
+        return queued
+      }
+      if (route.mode === 'none' || !route.step)
+        return { ok: false, reason: `settled-open chat has no delivery route: ${route.whyNone}` }
+      ackAttention(key, 'settled-open-resumed', 60)
+      saveState(itemId, {
+        phase: 'delivered',
+        at: new Date().toISOString(),
+        targetSessionId: a.sessionId,
+      })
+      return { ok: true, reviewerSteps: [route.step] }
+    }
     if (!targetLive) return { ok: false, reason: 'target is not a live session any more' }
     ackAttention(key, `resolved:${a.kind}`, 60)
     // No verify state on purpose: a live target's transcript moves from its own work, so
