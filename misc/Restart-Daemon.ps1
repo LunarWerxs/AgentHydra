@@ -71,6 +71,19 @@ param(
   [string]$Root = '',
   # Stop the daemon but don't relaunch the app afterwards.
   [switch]$NoLaunch,
+  # DEPLOY WITHOUT TOUCHING THE APP (owner directive, Michael, 2026-08-29: "You also keep
+  # launching agent Hydra when it's open. Probably should have a check to stop doing that.").
+  #
+  # The full restart is deliberately ruthless because a rebuild must never leave you on old
+  # code - but it kills the TRAY HOST too and relaunches it, which is what puts the app back on
+  # screen. For the common case (ship code, adopt it now, app already running and fine) that is
+  # collateral damage: the tray host's own ~5s watchdog revives a killed daemon by itself, so
+  # killing ONLY the daemon swaps the code and leaves every window exactly where it was.
+  #
+  # Falls back to the full path when no healthy tray host exists to do the reviving - otherwise
+  # this would stop the daemon and leave nothing to bring it back, which is the one outcome
+  # worse than a reopened window.
+  [switch]$DaemonOnly,
   # How long to keep killing before admitting defeat.
   [int]$KillTimeoutSeconds = 15
 )
@@ -204,14 +217,34 @@ $killed = @{}
 $deadline = (Get-Date).AddSeconds($KillTimeoutSeconds)
 $survivors = @{}
 
+# -DaemonOnly keeps the APP off the screen either way; only the mechanism differs.
+#   · tray host alive -> kill just the daemon; its ~5s watchdog brings the new one up.
+#   · no tray host    -> kill the daemon and start a BARE daemon ourselves (no Tray-Launch.vbs,
+#                        so no window). Deploying must never be a reason for the app to appear
+#                        (owner directive, 2026-08-29) - and a headless daemon is exactly what a
+#                        machine with no tray host had a moment ago anyway.
+$trayAlive = @(Get-TrayHostPids -IncludeFresh).Count -gt 0
+$daemonOnlyMode = [bool]$DaemonOnly
+if ($daemonOnlyMode) {
+  Write-Host $(if ($trayAlive) {
+      '  -DaemonOnly: leaving the tray host and every window alone; its watchdog starts the new daemon.'
+    } else {
+      '  -DaemonOnly: no tray host, so a BARE daemon will be started - still no app window.'
+    })
+}
+
 while ($true) {
   # Ordered kill list: tray hosts FIRST -- each carries a watchdog that would revive the daemon
   # mid-sweep, and tree-killing the host usually reaps its cmd->bun daemon in the same stroke.
+  # In -DaemonOnly mode that watchdog is the POINT: the tray host lives, and revives the daemon
+  # we are about to kill, so the app never leaves the screen.
   $targets = @{}
   $order = New-Object System.Collections.Generic.List[int]
-  foreach ($trayPid in @(Get-TrayHostPids)) {
-    $targets[[int]$trayPid] = "old tray host (its watchdog would revive the daemon we're stopping)"
-    $order.Add([int]$trayPid)
+  if (-not $daemonOnlyMode) {
+    foreach ($trayPid in @(Get-TrayHostPids)) {
+      $targets[[int]$trayPid] = "old tray host (its watchdog would revive the daemon we're stopping)"
+      $order.Add([int]$trayPid)
+    }
   }
   foreach ($entry in (Get-StaleTargets -PointerPort $pointerPort).GetEnumerator()) {
     if (-not $targets.ContainsKey([int]$entry.Key)) {
@@ -273,6 +306,26 @@ if (Test-Path $runtimeFile) {
 
 # --- Relaunch ------------------------------------------------------------------------------------
 if ($NoLaunch) { exit 0 }
+
+# -DaemonOnly never launches the app. With a tray host alive its watchdog already has the job;
+# without one we start the daemon BY ITSELF, detached the same way (WMI) so it outlives this
+# console. Either path leaves the screen exactly as it was.
+if ($daemonOnlyMode) {
+  if ($trayAlive) {
+    Write-Host "  Daemon stopped; the live tray host's watchdog will bring the new one up (no window touched)."
+    exit 0
+  }
+  $spawn = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+    CommandLine      = "cmd.exe /c bun run --cwd server start"
+    CurrentDirectory = $Root
+  } -ErrorAction SilentlyContinue
+  if ($spawn -and $spawn.ReturnValue -eq 0) {
+    Write-Host "  Started a bare daemon, detached (WMI). No tray host, no app window."
+  } else {
+    Write-Host "  ! Could not start the bare daemon - run 'bun run --cwd server start' yourself." -ForegroundColor Red
+  }
+  exit 0
+}
 
 # Anything still standing after the sweep is FRESH by construction (stale hosts were kill targets
 # above): a tray host someone started while we were sweeping. Launching another would only mint a

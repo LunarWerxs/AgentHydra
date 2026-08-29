@@ -53,6 +53,21 @@ READ FIRST, all current:
   POST /api/sessions/:id/automation
       Stamp bypassPermissions onto a chat's metadata (verify + re-stamp loop; see law 6).
 
+## DEPLOYING WITHOUT TOUCHING THE OWNER'S SCREEN (2026-08-29)
+
+  powershell -File misc\Restart-Daemon.ps1 -DaemonOnly    # ALWAYS this, to adopt new code
+
+⛔ The bare `Restart-Daemon.ps1` kills the tray host too and relaunches it, which puts AgentHydra
+back on screen every single deploy ("you keep launching agent Hydra when it's open" - owner,
+2026-08-29). `-DaemonOnly` swaps the daemon and nothing else: with a tray host alive its ~5s
+watchdog brings the new daemon up; without one, a BARE daemon is started detached. Verified:
+30 app windows before, 30 after.
+
+⛔ AND NEVER OPEN A CLOSED CLAUDE ACCOUNT (same day, same reason). The archive-visibility restart
+is quit-then-OPEN, so queueing it for a closed instance opens that account - which is how all 18
+got thrown open at once. It is now refused for anything not already running, and the standing
+`openInstances: never` setting says the same thing.
+
 ## HOW TO VERIFY ANYTHING
 
   curl -s -X POST http://127.0.0.1:7787/api/orchestrator/selftest -d "{}"
