@@ -453,10 +453,28 @@ export function noteReviewerActivity(nowMs: number = Date.now()): void {
  * a check that fires on healthy input stops being read. The bug was never that rule, it was
  * measuring the backlog with too narrow a ruler.
  */
+/** What to DO about a stalled reviewer, stated exactly where the stall is reported. The
+ *  reviewer is a ROLE, not a chat (survey tier 1, 2026-08-28: a phantom archive and a process
+ *  kill each took the host chat down and halted the fleet until a human typed /orchestrate):
+ *  reviving it means seeding ANY fresh chat with the successor briefing, never resurrecting the
+ *  dead one. Only ever present while `stalled` - a fix line that is always shown stops being
+ *  read, the same cry-wolf rule the health check itself lives by. */
+const REVIEWER_SEED_FIX =
+  'seed a SUCCESSOR: GET /api/orchestrator/reviewer-seed returns a ready-to-paste opening ' +
+  'prompt that briefs any fresh chat as the replacement reviewer (verify the hosting chat runs ' +
+  'bypassPermissions before booting it) - the reviewer is a role, not a chat; never resurrect ' +
+  'the dead one'
+
 export function reviewerHealth(
   nowMs: number,
   waiting: number,
-): { lastSeenAt: string | null; quietMins: number | null; stalled: boolean; why: string } {
+): {
+  lastSeenAt: string | null
+  quietMins: number | null
+  stalled: boolean
+  why: string
+  fix: string | null
+} {
   const raw = kvGet(REVIEWER_KV)
   const at = raw ? Date.parse(raw) : Number.NaN
   const quietMins = Number.isNaN(at) ? null : Math.round((nowMs - at) / 60_000)
@@ -473,6 +491,7 @@ export function reviewerHealth(
     quietMins,
     stalled,
     why,
+    fix: stalled ? REVIEWER_SEED_FIX : null,
   }
 }
 

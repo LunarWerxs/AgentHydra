@@ -1495,6 +1495,10 @@ export interface OrchestratorView {
       quietMins: number | null
       stalled: boolean
       why: string
+      /** Present ONLY while stalled: the successor-seeding instruction, naming
+       *  GET /api/orchestrator/reviewer-seed. The reviewer is a role, not a chat - reviving it
+       *  means briefing a fresh chat from the journal, never resurrecting the dead one. */
+      fix: string | null
     }
   }
 }

@@ -183,6 +183,7 @@ import {
   startOrchestrator,
   uninstallOrchestratorCommands,
 } from './orchestrator'
+import { buildReviewerJournal, composeReviewerSeed } from './orchestrator-reviewer-journal'
 import { runOrchestratorSelfTest } from './orchestrator-selftest'
 import {
   buildDryRun,
@@ -2253,6 +2254,36 @@ app.get('/api/orchestrator/dryrun', (c) => {
   const d = buildDryRun(c.req.query('reviewer')?.trim() ?? '')
   if (c.req.query('format') === 'text') return c.text(renderDryRunText(d))
   return c.json(d)
+})
+// THE REVIEWER IS A ROLE, NOT A CHAT (survey tier 1, 2026-08-28; measured twice that day: a
+// phantom archive and a process kill each took the reviewer's host chat down and the fleet
+// halted until a human typed /orchestrate). The JOURNAL is the compact successor briefing the
+// server already holds (recent rulings with notes, in-flight items with their saved verbatim
+// steps, standing context); the SEED composes it into a ready-to-paste opening prompt that
+// briefs ANY fresh chat as the successor. Delivery is whoever boots that chat - never a relay -
+// and the booter verifies its bypassPermissions stamp first, same as every other boot.
+// Deliberately NO noteReviewerActivity on either: these are read precisely while the reviewer is
+// dead, and stamping presence here would un-stall the very health check that says a successor is
+// needed (the same masking the dry run refuses).
+app.get('/api/orchestrator/reviewer-journal', (c) => c.json(buildReviewerJournal()))
+app.get('/api/orchestrator/reviewer-seed', (c) => {
+  const journal = buildReviewerJournal()
+  const prompt = composeReviewerSeed(journal)
+  if (c.req.query('format') === 'text') return c.text(prompt)
+  return c.json({
+    ok: true,
+    generatedAt: journal.generatedAt,
+    prompt,
+    boot: {
+      deliver:
+        'paste this prompt as the FIRST message of a fresh chat (or seed one with it) - never ' +
+        'resurrect a dead reviewer chat, and never relay it through working chats',
+      bypass:
+        'verify the hosting chat runs bypassPermissions BEFORE booting - the reviewer loop ' +
+        'shells out every wake, and an approval prompt nobody can click is a silent deadlock',
+    },
+    journal,
+  })
 })
 app.post('/api/orchestrator/items/:id/resolve', async (c) => {
   const body = await jsonBody(c)

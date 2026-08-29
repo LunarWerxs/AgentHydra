@@ -163,6 +163,49 @@ interface ItemState {
 function stateKey(itemId: string): string {
   return `wl:${itemId}`
 }
+
+/** One in-flight item as the reviewer journal and the dry run see it: the saved kv state,
+ *  flattened, with the verbatim steps preserved so a SUCCESSOR reviewer can re-issue them
+ *  without reconstruction (the reviewer is a role, not a chat - see
+ *  orchestrator-reviewer-journal.ts). */
+export interface InFlightItem {
+  itemId: string
+  phase: string
+  at: string
+  targetSessionId: string
+  instanceRef?: string | null
+  expectTitle?: string
+  oldSessionId?: string
+  steps?: ReviewerStep[]
+}
+
+/** Every wl: kv row, parsed. An unreadable row is surfaced as phase 'unreadable' rather than
+ *  dropped - it is still a row verify() will refuse, and hiding it would make the view lie. */
+export function listInFlightItems(): InFlightItem[] {
+  return db
+    .query<{ key: string; value: string }, []>(
+      "select key, value from orchestrator_kv where key like 'wl:%'",
+    )
+    .all()
+    .map((r) => {
+      const itemId = r.key.slice('wl:'.length)
+      try {
+        const s = JSON.parse(r.value) as ItemState
+        return {
+          itemId,
+          phase: s.phase,
+          at: s.at,
+          targetSessionId: s.targetSessionId,
+          instanceRef: s.instanceRef,
+          expectTitle: s.expectTitle,
+          oldSessionId: s.oldSessionId,
+          steps: s.steps,
+        }
+      } catch {
+        return { itemId, phase: 'unreadable', at: '', targetSessionId: '' }
+      }
+    })
+}
 function loadState(itemId: string): ItemState | null {
   const row = db
     .query<{ value: string }, [string]>('select value from orchestrator_kv where key = ?')
@@ -1748,19 +1791,11 @@ export function buildDryRun(reviewerSessionId = ''): DryRun {
     if (item) wouldAsk.push(item)
   }
 
-  const inFlight = db
-    .query<{ key: string; value: string }, []>(
-      "select key, value from orchestrator_kv where key like 'wl:%'",
-    )
-    .all()
-    .map((r) => {
-      try {
-        const s = JSON.parse(r.value) as ItemState
-        return { itemId: r.key.slice(3), phase: s.phase, targetSessionId: s.targetSessionId }
-      } catch {
-        return { itemId: r.key.slice(3), phase: 'unreadable', targetSessionId: '' }
-      }
-    })
+  const inFlight = listInFlightItems().map((f) => ({
+    itemId: f.itemId,
+    phase: f.phase,
+    targetSessionId: f.targetSessionId,
+  }))
 
   const lastSeen = db
     .query<{ value: string }, []>("select value from orchestrator_kv where key = 'lastReviewerAt'")

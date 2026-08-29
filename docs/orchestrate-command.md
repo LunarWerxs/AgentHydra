@@ -57,8 +57,11 @@ the server's job now, not yours.
    session, and re-create it when absent - cron jobs are session-only and auto-expire after 7
    days, so "I made one once" is not "one exists".
    Honest residual: the cron lives inside this session, so it does not survive the session
-   itself dying (app restart, crash). That case still needs a chat opened and `/orchestrate`
-   typed once - the bootstrap limit the feed's `unreachable.fix` already names.
+   itself dying (app restart, crash). That case needs a FRESH chat booted once - and the
+   reviewer is a ROLE, not a chat: seed the new chat with the successor briefing from
+   `GET /api/orchestrator/reviewer-seed` (it carries the in-flight items to verify first and
+   the standing context this loop held), never try to resurrect the dead reviewer chat. While
+   the stall lasts, the feed's `meta.reviewer.fix` names that endpoint too.
 7. Daemon unreachable 3 wakes in a row -> tell the user once, then retry every 600s.
 
 ## Judgment guidance (the only part that is yours)

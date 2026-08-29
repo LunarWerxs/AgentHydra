@@ -9,6 +9,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The reviewer is a ROLE, not a chat: the journal + seed make reviewer death a non-event.**
+  Measured twice on 2026-08-28: the reviewer loop died with its host chat (a phantom archive,
+  then a process kill) and the fleet halted until a human typed /orchestrate.
+  `GET /api/orchestrator/reviewer-journal` is the compact successor briefing the server
+  already maintains (recent rulings with their notes, in-flight items with their saved
+  verbatim steps, standing context); `GET /api/orchestrator/reviewer-seed` (`?format=text`)
+  composes it into a ready-to-paste opening prompt that briefs ANY fresh chat as the
+  replacement - revival is replay-into-whichever-window-is-free, never
+  resurrect-one-specific-chat (pattern: OpenHands' EventLog replay, Anthropic's memory
+  checkpoint, AG2's rehydrate-by-name). While the no-reviewer check is stalled,
+  `meta.reviewer.fix` names the seed endpoint. Neither endpoint stamps `lastReviewerAt`
+  (they are read precisely while the reviewer is dead), the journal records without
+  deciding (the action gate is untouched), and the seed is delivered by whoever boots the
+  new chat - never relayed - with the bypass stamp verified before boot.
+
 - **The chat dossier: one query, everything the system knows about a chat.**
   `GET /api/chats/dossier?q=<title fragment or any id>` (MCP `chat_dossier`) joins the four
   stores that each held a quarter of the answer - desktop metadata (archive flag read fresh

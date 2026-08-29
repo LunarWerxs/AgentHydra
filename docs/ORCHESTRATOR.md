@@ -96,6 +96,17 @@ POST /api/orchestrator/backlog/resolved  { key, ok?, sha? } - the reviewer's out
 POST /api/orchestrator/selftest   { deep? } - run the real guards against real state and report
                                   each check (see below). Safe on a live fleet; `deep` also seeds
                                   ONE real chat, proves it visible, and archives it
+GET  /api/orchestrator/reviewer-journal   the compact successor briefing the server maintains by
+                                  itself: recent rulings with their notes, in-flight items with
+                                  their saved verbatim steps, standing context (workMode, holds,
+                                  pending renames). Records, never decides
+GET  /api/orchestrator/reviewer-seed      ready-to-paste opening prompt that briefs ANY fresh
+                                  chat as the SUCCESSOR reviewer (?format=text for the raw
+                                  prompt). The reviewer is a role, not a chat: reviving it means
+                                  booting a new chat with this, never resurrecting the dead one.
+                                  Neither endpoint stamps lastReviewerAt - they are read while
+                                  the reviewer is dead, and a probe that stamps presence masks
+                                  the very stall it exists to fix
 POST /api/screenshot              { path? } - capture the screen to a PNG and return its path, so
                                   a claim about what is ON SCREEN can be looked at rather than
                                   inferred from disk. Interprets nothing: a camera, not a judge
@@ -664,6 +675,19 @@ and never by a process existing, because the failure most worth catching is a re
 booted and then froze at an approval prompt, which is alive and useless. `stalled` fires only
 when there is a BACKLOG: a reviewer with an empty queue is quiet because there is nothing to
 do, and a signal that cries wolf on healthy input stops being read.
+
+**And when it fires, the fix is a SUCCESSOR, never a resurrection.** The reviewer is a ROLE,
+not a chat (survey tier 1, 2026-08-28; measured twice that day: a phantom archive and a
+process kill each took the reviewer's host chat down and the fleet halted until a human typed
+`/orchestrate`). Everything a dead reviewer "knew" already lives in the server - the rulings
+with their notes in the proposals ledger, mid-delivery items with their exact verbatim steps in
+the `wl:` kv state, the standing mode in settings - so `GET /api/orchestrator/reviewer-journal`
+serves it as a compact view, and `GET /api/orchestrator/reviewer-seed` composes it into a
+ready-to-paste opening prompt that briefs ANY fresh chat as the replacement. While `stalled`,
+`meta.reviewer.fix` names that endpoint. The seed is delivered by whoever boots the new chat
+(never relayed through working chats), the booter verifies the hosting chat's
+`bypassPermissions` stamp first, and the journal records without ever deciding - the action
+gate is untouched.
 
 ## Settings (all `POST /api/orchestrator`)
 
