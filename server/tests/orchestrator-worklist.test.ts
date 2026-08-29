@@ -8,6 +8,9 @@
 // movement, not self-report), and surface purity (a desktop thread never resumes in a terminal).
 
 import { expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, sep } from 'node:path'
 import { resumeSurfaceFor } from '../src/monitor'
 import type { LiveSession } from '../src/orchestrator'
 import {
@@ -125,11 +128,22 @@ test('a SINGLE live occupant blocks seeding into its repo - the collisions feed 
   // The collisions feed only lists repos that already have TWO chats, so it can never veto
   // adding the second one - the exact clobber the rule exists to prevent (found by review).
   // repoOccupied asks the live registry directly.
-  const live = [liveSession({ sessionId: 'occ-1', name: 'repo-occupant', cwd: 'D:\\FakeRepoX' })]
-  expect(repoOccupied('D:\\FakeRepoX', live)).toBe('repo-occupant')
+  //
+  // Real tmp dirs each carrying their own .git, not 'D:\...' literals: on the linux CI runner
+  // a Windows path is RELATIVE, so repoRootForCwd's upward walk ended at '.' - the checkout
+  // itself, whose .git made every such cwd "the same repo" and kept this test red on ubuntu
+  // only (every run up to 2026-08-29) while windows stayed green. A .git in each fixture also
+  // shields the walk from any ancestor repo a dev machine happens to have above its tmpdir.
+  const base = mkdtempSync(join(tmpdir(), 'agenthydra-occ-'))
+  const repoX = join(base, 'FakeRepoX')
+  const other = join(base, 'OtherRepo')
+  mkdirSync(join(repoX, '.git'), { recursive: true })
+  mkdirSync(join(other, '.git'), { recursive: true })
+  const live = [liveSession({ sessionId: 'occ-1', name: 'repo-occupant', cwd: repoX })]
+  expect(repoOccupied(repoX, live)).toBe('repo-occupant')
   // Case-insensitive path identity, same as every other path comparison in the daemon.
-  expect(repoOccupied('d:\\fakerepox\\', live)).toBe('repo-occupant')
-  expect(repoOccupied('D:\\OtherRepo', live)).toBeNull()
+  expect(repoOccupied(`${repoX.toUpperCase()}${sep}`, live)).toBe('repo-occupant')
+  expect(repoOccupied(other, live)).toBeNull()
 })
 
 // --- surface purity ------------------------------------------------------------------------------
