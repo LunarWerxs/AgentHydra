@@ -2636,6 +2636,13 @@ export function proposeAgentChats(
   for (const row of rows) {
     if (!row.isRunning) continue // seeding into a closed app helps nobody yet; wait for it
     const dir = row.ref.slice('desktop:'.length)
+    // SUPERSEDED BY THE SCHEDULED COURIER TASK (2026-08-29). An instance that already has one
+    // installed is reachable without any chat at all, so proposing an agent CHAT there is a
+    // seed the reviewer rejects every wake - measured tonight: 10-11 identical proposals per
+    // tick, rejected, re-proposed, forever, while each accepted one would have added another
+    // chat to a sidebar the owner had just told us was full of junk. The agent chat remains as
+    // the fallback for an instance the courier cannot serve.
+    if (hasDesktopTask(dir, courierTaskId(row.name ?? dir.split(sep).pop() ?? ''))) continue
     const openHere = chats.filter(
       (c) => !c.archived && samePath(instanceDirForLabel(c.instance), dir),
     )
