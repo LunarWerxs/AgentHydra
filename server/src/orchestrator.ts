@@ -2275,14 +2275,57 @@ function runAutomationJanitor(ctx: OnceCtx): void {
  * eventually swallow a working chat, and archiving someone's real thread is far worse than
  * leaving plumbing on screen for one more tick.
  */
+/** How long a courier run must sit quiet before it counts as finished-but-not-exited. Five
+ *  minutes is comfortably longer than a real pass (fetch, act, report) and short enough that
+ *  zombies never accumulate between ticks. */
+const COURIER_ZOMBIE_MS = 5 * 60_000
+
+/** Milliseconds since a live session's transcript last moved, or null when that cannot be read -
+ *  and null means LEAVE IT ALONE, because absence of evidence must never justify a kill. */
+export function courierQuietMs(
+  s: LiveSession,
+  now = Date.now(),
+  readTail: (path: string) => { lastEventAt: string | null } = readTailInfo,
+): number | null {
+  if (!s.transcriptPath) return null
+  try {
+    const last = readTail(s.transcriptPath).lastEventAt
+    if (!last) return null
+    const at = Date.parse(last)
+    return Number.isFinite(at) ? now - at : null
+  } catch {
+    return null
+  }
+}
+
 export function sweepCourierRunChats(ctx: OnceCtx['metaMap'], live: LiveSession[]): number {
-  const liveIds = new Set(live.map((s) => s.sessionId))
+  const liveById = new Map(live.map((s) => [s.sessionId, s]))
   const seen = new Set<string>()
   let retired = 0
   for (const [id, meta] of ctx) {
     if (meta.archived || !isCourierRunTitle(meta.title)) continue
     const sessionId = meta.cliSessionId ?? id
-    if (liveIds.has(sessionId) || seen.has(sessionId)) continue
+    if (seen.has(sessionId)) continue
+    const liveHere = liveById.get(sessionId)
+    if (liveHere) {
+      // A COURIER RUN THAT FINISHED DOES NOT EXIT - measured 2026-08-29: 13 of 14 leftover
+      // courier chats were still LIVE, idle 8-15 minutes, their processes never terminating.
+      // Skipping every live chat (the rule that protects real work) therefore let our own
+      // plumbing accumulate as zombie sessions forever. These are ours, marker-titled, and a
+      // courier's whole life is one pass: once it has been quiet past the floor its pass is
+      // over, so its process is stopped and the chat retired. The quiet floor is what keeps
+      // this from ever touching a run that is still working.
+      const quietFor = courierQuietMs(liveHere)
+      if (quietFor === null || quietFor < COURIER_ZOMBIE_MS) continue
+      try {
+        process.kill(liveHere.pid)
+        console.log(
+          `[agenthydra] stopped a finished courier run (pid ${liveHere.pid}, quiet ${Math.round(quietFor / 60000)}m) before retiring its chat`,
+        )
+      } catch {
+        // Already gone, or not ours to kill: the archive below is still correct.
+      }
+    }
     seen.add(sessionId)
     void archiveDesktopChat(sessionId, true).then((res) => {
       for (const h of res.hits ?? [])
