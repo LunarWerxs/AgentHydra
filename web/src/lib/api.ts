@@ -23,9 +23,6 @@ import type {
   MonitorView,
   NotificationSettings,
   NotifyDeliveryResult,
-  OrchestratorPromptKey,
-  OrchestratorSettings,
-  OrchestratorView,
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
@@ -86,10 +83,6 @@ export type {
   MonitorView,
   NotificationSettings,
   NotifyDeliveryResult,
-  OrchestratorInstance,
-  OrchestratorPromptKey,
-  OrchestratorSettings,
-  OrchestratorView,
   PermissionMode,
   PortableModeSettings,
   PortableWindowResult,
@@ -746,43 +739,6 @@ export const setMonitorAccount = (accountId: string, enabled: boolean) =>
 export const runMonitorCheck = () =>
   j<{ ok: boolean } & MonitorView>('/api/monitor/check', { method: 'POST' })
 
-// --- orchestrator (docs/ORCHESTRATOR.md) ----------------------------------------
-export const getOrchestrator = () => j<OrchestratorView>('/api/orchestrator')
-export const updateOrchestrator = (
-  b: Partial<OrchestratorSettings> & {
-    /** Prompt-template edits; blank (or the default text verbatim) resets that key. */
-    prompts?: Partial<Record<OrchestratorPromptKey, string>>
-  },
-) => j<OrchestratorView>('/api/orchestrator', { method: 'POST', body: JSON.stringify(b) })
-/** Sweep the backlog now instead of at the next interval (full mode, docs/ORCHESTRATOR.md).
- *  Read-only: it reads task files, greps tracked source for markers, and asks git for HEAD. A
- *  scan asked for while the mode is OFF answers "what would this find?" and starts nothing. */
-export const scanOrchestratorBacklog = () =>
-  j<{ ok: boolean; backlog: OrchestratorView['backlog'] }>('/api/orchestrator/backlog/scan', {
-    method: 'POST',
-    body: JSON.stringify({}),
-  })
-/** (Re)install the shipped /orchestrate, /orcstop, /orcstart commands into ~/.claude/commands. */
-export const installOrchestratorCommands = (force = false) =>
-  j<{ ok: boolean; files: Array<{ file: string; outcome: string; path: string }> }>(
-    '/api/orchestrator/install-command',
-    { method: 'POST', body: JSON.stringify({ force }) },
-  )
-/** The opt-out: disable the orchestrator and remove its shipped commands from this machine. */
-export const uninstallOrchestratorCommands = () =>
-  j<{
-    ok: boolean
-    disabled: boolean
-    files: Array<{ file: string; outcome: string; path: string }>
-  }>('/api/orchestrator/uninstall-command', { method: 'POST', body: JSON.stringify({}) })
-/** Park (or unpark) one thread — the same switch `/orcstop` and `/orcstart` throw from inside a
- *  chat. Returns the fresh holds list so a caller can adopt the server's answer rather than
- *  guessing at it. */
-export const setOrchestratorHold = (sessionId: string, held: boolean) =>
-  j<{ ok: boolean; holds: OrchestratorView['holds'] }>('/api/orchestrator/hold', {
-    method: 'POST',
-    body: JSON.stringify({ session_id: sessionId, held }),
-  })
 /** Move a chat to another account: stops its live process if any, archives its old desktop
  *  entries, runs a one-turn migration on the target account, then imports it into that
  *  instance's desktop app under its real title (the finalize hook fires the import). */

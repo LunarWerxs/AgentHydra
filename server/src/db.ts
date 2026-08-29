@@ -132,57 +132,6 @@ create table if not exists session_scan_cache (
 );
 create index if not exists idx_session_scan_cache_path on session_scan_cache(path);
 
--- Orchestrator (docs/ORCHESTRATOR.md): reviewer acks on attention items, plus small persisted
--- state (repo dirty-since, usage baselines) so cooldowns and durations survive a daemon restart.
-create table if not exists orchestrator_acks (
-  key      text primary key,          -- the attention item's stable key
-  action   text not null,             -- what the reviewer says it did (free text, short)
-  until    text not null,             -- ISO; the item stays suppressed while now < until
-  acked_at text not null
-);
-create table if not exists orchestrator_kv (
-  key        text primary key,
-  value      text not null,
-  updated_at text not null
-);
-
--- Proposed actions (owner law 2026-08-26: EVERY action - a revive, an archive, an import - is
--- checked by the orchestrator AI before it is made; nothing acts blind). The daemon's detectors
--- write rows here instead of acting; the reviewer decides each one and executes the approved
--- ones itself, then reports the outcome. This table is the audit ledger of everything the
--- machinery wanted to do and what the AI said.
-create table if not exists orchestrator_proposals (
-  id            text primary key,
-  kind          text not null,       -- revive | archive | import
-  session_id    text not null,
-  instance_ref  text,
-  title         text,
-  summary       text not null,       -- one human line: the case for the action
-  evidence      text not null,       -- JSON: everything the checker needs to judge
-  status        text not null default 'proposed',  -- proposed | approved | rejected | executed | failed | expired
-  proposed_at   text not null,
-  updated_at    text not null,
-  decided_at    text,
-  decided_by    text,
-  decision_note text,
-  executed_at   text,
-  result        text
-);
-create index if not exists idx_orch_proposals_open on orchestrator_proposals(status, kind, session_id);
-
--- Where work was placed, and when. The routing table is a pure function of the usage cache,
--- and that cache refreshes about once a minute, so every placement decided inside one window
--- saw identical numbers and picked the identical top row. Round-robin is not something a
--- stateless sort can do. This ledger is the memory it was missing: an account that just
--- received work sinks below its equally-loaded peers until the usage numbers catch up.
-create table if not exists orchestrator_placements (
-  id           integer primary key autoincrement,
-  instance_ref text not null,       -- normalized 'desktop:<dir>' (lowercased, no trailing slash)
-  session_id   text,
-  kind         text not null,       -- seed | terminal | migrate | queue | manual
-  at           text not null        -- ISO
-);
-create index if not exists idx_orch_placements_at on orchestrator_placements(at);
 `)
 
 // A short-lived pre-0.11 hardening change stored manually added account credentials as DPAPI
@@ -475,51 +424,6 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   monitor_enabled: '0',
   monitor_max_attempts: '3',
   monitor_resume_buffer_min: '3',
-  // Orchestrator watcher (docs/ORCHESTRATOR.md) — OFF by default (it reads everything you are
-  // doing on a timer, and that should be a choice).
-  orch_enabled: '0',
-  orch_tick_secs: '60',
-  orch_idle_quiet_secs: '150',
-  orch_ctx_handoff_tokens: '700000',
-  orch_soft_pct: '80',
-  orch_warn_pct: '85',
-  orch_hard_pct: '90',
-  orch_session_high_pct: '90',
-  orch_reset_soon_mins: '120',
-  orch_spike_pct: '5',
-  orch_dirty_mins: '60',
-  orch_stale_task_mins: '120',
-  orch_nudge_cooldown_mins: '15',
-  // Launching closed instances is OFF by default (owner directive 2026-08-25): sessions on
-  // accounts that are not currently open are simply not resumable. The 'when-exhausted' mode,
-  // when a user opts in, may open an instance of at least orch_open_min_plan only once every
-  // running instance is out of headroom.
-  orch_open_instances: 'never',
-  orch_open_min_plan: 'Max 20',
-  orch_reviewer_reserve_pct: '75',
-  orch_handoff_surface: 'desktop',
-  // Every orchestrator-started chat (handoff continuation, chip, terminal launch) runs on the
-  // owner's chosen model/effort - Opus 5 at max effort with the ultracode opt-in by default
-  // (owner directive 2026-08-25).
-  orch_new_chat_model: 'opus',
-  orch_new_chat_effort: 'max',
-  orch_new_chat_ultracode: '1',
-  // OFF by default like the monitor it rides on: it spends OTHER accounts' quota unattended.
-  orch_migrate_on_limit: '0',
-  // 0 = unlimited (the default). A positive value caps how many chats may WORK at once,
-  // fleet-wide; the overflow rotates in round-robin, longest-idle first.
-  orch_max_active_chats: '0',
-  // ON by default: a unified manager that watched only one of the two agents was the gap.
-  orch_watch_codex: '1',
-  // ON by default (owner instruction 2026-08-27). It spends no quota of its own and starts
-  // nothing: it only reorders the accounts the router was already going to choose between,
-  // and only among accounts that are equally loaded. The thing it prevents, several
-  // placements in one usage-cache window all stacking onto one account, is silent when it
-  // happens, which is why the safe default is on rather than opt-in.
-  orch_load_balance: '1',
-  // How far back a placement counts against an account. 90 minutes comfortably outlives the
-  // usage cache's refresh, which is the whole blind spot this ledger exists to cover.
-  orch_balance_window_mins: '90',
 }
 
 export function getSetting(key: string): string {

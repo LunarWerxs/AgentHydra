@@ -1,6 +1,6 @@
 // server/tests/terminal-launch-gates.test.ts - the two ways a launched terminal hangs forever.
 //
-// Both were hit trying to start the orchestrator's reviewer on 2026-08-27, and both are invisible
+// Both were hit launching an unattended terminal session on 2026-08-27, and both are invisible
 // from the API: the endpoint returned ok:true, a window opened, and the session never joined the
 // live registry. A hang that reports success is worse than a refusal, because nothing anywhere
 // says the launch did not take.

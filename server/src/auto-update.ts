@@ -203,7 +203,7 @@ export async function runAutoUpdateOnce(): Promise<AutoUpdateRunResult> {
  * The notify half of the loop, run when auto-apply is off. Kept separate from runAutoUpdateOnce
  * rather than short-circuiting inside it: that function's contract is "one check → maybe apply →
  * maybe relaunch" and its guard ORDER (available → canApply → no active runs) is what the
- * orchestrator tests pin down. Threading an `enabled` early-return through it would have quietly
+ * auto-update tests pin down. Threading an `enabled` early-return through it would have quietly
  * moved a gate ahead of `busy-runs`, which is the kind of change that reads as harmless and is not.
  */
 export async function runUpdateCheckOnce(): Promise<{ ok: boolean; updateAvailable: boolean }> {

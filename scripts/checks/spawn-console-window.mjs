@@ -100,8 +100,8 @@ const SKIP_FILES = new Set([
   // Same category as the line above: `cmd /k claude --resume …` opens a terminal the user asked
   // for and is going to type into. windowsHide there would hide the entire feature.
   'server/src/session-resume.ts',
-  // Same category again: the orchestrator's handoff continuations open a NEW visible terminal
-  // session precisely because the headless queue was invisible. Hiding it defeats the feature.
+  // Same category again: launchTerminalSession opens a NEW visible terminal session
+  // precisely because the headless queue was invisible. Hiding it defeats the feature.
   'server/src/session-launch.ts',
   'server/src/core/crypto/keys.mac.ts',
   'server/src/core/crypto/keys.linux.ts',

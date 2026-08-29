@@ -16,7 +16,7 @@
 // locker store ships from the same package now): single-flight rotation-safe refresh,
 // per-attempt redirect_uri, server-side revoke on forget, and id_token identity all come
 // from the shared package. This module keeps only the agenthydra-specific parts: the
-// settings-row persistence seam, the settings allowlist, and the sync orchestration.
+// settings-row persistence seam, the settings allowlist, and the sync plumbing.
 //
 // Because agenthydra is loopback-only (no tunnel / remote mode), there is NO auth gate
 // and NO session cookie: "signed in" simply means the daemon holds a refresh token.
@@ -55,7 +55,7 @@ const OAUTH = {
  * Widened 2026-08-25 from four scheduler keys to thirty-odd. The old list was not a considered
  * boundary so much as the four keys that existed when it was written; everything added since
  * defaulted to not-synced without anyone deciding, which is why a user's notification setup,
- * display choices and every orchestrator threshold had to be re-entered per machine.
+ * display choices and every tuning threshold had to be re-entered per machine.
  *
  * The line that DID survive is in [`NEVER_SYNCED`]: secrets, this machine's identity, anything
  * naming a local path, and any switch that makes the app act on its own while nobody is watching.
@@ -79,66 +79,6 @@ export const PREF_KEYS = [
   'monitor_max_attempts',
   'monitor_resume_buffer_min',
   'monitor_resume_prompt',
-  // Orchestrator thresholds and cadence. Every one of these is inert unless `orch_enabled` was
-  // turned on locally, so carrying them costs nothing and saves re-tuning eleven numbers by hand.
-  'orch_tick_secs',
-  'orch_idle_quiet_secs',
-  'orch_ctx_handoff_tokens',
-  'orch_soft_pct',
-  'orch_warn_pct',
-  'orch_hard_pct',
-  'orch_session_high_pct',
-  'orch_reset_soon_mins',
-  'orch_spike_pct',
-  'orch_dirty_mins',
-  'orch_nudge_cooldown_mins',
-  // Added by another session while this list was being widened, and caught immediately by the
-  // classification guard rather than by anyone noticing — which is the guard earning its keep on
-  // its first day. Same family as the rest: orchestrator policy and tuning, inert unless
-  // `orch_enabled` was turned on locally.
-  'orch_open_instances',
-  'orch_open_min_plan',
-  'orch_reviewer_reserve_pct',
-  'orch_handoff_surface',
-  // New-chat defaults (model/effort/ultracode for orchestrator-started chats): same family,
-  // owner policy that should read the same on every machine, inert unless orch_enabled.
-  'orch_new_chat_model',
-  'orch_new_chat_effort',
-  'orch_new_chat_ultracode',
-  'orch_stale_task_mins',
-  'orch_max_active_chats',
-  // Watching Codex too is a preference about scope, not an autonomy switch: it only widens what
-  // the feed reports, and reports nothing at all unless orch_enabled is on locally.
-  'orch_watch_codex',
-  // Load balancing is routing POLICY, not an autonomy switch: it changes which of the accounts
-  // the router was already choosing between comes first, and starts nothing on its own. Every
-  // machine should route the owner's fleet the same way, so both keys sync. The ledger they
-  // consult does NOT sync and must not: it is a record of what THIS machine placed, and
-  // merging two machines' placements would have each one balancing against the other's load.
-  'orch_load_balance',
-  'orch_balance_window_mins',
-  // Full mode's tuning, which is cadence and ceilings rather than autonomy: none of it does
-  // anything unless `orch_work_mode` was set to full on THIS machine, and that switch is in
-  // NEVER_SYNCED for exactly that reason. What counts as a marker is owner policy and should
-  // read the same everywhere; how often to sweep and how much to have in flight at once are the
-  // same shape as the thresholds above. `orch_backlog_roots` does NOT sync: it is a list of
-  // absolute paths on one computer.
-  'orch_backlog_scan_mins',
-  'orch_backlog_max_open',
-  'orch_backlog_todo_markers',
-  // The owner's edited orchestrator prompts: policy text, same on every machine. Blank = the
-  // shipped default, so only real edits ever sync.
-  'orch_prompt_resume_nudge',
-  'orch_prompt_handoff_request',
-  'orch_prompt_stale_task_nudge',
-  'orch_prompt_hard_cutoff',
-  'orch_prompt_overload_nudge',
-  'orch_prompt_commit_nudge',
-  'orch_prompt_branch_nudge',
-  'orch_prompt_orphan_revive',
-  'orch_prompt_closeout_docs',
-  'orch_prompt_work_start',
-  'orch_prompt_migration_notice',
   // Notifications, including the SMTP endpoint — but never its password, which lives in
   // NEVER_SYNCED. Telling you something is not the same as acting for you, so unlike the
   // unattended switches below these travel: a notification setup is tedious to re-enter and
@@ -181,9 +121,6 @@ export const NEVER_SYNCED = [
   'app_ping_reported',
   // '' means auto-detect; anything else is an ABSOLUTE PATH to an editor on this machine.
   'transcript_editor',
-  // Same reason: absolute paths to repositories on THIS computer. A laptop that syncs a desktop's
-  // drive letters would sweep a list of directories none of which exist there.
-  'orch_backlog_roots',
   // Which providers exist HERE. A laptop without the Codex desktop app should not be told it has
   // one because the desktop does.
   'provider_chatgpt_handoff',
@@ -199,15 +136,6 @@ export const NEVER_SYNCED = [
   // rather than quietly narrowed, because taking away sync someone already relies on is its own
   // surprise. Worth an explicit decision rather than a drive-by one.
   'monitor_enabled',
-  'orch_enabled',
-  // Same family: migrate-on-limit spends OTHER accounts' quota unattended. Each machine decides
-  // for itself, like the switches above.
-  'orch_migrate_on_limit',
-  // And full mode, which is the largest of them: it is what makes the orchestrator go LOOKING for
-  // work in repositories nobody asked it about, and start chats to do it. Everything downstream
-  // of the switch is capped and AI-checked, but the decision to have the machinery hunt for work
-  // at all belongs to the machine it will run on, not to whichever one it was turned on from.
-  'orch_work_mode',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

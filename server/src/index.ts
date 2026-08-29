@@ -164,39 +164,8 @@ import {
   setNotificationSettings,
 } from './notify-settings'
 import { openUi } from './open-ui'
-import {
-  ackAttention,
-  clearPendingRename,
-  getOrchestratorPrompts,
-  getOrchestratorSettings,
-  installOrchestratorCommands,
-  listPendingRenames,
-  noteArchiveVisibilityPending,
-  noteReviewerActivity,
-  orchestratorView,
-  reportBacklogOutcome,
-  runBacklogSweep,
-  runOrchestratorOnce,
-  setOrchestratorPrompts,
-  setOrchestratorSettings,
-  setSessionHold,
-  startOrchestrator,
-  uninstallOrchestratorCommands,
-} from './orchestrator'
-import { clearDelivery, noteDeliveryAttempt, pendingDeliveries } from './orchestrator-courier'
-import { buildReviewerJournal, composeReviewerSeed } from './orchestrator-reviewer-journal'
-import { runOrchestratorSelfTest } from './orchestrator-selftest'
-import {
-  buildDryRun,
-  buildWorklist,
-  renderDryRunText,
-  resolveWorkItem,
-  verifyWorkItem,
-} from './orchestrator-worklist'
-import { recentPlacements, recordPlacement } from './placements'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
-import { decideProposal, openProposalsForSession, reportProposalExecuted } from './proposals'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { buildRelaunchArgv } from './relaunch-argv.mjs'
 import {
@@ -217,7 +186,6 @@ import {
   isSessionSuperseded,
   launchTerminalSession,
   liveSessionEntry,
-  seedDesktopSession,
 } from './session-launch'
 import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
@@ -787,10 +755,10 @@ app.get('/api/sessions/search', async (c) => {
   }
 })
 // ONE query, everything the system knows about a chat: metadata + archive flag as it sits on
-// disk right now, lineage ids across auto-compact rolls, done-mark, live process, every
-// orchestrator ledger row that touched it, and the kv state naming it. Built 2026-08-28 after
-// answering "what happened to the Orchestrate chat" took an hour of hand-joins across four
-// stores that this endpoint now does in one call. Query by title fragment or ANY id.
+// disk right now, lineage ids across auto-compact rolls, done-mark, and the live process
+// hosting it (if any). Built 2026-08-28 because answering "what happened to chat X" used to
+// take an hour of hand-joins across the stores that each hold a quarter of the answer.
+// Query by title fragment or ANY id.
 app.get('/api/chats/dossier', (c) => {
   const q = c.req.query('q') ?? ''
   if (!q.trim())
@@ -2007,151 +1975,6 @@ app.post('/api/monitor/check', async (c) => {
   return c.json({ ok: true, ...monitorView() })
 })
 
-// --- orchestrator (docs/ORCHESTRATOR.md) ------------------------------------
-// The attention watcher: settings + the current feed. The judgment half (the /orchestrate
-// reviewer session) consumes GET, acts over peer messaging or the queue, then POSTs an ack.
-app.get('/api/orchestrator', (c) => c.json(orchestratorView()))
-app.post('/api/orchestrator', async (c) => {
-  const body = await jsonBody(c)
-  const patch: Record<string, unknown> = {}
-  if (typeof body.enabled === 'boolean') patch.enabled = body.enabled
-  for (const k of [
-    'tickSecs',
-    'idleQuietSecs',
-    'ctxHandoffTokens',
-    'softPct',
-    'warnPct',
-    'hardPct',
-    'sessionHighPct',
-    'resetSoonMins',
-    'spikePct',
-    'dirtyMins',
-    'staleTaskMins',
-    'nudgeCooldownMins',
-    'maxActiveChats',
-    'backlogScanMins',
-    'backlogMaxOpen',
-  ] as const) {
-    if (typeof body[k] === 'number') patch[k] = body[k]
-  }
-  if (typeof body.reviewerReservePct === 'number')
-    patch.reviewerReservePct = body.reviewerReservePct
-  for (const k of [
-    'openInstances',
-    'openMinPlan',
-    'handoffSurface',
-    'newChatModel',
-    'newChatEffort',
-    'workMode',
-    'backlogRoots',
-  ] as const) {
-    if (typeof body[k] === 'string') patch[k] = body[k]
-  }
-  if (typeof body.newChatUltracode === 'boolean') patch.newChatUltracode = body.newChatUltracode
-  if (typeof body.migrateOnLimit === 'boolean') patch.migrateOnLimit = body.migrateOnLimit
-  if (typeof body.backlogIncludeTodoMarkers === 'boolean')
-    patch.backlogIncludeTodoMarkers = body.backlogIncludeTodoMarkers
-  const wasFull = getOrchestratorSettings().workMode === 'full'
-  setOrchestratorSettings(patch)
-  // Prompt edits ride the same route: {"prompts": {resumeNudge: "...", ...}}. Blank (or the
-  // default text verbatim) clears the override for that key.
-  if (body.prompts && typeof body.prompts === 'object')
-    setOrchestratorPrompts(body.prompts as Record<string, string>)
-  // Flipping it on should produce a feed now, not a tick-interval from now — and a machine that
-  // has never had the reviewer command gets it installed (an existing copy is never touched here).
-  if (patch.enabled === true) {
-    await runOrchestratorOnce().catch(() => {})
-    try {
-      installOrchestratorCommands(false)
-    } catch (err) {
-      console.error('[agenthydra] orchestrator command install failed:', err)
-    }
-  }
-  // Switching FULL MODE on sweeps immediately rather than at the next interval. Half an hour of
-  // "did that do anything?" is its own bug, and the first sweep is also the one that baselines
-  // each repo's existing markers, so it wants to happen while someone is watching.
-  if (!wasFull && getOrchestratorSettings().workMode === 'full')
-    await runBacklogSweep(true).catch(() => null)
-  return c.json(orchestratorView())
-})
-// --- full mode: the backlog (docs/ORCHESTRATOR.md, "Full mode") --------------
-// Sweep now instead of at the next interval. Read-only: it reads task files, greps tracked
-// source for markers, and asks git for HEAD — it never runs a repository's own scripts, which is
-// the work chat's job precisely because it is real work with judgment attached.
-app.post('/api/orchestrator/backlog/scan', async (c) => {
-  const scan = await runBacklogSweep(true)
-  return c.json({ ok: true, scan, backlog: orchestratorView().backlog })
-})
-// The reviewer's outcome report for one backlog item. A `gate` item resolves with the sha it was
-// green at, so that repository stays quiet until its code moves; the rest simply stop being
-// found. {"ok": false} counts against the item's retry budget, and an item that fails enough
-// times stops being offered and becomes a line for the owner instead of an infinite loop.
-app.post('/api/orchestrator/backlog/resolved', async (c) => {
-  const body = await jsonBody(c)
-  const key = typeof body.key === 'string' ? body.key.trim() : ''
-  if (!key) return c.json({ error: 'key is required' }, 400)
-  const ok = body.ok !== false
-  noteReviewerActivity()
-  const res = reportBacklogOutcome(key, ok, typeof body.sha === 'string' ? body.sha : null)
-  return c.json({ ...res, backlog: orchestratorView().backlog })
-})
-// Install (or with {"force": true}, refresh) the shipped orchestrator commands
-// (/orchestrate, /orcstop, /orcstart) into ~/.claude/commands — for a new machine, or after an
-// AgentHydra update changed them.
-app.post('/api/orchestrator/install-command', async (c) => {
-  const body = await jsonBody(c)
-  try {
-    return c.json({ ok: true, files: installOrchestratorCommands(body.force === true) })
-  } catch (err) {
-    return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
-  }
-})
-// The opt-out: turn the orchestrator off and remove its shipped commands (/orchestrate,
-// /orcstop, /orcstart) from ~/.claude/commands. Edited copies are removed too — a reinstall is
-// one click (or one enable) away. Pass {"keep_enabled": true} to remove only the files.
-app.post('/api/orchestrator/uninstall-command', async (c) => {
-  const body = await jsonBody(c)
-  try {
-    if (body.keep_enabled !== true) setOrchestratorSettings({ enabled: false })
-    return c.json({
-      ok: true,
-      disabled: body.keep_enabled !== true,
-      files: uninstallOrchestratorCommands(),
-    })
-  } catch (err) {
-    return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
-  }
-})
-// Park/unpark one thread (/orcstop and /orcstart call this with their own session id). A held
-// thread gets no orchestrator prompts of any kind until the hold is lifted.
-app.post('/api/orchestrator/hold', async (c) => {
-  const body = await jsonBody(c)
-  if (
-    typeof body.session_id !== 'string' ||
-    !body.session_id.trim() ||
-    typeof body.held !== 'boolean'
-  )
-    return c.json({ error: 'session_id and held (boolean) are required' }, 400)
-  setSessionHold(body.session_id.trim(), body.held)
-  return c.json({ ok: true, holds: orchestratorView().holds })
-})
-app.post('/api/orchestrator/ack', async (c) => {
-  const body = await jsonBody(c)
-  if (typeof body.key !== 'string' || !body.key.trim() || typeof body.action !== 'string')
-    return c.json({ error: 'key and action are required' }, 400)
-  ackAttention(
-    body.key,
-    body.action,
-    typeof body.cooldownMins === 'number' ? body.cooldownMins : undefined,
-  )
-  noteReviewerActivity()
-  return c.json({ ok: true, settings: getOrchestratorSettings() })
-})
-// Force one watcher pass now.
-app.post('/api/orchestrator/check', async (c) => {
-  await runOrchestratorOnce()
-  return c.json({ ok: true, ...orchestratorView() })
-})
 // Capture what is actually ON SCREEN, and hand back the path so the caller can LOOK at it.
 // Everything else this daemon reports is read from disk, and disk is not the screen - the gap
 // between them is where the archive-that-stayed-visible and the title-that-got-wiped both
@@ -2162,181 +1985,9 @@ app.post('/api/screenshot', async (c) => {
   const result = await captureScreen(typeof body.path === 'string' ? body.path : undefined)
   return c.json(result, result.ok ? 200 : 500)
 })
-// The orchestration self-test: run the real guards against real state and report what held.
-// Safe to run at any time - every artifact it touches is one it created (sacrificial ids, a
-// throwaway metadata store), and it never reads or writes a real chat. `deep: true` additionally
-// seeds ONE real desktop chat to prove the app-facing half works, then archives it.
-// Record that work was placed on an instance, for balancing. The primitives (seed, terminal
-// launch, migrate) record themselves, so this is only for a placement made through a channel
-// AgentHydra does not own: the reviewer delivering a turn NATIVELY into an existing chat on
-// some account is real load that nothing else here can see. Without it, balancing would
-// under-count exactly the delivery path the zero-click law made the default.
-// The reviewer reports a NATIVE rename done, so the chat leaves the pending list. Renaming
-// through the app is the only rename a running app cannot overwrite; the janitor's disk write
-// is a fallback for closed instances, not a substitute for this.
-app.post('/api/orchestrator/renamed', async (c) => {
-  const body = await jsonBody(c)
-  const id = typeof body.session_id === 'string' ? body.session_id.trim() : ''
-  if (!id) return c.json({ ok: false, error: 'session_id is required' }, 400)
-  const cleared = clearPendingRename(id)
-  return c.json({ ok: true, cleared, pending: listPendingRenames() })
-})
-app.post('/api/orchestrator/placement', async (c) => {
-  const body = await jsonBody(c)
-  const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''
-  if (!ref.startsWith('desktop:'))
-    return c.json({ ok: false, error: "instance_ref ('desktop:<dir>') is required" }, 400)
-  const KINDS = ['seed', 'terminal', 'migrate', 'queue', 'manual'] as const
-  const rawKind = typeof body.kind === 'string' ? body.kind : ''
-  const kind = (KINDS as readonly string[]).includes(rawKind)
-    ? (rawKind as (typeof KINDS)[number])
-    : 'manual'
-  recordPlacement(ref, kind, typeof body.session_id === 'string' ? body.session_id : null)
-  const s = getOrchestratorSettings()
-  return c.json({ ok: true, counts: recentPlacements(s.balanceWindowMins) })
-})
-app.post('/api/orchestrator/selftest', async (c) => {
-  const body = await jsonBody(c)
-  try {
-    const report = await runOrchestratorSelfTest({ deep: body.deep === true })
-    return c.json(report, report.ok ? 200 : 500)
-  } catch (err) {
-    return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
-  }
-})
-// --- the action gate (owner law 2026-08-26: every action is AI-checked before it is made) ---
-// The daemon's detectors write proposals; the reviewer rules on each one here, EXECUTES the
-// approved ones itself (native app tools in its own instance, peer relay elsewhere, or the
-// archive/import endpoints), then reports the outcome. Decide-then-execute is enforced: an
-// execution report on an undecided proposal is refused.
-app.post('/api/orchestrator/proposals/:id/decide', async (c) => {
-  const body = await jsonBody(c)
-  if (typeof body.approved !== 'boolean')
-    return c.json({ error: 'approved (boolean) is required' }, 400)
-  const by = typeof body.by === 'string' && body.by.trim() ? body.by.trim() : 'reviewer'
-  const note = typeof body.note === 'string' ? body.note : null
-  const res = decideProposal(c.req.param('id'), body.approved, by, note)
-  noteReviewerActivity()
-  if (!res.ok)
-    return c.json({ ok: false, error: res.reason }, res.reason === 'not-found' ? 404 : 409)
-  return c.json({ ok: true, proposal: res.proposal })
-})
-app.post('/api/orchestrator/proposals/:id/executed', async (c) => {
-  const body = await jsonBody(c)
-  if (typeof body.ok !== 'boolean') return c.json({ error: 'ok (boolean) is required' }, 400)
-  noteReviewerActivity()
-  const res = reportProposalExecuted(
-    c.req.param('id'),
-    body.ok,
-    typeof body.result === 'string' ? body.result : null,
-  )
-  if (!res.ok)
-    return c.json({ ok: false, error: res.reason }, res.reason === 'not-found' ? 404 : 409)
-  return c.json({ ok: true, proposal: res.proposal })
-})
-// --- THE WORKLIST: the reviewer's whole wake, computed (owner directive 2026-08-28) -------------
-// The raw feed + prose rubric asked an AI to compose messages, pick delivery routes, remember
-// orderings and do bookkeeping. These three endpoints move all of that server-side: the reviewer
-// GETs typed items with one judgment question each, POSTs a ruling, performs at most one exact
-// tool call handed back verbatim, and the server VERIFIES the outcome itself before closing the
-// ledger. See server/src/orchestrator-worklist.ts for the contract.
-app.get('/api/orchestrator/worklist', async (c) => {
-  const reviewer = c.req.query('reviewer')?.trim()
-  if (!reviewer) return c.json({ error: 'reviewer (your session id) is required' }, 400)
-  noteReviewerActivity()
-  return c.json(buildWorklist(reviewer))
-})
-// THE COURIER ENDPOINTS. A courier task, fired by a Desktop app's own scheduler inside its
-// account, drains its instance's delivery queue through these two calls. This is the rung that
-// removed the last human touch from the system (owner directive, 2026-08-28: "lift zero
-// fingers") - no session needs to be awake in an instance for the orchestrator to reach it.
-app.get('/api/orchestrator/courier/pending', (c) => {
-  const instance = c.req.query('instance')?.trim()
-  if (!instance) return c.json({ error: 'instance (the instance dir) is required' }, 400)
-  return c.json({ deliveries: pendingDeliveries(instance) })
-})
-app.post('/api/orchestrator/courier/done', async (c) => {
-  const body = await jsonBody(c)
-  const instance = typeof body.instance === 'string' ? body.instance.trim() : ''
-  const itemId = typeof body.itemId === 'string' ? body.itemId.trim() : ''
-  if (!instance || !itemId) return c.json({ error: 'instance and itemId are required' }, 400)
-  // A REPORTED send is not a verified one: the queue row is cleared so the courier stops
-  // re-sending, and the ledger still closes only when verify() sees the transcript move. A
-  // failure leaves the row queued and counts an attempt, which the breaker reads.
-  if (body.ok === false) {
-    const attempts = noteDeliveryAttempt(instance, itemId)
-    return c.json({ ok: true, requeued: true, attempts, error: body.error ?? null })
-  }
-  clearDelivery(instance, itemId)
-  return c.json({ ok: true, cleared: true, note: 'verify() closes the ledger, not this report' })
-})
-// The owner's dry run (asked 2026-08-28): what WOULD the orchestrator do with every chat and
-// every open window, as a read-only plan - the same item builders as the worklist, but nothing
-// acts, no cooldowns are spent, and deliberately NO noteReviewerActivity: a dry run pretending
-// to be a reviewer is how an earlier diagnostic probe masked a dead loop. ?format=text returns
-// the rendered layout so every surface shows the owner the same picture.
-app.get('/api/orchestrator/dryrun', (c) => {
-  const d = buildDryRun(c.req.query('reviewer')?.trim() ?? '')
-  if (c.req.query('format') === 'text') return c.text(renderDryRunText(d))
-  return c.json(d)
-})
-// THE REVIEWER IS A ROLE, NOT A CHAT (survey tier 1, 2026-08-28; measured twice that day: a
-// phantom archive and a process kill each took the reviewer's host chat down and the fleet
-// halted until a human typed /orchestrate). The JOURNAL is the compact successor briefing the
-// server already holds (recent rulings with notes, in-flight items with their saved verbatim
-// steps, standing context); the SEED composes it into a ready-to-paste opening prompt that
-// briefs ANY fresh chat as the successor. Delivery is whoever boots that chat - never a relay -
-// and the booter verifies its bypassPermissions stamp first, same as every other boot.
-// Deliberately NO noteReviewerActivity on either: these are read precisely while the reviewer is
-// dead, and stamping presence here would un-stall the very health check that says a successor is
-// needed (the same masking the dry run refuses).
-app.get('/api/orchestrator/reviewer-journal', (c) => c.json(buildReviewerJournal()))
-app.get('/api/orchestrator/reviewer-seed', (c) => {
-  const journal = buildReviewerJournal()
-  const prompt = composeReviewerSeed(journal)
-  if (c.req.query('format') === 'text') return c.text(prompt)
-  return c.json({
-    ok: true,
-    generatedAt: journal.generatedAt,
-    prompt,
-    boot: {
-      deliver:
-        'paste this prompt as the FIRST message of a fresh chat (or seed one with it) - never ' +
-        'resurrect a dead reviewer chat, and never relay it through working chats',
-      bypass:
-        'verify the hosting chat runs bypassPermissions BEFORE booting - the reviewer loop ' +
-        'shells out every wake, and an approval prompt nobody can click is a silent deadlock',
-    },
-    journal,
-  })
-})
-app.post('/api/orchestrator/items/:id/resolve', async (c) => {
-  const body = await jsonBody(c)
-  const reviewer = typeof body.reviewer === 'string' ? body.reviewer.trim() : ''
-  const decision = body.decision
-  if (!reviewer) return c.json({ error: 'reviewer (your session id) is required' }, 400)
-  if (decision !== 'approve' && decision !== 'reject')
-    return c.json({ error: "decision must be 'approve' or 'reject'" }, 400)
-  if (typeof body.note !== 'string' || !body.note.trim())
-    return c.json({ error: 'note (one line of reasoning) is required' }, 400)
-  noteReviewerActivity()
-  const res = await resolveWorkItem({
-    itemId: c.req.param('id'),
-    reviewerSessionId: reviewer,
-    decision,
-    note: body.note.trim(),
-    messageOverride: typeof body.messageOverride === 'string' ? body.messageOverride : undefined,
-  })
-  return c.json(res, res.ok ? 200 : 409)
-})
-app.post('/api/orchestrator/items/:id/verify', async (c) => {
-  noteReviewerActivity()
-  const res = await verifyWorkItem(c.req.param('id'))
-  return c.json(res, res.state === 'not-found' ? 404 : 200)
-})
 // Start a NEW interactive Claude session in a VISIBLE terminal window, pinned to an instance's
-// account. This is the handoff-continuation surface: unlike a headless queue run it is on the
-// user's screen and joins the live registry, so the orchestrator can keep orchestrating it.
+// account. Unlike a headless queue run it is on the user's screen and joins the live
+// registry, so peer messaging can reach it.
 app.post('/api/sessions/launch-terminal', async (c) => {
   const body = await jsonBody(c)
   if (
@@ -2348,8 +1999,8 @@ app.post('/api/sessions/launch-terminal', async (c) => {
     return c.json({ error: 'cwd and prompt are required' }, 400)
   if (body.effort != null && invalidEnum(body.effort, VALID_EFFORTS, 'effort'))
     return c.json({ error: invalidEnum(body.effort, VALID_EFFORTS, 'effort') }, 400)
-  // An unattended window (the orchestrator reviewer) must be able to ask for a mode that does
-  // not stop on shell approvals. Validated against the same set every other entry point uses,
+  // An unattended window must be able to ask for a mode that does not stop on shell
+  // approvals. Validated against the same set every other entry point uses,
   // because 'bypassPermissions' runs every tool with no approval and a typo must not silently
   // become something else.
   if (body.permission_mode != null && !VALID_PERMISSION_MODES.has(String(body.permission_mode)))
@@ -2391,8 +2042,7 @@ app.post('/api/sessions/launch-terminal', async (c) => {
 })
 // Import a FINISHED session into a desktop instance's app as a visible chat (the app's own
 // claude://resume one-way import, targeted at one instance via its profile dir). Refuses a
-// session that is currently live — the import rewrites the transcript. This is how the
-// orchestrator's finished handoff work lands on the user's screen inside the desktop app.
+// session that is currently live — the import rewrites the transcript.
 app.post('/api/sessions/:id/import-desktop', async (c) => {
   const sessionId = c.req.param('id')
   const body = await jsonBody(c)
@@ -2414,43 +2064,12 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
       },
       409,
     )
-  // The action gate, same shape as desktop-archive: an undecided import proposal must be
-  // decided before this fires; an approved one is auto-closed by the execution.
-  const importAsk = openProposalsForSession(sessionId).find((p) => p.kind === 'import')
-  if (importAsk?.status === 'proposed')
-    return c.json(
-      {
-        ok: false,
-        error: `proposal-pending: decide proposal ${importAsk.id} first (the action gate)`,
-      },
-      409,
-    )
   const result = await importSessionToDesktop({
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
     title: typeof body.title === 'string' ? body.title : null,
     force: body.force === true,
   })
-  if (importAsk?.status === 'approved')
-    reportProposalExecuted(importAsk.id, result.ok, result.ok ? 'imported' : result.reason)
-  return c.json(result, result.ok ? 200 : 422)
-})
-// Seed a brand-new visible desktop chat (fabricated minimal transcript + import). The reviewer
-// then delivers the real prompt through the app's own message channel, which boots the engine
-// and runs the turn IN the app — the desktop-native replacement for queue-with-import-back
-// (owner law 2026-08-26: desktop stays desktop; his threads never run headless). Returns the
-// new session id; the chat is dormant until the first delivered message.
-app.post('/api/sessions/seed-desktop', async (c) => {
-  const body = await jsonBody(c)
-  const ref = typeof body.instance_ref === 'string' ? body.instance_ref.trim() : ''
-  const cwd = typeof body.cwd === 'string' ? body.cwd.trim() : ''
-  const title = typeof body.title === 'string' ? body.title.trim() : ''
-  if (!ref.startsWith('desktop:') || !cwd || !title)
-    return c.json(
-      { ok: false, error: "instance_ref ('desktop:<dir>'), cwd and title are required" },
-      400,
-    )
-  const result = await seedDesktopSession({ cwd, title, instanceRef: ref })
   return c.json(result, result.ok ? 200 : 422)
 })
 // Stamp a desktop chat's automation posture to bypassPermissions (owner rule, restated
@@ -2480,31 +2099,12 @@ app.post('/api/sessions/:id/automation', async (c) => {
 app.post('/api/sessions/:id/desktop-archive', async (c) => {
   const body = await jsonBody(c)
   const sessionId = c.req.param('id')
-  // The action gate, enforced in code: an archive with an UNDECIDED proposal open must be
-  // decided first (no acting past the check), and executing an APPROVED one auto-closes the
-  // ledger so the audit trail cannot be forgotten. A session with no proposal at all is the
-  // owner's own manual call and passes untouched.
-  const archiveAsk = openProposalsForSession(sessionId).find((p) => p.kind === 'archive')
-  if (body.archived !== false && archiveAsk?.status === 'proposed')
-    return c.json(
-      {
-        ok: false,
-        error: `proposal-pending: decide proposal ${archiveAsk.id} first (the action gate)`,
-      },
-      409,
-    )
   const result = await archiveDesktopChat(sessionId, body.archived !== false)
-  // A flag written under a RUNNING app is invisible until that app restarts — queue the
-  // archive-visibility restart (owner ask: archived means GONE FROM THE SIDEBAR now).
-  for (const h of result.hits ?? [])
-    if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
-  // ...and SAY so, rather than returning a bare ok:true for a chat the owner can still see.
-  // Measured 2026-08-26 by asking the app itself right after this call: disk said archived,
-  // the app still reported isArchived:false, and the chat stayed in the sidebar. Reporting
-  // that as success is how "archived" came to mean "still there". Worse for the instance that
-  // hosts the reviewer, which can never satisfy the restart's zero-live-sessions condition
-  // because the reviewer is itself a live session - there, the app's OWN archive is the only
-  // thing that works, which is what the reviewer rubric already requires.
+  // SAY when the flag landed under a running app, rather than returning a bare ok:true for a
+  // chat the owner can still see. Measured 2026-08-26 by asking the app itself right after
+  // this call: disk said archived, the app still reported isArchived:false, and the chat
+  // stayed in the sidebar. Reporting that as success is how "archived" came to mean "still
+  // there".
   const underRunningApp = (result.hits ?? []).some((h) => h.changed && h.wasRunning)
   if (underRunningApp)
     return c.json({
@@ -2512,15 +2112,18 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
       visibleNow: false,
       note:
         'the flag is written, but that app is RUNNING and holds its chat list in memory, so ' +
-        'the chat is STILL ON SCREEN until it restarts. A restart is queued and fires once that ' +
-        'instance has no live sessions. To retire it immediately, use the app own archive (the ' +
-        'reviewer session tools) - required for the instance the reviewer runs in, which never ' +
-        'reaches zero live sessions because the reviewer is itself one.',
+        'the chat is STILL ON SCREEN until that instance next restarts. To retire it ' +
+        "immediately, archive it through the app's own UI.",
     })
-  if (body.archived !== false && archiveAsk?.status === 'approved')
-    reportProposalExecuted(archiveAsk.id, result.ok, result.ok ? 'archived' : result.reason)
   return c.json(result, result.ok ? 200 : 404)
 })
+// The default first message a migrated chat receives when the caller supplies no prompt.
+const MIGRATION_NOTICE =
+  '[agenthydra] You are being migrated to a different account and this thread will appear ' +
+  "in the owner's desktop app shortly. In a few lines: state what this thread is working on, " +
+  'what is verified complete so far, and the concrete next steps. Do not start new work in ' +
+  'this turn and do not touch any files; after this turn, this notice is spent - resume ' +
+  'normally when the owner next asks.'
 // Move a chat to a different account, end to end: stop its live process if it has one (this is
 // user-initiated — the chat is being moved, so its current run ends), flag its old desktop
 // entries archived, then IMPORT it into the target instance's app under its real title. The
@@ -2548,7 +2151,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   const prompt =
     typeof body.prompt === 'string' && body.prompt.trim()
       ? body.prompt.trim().slice(0, 8000)
-      : getOrchestratorPrompts().migrationNotice
+      : MIGRATION_NOTICE
   const s = await getSession(sessionId, 'claude')
   if (!s) return c.json({ ok: false, error: 'session not found' }, 404)
   // One lineage, one continuation — checked BEFORE the kill below, so a refused migrate never
@@ -2582,19 +2185,14 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   }
 
   // Old desktop entries: flagged archived now, BEFORE the import creates the fresh entry in
-  // the target profile — and queued for the archive-visibility restart so they leave the
-  // sidebars promptly instead of at some future restart.
-  const oldEntries = await archiveDesktopChat(sessionId, true).catch(() => null)
-  for (const h of oldEntries?.hits ?? [])
-    if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
+  // the target profile.
+  await archiveDesktopChat(sessionId, true).catch(() => null)
 
-  // Placement follows the owner's chosen surface (their standing rule: match the preference,
-  // and 'desktop' means no terminals and nothing headless) - EXCEPT that surface purity outranks
-  // the preference (owner law, restated 2026-08-28: desktop stays desktop, console stays console,
-  // never cross-contaminate). A thread that lives in a desktop app migrates desktop-to-desktop
-  // regardless of what handoffSurface says about NEW work.
+  // Surface purity (owner law, restated 2026-08-28: desktop stays desktop, console stays
+  // console, never cross-contaminate): a thread that lives in a desktop app migrates
+  // desktop-to-desktop; one with no desktop home continues in a visible terminal.
   const livesInDesktop = (await desktopHomeFor(sessionId).catch(() => null)) !== null
-  const surface = livesInDesktop ? 'desktop' : getOrchestratorSettings().handoffSurface
+  const surface = livesInDesktop ? 'desktop' : 'terminal'
   if (surface === 'terminal') {
     const launched = await launchTerminalSession({
       cwd: s.cwd,
@@ -2602,7 +2200,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       instanceRef: ref,
       resumeSessionId: sessionId,
       force: body.force === true,
-      // The handoff surface is orchestrator-driven and unattended, so the window must not
+      // The migration continuation is unattended, so the window must not
       // stop on a shell approval nobody is there to answer.
       permissionMode: 'bypassPermissions',
     })
@@ -2611,11 +2209,10 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     return c.json({ ok: true, surface: 'terminal', stoppedLive: !!live })
   }
   // Desktop surface: the thread lands in the target instance's app as a chat, dormant. The
-  // daemon has no messaging tools of its own, so the PROMPT is not delivered here — the
-  // interactive caller (the reviewer) delivers it through the app's own message channel, which
-  // BOOTS the dormant chat's engine and runs the turn in the app (measured 2026-08-26). No
-  // click is involved, and no headless process is created; the old "queues until the owner
-  // activates it" contract was the zero-click violation and is gone.
+  // daemon has no messaging tools of its own, so the PROMPT is not delivered here — an
+  // interactive caller delivers it through the app's own message channel, which BOOTS the
+  // dormant chat's engine and runs the turn in the app (measured 2026-08-26). No click is
+  // involved, and no headless process is created.
   const imported = await importSessionToDesktop({
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
@@ -2971,12 +2568,6 @@ startImportSweep()
 // sweep above, not here), gates each on the weekly cap via checkUsage, and schedules a
 // `claude --resume` for just after the 5-hour reset.
 startMonitor()
-
-// --- orchestrator watcher loop (opt-in; OFF by default; see docs/ORCHESTRATOR.md) -------------
-// Same posture as the monitor: the loop always runs, each tick is a no-op unless `orch_enabled`
-// is set. Reads the live-session registry, transcript tails, git status and the usage cache;
-// never messages, dispatches, or probes anything.
-startOrchestrator()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

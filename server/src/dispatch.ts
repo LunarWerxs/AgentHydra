@@ -1020,7 +1020,7 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // caller supply the session id even when new_chat is true, and buildArgv then passes it as
   // `--session-id <id>`, so `{new_chat: true, session_id: <an existing desktop chat>}` wrote
   // headless turns straight into that chat's transcript with the check skipped at both layers.
-  // Reachable from the MCP tool too, i.e. by the orchestrator itself. Asking the question about
+  // Reachable from the MCP tool too. Asking the question about
   // every run - "does this id already live in a desktop app?" - costs one directory walk and
   // cannot be reasoned around.
   // SUPERSEDED 2026-08-27 by a wider law. The block above describes the guard as it was: it asked

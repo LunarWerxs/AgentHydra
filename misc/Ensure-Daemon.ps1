@@ -1,9 +1,9 @@
 # misc/Ensure-Daemon.ps1 - make sure this app's daemon is UP, and start it if it is not.
 #
-# WHY THIS EXISTS (owner directive, Michael, 2026-08-28): the orchestrator reviewer loop talks to
-# AgentHydra over HTTP every wake. On 2026-08-28 the daemon and its tray host were gone (no tray
-# icon, port 7787 refusing), and the loop simply failed its curl and reported the outage instead of
-# fixing it. "Anything that might need AgentHydra should make sure AgentHydra is running first" -
+# WHY THIS EXISTS (owner directive, Michael, 2026-08-28): automations talk to AgentHydra over
+# HTTP every wake. On 2026-08-28 the daemon and its tray host were gone (no tray icon, port 7787
+# refusing), and the caller simply failed its curl and reported the outage instead of fixing
+# it. "Anything that might need AgentHydra should make sure AgentHydra is running first" -
 # so this is that preflight, and it is meant to be called before the first API call of a wake.
 #
 # THE DIFFERENCE FROM Restart-Daemon.ps1, which is the whole point:

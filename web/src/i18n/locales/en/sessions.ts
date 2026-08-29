@@ -139,8 +139,7 @@ export default {
   resumeFailed: "Couldn't reopen this session.",
   migrateAccount: 'Migrate to another account',
   migrateNoTargets: 'No other running instances',
-  migrateStarted:
-    'Migrated to {name} — the chat is in that desktop app now, ready to carry on. Nothing to click: the orchestrator delivers its next turn through the app itself.',
+  migrateStarted: 'Migrated to {name} — the chat is in that desktop app now, ready to carry on.',
   migrateFailed: "Couldn't migrate this chat.",
   // --- readable export ---
   exportMarkdown: 'Save as Markdown',

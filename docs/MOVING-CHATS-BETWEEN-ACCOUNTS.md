@@ -115,10 +115,9 @@ and repeating the test reproduced it exactly: the pointer reappeared within seco
   metadata file must live under your instance's signed-in account folder.
 - For a chat in another instance: **you cannot deliver right now - say so and wait.** The relay
   rung (peer-messaging a live working chat there and having it deliver) is BANNED (owner
-  directive, Michael, 2026-08-28: working chats are never couriers). The sanctioned replacement
-  is a dedicated orchestrator-owned agent chat per instance; until one exists in the target,
-  the delivery parks. Do not substitute your own `send_message` either - it steals the chat
-  onto your account (measured, below).
+  directive, Michael, 2026-08-28: working chats are never couriers). Until the owner opens the
+  target instance, the delivery parks. Do not substitute your own `send_message` either - it
+  steals the chat onto your account (measured, below).
 - **Before booting ANY migrated chat, verify its metadata says `bypassPermissions` and re-stamp
   if it does not** (owner rule, restated 2026-08-28: every migrated chat MUST be bypass before
   it starts). `POST /api/sessions/:id/automation` does the stamp; the dossier shows the mode.

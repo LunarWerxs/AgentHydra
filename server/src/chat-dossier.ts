@@ -2,11 +2,10 @@
 //
 // WHY THIS EXISTS (owner ask, 2026-08-28, verbatim: "so the next time this doesn't take a
 // f***ing hour to do what should have taken 3 seconds and one query"): diagnosing "what
-// happened to chat X" used to mean hand-walking four stores that each hold a quarter of the
-// answer — the desktop metadata files (title, archive flag, lineage ids), the orchestrator
-// ledger (every proposal that ever touched it, and who decided), the marks table (done),
-// and the live registry (is a process hosting it right now). This joins all four by ANY id
-// or title fragment and returns the whole story in one response.
+// happened to chat X" used to mean hand-walking the stores that each hold a piece of the
+// answer — the desktop metadata files (title, archive flag, lineage ids), the marks table
+// (done), and the live registry (is a process hosting it right now). This joins them by ANY
+// id or title fragment and returns the whole story in one response.
 //
 // The scan is a FRESH read of every store on purpose — no 15-second cache. A dossier is a
 // diagnostic: the caller is usually asking because the world just changed, and a cached
@@ -18,7 +17,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { defaultClaudeUserDataDir, instancesRoot } from './core/paths'
 import { db } from './db'
-import { readLiveRegistry } from './orchestrator'
+import { readLiveRegistry } from './live-registry'
 
 /** One chat's full metadata row, read straight off disk (superset of SessionMeta: the cached
  *  scan drops lineage and timestamps, and lineage ids are the whole point here). */
@@ -29,7 +28,7 @@ export interface DossierChat {
   chatId: string | null
   cliSessionId: string | null
   /** Continuations this chat rolled through (auto-compact keeps the chat, rolls the id).
-   *  A ledger row can name ANY of these and still be about this chat. */
+   *  A mark can be filed under ANY of these and still be about this chat. */
   priorCliSessionIds: string[]
   title: string | null
   cwd: string | null
@@ -40,13 +39,10 @@ export interface DossierChat {
 }
 
 export interface DossierMatch extends DossierChat {
-  /** Every id this chat answers to — what the ledger/marks/kv joins run on. */
+  /** Every id this chat answers to — what the marks and live-registry joins run on. */
   lineageIds: string[]
   doneMark: { done: boolean; updatedAt: string } | null
   live: { pid: number; name: string; startedAt: string; cwd: string } | null
-  ledger: Array<Record<string, unknown>>
-  /** orchestrator_kv rows whose key or value names this chat (wl: states, holds). */
-  kv: Array<{ key: string; value: string }>
 }
 
 const iso = (ms: unknown): string | null =>
@@ -132,20 +128,8 @@ export function chatMatches(c: DossierChat, q: string): boolean {
 
 export interface DossierDeps {
   roots?: Array<{ dir: string; label: string }>
-  ledgerFor?: (ids: string[]) => Array<Record<string, unknown>>
   markFor?: (ids: string[]) => { done: boolean; updatedAt: string } | null
-  kvFor?: (ids: string[]) => Array<{ key: string; value: string }>
   liveFor?: (ids: string[]) => DossierMatch['live']
-}
-
-function defaultLedgerFor(ids: string[]): Array<Record<string, unknown>> {
-  if (ids.length === 0) return []
-  const ph = ids.map(() => '?').join(',')
-  return db
-    .query<Record<string, unknown>, string[]>(
-      `select * from orchestrator_proposals where session_id in (${ph}) order by proposed_at desc`,
-    )
-    .all(...ids)
 }
 
 function defaultMarkFor(ids: string[]): { done: boolean; updatedAt: string } | null {
@@ -161,14 +145,6 @@ function defaultMarkFor(ids: string[]): { done: boolean; updatedAt: string } | n
   return null
 }
 
-function defaultKvFor(ids: string[]): Array<{ key: string; value: string }> {
-  if (ids.length === 0) return []
-  const rows = db
-    .query<{ key: string; value: string }, []>('select key, value from orchestrator_kv')
-    .all()
-  return rows.filter((r) => ids.some((id) => r.key.includes(id) || r.value?.includes(id)))
-}
-
 function defaultLiveFor(ids: string[]): DossierMatch['live'] {
   try {
     const live = readLiveRegistry(join(homedir(), '.claude'))
@@ -182,14 +158,11 @@ function defaultLiveFor(ids: string[]): DossierMatch['live'] {
 
 /**
  * The one-query answer: every chat matching `q` (title fragment or any lineage id), each with
- * its archive flag as it sits ON DISK RIGHT NOW, its done-mark, its live process if any, every
- * ledger row that ever touched its lineage, and the kv state that names it.
+ * its archive flag as it sits ON DISK RIGHT NOW, its done-mark, and its live process if any.
  */
 export function chatDossier(q: string, deps: DossierDeps = {}): { matches: DossierMatch[] } {
   const chats = collectChats(deps.roots)
-  const ledgerFor = deps.ledgerFor ?? defaultLedgerFor
   const markFor = deps.markFor ?? defaultMarkFor
-  const kvFor = deps.kvFor ?? defaultKvFor
   const liveFor = deps.liveFor ?? defaultLiveFor
   const matches: DossierMatch[] = []
   for (const c of chats) {
@@ -200,8 +173,6 @@ export function chatDossier(q: string, deps: DossierDeps = {}): { matches: Dossi
       lineageIds,
       doneMark: markFor(lineageIds),
       live: liveFor(lineageIds),
-      ledger: ledgerFor(lineageIds),
-      kv: kvFor(lineageIds),
     })
   }
   // Newest activity first — the chat being asked about is almost always the recent one.

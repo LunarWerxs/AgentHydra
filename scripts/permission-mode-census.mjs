@@ -20,7 +20,7 @@
  * The stamp was then measured directly (seed, boot, re-stamp, boot again): it lands, and the
  * app overwrites it on EVERY boot, not just the import boot. So the 4 survivors above are not
  * a second mechanism, they are chats nobody has woken yet. Per-chat stamping cannot hold for
- * a chat the orchestrator wakes, which is every chat it revives.
+ * any chat that gets woken again.
  *
  * Run it after changing anything in the import path, and before believing the stamp works.
  *

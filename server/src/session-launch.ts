@@ -1,14 +1,14 @@
 // server/src/session-launch.ts — start a NEW interactive Claude session in a visible terminal.
 //
-// WHY THIS EXISTS. The orchestrator's handoff continuations used to go through the headless
-// queue, and the owner's verdict after the first real run was immediate: "none of the chats
-// that say 'Handoff continued in a new session' show any new session running ANYWHERE." A
-// headless run is real work, but it is invisible in the desktop app and it does not register
-// as a live peer session, so the orchestrator itself cannot nudge it either. An INTERACTIVE
-// terminal session fixes both at once: the window is on the user's screen, and the session
-// joins ~/.claude/sessions and the peer-messaging daemon, so it is orchestratable like any
-// desktop chat. (A new DESKTOP-app chat cannot be created externally at all — there is no
-// stable interface for it; the terminal window is the visible surface that exists.)
+// WHY THIS EXISTS. Continuations used to go through the headless queue, and the owner's
+// verdict after the first real run was immediate: "none of the chats that say 'Handoff
+// continued in a new session' show any new session running ANYWHERE." A headless run is real
+// work, but it is invisible in the desktop app and it does not register as a live peer
+// session, so nothing can nudge it either. An INTERACTIVE terminal session fixes both at
+// once: the window is on the user's screen, and the session joins ~/.claude/sessions and the
+// peer-messaging daemon, so peer messaging can reach it like any desktop chat. (A new
+// DESKTOP-app chat cannot be created externally at all — there is no stable interface for
+// it; the terminal window is the visible surface that exists.)
 //
 // THIS WINDOW IS MEANT TO BE SEEN — `windowsHide` is deliberately ABSENT, same posture and
 // same guard exemption as session-resume.ts (scripts/checks/spawn-console-window.mjs).
@@ -37,8 +37,6 @@ import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
 import { db } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
-import { newChatOpening } from './new-chat-opening'
-import { recordPlacement } from './placements'
 
 /**
  * One lineage, one continuation. A done-marked session (session_marks.done = 1) was handed off,
@@ -65,7 +63,7 @@ export function isSessionSuperseded(sessionId: string): boolean {
  *
  * Preferring this over the machine's global `claude` is not cosmetic: measured 2026-08-25, the
  * globally installed npm CLI (2.1.220) writes a live-registry entry but hosts NO peer-messaging
- * socket, so a session launched with it is invisible to SendMessage — the orchestrator could
+ * socket, so a session launched with it is invisible to SendMessage — a peer could
  * start it but never steer it. The desktop-bundled CLI (2.1.237) is the version whose peer
  * plumbing provably interoperates with the rest of the fleet on this machine.
  */
@@ -110,9 +108,8 @@ export function buildTerminalLaunchPlan(
   // With resumeSessionId, the window CONTINUES an existing thread (--resume) with the prompt as
   // its next turn — the visible alternative to a headless queue resume, per the owner's standing
   // rule that nothing runs headless: work happens where it can be watched.
-  // An UNATTENDED window (the orchestrator reviewer is the case that forced this) must not
-  // stop on a per-command approval prompt, because nobody is there to answer it. Opt-in: a
-  // caller that does not ask keeps the CLI's own default.
+  // An UNATTENDED window must not stop on a per-command approval prompt, because nobody is
+  // there to answer it. Opt-in: a caller that does not ask keeps the CLI's own default.
   const modelArgs = `${resumeSessionId ? ` --resume ${resumeSessionId}` : ''}${model ? ` --model ${model}` : ''}${effort ? ` --effort ${effort}` : ''}${permissionMode ? ` --permission-mode ${permissionMode}` : ''}`
   if (platform === 'win32') {
     // PowerShell (not cmd) runs the claude line: `Get-Content -Raw` hands the multiline prompt
@@ -220,8 +217,8 @@ export interface TerminalLaunchResult {
 /**
  * Open a visible terminal running a NEW `claude` session in `cwd` with `prompt` as its first
  * message, on the account `instanceRef` names (or the ambient login when null). The session id
- * is chosen by the CLI itself; within seconds the session appears in ~/.claude/sessions, which
- * is where the orchestrator watcher (and anyone else) picks it up.
+ * is chosen by the CLI itself; within seconds the session appears in ~/.claude/sessions,
+ * where anything reading the live registry picks it up.
  */
 type InstanceEnvResolution =
   | { ok: true; env: Record<string, string>; exe: string | null }
@@ -316,13 +313,7 @@ export async function launchTerminalSession(opts: {
   const dir = join(tmpdir(), 'agenthydra-launch')
   mkdirSync(dir, { recursive: true })
   const promptFile = join(dir, `prompt-${crypto.randomUUID()}.txt`)
-  // THE ULTRACODE OPT-IN, applied in the primitive so every caller inherits it, exactly as the
-  // two-writers refusal above is. --model and --effort are real flags and are handled below;
-  // ultracode has no flag, so the only place it can be applied is the prompt text itself.
-  // Skipped for a resume: continuing an existing thread is not starting a chat, and the keyword
-  // belongs to the turn it is written on. See new-chat-opening.ts.
-  const firstMessage = opts.resumeSessionId ? opts.prompt : newChatOpening(opts.prompt)
-  writeFileSync(promptFile, firstMessage)
+  writeFileSync(promptFile, opts.prompt)
 
   const plan = buildTerminalLaunchPlan(
     process.platform,
@@ -356,7 +347,6 @@ export async function launchTerminalSession(opts: {
       stdout: 'ignore',
       stderr: 'ignore',
     })
-    recordPlacement(opts.instanceRef ?? null, 'terminal', opts.resumeSessionId ?? null)
     return { ok: true, command: plan.command }
   } catch (err) {
     return {
@@ -582,11 +572,10 @@ export function desktopChatArchiveState(
  * writes show in a RUNNING app after its next restart — the standing caveat.
  */
 const GENERIC_TITLE = /^(untitled|general coding session|new (chat|session))$/i
-// AgentHydra's own seed preamble. A seeded chat's first user message is fabricated so the
-// chat has something to boot from, and the title scanner derives titles from the first user
-// message, so without this the plumbing NAMES the chat. Observed on the owner's sidebar
-// 2026-08-27: '[orchestrator] This thread was seeded by AgentHydra for a new task. The task
-// prompt arrives as the next...'. Such a title is replaceable, and never writable.
+// The retired v1 orchestrator's seed preamble (archive/orchestrator-v1). Chats it seeded are
+// still on disk with fabricated first messages, and the title scanner derives titles from the
+// first user message, so without this the old plumbing NAMES the chat. Such a title is
+// replaceable, and never writable.
 const PLUMBING_TITLE = /^\[orchestrator\]/i
 
 /** If `path`'s stored title is empty/generic/plumbing AND the scanner has something real for it,
@@ -795,108 +784,6 @@ export async function stampImportedChat(
 }
 
 /**
- * Seed a brand-new DESKTOP chat: fabricate a minimal finished transcript on disk, then import
- * it into the target instance's app. The result is a visible, dormant chat the reviewer then
- * DELIVERS the real prompt into through the app's own message channel (which boots the engine
- * and runs the turn in the app — proven 2026-08-26). Together they are the desktop-native
- * replacement for the banned queue-with-import-back pattern (owner law: desktop stays desktop;
- * no thread of his ever runs headless): handoff continuations and chip launches both start
- * life this way, visible from their first real turn.
- */
-export async function seedDesktopSession(opts: {
-  cwd: string
-  title: string
-  instanceRef: string
-  isInstanceRunning?: (dir: string) => Promise<boolean>
-  /** Seam for tests; the default is the real ~/.claude store. */
-  claudeHome?: string
-}): Promise<{ ok: boolean; sessionId?: string; reason?: string; titleDurable?: boolean }> {
-  if (!opts.instanceRef.startsWith('desktop:'))
-    return { ok: false, reason: "instance_ref must be 'desktop:<dir>'" }
-  if (!existsSync(opts.cwd)) return { ok: false, reason: 'cwd-not-found' }
-  const sessionId = crypto.randomUUID()
-  // The CLI's transcript-store key for a cwd: every non-alphanumeric character becomes '-'
-  // (same encoding orchestrator.ts's projectKeyForCwd documents).
-  const projectKey = opts.cwd.replace(/[^a-zA-Z0-9]/g, '-')
-  const dir = join(opts.claudeHome ?? join(homedir(), '.claude'), 'projects', projectKey)
-  mkdirSync(dir, { recursive: true })
-  const now = new Date().toISOString()
-  const userUuid = crypto.randomUUID()
-  const records = [
-    {
-      type: 'user',
-      uuid: userUuid,
-      parentUuid: null,
-      sessionId,
-      cwd: opts.cwd,
-      timestamp: now,
-      isSidechain: false,
-      message: {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text:
-              '[orchestrator] This thread was seeded by AgentHydra for a new task. ' +
-              'The task prompt arrives as the next message; treat that as the real start.',
-          },
-        ],
-      },
-    },
-    {
-      type: 'assistant',
-      uuid: crypto.randomUUID(),
-      parentUuid: userUuid,
-      sessionId,
-      cwd: opts.cwd,
-      timestamp: now,
-      isSidechain: false,
-      message: { role: 'assistant', content: [{ type: 'text', text: 'Ready.' }] },
-    },
-  ]
-  try {
-    writeFileSync(
-      join(dir, `${sessionId}.jsonl`),
-      `${records.map((r) => JSON.stringify(r)).join('\n')}\n`,
-    )
-  } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : 'transcript-write-failed' }
-  }
-  const res = await importSessionToDesktop({
-    sessionId,
-    instanceDir: opts.instanceRef.slice('desktop:'.length),
-    title: opts.title,
-    isInstanceRunning: opts.isInstanceRunning,
-  })
-  if (!res.ok) return { ok: false, reason: res.reason }
-  // THE TITLE WE ASKED FOR IS THE ONE THAT SHOULD WIN. When the app is running it wipes this
-  // chat's title on the first boot, and the scanner then has only the fabricated preamble to
-  // work from, so leaving it to the janitor names the chat after AgentHydra's plumbing. Park
-  // the intended title for the reviewer to apply through the app, which is the one write the
-  // app cannot undo. Dynamic import: orchestrator.ts imports this module, so a static one
-  // would close a cycle.
-  if (!res.titleDurable) {
-    try {
-      const { addPendingRename } = await import('./orchestrator')
-      addPendingRename(opts.instanceRef, sessionId, opts.title)
-    } catch (err) {
-      // Losing the reminder must never fail the seed; the janitor is still the fallback.
-      console.error('[agenthydra] could not park the seeded chat rename:', err)
-    }
-  }
-  // A seeded chat IS work placed on that account, so the ledger hears about it here rather
-  // than in the callers. Recording at the primitive is what lets balancing count a placement
-  // made by the owner clicking in the app the same as one the monitor made itself; a ledger
-  // only the polite callers wrote to would be balancing against a fiction.
-  recordPlacement(opts.instanceRef, 'seed', sessionId)
-  // The title is written into metadata a RUNNING app will overwrite the moment this chat first
-  // boots - seen on screen, not inferred: a freshly seeded chat with a perfectly good title
-  // rendered as "General coding session" in the sidebar until it was renamed through the app.
-  // So the caller is told, and the rubric requires the native rename right after seeding.
-  return { ok: true, sessionId, titleDurable: res.titleDurable }
-}
-
-/**
  * The desktop metadata FILE for a session id, searched across every instance's store. This is
  * the roll-proof visibility test: a desktop chat that continues rolls onto a NEW cliSessionId
  * while its metadata file keeps the ORIGINAL id in its name — so any lookup keyed by
@@ -1005,9 +892,9 @@ export async function findDesktopEntryFile(
  * can be overwritten when that chat next boots. It costs one small write and removes the most
  * common way a revived chat dies quietly.
  *
- * HOW IT LOSES, measured twice (the 2026-08-27 experiment in ORCHESTRATOR.md, then live
- * 2026-08-29 01:58 UTC when seeded chat 95fe512c froze at its FIRST PowerShell prompt ~15s
- * after seeding): the running app's IN-MEMORY chat record is authoritative. The import handler
+ * HOW IT LOSES, measured twice (a 2026-08-27 experiment, then live 2026-08-29 01:58 UTC when
+ * seeded chat 95fe512c froze at its FIRST PowerShell prompt ~15s after seeding): the running
+ * app's IN-MEMORY chat record is authoritative. The import handler
  * creates that record with 'acceptEdits', every chat boot re-saves it over this file, and the
  * engine takes its mode from the record, not from disk — so a file stamp is invisible to the
  * app until the one moment it re-reads the store, which is ITS OWN boot. That is why this
@@ -1043,9 +930,8 @@ export function applyDesktopChatAutomation(instanceDir: string, sessionId: strin
  * made the stamp durable, reads the clobbered value and the chat stays deadlock-prone for
  * life (measured 2026-08-29 01:58 UTC: seeded chat 95fe512c booted ~15s after seeding, froze
  * at its first shell prompt, and the dossier read 'acceptEdits' back off disk). With it, the
- * file converges back to 'bypassPermissions' after every flip, and the next app boot — owner
- * restart, app update, or the orchestrator's own archive-visibility restart, which also runs
- * reassertAutomationStamps in its quit→reopen window — makes the stamp permanent.
+ * file converges back to 'bypassPermissions' after every flip, and the next app boot (owner
+ * restart or app update) makes the stamp permanent.
  *
  * Bounded three ways, so it can never fight the app forever or scan a store forever: a hard
  * time window, a cap on restores (a tug-of-war that reaches the cap is the app's to win), and
@@ -1157,8 +1043,8 @@ export function reassertAutomationStamps(profileDir: string): number {
  * filed under the app's own id and carries the CLI id inside as `cliSessionId`, which is 98.7%
  * of the owner's real chats. Every lookup here was filename-only, which meant archiving a chat
  * the owner had actually started returned "no-desktop-chat-found" and quietly did nothing -
- * found by the orchestration self-test on its first real run, in the same week the identical
- * blindness was fixed in the surface guard.
+ * found by a self-test on its first real run, in the same week the identical blindness was
+ * fixed in the surface guard.
  */
 /** The imported-shape / created-in-app-shape check for one org/user leaf directory, split out of
  *  {@link findChatMetaPath}'s walk so that function's own complexity reflects only the walk, not

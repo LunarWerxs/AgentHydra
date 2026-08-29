@@ -590,29 +590,14 @@ export const TOOLS: McpEngineTool[] = [
       ),
   },
   {
-    name: 'orchestrator_dryrun',
-    description:
-      'The orchestrator DRY RUN the owner asked for: what the orchestrator WOULD do with every ' +
-      'chat and every open window, as a read-only plan. Same item builders as the real worklist, ' +
-      'but nothing acts, no cooldowns are spent, and no reviewer stamp is written. Returns a ' +
-      'rendered text layout: open windows with their chats and weekly usage, the items a ' +
-      'reviewer would be asked to rule on (with the exact question and evidence), what the ' +
-      'server would handle itself, what it would suppress, and anything mid-delivery. Show the ' +
-      'text to the owner VERBATIM in a code block - it is the layout he asked to review before ' +
-      'letting the orchestrator act.',
-    inputSchema: S({}, []),
-    run: () => api('/api/orchestrator/dryrun?format=text'),
-  },
-  {
     name: 'chat_dossier',
     description:
       'ONE query, everything the system knows about a chat: which desktop instance holds it, its ' +
       'archive flag as it sits on disk RIGHT NOW, its lineage ids across auto-compact rolls, its ' +
-      'done-mark, the live process hosting it (if any), every orchestrator ledger row that ever ' +
-      'touched it (proposals, decisions, notes, results), and the orchestrator kv state naming it. ' +
-      'Use this FIRST for any "what happened to chat X / is it alive / who archived it" question — ' +
-      'it replaces hand-joining the metadata stores, the ledger, the marks table and the live ' +
-      'registry. Query by a title fragment or by ANY session/chat id, current or prior.',
+      'done-mark, and the live process hosting it (if any). Use this FIRST for any "what ' +
+      'happened to chat X / is it alive / who archived it" question — it replaces hand-joining ' +
+      'the metadata stores, the marks table and the live registry. Query by a title fragment or ' +
+      'by ANY session/chat id, current or prior.',
     inputSchema: S(
       { q: { type: 'string', description: 'Title fragment or any session/chat id (substring).' } },
       ['q'],
@@ -1338,48 +1323,10 @@ export const TOOLS: McpEngineTool[] = [
       api('/api/monitor', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(a) }),
   },
 
-  // --- orchestrator (docs/ORCHESTRATOR.md) --------------------------------------
-  {
-    name: 'get_orchestrator',
-    description:
-      'Get the orchestrator watcher: settings and the current attention feed — live chats idle and pending input (with the recap tail to judge from), chats due a context handoff, usage band/spike alerts per account, long-dirty repos, off-main branches, and offered task chips. This is the feed the /orchestrate reviewer session acts on.',
-    inputSchema: S(),
-    run: () => api('/api/orchestrator'),
-  },
-  {
-    name: 'set_orchestrator',
-    description:
-      'MUTATES: update orchestrator watcher settings (enabled, tickSecs, idleQuietSecs, ctxHandoffTokens, softPct/warnPct/hardPct, sessionHighPct, resetSoonMins, spikePct, dirtyMins, nudgeCooldownMins). OFF by default. The watcher only reads local state; it never messages sessions or spends quota.',
-    inputSchema: S({
-      enabled: { type: 'boolean' },
-      tickSecs: { type: 'number' },
-      idleQuietSecs: { type: 'number' },
-      ctxHandoffTokens: { type: 'number' },
-      softPct: { type: 'number' },
-      warnPct: { type: 'number' },
-      hardPct: { type: 'number' },
-      sessionHighPct: { type: 'number' },
-      resetSoonMins: { type: 'number' },
-      spikePct: { type: 'number' },
-      dirtyMins: { type: 'number' },
-      staleTaskMins: { type: 'number' },
-      nudgeCooldownMins: { type: 'number' },
-      openInstances: { type: 'string', enum: ['never', 'when-exhausted'] },
-      openMinPlan: { type: 'string' },
-      reviewerReservePct: { type: 'number' },
-      handoffSurface: { type: 'string', enum: ['desktop', 'terminal', 'queue'] },
-      newChatModel: { type: 'string' },
-      newChatEffort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
-      newChatUltracode: { type: 'boolean' },
-      migrateOnLimit: { type: 'boolean' },
-    }),
-    run: (a) =>
-      api('/api/orchestrator', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(a) }),
-  },
   {
     name: 'launch_terminal_session',
     description:
-      "MUTATES: open a VISIBLE terminal window running a NEW interactive Claude session in `cwd` with `prompt` as its first message, pinned to `instance_ref`'s account ('desktop:<dir>' or 'cli:<id>'; omitted = ambient login). Unlike a headless queue run, the session is on the user's screen and joins the live peer registry, so the orchestrator can keep orchestrating it. This is the default handoff-continuation surface.",
+      "MUTATES: open a VISIBLE terminal window running a NEW interactive Claude session in `cwd` with `prompt` as its first message, pinned to `instance_ref`'s account ('desktop:<dir>' or 'cli:<id>'; omitted = ambient login). Unlike a headless queue run, the session is on the user's screen and joins the live peer registry, so peer messaging can reach it.",
     inputSchema: S(
       {
         cwd: { type: 'string' },
@@ -1393,55 +1340,6 @@ export const TOOLS: McpEngineTool[] = [
     ),
     run: (a) =>
       api('/api/sessions/launch-terminal', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify(a),
-      }),
-  },
-  {
-    name: 'orchestrator_ack',
-    description:
-      "MUTATES: acknowledge one attention item by its key after acting on it (or deciding not to). Suppresses that item for cooldownMins (default: the nudgeCooldownMins setting); a session item whose transcript moves after the ack re-arms on its own. `action` is a short note of what was done ('nudged', 'answered', 'queued chip', 'left for human').",
-    inputSchema: S(
-      {
-        key: { type: 'string' },
-        action: { type: 'string' },
-        cooldownMins: { type: 'number' },
-      },
-      ['key', 'action'],
-    ),
-    run: (a) =>
-      api('/api/orchestrator/ack', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify(a),
-      }),
-  },
-  {
-    name: 'orchestrator_check',
-    description: 'Run one orchestrator watcher pass now and return the fresh attention feed.',
-    inputSchema: S(),
-    run: () => api('/api/orchestrator/check', { method: 'POST' }),
-  },
-  {
-    name: 'orchestrator_install_command',
-    description:
-      "MUTATES: install the shipped orchestrator commands (/orchestrate reviewer loop, /orcstop park-this-thread, /orcstart unpark) into this machine's ~/.claude/commands. A copy the user edited is reported as 'differs' and left alone unless force is true. Enabling the orchestrator also installs them when absent.",
-    inputSchema: S({ force: { type: 'boolean' } }),
-    run: (a) =>
-      api('/api/orchestrator/install-command', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify(a),
-      }),
-  },
-  {
-    name: 'orchestrator_uninstall_command',
-    description:
-      "MUTATES: turn the orchestrator OFF and remove its shipped commands (/orchestrate, /orcstop, /orcstart) from this machine's ~/.claude/commands — the opt-out mirror of orchestrator_install_command. Removes edited copies too; a reinstall is one call away. Pass keep_enabled true to remove only the files and leave the watcher running.",
-    inputSchema: S({ keep_enabled: { type: 'boolean' } }),
-    run: (a) =>
-      api('/api/orchestrator/uninstall-command', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify(a),
@@ -1480,22 +1378,6 @@ export const TOOLS: McpEngineTool[] = [
         body: JSON.stringify({ archived: a.archived }),
       }),
   },
-  {
-    name: 'orchestrator_hold',
-    description:
-      'MUTATES: park or unpark one thread for the orchestrator (what /orcstop and /orcstart do). held=true drops every feed item for that session so the reviewer never prompts it; held=false lifts the hold. Holds persist until lifted.',
-    inputSchema: S({ session_id: { type: 'string' }, held: { type: 'boolean' } }, [
-      'session_id',
-      'held',
-    ]),
-    run: (a) =>
-      api('/api/orchestrator/hold', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify(a),
-      }),
-  },
-
   // --- self-update ------------------------------------------------------------------
   {
     name: 'check_update',

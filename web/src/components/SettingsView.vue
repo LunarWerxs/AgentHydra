@@ -31,7 +31,6 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import OrchestratorSettings from '@/components/OrchestratorSettings.vue'
 import ProviderRows from '@/components/ProviderRows.vue'
 import UsageRefreshRows from '@/components/UsageRefreshRows.vue'
 import { Badge } from '@/components/ui/badge'
@@ -75,7 +74,7 @@ function setSectionEl(id: string, el: unknown) {
 }
 
 // General vs Automation (owner request 2026-08-25: the page got long and confusing, and the
-// automation machinery — scheduler, orchestrator, auto-resume monitor — is a coherent chunk).
+// automation machinery — scheduler and auto-resume monitor — is a coherent chunk).
 // Sections stay MOUNTED behind v-show per SettingsTabs' consumer rule, so open-watchers and
 // deep-link section refs keep working on the hidden tab.
 const settingsTab = ref<'general' | 'automation'>('general')
@@ -729,7 +728,7 @@ defineExpose({ save })
 
 <template>
   <div class="mx-auto max-w-3xl space-y-6 overflow-y-auto p-6">
-    <!-- Two tabs: General, and Automation (scheduler + orchestrator + auto-resume monitor).
+    <!-- Two tabs: General, and Automation (scheduler + auto-resume monitor).
          Sections carry a ref so a deep link (composer's tomorrow gear → 'scheduler') can flip
          the tab and scroll straight to them. Both tabs stay MOUNTED (v-show) so watchers and
          deep-link refs keep working on the hidden one. -->
@@ -1411,8 +1410,6 @@ defineExpose({ save })
       </ExpandTransition>
     </SettingsGroup>
 
-    <!-- orchestrator (docs/ORCHESTRATOR.md) — self-contained group, one-line mount -->
-    <OrchestratorSettings />
 
     <!-- auto-resume monitor -->
     <SettingsGroup :label="$t('settings.monitorTitle')" :description="$t('settings.monitorHint')">

@@ -28,7 +28,6 @@ import { coerceQueueItem, db, getSetting, setSetting } from './db'
 // choosing not to. The compiler is the guard.
 import { isActive, isSessionActive } from './dispatch'
 import { sessionMetaMap } from './instance-sessions'
-import { getOrchestratorSettings } from './orchestrator'
 import { discoverPendingStops, type RateLimitedStop } from './rate-limit-discovery'
 import { isSessionSuperseded } from './session-launch'
 import type {
@@ -56,13 +55,6 @@ export interface MonitorDeps {
    * reads files, which a unit test has no business doing to the developer's actual ~/.claude.
    */
   discoverStops: () => Promise<RateLimitedStop[]>
-  /**
-   * The migrate-on-limit target: a RUNNING desktop instance with headroom, excluding the ref the
-   * stop already ran under, or null when no viable account exists. Behind the seam because the
-   * real one joins the instance list with the usage cache (orchestrator's routing table).
-   * Optional so pre-existing deps objects stay valid; absent means "no target" (scheduled path).
-   */
-  pickMigrationTarget?: (excludeRef: string | null) => Promise<{ ref: string; name: string } | null>
 }
 
 const defaultDeps: MonitorDeps = {
@@ -79,35 +71,6 @@ const defaultDeps: MonitorDeps = {
           )
           .get(sessionId)?.n,
     }),
-  pickMigrationTarget: async (excludeRef) => {
-    // ONE picker, shared with the feed's recommendation and the reviewer's rubric. This used
-    // to carry its own inline copy of the eligibility filter, which is one policy living in
-    // two places and free to drift; `pickPlacement` is now the only definition of "an account
-    // that may take work", and buildInstanceRows is handed the placement ledger so a
-    // migration lands somewhere other than wherever the last one went.
-    const { buildInstanceRows, getOrchestratorSettings, pickPlacement } = await import(
-      './orchestrator'
-    )
-    const { listInstances } = await import('./core/instances')
-    const { allCachedUsage } = await import('./usage-cache')
-    const { recentPlacements, recordPlacement } = await import('./placements')
-    const s = getOrchestratorSettings()
-    const now = Date.now()
-    const rows = buildInstanceRows(
-      (await listInstances()).map((i) => ({
-        dir: i.dir,
-        name: i.label ?? i.name,
-        isRunning: i.isRunning,
-      })),
-      allCachedUsage(),
-      s,
-      now,
-      recentPlacements(s.balanceWindowMins, now),
-    )
-    const hit = pickPlacement(rows, { excludeRef })
-    if (hit) recordPlacement(hit.ref, 'migrate', null, now)
-    return hit ? { ref: hit.ref, name: hit.name } : null
-  },
 }
 
 /** The locked resume prompt — a code constant, not a field users casually edit (an advanced
@@ -482,59 +445,30 @@ async function tick(deps: MonitorDeps): Promise<void> {
  * is the whole point: the type has no headless member to return, so the no-headless law is
  * enforced here by construction rather than by a branch someone could add back.
  *
- * `native` means the reviewer wakes the thread inside its own desktop app. `terminal` opens a
- * visible window. Everything that is not reachable natively takes the terminal, INCLUDING the
- * `queue` preference, which used to mean headless dispatch and now means the closest thing to
- * what it asked for that a person can actually watch.
+ * `native` means the thread lives in a desktop app and stays there (surface purity - owner law,
+ * restated 2026-08-28: desktop stays desktop, console stays console, never cross-contaminate).
+ * `terminal` opens a visible window for everything else.
  *
- * Pure and exported so the policy can be checked without launching anything, the same reason
- * commandInstallOutcome in orchestrator.ts is.
+ * Pure and exported so the policy can be checked without launching anything.
  */
 export type ResumeSurface = 'native' | 'terminal'
 
 export function resumeSurfaceFor(
-  handoffSurface: string,
-  instanceRef: string | null | undefined,
   /** Does this thread LIVE in a desktop app right now? Passed in so the policy stays pure. */
   livesInDesktop?: boolean,
 ): ResumeSurface {
-  // SURFACE PURITY (owner law, restated 2026-08-28: desktop stays desktop, console stays
-  // console; never cross-contaminate). A thread that lives in a desktop app resumes NATIVELY,
-  // full stop - the global handoffSurface is a preference about NEW work and must never convert
-  // an existing desktop thread into a terminal window. Before this, handoffSurface='terminal'
-  // would have moved every desktop resume into a console, which is exactly the contamination
-  // the owner banned.
-  if (livesInDesktop) return 'native'
-  // A native delivery needs BOTH: the owner wanting desktop, and a thread that actually lives in a
-  // desktop app we can address. A `desktop` preference over a CLI-instance thread is the case that
-  // used to fall through to headless rather than admit it could not be done natively.
-  return handoffSurface === 'desktop' && instanceRef?.startsWith('desktop:') ? 'native' : 'terminal'
+  return livesInDesktop ? 'native' : 'terminal'
 }
 
-/** The `native` branch of dispatchDueResumes's per-row body: hand the due resume to the reviewer
- *  as a revive proposal, delivered through the desktop app's own message channel. Split out
- *  because this branch and its terminal sibling were two full try/catch blocks nested inside the
- *  same `if`; awaited by the caller exactly as the inline try/catch was (never fire-and-forget). */
+/** The `native` branch of dispatchDueResumes's per-row body: the thread lives in a desktop app,
+ *  and the daemon has no channel that can wake a desktop chat (surface purity forbids a terminal,
+ *  the no-headless law forbids a queue run). So the row is closed honestly: the reset is recorded
+ *  and the thread waits for the owner in its own app. Split out to mirror its terminal sibling. */
 async function deliverNativeResume(q: QueueItem): Promise<void> {
   try {
-    const { proposeAction } = await import('./proposals')
-    proposeAction({
-      kind: 'revive',
-      sessionId: q.session_id,
-      instanceRef: q.instance_ref,
-      title: baseTitle(q.title),
-      summary: `${baseTitle(q.title)} stopped at a usage limit and its window has reset — deliver the resume turn`,
-      evidence: {
-        flavor: 'limit-reset',
-        resumePrompt: q.prompt,
-        cwd: q.cwd,
-        scheduledFor: q.not_before ?? null,
-      },
-      evidenceAt: new Date().toISOString(),
-    })
-    // Same honesty as the terminal branch below: this row's job (actioning the scheduled
-    // resume) is done, but nothing has RUN yet - a proposal is waiting for the reviewer to
-    // decide it. An exit code of 0 would claim a clean finish for work that has not started.
+    // This row's job (actioning the scheduled resume) is done, but nothing has RUN - the thread
+    // sits ready in its app. An exit code of 0 would claim a clean finish for work that has not
+    // started, so there deliberately is none.
     db.query('update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?').run(
       'completed',
       new Date().toISOString(),
@@ -542,12 +476,12 @@ async function deliverNativeResume(q: QueueItem): Promise<void> {
       q.id,
     )
     db.query('update monitor_state set message = ?, updated_at = ? where resume_item_id = ?').run(
-      'window reset — handed to the reviewer as a revive proposal',
+      'window reset — the thread lives in its desktop app; resume it there',
       new Date().toISOString(),
       q.id,
     )
   } catch (err) {
-    console.error('[agenthydra] revive-proposal handoff failed:', err)
+    console.error('[agenthydra] native resume close-out failed:', err)
   }
 }
 
@@ -633,36 +567,14 @@ async function dispatchDueResumes(): Promise<void> {
     }
     const due = !q.not_before || q.not_before <= now
     if (q.status === 'queued' && due && !isActive(q.id) && !isSessionActive(q.session_id)) {
-      // Placement follows the owner's surface preference (standing rule 2026-08-25: match the
-      // preference; 'desktop' means no terminals and nothing headless). 'desktop' hands the due
-      // resume to the ACTION GATE (owner law 2026-08-26): a revive proposal the reviewer decides
-      // and then delivers through the desktop app's own message channel — the thread wakes
-      // VISIBLY in its app, never headless, never as a deaf re-import.
-      //
-      // NO HEADLESS (owner law 2026-08-27). Two branches used to fall through to dispatchItem
-      // here and both are gone. The first was `surface === 'queue'`, the classic headless
-      // dispatch "for owners who chose it"; it is no longer a thing anyone can choose, so it now
-      // means the same as 'terminal', which is the nearest thing to what it asked for that a
-      // person can actually watch. The second was subtler and was the one doing real damage: a
-      // 'desktop' preference whose thread has no `desktop:` instance ref (a CLI instance, or no
-      // ref at all) cannot be delivered natively, and it quietly fell back to headless rather
-      // than admitting that. Since the ban those resumes were scheduled, dispatched and refused
-      // on every attempt, which is a resume that can never happen.
-      //
-      // So the rule is now total and has no fallthrough: deliver natively when the thread lives
-      // in a desktop app we can reach, and otherwise open a VISIBLE terminal. Both are proven
-      // paths that were already here; nothing new had to be invented to close the hole. The
-      // decision itself is resumeSurfaceFor(), pure and tested, because a routing policy that can
-      // only be exercised by actually launching something is a policy nothing checks.
+      // NO HEADLESS (owner law 2026-08-27) and SURFACE PURITY (2026-08-28): a thread that
+      // lives in a desktop app stays there (the reset is recorded; the owner resumes it in the
+      // app), and everything else opens a VISIBLE terminal. The decision itself is
+      // resumeSurfaceFor(), pure and tested, because a routing policy that can only be
+      // exercised by actually launching something is a policy nothing checks.
       const { desktopHomeFor } = await import('./session-launch')
       const livesInDesktop = (await desktopHomeFor(q.session_id).catch(() => null)) !== null
-      if (
-        resumeSurfaceFor(
-          getOrchestratorSettings().handoffSurface,
-          q.instance_ref,
-          livesInDesktop,
-        ) === 'native'
-      ) {
+      if (resumeSurfaceFor(livesInDesktop) === 'native') {
         await deliverNativeResume(q)
       } else {
         void deliverTerminalResume(q)
@@ -737,31 +649,6 @@ async function processOneRateLimitedStop(
       nextCheckAt: resetIso ?? isoIn(60),
     })
     return
-  }
-
-  // Weekly has room. A 5-hour stop with the migrate toggle on doesn't wait for the reset at
-  // all: it resumes NOW on another running account with headroom (owner directive 2026-08-25 —
-  // "if the chat seems like it should still be running, migrate it and keep working"). The
-  // original account rejoins the routing pool naturally once its window resets. Falls back to
-  // the scheduled resume when no viable target exists.
-  if (getOrchestratorSettings().migrateOnLimit) {
-    let target: { ref: string; name: string } | null = null
-    try {
-      target = (await deps.pickMigrationTarget?.(item.instance_ref ?? null)) ?? null
-    } catch (err) {
-      console.error('[agenthydra] migration target pick failed:', err)
-    }
-    if (target) {
-      const resumeId = enqueueResume(item, new Date().toISOString(), target.ref)
-      upsertState(item, {
-        state: 'scheduled',
-        message: `migrated to ${target.name} until the 5h resets`,
-        resumeItemId: resumeId,
-        attempts: priorAttempts + 1,
-        nextCheckAt: null,
-      })
-      return
-    }
   }
 
   // Schedule the resume just after the 5-hour session reset (+ buffer). If the

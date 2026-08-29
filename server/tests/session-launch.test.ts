@@ -5,7 +5,7 @@
 // how arguments get silently mangled. These tests pin that the plan reads the file, keeps the
 // window open on failure, and never interpolates the prompt text itself into argv.
 import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../src/db'
@@ -22,7 +22,6 @@ import {
   launchTerminalSession,
   reassertAutomationStamps,
   reassertChatAutomation,
-  seedDesktopSession,
   stampImportedChat,
   sweepUntitledDesktopChats,
 } from '../src/session-launch'
@@ -422,40 +421,6 @@ test('a terminal resume of a done-marked lineage is refused before anything laun
   expect(res.ok).toBe(false)
   expect(res.reason).toStartWith('superseded')
   markDone('lineage-c', false)
-})
-
-test('seedDesktopSession writes a resumable two-record transcript, gated on a running instance', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'agenthydra-seed-home-'))
-  const cwd = mkdtempSync(join(tmpdir(), 'agenthydra-seed-cwd-'))
-  const inst = mkdtempSync(join(tmpdir(), 'agenthydra-seed-inst-'))
-  // A closed instance refuses the seed the same way it refuses imports (never boot an account).
-  const refused = await seedDesktopSession({
-    cwd,
-    title: 'Seeded thread',
-    instanceRef: `desktop:${inst}`,
-    isInstanceRunning: async () => false,
-    claudeHome: home,
-  })
-  expect(refused.ok).toBe(false)
-  expect(refused.reason).toContain('instance-not-running')
-  expect(
-    seedDesktopSession({ cwd, title: 'x', instanceRef: 'cli:whatever', claudeHome: home }),
-  ).resolves.toMatchObject({ ok: false })
-  // The transcript the refused attempt wrote is still a valid seed: two linked records, the
-  // session id in every record, and a tail that parses as a finished turn.
-  const projectKey = cwd.replace(/[^a-zA-Z0-9]/g, '-')
-  const files = readdirSync(join(home, 'projects', projectKey))
-  expect(files).toHaveLength(1)
-  const lines = readFileSync(join(home, 'projects', projectKey, files[0]), 'utf8')
-    .trim()
-    .split('\n')
-    .map((l) => JSON.parse(l))
-  expect(lines).toHaveLength(2)
-  expect(lines[0].type).toBe('user')
-  expect(lines[1].type).toBe('assistant')
-  expect(lines[0].sessionId).toBe(files[0].replace(/\.jsonl$/, ''))
-  expect(lines[1].parentUuid).toBe(lines[0].uuid)
-  expect(lines[0].cwd).toBe(cwd)
 })
 
 test('darwin and linux read the file via cat; unknown platforms still return the command text', () => {

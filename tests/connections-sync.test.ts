@@ -626,6 +626,6 @@ describe('settings classification', () => {
     const found = await everyKeyInSource()
     expect(found.size).toBeGreaterThan(30)
     expect(found.has('scheduler_enabled')).toBe(true)
-    expect(found.has('orch_enabled')).toBe(true)
+    expect(found.has('monitor_enabled')).toBe(true)
   })
 })

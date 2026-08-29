@@ -4,7 +4,7 @@
 // came back from Windows PowerShell 5.1 as a raw 0x1A SUB byte (legacy-codepage stdout), which
 // made the whole ConvertTo-Json document unparseable. The CIM path then returned null, the
 // wmic fallback does not exist on current Windows, and EVERY instance read as not-running —
-// the orchestrator saw a fleet of zero open accounts while five desktop apps were on screen.
+// the app saw a fleet of zero open accounts while five desktop apps were on screen.
 // The fix is layered (UTF-8 preamble in the script + this sanitizer); the sanitizer is the
 // layer a unit test can pin.
 import { expect, test } from 'bun:test'

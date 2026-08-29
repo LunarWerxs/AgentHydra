@@ -79,24 +79,6 @@ Two things make this survive contact with reality:
 
 - **Runs reattach after a restart.** Quitting the app, or letting it auto-update, does not kill
   what is in flight. It picks the runs back up.
-- **It can babysit every open chat for you.** The optional
-  [Orchestrator](docs/ORCHESTRATOR.md) watches every live session each minute and publishes what
-  needs attention: a chat that finished and is waiting, one whose context has outgrown its thread,
-  a repo left dirty, an account near its weekly wall, a thread killed by a restart. A reviewer
-  chat you keep open makes the calls and does the work. Every action it wants to take, from
-  reviving a dead chat to archiving a finished one, is checked by that reviewer before it
-  happens, and nothing is ever continued somewhere you cannot see it. New work is spread
-  across the accounts that have room rather than stacking one, counting the 5-hour window and
-  when it resets, and it never sends work to a busier account for the sake of fairness. Off by
-  default.
-- **And it can find the work nobody started.** Watching your chats only ever answers questions
-  about chats that exist, so a fleet where everything is healthy looks like a fleet with nothing
-  left to do. Turn on **full mode** (`/orchestrate full`, or the toggle in Settings) and it also
-  sweeps your repositories: a quality gate that has not passed since the code last changed, new
-  FIXME comments, unticked task boxes. Each one becomes a normal proposal, so the reviewer still
-  rules on it before anything starts, and the chat it opens is one you can watch. The sweep only
-  reads, never runs your repo's scripts, never reports a marker that was already there, and never
-  works in a repo another chat is in. Off by default.
 - **A rate limit is not a dead end.** Sessions stopped by a 5-hour limit can resume themselves once
   the window resets, gated on your weekly usage so it does not spend everything the moment it can.
   With several accounts signed in, it can instead move the run to one that still has headroom and
@@ -247,9 +229,9 @@ and hitting a wall halfway through it: [docs/AI_USAGE_SELFCHECK.md](docs/AI_USAG
 [Reference](docs/REFERENCE.md) covers configuration, the MCP tools, auto-update, the stack, the repo
 layout and how to run the checks.
 
-[Orchestrator](docs/ORCHESTRATOR.md) covers the attention watcher and the reviewer loop that acts
-on it: what it detects, the rules it obeys, the settings, and the self-test that proves the whole
-thing still works on your machine.
+[Orchestrator, retired](docs/ORCHESTRATOR-RETIRED.md) records the v1 orchestrator's retirement
+(2026-08-29) and where its complete implementation is archived while the ground-up rebuild
+happens.
 
 ## FAQ
 
@@ -280,8 +262,7 @@ Claude Squad and Conductor both start new, isolated Claude Code (and Codex) sess
 worktrees. AgentHydra creates no worktrees, and out of the box it starts nothing by
 itself: it reads the history, queue, and account state your existing Claude Code, Codex, and
 OpenCode setup already writes, and adds a scheduler, cost analytics, and instance management on
-top. The optional [Orchestrator](docs/ORCHESTRATOR.md) is the one part that does start work for
-you, and only once you turn it on. See [How it compares](#how-it-compares).
+top. See [How it compares](#how-it-compares).
 
 **Which AI tools does it support?**
 Claude Code, Codex, and OpenCode sessions are read directly and shown together in the session list.

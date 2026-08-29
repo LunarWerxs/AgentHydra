@@ -7,6 +7,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Removed
+
+- **The v1 orchestrator, whole** (owner order, 2026-08-29: retire it and rebuild from the
+  ground up). The watcher daemon, worklist, courier ladder, circuit breaker, reviewer
+  journal, self-test, Codex watcher, agent chats, proposal ledger, placement balancer,
+  backlog sweep and new-chat opening policy; the `/api/orchestrator/*` HTTP surface; seven
+  MCP tools; the settings UI panel and its locale; the shipped `/orchestrate`, `/orcstop`,
+  `/orcstart` commands and their installer; sixteen test files. The complete final state is
+  archived on the `archive/orchestrator-v1` branch (tag `orchestrator-v1-final`); see
+  docs/ORCHESTRATOR-RETIRED.md for what was kept and why. Session primitives survive:
+  migrate, import-desktop, desktop-archive, automation stamping, launch-terminal, the chat
+  dossier (now without ledger/kv joins, reading the live registry from the extracted
+  `live-registry.ts`), and the auto-resume monitor in its pre-orchestrator shape (scheduled
+  terminal resumes; desktop threads are closed out honestly as "ready in its app" -
+  migrate-on-limit and proposal-gated native revives are gone). Existing databases keep
+  their now-inert `orchestrator_*` tables and `orch_*` rows; fresh installs never create
+  them.
+
 ### Added
 
 - **The agent-chat courier: the sanctioned replacement for the banned relay rung** (9f48041).

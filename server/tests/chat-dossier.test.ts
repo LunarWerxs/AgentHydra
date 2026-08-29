@@ -1,6 +1,6 @@
-// The dossier's one job is joining four stores by ANY id a chat has ever had. The fixture
+// The dossier's one job is joining the stores by ANY id a chat has ever had. The fixture
 // pins the shape that made the 2026-08-28 diagnosis slow: a chat that rolled through prior
-// cliSessionIds, where the ledger rows name a PRIOR id and the file is addressed by a third.
+// cliSessionIds, where a mark names a PRIOR id and the file is addressed by a third.
 import { describe, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -17,7 +17,7 @@ function fixtureRoot(): { dir: string; label: string } {
       sessionId: 'local_chat-one',
       cliSessionId: 'current-id',
       priorCliSessionIds: ['prior-id-a', 'prior-id-b'],
-      title: 'Orchestrate',
+      title: 'Rolling thread',
       cwd: 'D:\\somewhere',
       createdAt: 1000,
       lastActivityAt: 2000,
@@ -43,7 +43,7 @@ describe('chat-dossier', () => {
   test('collectChats reads lineage, archive flag and timestamps off disk', () => {
     const chats = collectChats([root])
     expect(chats.length).toBe(2)
-    const one = chats.find((c) => c.title === 'Orchestrate')
+    const one = chats.find((c) => c.title === 'Rolling thread')
     expect(one).toBeDefined()
     expect(one?.archived).toBe(true)
     expect(one?.priorCliSessionIds).toEqual(['prior-id-a', 'prior-id-b'])
@@ -51,10 +51,10 @@ describe('chat-dossier', () => {
   })
 
   test('a chat answers to its title, its current id, any PRIOR id, and its filename id', () => {
-    const one = collectChats([root]).find((c) => c.title === 'Orchestrate')
+    const one = collectChats([root]).find((c) => c.title === 'Rolling thread')
     if (!one) throw new Error('fixture missing')
     expect(lineageIdsOf(one).sort()).toEqual(['chat-one', 'current-id', 'prior-id-a', 'prior-id-b'])
-    for (const q of ['orchestr', 'current-id', 'prior-id-b', 'chat-one', 'PRIOR-ID-A'])
+    for (const q of ['rolling', 'current-id', 'prior-id-b', 'chat-one', 'PRIOR-ID-A'])
       expect(chatMatches(one, q)).toBe(true)
     expect(chatMatches(one, 'other-id')).toBe(false)
   })
@@ -63,19 +63,15 @@ describe('chat-dossier', () => {
     const askedWith: string[][] = []
     const { matches } = chatDossier('prior-id-a', {
       roots: [root],
-      ledgerFor: (ids) => {
+      markFor: (ids) => {
         askedWith.push(ids)
-        return [{ id: 'row-1', session_id: 'prior-id-a', kind: 'archive' }]
+        return { done: true, updatedAt: 'ts' }
       },
-      markFor: () => ({ done: true, updatedAt: 'ts' }),
-      kvFor: () => [{ key: 'hold:prior-id-b', value: 'x' }],
       liveFor: () => null,
     })
     expect(matches.length).toBe(1)
-    expect(matches[0]?.ledger.length).toBe(1)
     expect(matches[0]?.doneMark?.done).toBe(true)
-    expect(matches[0]?.kv[0]?.key).toBe('hold:prior-id-b')
-    // The ledger join was handed every id the chat ever had — the whole point of the module.
+    // The mark join was handed every id the chat ever had — the whole point of the module.
     expect(askedWith[0]?.sort()).toEqual(['chat-one', 'current-id', 'prior-id-a', 'prior-id-b'])
   })
 

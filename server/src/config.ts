@@ -106,8 +106,8 @@ export const IS_COMPILED = !existsSync(join(import.meta.dir, 'config.ts'))
 // workspace, an IDE runner with the wrong cwd) arrives here with none of the isolation overrides
 // set — and every constant below would resolve to the developer's LIVE state: the same sqlite file
 // their running daemon has open. That happened on 2026-08-25 (fixture rate_limited rows the live
-// monitor kept resuming; a settings round-trip left orch_enabled at its default, silently disabling
-// the live orchestrator). Rather than trust every entry point to remember the preload, refuse to
+// monitor kept resuming; a settings round-trip reset a live daemon's switches to their defaults).
+// Rather than trust every entry point to remember the preload, refuse to
 // touch real state under test at all: point the whole state surface at a throwaway temp dir. Set
 // via process.env (not local variables) so child processes tests spawn inherit the same scratch.
 // tests/setup.ts remains the primary isolation (it also fixes PATH for child-process fixtures);
@@ -170,9 +170,9 @@ export interface DataDirResolution {
  * than a writable disk location (db.ts's eager mkdir there would crash the daemon before logging
  * even starts), so releases keep state under CONFIG_DIR. Source checkouts kept theirs beside the
  * code instead, and the two arrangements together are one app reading two DIFFERENT databases:
- * `bun run start` and the installed tray daemon diverged on settings, the run queue, orchestrator
- * acks, `/orcstop` holds and the done-mark ledger. That ledger is the orchestrator's guarantee that
- * one thread gets one continuation, and a guarantee kept in two places is not one. Worse, the split
+ * `bun run start` and the installed tray daemon diverged on settings, the run queue and the
+ * done-mark ledger. That ledger is the guarantee that one thread gets one continuation, and a
+ * guarantee kept in two places is not one. Worse, the split
  * is invisible while you debug it: forensics run against the wrong file answer confidently and
  * wrongly ("that table does not exist", "the mark was never written"). One directory, both modes.
  *
