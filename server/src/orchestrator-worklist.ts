@@ -133,6 +133,10 @@ interface ItemState {
   expectTitle?: string
   /** Handoff continuations: the predecessor to archive once the successor's engine is verified. */
   oldSessionId?: string
+  /** The reviewer steps handed out when this state was saved, so a re-resolve of an in-flight
+   *  item can RE-RETURN them instead of stranding a reviewer whose first read was lost (found
+   *  live: a truncated read left the exact verbatim message unrecoverable). */
+  steps?: ReviewerStep[]
 }
 
 function stateKey(itemId: string): string {
@@ -778,12 +782,26 @@ export async function resolveWorkItem(opts: {
   // re-approve of a still-approved item re-seeded chats and re-delivered closeouts every wake).
   // An item with pending state is IN FLIGHT: the answer is "call verify", never a re-execution.
   const pending = loadState(itemId)
-  if (pending && decision === 'approve')
-    return {
-      ok: true,
-      reason: `already in flight (phase: ${pending.phase}, since ${pending.at}) - call verify`,
-      reviewerSteps: [],
-    }
+  if (pending && decision === 'approve') {
+    // Re-return the saved steps: the reviewer's first read of them may have been lost, and the
+    // step text is the verbatim contract - it must come from here, never be reconstructed.
+    if (pending.steps?.length)
+      return {
+        ok: true,
+        reason: `already in flight (phase: ${pending.phase}, since ${pending.at}) - steps re-issued; call verify after performing them`,
+        reviewerSteps: pending.steps,
+      }
+    // States saved before steps were recorded: a plain-delivery revive is safe to recompose
+    // (no server side effects), so fall through and let the executor re-issue it. Anything
+    // with server side effects (seed, archive, handoff) stays blocked behind verify.
+    const pendingProposal = getProposal(itemId)
+    if (!(pending.phase === 'delivered' && pendingProposal?.kind === 'revive'))
+      return {
+        ok: true,
+        reason: `already in flight (phase: ${pending.phase}, since ${pending.at}) - call verify`,
+        reviewerSteps: [],
+      }
+  }
   if (pending && decision === 'reject') clearState(itemId)
 
   // Attention-derived items: the "execution" is one composed live send + the right ack.
@@ -813,7 +831,12 @@ export async function resolveWorkItem(opts: {
         if (route.mode === 'none' || !route.step)
           return { ok: false, reason: `unreachable: ${route.whyNone}` }
         ackAttention(key, 'handoff-requested', 30)
-        saveState(itemId, { phase: 'delivered', at: now, targetSessionId: a.sessionId })
+        saveState(itemId, {
+          phase: 'delivered',
+          at: now,
+          targetSessionId: a.sessionId,
+          steps: [route.step],
+        })
         return { ok: true, reviewerSteps: [route.step] }
       }
       const t = findTranscript(a.sessionId, 'claude')
@@ -1099,7 +1122,12 @@ export async function resolveWorkItem(opts: {
         }
         return { ok: true, reason: `approved but parked: ${route.whyNone}`, reviewerSteps: [] }
       }
-      saveState(itemId, { phase: 'delivered', at: now, targetSessionId: p.sessionId })
+      saveState(itemId, {
+        phase: 'delivered',
+        at: now,
+        targetSessionId: p.sessionId,
+        steps: [route.step],
+      })
       return { ok: true, reviewerSteps: [route.step] }
     }
     case 'archive': {
@@ -1150,7 +1178,12 @@ export async function resolveWorkItem(opts: {
         )
         return { ok: true, completed: true, result: 'archived un-closed-out (unreachable)' }
       }
-      saveState(itemId, { phase: 'closeout-delivered', at: now, targetSessionId: p.sessionId })
+      saveState(itemId, {
+        phase: 'closeout-delivered',
+        at: now,
+        targetSessionId: p.sessionId,
+        steps: [route.step],
+      })
       return { ok: true, reviewerSteps: [route.step] }
     }
     case 'import': {
