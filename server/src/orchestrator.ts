@@ -2286,7 +2286,15 @@ export function sweepCourierTasks(): number {
     // its own cron windows). So the pickup restart is queued ONCE per install, keyed by a
     // marker, rather than only on the tick that happened to do the writing - the bug that made
     // the first live test fail was exactly this line skipping before the restart was queued.
-    if (hasDesktopTask(dir, taskId)) {
+    const prompt = courierTaskPrompt(dir, PORT)
+    // The prompt is CODE, and code changes. A courier installed from an older build would keep
+    // running yesterday's instructions forever, silently, which is exactly the class of false
+    // green this repo keeps finding - so the installed version is stamped and compared, and a
+    // changed prompt reinstalls (and re-queues the pickup restart, since a running app is still
+    // holding the old one in memory).
+    const version = createHash('sha256').update(prompt).digest('hex').slice(0, 16)
+    const versionKey = `courierVersion:${desktopKey(dir)}`
+    if (hasDesktopTask(dir, taskId) && kvGet(versionKey) === version) {
       const pickupKey = `courierPickup:${desktopKey(dir)}`
       if (!kvGet(pickupKey)) {
         kvSet(pickupKey, new Date().toISOString())
@@ -2301,7 +2309,7 @@ export function sweepCourierTasks(): number {
       instanceDir: dir,
       taskId,
       description: `AgentHydra delivery courier for the ${entry.name} account - system plumbing`,
-      prompt: courierTaskPrompt(dir, PORT),
+      prompt,
       // Every ~11 minutes, off the hour: a queued delivery lands within one cron period, and
       // the offset keeps 18 accounts from firing in the same second.
       cronExpression: '*/11 * * * *',
@@ -2316,6 +2324,7 @@ export function sweepCourierTasks(): number {
       // ever fires when that instance has nothing live to interrupt. Without this a freshly
       // installed courier sits inert until the owner happens to restart the app, which is a
       // finger, which is banned.
+      kvSet(versionKey, version)
       kvSet(`courierPickup:${desktopKey(dir)}`, new Date().toISOString())
       noteArchiveVisibilityPending(dir)
     } else if (res.reason !== 'no signed-in account folder found for instance') {
