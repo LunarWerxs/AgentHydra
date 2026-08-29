@@ -542,6 +542,25 @@ without the PUBLIC warning protocol.
    tool). Defaults are sane; tune later.
 2. Reviewer side: open a fresh chat on a quiet account and type `/orchestrate`.
 
+## Seeing before doing: the dry run and the dossier (added 2026-08-28)
+
+Two read-only views exist because the owner asked to SEE the plan before anything runs, and
+because diagnosing "what happened to chat X" once took an hour of hand-joins:
+
+- **`GET /api/orchestrator/dryrun`** (`?format=text` for the rendered layout; MCP
+  `orchestrator_dryrun`; `/orc-dryrun` from any chat) - what the orchestrator WOULD do with
+  every chat and every open window: the same item builders as the live worklist, computed with
+  ZERO writes - no acks, no cooldowns, and deliberately no reviewer stamp (a probe that
+  stamped `lastReviewerAt` once masked a dead reviewer loop for an hour). Safe to run any
+  time, any number of times. The header states whether a reviewer has polled recently - the
+  loop being silently dead is the failure this view makes visible.
+- **`GET /api/chats/dossier?q=<title fragment or any id>`** (MCP `chat_dossier`) - everything
+  known about one chat in one query: which instance holds it, its archive flag as it sits on
+  disk right now, its lineage ids across auto-compact rolls, its done-mark, the live process
+  hosting it, and every ledger row that ever touched it. The archive flag is read fresh off
+  disk on purpose: the running app's memory and the disk can disagree in both directions, and
+  the disagreement is usually the answer being looked for.
+
 **A REVIEWER CANNOT BE SEEDED, and this was learned the hard way (2026-08-27).** The obvious
 move, seeding a desktop chat and delivering `/orchestrate` natively, produces a reviewer that
 boots, loads the rubric, issues its first `curl` and STOPS: seeded chats are imports, imports
