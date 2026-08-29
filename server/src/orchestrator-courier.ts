@@ -5,19 +5,33 @@
 // instance. A window whose chats were all asleep could only be reached by a human typing in it
 // once, which is a finger, which is not allowed.
 //
-// THE SHAPE. A delivery into an unreachable instance is no longer parked - it is QUEUED here,
-// and each instance runs a COURIER TASK in the app's own scheduler (see desktop-tasks.ts), which
-// the app fires by itself on a cron, inside that account, whether or not anything else is awake.
-// The courier run drains this queue: for each pending delivery it calls the app's own
-// send_message with the composed payload (booting the dormant target), reports the outcome, and
-// stops. Nothing is ever asked of a working chat (the relay ban), and nothing is asked of the
-// owner.
+// THE SHAPE. A delivery into an instance with nothing awake is no longer parked - it is QUEUED
+// here, and each instance runs a COURIER TASK in the app's own scheduler (see desktop-tasks.ts),
+// which the app fires by itself on a cron, inside that account, whether or not anything else is
+// awake. Proven live 2026-08-29: couriers installed in 18 accounts, apps auto-restarted to read
+// them, and a courier fired unprompted, fetched its queue and reported correctly.
 //
-// WHY A QUEUE AND NOT A DIRECT CALL. The daemon cannot send into an app at all; only a session
-// inside it can. The queue is the seam between "the server decided what to send" and "something
-// inside that app performs it", and it keeps the existing contract intact: the reviewer still
-// rules first, the server still composes, and verify() still proves delivery by re-reading the
-// transcript rather than trusting the courier's word.
+// ⛔ THE WALL THAT SHAPED THIS, measured the same night: a scheduled-task run is an UNATTENDED
+// session, and `mcp__ccd_session_mgmt__send_message` REFUSES in unattended sessions ("This tool
+// is unavailable in unattended sessions (scheduled-task runs and remote-dispatched trees)").
+// The courier tried it, was refused, and honestly reported ok:false. A relay-only courier is
+// therefore impossible - not unimplemented, impossible. Also ruled out by test the same night:
+// the `claude://code/continue?session=<id>` deep link, launched against the target profile,
+// did not boot the chat.
+//
+// SO THE DELIVERY BECAME A CONTINUATION. What the courier run genuinely is: a real, visible
+// session on the right account with full file and shell access, in a world where every dormant
+// chat's transcript is a readable file on disk. It therefore picks the work up itself with the
+// predecessor's transcript as context, rather than trying to poke the old chat awake. That is
+// OpenHands' replay-an-event-log-into-a-fresh-runtime, which the 2026-08-28 orchestrator survey
+// named for exactly this class of failure - and it is why the queue's `message` is a BRIEF, not
+// a payload to hand over verbatim.
+//
+// WHY A QUEUE AND NOT A DIRECT CALL. The daemon cannot run anything inside an app; only a
+// session there can. The queue is the seam between "the server decided what should happen" and
+// "something inside that account did it", and the rest of the contract is untouched: the
+// reviewer still rules first, the server still composes, and the ledger still closes on
+// evidence rather than on the courier's say-so.
 
 import { db } from './db'
 
@@ -141,9 +155,9 @@ export function courierTaskPrompt(instanceDir: string, port: number): string {
     'session, no human involved.',
     '',
     "You are this Claude Desktop account's ORCHESTRATOR COURIER. This run is a scheduled",
-    'task fired by the app itself. Your ONLY job is to hand over messages the orchestrator has',
-    'queued for chats in THIS app, then stop. Do not start work, do not touch files, do not',
-    'message any chat except as instructed below.',
+    'task fired by the app itself. Your job is the queue below and nothing else: take each',
+    'queued item, carry that ONE piece of work forward, report it, and stop. You never message',
+    'another chat, never invent work that is not queued, and never take a second lap.',
     '',
     'Do exactly this:',
     '',
