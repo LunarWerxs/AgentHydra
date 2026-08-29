@@ -9,6 +9,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Orchestrator rebuild, piece 1: the fleet observation core** (`GET /api/fleet`,
+  server/src/fleet.ts). Owner-led rebuild doctrine now binding on every piece: one feature at
+  a time, comprehensively verified before the next, and as programmatic as humanly possible -
+  deterministic code over AI inference wherever a rule can be stated. This piece is 100%
+  deterministic and read-only: which sessions are live (pid-validated registry) and what state
+  each is in - transcript ending through the SAME classifyEnding vocabulary the session list
+  already trusts (complete / interrupted / usage-limit / overload / refused / error), plus
+  quiet time, sorted quietest-first. Adaptive tail window (64KB growing to 4MB) because real
+  transcripts carry multi-MB single lines; torn first lines are dropped, unreadable files are
+  reported rather than hidden, and the usage probe is filtered by its exact scratch cwd.
+  Verified: 8 fixture tests (every ending class, window growth past a 100KB record, torn-line
+  rule, probe filter, deterministic ordering), plus a live read of this machine's real fleet -
+  7 sessions in 8.6ms, matching the peer registry exactly. Zero AI, zero writes, zero settings.
+
 - **misc/Archive-DesktopChat.ps1: archive a chat in a RUNNING desktop app - immediately,
   durably, and FOCUS-FREE - by driving the app's own sidebar controls** (owner's mechanism,
   2026-08-29). Wakes the Electron accessibility tree (MSAA poke on the render widgets - a UIA
