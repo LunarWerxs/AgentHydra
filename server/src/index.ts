@@ -184,7 +184,13 @@ import {
   uninstallOrchestratorCommands,
 } from './orchestrator'
 import { runOrchestratorSelfTest } from './orchestrator-selftest'
-import { buildWorklist, resolveWorkItem, verifyWorkItem } from './orchestrator-worklist'
+import {
+  buildDryRun,
+  buildWorklist,
+  renderDryRunText,
+  resolveWorkItem,
+  verifyWorkItem,
+} from './orchestrator-worklist'
 import { recentPlacements, recordPlacement } from './placements'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
@@ -2236,6 +2242,16 @@ app.get('/api/orchestrator/worklist', async (c) => {
   if (!reviewer) return c.json({ error: 'reviewer (your session id) is required' }, 400)
   noteReviewerActivity()
   return c.json(buildWorklist(reviewer))
+})
+// The owner's dry run (asked 2026-08-28): what WOULD the orchestrator do with every chat and
+// every open window, as a read-only plan - the same item builders as the worklist, but nothing
+// acts, no cooldowns are spent, and deliberately NO noteReviewerActivity: a dry run pretending
+// to be a reviewer is how an earlier diagnostic probe masked a dead loop. ?format=text returns
+// the rendered layout so every surface shows the owner the same picture.
+app.get('/api/orchestrator/dryrun', (c) => {
+  const d = buildDryRun(c.req.query('reviewer')?.trim() ?? '')
+  if (c.req.query('format') === 'text') return c.text(renderDryRunText(d))
+  return c.json(d)
 })
 app.post('/api/orchestrator/items/:id/resolve', async (c) => {
   const body = await jsonBody(c)

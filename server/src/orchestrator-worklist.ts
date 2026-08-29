@@ -34,6 +34,7 @@
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { collectChats, type DossierChat } from './chat-dossier'
 import { db } from './db'
 import {
   findDesktopChat,
@@ -451,17 +452,31 @@ function autoAckIfNoAction(
   reviewerSessionId: string,
   live: LiveSession[],
 ): string | null {
+  const c = classifyAutoAck(a, reviewerSessionId, live)
+  return c ? ack(a, c.action, c.cooldownMins) : null
+}
+
+/** The CLASSIFICATION half of auto-acking, split out so the dry run can ask "what would you
+ *  handle yourself?" without writing a single ack row. Returns null for items needing judgment. */
+export function classifyAutoAck(
+  a: AttentionItem,
+  reviewerSessionId: string,
+  live: LiveSession[],
+): { action: string; cooldownMins: number } | null {
   const d = (a.detail ?? {}) as Record<string, unknown>
-  if (a.sessionId === reviewerSessionId) return ack(a, 'auto:self-reviewer', 720)
+  if (a.sessionId === reviewerSessionId) return { action: 'auto:self-reviewer', cooldownMins: 720 }
   switch (a.kind) {
     case 'orphaned':
-      return ack(a, 'auto:see-proposal', 60) // the revive proposal is where action happens
+      // the revive proposal is where action happens
+      return { action: 'auto:see-proposal', cooldownMins: 60 }
     case 'interrupted':
-      return ack(a, 'auto:human-interrupted', 360) // never auto-resume a human stop
+      // never auto-resume a human stop
+      return { action: 'auto:human-interrupted', cooldownMins: 360 }
     case 'limit_stopped':
-      return ack(a, 'auto:monitor-jurisdiction', 120)
+      return { action: 'auto:monitor-jurisdiction', cooldownMins: 120 }
     case 'usage_alert': {
-      if (!d.hardCutoff) return ack(a, 'auto:routing-away', 60) // placement already excludes it
+      // placement already excludes it
+      if (!d.hardCutoff) return { action: 'auto:routing-away', cooldownMins: 60 }
       // A hard cutoff is only actionable while chats are LIVE on that account - "tell its chats
       // to wrap up" with zero chats there is noise (measured on the first live worklist: four
       // cutoff items for four closed apps). Placement already refuses the account either way.
@@ -474,21 +489,21 @@ function autoAckIfNoAction(
             samePath(r.slice('desktop:'.length), (a.instanceRef ?? '').slice('desktop:'.length))
           )
         })
-      if (!anyLiveThere) return ack(a, 'auto:no-live-chats-there', 60)
+      if (!anyLiveThere) return { action: 'auto:no-live-chats-there', cooldownMins: 60 }
       return null
     }
     case 'errored': {
       // Only an OVERLOAD gets a nudge ("continue where you left off"); an error/refused ending
       // is the owner's to see, and sending ANY proceed-style message into it is the one thing
       // you must not do. The ack action string is how it reaches the recap.
-      if (d.ending !== 'overload') return ack(a, 'auto:needs-owner', 360)
+      if (d.ending !== 'overload') return { action: 'auto:needs-owner', cooldownMins: 360 }
       return null
     }
     case 'idle_pending': {
       const lastHuman = typeof d.lastHumanAt === 'string' ? Date.parse(d.lastHumanAt) : Number.NaN
       if (Number.isFinite(lastHuman) && Date.now() - lastHuman < 30 * 60_000)
-        return ack(a, 'auto:human-active', 30)
-      if (d.midTurn && !d.staleTasks) return ack(a, 'auto:waiting-on-task', 30)
+        return { action: 'auto:human-active', cooldownMins: 30 }
+      if (d.midTurn && !d.staleTasks) return { action: 'auto:waiting-on-task', cooldownMins: 30 }
       if (d.waitingForSlot) return null // skip WITHOUT acking - the cap's rotation handles it
       return null
     }
@@ -572,7 +587,11 @@ function proposalToItem(
   }
 }
 
-function attentionToItem(a: AttentionItem, view: OrchestratorView): WorkItem | null {
+function attentionToItem(
+  a: AttentionItem,
+  view: OrchestratorView,
+  opts: { dryRun?: boolean } = {},
+): WorkItem | null {
   const d = (a.detail ?? {}) as Record<string, unknown>
   const prompts = getOrchestratorPrompts()
   const base = {
@@ -647,8 +666,9 @@ function attentionToItem(a: AttentionItem, view: OrchestratorView): WorkItem | n
       const inCollision = view.collisions.some((c) => samePath(c.where, a.cwd ?? ''))
       if (inCollision) {
         // The prose rule ("never commitNudge into a colliding repo") is now a refusal: the item
-        // simply is not offered while a second chat stands in the tree.
-        ackAttention(a.key, 'auto:collision-suppressed', 60)
+        // simply is not offered while a second chat stands in the tree. The dry run reports this
+        // suppression itself (buildDryRun repeats the collision test) and must not write the ack.
+        if (!opts.dryRun) ackAttention(a.key, 'auto:collision-suppressed', 60)
         return null
       }
       return {
@@ -1353,4 +1373,227 @@ export async function verifyWorkItem(
     reportProposalExecuted(itemId, true, 'delivered; engine verified by transcript movement')
   clearState(itemId)
   return { ok: true, state: 'verified', detail: 'engine ran - transcript moved after delivery' }
+}
+
+// --- the dry run ---------------------------------------------------------------------------------
+//
+// Owner ask (Michael, 2026-08-28): "instead of the orchestrator actually just going and running,
+// tell me what it would do with every chat and every open window - an orchestrator dry run - so
+// I can tell you no that's wrong before it acts." This is that view: the SAME item builders the
+// real wake uses, computed read-only. NOTHING here writes - no acks, no cooldowns, no reviewer
+// stamp, no dispatch. A dry run that mutated state would be a probe that lies twice: once to the
+// owner (it acted) and once to the next wake (its cooldowns are spent).
+
+export interface DryRunChatRow {
+  title: string | null
+  chatId: string | null
+  sessionId: string | null
+  cwd: string | null
+  lastActivityAt: string | null
+  done: boolean
+  live: { pid: number; peerName: string } | null
+  permissionMode: string | null
+}
+
+export interface DryRun {
+  generatedAt: string
+  workMode: string
+  reviewer: { lastSeenAt: string | null; presentWithin20m: boolean }
+  instances: Array<{
+    instance: string
+    weeklyPct: number | null
+    band: string | null
+    chats: DryRunChatRow[]
+    archivedCount: number
+  }>
+  wouldAsk: WorkItem[]
+  wouldAutoHandle: string[]
+  wouldSuppress: string[]
+  inFlight: Array<{ itemId: string; phase: string; targetSessionId: string }>
+  pendingRenames: Array<{ sessionId: string; title: string }>
+  placement: unknown
+  unreachable: unknown
+  note: string
+}
+
+function liveByAnyId(live: LiveSession[], c: DossierChat): LiveSession | null {
+  const ids = new Set<string>([c.cliSessionId ?? '', ...c.priorCliSessionIds])
+  if (c.chatId?.startsWith('local_')) ids.add(c.chatId.slice('local_'.length))
+  ids.delete('')
+  return live.find((s) => ids.has(s.sessionId)) ?? null
+}
+
+export function buildDryRun(reviewerSessionId = ''): DryRun {
+  const view = orchestratorView()
+  const live = readLiveRegistry(join(homedir(), '.claude'))
+
+  // The fleet inventory: every open window, its sidebar chats, its weekly band.
+  const doneIds = new Set(
+    db
+      .query<{ session_id: string }, []>('select session_id from session_marks where done = 1')
+      .all()
+      .map((r) =>
+        r.session_id.includes(':')
+          ? r.session_id.slice(r.session_id.indexOf(':') + 1)
+          : r.session_id,
+      ),
+  )
+  let usage: Record<string, { pct?: number; band?: string }> = {}
+  try {
+    const row = db
+      .query<{ value: string }, []>("select value from orchestrator_kv where key = 'usagePrev'")
+      .get()
+    if (row) usage = JSON.parse(row.value)
+  } catch {
+    /* no usage snapshot yet - bands just read unknown */
+  }
+  const byInstance = new Map<string, DossierChat[]>()
+  for (const c of collectChats()) {
+    const list = byInstance.get(c.instance) ?? []
+    list.push(c)
+    byInstance.set(c.instance, list)
+  }
+  const instances = [...byInstance.entries()]
+    .map(([instance, chats]) => {
+      const u =
+        usage[`desktop:${join(homedir(), '.claude-instances', instance).toLowerCase()}`] ?? {}
+      const open = chats.filter((c) => !c.archived)
+      open.sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''))
+      return {
+        instance,
+        weeklyPct: typeof u.pct === 'number' ? u.pct : null,
+        band: typeof u.band === 'string' ? u.band : null,
+        chats: open.map((c): DryRunChatRow => {
+          const l = liveByAnyId(live, c)
+          const ids = new Set<string>([c.cliSessionId ?? '', ...c.priorCliSessionIds])
+          return {
+            title: c.title,
+            chatId: c.chatId,
+            sessionId: c.cliSessionId,
+            cwd: c.cwd,
+            lastActivityAt: c.lastActivityAt,
+            done: [...ids].some((id) => doneIds.has(id)),
+            live: l ? { pid: l.pid, peerName: l.name } : null,
+            permissionMode: c.permissionMode,
+          }
+        }),
+        archivedCount: chats.length - open.length,
+      }
+    })
+    .sort((a, b) => a.instance.localeCompare(b.instance))
+
+  // The would-be worklist: same builders as buildWorklist, zero writes.
+  const wouldAsk: WorkItem[] = []
+  const wouldAutoHandle: string[] = []
+  const wouldSuppress: string[] = []
+  for (const p of view.proposals) {
+    if (p.status !== 'proposed' && p.status !== 'approved') continue
+    if (reviewerSessionId && p.sessionId === reviewerSessionId) continue
+    wouldAsk.push(proposalToItem(p, view, reviewerSessionId, live))
+  }
+  for (const a of view.attention) {
+    const c = classifyAutoAck(a, reviewerSessionId, live)
+    if (c) {
+      wouldAutoHandle.push(`${a.key} -> ${c.action}`)
+      continue
+    }
+    const d = (a.detail ?? {}) as Record<string, unknown>
+    if (a.kind === 'idle_pending' && d.waitingForSlot) {
+      wouldSuppress.push(`${a.key} -> waiting for a rotation slot`)
+      continue
+    }
+    // Same test attentionToItem applies before suppressing a commit nudge; repeated here because
+    // the dry run must REPORT the suppression, and the builder's contract is to return null.
+    if (a.kind === 'repo_dirty' && view.collisions.some((x) => samePath(x.where, a.cwd ?? ''))) {
+      wouldSuppress.push(`${a.key} -> collision-suppressed (two live chats in that repo)`)
+      continue
+    }
+    const item = attentionToItem(a, view, { dryRun: true })
+    if (item) wouldAsk.push(item)
+  }
+
+  const inFlight = db
+    .query<{ key: string; value: string }, []>(
+      "select key, value from orchestrator_kv where key like 'wl:%'",
+    )
+    .all()
+    .map((r) => {
+      try {
+        const s = JSON.parse(r.value) as ItemState
+        return { itemId: r.key.slice(3), phase: s.phase, targetSessionId: s.targetSessionId }
+      } catch {
+        return { itemId: r.key.slice(3), phase: 'unreadable', targetSessionId: '' }
+      }
+    })
+
+  const lastSeen = db
+    .query<{ value: string }, []>("select value from orchestrator_kv where key = 'lastReviewerAt'")
+    .get()?.value
+  return {
+    generatedAt: new Date().toISOString(),
+    workMode: view.settings.workMode,
+    reviewer: {
+      lastSeenAt: lastSeen ?? null,
+      presentWithin20m: !!lastSeen && Date.now() - Date.parse(lastSeen) < 20 * 60_000,
+    },
+    instances,
+    wouldAsk,
+    wouldAutoHandle,
+    wouldSuppress,
+    inFlight,
+    pendingRenames: listPendingRenames().map((r) => ({ sessionId: r.sessionId, title: r.title })),
+    placement: view.placement,
+    unreachable: view.unreachable,
+    note: 'READ-ONLY PLAN. Nothing above ran, no cooldowns were spent, no reviewer stamp was written.',
+  }
+}
+
+/** The owner-facing layout, rendered ONCE server-side so every surface shows the same picture. */
+export function renderDryRunText(d: DryRun): string {
+  const L: string[] = []
+  const rev = d.reviewer.presentWithin20m
+    ? `active (last call ${d.reviewer.lastSeenAt})`
+    : `NONE${d.reviewer.lastSeenAt ? ` (last call ${d.reviewer.lastSeenAt})` : ' (never)'}`
+  L.push(`ORCHESTRATOR DRY RUN - ${d.generatedAt} - workMode: ${d.workMode} - reviewer: ${rev}`)
+  L.push('')
+  L.push('OPEN WINDOWS')
+  for (const i of d.instances) {
+    const pct = i.weeklyPct == null ? '' : ` (${i.weeklyPct}% weekly${i.band ? `, ${i.band}` : ''})`
+    L.push(`  ${i.instance}${pct}`)
+    for (const c of i.chats) {
+      const state = c.live ? `LIVE pid ${c.live.pid}` : 'idle'
+      const done = c.done ? ' - done-marked' : ''
+      const cwd = c.cwd ? ` - ${c.cwd}` : ''
+      const title = c.title ?? c.chatId ?? '(untitled)'
+      L.push(`    - ${title} - ${state}${done} - last ${c.lastActivityAt ?? '?'}${cwd}`)
+    }
+    if (i.archivedCount) L.push(`    (+${i.archivedCount} archived)`)
+  }
+  L.push('')
+  L.push(`WOULD ASK THE REVIEWER (${d.wouldAsk.length})`)
+  d.wouldAsk.forEach((w, n) => {
+    L.push(`  ${n + 1}. [${w.kind}] ${w.title}`)
+    L.push(`     ${w.question}`)
+    const summary = (w.evidence as Record<string, unknown>)?.summary
+    if (typeof summary === 'string') L.push(`     evidence: ${summary}`)
+    if (w.unreachable) L.push(`     UNREACHABLE: ${w.unreachable}`)
+  })
+  L.push('')
+  L.push(`WOULD HANDLE ITSELF, NO REVIEWER INVOLVED (${d.wouldAutoHandle.length})`)
+  for (const s of d.wouldAutoHandle) L.push(`  - ${s}`)
+  if (d.wouldSuppress.length) {
+    L.push(`WOULD SUPPRESS (${d.wouldSuppress.length})`)
+    for (const s of d.wouldSuppress) L.push(`  - ${s}`)
+  }
+  if (d.inFlight.length) {
+    L.push(`MID-DELIVERY FROM AN EARLIER WAKE (${d.inFlight.length})`)
+    for (const f of d.inFlight) L.push(`  - ${f.itemId}: ${f.phase} -> ${f.targetSessionId}`)
+  }
+  if (d.pendingRenames.length) {
+    L.push(`PENDING RENAMES (${d.pendingRenames.length})`)
+    for (const r of d.pendingRenames) L.push(`  - ${r.sessionId.slice(0, 8)} -> "${r.title}"`)
+  }
+  L.push('')
+  L.push(d.note)
+  return L.join('\n')
 }

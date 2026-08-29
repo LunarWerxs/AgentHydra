@@ -590,6 +590,20 @@ export const TOOLS: McpEngineTool[] = [
       ),
   },
   {
+    name: 'orchestrator_dryrun',
+    description:
+      'The orchestrator DRY RUN the owner asked for: what the orchestrator WOULD do with every ' +
+      'chat and every open window, as a read-only plan. Same item builders as the real worklist, ' +
+      'but nothing acts, no cooldowns are spent, and no reviewer stamp is written. Returns a ' +
+      'rendered text layout: open windows with their chats and weekly usage, the items a ' +
+      'reviewer would be asked to rule on (with the exact question and evidence), what the ' +
+      'server would handle itself, what it would suppress, and anything mid-delivery. Show the ' +
+      'text to the owner VERBATIM in a code block - it is the layout he asked to review before ' +
+      'letting the orchestrator act.',
+    inputSchema: S({}, []),
+    run: () => api('/api/orchestrator/dryrun?format=text'),
+  },
+  {
     name: 'chat_dossier',
     description:
       'ONE query, everything the system knows about a chat: which desktop instance holds it, its ' +
