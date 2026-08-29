@@ -264,6 +264,7 @@ froze for good.
 | `chip` | a session offered a `spawn_task` chip (title + prompt captured) | queue it via `/api/queue` on the best account, or surface to the human |
 | `limit_stopped` | a live chat's last turn ended at a usage limit | none (the auto-resume monitor's jurisdiction; check `/api/monitor`) |
 | `orphaned` | the thread needs REVIVING: a dead pid (crash), a stranded mid-turn transcript (graceful restart), or a live-but-deaf plumbing process | informational twin of a `revive` PROPOSAL - the proposal is where the reviewer rules and acts (native delivery), the item just keeps the feed honest |
+| `loop_break` | the circuit breaker tripped on a live loop: the same (kind, session) proposed past its cap, or the same item drawing the same ruling over and over | none - OWNER-facing by construction; the worklist builders return null for it, so it can never become a work item that re-enters the loop it reports |
 
 ### Restart recovery (orphaned sessions)
 
@@ -589,6 +590,43 @@ stays on this machine); never work in a worktree or branch; a real human message
 pauses orchestration of that chat; never answer a session's question by picking a
 destructive or regressive option - skip and surface instead; never push a public repo
 without the PUBLIC warning protocol.
+
+### The circuit breaker (loop detection, 2026-08-28)
+
+Measured the night the worklist shipped: the same finished chat was re-archived FOUR times
+(each archive executed and verified honestly; the running app then re-saved its sidebar entry
+un-archived, the janitor saw a done-marked visible chat again, and the cycle restarted), and
+the same idle item was re-proposed and re-rejected THREE times in ~40 minutes. Every pass was
+individually correct; nothing anywhere COUNTED. `server/src/orchestrator-breaker.ts` is the
+counter (pattern sources: systemd's StartLimitIntervalSec/Burst restart-storm brake,
+claude_code_agent_farm's exponential backoff, CrewAI's max_iterations, Cloudzy's
+hash-the-repeated-action sliding window). State lives in `orchestrator_kv` (`breaker:` prefix),
+so counts survive daemon restarts - an in-memory counter would reset on exactly the restart a
+storm tends to cause. Three brakes:
+
+1. **Attempt counters at proposal creation.** `proposeAction` counts every NEW row per
+   (kind, sessionId) - refreshing an open row is not a new ask. Past 4 inserts inside a 6-hour
+   sliding window, the next ask is refused and becomes ONE owner-facing `loop_break` attention
+   item stating the loop and its history ("proposed 5× in 6h ... the app keeps resurrecting the
+   entry; it sticks only after that app restarts"). Suppressed asks keep the window sliding, so
+   a persistent loop stays suppressed under a single live escalation; a full quiet window
+   (the condition cleared - typically that app restarting) re-arms the pair.
+2. **Exponential backoff on revive deliveries, keyed per target session.** Each unverified
+   delivery doubles the wait before the next one (2min base, 30min cap - agent_farm's
+   10s→5min shape, scaled to chat revives); a VERIFIED delivery (transcript moved) resets the
+   ladder. A revive resolved inside its backoff parks as "approved but parked" - the ruling
+   stands, execution waits for the clock, and the pending wait is visible in the item's
+   constraints before the reviewer ever rules.
+3. **The repeat-hash on rulings.** Every resolve is counted per (itemId, decision). The same
+   item drawing the same ruling 3 times inside the window is folded into the owner escalation
+   and withheld from later worklists instead of being offered a fourth time.
+
+The law the breaker lives under: it suppresses PROPOSING and paces DELIVERY; it never overrides
+a ruling - an open row still gets decided, an approved one still executes, a reject still lands.
+And every stop is LOUD: the escalation item in the attention feed, plus a suppression line in
+both the worklist (`suppressed[]`) and the dry run (`wouldSuppress`), read straight from kv so
+they are current even between ticks. A silent brake would be the false quiet this document
+warns about everywhere else.
 
 ## Turning it on
 

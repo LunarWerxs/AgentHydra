@@ -19,16 +19,20 @@ own metadata. Owner ask: "see if you can find any better ways to do things we're
 - **A judgment layer.** None of the session managers has an equivalent of the one-AI-reviewer
   ruling over a typed worklist; they route messages and detect liveness, a human does the rest.
 
-## Tier 1 - direct hits on our named pains (chips filed)
+## Tier 1 - direct hits on our named pains (chips filed) - BOTH SHIPPED 2026-08-28
 
-1. **The reviewer is a ROLE, not a chat** (claude-flow's oversight decoupled from any worker;
+1. **The reviewer is a ROLE, not a chat** - SHIPPED (orchestrator-reviewer-journal.ts, commit
+   20cedde). (claude-flow's oversight decoupled from any worker;
    OpenHands' replay-an-EventLog-into-any-fresh-runtime; Anthropic's memory checkpoint;
    AG2's rehydrate-into-a-new-process). The daemon already holds the ledger and worklist; add
    a compact REVIEWER JOURNAL (decisions made, in-flight items, standing context) that any
    fresh chat can be seeded with, so "revive the reviewer" means replay-into-whichever-window
    -is-free, never resurrect-one-specific-chat. Kills reviewer mortality permanently and
    makes the phantom-archiver class of decapitation a non-event.
-2. **Circuit breakers + backoff + stuck-but-alive detection** (systemd restart-storm brake;
+2. **Circuit breakers + backoff + stuck-but-alive detection** - SHIPPED
+   (orchestrator-breaker.ts: attempt counters at proposal creation, revive-delivery backoff
+   per target session, repeat-hash on rulings; docs/ORCHESTRATOR.md "The circuit breaker").
+   (systemd restart-storm brake;
    agent_farm exponential backoff 10s..5min; CrewAI max_iterations; Cloudzy's hash-the-
    repeated-action sliding window; Temporal per-activity heartbeat). Measured tonight: the
    same finished chat was re-archived FOUR times and the same idle chat re-proposed three

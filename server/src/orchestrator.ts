@@ -90,6 +90,7 @@ import {
 } from './instance-sessions'
 import { NEW_CHAT_ULTRACODE_KEY, newChatUltracodeEnabled } from './new-chat-opening'
 import { agentChatKvKey, isOrchAgentTitle, ORCH_AGENT_TITLE } from './orch-agent'
+import { tripAttentionItems } from './orchestrator-breaker'
 import {
   type ChipInTail,
   isInjectedUserText,
@@ -2150,7 +2151,10 @@ function applyAckSuppressionAndPublish(ctx: OnceCtx): void {
     return false
   })
 
-  state.attention = withContinuity(visible)
+  // Circuit-breaker escalations ride BEHIND the ack filter on purpose: a tripped loop is the
+  // owner's to see for as long as it is live, and there is no reviewer path that could ack it
+  // (loop_break never becomes a work item). Stable keys, so continuity counts passes.
+  state.attention = withContinuity([...visible, ...tripAttentionItems(ctx.started)])
   state.lastTickAt = ctx.nowIso
   state.lastTickMs = ctx.deps.nowMs() - ctx.started
 }

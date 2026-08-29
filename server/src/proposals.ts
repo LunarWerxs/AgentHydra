@@ -18,6 +18,7 @@
 // moved after the AI ruled is a new situation, the same re-arm rule acks use).
 
 import { db } from './db'
+import { gateProposalAttempt } from './orchestrator-breaker'
 import type { OrchestratorProposal, ProposalKind } from './types'
 
 const EXPIRE_AFTER_MS = 48 * 3600 * 1000
@@ -116,6 +117,17 @@ export function proposeAction(opts: {
     const fresh = !Number.isNaN(evidenceMs) && evidenceMs > decidedMs
     if (!fresh && Date.now() - decidedMs < REJECT_QUIET_MS) return null
   }
+  // THE CIRCUIT BREAKER (orchestrator-breaker.ts), counted at creation and only at creation —
+  // refreshing an open row above is not a new ask. Measured 2026-08-28: the same finished chat
+  // was re-archived four times in one evening because every cycle was individually correct and
+  // nothing counted. Past the cap the ask becomes ONE owner-facing loop_break attention item
+  // instead of row number five; open rows still get decided (the gate suppresses proposing,
+  // never a ruling).
+  const brake = gateProposalAttempt(
+    { kind: opts.kind, sessionId: opts.sessionId, title: opts.title },
+    Date.now(),
+  )
+  if (!brake.allowed) return null
   const id = crypto.randomUUID()
   db.query(
     `insert into orchestrator_proposals

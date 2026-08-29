@@ -66,6 +66,14 @@ import {
   repoRootForCwd,
   samePath,
 } from './orchestrator'
+import {
+  breakerSuppressionLines,
+  clearReviveBackoff,
+  noteResolution,
+  noteReviveDelivery,
+  resolutionTrip,
+  reviveBackoffRefusal,
+} from './orchestrator-breaker'
 import { readTailInfo } from './orchestrator-transcript-tail'
 import { decideProposal, getProposal, reportProposalExecuted } from './proposals'
 import {
@@ -645,6 +653,10 @@ function proposalToItem(
       // proposal's evidence inherits the account fields from the source item's detail spread.
       const risk = usageRiskFlag(ev, getOrchestratorSettings())
       if (risk) constraints.push(risk)
+      // The delivery backoff is VISIBLE before the ruling, not a surprise at resolve: approving
+      // is still allowed (a ruling is never overridden), execution just parks until the clock.
+      const backoff = reviveBackoffRefusal(p.sessionId)
+      if (backoff) constraints.push(`⏳ ${backoff}`)
       if (route.mode === 'none') unreachable = route.whyNone
       question =
         'Is this lineage genuinely unfinished and not superseded, so it should get its next turn?'
@@ -861,6 +873,9 @@ export interface Worklist {
   items: WorkItem[]
   autoAcked: string[]
   renames: Array<{ id: string; sessionId: string; title: string; step: ReviewerStep | null }>
+  /** Items the circuit breaker withheld, one loud line each (orchestrator-breaker.ts). A
+   *  suppressed loop must be VISIBLE to the reviewer and the owner, never silently absent. */
+  suppressed: string[]
   note: string
 }
 
@@ -874,19 +889,29 @@ export function buildWorklist(reviewerSessionId: string): Worklist {
   const live = readLiveRegistry(join(homedir(), '.claude'))
   const autoAcked: string[] = []
   const items: WorkItem[] = []
+  // The breaker's standing suppressions, read from kv so they are current even between ticks.
+  // Loop escalations themselves (kind 'loop_break') are OWNER items and are skipped below —
+  // offering one to the reviewer would re-enter the loop it reports.
+  const suppressed: string[] = breakerSuppressionLines()
 
   for (const p of view.proposals) {
     if (p.status !== 'proposed' && p.status !== 'approved') continue
     if (p.sessionId === reviewerSessionId) continue
+    // The repeat-hash trip: an item the reviewer has ruled identically RESOLUTION_REPEAT_CAP
+    // times in the window is folded into the owner escalation, not offered a fourth time.
+    // countAsk keeps the tally of withheld offers honest in the escalation text.
+    if (resolutionTrip(p.id, Date.now(), true)) continue
     items.push(proposalToItem(p, view, reviewerSessionId, live))
   }
   for (const a of view.attention) {
+    if (a.kind === 'loop_break') continue // owner-facing; already in `suppressed` above
     const acked = autoAckIfNoAction(a, reviewerSessionId, live)
     if (acked) {
       autoAcked.push(acked)
       continue
     }
     if (a.kind === 'idle_pending' && (a.detail as Record<string, unknown>)?.waitingForSlot) continue
+    if (resolutionTrip(`att:${a.key}`, Date.now(), true)) continue
     const item = attentionToItem(a, view)
     if (item) items.push(item)
   }
@@ -914,6 +939,7 @@ export function buildWorklist(reviewerSessionId: string): Worklist {
     items,
     autoAcked,
     renames,
+    suppressed,
     note:
       'Every message and route above is final - send reviewer steps verbatim, then call verify. ' +
       'Judgment (approve/reject + note) is the only input the server wants from you.',
@@ -978,6 +1004,13 @@ export async function resolveWorkItem(opts: {
       }
   }
   if (pending && decision === 'reject') clearState(itemId)
+
+  // THE REPEAT-HASH (orchestrator-breaker.ts): every ruling is counted here, after the
+  // in-flight re-issue path above (re-reading your own steps is not a new ruling). Measured
+  // 2026-08-28: the same idle item was re-proposed and re-rejected three times in ~40 minutes.
+  // The ruling that trips still applies IN FULL below — the breaker never overrides a ruling —
+  // but the NEXT wake's worklist withholds the item and the loop becomes one owner escalation.
+  noteResolution(itemId, decision)
 
   // Attention-derived items: the "execution" is one composed live send + the right ack.
   if (itemId.startsWith('att:')) {
@@ -1132,6 +1165,9 @@ export async function resolveWorkItem(opts: {
     // a send queues into the void (measured). The unfreeze is the revive machinery: stop the
     // stuck process, then boot the chat fresh through the app with the file-tools-only message.
     if (a.kind === 'idle_pending' && d.approvalStall && a.sessionId) {
+      // Backoff check BEFORE the process kill: pacing a delivery must not still stop the chat.
+      const stallBackoff = reviveBackoffRefusal(a.sessionId)
+      if (stallBackoff) return { ok: false, reason: `parked: ${stallBackoff}` }
       const stuck = liveSessionEntry(a.sessionId)
       if (stuck) {
         try {
@@ -1161,6 +1197,7 @@ export async function resolveWorkItem(opts: {
         at: new Date().toISOString(),
         targetSessionId: a.sessionId,
       })
+      noteReviveDelivery(a.sessionId)
       return { ok: true, reviewerSteps: [route.step] }
     }
     // Everything else here is a LIVE-chat send. The item may name the target by sessionId or
@@ -1247,6 +1284,11 @@ export async function resolveWorkItem(opts: {
   const ev = p.evidence as Record<string, unknown>
   switch (p.kind) {
     case 'revive': {
+      // EXPONENTIAL BACKOFF per target session (orchestrator-breaker.ts): each unverified
+      // delivery into this lineage doubles the wait before the next one; a VERIFIED delivery
+      // resets it. The approval stands — this parks execution, it never overrides the ruling.
+      const backoff = reviveBackoffRefusal(p.sessionId)
+      if (backoff) return { ok: true, reason: `approved but parked: ${backoff}`, reviewerSteps: [] }
       const message =
         opts.messageOverride?.trim() ||
         composeRevive({
@@ -1288,6 +1330,7 @@ export async function resolveWorkItem(opts: {
             at: new Date().toISOString(),
             targetSessionId: p.sessionId,
           })
+          noteReviveDelivery(p.sessionId)
           return {
             ok: true,
             completed: false,
@@ -1303,6 +1346,7 @@ export async function resolveWorkItem(opts: {
         targetSessionId: p.sessionId,
         steps: [route.step],
       })
+      noteReviveDelivery(p.sessionId)
       return { ok: true, reviewerSteps: [route.step] }
     }
     case 'archive': {
@@ -1630,6 +1674,9 @@ export async function verifyWorkItem(
   if (!itemId.startsWith('att:') && !itemId.startsWith('rename:'))
     reportProposalExecuted(itemId, true, 'delivered; engine verified by transcript movement')
   clearState(itemId)
+  // VERIFIED success is the one thing that resets the revive backoff: the lineage is genuinely
+  // running again, so a future death starts the ladder from the bottom.
+  clearReviveBackoff(st.targetSessionId)
   return { ok: true, state: 'verified', detail: 'engine ran - transcript moved after delivery' }
 }
 
@@ -1761,16 +1808,22 @@ export function buildDryRun(reviewerSessionId = ''): DryRun {
     })
     .sort((a, b) => a.instance.localeCompare(b.instance))
 
-  // The would-be worklist: same builders as buildWorklist, zero writes.
+  // The would-be worklist: same builders as buildWorklist, zero writes. The breaker's standing
+  // suppressions open the list, read straight from kv — a suppressed loop must be visible here
+  // even between ticks, never silently absent (the false-quiet rule).
   const wouldAsk: WorkItem[] = []
   const wouldAutoHandle: string[] = []
-  const wouldSuppress: string[] = []
+  const wouldSuppress: string[] = breakerSuppressionLines()
   for (const p of view.proposals) {
     if (p.status !== 'proposed' && p.status !== 'approved') continue
     if (reviewerSessionId && p.sessionId === reviewerSessionId) continue
+    // Same repeat-hash withholding as the live worklist (its line is already in the list
+    // above); pure read — the dry run writes nothing.
+    if (resolutionTrip(p.id)) continue
     wouldAsk.push(proposalToItem(p, view, reviewerSessionId, live))
   }
   for (const a of view.attention) {
+    if (a.kind === 'loop_break') continue // owner escalation; already listed via the breaker
     const c = classifyAutoAck(a, reviewerSessionId, live)
     if (c) {
       wouldAutoHandle.push(`${a.key} -> ${c.action}`)
@@ -1781,6 +1834,7 @@ export function buildDryRun(reviewerSessionId = ''): DryRun {
       wouldSuppress.push(`${a.key} -> waiting for a rotation slot`)
       continue
     }
+    if (resolutionTrip(`att:${a.key}`)) continue
     // Same test attentionToItem applies before suppressing a commit nudge; repeated here because
     // the dry run must REPORT the suppression, and the builder's contract is to return null.
     if (a.kind === 'repo_dirty' && view.collisions.some((x) => samePath(x.where, a.cwd ?? ''))) {

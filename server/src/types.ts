@@ -1325,6 +1325,11 @@ export type AttentionKind =
    *  its live-registry file survived its pid. Mid-process death is a resumable scenario: the
    *  reviewer revives it per the owner's surface preference. */
   | 'orphaned'
+  /** The circuit breaker tripped on a live loop (orchestrator-breaker.ts): the same proposal
+   *  pair or the same ruling kept repeating with no counter anywhere. OWNER-facing only — the
+   *  worklist builders return null for this kind, so it can never become a work item that
+   *  re-enters the loop it reports. */
+  | 'loop_break'
 
 /** One thing the watcher thinks needs a judgment call. The payload carries enough to judge
  *  from (tail snippet, numbers), so the reviewer never has to open the transcript itself. */

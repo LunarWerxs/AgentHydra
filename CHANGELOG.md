@@ -9,6 +9,25 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The circuit breaker: live loops now trip to ONE owner escalation instead of running
+  forever.** Measured 2026-08-28: the same finished chat was re-archived four times in one
+  evening (every archive executed and verified; the running app re-saved the entry un-archived
+  and the janitor asked again), and the same idle item was re-proposed and re-rejected three
+  times in ~40 minutes - correct passes, zero counters. `server/src/orchestrator-breaker.ts`
+  adds three brakes, state in `orchestrator_kv` so counts survive daemon restarts: (1) attempt
+  counters at proposal creation - past 4 new rows per (kind, session) in a 6-hour sliding
+  window the ask is refused and becomes one `loop_break` attention item stating the loop and
+  its history; (2) exponential backoff on revive deliveries per target session (2min doubling
+  to 30min), reset the moment a delivery VERIFIES, with an in-backoff approval parking as
+  "approved but parked" and the wait visible in the item's constraints; (3) a repeat-hash on
+  rulings - the same item drawing the same decision three times folds into the owner
+  escalation and is withheld from later worklists. The breaker suppresses proposing and paces
+  delivery, never overrides a ruling, and every suppression is loud: the worklist gained a
+  `suppressed[]` list and the dry run's `wouldSuppress` carries the same lines, read straight
+  from kv so they hold even between ticks. Patterns: systemd StartLimitIntervalSec/Burst,
+  claude_code_agent_farm backoff, CrewAI max_iterations, Cloudzy's repeated-action hash.
+  Regression tests pin both measured shapes.
+
 - **The reviewer is a ROLE, not a chat: the journal + seed make reviewer death a non-event.**
   Measured twice on 2026-08-28: the reviewer loop died with its host chat (a phantom archive,
   then a process kill) and the fleet halted until a human typed /orchestrate.
@@ -917,7 +936,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the settings row shows exactly what will land on the clipboard, because a clipboard format
   described in prose is one nobody can picture.
 
-  Turning both off gives back the bare path, byte for byte — a test pins that, because this action
+  Turning both off gives back the bare path, byte for byte - a test pins that, because this action
   shipped long before the settings did and a path with anything appended stops working the moment
   it is pasted into a terminal. An empty prompt adds nothing rather than a leading blank line, and
   an untitled session contributes no blank line either.
@@ -926,7 +945,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **The usage-limit badge now disappears when the session is no longer stuck at the limit.** It was
   shown for any session that had EVER hit a wall, which meant a chat that hit one in the morning and
-  was finished in the afternoon still wore it — and a badge that never clears stops meaning "this
+  was finished in the afternoon still wore it - and a badge that never clears stops meaning "this
   one needs you", which is the only thing it is for. It now appears only while the wall is still the
   last thing in the transcript, which is exactly the `pending` verdict the detector already
   computed. Self-clearing, too: resuming a session appends to its file, the scan re-runs, and the
@@ -953,7 +972,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   through the same evidence gate as the usage-limit badge: only the CLI's own report counts. A
   conversation that merely discusses being overloaded did not end that way. The interrupt marker in
   particular is anchored and accepted only on a user turn, because the runtime writes it as the
-  whole content of one — an assistant repeating the phrase is quoting it, and a row claiming "you
+  whole content of one - an assistant repeating the phrase is quoting it, and a row claiming "you
   stopped it" when nobody did would spend the credibility of every other reason next to it. That
   distinction is a test, and it caught the loose first version.
 
@@ -964,13 +983,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A conversation stored as several transcripts now says so, instead of looking like several
   chats.** Interrupt a session and resume it and the CLI does not keep writing to the same file: it
   opens a new transcript, replays the history and carries on. One conversation therefore becomes
-  two or three rows with the same title, different message counts, and no visible relationship —
+  two or three rows with the same title, different message counts, and no visible relationship  - 
   which is what "why is this here twice?" looks like from the outside. Those rows now carry a
   "part 1 of 2" chip explaining that they are one conversation split by an interruption.
 
   **They are labelled rather than folded, and that was a measurement rather than a preference.**
   Hiding all but the fullest copy is the obvious fix and it is wrong. Across all 36 duplicate
-  transcripts on a real store, EVERY older copy held turns the newer one did not — and they were
+  transcripts on a real store, EVERY older copy held turns the newer one did not - and they were
   not bookkeeping, they were things the user had typed, usually the last thing said before the
   interruption ("See you soon.", "skip domains4sale.uk,, do the rest"), which the resumed file
   never carried over. Not one of the 36 could have been absorbed without deleting somebody's words,
@@ -978,7 +997,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
   The grouping key is the first message's uuid, captured on the scan that already reads every
   record. A uuid is unique, so two transcripts whose first message is the same message necessarily
-  share that history — no content comparison, no reading a second file, and no reliance on the
+  share that history - no content comparison, no reading a second file, and no reliance on the
   title, which genuinely different chats routinely share. Copies are numbered oldest first, so the
   numbering reads chronologically and the message count grows with it.
 
@@ -989,7 +1008,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Most of the "Unknown account" rows turned out to be a second copy of a chat already in the
   list, and they can now be named.** Reading all 64 of them settled what they actually were: none
   was a subagent, three were continuations of a compacted chat, and 27 were the same conversation
-  stored twice — same folder, same minute, and 93-100% of the smaller transcript's messages present
+  stored twice - same folder, same minute, and 93-100% of the smaller transcript's messages present
   in the larger, checked by message id rather than by title. Claude Desktop keeps its record
   pointing at one copy, so the other copy has no id to be found by, and that is the one that showed
   up with nothing against it.
@@ -1006,7 +1025,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   The constant carries that table, and a test pins the boundary in both directions so widening it
   has to be a deliberate decision with the cross-check re-run.
 
-  Three of the twin pairs share a title and share no messages at all — different conversations that
+  Three of the twin pairs share a title and share no messages at all - different conversations that
   happen to be called the same thing. That is exactly why this join keys on where and when a
   conversation began and never on what it is called.
 
@@ -1021,13 +1040,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is the session's SIZE, so on those rows "Marathon" became the last word on the line and read like
   somebody's name. The account chip is now always present for a Claude session, saying "Unknown
   account" with a tooltip explaining that Claude Desktop kept no record rather than that AgentHydra
-  is hiding one — and the size chip explains on hover that it is a size, from message count and
+  is hiding one - and the size chip explains on hover that it is a size, from message count and
   elapsed time, and not a name.
 
 - **19 of those 64 turned out to be knowable after all.** Desktop links its metadata to a transcript
   by session id, and for these it had written no such row. It had, however, written down the same
-  conversation's working directory and creation instant. Matching on those two — and ONLY where the
-  answer is unique, never where two accounts could both claim it — recovers the account without
+  conversation's working directory and creation instant. Matching on those two - and ONLY where the
+  answer is unique, never where two accounts could both claim it - recovers the account without
   going near the title match this module has always refused, because two chats in one project are
   routinely called the same thing while a folder plus a millisecond timestamp is not a coincidence
   that happens. The remaining 45 have no Desktop record anywhere on disk, verified by searching
@@ -1043,8 +1062,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ### Added
 
 - **The sessions a usage limit killed are now a list you can pull up.** AgentHydra could already
-  tell that a conversation had died at a quota wall — that is how the auto-resume monitor decides
-  what to restart — but the only place that verdict surfaced was the monitor's own to-do list,
+  tell that a conversation had died at a quota wall - that is how the auto-resume monitor decides
+  what to restart - but the only place that verdict surfaced was the monitor's own to-do list,
   which hides anything already resolved. So "which of my chats got cut off, and which are still
   sitting there?" had no answer. It does now: **List options -> Usage limits** narrows the session
   list to the conversations a wall stopped, or to the ones *still* stopped at one, and every row
@@ -1057,7 +1076,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   tail-reader into one shared accumulator, so the badge and the auto-resume queue physically cannot
   disagree, and it keeps that reader's hard-won evidence rule: only the CLI's own error report
   counts, never model prose or tool output, because the loose version marked every run that merely
-  TALKED about rate limits. A transient 529 is still not a usage limit. Claude only — Codex and
+  TALKED about rate limits. A transient 529 is still not a usage limit. Claude only - Codex and
   OpenCode record an error, but not in a form worth trusting, and a false badge is worse than a
   missing one.
 
@@ -1065,13 +1084,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   transcript to work out a title and a message count; the verdict rides along on that pass and is
   persisted with it, so the filter is a SQLite query rather than a thousand file reads. Cached
   scans now carry a version stamp, because a row written before the scanner learned this would
-  answer "was this rate limited?" with NULL forever — and a NULL there reads as "no", which would
+  answer "was this rate limited?" with NULL forever - and a NULL there reads as "no", which would
   have shipped as an empty list on a machine full of stopped sessions.
 
 - **An MCP client can finally read ALL the local chat history, rather than the last day of it.**
   `list_sessions` had no time parameter and the route it calls defaults to 24 hours, so an agent
   asked to go through "all my chat histories" issued the only call available to it and got one
-  day — 19 rows out of 1,231 here — with nothing to indicate anything had been withheld. The tool
+  day - 19 rows out of 1,231 here - with nothing to indicate anything had been withheld. The tool
   now takes `period`, explicit `since`/`until` bounds, `offset` for paging past the 500-row
   ceiling, `project`, `instance` and `archived`, and its description states the 24-hour default in
   its first sentence, because a parameter only helps a client that knows it needs one. `foreign`
@@ -1081,12 +1100,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   New `list_projects` is the index of the index: every folder that has conversations in it, with a
   session count and a per-provider breakdown, read from the transcript index rather than from any
   transcript. A thousand sessions collapse to a few dozen rows, which is small enough to hand to an
-  agent whole — and it is how a client finds out what "all" contains before querying it.
+  agent whole - and it is how a client finds out what "all" contains before querying it.
 
 ### Fixed
 
 - **Searching conversation bodies now finds the ones from Cursor, Windsurf, Zed, Copilot and the
-  rest.** Body search streams each transcript line by line and JSON-parses every line — right for
+  rest.** Body search streams each transcript line by line and JSON-parses every line - right for
   Claude and Codex, and wrong for the fourth reader, whose stores are directories of JSON, one big
   JSON document, or a database. Not a line of those parses as a record, so every one was skipped and
   the file reported zero matches. These rows were already in the sweep, so the miss was silent: the
@@ -1100,8 +1119,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   owner did not recognise, and there was no way to ask the app which of the four title sources had
   produced one. Rows carry `title_source` (`custom` / `ai` / `store` / `envelope` / `message` /
   `id`) and the UI puts it on the title's tooltip. The case worth naming is `envelope`: when the
-  first turn arrives wrapped in a pseudo-tag carrying a `name` attribute — `<scheduled-task
-  name="nightly-sweep">` — that name becomes the title, so the string was chosen by whatever wrote
+  first turn arrives wrapped in a pseudo-tag carrying a `name` attribute - `<scheduled-task
+  name="nightly-sweep">` - that name becomes the title, so the string was chosen by whatever wrote
   the wrapper (a scheduler, a hook, a harness) and may match nothing the user has ever named. Those
   rows now print the tag beside the title instead of leaving an unattributable label sitting there.
 
@@ -1112,15 +1131,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Two windows of AgentHydra can now be on two different tabs.** Opening a second window to watch
   Sessions beside Instances did not work: clicking a tab in one window moved the other window to
   the same tab, live. Which tab you were on was a single `localStorage` key, and the storage helper
-  behind it listens for the browser's cross-window `storage` event by default — two windows of the
+  behind it listens for the browser's cross-window `storage` event by default - two windows of the
   app are the same origin, so every click was broadcast to the other one. That key was doing two
   different jobs at once, and they have been split. Which tab THIS window is showing now lives in
   `sessionStorage`, the one storage scoped the way people expect: it survives a reload (an update,
-  a restart, a stray F5 — the reason the tab was ever remembered), the browser copies it into a
+  a restart, a stray F5 - the reason the tab was ever remembered), the browser copies it into a
   duplicated tab so the duplicate opens on what you were looking at, and from that moment the two
   windows are independent, because sessionStorage has no cross-window event to leak through. Which
   tab a BRAND-NEW window opens on is still the shared, daemon-mirrored preference, so a first
-  launch — or a launch on a hopped port with an empty localStorage — still lands where you left
+  launch - or a launch on a hopped port with an empty localStorage - still lands where you left
   off. A window that has been somewhere is never relocated by anything but its own user, and a
   click made while that shared value is still being fetched now beats the answer it is racing.
 
