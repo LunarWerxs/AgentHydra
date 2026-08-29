@@ -1139,7 +1139,23 @@ export async function resolveWorkItem(opts: {
     if (!a) return { ok: false, reason: 'attention item no longer present' }
     const dReject = (a.detail ?? {}) as Record<string, unknown>
     if (decision === 'reject') {
-      ackAttention(key, `rejected:${note.slice(0, 60)}`, 120)
+      // HOW LONG A REJECTION SILENCES AN ITEM, and why it is not one number.
+      //
+      // A flat two hours is right for a NOISE item (a nudge into a chat that is simply busy):
+      // re-offering it every tick would be the loop the breaker exists to stop. It is wrong for
+      // a judgment call about a chat's STATE, because the cost of a mistake is asymmetric - a
+      // wrongly-rejected settled-open chat sits invisible for the whole window, which is the
+      // phantom state the three-state law bans, and the owner noticed exactly that gap
+      // (2026-08-29: "let's shorten"). Twenty minutes is long enough that a considered rejection
+      // is not re-litigated on the next tick, short enough that a wrong call self-corrects
+      // within one coffee. The repeat-hash breaker still catches a genuine loop, so shortening
+      // this cannot reintroduce one.
+      // The short window covers every STATE judgment, not just the settled-open shape: an
+      // idle_pending rejection is always the claim "this chat is fine as it is", and that claim
+      // is exactly what goes stale. The item that prompted this was a plain idle rejection
+      // (Postal Kumo), silenced for two hours by a call made in one line of evidence.
+      const cooldown = a.kind === 'idle_pending' ? 20 : 120
+      ackAttention(key, `rejected:${note.slice(0, 60)}`, cooldown)
       // A SETTLED-OPEN CHAT HAS NOWHERE TO REST (three-state law, owner 2026-08-29). For every
       // other kind a reject means "leave it alone", which is a legal outcome. For this one it
       // would mean leaving the chat exactly in the state the law forbids - open, dead, finished -
