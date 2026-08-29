@@ -121,7 +121,55 @@ test('a git failure yields nulls plus an error string, never a silent zero', asy
   const repo = r.repos[0]
   expect(repo?.dirtyCount).toBe(null)
   expect(repo?.branch).toBe(null)
+  // An unknown branch must not masquerade as known facts: null, not false (review-confirmed
+  // honesty gap in the first cut).
+  expect(repo?.detached).toBe(null)
+  expect(repo?.offMain).toBe(null)
   expect(repo?.error).toContain('index.lock')
+})
+
+test('case-differing repos stay distinct when the filesystem is case-sensitive', async () => {
+  const fake = async (args: string[]) => {
+    const cwd = args[1] ?? ''
+    if (args.includes('--show-toplevel')) return { ok: true, out: cwd, err: '' }
+    if (args.includes('--abbrev-ref'))
+      return { ok: true, out: cwd.includes('Project') ? 'main' : 'feature-x', err: '' }
+    if (args.includes('--porcelain')) return { ok: true, out: '', err: '' }
+    return { ok: false, out: '', err: 'no upstream' }
+  }
+  // caseFold:false (Linux/macOS reality): two repos, both reported. The first cut lowercased
+  // unconditionally and the second repo VANISHED - not merged, gone (review repro).
+  const sensitive = await fleetGit(['/work/Project', '/work/project'], {
+    runGit: fake,
+    caseFold: false,
+  })
+  expect(sensitive.repos.length).toBe(2)
+  // caseFold:true (win32 reality): the same two paths are one repo.
+  const folded = await fleetGit(['/work/Project', '/work/project'], {
+    runGit: fake,
+    caseFold: true,
+  })
+  expect(folded.repos.length).toBe(1)
+})
+
+test('git calls run concurrently, so hung repos cannot stack their timeouts', async () => {
+  // The first cut awaited every call sequentially: N repos x 3 calls x 3s worst case (~48s
+  // measured in review for four hung repos). Pin the fix by observing real overlap: a stub
+  // that yields between start and finish must see more than one call in flight.
+  let inFlight = 0
+  let maxInFlight = 0
+  const fake = async (args: string[]) => {
+    inFlight++
+    maxInFlight = Math.max(maxInFlight, inFlight)
+    await new Promise((r) => setTimeout(r, 10))
+    inFlight--
+    if (args.includes('--show-toplevel')) return { ok: true, out: args[1] ?? '', err: '' }
+    if (args.includes('--abbrev-ref')) return { ok: true, out: 'main', err: '' }
+    if (args.includes('--porcelain')) return { ok: true, out: '', err: '' }
+    return { ok: false, out: '', err: 'no upstream' }
+  }
+  await fleetGit(['/r/a', '/r/b', '/r/c'], { runGit: fake, caseFold: false })
+  expect(maxInFlight).toBeGreaterThan(1)
 })
 
 test('repos sort dirtiest first, deterministically', async () => {

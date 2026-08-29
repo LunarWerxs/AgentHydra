@@ -89,3 +89,20 @@ test('ordering is worst band first, then weekly pct desc, then ref - and repeata
   ])
   expect(fleetUsage({ nowMs: NOW, cache }).map((r) => r.ref)).toEqual(order)
 })
+
+test('ordering ranks by the WEEKLY limit only - the binding cap - never the session band', () => {
+  // Deliberate (types.ts documents weekAll as the binding cap for pacing); pinned so it can
+  // only change on purpose.
+  const rows = fleetUsage({
+    nowMs: NOW,
+    cache: () => ({
+      'desktop:sessionhot': snap({
+        weekAll: { pct: 10, resets: '' },
+        session: { pct: 99, resets: '' },
+      }),
+      'desktop:weekwarm': snap({ weekAll: { pct: 81, resets: '' } }),
+    }),
+  })
+  expect(rows.map((r) => r.ref)).toEqual(['desktop:weekwarm', 'desktop:sessionhot'])
+  expect(rows[1]?.sessionBand).toBe('critical')
+})

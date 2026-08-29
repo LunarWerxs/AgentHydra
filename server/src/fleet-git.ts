@@ -13,17 +13,22 @@
 //
 // Failure honesty: a git call that errors or times out yields nulls plus an `error` string on
 // that repo's row - never a silent zero, because "0 dirty files" and "could not ask" must not
-// look alike. Each command carries its own timeout so one hung git (e.g. a lock contest with a
-// concurrent session) cannot wedge the endpoint.
+// look alike. When the branch itself is unknown, `detached` and `offMain` are null too - a
+// false would claim knowledge nobody has. Each command carries its own timeout, and all git
+// calls run CONCURRENTLY (across cwds, across repos, and the three facts within a repo), so
+// the endpoint's worst case is one timeout width, not a sum of them - the adversarial review
+// of the first cut measured the sequential version stacking to ~48s across four hung repos.
 
 export interface FleetRepoState {
   root: string
   /** Live-session cwds working inside this repo (why it is being watched at all). */
   cwds: string[]
   branch: string | null
-  detached: boolean
-  /** Not on main/master, or detached. Work happens on main (standing owner rule). */
-  offMain: boolean
+  /** null when the branch itself could not be read - unknown, not false. */
+  detached: boolean | null
+  /** Not on main/master, or detached; null when the branch is unknown. Work happens on main
+   *  (standing owner rule). */
+  offMain: boolean | null
   dirtyCount: number | null
   /** Commits ahead of upstream; null when there is no upstream to compare against. */
   aheadCount: number | null
@@ -43,6 +48,10 @@ const MAIN_BRANCHES = new Set(['main', 'master'])
 export interface FleetGitDeps {
   /** Seam for tests; the default shells out to real git with a timeout. */
   runGit?: (args: string[]) => Promise<{ ok: boolean; out: string; err: string }>
+  /** Fold path case for dedupe keys. Defaults to the platform's reality: true on win32 only.
+   *  Lowercasing everywhere silently MERGED two repos differing only by case on Linux/macOS
+   *  (found by adversarial review of the first cut, with a repro). */
+  caseFold?: boolean
 }
 
 async function realRunGit(args: string[]): Promise<{ ok: boolean; out: string; err: string }> {
@@ -67,11 +76,9 @@ async function realRunGit(args: string[]): Promise<{ ok: boolean; out: string; e
   }
 }
 
-function normKey(p: string): string {
-  return p
-    .replace(/[\\/]+/g, '/')
-    .replace(/\/+$/, '')
-    .toLowerCase()
+function normKey(p: string, caseFold: boolean): string {
+  const slashed = p.replace(/[\\/]+/g, '/').replace(/\/+$/, '')
+  return caseFold ? slashed.toLowerCase() : slashed
 }
 
 /**
@@ -80,54 +87,70 @@ function normKey(p: string): string {
  */
 export async function fleetGit(cwds: string[], deps: FleetGitDeps = {}): Promise<FleetGit> {
   const runGit = deps.runGit ?? realRunGit
+  const caseFold = deps.caseFold ?? process.platform === 'win32'
   const notRepo: string[] = []
-  // cwd -> root, deduped by normalized cwd first so one repo is asked about once per distinct dir.
+  // cwd -> root, deduped by normalized cwd first so one repo is asked about once per distinct
+  // dir. All root resolutions run concurrently; results are applied in input order so the
+  // outcome is deterministic regardless of completion order.
   const seenCwd = new Set<string>()
-  const rootCwds = new Map<string, { root: string; cwds: string[] }>()
+  const uniqueCwds: string[] = []
   for (const cwd of cwds) {
-    const key = normKey(cwd)
+    const key = normKey(cwd, caseFold)
     if (seenCwd.has(key)) continue
     seenCwd.add(key)
-    const top = await runGit(['-C', cwd, 'rev-parse', '--show-toplevel'])
-    if (!top.ok || !top.out) {
+    uniqueCwds.push(cwd)
+  }
+  const tops = await Promise.all(
+    uniqueCwds.map((cwd) => runGit(['-C', cwd, 'rev-parse', '--show-toplevel'])),
+  )
+  const rootCwds = new Map<string, { root: string; cwds: string[] }>()
+  for (let i = 0; i < uniqueCwds.length; i++) {
+    const cwd = uniqueCwds[i] as string
+    const top = tops[i]
+    if (!top?.ok || !top.out) {
       notRepo.push(cwd)
       continue
     }
-    const rootKey = normKey(top.out)
+    const rootKey = normKey(top.out, caseFold)
     const entry = rootCwds.get(rootKey)
     if (entry) entry.cwds.push(cwd)
     else rootCwds.set(rootKey, { root: top.out, cwds: [cwd] })
   }
 
-  const repos: FleetRepoState[] = []
-  for (const { root, cwds: members } of rootCwds.values()) {
-    let error: string | null = null
-    const fail = (r: { err: string }) => {
-      if (error === null) error = (r.err || 'git failed').slice(0, 200)
-    }
-    const branchRes = await runGit(['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'])
-    const branch = branchRes.ok && branchRes.out ? branchRes.out : null
-    if (!branchRes.ok) fail(branchRes)
-    const detached = branch === 'HEAD'
-    const statusRes = await runGit(['-C', root, 'status', '--porcelain'])
-    const dirtyCount = statusRes.ok
-      ? statusRes.out.split('\n').filter((l) => l.trim()).length
-      : null
-    if (!statusRes.ok) fail(statusRes)
-    // No upstream is an ordinary condition (fresh branch, local-only repo): null, not an error.
-    const aheadRes = await runGit(['-C', root, 'rev-list', '--count', '@{upstream}..HEAD'])
-    const aheadCount = aheadRes.ok && /^\d+$/.test(aheadRes.out) ? Number(aheadRes.out) : null
-    repos.push({
-      root,
-      cwds: members.sort(),
-      branch,
-      detached,
-      offMain: detached || (branch !== null && !MAIN_BRANCHES.has(branch)),
-      dirtyCount,
-      aheadCount,
-      error,
-    })
-  }
+  const repos: FleetRepoState[] = await Promise.all(
+    [...rootCwds.values()].map(async ({ root, cwds: members }) => {
+      // The three facts are independent read-only queries: ask concurrently, so a repo's cost
+      // is its slowest single call, never their sum.
+      const [branchRes, statusRes, aheadRes] = await Promise.all([
+        runGit(['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD']),
+        runGit(['-C', root, 'status', '--porcelain']),
+        // No upstream is an ordinary condition (fresh branch, local-only repo): null, no error.
+        runGit(['-C', root, 'rev-list', '--count', '@{upstream}..HEAD']),
+      ])
+      let error: string | null = null
+      const fail = (r: { err: string }) => {
+        if (error === null) error = (r.err || 'git failed').slice(0, 200)
+      }
+      const branch = branchRes.ok && branchRes.out ? branchRes.out : null
+      if (!branchRes.ok) fail(branchRes)
+      const detached = branch === null ? null : branch === 'HEAD'
+      const dirtyCount = statusRes.ok
+        ? statusRes.out.split('\n').filter((l) => l.trim()).length
+        : null
+      if (!statusRes.ok) fail(statusRes)
+      const aheadCount = aheadRes.ok && /^\d+$/.test(aheadRes.out) ? Number(aheadRes.out) : null
+      return {
+        root,
+        cwds: members.sort(),
+        branch,
+        detached,
+        offMain: branch === null ? null : detached || !MAIN_BRANCHES.has(branch),
+        dirtyCount,
+        aheadCount,
+        error,
+      }
+    }),
+  )
   // Dirtiest first (null = could-not-ask sorts above clean, below genuinely dirty), then root.
   repos.sort(
     (a, b) => (b.dirtyCount ?? 0.5) - (a.dirtyCount ?? 0.5) || a.root.localeCompare(b.root),

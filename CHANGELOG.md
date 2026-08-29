@@ -9,6 +9,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Piece 3 hardened by adversarial review (3 confirmed bugs fixed before the piece counts as
+  done).** Sequential git calls stacked their 3s timeouts (measured ~48s worst case across four
+  hung repos); all calls now run concurrently - across cwds, across repos, and the three facts
+  within a repo - so the worst case is one timeout width (live fleet read: 216ms -> 86ms).
+  Unconditional lowercasing of dedupe keys silently VANISHED one of two case-differing repos on
+  case-sensitive filesystems; folding is now platform-gated (win32 only, test-overridable). A
+  failed branch read reported detached:false / offMain:false as if known; both are now null
+  when the branch is unknown. Each fix is pinned by a regression test (in-flight-overlap
+  counter, case-sensitivity pair, null honesty), plus a new test pinning that usage ordering
+  ranks by the weekly limit only.
 - **Orchestrator rebuild, piece 3: git hygiene** (`git` key on `GET /api/fleet`,
   server/src/fleet-git.ts; owner-picked). Deterministic and read-only: for every repo the live
   sessions work in (deduped by `rev-parse --show-toplevel`), the branch, detached state,
