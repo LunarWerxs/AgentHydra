@@ -135,6 +135,27 @@ export function courierTaskId(instanceLabel: string): string {
 }
 
 /**
+ * EVERY COURIER RUN LEAVES A CHAT BEHIND, and they must be swept.
+ *
+ * Measured within the hour of shipping the courier (2026-08-29, owner-reported, angry and
+ * right): a scheduled task run appears in the sidebar as an ordinary chat titled after its task
+ * id, and it stays there. At one run per 11 minutes across 18 accounts that is ~100 dead chats
+ * an hour burying the owner's real work - the exact "bunch of chats doing nothing and not
+ * archived" complaint. The runs themselves were correct; the litter was not.
+ *
+ * So courier chats are SYSTEM PLUMBING with a recognizable title, and the janitor retires every
+ * finished one. The admission test is this prefix and nothing else (same discipline as the
+ * agent-chat marker): a heuristic would eventually archive a working chat, and archiving
+ * someone's live work is far worse than leaving a stray plumbing chat on screen.
+ */
+const COURIER_CHAT_PREFIX = 'orch courier'
+
+/** Is this the sidebar chat left behind by a courier RUN (not the agent chat, not real work)? */
+export function isCourierRunTitle(title: string | null | undefined): boolean {
+  return !!title && title.trim().toLowerCase().startsWith(COURIER_CHAT_PREFIX)
+}
+
+/**
  * The courier task's prompt: what the app runs, by itself, on the cron, inside that account.
  *
  * Written as a closed loop with an explicit stop: fetch, send each, report each, stop. It must

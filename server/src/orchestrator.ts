@@ -89,12 +89,13 @@ import {
   findDesktopChat,
   instanceDirForLabel,
   instanceRefForSession,
+  invalidateSessionMetaCache,
   sessionMetaMap,
 } from './instance-sessions'
 import { NEW_CHAT_ULTRACODE_KEY, newChatUltracodeEnabled } from './new-chat-opening'
 import { agentChatKvKey, isOrchAgentTitle, ORCH_AGENT_TITLE } from './orch-agent'
 import { tripAttentionItems } from './orchestrator-breaker'
-import { courierTaskId, courierTaskPrompt } from './orchestrator-courier'
+import { courierTaskId, courierTaskPrompt, isCourierRunTitle } from './orchestrator-courier'
 import {
   type ChipInTail,
   isInjectedUserText,
@@ -2254,6 +2255,46 @@ function runAutomationJanitor(ctx: OnceCtx): void {
   } catch (err) {
     console.error('[agenthydra] courier-task janitor failed:', err)
   }
+  try {
+    sweepCourierRunChats(ctx.metaMap, ctx.sessions)
+  } catch (err) {
+    console.error('[agenthydra] courier-run chat sweep failed:', err)
+  }
+}
+
+/**
+ * Retire the sidebar chats that courier RUNS leave behind.
+ *
+ * Every scheduled-task run shows up as an ordinary chat and stays there; at one run per 11
+ * minutes across 18 accounts that is ~100 dead chats an hour burying the owner's real work
+ * (measured within the hour of shipping the courier, owner-reported). The runs are correct, the
+ * litter is not, so each finished one is archived here.
+ *
+ * Two guards, both load-bearing. A LIVE courier run is never touched, because archiving a chat
+ * mid-turn is how work gets lost. And admission is the title marker only - a heuristic would
+ * eventually swallow a working chat, and archiving someone's real thread is far worse than
+ * leaving plumbing on screen for one more tick.
+ */
+export function sweepCourierRunChats(ctx: OnceCtx['metaMap'], live: LiveSession[]): number {
+  const liveIds = new Set(live.map((s) => s.sessionId))
+  const seen = new Set<string>()
+  let retired = 0
+  for (const [id, meta] of ctx) {
+    if (meta.archived || !isCourierRunTitle(meta.title)) continue
+    const sessionId = meta.cliSessionId ?? id
+    if (liveIds.has(sessionId) || seen.has(sessionId)) continue
+    seen.add(sessionId)
+    void archiveDesktopChat(sessionId, true).then((res) => {
+      for (const h of res.hits ?? [])
+        if (h.changed && h.wasRunning) noteArchiveVisibilityPending(h.profile)
+    })
+    retired++
+  }
+  if (retired) {
+    invalidateSessionMetaCache()
+    console.log(`[agenthydra] retired ${retired} finished courier run chat(s)`)
+  }
+  return retired
 }
 
 /**
@@ -2312,7 +2353,7 @@ export function sweepCourierTasks(): number {
       prompt,
       // Every ~11 minutes, off the hour: a queued delivery lands within one cron period, and
       // the offset keeps 18 accounts from firing in the same second.
-      cronExpression: '*/11 * * * *',
+      cronExpression: '7,37 * * * *',
       cwd: dir,
     })
     if (res.ok) {
