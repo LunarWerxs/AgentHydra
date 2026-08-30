@@ -58,6 +58,17 @@ export interface ChatGate {
 
 const EVIDENCE_CAP = 2000
 const RECAP_HEADER = /##\s*Am I 100% done\?/i
+
+/** The recap-bearing view of an assistant message: fenced code blocks and quoted (>) lines
+ *  removed, so a recap merely QUOTED or shown as an example cannot fake a live self-report
+ *  (review-confirmed misroute to archive-candidate in the first cut). */
+export function recapView(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '')
+    .split('\n')
+    .filter((l) => !/^\s*>/.test(l))
+    .join('\n')
+}
 const INTERRUPTED = /^\[Request interrupted by user[^\]]*\]$/
 
 interface TailRecord {
@@ -66,6 +77,10 @@ interface TailRecord {
   apiError: boolean
   text: string
   hasText: boolean
+  /** The record carries a tool_use block: an answer that is still mid-action. A transcript
+   *  ENDING on one means the tool's result never landed - a mid-turn death even when the
+   *  record also carries prefacing text (review-confirmed hole in the first cut). */
+  hasToolUse: boolean
 }
 
 function parseTailRecords(text: string, wholeFile: boolean): TailRecord[] {
@@ -81,9 +96,13 @@ function parseTailRecords(text: string, wholeFile: boolean): TailRecord[] {
     } catch {
       continue
     }
-    const e = ev as { type?: string }
+    const e = ev as { type?: string; isSidechain?: boolean; message?: { content?: unknown } }
     if (e.type !== 'user' && e.type !== 'assistant' && e.type !== 'result') continue
+    // Sidechain records (compaction side-branches) are not the conversation's own tail - a
+    // sidechain appended after the real last turn must not hijack the verdict.
+    if (e.isSidechain === true) continue
     const txt = endingEventText(ev)
+    const content = e.message?.content
     out.push({
       type: e.type,
       interrupted: e.type === 'user' && INTERRUPTED.test(txt.trim()),
@@ -92,6 +111,9 @@ function parseTailRecords(text: string, wholeFile: boolean): TailRecord[] {
         (e.type === 'result' && (ev as { is_error?: boolean }).is_error === true),
       text: txt,
       hasText: txt.trim().length > 0,
+      hasToolUse:
+        Array.isArray(content) &&
+        content.some((b) => (b as { type?: string })?.type === 'tool_use'),
     })
   }
   return out
@@ -152,8 +174,16 @@ export function chatGate(sessionId: string, deps: ChatGateDeps = {}): ChatGate |
     }
   }
 
-  const raw = readTranscriptTailText(transcriptPath)
-  const records = raw ? parseTailRecords(raw.text, raw.wholeFile) : []
+  // Adaptive read, same growth discipline as fleet's classifier: a single closing record can
+  // exceed the starting window, and a truncated tail must widen rather than let 'no records'
+  // masquerade as a mid-turn death (review-confirmed misclassification in the first cut).
+  let records: TailRecord[] = []
+  for (let window = 64 * 1024; ; window *= 4) {
+    const raw = readTranscriptTailText(transcriptPath, window)
+    if (!raw) break
+    records = parseTailRecords(raw.text, raw.wholeFile)
+    if (records.length > 0 || raw.wholeFile || window >= 4 * 1024 * 1024) break
+  }
   const orphaned = orphans(claudeHome).some((o) => o.sessionId === sessionId)
   const orphanNote = orphaned
     ? '; a dead-pid registry file confirms the process died un-gracefully'
@@ -206,24 +236,28 @@ export function chatGate(sessionId: string, deps: ChatGateDeps = {}): ChatGate |
     })
   }
 
-  if (last.type === 'user' || !last.hasText) {
-    // A delivered prompt with no answer, or an assistant record that is pure tool traffic:
-    // the turn never completed.
-    return gate(
-      'crashed',
-      `died mid-turn (last record: ${last.type === 'user' ? 'an unanswered user message' : 'tool traffic with no closing text'})${orphanNote}`,
-      {
-        crashed: { kind: 'mid-turn' },
-      },
-    )
+  if (last.type === 'user' || !last.hasText || last.hasToolUse) {
+    // A delivered prompt with no answer, an assistant record that is pure tool traffic, or an
+    // assistant record whose tool call never got its result back (prefacing text does not make
+    // a dangling tool call a finish): the turn never completed.
+    const why =
+      last.type === 'user'
+        ? 'an unanswered user message'
+        : last.hasToolUse
+          ? 'a tool call whose result never landed'
+          : 'tool traffic with no closing text'
+    return gate('crashed', `died mid-turn (last record: ${why})${orphanNote}`, {
+      crashed: { kind: 'mid-turn' },
+    })
   }
 
   // Finished on a real assistant turn. The lanes, by stated rule:
   //   done-yes and not asking anything -> archive-candidate
   //   anything else                    -> needs-input-review (the AI's autonomy judgment)
   const evidence = lastAssistantText(records)
-  const recapPresent = RECAP_HEADER.test(evidence)
-  const doneClaim = parseDoneClaim(evidence)
+  const view = recapView(evidence)
+  const recapPresent = RECAP_HEADER.test(view)
+  const doneClaim = parseDoneClaim(view)
   const endsWithQuestion = /\?\s*$/.test(evidence.trim())
   const lane: FinishedLane =
     doneClaim === 'yes' && !endsWithQuestion ? 'archive-candidate' : 'needs-input-review'

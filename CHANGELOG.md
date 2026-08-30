@@ -9,6 +9,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Four review-confirmed misclassification holes in the piece-8 gate** (adversarial review of
+  fe8907a; each pinned by a regression test). (1) A single closing record larger than the 64KB
+  tail window parsed as zero records and gated as crashed mid-turn - the read now grows the
+  window (x4 up to 4MB, matching fleet's classifier) until a record speaks or the whole file is
+  read. (2) An assistant record with prefacing text AND a dangling tool_use counted as a
+  completed turn - a transcript ending on a tool call whose result never landed is now crashed
+  mid-turn regardless of text. (3) A done-recap merely QUOTED in a code fence or blockquote
+  faked done:yes and routed real waiting-on-input chats to archive-candidate - recap detection
+  now reads a view with fenced blocks and >-quoted lines stripped (recapView). (4) A sidechain
+  record appended after the real last turn hijacked the verdict - isSidechain records are
+  skipped. Gate tests 14 -> 18, suite green.
+
 - **A RUNNING instance could read as "not running" to the import/archive path when the caller
   spelled the dir with forward slashes** (defaultInstanceRunning compared dirs without
   normalizing slash style). Found live during the owner's account-switch drill: temp1 was up

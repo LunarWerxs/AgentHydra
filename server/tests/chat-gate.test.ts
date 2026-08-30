@@ -178,6 +178,64 @@ test('no transcript anywhere -> null: what cannot be gated cannot be acted on', 
   expect(chatGate('missing-session', deps)).toBe(null)
 })
 
+test('a giant closing record still classifies - the window grows instead of faking a crash', () => {
+  // A >64KB final assistant record with a done recap: the first cut read one fixed window,
+  // parsed zero records, and called it crashed mid-turn (review-confirmed).
+  const filler = line(user('go')).repeat(200)
+  const big = `${'x'.repeat(80 * 1024)}\n\n${RECAP_DONE}`
+  const g = chatGate('s15', home('s15', filler + line(assistant(big))))
+  expect(g?.state).toBe('finished')
+  expect(g?.finished?.lane).toBe('archive-candidate')
+})
+
+test('prefacing text does not make a dangling tool call a finish', () => {
+  const dangling = {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Let me check that for you.' },
+        { type: 'tool_use', name: 'Bash', input: {} },
+      ],
+    },
+  }
+  const g = chatGate('s16', home('s16', line(user('go')) + line(dangling)))
+  expect(g?.state).toBe('crashed')
+  expect(g?.crashed?.kind).toBe('mid-turn')
+  expect(g?.cause).toContain('tool call whose result never landed')
+})
+
+test('a recap QUOTED in a code block or blockquote cannot fake done:yes', () => {
+  const quoting = [
+    'Here is what a recap looks like:',
+    '```',
+    '## Am I 100% done?',
+    '- Yes.',
+    '```',
+    'Anyway, still deciding how to proceed.',
+  ].join('\n')
+  const g = chatGate('s17', home('s17', line(user('go')) + line(assistant(quoting))))
+  expect(g?.finished?.lane).toBe('needs-input-review')
+  expect(g?.finished?.doneClaim).toBe('unknown')
+  const quoted = ['> ## Am I 100% done?', '> - Yes.', 'Thoughts?'].join('\n')
+  const g2 = chatGate('s18', home('s18', line(user('go')) + line(assistant(quoted))))
+  expect(g2?.finished?.doneClaim).toBe('unknown')
+})
+
+test('a sidechain record appended after the real last turn does not hijack the verdict', () => {
+  const sidechain = {
+    type: 'user',
+    isSidechain: true,
+    message: { role: 'user', content: 'compaction side-branch chatter' },
+  }
+  const g = chatGate(
+    's19',
+    home('s19', line(user('go')) + line(assistant(RECAP_DONE)) + line(sidechain)),
+  )
+  expect(g?.state).toBe('finished')
+  expect(g?.finished?.lane).toBe('archive-candidate')
+})
+
 test('parseDoneClaim reads the section, not the whole message', () => {
   expect(parseDoneClaim('## Am I 100% done?\n- Yes.\n## Next\n- No idea.')).toBe('yes')
   expect(parseDoneClaim('## Am I 100% done?\n- Done except the CI verdict.')).toBe('no')
