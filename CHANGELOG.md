@@ -106,20 +106,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
-- **The test suite runs its files in parallel: 34.9s -> 22.1s, a measured 1.6x** (three
-  consecutive clean runs, 1548 tests). Each file already gets its own process with its own
-  throwaway state directory, so there is nothing to share and nothing to race. The two slowest
-  files were measured rather than guessed - dispatch.test.ts is 39% of the serial total
-  because it drives a REAL detached OS process, and updater-engine.test.ts drives REAL git -
-  and both were left alone deliberately: their whole value is that they are not faked.
-  THE WORKER COUNT IS PINNED TO FOUR, and the first cut got this wrong in a way worth
-  recording: bare `--parallel` defaults to the CORE COUNT, which is 32 on this box. It was
-  2.2x and green twice, and then the local CI leg failed three tests in dispatch.test.ts -
-  the suite that waits on real processes behind 5s timeouts - purely because the machine was
-  saturated. It passes alone, at 4, and at 8; only unbounded fails. A suite whose verdict
-  depends on how busy the machine is teaches you to ignore it, which is worth more than the
-  six seconds. Four is also one worker per core on a GitHub runner, so CI and local contend
-  alike instead of one of them being a different experiment.
+- **`bun run test` runs its files in parallel: 34.9s -> 22.1s, a measured 1.6x** for the local
+  loop. Each file already gets its own process with its own throwaway state directory, so
+  there is nothing to share and nothing to race. The two slowest files were measured rather
+  than guessed - dispatch.test.ts is 39% of the serial total because it drives a REAL detached
+  OS process, and updater-engine.test.ts drives REAL git - and both were left alone
+  deliberately: their whole value is that they are not faked.
+  **CI STAYS SERIAL, and that split is the entry, not a footnote to it.** Parallel went into
+  CI too and came back out the same evening, twice. Bare `--parallel` defaults to the CORE
+  COUNT (32 here): 2.2x, green four runs, then three failures in dispatch.test.ts once the
+  machine was busy. Pinned to four workers it passed locally three times and passed one CI
+  run - then failed the next on the GitHub Windows runner, two 5s timeouts in tests that
+  spawn real processes and build a real .lnk. That runner has about four slow vCPUs, so four
+  workers is full saturation, and the tests that break are precisely the ones whose value is
+  that they are not faked. **A green that depended on how busy the machine was is not a
+  green**; locally that costs a re-run, but on a public repo it spends the credibility of
+  every future red, and twelve seconds does not buy that. The honest fix, if it is ever
+  revisited, is to raise those tests' own timeouts and prove it over many runs - not to widen
+  the workers and hope.
 
 - **THE COURIER'S SCHEDULER MODULE WAS DELETED** (desktop-tasks.ts and its suite, 429 lines).
   Nothing called it once the scheduler transport was demolished, and code kept for a

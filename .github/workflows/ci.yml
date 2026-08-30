@@ -110,17 +110,22 @@ jobs:
         run: bun run build
 
       - name: Test
-        # --parallel runs test FILES concurrently: 34.9s -> 22.1s locally (1.6x). Each file
-        # gets its own process and tests/setup.ts mints a fresh throwaway state dir per
-        # process, so they cannot share a database.
+        # ⛔ SERIAL ON PURPOSE. `bun run test` is --parallel=4 for a fast local loop (34.9s
+        # -> 22.1s); CI is NOT, and the difference is deliberate rather than an oversight.
         #
-        # THE WORKER COUNT IS PINNED, and that is the whole lesson here. Bare --parallel
-        # defaults to the CORE COUNT: 32 workers on this dev box, which saturated it and made
-        # the subprocess suites (dispatch.test.ts, whose tests wait on real processes behind
-        # 5s timeouts) fail intermittently - twice green by luck, then three failures under
-        # load. A test run whose verdict depends on how busy the machine is teaches you to
-        # ignore it. Four is one per core on a GitHub runner, so local and CI contend alike.
-        run: bun test --parallel=4
+        # Parallelism was tried here and pulled back out the same evening. Bare --parallel
+        # defaults to the core count (32 on the dev box) and failed three tests in
+        # dispatch.test.ts under load; pinned to 4 it passed locally three times running and
+        # passed one CI run, then failed the next on THIS runner - two 5s timeouts in
+        # launcher/lifecycle tests that spawn real processes and build a real .lnk. The
+        # runner has ~4 slow vCPUs, so four workers is full saturation, and the tests that
+        # break are the ones whose whole value is that they are not faked.
+        #
+        # A green that depends on how busy the machine was is not a green. Locally that costs
+        # a re-run; on a public repo's CI it costs trust in every future red. Twelve seconds
+        # is not worth it. If this is ever revisited, the fix is to raise those tests' own
+        # timeouts first and prove it over many runs - not to widen the workers and hope.
+        run: bun test
 
     # NOTE: the windows-latest leg exercises the tray's Windows -SelfTest
     # (tests/launcher.test.ts's `test.skipIf(!isWin)` cases run automatically here, skip on
