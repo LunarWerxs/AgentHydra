@@ -180,12 +180,23 @@ const after = await callTool("prestart");
 ok("census still sane on the second pass", after.sanity?.plausible === true);
 ok("no undelivered prompts remain", (after.pendingDeliveries ?? []).length === 0);
 if (ACT) {
-  // Only meaningful after a real pass: a report-only run deliberately leaves its queue intact.
-  ok(
-    "nextSteps is empty after acting",
-    (after.nextSteps ?? []).length === 0,
-    (after.nextSteps ?? []).map((s) => `${s.step}:${s.title}`).join(", "),
+  // ONLY the steps the sweep itself owns. Asserting "nextSteps is empty" was wrong and produced a
+  // false red on the first real run: `judge-then-act` survives a sweep BY DESIGN (chat_sweep never
+  // resolves that lane - it needs a separate chat_act decision, and a "human" verdict deliberately
+  // leaves the chat exactly where it is), and `investigate` rows are report-only by construction.
+  // A gate that cries wolf gets ignored, so it asserts the thing that is actually true.
+  const sweepOwned = (after.nextSteps ?? []).filter(
+    (s) => s.step === "archive" || s.step === "surface-and-deliver",
   );
+  ok(
+    "no sweep-owned work is left outstanding (archive / surface-and-deliver)",
+    sweepOwned.length === 0,
+    sweepOwned.map((s) => `${s.step}:${s.title}`).join(", "),
+  );
+  const humanOwned = (after.nextSteps ?? []).filter((s) => s.step !== "archive" && s.step !== "surface-and-deliver");
+  if (humanOwned.length)
+    console.log(`    ${humanOwned.length} row(s) awaiting a judgment or a human, which a sweep cannot clear:`);
+  for (const s of humanOwned) console.log(`      - ${s.step}: ${s.title}`);
 } else {
   console.log(`    ${(after.nextSteps ?? []).length} nextSteps outstanding (report-only: not acted on)`);
 }
