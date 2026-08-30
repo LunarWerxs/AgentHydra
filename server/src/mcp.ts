@@ -610,7 +610,16 @@ export const TOOLS: McpEngineTool[] = [
       'sharing one working tree - they can overwrite each other, and telling one to carry on ' +
       'may have it commit what another is still writing); and suppressed (actions the circuit ' +
       'breaker is holding back after repeated futile attempts - a held action is why something ' +
-      'that looks undone is not being retried, and a direct request from you is never blocked).',
+      'that looks undone is not being retried, and a direct request from you is never blocked). ' +
+      'TWO MORE: stalled (LIVE chats whose newest record is an unanswered shell call and which ' +
+      'have been quiet for half an hour - open and read those, they are never acted on ' +
+      'automatically) and holds (chats deliberately taken off automation, with the reason - ' +
+      'listed every pass so a hold can never become an invisible permanent gap). ' +
+      "⛔ SCOPE: this answers 'what next for every CHAT', never 'which PROJECT should be picked " +
+      "up'. Repo-level backlog - which codebase has unstarted or stalled work, unpushed " +
+      'commits, version skew, a stale codemap - belongs to ODIN, a separate program in its own ' +
+      'clone (`python odin.py next` / `list` / `show <key>`). Ask Odin that question rather ' +
+      'than inferring it from chats or asking for it to be rebuilt here.',
     inputSchema: S({}),
     run: () => api('/api/prestart'),
   },
