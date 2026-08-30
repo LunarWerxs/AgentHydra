@@ -125,14 +125,25 @@ test('fleetStatus joins the registry to transcript state and sorts quietest firs
   expect(status.sessions[2]?.transcript).toBe(null)
 })
 
-test('the usage probe session is filtered out by its exact cwd, slash/case-insensitively', () => {
+test('the usage probe session is filtered out by its exact cwd, slash-insensitively', () => {
+  // Slash style must never matter; CASE folds only on win32 (path-key.ts's platform default -
+  // POSIX paths are case-sensitive, so folding there could filter a real session). The ubuntu
+  // CI leg caught the old fixture asserting unconditional folding.
   const status = fleetStatus({
     registry: () => [
-      reg({ pid: 1, cwd: 'C:\\Users\\x\\.agenthydra\\data\\usage-probe' }),
+      reg({ pid: 1, cwd: 'c:\\users\\x\\.agenthydra\\data\\usage-probe' }),
       reg({ pid: 2, cwd: 'D:\\RealWork' }),
     ],
     probeCwd: () => 'c:/users/x/.agenthydra/data/usage-probe/',
   })
   expect(status.count).toBe(1)
   expect(status.sessions[0]?.pid).toBe(2)
+})
+
+test('probe-cwd case differences fold on win32 only', () => {
+  const status = fleetStatus({
+    registry: () => [reg({ pid: 1, cwd: 'C:\\Users\\x\\.agenthydra\\data\\usage-probe' })],
+    probeCwd: () => 'c:/users/x/.agenthydra/data/usage-probe',
+  })
+  expect(status.count).toBe(process.platform === 'win32' ? 0 : 1)
 })
