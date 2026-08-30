@@ -16,6 +16,7 @@
 //     is v1's mistake with a timer attached.
 
 import { getSetting, setSetting } from './db'
+import { reconcileDeliveries } from './deliveries'
 import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
 
 export interface SweepLoopSettings {
@@ -79,6 +80,8 @@ export interface SweepLoopStatus {
   lastError: { at: string; message: string } | null
   /** Ticks refused because one was already in flight - evidence, not silence. */
   overlapSkips: number
+  /** The delivery-ledger reconcile failing on the tick - durable, cleared by a clean pass. */
+  lastReconcileError: { at: string; message: string } | null
   /** ISO of the next tick when enabled (never earlier than now; before the first tick it
    *  reads as imminent, not as 1970); null when off. */
   nextDueAt: string | null
@@ -86,6 +89,7 @@ export interface SweepLoopStatus {
 
 let lastRun: SweepLoopStatus['lastRun'] = null
 let lastError: SweepLoopStatus['lastError'] = null
+let lastReconcileError: { at: string; message: string } | null = null
 let lastTickAt = 0
 let overlapSkips = 0
 let ticking = false
@@ -103,6 +107,7 @@ export function sweepLoopStatus(): SweepLoopStatus {
     lastRun,
     lastError,
     overlapSkips,
+    lastReconcileError,
     nextDueAt: s.enabled
       ? new Date(Math.max(Date.now(), lastTickAt + s.intervalMin * 60_000)).toISOString()
       : null,
@@ -167,7 +172,11 @@ export function parseSweepLoopPatch(
 }
 
 export async function runSweepLoopOnce(
-  deps: SweepDeps & { sweep?: typeof sweepGateActions; force?: boolean } = {},
+  deps: SweepDeps & {
+    sweep?: typeof sweepGateActions
+    force?: boolean
+    reconcile?: typeof reconcileDeliveries
+  } = {},
 ): Promise<SweepReport | null> {
   const s = getSweepLoopSettings()
   if (!s.enabled && !deps.force) return null
@@ -187,6 +196,20 @@ export async function runSweepLoopOnce(
       },
       deps,
     )
+    // Settle the delivery ledger on every tick: staged prompts that got delivered (or turned
+    // out deaf, or aged out) resolve here without anyone asking. A throwing reconcile is a
+    // DURABLE status fact (review-confirmed: console-only meant a permanently-broken ledger
+    // read as healthy), cleared by the next clean pass.
+    try {
+      ;(deps.reconcile ?? reconcileDeliveries)()
+      lastReconcileError = null
+    } catch (err) {
+      lastReconcileError = {
+        at: new Date().toISOString(),
+        message: err instanceof Error ? err.message : String(err),
+      }
+      console.error('[agenthydra] delivery reconcile error:', err)
+    }
     lastRun = {
       at: new Date(started).toISOString(),
       tookMs: Date.now() - started,

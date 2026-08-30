@@ -30,6 +30,7 @@
 import { type ChatGate, type ChatGateDeps, type CrashKind, chatGate } from './chat-gate'
 import { resolveAutomatedTitle } from './chat-title'
 import { openInstance } from './core/instances'
+import { stageDelivery } from './deliveries'
 import { type FleetInstanceEntry, fleetInstances, planRank } from './fleet-instances'
 import { type FleetUsageEntry, fleetUsage, LANDING_OVERFLOW_PCT } from './fleet-usage'
 import { instanceRefForSession } from './instance-sessions'
@@ -126,6 +127,8 @@ export interface GateActionDeps {
   uiArchive?: (profileDir: string, sessionId: string) => Promise<UiArchiveOutcome>
   /** Is the session live RIGHT NOW (an alive-pid registry entry)? The TOCTOU rail's read. */
   liveNow?: (sessionId: string) => boolean
+  /** The delivery ledger's stager (deliveries.ts) - every surfaced prompt is tracked. */
+  stage?: typeof stageDelivery
   pinnedRefFor?: (sessionId: string) => string | null
   /** How long to wait for a just-opened instance to reach running. */
   openWaitMs?: number
@@ -146,6 +149,7 @@ function real(deps: GateActionDeps) {
     home: deps.home ?? desktopHomeFor,
     uiArchive: deps.uiArchive ?? uiArchiveChat,
     liveNow: deps.liveNow ?? ((sid: string) => liveSessionEntry(sid) !== null),
+    stage: deps.stage ?? stageDelivery,
     pinnedRefFor: deps.pinnedRefFor ?? instanceRefForSession,
     openWaitMs: deps.openWaitMs ?? 45_000,
     sleep: deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
@@ -501,6 +505,16 @@ async function surfaceForMessage(
     `${opened ? `opened instance #${num} (overflow rule: every open account is at/over ${LANDING_OVERFLOW_PCT}%) and ` : ''}` +
     `the chat now sits dormant in instance #${num}'s app - deliver the prompt through the ` +
     "app's native message channel to boot it (the daemon has no messaging channel of its own)"
+  /** Every surfaced result also STAGES its prompt in the delivery ledger, so an undelivered
+   *  prompt is a visible pending row instead of a silent loss (deliveries.ts). */
+  const surfaced = (why: string, extra: Partial<GateActionResult>): GateActionResult => {
+    d.stage({
+      sessionId,
+      prompt,
+      instanceRef: extra.instance?.ref ?? null,
+    })
+    return res('surfaced', why, extra)
+  }
 
   const home = await d.home(sessionId).catch(() => null)
   if (home) {
@@ -560,7 +574,7 @@ async function surfaceForMessage(
           'parked',
           `could not surface in its home instance #${inst.num}: ${imported.reason ?? 'unknown'}`,
         )
-      return res('surfaced', surfacedWhy(inst.num, true), {
+      return surfaced(surfacedWhy(inst.num, true), {
         instance: { ref: inst.ref, num: inst.num },
         openedInstance: true,
         prompt,
@@ -603,8 +617,7 @@ async function surfaceForMessage(
       }
       if (landed.ok) {
         const flagged = await d.archive(sessionId, true).catch(() => ({ ok: false }) as const)
-        return res(
-          'surfaced',
+        return surfaced(
           `migrated off its saturated home instance #${inst.num} (at/over ${LANDING_OVERFLOW_PCT}% - the load-balancing order)` +
             `${flagged.ok ? '' : ' - WARNING: the source entries could not be flagged archived, so the chat may render in both sidebars; re-act once it settles'} - ` +
             surfacedWhy(landed.instance.num, landed.openedInstance),
@@ -624,8 +637,7 @@ async function surfaceForMessage(
           'parked',
           `its home instance #${inst.num} is saturated and no cooler account could take it (${landed.reason}); surfacing at home also failed: ${stayed.reason ?? 'unknown'}`,
         )
-      return res(
-        'surfaced',
+      return surfaced(
         `home instance #${inst.num} is at/over ${LANDING_OVERFLOW_PCT}% but no cooler account could take the chat (${landed.reason}) - ` +
           surfacedWhy(inst.num, false),
         {
@@ -642,7 +654,7 @@ async function surfaceForMessage(
         'parked',
         `could not surface in its home instance #${inst.num}: ${imported.reason ?? 'unknown'}`,
       )
-    return res('surfaced', surfacedWhy(inst.num, false), {
+    return surfaced(surfacedWhy(inst.num, false), {
       instance: { ref: inst.ref, num: inst.num },
       openedInstance: false,
       prompt,
@@ -656,7 +668,7 @@ async function surfaceForMessage(
     deps: { ...dToDeps(d) },
   })
   if (!landed.ok) return res('parked', landed.reason)
-  return res('surfaced', surfacedWhy(landed.instance.num, landed.openedInstance), {
+  return surfaced(surfacedWhy(landed.instance.num, landed.openedInstance), {
     instance: landed.instance,
     openedInstance: landed.openedInstance,
     prompt,
@@ -678,6 +690,7 @@ function dToDeps(d: ReturnType<typeof real>): GateActionDeps {
     home: d.home,
     uiArchive: d.uiArchive,
     liveNow: d.liveNow,
+    stage: d.stage,
     pinnedRefFor: d.pinnedRefFor,
     openWaitMs: d.openWaitMs,
     sleep: d.sleep,

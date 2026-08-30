@@ -103,6 +103,22 @@ create table if not exists session_marks (
   updated_at integer not null
 );
 
+-- The DELIVERY LEDGER (deliveries.ts, 2026-08-30): every prompt the act path stages for a
+-- surfaced chat, tracked until something actually delivers it. One-shot staging was the
+-- silent-loss shape the import-retry lesson warned about: a surfaced chat whose prompt nobody
+-- sent sits dormant forever, indistinguishable from delivered-and-thinking. One PENDING row
+-- per session (a re-surface replaces the staged prompt); terminal rows keep their evidence.
+create table if not exists deliveries (
+  id           text primary key,
+  session_id   text not null,
+  prompt       text not null,
+  instance_ref text,
+  state        text not null default 'pending',
+  staged_at    integer not null,
+  resolved_at  integer,
+  evidence     text
+);
+
 -- Parsed transcript metadata (title / preview / counts), keyed by the file it was derived from.
 -- Producing one row means reading up to 12 MB of transcript tail and JSON.parsing every line of it,
 -- so an in-memory-only cache made the FIRST sessions list of every daemon re-pay that for all 200

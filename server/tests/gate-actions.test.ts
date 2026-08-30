@@ -46,6 +46,7 @@ const crashedGate = (kind: CrashKind) => gateOf({ state: 'crashed', crashed: { k
 interface Fixture {
   deps: GateActionDeps
   events: string[]
+  staged: Array<{ sessionId: string; prompt: string; instanceRef: string | null }>
 }
 
 /** Three instances: #1 running, #2 closed, #3 running (both signed in). Usage injectable per
@@ -80,6 +81,7 @@ function fixture(over: {
   importOk?: boolean
 }): Fixture {
   const events: string[] = []
+  const staged: Array<{ sessionId: string; prompt: string; instanceRef: string | null }> = []
   const opened = new Set<string>()
   const base = over.instances ?? [
     { num: 1, dir: 'C:/i1', isRunning: true, signedIn: true },
@@ -148,11 +150,14 @@ function fixture(over: {
       return over.uiClick ?? { clicked: true, verified: true }
     },
     liveNow: () => over.liveNow ?? false,
+    stage: (o) => {
+      staged.push({ sessionId: o.sessionId, prompt: o.prompt, instanceRef: o.instanceRef })
+    },
     openWaitMs: 5000,
     sleep: async () => {},
     now: () => (t += 100),
   }
-  return { deps, events }
+  return { deps, events, staged }
 }
 
 const fresh = (ref: string, weeklyPct: number, sessionPct = 0) => ({
@@ -816,6 +821,29 @@ test('an autonomous ANSWER rides the same balancing branch as a crash resume', a
   expect(r?.instance?.num).toBe(3)
   expect(r?.prompt).toBe('Yes - proceed.')
   expect(r?.why).toContain('migrated off its saturated home')
+})
+
+test('every surfaced result STAGES its prompt in the delivery ledger', async () => {
+  const home = fixture({ gate: crashedGate('mid-turn'), home: 'C:/i1' })
+  await actOnGate('sid', {}, home.deps)
+  expect(home.staged).toEqual([
+    { sessionId: 'sid', prompt: resumeNotice('mid-turn'), instanceRef: 'desktop:C:/i1' },
+  ])
+
+  // The migration path stages too, pointed at the NEW home.
+  const mig = fixture({
+    gate: crashedGate('mid-turn'),
+    home: 'C:/i1',
+    usage: [fresh('desktop:C:/i1', 20, 86), fresh('desktop:C:/i3', 10, 5)],
+    archiveHits: [{ profile: 'C:/i1', wasRunning: true, changed: true }],
+  })
+  await actOnGate('sid', {}, mig.deps)
+  expect(mig.staged[0]?.instanceRef).toBe('desktop:C:/i3')
+
+  // Parked and left-alone results stage NOTHING.
+  const parked = fixture({ gate: crashedGate('mid-turn'), home: 'C:/i1', title: null })
+  await actOnGate('sid', {}, parked.deps)
+  expect(parked.staged).toEqual([])
 })
 
 // --- the picker itself, pure ---------------------------------------------------------------

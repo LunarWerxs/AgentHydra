@@ -608,6 +608,28 @@ export const TOOLS: McpEngineTool[] = [
     run: () => api('/api/prestart'),
   },
   {
+    name: 'deliveries',
+    description:
+      'THE DELIVERY LEDGER: every prompt the act path staged for a surfaced chat, and whether ' +
+      'anything ever delivered it. States settle from evidence on every read: delivered (the ' +
+      'transcript moved after staging), deaf (a process started but the engine never did - do ' +
+      'NOT message it again; inspect via the dossier), expired (24h unclaimed). PENDING rows ' +
+      'are dormant chats waiting on a SENDER, and the sender is YOU: use your native ' +
+      'per-instance session-management send for chats in your own instance, or a live-peer ' +
+      "SendMessage - NEVER a relay through one of the owner's working chats (banned), never " +
+      'headless, never the daemon (it has no channel by design). If you cannot reach a ' +
+      "pending row's instance, leave it pending - the ledger keeps it visible instead of " +
+      'losing it.',
+    inputSchema: S({
+      state: {
+        type: 'string',
+        enum: ['pending', 'delivered', 'deaf', 'expired', 'superseded'],
+        description: 'Filter to one state; omit for the whole ledger.',
+      },
+    }),
+    run: (a) => api(`/api/deliveries${qs({ state: a.state })}`),
+  },
+  {
     name: 'chat_gate',
     description:
       'THE GATE - call this BEFORE acting on any chat (owner law): one deterministic answer to ' +
@@ -645,7 +667,9 @@ export const TOOLS: McpEngineTool[] = [
       'determinable), or decision "human" to leave it. WHENEVER the result is ' +
       'action:"surfaced" you MUST then deliver result.prompt to that chat through the app\'s ' +
       'native message channel (peer messaging) - that delivery is what boots the dormant chat ' +
-      'and makes the resume real; the daemon deliberately has no messaging channel of its own.',
+      'and makes the resume real; the daemon deliberately has no messaging channel of its own. ' +
+      'Every surfaced prompt is also STAGED in the delivery ledger (the deliveries tool), ' +
+      'which tracks whether the delivery ever actually happened.',
     inputSchema: S(
       {
         session_id: { type: 'string', description: 'The chat/session id to act on.' },

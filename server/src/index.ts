@@ -117,6 +117,7 @@ import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from './core/shared'
 import { createInstanceShortcut } from './core/shortcut'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { coerceQueueItem, db, getSetting, runOutcome, setSetting } from './db'
+import { listDeliveries, parseDeliveryState } from './deliveries'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import {
   activeCount,
@@ -823,6 +824,16 @@ app.post('/api/chats/sweep', async (c) => {
 // instance = detection is wrong, by the owner's own word), the full pure-report gate sweep,
 // the big-picture next step per chat, and the junk lists. The FIRST call of any orchestration.
 app.get('/api/prestart', async (c) => c.json(await prestartCheck()))
+// --- the delivery ledger (deliveries.ts) ----------------------------------------------------
+// What the act path staged for surfaced chats and whether anything ever delivered it. The
+// list reconciles first (delivered / deaf / expired settled from transcript+registry
+// evidence), so the answer is always current. The daemon never SENDS - that stays with an AI
+// session's native per-instance channel, per the measured boundary and the no-relay ban.
+app.get('/api/deliveries', (c) => {
+  const parsed = parseDeliveryState(c.req.query('state'))
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400)
+  return c.json({ deliveries: listDeliveries(parsed.state) })
+})
 // --- the standing sweep loop (rebuild backlog) - see server/src/sweep-loop.ts ---------------
 // OFF by default; unattended-safe caps (archive unlimited, surface 0 - no deliverer, no
 // dormant parking). The last report is served verbatim so the loop's work is inspectable.

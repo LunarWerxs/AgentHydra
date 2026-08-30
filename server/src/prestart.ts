@@ -18,6 +18,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isGenericChatTitle } from './chat-title'
 import { db } from './db'
+import { pendingDeliveries } from './deliveries'
 import { type FleetInstanceEntry, fleetInstances } from './fleet-instances'
 import { type FleetUsageEntry, fleetUsage } from './fleet-usage'
 import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
@@ -87,6 +88,14 @@ export interface PrestartReport {
      *  counted honestly instead of silently passing both checks. */
     identityUnresolvedCount: number
   }
+  /** Prompts staged by past surfacings that NOBODY has delivered yet (deliveries.ts) -
+   *  each one is a dormant chat waiting on a sender. Deliver these first. */
+  pendingDeliveries: Array<{
+    sessionId: string
+    prompt: string
+    instanceRef: string | null
+    stagedAt: string
+  }>
   tookMs: number
 }
 
@@ -99,6 +108,12 @@ export interface PrestartDeps extends SweepDeps {
   doneMarked?: () => Map<string, number>
   /** Live session ids with each process's start time (ms). */
   liveMap?: () => Map<string, number>
+  deliveries?: () => Array<{
+    session_id: string
+    prompt: string
+    instance_ref: string | null
+    staged_at: number
+  }>
 }
 
 /** The marks table's updated_at is epoch-millis from the done route but ISO from older
@@ -299,6 +314,13 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
       genericTitled.push({ sessionId, title: m.title, instance: m.instance })
   }
 
+  const pending = (deps.deliveries ?? pendingDeliveries)().map((r) => ({
+    sessionId: r.session_id,
+    prompt: r.prompt,
+    instanceRef: r.instance_ref,
+    stagedAt: new Date(r.staged_at).toISOString(),
+  }))
+
   return {
     instances: { total: instances.length, openCount: open.length, open },
     sanity,
@@ -306,6 +328,7 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
     nextSteps,
     sweepError,
     junk: { supersededVisible, genericTitled, liveButDoneMarked, identityUnresolvedCount },
+    pendingDeliveries: pending,
     tookMs: Date.now() - started,
   }
 }

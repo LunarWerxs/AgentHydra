@@ -7,6 +7,30 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **THE DELIVERY LEDGER** (`GET /api/deliveries` + server/src/deliveries.ts + the deliveries
+  MCP tool): the deterministic half of the delivery story. Every prompt the act path stages
+  for a surfaced chat is now a tracked row instead of a hope - until now a surfaced chat
+  whose prompt nobody sent sat dormant forever, indistinguishable from delivered-and-thinking
+  (the one-shot silent-loss shape the import-retry lesson warned about). States settle from
+  evidence on every read and on every standing-sweep tick: delivered (the transcript moved
+  after staging - a delivered prompt lands as a user turn, so that is the receipt), deaf (a
+  process started after staging but the transcript never moved - the engine-never-started
+  orphan flavor, now a ledger state instead of a six-hour mystery), expired (24h unclaimed,
+  reason kept). One pending row per session; a re-surface replaces the prompt. The pre-start
+  check lists pendingDeliveries so outstanding sends are the first thing any orchestration
+  sees. WHO SENDS is unchanged and deliberate: an AI session's native per-instance channel or
+  a live-peer message - never the daemon (no channel by design), never a relay through the
+  owner's working chats (banned 2026-08-28), never headless. Live-proven: a real surfaced act
+  staged a real pending row, and transcript movement flipped it to delivered with the receipt
+  in evidence. Adversarially reviewed pre-ship (9 findings fixed, 1 refuted): the receipt now
+  reads the transcript's EXACT mtime instead of a second-rounded reconstruction that could
+  both fabricate and erase receipts; a re-surface SUPERSEDES the earlier pending row with the
+  reason kept instead of deleting it; deaf is semi-terminal (a late-starting engine upgrades
+  it to delivered); a vanished transcript is named in the expiry evidence; and a failing
+  tick-reconcile is a durable status fact, not a console line.
+
 ### Changed
 
 - **The prestart's contradiction lane now tells the story** (owner-decoded 2026-08-30: all
