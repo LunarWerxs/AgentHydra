@@ -65,6 +65,12 @@ export interface DeliverOpts {
   /** Refuse rather than deliver when a turn is already in flight. Default true: never
    *  interrupt live work. */
   ifBusyAbort?: boolean
+  /** When the title is not rendered - an imported chat shows as 'Untitled' until it is
+   *  renamed through the app - identify the chat by opening candidate rows and matching
+   *  verifyText. Safe by construction: the same on-screen proof still gates the send, so a
+   *  wrong candidate is navigated past and then refused, never typed into. Default true,
+   *  because the chats a courier most needs to reach are exactly the freshly imported ones. */
+  searchByContent?: boolean
   /** Seam for tests. */
   run?: (args: string[]) => Promise<{ code: number; out: string }>
 }
@@ -119,6 +125,7 @@ export async function uiDeliverToChat(opts: DeliverOpts): Promise<DeliverResult>
     opts.verifyText,
   ]
   if (opts.ifBusyAbort !== false) args.push('-IfBusyAbort')
+  if (opts.searchByContent !== false) args.push('-SearchByContent')
   try {
     const { code, out } = await (opts.run ?? runPs1)(args)
     return interpretDeliverExit(code, out)

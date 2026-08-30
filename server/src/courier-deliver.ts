@@ -90,7 +90,7 @@ export interface CourierDeliveryAttempt {
   sessionId: string
   title: string | null
   instanceDir: string | null
-  outcome: DeliverResult['outcome'] | 'no-title' | 'no-aim-proof' | 'no-home'
+  outcome: DeliverResult['outcome'] | 'no-title' | 'no-aim-proof' | 'no-home' | 'planned'
   detail: string
 }
 

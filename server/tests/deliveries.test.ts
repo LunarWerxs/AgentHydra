@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../src/db'
 import {
+  deliverableDeliveries,
   lastTranscriptMessageAt,
   listDeliveries,
   parseDeliveryState,
@@ -222,4 +223,36 @@ test('listDeliveries reconciles before answering - a stale pending settles on re
     liveSince: () => null,
   })
   expect(rows.length).toBe(1)
+})
+
+test('deliverableDeliveries carries pending AND deaf - the composer reaches a deaf chat', () => {
+  // Deaf was a dead end for send_message (queues into an engine that never started), but the
+  // composer drives the APP, which runs the turn regardless - measured repeatedly. And a
+  // just-surfaced chat goes deaf within a tick because its own import parks a phantom live
+  // process, so delivering only 'pending' would strand the common case.
+  stageDelivery({ sessionId: 'deaf-one', prompt: 'p', instanceRef: null, nowMs: T0 })
+  reconcileDeliveries({
+    nowMs: T0 + 60_000,
+    lastActivity: () => T0 - 5_000,
+    liveSince: () => T0 + 10_000,
+  })
+  stageDelivery({ sessionId: 'pending-one', prompt: 'p', instanceRef: null, nowMs: T0 + 70_000 })
+  const rows = deliverableDeliveries({
+    nowMs: T0 + 80_000,
+    lastActivity: () => null,
+    liveSince: () => null,
+  })
+  expect(rows.map((r) => r.session_id).sort()).toEqual(['deaf-one', 'pending-one'])
+  expect(rows.find((r) => r.session_id === 'deaf-one')?.state).toBe('deaf')
+})
+
+test('deliverableDeliveries never carries a settled row', () => {
+  stageDelivery({ sessionId: 'done-one', prompt: 'p', instanceRef: null, nowMs: T0 })
+  reconcileDeliveries({ nowMs: T0 + 10_000, lastActivity: () => T0 + 5_000, liveSince: () => null })
+  const rows = deliverableDeliveries({
+    nowMs: T0 + 20_000,
+    lastActivity: () => null,
+    liveSince: () => null,
+  })
+  expect(rows.length).toBe(0)
 })

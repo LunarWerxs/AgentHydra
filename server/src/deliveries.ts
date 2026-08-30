@@ -239,3 +239,27 @@ export function listDeliveries(state?: DeliveryState, deps: DeliveryDeps = {}): 
 export function pendingDeliveries(deps: DeliveryDeps = {}): DeliveryRow[] {
   return listDeliveries('pending', deps)
 }
+
+/**
+ * Rows the COMPOSER transport can still carry: pending PLUS deaf.
+ *
+ * Deaf means "a process started after staging but the transcript never moved". That was a
+ * dead end for the send_message transport - messages queue into an engine that never
+ * started - and the banked law forbids re-messaging such a chat THAT way. It is NOT a dead
+ * end for the composer: driving the app's own composer makes the APP run the turn, engine
+ * state irrelevant. Measured repeatedly on 2026-08-30 - every drill target was a freshly
+ * imported chat carrying exactly this phantom live entry, and every one answered.
+ *
+ * This matters in production, not just in drills: surfacing a chat imports it, the import
+ * parks a live registry entry for ~15-20 minutes, and the row staged moments earlier is
+ * therefore reconciled DEAF within one tick. Delivering only 'pending' would strand the
+ * common case.
+ */
+export function deliverableDeliveries(deps: DeliveryDeps = {}): DeliveryRow[] {
+  reconcileDeliveries(deps)
+  return db
+    .query<DeliveryRow, []>(
+      "select * from deliveries where state in ('pending', 'deaf') order by staged_at desc",
+    )
+    .all()
+}

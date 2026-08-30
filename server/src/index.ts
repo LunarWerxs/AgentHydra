@@ -836,9 +836,9 @@ app.get('/api/deliveries', (c) => {
   return c.json({ deliveries: listDeliveries(parsed.state) })
 })
 // --- the courier (rebuild backlog) - see server/src/courier.ts ------------------------------
-// The daemon still never sends; it ARMS a one-shot task in the target instance's own app
-// scheduler, and the session THE APP fires does the native sending. GET plans without
-// touching anything; POST executes the plan (arm / re-arm / disarm).
+// Delivers each pending staged prompt by driving that chat's OWN composer in the running app
+// (ui-deliver.ts), after proving the target's conversation is on screen. GET plans without
+// typing anything; POST delivers.
 app.get('/api/couriers', async (c) => c.json(await courierPass({ act: false })))
 app.post('/api/couriers/run', async (c) => c.json(await courierPass({ act: true })))
 // --- the standing sweep loop (rebuild backlog) - see server/src/sweep-loop.ts ---------------

@@ -180,7 +180,14 @@ test('the tick runs the courier pass when enabled, and a throwing pass is a DURA
   await runSweepLoopOnce({
     force: true,
     sweep: async () => emptyReport(),
-    courier: async () => ({ dryRun: false, couriers: [], unroutable: [], checkedAt: 'x' }),
+    courier: async () => ({
+      dryRun: false,
+      attempts: [],
+      held: [],
+      unroutable: [],
+      instancesTouched: 0,
+      checkedAt: 'x',
+    }),
   })
   expect(sweepLoopStatus().lastCourierError).toBe(null)
 })
@@ -194,7 +201,14 @@ test('courier_enabled=0 keeps the tick from arming anything', async () => {
     sweep: async () => emptyReport(),
     courier: async () => {
       courierRuns++
-      return { dryRun: false, couriers: [], unroutable: [], checkedAt: 'x' }
+      return {
+        dryRun: false,
+        attempts: [],
+        held: [],
+        unroutable: [],
+        instancesTouched: 0,
+        checkedAt: 'x',
+      }
     },
   })
   expect(courierRuns).toBe(0)
@@ -208,7 +222,14 @@ test('courier housekeeping is ALWAYS-ON but throttled - force bypasses the caden
   let runs = 0
   const courier = async () => {
     runs++
-    return { dryRun: false, couriers: [], unroutable: [], checkedAt: 'x' }
+    return {
+      dryRun: false,
+      attempts: [],
+      held: [],
+      unroutable: [],
+      instancesTouched: 0,
+      checkedAt: 'x',
+    }
   }
   expect(await runCourierHousekeeping({ courier, force: true })).toBe(true)
   // Within the 5-minute cadence a non-forced call declines...

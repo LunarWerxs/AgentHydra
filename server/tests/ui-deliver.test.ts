@@ -67,6 +67,7 @@ test('the PS1 gets exact instance/title/message/verify args, and busy-abort by d
     '-VerifyText',
     'its own words',
     '-IfBusyAbort',
+    '-SearchByContent',
   ])
 })
 
@@ -99,4 +100,23 @@ test('a throwing spawn is an error result, never an exception the caller must ca
   expect(r.ok).toBe(false)
   expect(r.outcome).toBe('error')
   expect(r.detail).toContain('powershell vanished')
+})
+
+test('searchByContent is on by default and can be switched off explicitly', async () => {
+  let args: string[] = []
+  const run = async (a: string[]) => {
+    args = a
+    return { code: 0, out: 'DELIVERED' }
+  }
+  await uiDeliverToChat({ instanceDir: 'd', title: 't', message: 'm', verifyText: 'v', run })
+  expect(args).toContain('-SearchByContent')
+  await uiDeliverToChat({
+    instanceDir: 'd',
+    title: 't',
+    message: 'm',
+    verifyText: 'v',
+    searchByContent: false,
+    run,
+  })
+  expect(args).not.toContain('-SearchByContent')
 })

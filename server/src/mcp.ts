@@ -632,26 +632,23 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'courier',
     description:
-      "THE COURIER: the ledger's fallback deliverer - built, guarded, and OFF by default " +
-      '(courier_enabled=0) because the live drill measured the app never firing externally ' +
-      'registered scheduler tasks on this version; until a working channel is proven, ' +
-      'pending deliveries need an awake AI sender (see the deliveries tool). Design: for ' +
-      'each instance with pending deliveries past a short grace window, the ' +
-      "daemon registers a one-shot task in that instance's OWN app scheduler; the app then " +
-      "fires a fresh session (the system's own hands, never one of the owner's threads) that " +
-      'sends each staged prompt natively via its session-management tools and stops. The ' +
-      'scheduler store is LAUNCH-LOAD state (measured), so registration always happens ' +
-      'against a closed app: closed = register then open; running = cycle (quit, register, ' +
-      'relaunch) ONLY when every live session is ancestry-proven to live elsewhere - ' +
-      'otherwise held-app-busy. The daemon still never sends. Rows clear from ' +
-      'message-traffic receipts, and cleared instances are disarmed automatically. Without ' +
-      'run: PLAN only (what would arm/re-arm/disarm, plus unroutable rows and why). With ' +
-      'run:true: execute the plan. Before hand-delivering a pending row yourself, check here ' +
-      'first - a courier already armed for that instance means a second send is a duplicate.',
+      "THE COURIER: the ledger's deliverer. For each pending delivery past a short grace " +
+      "window, the daemon drives that chat's OWN composer in the running desktop app (select " +
+      'the chat, PROVE its conversation is on screen, type, Send) - proven end to end: a ' +
+      'dormant chat answered with zero clicks and no human. It NEVER types without that ' +
+      'on-screen proof; a row it cannot aim at stays pending with a named reason (no-title: ' +
+      'an imported chat renders Untitled until renamed through the app; no-aim-proof; ' +
+      "no-home) rather than being sent on a guess. Rows settle from the ledger's own " +
+      'message-traffic receipts. NOTE the scheduler transport was demolished: a ' +
+      'scheduled-task session is flagged unattended and the app refuses send_message there, ' +
+      'so it can never relay into an existing chat. Without run: PLAN only (what would be ' +
+      'delivered, plus held and unroutable rows and why). With run:true: deliver. Before ' +
+      'hand-delivering a pending row yourself, check here first - a courier pass already ' +
+      'delivering it means a second send is a duplicate.',
     inputSchema: S({
       run: {
         type: 'boolean',
-        description: 'true = execute (arm/re-arm/disarm); omit or false = plan only.',
+        description: 'true = deliver; omit or false = plan only.',
       },
     }),
     run: (a) =>

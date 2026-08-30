@@ -40,7 +40,11 @@ param(
   [string]$Instance = '',
   # A snippet that MUST be visible in the target's conversation after selecting it.
   [Parameter(Mandatory = $true)][string]$VerifyText,
-  [switch]$IfBusyAbort
+  [switch]$IfBusyAbort,
+  # When the title is not rendered (an imported chat shows as 'Untitled'), identify the chat
+  # by opening candidate rows and matching VerifyText. Safe by construction: the same
+  # on-screen proof gates the send, so a wrong guess navigates and then refuses.
+  [switch]$SearchByContent
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
@@ -118,15 +122,49 @@ foreach ($m in $mains) {
       $n = $b.Current.Name
       if ($n -and $n.EndsWith($Title) -and $n -notlike 'More options for *' -and $n -notlike '*Optionen*') { $row = $b; break }
     }
-    if (-not $row) { continue }  # not rendered in this instance; try the next
-    Write-Output "found '$Title' in $($m.Dir) (row '$($row.Current.Name)')"
-
-    $inv = TryPattern $row ([System.Windows.Automation.InvokePattern]::Pattern)
-    if (-not $inv) { Write-Output 'FAIL: chat row does not expose Invoke'; exit 1 }
-    $inv.Invoke()
-    Start-Sleep -Milliseconds 2000
-    [AxD]::Wake($hwnd); Start-Sleep -Milliseconds 800
-    $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    if ($row) {
+      Write-Output "found '$Title' in $($m.Dir) (row '$($row.Current.Name)')"
+      $inv = TryPattern $row ([System.Windows.Automation.InvokePattern]::Pattern)
+      if (-not $inv) { Write-Output 'FAIL: chat row does not expose Invoke'; exit 1 }
+      $inv.Invoke()
+      Start-Sleep -Milliseconds 2000
+      [AxD]::Wake($hwnd); Start-Sleep -Milliseconds 800
+      $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    }
+    elseif ($SearchByContent) {
+      # THE TITLE THE APP RENDERS IS NOT ALWAYS THE TITLE ON DISK: an imported chat renders
+      # as 'Untitled' until it is renamed through the app (banked behaviour), so a
+      # title-only lookup strands exactly the chats the courier most needs to reach.
+      # Fall back to identifying the chat BY ITS CONTENT: open candidate rows one at a time
+      # and keep the one whose conversation shows VerifyText. This can never deliver to the
+      # wrong chat - the same on-screen proof still gates the send below - it only costs a
+      # few navigations. Bounded, and it skips rows that already matched another title.
+      Write-Output "'$Title' is not rendered; searching by content for the target..."
+      $candidates = @()
+      foreach ($b in Buttons $el) {
+        $n = $b.Current.Name
+        if ($n -and $n -notlike 'More options for *' -and $n -notlike '*Optionen*' -and
+            $n -notlike '*Feedback*' -and (TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern))) {
+          $candidates += $b
+        }
+      }
+      $hit = $false
+      foreach ($c in ($candidates | Select-Object -First 12)) {
+        $ci = TryPattern $c ([System.Windows.Automation.InvokePattern]::Pattern)
+        if (-not $ci) { continue }
+        $ci.Invoke()
+        Start-Sleep -Milliseconds 1400
+        [AxD]::Wake($hwnd); Start-Sleep -Milliseconds 500
+        $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+        if (TargetVisible $el) {
+          Write-Output "  identified by content: row '$($c.Current.Name)'"
+          $hit = $true
+          break
+        }
+      }
+      if (-not $hit) { continue }  # not in this instance; try the next
+    }
+    else { continue }  # not rendered in this instance; try the next
   }
 
   # RAIL 3: PROVE the intended conversation is the one on screen.

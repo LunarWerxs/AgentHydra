@@ -446,13 +446,13 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   sweep_interval_min: '15',
   sweep_max_archive: '-1',
   sweep_max_surface: '0',
-  // The courier (courier.ts): housekeeping that registers in-app deliverers for staged
-  // prompts. OFF by default (2026-08-30): the live drill measured that this app version
-  // never fires an externally-registered scheduler task - clobbered while running, ignored
-  // at launch - so cycling apps to register one is motion without delivery. The arming
-  // machinery, guards and lanes are built and tested; flip this on only once a working
-  // delivery channel is proven.
-  courier_enabled: '0',
+  // The courier (courier.ts): delivers staged prompts by driving the target chat's own
+  // composer in the running app. ON (2026-08-30) now that the transport is proven end to end
+  // on the real fleet - a dormant chat answered with zero clicks and no human - and every
+  // send is gated on proving the target's conversation is on screen first. It still only
+  // runs when something asks (the sweep tick or a caller), and only for rows an authorized
+  // act already staged.
+  courier_enabled: '1',
   // New-chat defaults (owner rule 2026-08-30, new-chat-defaults.ts): "Opus 5 Ultra code" =
   // model opus + the ultracode keyword in the first prompt; explicit caller choice wins.
   new_chat_model: 'opus',

@@ -9,6 +9,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **THE COURIER LOOP IS CLOSED AND ON** (courier_enabled defaults '1'). One
+  `POST /api/couriers/run` now takes a staged prompt all the way to an answer with no human:
+  the daemon finds the pending row, resolves its chat, derives the aim proof, types into that
+  chat, the chat replies, and the ledger settles the row to delivered with the receipt -
+  proven live end to end on the real fleet.
+  THE SCHEDULER TRANSPORT WAS DEMOLISHED rather than left disabled: a scheduler-fired session
+  is flagged unattended and the app refuses `send_message` there, so it could never deliver
+  into an existing chat. Every line serving it is gone from the courier - including the
+  quit/register/relaunch app CYCLING, which was risk paid for nothing. desktop-tasks.ts keeps
+  the proven `fireAt` primitives (plus `ensureScheduledTasksEnabled`) for STARTING work in an
+  instance, which is what that mechanism is actually good for.
+  Two findings the live loop forced, both now law: a just-surfaced chat is reconciled DEAF
+  within a tick (its own import parks a phantom live process), and deaf is only a dead end
+  for the send_message transport - the composer drives the APP, which runs the turn - so the
+  courier carries `pending` AND `deaf` rows (`deliverableDeliveries`). And the app renders an
+  imported chat as "Untitled" regardless of its disk title, which stranded exactly the chats
+  a courier most needs; the actuator can now identify a chat BY ITS CONTENT when the title is
+  not rendered, which is safe by construction because the same on-screen proof still gates
+  the send - a wrong candidate is navigated past and refused, never typed into.
+
 - **THE DELIVERY ACTUATOR** (server/src/ui-deliver.ts + misc/Deliver-DesktopChat.ps1): the
   daemon can now put a prompt INTO a specific dormant chat and press Send, focus-free, with
   no human and no app update - the gap that had blocked the whole delivery half. It drives
