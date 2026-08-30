@@ -20,6 +20,7 @@ import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type DeliveryRow, pendingDeliveries } from './deliveries'
+import { type Hold, isHeld } from './holds'
 import { findDesktopChat } from './instance-sessions'
 import { findTranscriptById } from './live-registry'
 import { pathKey } from './path-key'
@@ -61,9 +62,17 @@ export function deriveVerifyText(transcriptPath: string): string | null {
     try {
       const rec = JSON.parse(t) as {
         type?: string
+        isCompactSummary?: boolean
         message?: { content?: unknown }
       }
       if (rec.type !== 'user') continue
+      // A COMPACTION SUMMARY IS NOT THIS CHAT'S OWN WORDS. Claude Code writes the synthetic
+      // "This session is being continued from a previous conversation..." preamble as a user
+      // record flagged isCompactSummary, and ~8% of sessions carry one. Its opening sentence
+      // is IDENTICAL across every such chat, so using it as the aim proof would let the
+      // actuator "verify" itself against a completely different conversation and type there
+      // (review-confirmed must-fix). Skip it and keep looking for a real turn.
+      if (rec.isCompactSummary === true) continue
       const content = rec.message?.content
       let s: string | null = null
       if (typeof content === 'string') s = content
@@ -90,8 +99,32 @@ export interface CourierDeliveryAttempt {
   sessionId: string
   title: string | null
   instanceDir: string | null
-  outcome: DeliverResult['outcome'] | 'no-title' | 'no-aim-proof' | 'no-home' | 'planned'
+  outcome:
+    | DeliverResult['outcome']
+    | 'no-title'
+    | 'no-aim-proof'
+    | 'no-home'
+    | 'planned'
+    | 'recently-sent'
+    | 'on-hold'
   detail: string
+}
+
+/**
+ * THE POST-SEND COOLDOWN, and why it is not optional.
+ *
+ * A row leaves 'pending'/'deaf' only when reconcile sees a transcript record NEWER than
+ * staged_at - but the app writes that record seconds AFTER Send is invoked. In that window
+ * the row still reads deliverable, so the next pass (the 5-minute timer, or a manual run)
+ * would select the same chat and type the same prompt AGAIN. In-memory is the right scope:
+ * every act-mode pass runs in this one process, behind the same act lock.
+ */
+const RECENTLY_SENT_MS = 3 * 60_000
+const recentlySent = new Map<string, number>()
+
+/** Exported for tests: forget the cooldown (a fresh daemon has no memory of it either). */
+export function clearRecentlySent(): void {
+  recentlySent.clear()
 }
 
 export interface CourierDeliverDeps {
@@ -102,6 +135,10 @@ export interface CourierDeliverDeps {
   deliver?: typeof uiDeliverToChat
   /** Cap per pass, so one sweep can never spray a fleet. */
   max?: number
+  /** Clock seam for the post-send cooldown. */
+  nowMs?: () => number
+  /** Per-chat automation opt-out (holds.ts); seamed for tests. */
+  heldSession?: (sessionId: string) => Hold | null
 }
 
 /**
@@ -122,10 +159,37 @@ export async function deliverPendingRows(
     deps.transcriptOf ?? ((sid: string) => findTranscriptById(join(homedir(), '.claude'), sid))
   const deliver = deps.deliver ?? uiDeliverToChat
   const max = deps.max ?? 5
+  const now = deps.nowMs ?? Date.now
 
   const out: CourierDeliveryAttempt[] = []
   for (const row of pending) {
     if (out.length >= max) break
+    // Already sent moments ago? The ledger cannot know yet (the app writes the receipt
+    // seconds later), so this is the only thing standing between a slow app and a duplicate.
+    // A HELD chat is the owner saying "leave this alone on your own initiative", so the
+    // unattended courier does not type into it. He can still deliver by asking directly.
+    const hold = (deps.heldSession ?? isHeld)(row.session_id)
+    if (hold) {
+      out.push({
+        sessionId: row.session_id,
+        title: null,
+        instanceDir: null,
+        outcome: 'on-hold',
+        detail: `on hold since ${hold.heldAt}: ${hold.reason} - the automation leaves this chat alone (a direct request still works)`,
+      })
+      continue
+    }
+    const sentAt = recentlySent.get(row.session_id)
+    if (sentAt !== undefined && now() - sentAt < RECENTLY_SENT_MS) {
+      out.push({
+        sessionId: row.session_id,
+        title: null,
+        instanceDir: null,
+        outcome: 'recently-sent',
+        detail: `delivered ${Math.round((now() - sentAt) / 1000)}s ago - waiting for the transcript receipt rather than sending twice`,
+      })
+      continue
+    }
     const chat = chatOf(row.session_id)
     const instanceDir = row.instance_ref?.startsWith('desktop:')
       ? row.instance_ref.slice('desktop:'.length)
@@ -170,6 +234,8 @@ export async function deliverPendingRows(
       message: row.prompt,
       verifyText,
     })
+    // Stamp on SUCCESS only: a refusal typed nothing, so it must stay retryable.
+    if (r.outcome === 'delivered') recentlySent.set(row.session_id, now())
     out.push({
       sessionId: row.session_id,
       title: chat.title,

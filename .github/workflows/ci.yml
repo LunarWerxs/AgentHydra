@@ -110,7 +110,17 @@ jobs:
         run: bun run build
 
       - name: Test
-        run: bun test
+        # --parallel runs test FILES concurrently: 34.9s -> 22.1s locally (1.6x). Each file
+        # gets its own process and tests/setup.ts mints a fresh throwaway state dir per
+        # process, so they cannot share a database.
+        #
+        # THE WORKER COUNT IS PINNED, and that is the whole lesson here. Bare --parallel
+        # defaults to the CORE COUNT: 32 workers on this dev box, which saturated it and made
+        # the subprocess suites (dispatch.test.ts, whose tests wait on real processes behind
+        # 5s timeouts) fail intermittently - twice green by luck, then three failures under
+        # load. A test run whose verdict depends on how busy the machine is teaches you to
+        # ignore it. Four is one per core on a GitHub runner, so local and CI contend alike.
+        run: bun test --parallel=4
 
     # NOTE: the windows-latest leg exercises the tray's Windows -SelfTest
     # (tests/launcher.test.ts's `test.skipIf(!isWin)` cases run automatically here, skip on

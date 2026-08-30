@@ -5,7 +5,7 @@
 // done-no, human via interruption), the orphan-evidence note, done-claim parsing, and the
 // no-transcript null.
 import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type ChatGateDeps, chatGate, parseDoneClaim } from '../src/chat-gate'
@@ -241,4 +241,77 @@ test('parseDoneClaim reads the section, not the whole message', () => {
   expect(parseDoneClaim('## Am I 100% done?\n- Done except the CI verdict.')).toBe('no')
   expect(parseDoneClaim('## Am I 100% done?\n- Blocked on your call.')).toBe('no')
   expect(parseDoneClaim('nothing here')).toBe('unknown')
+})
+
+// --- STALL DETECTION: a chat that is alive and stuck looks exactly like one that is alive and
+// busy, so the tell is narrow on purpose (newest record = an unanswered SHELL tool call, quiet
+// past the threshold). The verdict is ADVISORY: state stays 'running' and nothing acts on it.
+
+const liveDeps = (sid: string, transcript: string, quietMin: number): ChatGateDeps => {
+  const deps = home(sid, transcript)
+  const path = join(String(deps.claudeHome), 'projects', 'D--Work', `${sid}.jsonl`)
+  deps.registry = () => [
+    {
+      pid: 999,
+      sessionId: sid,
+      cwd: 'D:Work',
+      name: 'peer-a',
+      startedAt: 1,
+      transcriptPath: path,
+    } satisfies LiveSession,
+  ]
+  deps.nowMs = statSync(path).mtimeMs + quietMin * 60_000
+  return deps
+}
+const shellCall = (name: string) => ({
+  type: 'assistant',
+  message: { role: 'assistant', content: [{ type: 'tool_use', name, input: {} }] },
+})
+const toolResult = () => ({
+  type: 'user',
+  message: { role: 'user', content: [{ type: 'tool_result', content: 'ok' }] },
+})
+
+test('stalled: alive, quiet for hours, newest record is an unanswered shell call', () => {
+  const g = chatGate('st1', liveDeps('st1', line(user('go')) + line(shellCall('Bash')), 45))
+  expect(g?.state).toBe('running')
+  expect(g?.stalled?.tool).toBe('Bash')
+  expect(g?.cause).toContain('STUCK')
+  // It must never assert more than it knows: a long command looks the same from outside.
+  expect(g?.stalled?.why).toContain('Read the chat before acting')
+})
+
+test('NOT stalled: the tool result landed, so the chat is simply working', () => {
+  const g = chatGate(
+    'st2',
+    liveDeps(
+      'st2',
+      line(shellCall('Bash')) + line(toolResult()) + line(assistant('carrying on')),
+      45,
+    ),
+  )
+  expect(g?.state).toBe('running')
+  expect(g?.stalled ?? null).toBe(null)
+})
+
+test('NOT stalled: a slow file edit is not a stall - edits auto-approve, so flagging them cries wolf', () => {
+  const g = chatGate('st3', liveDeps('st3', line(user('go')) + line(shellCall('Write')), 45))
+  expect(g?.stalled ?? null).toBe(null)
+})
+
+test('NOT stalled below the quiet threshold: a command that has run for two minutes is a command', () => {
+  const g = chatGate('st4', liveDeps('st4', line(user('go')) + line(shellCall('Bash')), 2))
+  expect(g?.stalled ?? null).toBe(null)
+  expect(g?.cause).toContain('background work')
+})
+
+test('a DORMANT chat is never called stalled - the tell needs a live process behind it', () => {
+  const g = chatGate('st5', home('st5', line(user('go')) + line(shellCall('Bash'))))
+  expect(g?.state).toBe('crashed')
+  expect(g?.stalled ?? null).toBe(null)
+})
+
+test('a twenty-minute command is still a command - the threshold is half an hour on purpose', () => {
+  const g = chatGate('st6', liveDeps('st6', line(user('go')) + line(shellCall('Bash')), 20))
+  expect(g?.stalled ?? null).toBe(null)
 })

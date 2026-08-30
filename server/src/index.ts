@@ -143,6 +143,7 @@ import { actOnGate, isActBusy, parseActInput } from './gate-actions'
 import { parseSweepInput, sweepGateActions } from './gate-sweep'
 import { cleanupStaleUpdateArtifacts } from './github-updater'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
+import { holdSession, listHolds, releaseSession } from './holds'
 import {
   clearInstanceInfo,
   findLiveInstance,
@@ -152,6 +153,7 @@ import {
   writeInstanceInfo,
 } from './instance'
 import {
+  findDesktopChat,
   instanceRefForSession,
   invalidateSessionMetaCache,
   resolveRunAsRef,
@@ -235,6 +237,7 @@ import {
   type SessionSource,
   type UsageCheckResult,
 } from './types'
+import { uiRenameChat } from './ui-archive'
 import { updateProgress } from './update-progress'
 import { applyUpdate, checkForUpdate } from './updater'
 import {
@@ -835,6 +838,44 @@ app.get('/api/deliveries', (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400)
   return c.json({ deliveries: listDeliveries(parsed.state) })
 })
+// --- per-chat automation opt-out - see server/src/holds.ts ----------------------------------
+// A hold stops the UNATTENDED machinery touching one chat (no archive, no surface, no
+// delivery) while leaving directly requested deeds working. The reason is required.
+app.get('/api/holds', (c) => c.json({ holds: listHolds() }))
+app.post('/api/sessions/:id/hold', async (c) => {
+  const body = await jsonBody(c)
+  const r = holdSession(c.req.param('id'), typeof body.reason === 'string' ? body.reason : '')
+  return c.json(r, r.ok ? 200 : 400)
+})
+app.post('/api/sessions/:id/release', (c) => c.json(releaseSession(c.req.param('id'))))
+
+// --- rename a chat through the app's own control ---------------------------------------------
+// The one write the daemon cannot make on disk: a RUNNING app holds its chat list in memory and
+// re-saves over any file edit. It exists because an IMPORTED chat renders as 'Untitled' whatever
+// its disk title says, and an untitled chat is both a naming-law violation and undeliverable -
+// the courier aims by rendered name, so it reports those rows as no-title and stops. This is a
+// DIRECT request only (never on the machinery's own initiative), so a hold does not gate it.
+app.post('/api/chats/:id/rename', async (c) => {
+  const body = await jsonBody(c)
+  const newTitle = typeof body.new_title === 'string' ? body.new_title.trim() : ''
+  if (!newTitle) return c.json({ ok: false, detail: 'new_title is required' }, 400)
+  const chat = findDesktopChat(c.req.param('id'))
+  if (!chat?.instance)
+    return c.json({ ok: false, detail: 'no desktop instance holds this chat' }, 404)
+  // The app matches rows by what it RENDERS, which is not always the disk title (that mismatch
+  // is the whole reason this route exists), so the caller may name the on-screen row itself.
+  const from =
+    typeof body.current_title === 'string' && body.current_title.trim()
+      ? body.current_title.trim()
+      : chat.title
+  if (!from)
+    return c.json(
+      { ok: false, detail: "this chat's current on-screen name is unknown - pass current_title" },
+      400,
+    )
+  return c.json(await uiRenameChat(chat.instance, from, newTitle))
+})
+
 // --- the courier (rebuild backlog) - see server/src/courier.ts ------------------------------
 // Delivers each pending staged prompt by driving that chat's OWN composer in the running app
 // (ui-deliver.ts), after proving the target's conversation is on screen. GET plans without

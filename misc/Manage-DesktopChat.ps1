@@ -116,7 +116,7 @@ function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch 
 # print the menu we saw. Never invoke an item we cannot name.
 $ACTION_LABELS = @{
   'Archive'   = @('Archive', 'Archivieren', 'Archiver', 'Archivar', 'Archiviare', 'Archiveren')
-  'Unarchive' = @('Unarchive', 'Nicht mehr archivieren', 'Désarchiver', 'Desarchivar', 'Dearchiviare')
+  'Unarchive' = @('Unarchive', 'Nicht mehr archivieren', 'Désarchiver', 'Desarchivar', 'Dearchiviare', 'Dearchiveren')
   'Rename'    = @('Rename', 'Umbenennen', 'Renommer', 'Cambiar nombre', 'Rinomina', 'Hernoemen')
 }
 function MenuItemFor($cond, $action) {
@@ -134,12 +134,25 @@ function MenuItemFor($cond, $action) {
   return @{ Item = $null; Seen = $seen }
 }
 
+# AMBIGUITY IS A REFUSAL: a suffix match means 'Notes' also matches the row for 'My Notes',
+# and taking the first hit in tree order would archive the WRONG chat (review-confirmed). If
+# several menus end with the title, only an exact-suffix-after-the-phrase match can break the
+# tie; otherwise return $null and let the caller report it not-found rather than guess.
 function KebabFor($scope, $title) {
   $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
+  $hits = @()
   foreach ($b in $scope.FindAll($TREE, $c)) {
     $n = $b.Current.Name
-    if ($n -and $n.EndsWith($title) -and (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern))) { return $b }
+    if ($n -and $n.EndsWith($title) -and (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern))) { $hits += $b }
   }
+  if ($hits.Count -le 1) { return $hits | Select-Object -First 1 }
+  # Prefer the one whose title is preceded by a space (i.e. the whole trailing word matches,
+  # not a longer title that merely ends the same way).
+  $clean = @($hits | Where-Object { $_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title })
+  $others = @($hits | Where-Object { -not ($_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title) })
+  if ($clean.Count -eq 1 -and $others.Count -eq 0) { return $clean[0] }
+  Write-Output ("AMBIGUOUS: " + $hits.Count + " rendered chats end with '$title' (" +
+    (($hits | ForEach-Object { "'" + $_.Current.Name + "'" }) -join ', ') + ') - refusing to guess')
   return $null
 }
 # -List emits each kebab's accessible name VERBATIM - '<localized more-options phrase>
@@ -247,26 +260,33 @@ foreach ($m in $mains) {
     # The inline editor: an Edit named 'Rename' exposing ValuePattern. SetValue is focus-free;
     # the commit is a posted Enter to the render widget.
     $hwndTop = [IntPtr]$win.Current.NativeWindowHandle
-    [Ax]::Wake($hwndTop); Start-Sleep -Milliseconds 800
+    # Two pokes with a real gap: the editor is materialised lazily AFTER the menu Invoke, and
+    # a single 800ms wake caught the tree before it existed (measured - this is why rename
+    # read as impossible on a German app).
+    [Ax]::Wake($hwndTop); Start-Sleep -Milliseconds 900
+    [Ax]::Wake($hwndTop); Start-Sleep -Milliseconds 900
     # The editor may live under a sibling top-level pane, not the main window subtree - search
     # every top-level element of this process (how the working probe found it).
-    # RENAME IS ENGLISH-ONLY AND KNOWN-INCOMPLETE (2026-08-30). Archive/Unarchive are now
-    # locale-independent (structural kebab + the $ACTION_LABELS table), but the inline rename
-    # EDITOR is not: on a German app the Rename item invokes and the menu closes, yet no
-    # writable Edit holding the old title ever appears in the tree - only the composer. The
-    # editor is presumably rendered in a way this build does not expose. Rather than ship a
-    # guess, this path stays as it was: it works on an English app, and says so plainly
-    # elsewhere. The delivery actuator does not depend on it.
+    # THE EDITOR'S NAME IS LOCALIZED TOO ('Sitzungsname' on a German app, 'Rename' on an
+    # English one), so it is identified STRUCTURALLY: the writable Edit that currently HOLDS
+    # THE OLD TITLE. That value check is what separates it from the message composer (an Edit
+    # named 'Prompt' holding placeholder text) without knowing either language.
+    # ⛔ The Wake above this block is load-bearing: Chromium materialises the editor lazily,
+    # and without a fresh MSAA poke after the menu Invoke the element simply is not in the
+    # tree yet - which is what made rename look permanently broken on non-English builds.
     $edit = $null
-    $ecEdit = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Rename')
     foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
-      foreach ($e in $t.FindAll($TREE, $ecEdit)) {
-        if ($e.Current.ControlType.ProgrammaticName -eq 'ControlType.Edit') { $edit = $e; break }
+      foreach ($e in $t.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+        if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.Edit') { continue }
+        $v = TryPattern $e ([System.Windows.Automation.ValuePattern]::Pattern)
+        if (-not $v -or $v.Current.IsReadOnly) { continue }
+        $held = try { $v.Current.Value } catch { '' }
+        if ($held -eq $Title) { $edit = $e; break }
       }
       if ($edit) { break }
     }
     if (-not $edit) {
-      Write-Output 'FAIL: rename editor did not open (known limit: the inline editor is not exposed on non-English builds - archive/unarchive are locale-independent, rename is not)'
+      Write-Output "FAIL: rename editor did not open (no writable Edit holding '$Title')"
       exit 1
     }
     $vp = TryPattern $edit ([System.Windows.Automation.ValuePattern]::Pattern)

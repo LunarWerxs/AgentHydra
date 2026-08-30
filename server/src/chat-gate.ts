@@ -54,6 +54,15 @@ export interface ChatGate {
   live: { pid: number; name: string } | null
   crashed: { kind: CrashKind } | null
   finished: ChatGateFinished | null
+  /** A LIVE chat that looks stuck rather than busy: its newest record is a SHELL tool call
+   *  with no result after it, and it has been quiet a long time. The state stays 'running' -
+   *  this is extra evidence, never a reclassification, because acting on a live chat is
+   *  exactly what the gate law forbids. Null when the chat is not live or looks fine. */
+  stalled?: {
+    tool: string
+    quietSecs: number
+    why: string
+  } | null
 }
 
 const EVIDENCE_CAP = 2000
@@ -81,6 +90,12 @@ interface TailRecord {
    *  ENDING on one means the tool's result never landed - a mid-turn death even when the
    *  record also carries prefacing text (review-confirmed hole in the first cut). */
   hasToolUse: boolean
+  /** Names of the tool_use blocks on this record, so a stalled chat can say WHAT it is stuck
+   *  on - the difference between "waiting on a shell command nobody can approve" and "running
+   *  a long build" is the tool, and a stall report without it is unactionable. */
+  toolNames: string[]
+  /** The record carries a tool_result: the answer to a previous tool_use landed. */
+  hasToolResult: boolean
 }
 
 function parseTailRecords(text: string, wholeFile: boolean): TailRecord[] {
@@ -114,9 +129,67 @@ function parseTailRecords(text: string, wholeFile: boolean): TailRecord[] {
       hasToolUse:
         Array.isArray(content) &&
         content.some((b) => (b as { type?: string })?.type === 'tool_use'),
+      toolNames: Array.isArray(content)
+        ? content
+            .filter((b) => (b as { type?: string })?.type === 'tool_use')
+            .map((b) => String((b as { name?: string }).name ?? ''))
+            .filter(Boolean)
+        : [],
+      hasToolResult:
+        Array.isArray(content) &&
+        content.some((b) => (b as { type?: string })?.type === 'tool_result'),
     })
   }
   return out
+}
+
+/**
+ * IS THIS LIVE CHAT STUCK, or just busy? The banked tell (measured 2026-08-26, five imported
+ * chats froze exactly this way and looked identical to "thinking"): the newest record is an
+ * assistant tool_use with NO tool_result after it, while the process is alive and idle.
+ *
+ * ⛔ NARROW TO SHELL TOOLS ON PURPOSE. File edits are auto-approved under `acceptEdits`, so
+ * including them would flag every slow Write, and a detector that cries wolf gets ignored -
+ * which is worse than not having one. A shell command is the one that sits on an approval
+ * prompt nobody is present to click, or on a build that died.
+ */
+const SHELL_TOOLS = /^(bash|powershell|shell|run|terminal|npx|exec)/i
+/**
+ * Below this a quiet tool call is just a command running.
+ *
+ * HALF AN HOUR, not the fifteen minutes this started at, and the reason is a measurement: run
+ * over 1,504 real transcripts with every one forced to look live and an hour quiet, the SHAPE
+ * (ends on an unanswered shell call) matched 11 of them - 0.7%, narrow enough. But one of the
+ * eleven was the session doing the measuring, which was mid-`bun` at that instant and perfectly
+ * healthy. So the shape alone proves nothing and this threshold is the ENTIRE discriminator
+ * between busy and stuck. Thirty minutes clears the long real commands in these repos (Rust
+ * release builds, container CI legs) at no cost, because a genuinely stuck chat stays stuck -
+ * waiting longer to speak loses nothing, and a detector that cries wolf gets ignored.
+ */
+const STALL_QUIET_SECS = 30 * 60
+
+function detectStall(transcriptPath: string, quietSecs: number): ChatGate['stalled'] {
+  if (quietSecs < STALL_QUIET_SECS) return null
+  // ONE window, no growth loop, unlike the finished-chat classifier below: there, finding no
+  // records changes the verdict, so a truncated read had to widen. Here a short read can only
+  // cost us a detection we then do not claim - and a missed stall is a report the human reads
+  // themselves, while a false stall is the actuator lying about a healthy chat.
+  const raw = readTranscriptTailText(transcriptPath, 64 * 1024)
+  if (!raw) return null
+  const records = parseTailRecords(raw.text, raw.wholeFile)
+  const last = records.at(-1)
+  if (!last?.hasToolUse || last.hasToolResult) return null
+  const tool = last.toolNames.find((n) => SHELL_TOOLS.test(n))
+  if (!tool) return null
+  return {
+    tool,
+    quietSecs,
+    why:
+      `its newest record is a '${tool}' call with no result after it, and nothing has moved ` +
+      `for ${Math.round(quietSecs / 60)}min - the classic shape of a command waiting on an ` +
+      'approval nobody is present to click, or a background task that died. Read the chat ' +
+      'before acting: a genuinely long command looks the same from outside.',
+  }
 }
 
 /** The recap's own claim, parsed from the section under "## Am I 100% done?". */
@@ -162,15 +235,19 @@ export function chatGate(sessionId: string, deps: ChatGateDeps = {}): ChatGate |
   const tailMeta = classifyTranscriptTail(transcriptPath, nowMs)
 
   if (live) {
+    const stalled = detectStall(transcriptPath, tailMeta.quietSecs)
     return {
       sessionId,
       state: 'running',
-      cause: `process ${live.pid} is alive (quiet ${tailMeta.quietSecs}s - a long quiet can be background work, not a stall)`,
+      cause: stalled
+        ? `process ${live.pid} is alive but looks STUCK: ${stalled.why}`
+        : `process ${live.pid} is alive (quiet ${tailMeta.quietSecs}s - a long quiet can be background work, not a stall)`,
       transcriptPath,
       quietSecs: tailMeta.quietSecs,
       live: { pid: live.pid, name: live.name },
       crashed: null,
       finished: null,
+      stalled,
     }
   }
 

@@ -9,9 +9,10 @@
 // `ccd_session_mgmt send_message` refuses there verbatim: "This tool is unavailable in
 // unattended sessions (scheduled-task runs and remote-dispatched trees)." So that transport
 // can never deliver into an existing chat, and every line that served it is gone - including
-// the quit/register/relaunch app CYCLING, which was risk paid for nothing. desktop-tasks.ts
-// keeps the (correct, proven) fireAt primitives for STARTING work in an instance; the courier
-// no longer uses them.
+// the quit/register/relaunch app CYCLING, which was risk paid for nothing, and the
+// desktop-tasks.ts module itself (deleted: no caller remained, and code kept for a
+// hypothetical future consumer is exactly what the standing rules forbid - git has it if the
+// "start fresh work in a dormant instance" feature is ever actually built).
 //
 // THE TRANSPORT THAT WORKS, proven end to end on the real fleet: drive the target chat's own
 // composer through UI Automation (ui-deliver.ts) - select the chat, PROVE its conversation is
@@ -40,6 +41,7 @@ import {
   type CourierDeliverDeps,
   type CourierDeliveryAttempt,
   deliverPendingRows,
+  distinctInstances,
 } from './courier-deliver'
 import { type DeliveryRow, deliverableDeliveries } from './deliveries'
 import { type FleetInstanceEntry, fleetInstances } from './fleet-instances'
@@ -65,7 +67,9 @@ export interface CourierReport {
   dryRun: boolean
   /** What would be / was delivered, per row. */
   attempts: CourierDeliveryAttempt[]
-  /** Rows deliberately left for later, with the honest reason. */
+  /** Rows deliberately left for LATER by this pass (a fresh surfacing still inside its grace
+   *  window, mostly). Not to be confused with an attempt whose outcome is 'on-hold', which is
+   *  the owner taking that chat off automation entirely (holds.ts). */
   held: Array<{ sessionId: string; reason: string }>
   /** Pending rows no courier can carry at all. */
   unroutable: Array<{ sessionId: string; instanceRef: string | null; reason: string }>
@@ -223,9 +227,7 @@ async function courierPassInner(
     attempts,
     held,
     unroutable,
-    instancesTouched: new Set(
-      attempts.map((a) => (a.instanceDir ? pathKey(a.instanceDir, true) : '')),
-    ).size,
+    instancesTouched: distinctInstances(attempts),
     checkedAt: new Date(now).toISOString(),
   }
 }

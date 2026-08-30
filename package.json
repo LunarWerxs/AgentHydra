@@ -26,7 +26,7 @@
     "lint": "biome check .",
     "typecheck": "bun run --cwd web typecheck && bun run --cwd server typecheck",
     "format": "biome format --write .",
-    "test": "bun test",
+    "test": "bun test --parallel=4",
     "audit": "bun run scripts/audit.ts"
   },
   "devDependencies": {

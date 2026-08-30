@@ -149,6 +149,7 @@ function trimForStatus(report: SweepReport): SweepReport {
     report.crashedRows.length > MAX_STATUS_ROWS ||
     report.waitForReset.length > MAX_STATUS_ROWS ||
     report.needsJudgment.length > MAX_STATUS_ROWS ||
+    report.stalled.length > MAX_STATUS_ROWS ||
     report.ungated.length > MAX_STATUS_ROWS ||
     report.unswept.length > MAX_STATUS_ROWS
   if (!over) return report
@@ -159,6 +160,7 @@ function trimForStatus(report: SweepReport): SweepReport {
     crashedRows: report.crashedRows.slice(0, MAX_STATUS_ROWS),
     waitForReset: report.waitForReset.slice(0, MAX_STATUS_ROWS),
     needsJudgment: report.needsJudgment.slice(0, MAX_STATUS_ROWS),
+    stalled: report.stalled.slice(0, MAX_STATUS_ROWS),
     ungated: report.ungated.slice(0, MAX_STATUS_ROWS),
     unswept: report.unswept.slice(0, MAX_STATUS_ROWS),
   }

@@ -106,13 +106,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
-- **The test suite runs its files in parallel: 34.9s -> 16.2s, a measured 2.2x** (four runs,
-  1504 tests, zero failures; the local CI leg went 52s -> 33s and the container leg 45s ->
-  32s). Each file already gets its own process with its own throwaway state directory, so
-  there is nothing to share and nothing to race. The two slowest files were measured rather
-  than guessed - dispatch.test.ts is 39% of the serial total because it drives a REAL
-  detached OS process, and updater-engine.test.ts drives REAL git - and both were left alone
-  deliberately: their whole value is that they are not faked.
+- **The test suite runs its files in parallel: 34.9s -> 22.1s, a measured 1.6x** (three
+  consecutive clean runs, 1548 tests). Each file already gets its own process with its own
+  throwaway state directory, so there is nothing to share and nothing to race. The two slowest
+  files were measured rather than guessed - dispatch.test.ts is 39% of the serial total
+  because it drives a REAL detached OS process, and updater-engine.test.ts drives REAL git -
+  and both were left alone deliberately: their whole value is that they are not faked.
+  THE WORKER COUNT IS PINNED TO FOUR, and the first cut got this wrong in a way worth
+  recording: bare `--parallel` defaults to the CORE COUNT, which is 32 on this box. It was
+  2.2x and green twice, and then the local CI leg failed three tests in dispatch.test.ts -
+  the suite that waits on real processes behind 5s timeouts - purely because the machine was
+  saturated. It passes alone, at 4, and at 8; only unbounded fails. A suite whose verdict
+  depends on how busy the machine is teaches you to ignore it, which is worth more than the
+  six seconds. Four is also one worker per core on a GitHub runner, so CI and local contend
+  alike instead of one of them being a different experiment.
 
 - **THE COURIER'S SCHEDULER MODULE WAS DELETED** (desktop-tasks.ts and its suite, 429 lines).
   Nothing called it once the scheduler transport was demolished, and code kept for a
@@ -120,6 +127,39 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   "start fresh work in a dormant instance" feature is ever actually built.
 
 ### Added
+
+- **A chat can be taken off automation, one at a time, with a reason.** The fleet-wide switches
+  were the only instrument available: turning the sweep off to protect ONE delicate thread
+  stopped the machinery tending the other twenty, and leaving it on meant a chat someone was
+  personally mid-thought in could be archived or resumed under them. A hold makes the
+  unattended machinery skip exactly one chat - no archive, no surface, no delivery - while
+  everything a person or an AI session asks for DIRECTLY still runs, because being asked is
+  the point of asking, and a hold you cannot override is one that gets deleted in frustration
+  later. It outranks the circuit breaker (an owner instruction beats a counter), it survives
+  restarts, it never expires, and the reason is required and quoted back everywhere the hold
+  appears, so "why has nothing happened to this chat?" answers itself six weeks later. Held
+  chats stay fully visible in the pre-start check and the sweep - a chat that vanished from
+  the fleet view would be worse than one that got acted on. `chat_hold` / `POST
+  /api/sessions/:id/hold` / `/release`.
+
+- **A live chat that is STUCK is now told apart from one that is busy.** Alive-and-quiet was
+  reported as a single fact, so a chat frozen waiting on a background command nobody was
+  present to approve looked exactly like one running a long build, and both disappeared into
+  the "left alone" count. The tell (measured across five chats that froze this way): the
+  newest transcript record is a tool call with no result after it, while the process is alive
+  and idle past half an hour. It is deliberately narrowed to SHELL tools - file edits
+  auto-approve under `acceptEdits`, so including them would flag every slow Write, and a
+  detector that cries wolf gets ignored, which is worse than not having one. The verdict is
+  ADVISORY: the state stays `running`, nothing acts on it, and the report says to read the
+  chat first, because a genuinely long command looks identical from outside. Stalled chats
+  get their own lane in the sweep report and a next-step line in the pre-start check.
+
+- **Chats can be renamed through the app's own control, from the API.** The PowerShell layer
+  gained this when the German-locale fix landed, but nothing in the daemon called it. It
+  matters because an imported chat renders as 'Untitled' whatever its disk title says, which
+  is both a naming-law violation and a delivery dead end - the courier aims by rendered name
+  and reports those rows as no-title forever. `chat_rename` / `POST /api/chats/:id/rename`;
+  generic names are refused, and an ambiguous row is refused rather than guessed at.
 
 - **THE LOOP RUNS ITSELF** (proven 2026-08-30): with nothing touched but a staged row, the
   daemon's own 5-minute timer delivered it and the chat answered - no route call, no human.

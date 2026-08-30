@@ -24,6 +24,7 @@
 import { type BreakerKind, checkBreaker, clearAttempts, noteAttempt } from './breaker'
 import { type ChatGate, type CrashKind, chatGate } from './chat-gate'
 import { actOnGate, type GateActionDeps, type GateActionResult } from './gate-actions'
+import { type Hold, isHeld } from './holds'
 import { sessionMetaMap } from './instance-sessions'
 
 export interface SweepDeps extends GateActionDeps {
@@ -40,6 +41,8 @@ export interface SweepDeps extends GateActionDeps {
   >
   /** The per-chat act; seamed so sweep tests pin dispatch and caps, not the act itself. */
   act?: typeof actOnGate
+  /** Per-chat automation opt-out (holds.ts); seamed for tests. */
+  heldSession?: (sessionId: string) => Hold | null
 }
 
 export interface SweepRow {
@@ -82,6 +85,17 @@ export interface SweepReport {
   waitForReset: SweepRow[]
   /** The ONE AI step, packaged per chat: judge each, then chat_act it with the decision. */
   needsJudgment: NeedsJudgmentRow[]
+  /** LIVE chats that look STUCK: the newest record is a shell tool call with no result and
+   *  nothing has moved for a long time. Report-only by construction - a live chat is never
+   *  acted on, and a long command looks identical from outside, so this asks a human to look. */
+  stalled: Array<{
+    sessionId: string
+    title: string | null
+    instance: string | null
+    tool: string
+    quietSecs: number
+    why: string
+  }>
   /** Chats with no transcript anywhere - listed, never guessed about. */
   ungated: Array<{ sessionId: string; title: string | null; instance: string | null }>
   /** Candidates the deadline cut off - listed, never silently dropped. */
@@ -177,6 +191,7 @@ export async function sweepGateActions(
     crashedRows: [],
     waitForReset: [],
     needsJudgment: [],
+    stalled: [],
     ungated: [],
     unswept: [],
     deadlineHit: false,
@@ -232,6 +247,23 @@ export async function sweepGateActions(
     // unattended path. A deed the owner or an AI session asks for directly must never be
     // blocked by a counter - being asked is the point of asking. Only the machinery repeating
     // itself is bounded (breaker.ts documents the four-archives-in-one-evening measurement).
+    // A HELD chat is left alone by the machinery entirely - checked before the breaker,
+    // because a hold is the owner's explicit instruction and outranks any counter. It is
+    // reported, never silently skipped: a chat that vanished from the fleet view would be
+    // worse than one that got acted on.
+    const held = (deps.heldSession ?? isHeld)(c.sessionId)
+    if (held) {
+      return {
+        sessionId: c.sessionId,
+        gate: {
+          state: g.state,
+          crashedKind: g.crashed?.kind ?? null,
+          lane: g.finished?.lane ?? null,
+        },
+        action: 'parked',
+        why: `on hold since ${held.heldAt}: ${held.reason} - the automation leaves this chat alone (a direct request still works)`,
+      }
+    }
     const brake = checkBreaker(kind, c.sessionId, now())
     if (brake.suppressed) {
       // Echo the REAL gate we already computed - not a fabricated 'crashed' stand-in
@@ -289,6 +321,18 @@ export async function sweepGateActions(
     }
     if (g.state === 'running' || (g.state === 'finished' && g.finished?.lane === 'human')) {
       report.leftAlone++
+      // A live chat is never acted on - but "alive and stuck on a shell command nobody is
+      // present to approve" is the one shape a human must SEE, and counting it as left-alone
+      // hides it behind a number. Reported, never touched.
+      if (g.stalled)
+        report.stalled.push({
+          sessionId: c.sessionId,
+          title: c.title,
+          instance: c.instance,
+          tool: g.stalled.tool,
+          quietSecs: g.stalled.quietSecs,
+          why: g.stalled.why,
+        })
       continue
     }
     if (g.state === 'finished' && g.finished?.lane === 'archive-candidate') {

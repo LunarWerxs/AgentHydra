@@ -117,6 +117,35 @@ function diskTitleCountOf(profileDir: string, title: string): number {
   return n
 }
 
+/**
+ * Rename a chat through the app's own control - the one write a running app cannot undo.
+ *
+ * WHY THE COURIER NEEDS IT: the app renders an IMPORTED chat as 'Untitled' whatever its disk
+ * title says, so a chat the daemon just delivered into sits nameless in the owner's sidebar,
+ * against the naming law. Delivery itself does not depend on this (the actuator finds chats by
+ * content), so a failure here is reported, never fatal.
+ */
+export async function uiRenameChat(
+  profileDir: string,
+  renderedTitle: string,
+  newTitle: string,
+  run: (args: string[]) => Promise<{ code: number; out: string }> = runPs1,
+): Promise<{ ok: boolean; detail: string }> {
+  if (isGenericChatTitle(newTitle))
+    return { ok: false, detail: `refusing to rename to a generic name ('${newTitle}')` }
+  const { code, out } = await run([
+    '-Title',
+    renderedTitle,
+    '-Instance',
+    profileDir,
+    '-Action',
+    'Rename',
+    '-NewTitle',
+    newTitle,
+  ])
+  return { ok: code === 0, detail: out.trim() || `exit ${code}` }
+}
+
 export interface UiArchiveOutcome {
   /** The app's own Archive action fired and the tool saw the row leave the sidebar. */
   clicked: boolean

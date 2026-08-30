@@ -25,6 +25,7 @@ import { pendingDeliveries } from './deliveries'
 import { type FleetInstanceEntry, fleetInstances } from './fleet-instances'
 import { type FleetUsageEntry, fleetUsage } from './fleet-usage'
 import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
+import { type Hold, listHolds } from './holds'
 import { sessionMetaMap } from './instance-sessions'
 import { readLiveRegistry } from './live-registry'
 import { pathKey } from './path-key'
@@ -101,6 +102,10 @@ export interface PrestartReport {
   /** Actions the circuit breaker is currently holding back, so a suppressed loop is visible
    *  rather than looking like nothing needed doing. */
   suppressed: Array<{ kind: string; sessionId: string; attempts: number; retryAfter: string }>
+  /** Chats the owner has taken OFF automation (holds.ts). Listed every pass on purpose: a
+   *  hold that becomes invisible becomes permanent, and then a chat quietly stops being
+   *  worked without anyone remembering why. */
+  holds: Array<{ sessionId: string; reason: string; heldAt: string }>
   /** Prompts staged by past surfacings that NOBODY has delivered yet (deliveries.ts) -
    *  each one is a dormant chat waiting on a sender. Deliver these first. */
   pendingDeliveries: Array<{
@@ -129,6 +134,7 @@ export interface PrestartDeps extends SweepDeps {
     attempts: number
     retryAfter: string
   }>
+  holds?: () => Hold[]
   deliveries?: () => Array<{
     session_id: string
     prompt: string
@@ -224,6 +230,7 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
       crashedRows: [],
       waitForReset: [],
       needsJudgment: [],
+      stalled: [],
       ungated: [],
       unswept: [],
       deadlineHit: false,
@@ -263,6 +270,14 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
       instance: r.instance,
       step: 'judge-then-act',
       why: 'waiting on an answer - the ONE AI step: judge autonomous-vs-human, then chat_act with the decision',
+    })
+  for (const r of chats.stalled)
+    nextSteps.push({
+      sessionId: r.sessionId,
+      title: r.title,
+      instance: r.instance,
+      step: 'investigate',
+      why: `alive but looks STUCK on '${r.tool}' for ${Math.round(r.quietSecs / 60)}min - open it and look; a live chat is never acted on automatically`,
     })
   for (const r of chats.ungated)
     nextSteps.push({
@@ -366,6 +381,7 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
     )(),
     collisions: (deps.collisions ?? liveCollisions)(),
     suppressed: (deps.suppressed ?? suppressedChats)(),
+    holds: (deps.holds ?? listHolds)(),
     pendingDeliveries: pending,
     tookMs: Date.now() - started,
   }

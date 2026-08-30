@@ -16,6 +16,7 @@ const gateOf = (over: Partial<ChatGate>): ChatGate => ({
   live: null,
   crashed: null,
   finished: null,
+  stalled: null,
   ...over,
 })
 const finishedGate = (lane: FinishedLane) =>
@@ -366,4 +367,55 @@ test('a SURFACED chat clears its count - it becomes running, so it is self-limit
   }
   expect(checkBreaker('surface', 's2').attempts).toBe(0)
   db.query('delete from action_attempt_log').run()
+})
+
+test('a HELD chat is parked, not acted on, and the reason travels with the row', async () => {
+  const { deps, acted } = fixture({
+    gates: { arc: finishedGate('archive-candidate') },
+    meta: [{ key: 'arc' }],
+  })
+  deps.heldSession = () => ({
+    sessionId: 'arc',
+    reason: 'owner working it by hand',
+    heldAt: 'WHEN',
+  })
+  const report = await sweepGateActions({}, deps)
+  expect(acted).toEqual([])
+  expect(report.acted.archived).toBe(0)
+  expect(report.archiveRows[0]?.action).toBe('parked')
+  expect(report.archiveRows[0]?.why).toContain('owner working it by hand')
+})
+
+test('a hold outranks the breaker - it is checked first, so its reason is what gets reported', async () => {
+  const { db } = await import('../src/db')
+  const { ATTEMPT_CAP, noteAttempt } = await import('../src/breaker')
+  db.query('delete from action_attempt_log').run()
+  const { deps } = fixture({
+    gates: { arc: finishedGate('archive-candidate') },
+    meta: [{ key: 'arc' }],
+  })
+  for (let i = 0; i < ATTEMPT_CAP; i++) noteAttempt('archive', 'arc', Date.now())
+  deps.heldSession = () => ({ sessionId: 'arc', reason: 'parked mid-experiment', heldAt: 'WHEN' })
+  const report = await sweepGateActions({}, deps)
+  expect(report.archiveRows[0]?.why).toContain('parked mid-experiment')
+  db.query('delete from action_attempt_log').run()
+})
+
+test('a STALLED live chat is still left alone, but it is listed instead of hidden in a count', async () => {
+  const { deps, acted } = fixture({
+    gates: {
+      stuck: gateOf({
+        state: 'running',
+        live: { pid: 7, name: 'peer-a' },
+        stalled: { tool: 'Bash', quietSecs: 3600, why: 'no result after the call' },
+      }),
+      busy: gateOf({ state: 'running', live: { pid: 8, name: 'peer-b' } }),
+    },
+    meta: [{ key: 'stuck' }, { key: 'busy' }],
+  })
+  const report = await sweepGateActions({}, deps)
+  expect(acted).toEqual([])
+  expect(report.leftAlone).toBe(2)
+  expect(report.stalled.map((r) => r.sessionId)).toEqual(['stuck'])
+  expect(report.stalled[0]?.tool).toBe('Bash')
 })

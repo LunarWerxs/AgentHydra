@@ -14,6 +14,7 @@ const emptySweep = (over: Partial<SweepReport> = {}): SweepReport => ({
   crashedRows: [],
   waitForReset: [],
   needsJudgment: [],
+  stalled: [],
   ungated: [],
   unswept: [],
   deadlineHit: false,

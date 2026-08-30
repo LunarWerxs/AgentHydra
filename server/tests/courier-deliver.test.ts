@@ -1,16 +1,21 @@
 // server/tests/courier-deliver.test.ts - the courier's hands pinned: aim proof derived from
 // the target's OWN transcript, refusals that leave a row pending instead of guessing, and a
 // hard cap so one pass can never spray the fleet.
-import { expect, test } from 'bun:test'
+import { beforeEach, expect, test } from 'bun:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   type CourierDeliverDeps,
+  clearRecentlySent,
   deliverPendingRows,
   deriveVerifyText,
   distinctInstances,
 } from '../src/courier-deliver'
+
+// The post-send cooldown is module-global (one daemon process), so each test starts from a
+// clean slate - otherwise an earlier delivery silently suppresses a later test's.
+beforeEach(() => clearRecentlySent())
 
 const T0 = Date.parse('2026-08-30T12:00:00Z')
 
@@ -193,4 +198,74 @@ test('distinctInstances counts apps touched, case/slash-insensitively', () => {
       { instanceDir: null },
     ]),
   ).toBe(3)
+})
+
+test('a compaction-summary preamble is NEVER the aim proof - it is identical across chats', () => {
+  // ~8% of sessions open with Claude Code's synthetic "This session is being continued from
+  // a previous conversation..." record, flagged isCompactSummary. Using it would let the
+  // actuator verify itself against a DIFFERENT chat and type there (review-confirmed).
+  const p = transcript([
+    {
+      type: 'user',
+      isCompactSummary: true,
+      message: {
+        content: [
+          { type: 'text', text: 'This session is being continued from a previous conversation...' },
+        ],
+      },
+    },
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'Now fix the widget pipeline for real' }] },
+    },
+  ])
+  expect(deriveVerifyText(p)).toBe('Now fix the widget pipeline for real')
+})
+
+test('a row delivered moments ago is NOT re-sent - the receipt lags the send', async () => {
+  let sends = 0
+  const base = deps({
+    deliver: async () => {
+      sends++
+      return { ok: true, outcome: 'delivered', detail: 'DELIVERED' }
+    },
+  })
+  const first = await deliverPendingRows(base)
+  expect(first[0]?.outcome).toBe('delivered')
+  // The ledger still says pending (the app has not written the receipt yet) - a second pass
+  // must refuse rather than type the same prompt again.
+  const second = await deliverPendingRows(base)
+  expect(second[0]?.outcome).toBe('recently-sent')
+  expect(sends).toBe(1)
+})
+
+test('the cooldown is stamped only on SUCCESS - a refusal stays retryable', async () => {
+  let sends = 0
+  const base = deps({
+    deliver: async () => {
+      sends++
+      return { ok: false, outcome: 'chat-busy', detail: 'ABORT' }
+    },
+  })
+  await deliverPendingRows(base)
+  const second = await deliverPendingRows(base)
+  expect(second[0]?.outcome).toBe('chat-busy')
+  expect(sends).toBe(2)
+})
+
+test('the cooldown expires, so a genuinely undelivered row is retried later', async () => {
+  let t = 1_000_000
+  let sends = 0
+  const base = deps({
+    nowMs: () => t,
+    deliver: async () => {
+      sends++
+      return { ok: true, outcome: 'delivered', detail: 'DELIVERED' }
+    },
+  })
+  await deliverPendingRows(base)
+  t += 4 * 60_000 // past the 3-minute cooldown
+  const later = await deliverPendingRows(base)
+  expect(later[0]?.outcome).toBe('delivered')
+  expect(sends).toBe(2)
 })

@@ -812,6 +812,66 @@ export const TOOLS: McpEngineTool[] = [
     },
   },
   {
+    name: 'chat_rename',
+    description:
+      "RENAME a chat through the running app's own control - the one write that sticks while an " +
+      'app is open (an app holds its chat list in memory and re-saves over any file edit). Use ' +
+      'it on a chat the app renders as Untitled: an imported chat shows that way whatever its ' +
+      'disk title says, which both breaks the naming law and makes it UNDELIVERABLE, because ' +
+      'the courier aims by rendered name and reports those rows as no-title. Give it a real ' +
+      'name that says what the work is; generic names are refused. If the row on screen reads ' +
+      'differently from what the system thinks, pass current_title to name the visible row.',
+    inputSchema: S(
+      {
+        session_id: { type: 'string', description: 'The chat/session id to rename.' },
+        new_title: { type: 'string', description: 'The new name. Generic names are refused.' },
+        current_title: {
+          type: 'string',
+          description: "The row's CURRENT on-screen name, when it differs from the stored title.",
+        },
+      },
+      ['session_id', 'new_title'],
+    ),
+    run: (a) =>
+      api(`/api/chats/${encodeURIComponent(str(a.session_id))}/rename`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ new_title: a.new_title, current_title: a.current_title }),
+      }),
+  },
+  {
+    name: 'chat_hold',
+    description:
+      'TAKE ONE CHAT OFF AUTOMATION, or put it back. A held chat is skipped by every unattended ' +
+      'actuator - the gate sweep will not archive or surface it, and the courier will not type ' +
+      'into it - while everything else keeps running normally. Use it for a chat a person is ' +
+      'working by hand, one that is deliberately parked mid-experiment, or one the machinery ' +
+      'keeps getting wrong. A reason is REQUIRED and is quoted back everywhere the hold appears, ' +
+      'so nobody has to guess later why a chat stopped being worked. With no arguments: every ' +
+      'hold currently in force. Holds survive restarts and never expire - release is explicit.',
+    inputSchema: S({
+      session_id: { type: 'string', description: 'The chat/session id to hold or release.' },
+      reason: {
+        type: 'string',
+        description: 'Why it is being held. Required to place a hold; refused if empty.',
+      },
+      release: {
+        type: 'boolean',
+        description: 'true = put this chat back under automation instead of holding it.',
+      },
+    }),
+    run: (a) => {
+      if (a.session_id === undefined) return api('/api/holds')
+      const id = encodeURIComponent(str(a.session_id))
+      if (a.release === true) return api(`/api/sessions/${id}/release`, { method: 'POST' })
+      return api(`/api/sessions/${id}/hold`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ reason: a.reason }),
+      })
+    },
+  },
+  {
     name: 'chat_dossier',
     description:
       'ONE query, everything the system knows about a chat: which desktop instance holds it, its ' +

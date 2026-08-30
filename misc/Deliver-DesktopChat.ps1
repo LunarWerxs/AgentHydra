@@ -76,7 +76,7 @@ function Buttons($scope) {
 # Send/Stop are LOCALIZED ('Senden' on this box). Key off the known label set; the enabled
 # flip is what actually proves the app saw our text, so the label only has to find it.
 $SEND_NAMES = @('Send', 'Senden', 'Enviar', 'Envoyer', 'Invia', 'Verzenden')
-$STOP_NAMES = @('Stop', 'Stopp', 'Anhalten', 'Detener', 'Arrêter')
+$STOP_NAMES = @('Stop', 'Stopp', 'Anhalten', 'Detener', 'Arrêter', 'Interrompi', 'Stoppen')
 
 $mains = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
   Where-Object { $_.CommandLine -and $_.CommandLine -notmatch '--type=' } |
@@ -104,10 +104,16 @@ foreach ($m in $mains) {
   # RAIL 2: get the target chat ON SCREEN. It may ALREADY be the open conversation - an open
   # chat renders no selectable sidebar row (measured), so requiring a row would refuse the
   # easiest case. Ask the aim question first: is the target's own text already visible?
+  # The proof must be ON SCREEN, not merely present somewhere in the window's tree. The
+  # sidebar renders other chats' titles and preview snippets, so an un-scoped Contains() could
+  # "verify" against a DIFFERENT chat's preview and type into the wrong conversation
+  # (review-confirmed). IsOffscreen is UIA's own answer to exactly that.
   function TargetVisible($scope) {
     foreach ($e in $scope.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
       $n = $e.Current.Name
-      if ($n -and $n.Contains($VerifyText)) { return $true }
+      if (-not $n -or -not $n.Contains($VerifyText)) { continue }
+      try { if ($e.Current.IsOffscreen) { continue } } catch { continue }
+      return $true
     }
     return $false
   }
@@ -117,11 +123,25 @@ foreach ($m in $mains) {
   else {
     # Not open: select its row, matched ENDS-WITH the title (rows carry a status prefix like
     # 'Inaktiv <title>'), never the kebab.
-    $row = $null
+    # AMBIGUITY IS A REFUSAL, not a coin flip: a suffix match means chat 'Notes' also matches
+    # a row for 'My Notes', and taking the first hit in tree order would silently target the
+    # wrong chat (review-confirmed). Collect them all and refuse if more than one survives.
+    $rowMatches = @()
     foreach ($b in Buttons $el) {
       $n = $b.Current.Name
-      if ($n -and $n.EndsWith($Title) -and $n -notlike 'More options for *' -and $n -notlike '*Optionen*') { $row = $b; break }
+      if ($n -and $n.EndsWith($Title) -and $n -notlike 'More options for *' -and $n -notlike '*Optionen*') { $rowMatches += $b }
     }
+    if ($rowMatches.Count -gt 1) {
+      # An exact-name row (no status prefix) is unambiguous; otherwise refuse.
+      $exact = @($rowMatches | Where-Object { $_.Current.Name -eq $Title })
+      if ($exact.Count -eq 1) { $rowMatches = $exact }
+      else {
+        Write-Output ("REFUSED: '$Title' is ambiguous - " + $rowMatches.Count + " rendered rows end with it (" +
+          (($rowMatches | ForEach-Object { "'" + $_.Current.Name + "'" }) -join ', ') + ')')
+        exit 4
+      }
+    }
+    $row = if ($rowMatches.Count -eq 1) { $rowMatches[0] } else { $null }
     if ($row) {
       Write-Output "found '$Title' in $($m.Dir) (row '$($row.Current.Name)')"
       $inv = TryPattern $row ([System.Windows.Automation.InvokePattern]::Pattern)
@@ -212,7 +232,10 @@ foreach ($m in $mains) {
     $delivered = $true
   }
   if (-not $delivered) {
-    Write-Output "FAIL: the composer never reported the text (Send stayed disabled; was enabled before: $wasEnabled)"
+    # Leave nothing behind: an un-sent message sitting in the owner's composer is our litter,
+    # and worse, he could send it by hand later without context (review-confirmed).
+    try { $vp.SetValue('') } catch { }
+    Write-Output "FAIL: the composer never reported the text (Send stayed disabled; was enabled before: $wasEnabled) - composer cleared"
     exit 5
   }
   Write-Output "DELIVERED to '$Title' in $($m.Dir) (focus-free; row-verified before typing)"

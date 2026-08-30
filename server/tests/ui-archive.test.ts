@@ -2,7 +2,7 @@
 // it may only fire on a real disk title rendered exactly once, and success is verified BY ID
 // on disk, never by title (the drill-cleanup law).
 import { expect, test } from 'bun:test'
-import { parseListOutput, type UiArchiveDeps, uiArchiveChat } from '../src/ui-archive'
+import { parseListOutput, type UiArchiveDeps, uiArchiveChat, uiRenameChat } from '../src/ui-archive'
 
 function deps(over: {
   title?: string | null
@@ -132,4 +132,47 @@ test('a menu name that merely CONTAINS the title is not a match - only a suffix 
   const r = await uiArchiveChat('C:/i1', 'sid', d)
   expect(r.clicked).toBe(false)
   expect(calls).toEqual([])
+})
+
+// --- RENAME: the one write a running app cannot undo. It exists so an imported chat that the
+// app renders as 'Untitled' can be given a real name - which is also what makes it deliverable,
+// since the courier aims by rendered name.
+
+test('rename refuses a generic name - renaming Untitled to Untitled fixes nothing', async () => {
+  let ran = false
+  const r = await uiRenameChat('C:inst', 'Untitled', 'New chat', async () => {
+    ran = true
+    return { code: 0, out: '' }
+  })
+  expect(r.ok).toBe(false)
+  expect(ran).toBe(false)
+  expect(r.detail).toContain('generic')
+})
+
+test('rename names the CURRENT on-screen row and the new title, in the app it lives in', async () => {
+  let args: string[] = []
+  const r = await uiRenameChat('C:inst', 'Untitled', 'Courier ledger rebuild', async (a) => {
+    args = a
+    return { code: 0, out: 'renamed' }
+  })
+  expect(r.ok).toBe(true)
+  expect(args).toEqual([
+    '-Title',
+    'Untitled',
+    '-Instance',
+    'C:inst',
+    '-Action',
+    'Rename',
+    '-NewTitle',
+    'Courier ledger rebuild',
+  ])
+})
+
+test('a failed rename is reported as a failure, with whatever the tool said', async () => {
+  const r = await uiRenameChat('C:inst', 'Untitled', 'Real name', async () => ({
+    code: 3,
+    out: 'ambiguous: two rows match',
+  }))
+  expect(r.ok).toBe(false)
+  expect(r.detail).toContain('ambiguous')
 })

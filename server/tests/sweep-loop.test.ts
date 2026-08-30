@@ -21,6 +21,7 @@ const emptyReport = (): SweepReport => ({
   crashedRows: [],
   waitForReset: [],
   needsJudgment: [],
+  stalled: [],
   ungated: [],
   unswept: [],
   deadlineHit: false,

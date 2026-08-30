@@ -126,6 +126,17 @@ create table if not exists deliveries (
 -- COUNTED. A deterministic gate makes a wrong verdict unlikely; it does nothing about a
 -- correct verdict repeated forever. On disk, not in memory, because a restart is exactly what
 -- a storm tends to cause and an in-memory counter would forget at the worst moment.
+-- PER-CHAT AUTOMATION OPT-OUT (holds.ts, 2026-08-30, owner request). The fleet-wide switches
+-- are too blunt: turning the sweep off to protect ONE delicate thread abandons the other
+-- twenty. A hold stops the UNATTENDED machinery touching this chat; a directly requested deed
+-- still runs. The reason is stored because "why is nothing happening to this chat?" is the
+-- question a hold creates and it should answer itself weeks later.
+create table if not exists session_holds (
+  session_id text primary key,
+  reason     text not null,
+  held_at    integer not null
+);
+
 -- ⛔ EVERY ATTEMPT IS A ROW. The first cut keyed on (kind, session_id, at), which silently
 -- COLLAPSED attempts landing in the same millisecond into one - and a tight loop is exactly
 -- where repeats arrive that fast, so the counter under-counted precisely the case it exists to
