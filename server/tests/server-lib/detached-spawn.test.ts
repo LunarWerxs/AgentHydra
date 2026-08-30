@@ -55,6 +55,20 @@ test("win32: falls back to Start-Process (no cmd.exe reparse) — a leaked handl
   expect(script).toContain("exit 0");
 });
 
+test("win32: hideWindow adds ShowWindow=0 startup info for CONSOLE programs only", () => {
+  // Without it, WMI's default STARTUPINFO gives a console program a VISIBLE console window -
+  // every daemon auto-update relaunch popped one (found live 2026-08-30). GUI callers must not
+  // get it (ShowWindow=0 can hide a GUI app's own window), so it is strictly opt-in.
+  const hidden = buildDetachedSpawn("win32", [EXE, ...ARGS], { hideWindow: true }).argv[4]!;
+  expect(hidden).toContain("Win32_ProcessStartup");
+  expect(hidden).toContain("ShowWindow = [UInt16]0");
+  expect(hidden).toContain("ProcessStartupInformation");
+
+  const plain = buildDetachedSpawn("win32", [EXE, ...ARGS]).argv[4]!;
+  expect(plain).not.toContain("Win32_ProcessStartup");
+  expect(plain).not.toContain("ProcessStartupInformation");
+});
+
 test("win32: no-arg launch omits an empty -ArgumentList", () => {
   // Start-Process throws on an empty ArgumentList, so the single-exe case must not emit one.
   const script = buildDetachedSpawn("win32", [EXE]).argv[4]!;

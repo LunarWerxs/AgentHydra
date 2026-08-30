@@ -2593,7 +2593,12 @@ function relaunchDaemon(): boolean {
     // handoff, so a tray Quit (`taskkill /T /F`) landing in that window kills the outgoing daemon
     // AND its replacement, leaving the user with none. That hand-off is also why the relaunch
     // signal and the port ride as FLAGS above: WMI does not carry our environment block.
-    const plan = buildDetachedSpawn(process.platform, relaunchArgv)
+    // hideWindow: the successor is a CONSOLE program (bun), and WMI's default STARTUPINFO gives
+    // it a VISIBLE console on the owner's desktop at every auto-update - the recurring mystery
+    // "command prompt that says starting" (found live 2026-08-30). Same ShowWindow=0 mechanism
+    // the dispatch runner's WMI launch verified on 2026-07-15; closing such a stray console
+    // would also CTRL_CLOSE_EVENT-kill the daemon living in it.
+    const plan = buildDetachedSpawn(process.platform, relaunchArgv, { hideWindow: true })
     const child = spawn(plan.argv[0] as string, plan.argv.slice(1), {
       cwd: process.cwd(),
       detached: plan.detached,

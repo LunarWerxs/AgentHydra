@@ -30,9 +30,11 @@
  *   · Win32_Process.Create takes ONE CommandLine string, so argv is quoted back into a command line
  *     with the CommandLineToArgvW rules ({@link quoteWinArg}) rather than passed as an array.
  *   · It launches with a default STARTUPINFO, which means a CONSOLE program gets a VISIBLE console
- *     window. Every caller here launches a GUI app (browser, editor); do NOT route a console program
- *     (bun/node) through this without a Win32_ProcessStartup ShowWindow=0 — and note that setting
- *     ShowWindow=0 can also hide a GUI app's window, which is why it isn't set here.
+ *     window. A GUI caller (browser, editor) leaves `hideWindow` unset — ShowWindow=0 can also hide
+ *     a GUI app's window. A CONSOLE caller (a bun/node daemon relaunching itself) passes
+ *     `hideWindow: true`, which adds a Win32_ProcessStartup ShowWindow=0 to the WMI create —
+ *     without it, every auto-update relaunch popped a visible console hosting the successor daemon
+ *     (found live 2026-08-30: the owner's recurring mystery "command prompt that says starting").
  *   · If WMI is unavailable/blocked, the fallback below is a `Start-Process` in that same transient
  *     powershell — it replaced an older `cmd /c start ""` fallback (see the WHY NOT above) and keeps
  *     cmd.exe out of the path entirely. A second-choice hand-off beats a window that never opens.
@@ -86,9 +88,15 @@ export function quoteWinArg(arg) {
 /** Escape a string for a PowerShell single-quoted literal (the only metacharacter is `'`). */
 const psLiteral = (s) => `'${s.replace(/'/g, "''")}'`;
 
-export function buildDetachedSpawn(platform, argv) {
+export function buildDetachedSpawn(platform, argv, opts = {}) {
   if (platform === "win32") {
     const commandLine = argv.map(quoteWinArg).join(" ");
+    // See the header's WMI-quirks note: a console program needs ShowWindow=0 or WMI's default
+    // STARTUPINFO gives it a visible console; a GUI program must NOT get it (it can hide the
+    // app's own window). The caller knows which kind it is launching.
+    const wmiArguments = opts.hideWindow
+      ? `@{ CommandLine = ${psLiteral(commandLine)}; ProcessStartupInformation = (New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [UInt16]0 }) }`
+      : `@{ CommandLine = ${psLiteral(commandLine)} }`;
     // WMI first (detaches AND inherits no handles); a Start-Process fallback only if WMI refuses,
     // because a leaked handle is a far smaller failure than a process that never launches. `exit 0`
     // keeps a non-zero WMI ReturnValue from reaching the caller as a spawn failure once we've
@@ -117,7 +125,7 @@ export function buildDetachedSpawn(platform, argv) {
     const ps = [
       "$ErrorActionPreference = 'Stop'",
       "$rc = 1",
-      `try { $rc = (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${psLiteral(commandLine)} }).ReturnValue } catch { $rc = 1 }`,
+      `try { $rc = (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments ${wmiArguments}).ReturnValue } catch { $rc = 1 }`,
       `if ($rc -ne 0) { ${startProcess} }`,
       "exit 0",
     ].join("; ");

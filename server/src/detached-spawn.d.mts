@@ -19,6 +19,17 @@ export interface DetachedSpawn {
  */
 export function quoteWinArg(arg: string): string;
 
+export interface DetachedSpawnOptions {
+  /**
+   * Set when launching a CONSOLE program (a bun/node daemon relaunching itself): adds a
+   * Win32_ProcessStartup ShowWindow=0 to the WMI create, without which WMI's default STARTUPINFO
+   * gives the child a VISIBLE console window (every auto-update relaunch popped one, found live
+   * 2026-08-30). GUI callers (browser, editor) leave it unset — ShowWindow=0 can also hide a GUI
+   * app's own window. No effect on POSIX.
+   */
+  hideWindow?: boolean;
+}
+
 /**
  * Build the launch for `argv` (`[command, ...args]`) so the spawned child OUTLIVES the daemon (a
  * tray Quit / auto-update relaunch tree-kills the daemon). On win32 the launch is handed to WMI via a
@@ -29,4 +40,8 @@ export function quoteWinArg(arg: string): string;
  * tests. See the `.mjs` for the caller responsibilities around `%`/`^` and `.cmd`/`.bat` shims, and
  * for why a console program must not be routed through the win32 path.
  */
-export function buildDetachedSpawn(platform: NodeJS.Platform, argv: string[]): DetachedSpawn;
+export function buildDetachedSpawn(
+  platform: NodeJS.Platform,
+  argv: string[],
+  opts?: DetachedSpawnOptions,
+): DetachedSpawn;
