@@ -223,3 +223,61 @@ test('the census reports open instances with plan and usage, and the totals', as
   expect(r.instances.openCount).toBe(3)
   expect(r.instances.open[0]?.plan).toBe('Max 20×')
 })
+
+test('the health lane is fed the instance DIRECTORY, not the ref - the wiring itself is pinned', async () => {
+  // The first live run reported all 18 instances as "never signed in", including one that was
+  // open and answering, because prestart handed instance-health the `ref` ('desktop:<dir>' - a
+  // vocabulary, not a path) so every config.json lookup missed. Every unit test underneath passed:
+  // they are given a real directory, so only a test at THIS level can catch the wrong field.
+  const { mkdtempSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const real = mkdtempSync(join(tmpdir(), 'agenthydra-prestart-'))
+  writeFileSync(join(real, 'config.json'), JSON.stringify({ lastKnownAccountUuid: 'uuid-1' }))
+
+  const { d } = deps({})
+  d.instancesList = async () => [
+    {
+      num: 1,
+      name: 'signed-in',
+      label: null,
+      dir: real,
+      ref: `desktop:${real}`,
+      isRunning: false,
+      pid: null,
+      loginUuid: 'uuid-1',
+      signedIn: true,
+      account: null,
+    },
+  ]
+  // No `health` stub on purpose: the REAL collector must run, against the real directory.
+  const report = await prestartCheck(d)
+  expect(report.unusableInstances).toEqual([])
+})
+
+test('an instance with a DAMAGED profile is named as damaged, not as signed out', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const broken = mkdtempSync(join(tmpdir(), 'agenthydra-prestart-'))
+  writeFileSync(join(broken, 'config.json'), '{ half-written')
+
+  const { d } = deps({})
+  d.instancesList = async () => [
+    {
+      num: 4,
+      name: 'damaged',
+      label: null,
+      dir: broken,
+      ref: `desktop:${broken}`,
+      isRunning: false,
+      pid: null,
+      loginUuid: null,
+      signedIn: false,
+      account: null,
+    },
+  ]
+  const report = await prestartCheck(d)
+  expect(report.unusableInstances.map((h) => h.unusable?.reason)).toEqual(['profile-unreadable'])
+  expect(report.unusableInstances[0]?.num).toBe(4)
+})

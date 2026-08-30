@@ -400,7 +400,10 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
             instances.map((i) => ({
               ref: i.ref,
               num: i.num,
-              instanceDir: i.ref,
+              // `dir`, NEVER `ref`. The ref is 'desktop:<dir>' - a vocabulary, not a path - and
+              // passing it made every config.json lookup miss, so the first live run reported all
+              // 18 instances as "never signed in", including one that was open and answering.
+              instanceDir: i.dir,
               isRunning: i.isRunning,
               pid: i.pid,
               usagePct: usage.find((u) => norm(u.ref) === norm(i.ref))?.weeklyPct ?? null,
