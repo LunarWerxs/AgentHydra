@@ -89,32 +89,24 @@ export function courierTaskId(instanceDir: string): string {
   return `${TASK_PREFIX}${slug}-${hash6(norm)}`
 }
 
-/** A one-shot schedule: a concrete minute/hour/day/month in LOCAL time. It technically
- *  recurs yearly, but the daemon disarms the task the moment its rows clear, and the baked
- *  24h guard refuses stale delivery even if one slipped through. */
-export function oneShotCron(atMs: number): string {
-  const d = new Date(atMs)
-  return `${d.getMinutes()} ${d.getHours()} ${d.getDate()} ${d.getMonth() + 1} *`
+/**
+ * The scheduling instant of a task row we (or the app) wrote, or null when it carries none.
+ *
+ * ONE-SHOTS ARE `fireAt` EPOCH MS, NOT CRON (measured 2026-08-30 against the app's own
+ * main.log). A cron slot EXPIRES if its exact 60s tick is missed, so a single-minute cron
+ * one-shot is skipped forever the moment any startup gate defers that tick - which is why
+ * every early courier drill silently never fired. A `fireAt` has no missed-window expiry: the
+ * app retries it every tick until it fires, then auto-disables the row. No year-rollover
+ * arithmetic either, because an absolute timestamp cannot lose its year.
+ */
+export function taskFireAt(task: { fireAt?: number; cronExpression?: string }): number | null {
+  return typeof task.fireAt === 'number' && Number.isFinite(task.fireAt) ? task.fireAt : null
 }
 
-/** Read a one-shot cron back into the fire time it meant, relative to `nowMs`. The
- *  expression drops the year, so the correction is SYMMETRIC (review-confirmed one-way):
- *  a candidate >45 days in the future was written LAST year (armed Dec 31, read Jan 1),
- *  and one >45 days in the past means NEXT year (armed Dec 31 FOR Jan 1, read Dec 31).
- *  Null = not a shape we wrote. */
-export function parseOneShotCron(expr: string, nowMs: number): number | null {
-  const m = /^(\d{1,2}) (\d{1,2}) (\d{1,2}) (\d{1,2}) \*$/.exec(expr.trim())
-  if (!m) return null
-  const [min, hour, day, month] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
-  if (min > 59 || hour > 23 || day < 1 || day > 31 || month < 1 || month > 12) return null
-  const now = new Date(nowMs)
-  const WINDOW = 45 * 24 * 3600 * 1000
-  const candidate = new Date(now.getFullYear(), month - 1, day, hour, min).getTime()
-  if (candidate - nowMs > WINDOW)
-    return new Date(now.getFullYear() - 1, month - 1, day, hour, min).getTime()
-  if (nowMs - candidate > WINDOW)
-    return new Date(now.getFullYear() + 1, month - 1, day, hour, min).getTime()
-  return candidate
+/** Has this row already fired? The app stamps lastRunAt and disables a one-shot after its
+ *  run, so either is proof - and a fired row must never be read as "still armed". */
+export function taskHasFired(task: { lastRunAt?: number; enabled?: boolean }): boolean {
+  return typeof task.lastRunAt === 'number' || task.enabled === false
 }
 
 export interface CourierItem {
@@ -441,7 +433,7 @@ async function courierPassInner(
           items: due,
           nowMs: now,
         }),
-        cronExpression: oneShotCron(at),
+        fireAt: at,
         cwd: entry.dir,
       })
 
@@ -554,8 +546,10 @@ async function courierPassInner(
     const waitingWhy = `every ${existing ? 'remaining ' : ''}row is younger than ${COURIER_GRACE_MS / 60_000}min - the AI that surfaced it usually delivers first; the courier is the fallback`
 
     if (existing) {
-      const fireAt = parseOneShotCron(existing.cronExpression, now)
-      if (fireAt !== null && now < fireAt + COURIER_REARM_MS) {
+      const fireAt = taskFireAt(existing)
+      // A row the app already ran (lastRunAt stamped, or auto-disabled after its one-shot
+      // fire) is spent evidence, never "still armed" - fall through to the re-arm decision.
+      if (!taskHasFired(existing) && fireAt !== null && now < fireAt + COURIER_REARM_MS) {
         couriers.push({
           ...base(entry, items, due),
           state: 'already-armed',
@@ -579,10 +573,11 @@ async function courierPassInner(
         })
         continue
       }
-      // Fired long ago (or the schedule is not a shape we wrote) with due rows still
-      // pending: the arm-and-retry law - re-arm with a fresh time and the CURRENT due rows.
-      const whyPrefix =
-        fireAt === null
+      // Fired (or scheduled in a shape we do not write) with due rows still pending: the
+      // arm-and-retry law - re-arm with a fresh time and the CURRENT due rows.
+      const whyPrefix = taskHasFired(existing)
+        ? 'the armed courier already ran but rows are still pending - re-arming: '
+        : fireAt === null
           ? 'the armed schedule was not one of ours - rewriting: '
           : `a courier fired ${Math.round((now - fireAt) / 60_000)}min ago but rows are still pending - re-arming: `
       couriers.push(await armWith(entry, items, due, 'rearmed', whyPrefix))

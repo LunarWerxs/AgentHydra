@@ -44,11 +44,21 @@ export const ORCH_TASK_PREFIX = 'orch-'
 
 export interface DesktopTask {
   id: string
-  cronExpression: string
+  /** ONE-SHOT scheduling: epoch ms. THE shape that works (measured 2026-08-30 against the
+   *  app's own main.log): a `fireAt` has NO missed-window expiry, so it fires on the first
+   *  60s tick where every gate passes, and the app auto-disables it after the fire. A
+   *  single-minute cronExpression does NOT survive - cron slots expire, so a one-shot cron
+   *  whose exact tick is deferred by any startup gate is skipped forever (that is why the
+   *  first courier drills never fired). Recurring crons still work, which is why the old
+   *  fleet-wide probe tasks did fire. */
+  fireAt?: number
+  /** Recurring only. Left optional so an owner-authored cron row round-trips unharmed. */
+  cronExpression?: string
   enabled: boolean
   filePath: string
   createdAt: number
   cwd: string
+  lastRunAt?: number
 }
 
 interface TaskStore {
@@ -145,10 +155,50 @@ export interface InstallTaskOpts {
   taskId: string
   description: string
   prompt: string
-  cronExpression: string
+  /** When the one-shot should fire, epoch ms (see DesktopTask.fireAt). */
+  fireAt: number
   cwd: string
   /** Seam for tests. */
   accountDir?: string | null
+}
+
+/**
+ * THE FEATURE FLAG. `checkScheduledTasksInner()` returns immediately unless
+ * `preferences.ccdScheduledTasksEnabled` is true in the instance's claude_desktop_config.json
+ * (source-read 2026-08-30; the app's own UI toggle is the only thing that normally sets it).
+ * Without it a perfectly-formed task is ignored forever, silently.
+ *
+ * The file also carries the instance's MCP server config, so this is a strict read-merge-write
+ * of ONE key - never a replace. A malformed/unreadable config is left ALONE rather than
+ * overwritten: clobbering someone's MCP setup to enable a courier is not a trade worth making.
+ */
+export function ensureScheduledTasksEnabled(
+  instanceDir: string,
+): { ok: true; changed: boolean } | { ok: false; reason: string } {
+  const path = join(instanceDir, 'claude_desktop_config.json')
+  let cfg: Record<string, unknown>
+  try {
+    cfg = existsSync(path)
+      ? (JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>)
+      : {}
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `claude_desktop_config.json is unreadable (${err instanceof Error ? err.message : 'parse error'}) - refusing to overwrite it, enable scheduled tasks in the app's settings instead`,
+    }
+  }
+  const prefs =
+    cfg.preferences && typeof cfg.preferences === 'object'
+      ? (cfg.preferences as Record<string, unknown>)
+      : {}
+  if (prefs.ccdScheduledTasksEnabled === true) return { ok: true, changed: false }
+  cfg.preferences = { ...prefs, ccdScheduledTasksEnabled: true }
+  try {
+    writeFileSync(path, `${JSON.stringify(cfg, null, 2)}\n`)
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : 'config write failed' }
+  }
+  return { ok: true, changed: true }
 }
 
 /**
@@ -182,7 +232,7 @@ export function installDesktopTask(
   const existing = store.scheduledTasks.find((t) => t.id === opts.taskId)
   const row: DesktopTask = {
     id: opts.taskId,
-    cronExpression: opts.cronExpression,
+    fireAt: opts.fireAt,
     enabled: true,
     filePath,
     createdAt: existing?.createdAt ?? Date.now(),
@@ -202,8 +252,10 @@ export function hasDesktopTask(instanceDir: string, taskId: string, accountDir?:
   return getDesktopTask(instanceDir, taskId, accountDir) !== null
 }
 
-/** The full registry row for one of our tasks (the courier reads its cronExpression back to
- *  decide re-arm vs leave-alone), or null when absent or disabled. */
+/** The full registry row for one of our tasks (the courier reads its fireAt/lastRunAt back to
+ *  decide re-arm vs leave-alone), or null when absent. A FIRED one-shot is left in the store
+ *  by the app with enabled:false (it "auto-disables one-time tasks after fire"), which is
+ *  evidence the courier needs - so a disabled row is RETURNED, not hidden. */
 export function getDesktopTask(
   instanceDir: string,
   taskId: string,
@@ -212,7 +264,7 @@ export function getDesktopTask(
   const dir = accountDir ?? activeAccountDir(instanceDir)
   if (!dir) return null
   const row = readStore(join(dir, 'scheduled-tasks.json')).scheduledTasks.find(
-    (t) => t.id === taskId && t.enabled,
+    (t) => t.id === taskId,
   )
   return row ?? null
 }

@@ -12,8 +12,8 @@ import {
   type CourierDeps,
   courierPass,
   courierTaskId,
-  oneShotCron,
-  parseOneShotCron,
+  taskFireAt,
+  taskHasFired,
 } from '../src/courier'
 import type { DesktopTask, InstallTaskOpts } from '../src/desktop-tasks'
 import type { FleetInstanceEntry } from '../src/fleet-instances'
@@ -135,24 +135,24 @@ test('courierTaskId is ours, stable, and distinct per instance dir', () => {
   expect(courierTaskId('c:\\users\\x\\.claude-instances\\WORK')).toBe(a)
 })
 
-test('oneShotCron round-trips through parseOneShotCron at minute precision', () => {
-  const at = T0 + COURIER_FIRE_DELAY_MS
-  const parsed = parseOneShotCron(oneShotCron(at), T0)
-  expect(parsed).not.toBeNull()
-  expect(Math.abs((parsed as number) - at)).toBeLessThan(60_000)
+test('a one-shot is a fireAt TIMESTAMP, never a cron - cron slots expire, fireAt does not', () => {
+  // Measured 2026-08-30 against the app's own main.log: a single-minute cron one-shot is
+  // skipped forever the moment its exact tick is deferred; a fireAt row is retried every
+  // tick until it fires. This is why the first courier drills silently never delivered.
+  expect(taskFireAt({ fireAt: T0 + 60_000 })).toBe(T0 + 60_000)
+  // A recurring row (someone else's, or an old shape) carries no fireAt - not ours to read.
+  expect(taskFireAt({ cronExpression: '*/5 * * * *' })).toBeNull()
+  expect(taskFireAt({})).toBeNull()
+  expect(taskFireAt({ fireAt: Number.NaN })).toBeNull()
 })
 
-test('a fire time armed LAST year reads as the past, not eleven months ahead', () => {
-  const dec31 = new Date(2026, 11, 31, 23, 58).getTime()
-  const jan1 = new Date(2027, 0, 1, 12, 0).getTime()
-  const parsed = parseOneShotCron(oneShotCron(dec31), jan1)
-  expect(parsed).toBe(dec31)
-})
-
-test('parseOneShotCron refuses shapes we did not write', () => {
-  expect(parseOneShotCron('*/5 * * * *', T0)).toBeNull()
-  expect(parseOneShotCron('0 9 * * 1', T0)).toBeNull()
-  expect(parseOneShotCron('99 9 1 1 *', T0)).toBeNull()
+test('a FIRED row is spent evidence, never "still armed"', () => {
+  // The app stamps lastRunAt and auto-disables a one-shot after its run (log-confirmed:
+  // "Auto-disabled one-time task after fire"). Either signal means fired.
+  expect(taskHasFired({ lastRunAt: T0 })).toBe(true)
+  expect(taskHasFired({ enabled: false })).toBe(true)
+  expect(taskHasFired({ enabled: true })).toBe(false)
+  expect(taskHasFired({})).toBe(false)
 })
 
 test('the baked prompt carries the rows verbatim and every rule the run depends on', () => {
@@ -224,7 +224,7 @@ test('a due row at a RUNNING-IDLE instance arms via the cycle: quit, register, r
   expect(h.installs[0]?.instanceDir).toBe(i.dir)
   expect(h.installs[0]?.taskId).toBe(courierTaskId(i.dir))
   expect(h.installs[0]?.prompt).toContain('resume order')
-  expect(h.installs[0]?.cronExpression).toBe(oneShotCron(T0 + COURIER_FIRE_DELAY_MS))
+  expect(h.installs[0]?.fireAt).toBe(T0 + COURIER_FIRE_DELAY_MS)
   // The measured law: a RUNNING app clobbers external store rows, so the register happens
   // inside a quit -> install -> open cycle, in that order.
   expect(h.quits).toEqual([i.dir])
@@ -315,7 +315,7 @@ test('an armed courier that has not fired is left alone', async () => {
     instances: [i],
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 + 60_000),
+      fireAt: T0 + 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 60_000,
@@ -334,7 +334,7 @@ test('a courier that fired RECENTLY holds - its deliveries need time to settle',
     instances: [i],
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 - COURIER_REARM_MS + 60_000),
+      fireAt: T0 - COURIER_REARM_MS + 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -353,7 +353,7 @@ test('a courier that fired LONG ago with rows still pending RE-ARMS with the cur
     instances: [i],
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 - COURIER_REARM_MS - 60_000),
+      fireAt: T0 - COURIER_REARM_MS - 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -373,7 +373,7 @@ test('a CLOSED instance whose queue cleared is disarmed cold', async () => {
     instances: [i],
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 - 10 * 60_000),
+      fireAt: T0 - 10 * 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -392,7 +392,7 @@ test('a RUNNING instance whose queue cleared is disarm-PENDING - a file-remove w
     instances: [i],
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 - 10 * 60_000),
+      fireAt: T0 - 10 * 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -412,7 +412,7 @@ test('act:false PLANS the same lanes and writes NOTHING', async () => {
     instances: [i],
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 - COURIER_REARM_MS - 60_000),
+      fireAt: T0 - COURIER_REARM_MS - 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -524,7 +524,7 @@ test('the RE-ARM branch honors the grace window too - young rows never trigger a
     instances: [i],
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 - COURIER_REARM_MS - 60_000),
+      fireAt: T0 - COURIER_REARM_MS - 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -544,7 +544,7 @@ test('a failed install in the RE-ARM branch is also an ERROR lane', async () => 
     installOk: false,
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 - COURIER_REARM_MS - 60_000),
+      fireAt: T0 - COURIER_REARM_MS - 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -565,6 +565,7 @@ test('an existing task whose schedule is not ours is rewritten end-to-end', asyn
     existingTask: {
       id: courierTaskId(i.dir),
       cronExpression: '*/5 * * * *',
+      // no fireAt: a recurring row we did not write
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -585,7 +586,7 @@ test('a failed DISARM is an error lane, never a silent pass', async () => {
     removeOk: false,
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 - 10 * 60_000),
+      fireAt: T0 - 10 * 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -604,7 +605,7 @@ test('act:false PLANS a disarm and removes NOTHING', async () => {
     instances: [i],
     existingTask: {
       id: courierTaskId(i.dir),
-      cronExpression: oneShotCron(T0 - 10 * 60_000),
+      fireAt: T0 - 10 * 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -625,7 +626,7 @@ test('a signed-out instance with STUCK rows is never disarmed as if its queue cl
     instances: [signedOut],
     existingTask: {
       id: courierTaskId(signedOut.dir),
-      cronExpression: oneShotCron(T0 - 10 * 60_000),
+      fireAt: T0 - 10 * 60_000,
       enabled: true,
       filePath: 'f',
       createdAt: T0 - 3600_000,
@@ -655,14 +656,6 @@ test('a case/slash-variant instance_ref lands in the SAME courier as the canonic
   expect(report.couriers.length).toBe(1)
   expect(report.couriers[0]?.sessionIds.sort()).toEqual(['s-1', 's-2'])
   expect(report.unroutable.length).toBe(0)
-})
-
-test('a task armed just before midnight Dec 31 FOR January reads as imminent, not a year late', async () => {
-  // Review-confirmed one-way year correction: armed 23:59 Dec 31 2026 to fire 00:01 Jan 1
-  // 2027, then read back ten seconds later while it is still 2026.
-  const fire = new Date(2027, 0, 1, 0, 1).getTime()
-  const readAt = new Date(2026, 11, 31, 23, 59, 10).getTime()
-  expect(parseOneShotCron(oneShotCron(fire), readAt)).toBe(fire)
 })
 
 test('act:true runs inside the act serializer; planning never takes the lock', async () => {

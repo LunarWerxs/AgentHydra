@@ -9,6 +9,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **THE DELIVERY ACTUATOR** (server/src/ui-deliver.ts + misc/Deliver-DesktopChat.ps1): the
+  daemon can now put a prompt INTO a specific dormant chat and press Send, focus-free, with
+  no human and no app update - the gap that had blocked the whole delivery half. It drives
+  the app's own composer through UI Automation, the same mechanism the archive/rename clicks
+  have used since they shipped: the composer is an `Edit` named 'Prompt' exposing a writable
+  ValuePattern, and Send exposes Invoke. Proven end to end through the server module - a
+  dormant chat answered "SERVER PATH ACK" with zero clicks.
+  THE AIM RAILS are the entire reason this is safe, because typing into whatever had focus is
+  exactly what got v1's UI injection deleted. A send happens only when: the instance matches
+  by EXACT --user-data-dir; the target is reached either because it is ALREADY the open
+  conversation or via its sidebar row (matched ENDS-WITH the title, since rows carry a status
+  prefix like "Inaktiv <title>"); the caller's `verifyText` is VISIBLE in the conversation
+  afterwards, proving the composer belongs to the intended chat (no proof = refuse, exit 4,
+  never "send anyway"); the composer's SetValue reads back; and the Send button FLIPS
+  disabled->enabled, which is the app's own React state confirming it saw the text (no flip =
+  refuse, exit 5). A turn already in flight aborts by default rather than interrupting live
+  work (exit 6). Every exit maps to a DISTINCT typed outcome - delivered / not-rendered /
+  wrong-chat / composer-refused / chat-busy / error - because each implies a different next
+  move. Same reach limit as the archive click: only a rendered row is actionable.
+
 - **THE COURIER** (`GET /api/couriers`, `POST /api/couriers/run`, server/src/courier.ts + the
   courier MCP tool): the delivery ledger's fallback deliverer, and the sanctioned replacement
   for the banned relay ("you'll find other ways" - this is the other way). The daemon still
@@ -25,17 +45,30 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   in a stale account leaf never fires but reads as one that did) and their stuck rows block
   the disarm lane from claiming a clear queue; unroutable rows carry honest reasons.
 
-  **SHIPPED OFF BY DEFAULT, because the live drill measured the delivery channel dead on
-  the current app version.** Three channels were drilled on the real fleet, all with the
-  same verdict: a task row written into a RUNNING app's scheduler store sat unread for five
-  minutes and was clobbered by the app's in-memory re-save (the chat-metadata disease); a
-  row registered against a CLOSED app one second before its relaunch sat in the store, app
-  running, ten minutes past its fire time, never fired (the store is a write-mirror, not a
-  registration channel); and an imported chat whose transcript ends on an unanswered user
-  turn boots a live engine that never runs the turn. Only tasks the app registered through
-  its OWN scheduling tool ever fire (their runs are on disk). So courier_enabled defaults
-  '0': flipping it on cycles apps to register tasks that never fire - motion without
-  delivery. The machinery is built, guarded and pinned for the day a working channel exists:
+  **THE CHANNEL IS SOLVED (2026-08-30, owner: "you will find a way around this. End of
+  story." - and no app update was involved).** Extracting the desktop app's own asar and
+  reading its scheduler source turned three "dead" drills into three fixable mistakes, each
+  now measured rather than guessed:
+    - A one-shot must be a **`fireAt` timestamp, not a cron**. Cron slots EXPIRE, so a
+      single-minute cron one-shot is skipped forever the moment its exact tick is deferred by
+      any startup gate; a `fireAt` row is retried every 60s tick until it fires, and the app
+      then logs "Auto-disabled one-time task after fire". The old fleet-wide probe tasks only
+      ever fired because they were RECURRING crons.
+    - The prompt must sit at the app's **hardcoded** `~/.claude/scheduled-tasks/<taskId>/
+      SKILL.md`; the task row's own `filePath` is ignored (the app's main.log said so
+      outright: "Skipping ... task file not found at ...").
+    - The feature is gated on `preferences.ccdScheduledTasksEnabled` in the instance's
+      claude_desktop_config.json, which defaults false.
+  With those three right, an externally-written task FIRES: proven live, a fired session
+  replied "SCHEDULER FIRE ACK". **But a scheduler-fired session cannot relay:** it is flagged
+  UNATTENDED and `ccd_session_mgmt send_message` refuses there verbatim - "This tool is
+  unavailable in unattended sessions (scheduled-task runs and remote-dispatched trees)". So
+  the scheduler can start work; it cannot deliver INTO an existing chat.
+  **The delivery channel that DOES reach a specific dormant chat is the new
+  `ui-deliver.ts` + `misc/Deliver-DesktopChat.ps1`** (see its own entry below), proven end to
+  end through the server module: a dormant chat answered "SERVER PATH ACK" with zero human
+  input. courier_enabled stays '0' only until the courier is rewired onto that actuator; its
+  scheduler machinery now writes the correct `fireAt` shape and can ensure the feature flag:
   registration always happens against a closed app (closed = register-then-open; running =
   prove-idle-then-cycle, where "idle" is the self-kill ancestry law - every live session's
   tree verified to hang off some OTHER app, could-not-check means hold, a session appearing

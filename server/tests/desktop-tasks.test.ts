@@ -39,7 +39,7 @@ describe('desktop-tasks', () => {
       taskId: 'orch-courier-test',
       description: 'courier',
       prompt: 'do the thing',
-      cronExpression: '*/11 * * * *',
+      fireAt: 1_800_000_000_000,
       cwd: f.dir,
     })
     if (!res.ok) throw new Error(res.reason)
@@ -55,10 +55,10 @@ describe('desktop-tasks', () => {
     const row = store.scheduledTasks[0]
     expect(Object.keys(row).sort()).toEqual([
       'createdAt',
-      'cronExpression',
       'cwd',
       'enabled',
       'filePath',
+      'fireAt',
       'id',
     ])
     expect(row.enabled).toBe(true)
@@ -71,7 +71,7 @@ describe('desktop-tasks', () => {
       taskId: 'orch-courier-test',
       description: 'courier',
       prompt: 'updated body',
-      cronExpression: '*/11 * * * *',
+      fireAt: 1_800_000_000_000,
       cwd: f.dir,
     })
     const after = JSON.parse(readFileSync(join(f.live, 'scheduled-tasks.json'), 'utf8'))
@@ -105,7 +105,7 @@ describe('desktop-tasks', () => {
       taskId: 'orch-courier-test',
       description: 'c',
       prompt: 'p',
-      cronExpression: '*/11 * * * *',
+      fireAt: 1_800_000_000_000,
       cwd: f.dir,
     })
     const store = JSON.parse(readFileSync(join(f.live, 'scheduled-tasks.json'), 'utf8'))
@@ -127,7 +127,7 @@ describe('desktop-tasks', () => {
       taskId: 'orch-courier-test',
       description: 'c',
       prompt: 'p',
-      cronExpression: '*/11 * * * *',
+      fireAt: 1_800_000_000_000,
       cwd: dir,
     })
     expect(res.ok).toBe(false)
