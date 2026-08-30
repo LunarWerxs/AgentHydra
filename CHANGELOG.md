@@ -18,6 +18,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   account's running desktop app and archived there through the app's own UI.
 
 ### Added
+- **Piece 5 hardened by adversarial review (2 confirmed bypasses closed).** The queue's
+  auto-import path landed chats with a null or generic title, never passing the route
+  contract - the law now holds at the CHOKEPOINT: importSessionToDesktop itself refuses a
+  generic/missing title (no bypass flag), and the automated path resolves a real name
+  deterministically (row title, else the session list's title) or fails honestly in the
+  queue row. And generic names disguised with zero-width characters or doubled whitespace
+  ('Untitled' + U+200B, 'new  chat') now canonicalize before matching. Both pinned by
+  regression tests.
 - **Orchestrator rebuild, piece 5: the naming requirement** (server/src/chat-title.ts;
   owner directive: a chat must never land with a generic name). import-desktop and migrate
   now REQUIRE a title decision: `title` (a real, non-generic, non-plumbing name) or

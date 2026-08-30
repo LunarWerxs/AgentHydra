@@ -17,8 +17,18 @@ export const PLUMBING_CHAT_TITLE = /^\[orchestrator\]/i
 
 const MAX_TITLE_LEN = 200
 
+/** The form the generic patterns match against: zero-width/soft-hyphen characters stripped and
+ *  whitespace collapsed, so 'Untitled\u200b' and 'new  chat' cannot slip past an exact-match
+ *  regex while looking generic on screen (review-confirmed hole in the first cut). */
+function canonicalForMatch(title: string): string {
+  return title
+    .replace(/[\u200B-\u200D\uFEFF\u00AD]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export function isGenericChatTitle(title: string | null | undefined): boolean {
-  const t = (title ?? '').trim()
+  const t = canonicalForMatch(title ?? '')
   return t.length === 0 || GENERIC_CHAT_TITLE.test(t) || PLUMBING_CHAT_TITLE.test(t)
 }
 

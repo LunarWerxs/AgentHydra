@@ -720,11 +720,33 @@ export async function attemptDesktopImport(id: string, importer?: DesktopImporte
     // Dynamic import keeps session-launch (which pulls in core/instances) out of dispatch's module
     // graph at load time.
     const run = importer ?? (await import('./session-launch')).importSessionToDesktop
-    result = await run({
-      sessionId: row.session_id,
-      instanceDir: row.import_to.slice('desktop:'.length),
-      title: row.import_title,
-    })
+    // THE NAMING LAW (owner directive 2026-08-29): this automated path carries no AI to decide
+    // a name, so it resolves one deterministically - the row's stored title, else the session
+    // list's title for the thread - and when neither is a real name the import fails HONESTLY
+    // (visible in the queue row) instead of landing a chat called Untitled.
+    const { isGenericChatTitle } = await import('./chat-title')
+    let importTitle = row.import_title
+    if (isGenericChatTitle(importTitle)) {
+      try {
+        const { getSession } = await import('./sessions')
+        importTitle = (await getSession(row.session_id, 'claude'))?.title ?? importTitle
+      } catch {
+        // fall through to the generic check below
+      }
+    }
+    if (isGenericChatTitle(importTitle)) {
+      result = {
+        ok: false,
+        reason:
+          'title-required: no real name available for this chat (row and session list are both generic) - name it, then retry',
+      }
+    } else {
+      result = await run({
+        sessionId: row.session_id,
+        instanceDir: row.import_to.slice('desktop:'.length),
+        title: importTitle,
+      })
+    }
   } catch (err) {
     result = { ok: false, reason: err instanceof Error ? err.message : 'import-threw' }
   }

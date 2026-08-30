@@ -91,6 +91,7 @@ test('the desktop import plan targets one instance via its profile dir', () => {
 test('import refuses a non-running instance instead of booting it', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agenthydra-import-guard-'))
   const r = await importSessionToDesktop({
+    title: 'A real guard-test title',
     sessionId: 'no-such-session',
     instanceDir: dir,
     isLive: () => false,
@@ -99,6 +100,7 @@ test('import refuses a non-running instance instead of booting it', async () => 
   expect(r.ok).toBe(false)
   expect(r.reason).toContain('instance-not-running')
   const live = await importSessionToDesktop({
+    title: 'A real guard-test title',
     sessionId: 'no-such-session',
     instanceDir: dir,
     isLive: () => true,
@@ -394,6 +396,7 @@ test('isSessionSuperseded reads the done-mark ledger', () => {
 test('import refuses a done-marked lineage; force falls through to the next guard', async () => {
   markDone('lineage-b', true)
   const refused = await importSessionToDesktop({
+    title: 'A real guard-test title',
     sessionId: 'lineage-b',
     instanceDir: 'X:\\no-such-instance',
     isLive: () => false,
@@ -402,6 +405,7 @@ test('import refuses a done-marked lineage; force falls through to the next guar
   expect(refused.reason).toStartWith('superseded')
   // force: the lineage guard steps aside and the ordinary guards take over.
   const forced = await importSessionToDesktop({
+    title: 'A real guard-test title',
     sessionId: 'lineage-b',
     instanceDir: 'X:\\no-such-instance',
     isLive: () => false,
@@ -409,6 +413,19 @@ test('import refuses a done-marked lineage; force falls through to the next guar
   })
   expect(forced.reason).toBe('instance-dir-not-found')
   markDone('lineage-b', false)
+})
+
+test('the import chokepoint refuses a generic or missing title - the naming law has no bypass', async () => {
+  const { importSessionToDesktop } = await import('../src/session-launch')
+  for (const title of [null, undefined, '', 'Untitled', '[orchestrator] seeded']) {
+    const r = await importSessionToDesktop({
+      sessionId: 'any-session',
+      instanceDir: 'C:\nowhere',
+      title: title as string | null,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.reason).toContain('title-required')
+  }
 })
 
 test('a terminal resume of a done-marked lineage is refused before anything launches', async () => {

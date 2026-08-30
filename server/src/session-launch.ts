@@ -31,7 +31,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
-import { GENERIC_CHAT_TITLE, PLUMBING_CHAT_TITLE } from './chat-title'
+import { GENERIC_CHAT_TITLE, isGenericChatTitle, PLUMBING_CHAT_TITLE } from './chat-title'
 import { resolveClaudeExe } from './config'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
@@ -707,6 +707,16 @@ export async function importSessionToDesktop(opts: {
   /** Import a done-marked (superseded) lineage anyway. See isSessionSuperseded. */
   force?: boolean
 }): Promise<{ ok: boolean; reason?: string; titled?: boolean; titleDurable?: boolean }> {
+  // THE NAMING LAW HOLDS AT THE CHOKEPOINT (owner directive 2026-08-29), not only at the
+  // routes: adversarial review found the queue's auto-import landing chats with a null or
+  // generic title because it never passed through the route contract. Every caller now
+  // supplies a real name or the import refuses - there is no bypass flag on purpose.
+  if (isGenericChatTitle(opts.title))
+    return {
+      ok: false,
+      reason:
+        'title-required: a chat must not land with a generic or missing name (owner rule); resolve a real title first',
+    }
   if ((opts.isLive ?? sessionIsLive)(opts.sessionId))
     return { ok: false, reason: 'session-live: refusing to import under an active writer' }
   if (!opts.force && isSessionSuperseded(opts.sessionId))

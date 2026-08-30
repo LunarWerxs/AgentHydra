@@ -24,6 +24,15 @@ test('generic detection: the manufactured non-names, plumbing, and emptiness', (
     expect(isGenericChatTitle(t)).toBe(false)
 })
 
+test('zero-width and doubled-whitespace disguises of generic names are still generic', () => {
+  expect(isGenericChatTitle('Untitled​')).toBe(true)
+  expect(isGenericChatTitle('​Untitled')).toBe(true)
+  expect(isGenericChatTitle('new  chat')).toBe(true)
+  expect(isGenericChatTitle('New Session'.replace(' ', ' '))).toBe(true)
+  expect(isGenericChatTitle('General  Coding  Session')).toBe(true)
+  expect(resolveRequiredTitle({ title: 'Untitled​', currentTitle: null }).ok).toBe(false)
+})
+
 test('a real new title is accepted, trimmed', () => {
   const r = resolveRequiredTitle({ title: '  Fix the widget pipeline  ', currentTitle: null })
   expect(r).toEqual({ ok: true, title: 'Fix the widget pipeline' })
