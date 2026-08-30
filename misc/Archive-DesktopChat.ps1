@@ -39,13 +39,24 @@
 #   powershell -File misc/Archive-DesktopChat.ps1 -Title "..." -Instance 5claude
 #   powershell -File misc/Archive-DesktopChat.ps1 -Title "..." -Action Unarchive   # (only reaches
 #                                              a currently-rendered archived row)
+#   powershell -File misc/Archive-DesktopChat.ps1 -Title "..." -Action Rename -NewTitle "Real name"
 #   powershell -File misc/Archive-DesktopChat.ps1 -List -Instance 5claude          # rendered rows
+#
+# RENAME (piece 6 of the rebuild, proven live 2026-08-29): the app's own Rename control is the
+# ONE write a running app cannot undo (v1 measured every outside metadata write being re-saved
+# away), so this is how a landed chat's DISPLAYED name is fixed immediately. Mechanics: the
+# Rename menu item Invokes; the inline editor is an Edit named 'Rename' exposing ValuePattern
+# (SetValue is focus-free); the commit is a posted WM_KEYDOWN Enter to the render widget - no
+# global focus, no cursor. After committing, the app re-saves the metadata itself, so disk and
+# app memory AGREE on the name (verified). -NewTitle must be a real name: generic non-names are
+# refused here with the same patterns chat-title.ts owns (that file is canonical; keep in sync).
 #
 # Exit: 0 done (row left the sidebar) - 1 error - 2 invoked but row still present - 3 not rendered.
 param(
   [string]$Title,
   [string]$Instance = '',
-  [ValidateSet('Archive', 'Unarchive')][string]$Action = 'Archive',
+  [ValidateSet('Archive', 'Unarchive', 'Rename')][string]$Action = 'Archive',
+  [string]$NewTitle = '',
   [switch]$List
 )
 $ErrorActionPreference = 'Stop'
@@ -56,7 +67,20 @@ public static class Ax{
   [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr h, EnumFunc cb, IntPtr l);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int m);
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [In,Out,MarshalAs(UnmanagedType.IUnknown)] ref object p);
+  [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
   delegate bool EnumFunc(IntPtr h, IntPtr l);
+  static List<IntPtr> widgets(IntPtr top){
+    var ws = new List<IntPtr>();
+    EnumChildWindows(top, (h,l) => { var sb = new StringBuilder(256); GetClassName(h, sb, 256); if (sb.ToString().Contains("Chrome_RenderWidgetHostHWND")) ws.Add(h); return true; }, IntPtr.Zero);
+    return ws;
+  }
+  public static void PostEnter(IntPtr top){
+    foreach (var w in widgets(top)) {
+      PostMessageW(w, 0x0100, (IntPtr)0x0D, (IntPtr)0x001C0001);
+      System.Threading.Thread.Sleep(50);
+      PostMessageW(w, 0x0101, (IntPtr)0x0D, unchecked((IntPtr)(long)0xC01C0001));
+    }
+  }
   public static void Wake(IntPtr top){
     Guid g = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
     var ws = new List<IntPtr>();
@@ -81,6 +105,18 @@ $mains = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
   ForEach-Object { [pscustomobject]@{ ProcId = $_.ProcessId; Dir = ([regex]::Match($_.CommandLine, '--user-data-dir=("?)([^"]+?)\1(\s|$)').Groups[2].Value) } }
 if ($Instance) { $mains = @($mains | Where-Object { $_.Dir -like "*$Instance*" }) }
 if (-not $mains) { Write-Output "FAIL: no running Claude desktop instance matches '$Instance'"; exit 1 }
+
+if ($Action -eq 'Rename') {
+  # THE NAMING LAW (chat-title.ts is canonical; these mirror its patterns): a rename must land
+  # a real name. Canonicalize the same way: strip zero-width chars, collapse whitespace.
+  $canon = ($NewTitle -replace "[\u200B-\u200D\uFEFF\u00AD]", '') -replace '\s+', ' '
+  $canon = $canon.Trim()
+  if (-not $canon -or $canon -match '^(untitled|general coding session|new (chat|session))$' -or $canon -match '^\[orchestrator\]') {
+    Write-Output "FAIL: -NewTitle '$NewTitle' is a generic non-name (owner rule: real names only)"
+    exit 1
+  }
+  $NewTitle = $canon
+}
 
 foreach ($m in $mains) {
   $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$m.ProcId)
@@ -127,6 +163,42 @@ foreach ($m in $mains) {
   if (-not $inv) { Write-Output "FAIL: '$Action' item does not expose Invoke"; exit 1 }
   $inv.Invoke()
   Start-Sleep -Milliseconds 1200
+
+  if ($Action -eq 'Rename') {
+    # The inline editor: an Edit named 'Rename' exposing ValuePattern. SetValue is focus-free;
+    # the commit is a posted Enter to the render widget.
+    $hwndTop = [IntPtr]$win.Current.NativeWindowHandle
+    [Ax]::Wake($hwndTop); Start-Sleep -Milliseconds 800
+    # The editor may live under a sibling top-level pane, not the main window subtree - search
+    # every top-level element of this process (how the working probe found it).
+    $edit = $null
+    $ecEdit = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Rename')
+    foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+      foreach ($e in $t.FindAll($TREE, $ecEdit)) {
+        if ($e.Current.ControlType.ProgrammaticName -eq 'ControlType.Edit') { $edit = $e; break }
+      }
+      if ($edit) { break }
+    }
+    if (-not $edit) { Write-Output 'FAIL: rename editor did not open'; exit 1 }
+    $vp = TryPattern $edit ([System.Windows.Automation.ValuePattern]::Pattern)
+    if (-not $vp) { Write-Output 'FAIL: rename editor exposes no ValuePattern'; exit 1 }
+    # Commit loop: SetValue, verify the editor actually holds the new text, post Enter, check
+    # the row; retry up to 3 times (a posted keystroke can race the editor's first paint).
+    $renamed = $false
+    for ($try = 1; $try -le 3 -and -not $renamed; $try++) {
+      $vp.SetValue($NewTitle)
+      Start-Sleep -Milliseconds 500
+      $held = try { $vp.Current.Value } catch { '' }
+      if ($held -ne $NewTitle) { Start-Sleep -Milliseconds 500; continue }
+      [Ax]::PostEnter($hwndTop)
+      Start-Sleep -Milliseconds 1500
+      $el = Wake $hwndTop
+      $renamed = [bool](ByName $el "More options for $NewTitle")
+    }
+    if (-not $renamed) { Write-Output 'RENAME INVOKED but the row does not render the new name - report this'; exit 2 }
+    Write-Output "Rename done: '$Title' -> '$NewTitle' (focus-free; committed through the app, so disk and app memory agree)"
+    exit 0
+  }
 
   $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
   $still = [bool](ByName $el "More options for $Title")

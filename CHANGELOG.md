@@ -18,6 +18,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   account's running desktop app and archived there through the app's own UI.
 
 ### Added
+- **Orchestrator rebuild, piece 6: focus-free in-app RENAME** (misc/Archive-DesktopChat.ps1
+  -Action Rename -NewTitle; owner-picked - fixes the 'lands as Untitled in the running
+  window' display boundary). Drives the app's OWN Rename control: menu item Invoke, the
+  inline editor's ValuePattern.SetValue (focus-free), and a posted WM_KEYDOWN Enter to the
+  render widget as the commit - no SetForegroundWindow, no cursor. Because the app performs
+  the rename, it is the one name-write a running app cannot undo: disk and app memory agree
+  afterwards (verified live both directions). -NewTitle enforces the naming law (generic
+  non-names refused, canonicalized matching mirroring chat-title.ts). Commit loop verifies
+  the editor holds the text and retries the posted Enter (it can race the editor's first
+  paint); the editor is searched across every top-level pane (it can live outside the main
+  window subtree). Proven live on a disposable subject: imported titled, rendered generic
+  in-memory, renamed via the tool, row + disk both showing the new name, then archived.
+  Also: the five leftover v1 courier chats on the temp1 account were archived durably
+  (disk flags + a clean instance cycle via the lifecycle primitives).
+
 - **Piece 5 hardened by adversarial review (2 confirmed bypasses closed).** The queue's
   auto-import path landed chats with a null or generic title, never passing the route
   contract - the law now holds at the CHOKEPOINT: importSessionToDesktop itself refuses a
