@@ -138,6 +138,7 @@ import { fleetGit } from './fleet-git'
 import { fleetInstances } from './fleet-instances'
 import { fleetUsage } from './fleet-usage'
 import { actOnGate, parseActInput } from './gate-actions'
+import { parseSweepInput, sweepGateActions } from './gate-sweep'
 import { cleanupStaleUpdateArtifacts } from './github-updater'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
 import {
@@ -797,6 +798,15 @@ app.post('/api/chats/:id/act', async (c) => {
       404,
     )
   return c.json(result)
+})
+// --- the sweep (owner-authorized 2026-08-30) - see server/src/gate-sweep.ts -----------------
+// Gate every visible desktop chat (or the given ids) and act within caps, sequentially.
+// Caps of 0 make it a pure report. The needs-input lane is never auto-acted: the response
+// packages its evidence for the caller's judgment.
+app.post('/api/chats/sweep', async (c) => {
+  const parsed = parseSweepInput(await jsonBody(c))
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400)
+  return c.json(await sweepGateActions(parsed.opts))
 })
 app.get('/api/chats/dossier', (c) => {
   const q = c.req.query('q') ?? ''

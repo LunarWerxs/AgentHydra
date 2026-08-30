@@ -9,6 +9,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The SWEEP** (`POST /api/chats/sweep` + server/src/gate-sweep.ts + the chat_sweep MCP
+  tool): gate every visible desktop chat - or exactly the given ids - and act on the verdicts
+  in one call, sequentially, within caps (surface 3 by default, archive unlimited; 0s make a
+  lane report-only, and 0/0 is a genuinely pure report). Running and human-interrupted chats
+  are left alone; archive-candidates archive (with the click-through); crashed chats surface
+  with the EXACT resume prompt and instance in the row for the caller to deliver; usage-limit
+  crashes report their reset; the needs-input lane is packaged for the caller's judgment,
+  never auto-acted. A wall-clock deadline lists anything it cut off as unswept. Acts now hold
+  a PROCESS-WIDE lock (withActSerialized) shared by the sweep, the direct act route and the
+  auto-resume monitor's landing, so two callers can never drive the app's UIA menus or
+  Electron's single-instance import at the same moment - and an archive act re-checks the
+  live registry right before the UI click, skipping it when a person resumed the chat
+  mid-act. Adversarially reviewed pre-ship (11 confirmed findings fixed, 4 refuted): among
+  them, an empty session_ids list would have detonated into a fleet-wide sweep (now sweeps
+  nothing), surfaced rows lacked the very prompt the caller must deliver, rows echoed a stale
+  pre-act verdict, and one transcript imported into two instances was swept twice (now
+  deduped by resolved id - which the live drill then proved against the real fleet: 10 rows
+  became 9). Live: fleet-wide pure report over the real machine in ~360ms, and a scoped
+  acted sweep took a fabricated finished chat through archive-flag + the app's own Archive
+  click, verified by id.
+
 - **Three owner rulings on the act path, encoded (2026-08-30).** (1) Auto-archive under a
   RUNNING app now CLICKS the app's own Archive itself (server/src/ui-archive.ts driving
   misc/Manage-DesktopChat.ps1) so the chat leaves the sidebar immediately - with hard safety

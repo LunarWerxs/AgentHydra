@@ -603,13 +603,17 @@ async function deliverDesktopLanding(q: QueueItem): Promise<void> {
   try {
     // ONE definition of landing (gate-actions.ts): naming law, the picker with the owner's 85%
     // overflow rule, the boot-and-wait for a picked closed instance, then the import. Dynamic
-    // import because gate-actions imports this module's picker (no load-time cycle).
-    const { landSessionInDesktop } = await import('./gate-actions')
-    const landed = await landSessionInDesktop({
-      sessionId: q.session_id,
-      pinnedRef: q.instance_ref,
-      fallbackTitle: q.title,
-    })
+    // import because gate-actions imports this module's picker (no load-time cycle). Runs
+    // under the process-wide act lock so it can never interleave with a sweep's or a direct
+    // act's boot/import (review-confirmed race).
+    const { landSessionInDesktop, withActSerialized } = await import('./gate-actions')
+    const landed = await withActSerialized(() =>
+      landSessionInDesktop({
+        sessionId: q.session_id,
+        pinnedRef: q.instance_ref,
+        fallbackTitle: q.title,
+      }),
+    )
     // `completed` means the LANDING happened, never that the work ran: the chat is visible in
     // that app, waiting to be resumed there (zero-click delivery is a future piece).
     close(

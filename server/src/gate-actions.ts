@@ -40,6 +40,7 @@ import {
   desktopHomeFor,
   importSessionToDesktop,
   isSessionSuperseded,
+  liveSessionEntry,
 } from './session-launch'
 import { type UiArchiveOutcome, uiArchiveChat } from './ui-archive'
 
@@ -118,6 +119,8 @@ export interface GateActionDeps {
   home?: typeof desktopHomeFor
   /** The running-app UI archive click (ui-archive.ts) - seamed because it drives real UIA. */
   uiArchive?: (profileDir: string, sessionId: string) => Promise<UiArchiveOutcome>
+  /** Is the session live RIGHT NOW (an alive-pid registry entry)? The TOCTOU rail's read. */
+  liveNow?: (sessionId: string) => boolean
   pinnedRefFor?: (sessionId: string) => string | null
   /** How long to wait for a just-opened instance to reach running. */
   openWaitMs?: number
@@ -137,6 +140,7 @@ function real(deps: GateActionDeps) {
     superseded: deps.superseded ?? isSessionSuperseded,
     home: deps.home ?? desktopHomeFor,
     uiArchive: deps.uiArchive ?? uiArchiveChat,
+    liveNow: deps.liveNow ?? ((sid: string) => liveSessionEntry(sid) !== null),
     pinnedRefFor: deps.pinnedRefFor ?? instanceRefForSession,
     openWaitMs: deps.openWaitMs ?? 45_000,
     sleep: deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
@@ -248,11 +252,34 @@ export async function landSessionInDesktop(opts: {
   }
 }
 
+/** ONE deed at a time, process-wide (review-confirmed): concurrent acts - two sweeps, a sweep
+ *  plus a direct act, the monitor's landing - can drive the app's UIA menus or Electron's
+ *  single-instance import twice at once for the same chat. Every mutating entry point queues
+ *  here; landSessionInDesktop itself stays unlocked because it always runs UNDER this lock. */
+let actLock: Promise<void> = Promise.resolve()
+export function withActSerialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = actLock.then(fn)
+  actLock = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
 /**
  * The act call. Returns null when the session has no transcript (mirror of the gate's own
- * honesty: what cannot be gated cannot be acted on).
+ * honesty: what cannot be gated cannot be acted on). Serialized process-wide - see
+ * {@link withActSerialized}.
  */
-export async function actOnGate(
+export function actOnGate(
+  sessionId: string,
+  input: GateActionInput = {},
+  deps: GateActionDeps = {},
+): Promise<GateActionResult | null> {
+  return withActSerialized(() => actOnGateInner(sessionId, input, deps))
+}
+
+async function actOnGateInner(
   sessionId: string,
   input: GateActionInput = {},
   deps: GateActionDeps = {},
@@ -310,6 +337,17 @@ export async function actOnGate(
           'archived',
           'archive flag written and durable (no running app holds this chat in memory)',
           { archived: { profiles: r.hits.length, durable: true } },
+        )
+      // The TOCTOU rail (review-confirmed): between the gate's verdict and the click, a
+      // person can resume the chat - a live process means someone may be using it RIGHT NOW,
+      // and clicking Archive under them is exactly the wrong-chat class of harm. The flag
+      // write is reversible; the click waits.
+      if (d.liveNow(sessionId))
+        return res(
+          'archived',
+          'archive flag written, but the session became LIVE mid-act - the UI click was ' +
+            'skipped (a person may be using it); act again once it settles',
+          { archived: { profiles: r.hits.length, durable: false } },
         )
       // Owner ruling 2026-08-30 ("I will defer to your recommendation and say yes"): the
       // server itself retires the row through the running app's own UI, so the chat leaves
@@ -520,6 +558,7 @@ function dToDeps(d: ReturnType<typeof real>): GateActionDeps {
     superseded: d.superseded,
     home: d.home,
     uiArchive: d.uiArchive,
+    liveNow: d.liveNow,
     pinnedRefFor: d.pinnedRefFor,
     openWaitMs: d.openWaitMs,
     sleep: d.sleep,

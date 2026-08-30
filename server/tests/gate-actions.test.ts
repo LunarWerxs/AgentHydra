@@ -68,6 +68,7 @@ function fixture(over: {
   openFails?: boolean
   openStalls?: boolean
   uiClick?: { clicked: boolean; verified: boolean; reason?: string }
+  liveNow?: boolean
   archiveHits?: Array<{ profile: string; wasRunning: boolean; changed: boolean }>
   pinnedRef?: string | null
   importOk?: boolean
@@ -140,6 +141,7 @@ function fixture(over: {
       events.push(`uiarchive:${profileDir}`)
       return over.uiClick ?? { clicked: true, verified: true }
     },
+    liveNow: () => over.liveNow ?? false,
     openWaitMs: 5000,
     sleep: async () => {},
     now: () => (t += 100),
@@ -617,6 +619,41 @@ test('parseActInput pins the route contract: bad decisions 400, answers are capp
     expect(long.input.decision).toBe('autonomous')
     expect(long.input.answer?.length).toBe(8000)
   }
+})
+
+test('a session that turns LIVE mid-act skips the UI click - a person may be using it', async () => {
+  const { deps, events } = fixture({
+    gate: finishedGate('archive-candidate'),
+    archiveHits: [{ profile: 'C:/i1', wasRunning: true, changed: true }],
+    liveNow: true,
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('archived')
+  expect(r?.archived?.durable).toBe(false)
+  expect(r?.why).toContain('became LIVE')
+  expect(events).not.toContain('uiarchive:C:/i1')
+})
+
+test('acts are serialized process-wide - two concurrent calls never interleave', async () => {
+  const order: string[] = []
+  const make = (tag: string) => {
+    const { deps } = fixture({
+      gate: finishedGate('archive-candidate'),
+      archiveHits: [{ profile: 'C:/i2', wasRunning: false, changed: true }],
+    })
+    const inner = deps.archive
+    if (!inner) throw new Error('fixture always sets archive')
+    deps.archive = async (sid, archived) => {
+      order.push(`start:${tag}`)
+      await new Promise((res) => setTimeout(res, 5))
+      const r = await inner(sid, archived)
+      order.push(`end:${tag}`)
+      return r
+    }
+    return deps
+  }
+  await Promise.all([actOnGate('s-a', {}, make('a')), actOnGate('s-b', {}, make('b'))])
+  expect(order).toEqual(['start:a', 'end:a', 'start:b', 'end:b'])
 })
 
 // --- the picker itself, pure ---------------------------------------------------------------

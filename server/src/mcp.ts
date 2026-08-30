@@ -655,6 +655,50 @@ export const TOOLS: McpEngineTool[] = [
       }),
   },
   {
+    name: 'chat_sweep',
+    description:
+      'THE SWEEP: gate every visible desktop chat (or the given ids) and act on the verdicts ' +
+      'in one call - sequentially, within caps. Archive-candidates are archived (unlimited by ' +
+      'default; the click-through applies); crashed chats are surfaced up to max_surface ' +
+      '(default 3 - booting/importing is heavy); usage-limit crashes report their reset; ' +
+      'running and human-interrupted chats are left alone. Pass max_archive:0 and ' +
+      'max_surface:0 for a genuinely pure report. session_ids PRESENT means exactly those ' +
+      '(an empty list sweeps nothing); omit it for fleet-wide. A wall-clock deadline bounds ' +
+      'the call; anything cut off is listed in `unswept` - re-sweep to continue. TWO ' +
+      'obligations land on YOU afterwards: (1) each needsJudgment row is the one AI step - ' +
+      "read its lastAssistantText, decide autonomous (the owner's preference when the answer " +
+      'is determinable) or human, and chat_act each with your decision; (2) every surfaced ' +
+      'crashedRows row carries the EXACT `prompt` and the `surfacedIn` instance - the chat ' +
+      "is DORMANT until you deliver that prompt text through the app's native message " +
+      'channel, or the resume never actually happens.',
+    inputSchema: S({
+      session_ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Restrict the sweep to these transcript session ids (drills, targeted cleanups).',
+      },
+      max_archive: {
+        type: 'number',
+        description: 'Archive-lane cap; 0 = report only. Omit for unlimited (the default).',
+      },
+      max_surface: {
+        type: 'number',
+        description: 'Surface-lane cap; 0 = report only. Default 3.',
+      },
+    }),
+    run: (a) =>
+      api('/api/chats/sweep', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          session_ids: a.session_ids,
+          max_archive: a.max_archive,
+          max_surface: a.max_surface,
+        }),
+      }),
+  },
+  {
     name: 'chat_dossier',
     description:
       'ONE query, everything the system knows about a chat: which desktop instance holds it, its ' +
