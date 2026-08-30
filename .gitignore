@@ -6,7 +6,11 @@ data/
 .DS_Store
 .env
 .env.local
-.claude/
+# Local AI working state stays local (codemap index, memory, launch config, harnesses) - but the
+# SLASH COMMANDS ship: they are how a person operates this daemon, and a rule that lives on one
+# machine is not a rule the team has. Same idiom as .arkitect below.
+/.claude/*
+!/.claude/commands/
 # Architect: run output stays local; the config + custom checks (your-checks/) are committed
 # owner-owned tooling (the reusable guardrail checks live there). The core is fetched by npx.
 .arkitect/*

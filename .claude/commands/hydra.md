@@ -1,0 +1,34 @@
+---
+description: Run the AgentHydra orchestrator pass - census, gate every chat, act on the verdicts, deliver what was staged
+---
+
+Operate the fleet through AgentHydra's own MCP tools. Extra instructions, if any: $ARGUMENTS
+
+Work in this order and do not skip step 1 - acting on a chat without gating it first is the one
+thing this system forbids.
+
+1. **`prestart`** - the census and the pre-check, in the required order: how many instances are
+   open, then every chat across them, gated, nothing touched. STOP AND INVESTIGATE if
+   `sanity.plausible` is false; one or zero open instances means detection is broken, not that the
+   fleet is quiet, and a census that starts wrong poisons every decision after it.
+
+2. **Read every lane before acting.** `nextSteps` is the ordered answer per chat. Also read:
+   `stalled` (live chats stuck on a shell command nobody is present to approve - open and LOOK,
+   never act), `holds` (chats deliberately off automation, with the reason), `handoffSoon` (nearly
+   full context - hand off while they can still summarise themselves), `collisions` (live chats
+   sharing one working tree), `suppressed` (the circuit breaker holding back a futile loop), and
+   `pendingDeliveries` (staged prompts nobody has sent - these come first).
+
+3. **`chat_sweep`** to act on the verdicts within caps. Then work the two things it hands back to
+   you: each `needsJudgment` row is YOUR call (autonomous vs human - the owner prefers autonomous
+   whenever the answer is determinable), and each surfaced chat is DORMANT until its prompt is
+   delivered.
+
+4. **`courier { run: true }`** to deliver staged prompts by driving each chat's own composer.
+   Check `capHit` / `notAttempted` - a capped pass is not a finished queue.
+
+5. Report what changed in plain English. Name any chat you left alone and why.
+
+**Never act on a live chat.** **Never archive a chat contradicting a live process** - read its tail
+and clear the false mark instead. Repo-level questions ("which PROJECT should I pick up") are not
+this tool's job: that is Odin, in its own clone.

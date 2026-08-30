@@ -77,6 +77,9 @@ function Buttons($scope) {
 # flip is what actually proves the app saw our text, so the label only has to find it.
 $SEND_NAMES = @('Send', 'Senden', 'Enviar', 'Envoyer', 'Invia', 'Verzenden')
 $STOP_NAMES = @('Stop', 'Stopp', 'Anhalten', 'Detener', 'Arrêter', 'Interrompi', 'Stoppen')
+# Only a TIE-BREAK, never the primary lookup: the composer is found structurally (RAIL 4). This
+# list exists solely to pick between two writable boxes when both are on screen.
+$PROMPT_NAMES = @('Prompt', 'Eingabe', 'Nachricht', 'Message', 'Mensaje', 'Messaggio', 'Bericht')
 
 $mains = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
   Where-Object { $_.CommandLine -and $_.CommandLine -notmatch '--type=' } |
@@ -108,14 +111,19 @@ foreach ($m in $mains) {
   # sidebar renders other chats' titles and preview snippets, so an un-scoped Contains() could
   # "verify" against a DIFFERENT chat's preview and type into the wrong conversation
   # (review-confirmed). IsOffscreen is UIA's own answer to exactly that.
+  # Returns the MATCHING ELEMENT (truthy) or $null, not merely a boolean: RAIL 4 needs to know
+  # WHERE the proof was found, because a window can hold two chat panes side by side and each has
+  # its own composer (measured 2026-08-30: one real window, two writable Edits both named
+  # 'Prompt', 308x44 each at x=995 and x=1423). Verifying in one pane and then typing into "the"
+  # composer is how a proven aim still ends up in the wrong conversation.
   function TargetVisible($scope) {
     foreach ($e in $scope.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
       $n = $e.Current.Name
       if (-not $n -or -not $n.Contains($VerifyText)) { continue }
       try { if ($e.Current.IsOffscreen) { continue } } catch { continue }
-      return $true
+      return $e
     }
-    return $false
+    return $null
   }
   if (TargetVisible $el) {
     Write-Output "'$Title' is already the open conversation in $($m.Dir)"
@@ -126,10 +134,19 @@ foreach ($m in $mains) {
     # AMBIGUITY IS A REFUSAL, not a coin flip: a suffix match means chat 'Notes' also matches
     # a row for 'My Notes', and taking the first hit in tree order would silently target the
     # wrong chat (review-confirmed). Collect them all and refuse if more than one survives.
+    # THE KEBAB IS EXCLUDED BY WHAT IT IS, NOT BY WHAT IT IS CALLED. This used to test the name
+    # against two literals ('More options for *' and '*Optionen*') in a file that supports six
+    # languages everywhere else - so on a French, Spanish, Italian or Dutch app the kebab's own
+    # name ALSO ends with the chat title, both survive, and the ambiguity guard below then refuses
+    # the delivery outright. The sibling script settled this months ago: the kebab exposes
+    # ExpandCollapse, the row itself exposes Invoke. The pattern identifies it, in every language.
     $rowMatches = @()
     foreach ($b in Buttons $el) {
       $n = $b.Current.Name
-      if ($n -and $n.EndsWith($Title) -and $n -notlike 'More options for *' -and $n -notlike '*Optionen*') { $rowMatches += $b }
+      if (-not $n -or -not $n.EndsWith($Title)) { continue }
+      if (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)) { continue }
+      if (-not (TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern))) { continue }
+      $rowMatches += $b
     }
     if ($rowMatches.Count -gt 1) {
       # An exact-name row (no status prefix) is unambiguous; otherwise refuse.
@@ -195,7 +212,8 @@ foreach ($m in $mains) {
   # Invoke silently no-opped, the target's own still-rendered SIDEBAR PREVIEW satisfied this
   # check and the prompt went into whatever chat happened to be open. Found by an adversarial
   # audit 2026-08-30, after the offscreen fix had already been applied - to one copy.
-  if (-not (TargetVisible $el)) {
+  $proof = TargetVisible $el
+  if (-not $proof) {
     Write-Output "REFUSED: after selecting '$Title' the conversation does not show the expected text - not typing into the wrong chat"
     exit 4
   }
@@ -205,18 +223,79 @@ foreach ($m in $mains) {
   foreach ($b in Buttons $el) { if ($STOP_NAMES -contains $b.Current.Name) { $stop = $b; break } }
   if ($stop -and $IfBusyAbort) { Write-Output 'ABORT: this chat has a turn in flight (Stop button present)'; exit 6 }
 
-  # RAIL 4: the composer.
-  $prompt = $null
-  foreach ($e in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
-    if ($e.Current.ControlType.ProgrammaticName -eq 'ControlType.Edit' -and $e.Current.Name -eq 'Prompt') { $prompt = $e; break }
+  # RAIL 4: the composer, found STRUCTURALLY.
+  # ⛔ IT USED TO BE `Name -eq 'Prompt'`, a bare English literal in a file that carries six-language
+  # lists for Send and Stop - so on the owner's GERMAN app the whole delivery channel would have
+  # exited 5 and typed nothing, forever, while every other rail worked. The sibling script already
+  # proved these Edit names ARE localized ('Sitzungsname' for the rename editor), so the string was
+  # never safe. What actually identifies the composer is what it IS: an on-screen Edit you can
+  # write to. That is language-independent, and on a chat window it is normally unique.
+  function WritableEdits($scope) {
+    $out = @()
+    foreach ($e in $scope.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+      if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.Edit') { continue }
+      try { if ($e.Current.IsOffscreen) { continue } } catch { continue }
+      $p = TryPattern $e ([System.Windows.Automation.ValuePattern]::Pattern)
+      if ($p -and -not $p.Current.IsReadOnly) { $out += $e }
+    }
+    return $out
   }
-  if (-not $prompt) { Write-Output 'FAIL: composer (Edit named Prompt) not found'; exit 5 }
+
+  # FIRST, AND THIS IS THE ONE THAT MATTERS: climb from the ELEMENT that proved our aim until we
+  # reach the smallest container that also holds a writable box. That box belongs to the same pane
+  # as the proof, which is the whole guarantee this script exists to make. Without it, a window
+  # showing two conversations side by side verifies in one pane and types into whichever composer
+  # happens to come first in tree order - a proven aim landing in the wrong chat.
+  $prompt = $null
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $node = $proof
+  for ($up = 0; $up -lt 12 -and $node -ne $null; $up++) {
+    $here = WritableEdits $node
+    if ($here.Count -eq 1) { $prompt = $here[0]; break }
+    if ($here.Count -gt 1) { break }  # this ancestor already spans both panes - stop climbing
+    try { $node = $walker.GetParent($node) } catch { break }
+  }
+
+  if (-not $prompt) {
+    # The proof's own subtree told us nothing (a flat tree, or the proof sits outside the pane).
+    # Fall back to the window: one writable box on screen is unambiguous by itself.
+    $writable = WritableEdits $el
+    if ($writable.Count -eq 1) { $prompt = $writable[0] }
+    elseif ($writable.Count -gt 1) {
+      $named = @($writable | Where-Object { $PROMPT_NAMES -contains $_.Current.Name })
+      if ($named.Count -eq 1) { $prompt = $named[0] }
+      else {
+        Write-Output ('REFUSED: ' + $writable.Count + ' writable text boxes are on screen and none could be tied to the verified conversation (' +
+          (($writable | ForEach-Object { "'" + $_.Current.Name + "'" }) -join ', ') + ') - not typing into a guess')
+        exit 5
+      }
+    }
+  }
+  if (-not $prompt) { Write-Output 'FAIL: no writable text box on screen - the composer was not found'; exit 5 }
   $vp = TryPattern $prompt ([System.Windows.Automation.ValuePattern]::Pattern)
   if (-not $vp -or $vp.Current.IsReadOnly) { Write-Output 'FAIL: composer is not writable'; exit 5 }
 
   # RAIL 5: SetValue, then require the Send button to FLIP enabled (React saw the text).
-  $sendBtn = $null
-  foreach ($b in Buttons $el) { if ($SEND_NAMES -contains $b.Current.Name) { $sendBtn = $b; break } }
+  # THE SEND BUTTON MUST BE THE COMPOSER'S OWN. A two-pane window has two of them, and taking the
+  # first in tree order means typing into one pane and watching the other pane's button for the
+  # enabled flip - which never comes, so a delivery that actually landed reports as failed and the
+  # courier retries it. Climb from the composer to the nearest container that holds a Send button.
+  function SendScopeFor($edit) {
+    $w = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $n = $edit
+    for ($u = 0; $u -lt 12 -and $n -ne $null; $u++) {
+      foreach ($b in Buttons $n) { if ($SEND_NAMES -contains $b.Current.Name) { return $n } }
+      try { $n = $w.GetParent($n) } catch { break }
+    }
+    return $null
+  }
+  function SendIn($scope) {
+    foreach ($b in Buttons $scope) { if ($SEND_NAMES -contains $b.Current.Name) { return $b } }
+    return $null
+  }
+  $sendScope = SendScopeFor $prompt
+  if (-not $sendScope) { $sendScope = $el }
+  $sendBtn = SendIn $sendScope
   $wasEnabled = if ($sendBtn) { $sendBtn.Current.IsEnabled } else { $false }
   $delivered = $false
   for ($try = 1; $try -le 3 -and -not $delivered; $try++) {
@@ -224,8 +303,11 @@ foreach ($m in $mains) {
     Start-Sleep -Milliseconds 700
     [AxD]::Wake($hwnd); Start-Sleep -Milliseconds 300
     $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
-    $sendBtn = $null
-    foreach ($b in Buttons $el) { if ($SEND_NAMES -contains $b.Current.Name) { $sendBtn = $b; break } }
+    # Re-read within the composer's own scope. The refreshed tree invalidates the old handles, so
+    # re-derive the scope from the composer rather than reusing a stale container.
+    $rescope = SendScopeFor $prompt
+    if (-not $rescope) { $rescope = $el }
+    $sendBtn = SendIn $rescope
     if (-not $sendBtn) { Start-Sleep -Milliseconds 500; continue }
     if (-not $sendBtn.Current.IsEnabled) { Start-Sleep -Milliseconds 500; continue }
     $si = TryPattern $sendBtn ([System.Windows.Automation.InvokePattern]::Pattern)

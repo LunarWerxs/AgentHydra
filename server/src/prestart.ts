@@ -26,6 +26,7 @@ import { type FleetInstanceEntry, fleetInstances } from './fleet-instances'
 import { type FleetUsageEntry, fleetUsage } from './fleet-usage'
 import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
 import { type Hold, listHolds } from './holds'
+import { fleetHealth, type InstanceHealth, unusableInstances } from './instance-health'
 import { sessionMetaMap } from './instance-sessions'
 import { readLiveRegistry } from './live-registry'
 import { pathKey } from './path-key'
@@ -106,6 +107,11 @@ export interface PrestartReport {
    *  hold that becomes invisible becomes permanent, and then a chat quietly stops being
    *  worked without anyone remembering why. */
   holds: Array<{ sessionId: string; reason: string; heldAt: string }>
+  /** INSTANCES THAT CANNOT DO WORK, with the reason (instance-health.ts). Said ONCE per account
+   *  here rather than discovered one failed chat at a time: a wedged app, a damaged profile and a
+   *  signed-out app all used to surface as the same guess. 'Closed' is never listed - a closed
+   *  app is this fleet's resting state, not a fault. */
+  unusableInstances: InstanceHealth[]
   /** Prompts staged by past surfacings that NOBODY has delivered yet (deliveries.ts) -
    *  each one is a dormant chat waiting on a sender. Deliver these first. */
   pendingDeliveries: Array<{
@@ -135,6 +141,7 @@ export interface PrestartDeps extends SweepDeps {
     retryAfter: string
   }>
   holds?: () => Hold[]
+  health?: () => InstanceHealth[]
   deliveries?: () => Array<{
     session_id: string
     prompt: string
@@ -382,6 +389,25 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
     collisions: (deps.collisions ?? liveCollisions)(),
     suppressed: (deps.suppressed ?? suppressedChats)(),
     holds: (deps.holds ?? listHolds)(),
+    // Asked of EVERY known instance, not just the open ones: a signed-out or damaged profile is
+    // exactly as unusable while the app is closed, and it is the reason a later boot would fail.
+    // The responsiveness probe runs once for the whole fleet, not once per instance.
+    unusableInstances: unusableInstances(
+      (
+        deps.health ??
+        (() =>
+          fleetHealth(
+            instances.map((i) => ({
+              ref: i.ref,
+              num: i.num,
+              instanceDir: i.ref,
+              isRunning: i.isRunning,
+              pid: i.pid,
+              usagePct: usage.find((u) => norm(u.ref) === norm(i.ref))?.weeklyPct ?? null,
+            })),
+          ))
+      )(),
+    ),
     pendingDeliveries: pending,
     tookMs: Date.now() - started,
   }

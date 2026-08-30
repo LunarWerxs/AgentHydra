@@ -7,7 +7,44 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **The fleet can now say "this account cannot do work, and here is why" ONCE, instead of finding
+  out one failed chat at a time.** It knew three separate things - closed, signed out, near its
+  usage cap - in three files, so an act reported whichever its own code path happened to read.
+  There is now a single verdict per instance, and it carries a signal that did not exist at all:
+  **whether the app is actually answering**. `isRunning` was a process id, and a wedged Electron
+  app keeps its process id and its config file, so a hung instance reported as perfectly healthy
+  while every act against it failed. It also stops confusing a DAMAGED profile with a signed-out
+  one - a half-written config file used to be announced as "sign it in", sending you to fix a
+  login that was never broken. Closed is deliberately never a fault (it is this fleet's resting
+  state), and a probe that could not run reports UNKNOWN, never "fine".
+
+- **Slash commands, so operating this thing is not folklore.** `/hydra` runs the orchestrator pass
+  in the required order, `/hydra-status` reports everything and touches nothing, `/hydra-check`
+  runs every gate this repo has including its own CI locally. They ship with the repo now - the
+  ignore rule was hiding them on one machine, which is the same defect as a memory that only one
+  person can read.
+
 ### Fixed
+
+- **The delivery driver was still English-only where it mattered most, and a second audit caught
+  it.** The composer - the box the whole channel types into - was found by the literal name
+  `Prompt`, in a file that carries six-language lists for every other control. On a German app
+  delivery would have failed at that exact line, forever, with every other rail working
+  perfectly. It is now found by what it IS (an on-screen text box you can write to), which needs
+  no language at all. The chat-row match had the same shape - it excluded the menu button by two
+  hardcoded prefixes, English and German, so a French or Spanish app would have seen the menu and
+  the row as equally valid and refused the delivery as ambiguous. It now uses the structural test
+  the sibling script settled months ago.
+
+  **And probing the real app for that fix turned up something worse.** One window had TWO
+  composers, because it was showing two conversations side by side - and the code took whichever
+  came first, so it could verify the right chat and then type into the other one. The composer is
+  now found by climbing from the proof itself to the pane that contains it, and the Send button
+  the same way. Verified against the live app: text in the left pane resolves to the left
+  composer, the right to the right, and a match found in the shared sidebar - a chat PREVIEW,
+  which belongs to no pane - now refuses instead of guessing.
 
 - **An adversarial audit of the whole daemon found seven real defects; all seven are fixed.**
   Four independent reviewers went at it from different angles - what can it do wrong with nobody

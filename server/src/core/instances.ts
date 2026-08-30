@@ -119,14 +119,42 @@ function dirSizeBytes(dir: string): number | undefined {
  * never reads or returns a token. Never throws.
  */
 export function readLoginUuid(instanceDir: string): string | null {
+  return readLoginState(instanceDir).uuid
+}
+
+/**
+ * ⛔ 'SIGNED OUT' AND 'I COULD NOT READ THE PROFILE' ARE DIFFERENT PROBLEMS, and `readLoginUuid`
+ * answers null to both. That single boolean is what the fleet reports, so a config.json that a
+ * crash left half-written is announced to the owner as "instance #N is signed out - sign it in",
+ * sending him to fix a login that was never broken while the real fault (a damaged profile) goes
+ * unnamed. The uuid is unchanged for every existing caller; this just keeps the reason.
+ *
+ * `no-config` is separated from `unreadable` on purpose too: a directory with no config.json yet
+ * is a NEW instance that has never been signed in, which is ordinary, while a config.json that
+ * exists and will not parse is damage.
+ */
+export type LoginState =
+  | { uuid: string; reason: 'signed-in' }
+  | { uuid: null; reason: 'signed-out' | 'no-config' | 'unreadable' }
+
+export function readLoginState(instanceDir: string): LoginState {
+  if (!instanceDir?.trim()) return { uuid: null, reason: 'unreadable' }
+  let raw: string
   try {
-    if (!instanceDir?.trim()) return null
-    const raw = readFileSync(join(instanceDir, 'config.json'), 'utf8')
-    if (!raw?.trim()) return null
+    raw = readFileSync(join(instanceDir, 'config.json'), 'utf8')
+  } catch (err) {
+    // Nothing there yet vs. something there we cannot read - only the second one is damage.
+    const missing = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+    return { uuid: null, reason: missing ? 'no-config' : 'unreadable' }
+  }
+  if (!raw?.trim()) return { uuid: null, reason: 'unreadable' }
+  try {
     const parsed = JSON.parse(raw) as Record<string, unknown>
-    return typeof parsed.lastKnownAccountUuid === 'string' ? parsed.lastKnownAccountUuid : null
+    return typeof parsed.lastKnownAccountUuid === 'string'
+      ? { uuid: parsed.lastKnownAccountUuid, reason: 'signed-in' }
+      : { uuid: null, reason: 'signed-out' }
   } catch {
-    return null
+    return { uuid: null, reason: 'unreadable' }
   }
 }
 

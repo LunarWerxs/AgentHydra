@@ -615,6 +615,12 @@ export const TOOLS: McpEngineTool[] = [
       'have been quiet for half an hour - open and read those, they are never acted on ' +
       'automatically) and holds (chats deliberately taken off automation, with the reason - ' +
       'listed every pass so a hold can never become an invisible permanent gap). ' +
+      'READ unusableInstances BEFORE ROUTING ANY WORK: instances that cannot do work at all, said ' +
+      'once per account with the reason (wedged - alive but its window is not answering, so every ' +
+      'act against it fails one chat at a time until it is restarted; profile-unreadable, which ' +
+      'is damage and NOT fixed by signing in; signed-out; no-config; usage-wall). A CLOSED ' +
+      'instance is never listed - closed is this fleet’s resting state, not a fault. ' +
+      '`responding: null` means the probe could not ask, which is not the same as healthy. ' +
       "⛔ SCOPE: this answers 'what next for every CHAT', never 'which PROJECT should be picked " +
       "up'. Repo-level backlog - which codebase has unstarted or stalled work, unpushed " +
       'commits, version skew, a stale codemap - belongs to ODIN, a separate program in its own ' +
