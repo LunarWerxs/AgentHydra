@@ -9,6 +9,60 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **THE COURIER** (`GET /api/couriers`, `POST /api/couriers/run`, server/src/courier.ts + the
+  courier MCP tool): the delivery ledger's fallback deliverer, and the sanctioned replacement
+  for the banned relay ("you'll find other ways" - this is the other way). The daemon still
+  never sends a message; for each instance with pending deliveries older than a 5-minute
+  grace window it REGISTERS a one-shot task in that instance's OWN desktop-app scheduler
+  (desktop-tasks.ts - written for exactly this, until now with zero callers). The app then
+  fires a fresh session - the system's own hands, never one of the owner's threads - whose
+  entire prompt rides inside the task's SKILL.md: the staged rows BAKED in verbatim inside
+  nonce-carrying fences (content cannot forge a boundary), MCP-only delivery via the app's
+  native send_message, an explicit no-shell rule (a scheduled session can freeze forever at
+  an approval prompt nobody is present to click), a 24h staleness guard, and a
+  no-self-archive rule. Task ids are per-instance ('orch-courier-<slug>-<hash>') because
+  SKILL.md files live in the shared ~/.claude tree; signed-out instances are refused (a task
+  in a stale account leaf never fires but reads as one that did) and their stuck rows block
+  the disarm lane from claiming a clear queue; unroutable rows carry honest reasons.
+
+  **SHIPPED OFF BY DEFAULT, because the live drill measured the delivery channel dead on
+  the current app version.** Three channels were drilled on the real fleet, all with the
+  same verdict: a task row written into a RUNNING app's scheduler store sat unread for five
+  minutes and was clobbered by the app's in-memory re-save (the chat-metadata disease); a
+  row registered against a CLOSED app one second before its relaunch sat in the store, app
+  running, ten minutes past its fire time, never fired (the store is a write-mirror, not a
+  registration channel); and an imported chat whose transcript ends on an unanswered user
+  turn boots a live engine that never runs the turn. Only tasks the app registered through
+  its OWN scheduling tool ever fire (their runs are on disk). So courier_enabled defaults
+  '0': flipping it on cycles apps to register tasks that never fire - motion without
+  delivery. The machinery is built, guarded and pinned for the day a working channel exists:
+  registration always happens against a closed app (closed = register-then-open; running =
+  prove-idle-then-cycle, where "idle" is the self-kill ancestry law - every live session's
+  tree verified to hang off some OTHER app, could-not-check means hold, a session appearing
+  mid-check means hold, dead-pid registry residue filtered as crash evidence). Act-mode
+  passes run inside the process-wide act lock (a cycle can never pull an app out from under
+  a mid-flight gate deed), decide from fresh process state, never bake a row younger than
+  its own grace window, reopen the app when a post-quit registration fails, cap cycling at
+  45 minutes of failed attempts, and mark cleared-but-running instances disarm-pending
+  instead of writing into a store the app clobbers back. Housekeeping is a re-entrancy-
+  guarded 5-minute cadence plus fresh-after-tick, gated only by courier_enabled (never
+  synced), with a durable lastCourierError in the sweep-loop status.
+
+  THE RECEIPT HARDENED with it, both holes caught live by the drill: delivered now means the
+  transcript gained TIMESTAMPED message records (queue-operation/user/assistant) after
+  staging - the app appends timestamp-free bookkeeping (atis-latch, mode) to imported chats,
+  and the old bare-mtime receipt read exactly that as a delivery that never happened. The
+  tail scan widens to the whole file before concluding no-receipt (a giant trailing
+  tool-result line must not bury the real records), bookkeeping records are never receipts
+  even if they someday carry timestamps (warned as schema drift), and the expiry evidence
+  says "no timestamped activity found" instead of claiming a vanished transcript. The
+  one-shot cron's year correction is symmetric (armed Dec 31 for Jan 1 no longer reads a
+  year late). Two adversarial review rounds (38 agents; 26 findings confirmed and fixed, 4
+  refuted). Cleanup: 18 broken recurring courier-probe tasks the retired v1 probing had left
+  registered across the whole fleet (all pointing at deleted SKILL files, firing-and-failing
+  in any instance the owner opened) were removed, and the test suite no longer writes SKILL
+  dirs into the real ~/.claude (taskSkillPath honors the test-state override).
+
 - **THE DELIVERY LEDGER** (`GET /api/deliveries` + server/src/deliveries.ts + the deliveries
   MCP tool): the deterministic half of the delivery story. Every prompt the act path stages
   for a surfaced chat is now a tracked row instead of a hope - until now a surfaced chat

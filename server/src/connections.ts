@@ -147,6 +147,9 @@ export const NEVER_SYNCED = [
   'sweep_enabled',
   'sweep_interval_min',
   'sweep_max_archive',
+  // The courier rides the sweep tick and spawns sessions in THIS machine's instances - same
+  // unattended-action class, same reason it stays home.
+  'courier_enabled',
   'sweep_max_surface',
 ] as const
 

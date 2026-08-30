@@ -14,14 +14,15 @@
 //
 //   pending     staged, not yet observed delivered.
 //   superseded  a re-surface staged a newer prompt; the old attempt is history, never erased.
-//   delivered   the transcript's exact mtime moved past the staging instant - a delivered
-//               prompt lands as a user turn, so that is the deterministic receipt.
+//   delivered   the transcript gained TIMESTAMPED message records after the staging instant
+//               - a delivered prompt lands as queue/user/assistant records, and the app's
+//               timestamp-free bookkeeping appends (atis-latch, mode) move nothing.
 //   deaf        a live process started after staging but the transcript never moved (the
 //               banked engine-never-started orphan flavor). SEMI-terminal: late movement
 //               upgrades it to delivered.
 //   expired     pending for 24h - given up, reason kept, same convention as import retries.
 
-import { statSync } from 'node:fs'
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { db } from './db'
@@ -87,18 +88,79 @@ export interface DeliveryDeps {
   liveSince?: (sessionId: string) => number | null
 }
 
-function realLastActivity(sessionId: string, _nowMs: number): number | null {
-  // The transcript file's EXACT mtime, never a reconstruction: the first cut derived this
-  // from second-rounded quietSecs, and the rounding both fabricated receipts (an activity
-  // computed up to ~500ms later than the true write) and erased real ones (review-confirmed,
-  // both directions). A delivered prompt lands as a user turn, which moves the mtime.
-  const path = findTranscriptById(join(homedir(), '.claude'), sessionId)
-  if (!path) return null
+/** How much transcript tail the receipt scan reads. Big enough to clear a large trailing
+ *  tool-result record, small enough to stay a single cheap read. */
+const RECEIPT_TAIL_BYTES = 512 * 1024
+
+/**
+ * The newest TIMESTAMPED record in a transcript - the delivery receipt.
+ *
+ * NOT the file mtime (measured live, 2026-08-30, drill chat 616ecfe8): the app appends
+ * bookkeeping records (`atis-latch`, `mode`) to an imported chat's transcript with no
+ * delivery anywhere near it, and a bare-mtime receipt read that as delivered. Real message
+ * traffic - the queue-operation enqueue a native send writes, and the user/assistant turn
+ * records that follow - carries a `timestamp` field; the bookkeeping records carry none. So
+ * the receipt is the newest parseable timestamp in the tail, and an app touch moves nothing.
+ */
+/** Record types the APP appends as bookkeeping - never message traffic, never a receipt.
+ *  Today they carry no timestamp; if one ever does, the schema assumption this receipt
+ *  rests on has inverted, so that is warned about rather than silently absorbed. */
+const BOOKKEEPING_TYPES = new Set(['atis-latch', 'mode'])
+
+export function lastTranscriptMessageAt(
+  path: string,
+  tailBytes = RECEIPT_TAIL_BYTES,
+): number | null {
+  let fd: number
+  let size: number
   try {
-    return statSync(path).mtimeMs
+    size = statSync(path).size
+    fd = openSync(path, 'r')
   } catch {
     return null
   }
+  try {
+    const scan = (want: number): number | null => {
+      const buf = Buffer.alloc(want)
+      readSync(fd, buf, 0, want, size - want)
+      let newest: number | null = null
+      for (const line of buf.toString('utf8').split('\n')) {
+        const t = line.trim()
+        if (!t.startsWith('{') || !t.includes('"timestamp"')) continue
+        try {
+          const rec = JSON.parse(t) as { timestamp?: unknown; type?: unknown }
+          if (typeof rec.timestamp !== 'string') continue
+          if (typeof rec.type === 'string' && BOOKKEEPING_TYPES.has(rec.type)) {
+            console.warn(
+              `[agenthydra] bookkeeping record '${rec.type}' carries a timestamp - the receipt schema assumption may have inverted (${path})`,
+            )
+            continue
+          }
+          const ms = Date.parse(rec.timestamp)
+          if (Number.isFinite(ms) && (newest === null || ms > newest)) newest = ms
+        } catch {
+          // A line cut by the tail window or mid-write - skip it, never guess.
+        }
+      }
+      return newest
+    }
+    const fast = scan(Math.min(size, tailBytes))
+    if (fast !== null || size <= tailBytes) return fast
+    // The tail window can be one giant trailing tool-result line with the real records
+    // buried before it (review-confirmed false 'never delivered') - re-scan the whole file
+    // before concluding there is no receipt.
+    return scan(size)
+  } catch {
+    return null
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function realLastActivity(sessionId: string, _nowMs: number): number | null {
+  const path = findTranscriptById(join(homedir(), '.claude'), sessionId)
+  if (!path) return null
+  return lastTranscriptMessageAt(path)
 }
 
 function realLiveSince(sessionId: string): number | null {
@@ -153,7 +215,7 @@ export function reconcileDeliveries(deps: DeliveryDeps = {}): void {
         now,
         'pending for 24h with no delivery observed - given up, reason kept' +
           (activity === null
-            ? ' (no transcript found at expiry: it may have vanished or rolled over)'
+            ? ' (no timestamped transcript activity found by expiry: the transcript may be missing, rolled over, or its tail unreadable)'
             : ''),
         row.id,
       )

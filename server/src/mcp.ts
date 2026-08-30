@@ -630,6 +630,34 @@ export const TOOLS: McpEngineTool[] = [
     run: (a) => api(`/api/deliveries${qs({ state: a.state })}`),
   },
   {
+    name: 'courier',
+    description:
+      "THE COURIER: the ledger's fallback deliverer - built, guarded, and OFF by default " +
+      '(courier_enabled=0) because the live drill measured the app never firing externally ' +
+      'registered scheduler tasks on this version; until a working channel is proven, ' +
+      'pending deliveries need an awake AI sender (see the deliveries tool). Design: for ' +
+      'each instance with pending deliveries past a short grace window, the ' +
+      "daemon registers a one-shot task in that instance's OWN app scheduler; the app then " +
+      "fires a fresh session (the system's own hands, never one of the owner's threads) that " +
+      'sends each staged prompt natively via its session-management tools and stops. The ' +
+      'scheduler store is LAUNCH-LOAD state (measured), so registration always happens ' +
+      'against a closed app: closed = register then open; running = cycle (quit, register, ' +
+      'relaunch) ONLY when every live session is ancestry-proven to live elsewhere - ' +
+      'otherwise held-app-busy. The daemon still never sends. Rows clear from ' +
+      'message-traffic receipts, and cleared instances are disarmed automatically. Without ' +
+      'run: PLAN only (what would arm/re-arm/disarm, plus unroutable rows and why). With ' +
+      'run:true: execute the plan. Before hand-delivering a pending row yourself, check here ' +
+      'first - a courier already armed for that instance means a second send is a duplicate.',
+    inputSchema: S({
+      run: {
+        type: 'boolean',
+        description: 'true = execute (arm/re-arm/disarm); omit or false = plan only.',
+      },
+    }),
+    run: (a) =>
+      a.run === true ? api('/api/couriers/run', { method: 'POST' }) : api('/api/couriers'),
+  },
+  {
     name: 'chat_gate',
     description:
       'THE GATE - call this BEFORE acting on any chat (owner law): one deterministic answer to ' +

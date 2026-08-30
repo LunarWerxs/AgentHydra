@@ -1,8 +1,12 @@
 // server/tests/deliveries.test.ts - the delivery ledger pinned: one pending row per session,
 // evidence-settled states (delivered / deaf / expired), and reconcile-before-read.
 import { beforeEach, expect, test } from 'bun:test'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { db } from '../src/db'
 import {
+  lastTranscriptMessageAt,
   listDeliveries,
   parseDeliveryState,
   pendingDeliveries,
@@ -76,7 +80,7 @@ test('activity at EXACTLY staged_at is not a receipt - strict after, with exact 
   ).toBe(1)
 })
 
-test('expiry with no transcript found says so - a vanished file is named, not blended in', () => {
+test('expiry with no receipt says so honestly - null has three causes and none is claimed', () => {
   stageDelivery({ sessionId: 's1', prompt: 'p', instanceRef: null, nowMs: T0 })
   reconcileDeliveries({
     nowMs: T0 + 25 * 3600 * 1000,
@@ -88,7 +92,7 @@ test('expiry with no transcript found says so - a vanished file is named, not bl
     lastActivity: () => null,
     liveSince: () => null,
   })
-  expect(row?.evidence).toContain('no transcript found at expiry')
+  expect(row?.evidence).toContain('no timestamped transcript activity found by expiry')
 })
 
 test('parseDeliveryState pins the route filter contract', () => {
@@ -153,6 +157,61 @@ test('24h unclaimed expires with the reason kept', () => {
   })
   expect(row?.state).toBe('expired')
   expect(row?.evidence).toContain('given up')
+})
+
+test('the receipt is MESSAGE TRAFFIC, never file movement - app bookkeeping moves nothing', () => {
+  // Measured live 2026-08-30 (drill chat 616ecfe8): the app appended timestamp-free
+  // atis-latch/mode records to an imported chat and a bare-mtime receipt read it as
+  // delivered. Only timestamped records count.
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-receipt-'))
+  const path = join(dir, 'session.jsonl')
+  const userAt = '2026-08-30T07:00:00.000Z'
+  writeFileSync(
+    path,
+    [
+      JSON.stringify({ type: 'user', timestamp: userAt, message: { role: 'user' } }),
+      JSON.stringify({ type: 'atis-latch', atis: '' }),
+      JSON.stringify({ type: 'mode', mode: 'normal' }),
+    ].join('\n'),
+  )
+  // The newest TIMESTAMPED record wins; the later bookkeeping appends are invisible.
+  expect(lastTranscriptMessageAt(path)).toBe(Date.parse(userAt))
+  // A queue-operation enqueue (what a native send writes first) is a receipt on its own.
+  const enqueueAt = '2026-08-30T08:30:00.000Z'
+  writeFileSync(
+    path,
+    [
+      JSON.stringify({ type: 'user', timestamp: userAt, message: { role: 'user' } }),
+      JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: enqueueAt }),
+      JSON.stringify({ type: 'mode', mode: 'normal' }),
+    ].join('\n'),
+  )
+  expect(lastTranscriptMessageAt(path)).toBe(Date.parse(enqueueAt))
+  // No timestamped records at all = no receipt, never a guess.
+  writeFileSync(path, `${JSON.stringify({ type: 'atis-latch', atis: '' })}\n`)
+  expect(lastTranscriptMessageAt(path)).toBe(null)
+  expect(lastTranscriptMessageAt(join(dir, 'missing.jsonl'))).toBe(null)
+  // A bookkeeping record that DOES carry a timestamp is still never a receipt (the schema
+  // assumption inverting must not fabricate deliveries).
+  writeFileSync(
+    path,
+    `${JSON.stringify({ type: 'mode', mode: 'normal', timestamp: '2026-08-30T09:00:00.000Z' })}\n`,
+  )
+  expect(lastTranscriptMessageAt(path)).toBe(null)
+})
+
+test('a giant trailing record cannot bury the receipt - the scan widens to the whole file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-receipt-tail-'))
+  const path = join(dir, 'session.jsonl')
+  const userAt = '2026-08-30T07:00:00.000Z'
+  const hugeLine = JSON.stringify({ type: 'x-blob', data: 'z'.repeat(4096) })
+  writeFileSync(
+    path,
+    `${JSON.stringify({ type: 'user', timestamp: userAt, message: { role: 'user' } })}\n${hugeLine}\n`,
+  )
+  // A tail window smaller than the trailing blob sees no timestamped record - the fallback
+  // full scan must still find the real one (review-confirmed false 'never delivered').
+  expect(lastTranscriptMessageAt(path, 1024)).toBe(Date.parse(userAt))
 })
 
 test('listDeliveries reconciles before answering - a stale pending settles on read', () => {

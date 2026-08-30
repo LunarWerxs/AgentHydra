@@ -116,6 +116,7 @@ import { createInstance, removeInstance } from './core/lifecycle'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from './core/shared'
 import { createInstanceShortcut } from './core/shortcut'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
+import { courierPass } from './courier'
 import { coerceQueueItem, db, getSetting, runOutcome, setSetting } from './db'
 import { listDeliveries, parseDeliveryState } from './deliveries'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
@@ -834,6 +835,12 @@ app.get('/api/deliveries', (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400)
   return c.json({ deliveries: listDeliveries(parsed.state) })
 })
+// --- the courier (rebuild backlog) - see server/src/courier.ts ------------------------------
+// The daemon still never sends; it ARMS a one-shot task in the target instance's own app
+// scheduler, and the session THE APP fires does the native sending. GET plans without
+// touching anything; POST executes the plan (arm / re-arm / disarm).
+app.get('/api/couriers', async (c) => c.json(await courierPass({ act: false })))
+app.post('/api/couriers/run', async (c) => c.json(await courierPass({ act: true })))
 // --- the standing sweep loop (rebuild backlog) - see server/src/sweep-loop.ts ---------------
 // OFF by default; unattended-safe caps (archive unlimited, surface 0 - no deliverer, no
 // dormant parking). The last report is served verbatim so the loop's work is inspectable.

@@ -36,6 +36,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { appEnv } from './config'
 
 /** Every id we write starts with this. The removal path refuses anything that does not, so an
  *  owner-authored task can never be deleted by our janitor. */
@@ -131,9 +132,12 @@ function readStore(path: string): TaskStore {
 
 /** Where a task's prompt lives. The shared ~/.claude tree, one directory per task id, exactly
  *  where the app's own tool puts them (measured) - so a task we write and a task the owner
- *  wrote are indistinguishable to the app, which is the point. */
+ *  wrote are indistinguishable to the app, which is the point. Honors AGENTHYDRA_HOME so the
+ *  test suite's throwaway-state backstop covers this write too (found live: a unit test had
+ *  left a real orch-courier-test SKILL dir in the developer's ~/.claude). */
 export function taskSkillPath(taskId: string): string {
-  return join(homedir(), '.claude', 'scheduled-tasks', taskId, 'SKILL.md')
+  const base = appEnv('HOME')?.trim() || homedir()
+  return join(base, '.claude', 'scheduled-tasks', taskId, 'SKILL.md')
 }
 
 export interface InstallTaskOpts {
@@ -195,11 +199,22 @@ export function installDesktopTask(
 
 /** Is one of our tasks installed in this instance right now? */
 export function hasDesktopTask(instanceDir: string, taskId: string, accountDir?: string): boolean {
+  return getDesktopTask(instanceDir, taskId, accountDir) !== null
+}
+
+/** The full registry row for one of our tasks (the courier reads its cronExpression back to
+ *  decide re-arm vs leave-alone), or null when absent or disabled. */
+export function getDesktopTask(
+  instanceDir: string,
+  taskId: string,
+  accountDir?: string,
+): DesktopTask | null {
   const dir = accountDir ?? activeAccountDir(instanceDir)
-  if (!dir) return false
-  return readStore(join(dir, 'scheduled-tasks.json')).scheduledTasks.some(
+  if (!dir) return null
+  const row = readStore(join(dir, 'scheduled-tasks.json')).scheduledTasks.find(
     (t) => t.id === taskId && t.enabled,
   )
+  return row ?? null
 }
 
 /** Remove one of OUR tasks. Refuses any id without our prefix, so an owner-authored task cannot

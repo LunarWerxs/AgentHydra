@@ -161,3 +161,64 @@ test('the STATUS copy of a huge report is bounded and flagged; the return is unt
   expect(status.lastRun?.report.crashedRows.length).toBe(100)
   expect(status.lastRun?.report.rowsTruncated).toBe(true)
 })
+
+test('the tick runs the courier pass when enabled, and a throwing pass is a DURABLE status fact', async () => {
+  const { setSetting } = await import('../src/db')
+  setSetting('courier_enabled', '1')
+  let courierRuns = 0
+  await runSweepLoopOnce({
+    force: true,
+    sweep: async () => emptyReport(),
+    courier: async () => {
+      courierRuns++
+      throw new Error('courier store blew up')
+    },
+  })
+  expect(courierRuns).toBe(1)
+  expect(sweepLoopStatus().lastCourierError?.message).toContain('courier store blew up')
+  // A clean pass CLEARS it - a healed courier must stop reading as broken.
+  await runSweepLoopOnce({
+    force: true,
+    sweep: async () => emptyReport(),
+    courier: async () => ({ dryRun: false, couriers: [], unroutable: [], checkedAt: 'x' }),
+  })
+  expect(sweepLoopStatus().lastCourierError).toBe(null)
+})
+
+test('courier_enabled=0 keeps the tick from arming anything', async () => {
+  const { setSetting } = await import('../src/db')
+  setSetting('courier_enabled', '0')
+  let courierRuns = 0
+  await runSweepLoopOnce({
+    force: true,
+    sweep: async () => emptyReport(),
+    courier: async () => {
+      courierRuns++
+      return { dryRun: false, couriers: [], unroutable: [], checkedAt: 'x' }
+    },
+  })
+  expect(courierRuns).toBe(0)
+  setSetting('courier_enabled', '1')
+})
+
+test('courier housekeeping is ALWAYS-ON but throttled - force bypasses the cadence', async () => {
+  const { setSetting } = await import('../src/db')
+  const { runCourierHousekeeping } = await import('../src/sweep-loop')
+  setSetting('courier_enabled', '1')
+  let runs = 0
+  const courier = async () => {
+    runs++
+    return { dryRun: false, couriers: [], unroutable: [], checkedAt: 'x' }
+  }
+  expect(await runCourierHousekeeping({ courier, force: true })).toBe(true)
+  // Within the 5-minute cadence a non-forced call declines...
+  expect(await runCourierHousekeeping({ courier })).toBe(false)
+  // ...while force (the sweep tick, fresh after its acts) always runs.
+  expect(await runCourierHousekeeping({ courier, force: true })).toBe(true)
+  expect(runs).toBe(2)
+  // And the gate is the courier's OWN switch, not the sweep's.
+  setSetting('courier_enabled', '0')
+  expect(await runCourierHousekeeping({ courier, force: true })).toBe(false)
+  expect(runs).toBe(2)
+  setSetting('courier_enabled', '1')
+})

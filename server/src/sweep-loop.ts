@@ -15,6 +15,7 @@
 //   - The last report is kept and served verbatim - a loop whose work cannot be inspected
 //     is v1's mistake with a timer attached.
 
+import { courierPass } from './courier'
 import { getSetting, setSetting } from './db'
 import { reconcileDeliveries } from './deliveries'
 import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
@@ -82,6 +83,8 @@ export interface SweepLoopStatus {
   overlapSkips: number
   /** The delivery-ledger reconcile failing on the tick - durable, cleared by a clean pass. */
   lastReconcileError: { at: string; message: string } | null
+  /** The courier pass failing (tick or always-on housekeeping) - same durable convention. */
+  lastCourierError: { at: string; message: string } | null
   /** ISO of the next tick when enabled (never earlier than now; before the first tick it
    *  reads as imminent, not as 1970); null when off. */
   nextDueAt: string | null
@@ -90,6 +93,7 @@ export interface SweepLoopStatus {
 let lastRun: SweepLoopStatus['lastRun'] = null
 let lastError: SweepLoopStatus['lastError'] = null
 let lastReconcileError: { at: string; message: string } | null = null
+let lastCourierError: { at: string; message: string } | null = null
 let lastTickAt = 0
 let overlapSkips = 0
 let ticking = false
@@ -108,6 +112,7 @@ export function sweepLoopStatus(): SweepLoopStatus {
     lastError,
     overlapSkips,
     lastReconcileError,
+    lastCourierError,
     nextDueAt: s.enabled
       ? new Date(Math.max(Date.now(), lastTickAt + s.intervalMin * 60_000)).toISOString()
       : null,
@@ -176,6 +181,7 @@ export async function runSweepLoopOnce(
     sweep?: typeof sweepGateActions
     force?: boolean
     reconcile?: typeof reconcileDeliveries
+    courier?: typeof courierPass
   } = {},
 ): Promise<SweepReport | null> {
   const s = getSweepLoopSettings()
@@ -210,6 +216,8 @@ export async function runSweepLoopOnce(
       }
       console.error('[agenthydra] delivery reconcile error:', err)
     }
+    // Arm/disarm couriers from the settled ledger, freshly after the acts above.
+    await runCourierHousekeeping({ courier: deps.courier, force: true })
     lastRun = {
       at: new Date(started).toISOString(),
       tookMs: Date.now() - started,
@@ -228,6 +236,46 @@ export async function runSweepLoopOnce(
   }
 }
 
+/**
+ * Courier housekeeping (arm / re-arm / disarm from the settled ledger) is ALWAYS-ON, not
+ * gated behind sweep_enabled (review-confirmed hole: with the sweep off - its documented
+ * default - nothing ever DISARMED a cleared courier task, and the one-shot cron is genuinely
+ * annual, so it would re-fire an empty courier every year; nothing re-armed failed fires
+ * either). Same rationale as the always-on import-delivery sweep: sweep_enabled governs
+ * hours-scale autonomy (archiving, surfacing); this only finishes deliveries an authorized
+ * act already staged. courier_enabled is its own gate.
+ */
+const COURIER_HOUSEKEEP_MS = 5 * 60_000
+let lastCourierPassAt = 0
+let courierTicking = false
+
+export async function runCourierHousekeeping(
+  deps: { courier?: typeof courierPass; force?: boolean } = {},
+): Promise<boolean> {
+  if (getSetting('courier_enabled') !== '1') return false
+  // In-flight guard (review-confirmed): the poll's unforced call and the sweep tick's forced
+  // one can land together, and a cycle takes real seconds - two concurrent passes would each
+  // decide from their own snapshot and quit/relaunch the same app twice. (courierPass also
+  // serializes through the act lock, but skipping here is cheaper than queueing a duplicate.)
+  if (courierTicking) return false
+  if (!deps.force && Date.now() - lastCourierPassAt < COURIER_HOUSEKEEP_MS) return false
+  courierTicking = true
+  lastCourierPassAt = Date.now()
+  try {
+    await (deps.courier ?? courierPass)({ act: true })
+    lastCourierError = null
+  } catch (err) {
+    lastCourierError = {
+      at: new Date().toISOString(),
+      message: err instanceof Error ? err.message : String(err),
+    }
+    console.error('[agenthydra] courier pass error:', err)
+  } finally {
+    courierTicking = false
+  }
+  return true
+}
+
 const POLL_MS = 60_000
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -237,6 +285,8 @@ let timer: ReturnType<typeof setInterval> | null = null
 export function startSweepLoop(): void {
   if (timer) return
   timer = setInterval(() => {
+    // Courier housekeeping first, on its own always-on cadence (see its header).
+    void runCourierHousekeeping()
     const s = getSweepLoopSettings()
     if (!s.enabled) return
     if (Date.now() - lastTickAt < s.intervalMin * 60_000) return
