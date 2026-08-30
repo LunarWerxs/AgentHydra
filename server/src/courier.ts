@@ -73,6 +73,12 @@ export interface CourierReport {
   held: Array<{ sessionId: string; reason: string }>
   /** Pending rows no courier can carry at all. */
   unroutable: Array<{ sessionId: string; instanceRef: string | null; reason: string }>
+  /** How many rows this pass judged deliverable BEFORE the per-pass cap was applied. */
+  deliverable: number
+  /** Deliverable rows the cap left for the next pass - never silently dropped. */
+  notAttempted: number
+  /** True when the cap bound this pass, so a partial run can never read as a finished queue. */
+  capHit: boolean
   /** How many DISTINCT apps this pass touched. */
   instancesTouched: number
   checkedAt: string
@@ -222,11 +228,20 @@ async function courierPassInner(
     }
   }
 
+  // ⛔ SAY WHAT THE CAP LEFT BEHIND. Rows past `max` are never visited, so they landed in NONE of
+  // attempts/held/unroutable and vanished from the report entirely - a pass that carried 5 of 40
+  // read exactly like a pass that cleared the queue. The sweep has said `unswept`/`deadlineHit`
+  // for this reason since it was written; the courier said nothing. A cap is a fact about the
+  // pass, never a fact about the queue.
+  const notAttempted = Math.max(0, deliverable.length - attempts.length)
   return {
     dryRun: !opts.act,
     attempts,
     held,
     unroutable,
+    deliverable: deliverable.length,
+    notAttempted,
+    capHit: notAttempted > 0,
     instancesTouched: distinctInstances(attempts),
     checkedAt: new Date(now).toISOString(),
   }

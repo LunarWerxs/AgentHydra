@@ -197,7 +197,13 @@ export function reconcileDeliveries(deps: DeliveryDeps = {}): void {
       )
       continue
     }
-    if (row.state === 'deaf') continue // still deaf; nothing new to say
+    // ⛔ A DEAF ROW STILL AGES OUT. This used to be a bare `continue`, which read as "nothing new
+    // to say" and actually meant "never reach the expiry check below again" - so a deaf row could
+    // only ever become 'delivered', and 'deaf' is precisely where a freshly imported chat lands.
+    // Combined with pruning that (correctly) never touches open rows, that made a stuck row
+    // immortal AND permanently deliverable, so the courier re-drove its UI every five minutes
+    // forever. Deaf is a diagnosis, not a life sentence.
+    if (row.state === 'deaf' && now - row.staged_at <= EXPIRE_MS) continue
     const live = liveSince(row.session_id)
     if (live !== null && live > row.staged_at) {
       // A process started after staging but the transcript never moved: the engine did not
@@ -216,7 +222,7 @@ export function reconcileDeliveries(deps: DeliveryDeps = {}): void {
         "update deliveries set state = 'expired', resolved_at = ?, evidence = ? where id = ?",
       ).run(
         now,
-        'pending for 24h with no delivery observed - given up, reason kept' +
+        `${row.state === 'deaf' ? 'deaf' : 'pending'} for 24h with no delivery observed - given up, reason kept` +
           (activity === null
             ? ' (no timestamped transcript activity found by expiry: the transcript may be missing, rolled over, or its tail unreadable)'
             : ''),

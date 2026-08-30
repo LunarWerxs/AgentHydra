@@ -188,12 +188,14 @@ foreach ($m in $mains) {
   }
 
   # RAIL 3: PROVE the intended conversation is the one on screen.
-  $verified = $false
-  foreach ($e in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
-    $n = $e.Current.Name
-    if ($n -and $n.Contains($VerifyText)) { $verified = $true; break }
-  }
-  if (-not $verified) {
+  # ⛔ THIS CALLS TargetVisible, it does NOT re-implement it. It used to: the same scan pasted
+  # a second time, minus the IsOffscreen filter. That made the file's most important gate the
+  # WEAKEST of the two copies, and in the common path (a title-matched sidebar row we just
+  # Invoked) nothing else confirms the click actually switched conversations - so if the
+  # Invoke silently no-opped, the target's own still-rendered SIDEBAR PREVIEW satisfied this
+  # check and the prompt went into whatever chat happened to be open. Found by an adversarial
+  # audit 2026-08-30, after the offscreen fix had already been applied - to one copy.
+  if (-not (TargetVisible $el)) {
     Write-Output "REFUSED: after selecting '$Title' the conversation does not show the expected text - not typing into the wrong chat"
     exit 4
   }

@@ -269,3 +269,63 @@ test('the cooldown expires, so a genuinely undelivered row is retried later', as
   expect(later[0]?.outcome).toBe('delivered')
   expect(sends).toBe(2)
 })
+
+// --- THE DELIVERY BREAKER ---------------------------------------------------------------
+// Archive and surface have been behind the circuit breaker since it was built; DELIVERY, the
+// one actuator that types into a real window, was not. Its only anti-repeat guard is stamped on
+// success, so every failure outcome left the row eligible and the always-on 5-minute courier
+// tick retyped into the same chat forever. Found by an adversarial audit 2026-08-30.
+
+test('a chat that keeps refusing delivery is SUPPRESSED after the cap, not retyped forever', async () => {
+  const { ATTEMPT_CAP, checkBreaker, clearAttempts } = await import('../src/breaker')
+  const { db } = await import('../src/db')
+  db.query('delete from action_attempt_log').run()
+  clearAttempts('deliver', 's-1')
+  const d = deps({
+    deliver: async () => ({ ok: false, outcome: 'composer-refused', detail: 'no' }),
+  })
+  let refusals = 0
+  for (let i = 0; i < ATTEMPT_CAP; i++) {
+    clearRecentlySent()
+    const rows = await deliverPendingRows(d)
+    if (rows[0]?.outcome === 'composer-refused') refusals++
+  }
+  expect(refusals).toBe(ATTEMPT_CAP)
+  clearRecentlySent()
+  const capped = await deliverPendingRows(d)
+  expect(capped[0]?.outcome).toBe('suppressed')
+  expect(capped[0]?.detail).toContain('retry allowed after')
+  expect(checkBreaker('deliver', 's-1', Date.now()).suppressed).toBe(true)
+  db.query('delete from action_attempt_log').run()
+})
+
+test('a delivery that LANDS clears the count - the brake is for futility, not for work that works', async () => {
+  const { checkBreaker, clearAttempts } = await import('../src/breaker')
+  const { db } = await import('../src/db')
+  db.query('delete from action_attempt_log').run()
+  clearAttempts('deliver', 's-1')
+  clearRecentlySent()
+  await deliverPendingRows(
+    deps({ deliver: async () => ({ ok: true, outcome: 'delivered', detail: 'sent' }) }),
+  )
+  expect(checkBreaker('deliver', 's-1', Date.now()).attempts).toBe(0)
+  db.query('delete from action_attempt_log').run()
+})
+
+test('the attempt is counted BEFORE the send, so one that dies mid-send still counts', async () => {
+  const { checkBreaker } = await import('../src/breaker')
+  const { db } = await import('../src/db')
+  db.query('delete from action_attempt_log').run()
+  clearRecentlySent()
+  await expect(
+    deliverPendingRows(
+      deps({
+        deliver: async () => {
+          throw new Error('the actuator died mid-send')
+        },
+      }),
+    ),
+  ).rejects.toThrow('the actuator died mid-send')
+  expect(checkBreaker('deliver', 's-1', Date.now()).attempts).toBe(1)
+  db.query('delete from action_attempt_log').run()
+})

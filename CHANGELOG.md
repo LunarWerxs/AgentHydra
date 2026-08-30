@@ -9,6 +9,46 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **An adversarial audit of the whole daemon found seven real defects; all seven are fixed.**
+  Four independent reviewers went at it from different angles - what can it do wrong with nobody
+  watching, what happens when things break at runtime, what is half-wired, and does it tell its
+  operator the truth - and every finding was then handed to a separate agent whose only job was
+  to refute it. One was refuted and dropped. These are the six that survived, plus the one the
+  audit's own reviewer turned up while checking another:
+
+  **Three could take the daemon down or drive the wrong window.** (1) The delivery actuator's
+  final pre-send gate re-implemented the on-screen check instead of calling it, minus the
+  offscreen filter - so the file's most important rail was the weaker of its two copies, and in
+  the common path (a sidebar row we just clicked) nothing else confirms the click worked. If it
+  silently no-opped, the target's own still-rendered sidebar preview satisfied the check and the
+  prompt went into whatever chat was actually open. There is now ONE implementation. (2) The
+  scheduler's tick had no try/catch anywhere in the file, and (3) the monitor's settings read sat
+  one line above its try, in an async callback whose promise was discarded. This process answers
+  an uncaught error with exit(1), so either one turned a single locked database read into the
+  loss of the queue, the monitor, the courier and the API together.
+
+  **Three more were silent rather than loud, which is worse.** (4) No `busy_timeout` was ever set,
+  so SQLite threw on the FIRST lock collision rather than waiting - the fuel for both crashes
+  above, and the self-updater deliberately runs two daemons together for 800ms. (5) The boot-time
+  liveness probe spawned PowerShell with no deadline, and that call is what un-parks the
+  scheduler and monitor: one hung WMI query left every automatic tick doing nothing for the life
+  of the daemon, with no throw, no exit, and a health endpoint still answering green. (6) A
+  delivery row marked `deaf` could never expire - reconcile skipped it before reaching the expiry
+  check - while open rows are (correctly) never pruned and always deliverable. A stuck row was
+  therefore immortal AND re-driven every five minutes forever.
+
+  **And the courier, the one actuator that types into a real window, had no attempt cap at all** -
+  archive and surface have been behind the circuit breaker since it was built. It is now behind
+  it too, counted before the attempt so a crash still counts, and cleared by a delivery that
+  lands. Its report also stopped lying by omission: rows past the per-pass cap were never
+  visited, so they appeared in none of its lanes and a pass carrying 5 of 40 read exactly like
+  one that cleared the queue. It now states what it left behind.
+
+  The two crash-shaped defects are the same mistake twice, so they got a **guardrail instead of
+  two patches**: a check that fails CI if any repeating timer's callback can throw out of itself.
+  It was proven by re-introducing the real scheduler bug and watching it go red, and its
+  regression fixtures are the two actual broken shapes, not synthetic near-misses.
+
 - **Three production-readiness defects, from an audit asking "what bites in unattended daily
   use?"** (1) The courier - the thing that types into live chat windows on a timer - had no
   way to see or switch it off short of knowing a settings key existed; it is now reported in

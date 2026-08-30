@@ -406,10 +406,17 @@ function fmtLocalTime(iso: string): string {
 let ticking = false
 
 async function tick(deps: MonitorDeps): Promise<void> {
-  if (getSetting('monitor_enabled') !== '1') return
-  if (ticking) return // a slow checkUsage must not let ticks pile up
-  ticking = true
+  // ⛔ THE ENABLED READ IS INSIDE THE TRY, and that placement is the fix, not a style choice.
+  // It was the first statement, ABOVE the try - a synchronous sqlite read outside every guard.
+  // In an async function that throw becomes a rejected promise, the timer below discards the
+  // promise, and this process answers an unhandled rejection with exit(1). The whole daemon,
+  // killed by a locked settings read. Everything that can throw belongs under the catch.
+  let entered = false
   try {
+    if (getSetting('monitor_enabled') !== '1') return
+    if (ticking) return // a slow checkUsage must not let ticks pile up
+    ticking = true
+    entered = true
     // Settle finished resumes before anything else reads state, so a session whose resume already
     // completed is eligible for a fresh stop rather than looking permanently "scheduled".
     reconcileScheduled()
@@ -418,7 +425,11 @@ async function tick(deps: MonitorDeps): Promise<void> {
   } catch (err) {
     console.error('[agenthydra] monitor tick error:', err)
   } finally {
-    ticking = false
+    // ONLY the tick that actually took the lock may release it. A tick that returned early
+    // BECAUSE another was running now reaches this finally too (the early returns moved inside
+    // the try), and clearing the flag there would unlock a tick still in flight - letting the
+    // pile-up this guard exists to prevent happen anyway.
+    if (entered) ticking = false
   }
 }
 
@@ -791,7 +802,13 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 export function startMonitor(): void {
   if (timer) return
-  timer = setInterval(() => void tick(defaultDeps), MONITOR_POLL_MS)
+  // The .catch() is belt AND braces: tick() already swallows its own failures, but `void` on a
+  // promise discards the rejection rather than handling it, so anything that ever escapes tick
+  // would reach this process's unhandledRejection handler, which exits. A timer must not be able
+  // to kill the daemon. (dispatch.ts's sibling timer has always done this; monitor.ts did not.)
+  timer = setInterval(() => {
+    tick(defaultDeps).catch((err) => console.error('[agenthydra] monitor tick error:', err))
+  }, MONITOR_POLL_MS)
 }
 
 export function stopMonitor(): void {

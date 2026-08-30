@@ -19,6 +19,7 @@
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { type BreakerVerdict, checkBreaker, clearAttempts, noteAttempt } from './breaker'
 import { type DeliveryRow, pendingDeliveries } from './deliveries'
 import { type Hold, isHeld } from './holds'
 import { findDesktopChat } from './instance-sessions'
@@ -107,6 +108,7 @@ export interface CourierDeliveryAttempt {
     | 'planned'
     | 'recently-sent'
     | 'on-hold'
+    | 'suppressed'
   detail: string
 }
 
@@ -139,6 +141,9 @@ export interface CourierDeliverDeps {
   nowMs?: () => number
   /** Per-chat automation opt-out (holds.ts); seamed for tests. */
   heldSession?: (sessionId: string) => Hold | null
+  /** Circuit breaker seams (breaker.ts). */
+  breaker?: (sessionId: string, nowMs: number) => BreakerVerdict
+  note?: (sessionId: string, nowMs: number) => void
 }
 
 /**
@@ -176,6 +181,26 @@ export async function deliverPendingRows(
         instanceDir: null,
         outcome: 'on-hold',
         detail: `on hold since ${hold.heldAt}: ${hold.reason} - the automation leaves this chat alone (a direct request still works)`,
+      })
+      continue
+    }
+    // ⛔ THE ONE ACTUATOR THAT DRIVES REAL UI WAS THE ONE WITH NO ATTEMPT CAP. Archive and
+    // surface have been behind the breaker since it was built; delivery was not, and its only
+    // anti-repeat guard (recentlySent, below) is stamped on SUCCESS - so every failure outcome
+    // left the row fully eligible and the always-on 5-minute courier tick retyped into the same
+    // chat forever, with no backoff. Four futile attempts in six hours is enough; a direct
+    // request is never blocked, and a delivery that lands clears the count.
+    const brake = (deps.breaker ?? ((id: string, at: number) => checkBreaker('deliver', id, at)))(
+      row.session_id,
+      now(),
+    )
+    if (brake.suppressed) {
+      out.push({
+        sessionId: row.session_id,
+        title: null,
+        instanceDir: null,
+        outcome: 'suppressed',
+        detail: `${brake.why} (retry allowed after ${brake.retryAfter})`,
       })
       continue
     }
@@ -228,6 +253,12 @@ export async function deliverPendingRows(
       })
       continue
     }
+    // COUNT THE ATTEMPT BEFORE MAKING IT, so an attempt that hangs or crashes the pass is still
+    // on the record. A counter written only on the way out cannot bound the thing it is for.
+    ;(deps.note ?? ((id: string, at: number) => noteAttempt('deliver', id, at)))(
+      row.session_id,
+      now(),
+    )
     const r = await deliver({
       instanceDir,
       title: chat.title,
@@ -235,7 +266,12 @@ export async function deliverPendingRows(
       verifyText,
     })
     // Stamp on SUCCESS only: a refusal typed nothing, so it must stay retryable.
-    if (r.outcome === 'delivered') recentlySent.set(row.session_id, now())
+    // A delivery that LANDED also forgets the count - the brake is for futility, not for work
+    // that works (same rule as the surface lane).
+    if (r.outcome === 'delivered') {
+      recentlySent.set(row.session_id, now())
+      if (!deps.note) clearAttempts('deliver', row.session_id)
+    }
     out.push({
       sessionId: row.session_id,
       title: chat.title,

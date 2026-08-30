@@ -193,6 +193,70 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
        })`,
     ],
   },
+  'timer-callback-can-kill-the-daemon.mjs': {
+    broken: [
+      // scheduler.ts as it shipped until 2026-08-30: a bare named callback whose function has no
+      // try/catch anywhere in it, and whose first statement is a synchronous sqlite read.
+      `
+      function tick() {
+        if (getSetting('scheduler_enabled') !== '1') return
+        const next = db.query('select * from queue_items').get()
+        if (next) void dispatchItem(next)
+      }
+      export function startScheduler() {
+        timer = setInterval(tick, pollSeconds * 1000)
+      }
+      `,
+      // monitor.ts's shape: it HAS a try/catch, but the settings read sits above it, and the
+      // callback discards the promise with \`void\` so the rejection reaches the process handler.
+      `
+      async function tick(deps) {
+        if (getSetting('monitor_enabled') !== '1') return
+        try {
+          await processRateLimited(deps)
+        } catch (err) {
+          console.error('monitor tick error:', err)
+        }
+      }
+      export function startMonitor() {
+        timer = setInterval(() => void tick(defaultDeps), MONITOR_POLL_MS)
+      }
+      `,
+    ],
+    fixed: [
+      // The shape scheduler.ts ships today: the callback is a thin guarded wrapper.
+      `
+      function tick() {
+        try {
+          tickInner()
+        } catch (err) {
+          console.error('scheduler tick error:', err)
+        }
+      }
+      function tickInner() {
+        if (getSetting('scheduler_enabled') !== '1') return
+      }
+      export function startScheduler() {
+        timer = setInterval(tick, pollSeconds * 1000)
+      }
+      `,
+      // The shape monitor.ts ships today: every statement inside the try, AND a .catch() on the
+      // promise the callback returns, so nothing can escape either way.
+      `
+      export function startMonitor() {
+        timer = setInterval(() => {
+          tick(defaultDeps).catch((err) => console.error('monitor tick error:', err))
+        }, MONITOR_POLL_MS)
+      }
+      `,
+      // A timer that discusses its own failure in prose must not read as one: comments and string
+      // literals are blanked before the scan.
+      `
+      // A bare setInterval(tick, ms) here would be unguarded and could kill the daemon.
+      const note = 'setInterval(tick, 1000) is the shape we do not want'
+      `,
+    ],
+  },
   'transcript-index-born-stale.mjs': {
     broken: [
       // Direction A: a snapshot lifetime shorter than the sweep that fills it. 2000 is the literal

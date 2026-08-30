@@ -2756,7 +2756,25 @@ if (IS_COMPILED) cleanupStaleUpdateArtifacts()
 // UI shows them live again and their final status is recorded instead of being stuck 'running'.
 // The scheduler/monitor auto-dispatchers stay parked (boot-state.ts) until this settles, so they
 // can't double-dispatch a surviving run's session before it's back in the `active` map.
-void reattachRuns().finally(markDispatchReady)
+// ⛔ ON A DEADLINE, because this call is what un-parks the scheduler and the monitor. If it never
+// settles - one hung child process is enough - markDispatchReady() never runs, every automatic
+// tick returns immediately for the life of the daemon, and NOTHING reports it: no throw, no exit,
+// /api/health still green, the manual "Run now" path still working. A silent permanent stall is
+// worse than a crash, because a crash gets restarted. After the deadline we un-park anyway: the
+// cost of that is a possible double-dispatch of one surviving run, against the certainty of no
+// automation at all.
+const REATTACH_DEADLINE_MS = 120_000
+void Promise.race([
+  reattachRuns(),
+  new Promise<void>((r) =>
+    setTimeout(() => {
+      console.error(
+        `[agenthydra] reattachRuns did not settle within ${REATTACH_DEADLINE_MS}ms - starting auto-dispatch anyway rather than leaving it parked forever`,
+      )
+      r()
+    }, REATTACH_DEADLINE_MS).unref?.(),
+  ),
+]).finally(markDispatchReady)
 
 startAutoUpdate()
 

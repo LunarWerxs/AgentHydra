@@ -33,7 +33,22 @@ export function tomorrowTime(): string {
   return /^([01]?\d|2[0-3]):[0-5]\d$/.test(v) ? v : '09:00'
 }
 
+/**
+ * ⛔ THE TICK MUST NEVER THROW OUT OF ITSELF. It is handed straight to setInterval, so a
+ * synchronous throw here is not caught by anything: it becomes an uncaughtException, and this
+ * process installs a handler that answers those with process.exit(1). That is the whole daemon
+ * gone - the queue, the monitor, the courier, the HTTP API - because one sqlite read hit a lock.
+ * A tick that fails is a tick skipped; the next one is a poll interval away.
+ */
 function tick() {
+  try {
+    tickInner()
+  } catch (err) {
+    console.error('[agenthydra] scheduler tick error:', err)
+  }
+}
+
+function tickInner() {
   if (getSetting('scheduler_enabled') !== '1') return
   // Don't dispatch until reattachRuns() has settled: a run that survived the previous daemon isn't
   // in `active` yet, so isSessionActive() below would wrongly say "free" and we'd double-dispatch

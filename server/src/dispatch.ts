@@ -500,9 +500,39 @@ async function killTree(pid: number): Promise<void> {
  * catches a runner that was still launching when the previous daemon died (its cmdline already carries
  * the spec), so a live run is never wrongly finalized as failed. Never throws.
  */
+/**
+ * ⛔ EVERY SPAWN HERE IS ON A LEASH. This probe is awaited by reattachRuns() during boot, and
+ * boot is what un-parks the scheduler and the monitor - so a spawn that never returns does not
+ * merely fail this one lookup, it leaves markDispatchReady() uncalled and EVERY automatic tick
+ * silently no-ops for as long as the daemon runs. Nothing throws, nothing exits, and /api/health
+ * keeps answering, so a watchdog sees a perfectly healthy daemon doing nothing at all. A hung
+ * WMI query is the documented Windows failure that gets you there (wedged winmgmt, a corrupt
+ * repository, DCOM trouble). The other two PowerShell spawners in this codebase already kill on
+ * a deadline; this one did not.
+ */
+const PROBE_TIMEOUT_MS = 15_000
+
 async function isRunnerAlive(id: string): Promise<boolean> {
   // Item ids are uuids/simple slugs (no WQL/regex metacharacters), so the needle needs no escaping.
   const needle = `${id}.spec.json`
+  const onLeash = async (
+    proc: { exited: Promise<number>; kill: () => void },
+    read: Promise<string>,
+  ) => {
+    const killer = setTimeout(() => {
+      try {
+        proc.kill()
+      } catch {
+        /* already gone */
+      }
+    }, PROBE_TIMEOUT_MS)
+    try {
+      const [out] = await Promise.all([read, proc.exited])
+      return out
+    } finally {
+      clearTimeout(killer)
+    }
+  }
   try {
     if (process.platform === 'win32') {
       const proc = Bun.spawn(
@@ -521,11 +551,11 @@ async function isRunnerAlive(id: string): Promise<boolean> {
         ],
         { stdout: 'pipe', stderr: 'ignore', windowsHide: true },
       )
-      const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+      const out = await onLeash(proc, new Response(proc.stdout).text())
       return Number(out.trim()) > 0
     }
     const proc = Bun.spawn(['ps', '-eo', 'args='], { stdout: 'pipe', stderr: 'ignore' })
-    const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+    const out = await onLeash(proc, new Response(proc.stdout).text())
     return out.split('\n').some((line) => line.includes(needle))
   } catch {
     return false

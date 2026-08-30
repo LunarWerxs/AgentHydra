@@ -179,6 +179,20 @@ test('the per-pass cap is passed down, so one tick can never spray the fleet', a
   const rep = await courierPass({ act: true }, { ...h.deps, max: 3 })
   expect(h.delivered.length).toBe(3)
   expect(rep.attempts.length).toBe(3)
+  // ...AND IT SAYS SO. The other nine are not in attempts, held, or unroutable - they were never
+  // visited. Without these three fields the report read exactly like a pass that cleared the
+  // queue, which is the false green this codebase treats as the worst defect there is.
+  expect(rep.deliverable).toBe(12)
+  expect(rep.notAttempted).toBe(9)
+  expect(rep.capHit).toBe(true)
+})
+
+test('a pass that clears the queue says capHit false - the flag is about THIS pass, not the queue', async () => {
+  const h = harness({ pending: [row({ session_id: 'only-one' })], instances: [inst()] })
+  const rep = await courierPass({ act: true }, { ...h.deps, max: 3 })
+  expect(rep.deliverable).toBe(1)
+  expect(rep.notAttempted).toBe(0)
+  expect(rep.capHit).toBe(false)
 })
 
 test('a refusing actuator is reported verbatim - the row stays pending for the ledger', async () => {

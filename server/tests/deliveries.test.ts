@@ -282,3 +282,51 @@ test('settled rows are pruned past the retention window; OPEN rows never are', (
     .sort()
   expect(left).toEqual(['new-done', 'old-open'])
 })
+
+test('a DEAF row ages out at 24h - deaf is a diagnosis, not a life sentence', () => {
+  stageDelivery({
+    sessionId: 's-deaf',
+    prompt: 'resume please',
+    instanceRef: 'desktop:C:/i1',
+    nowMs: T0,
+  })
+  // A process started after staging but the transcript never moved: deaf.
+  reconcileDeliveries({ nowMs: T0 + 1000, lastActivity: () => null, liveSince: () => T0 + 500 })
+  expect(listDeliveries().find((r) => r.session_id === 's-deaf')?.state).toBe('deaf')
+  // Still deaf a few hours later - nothing new to say, and nothing to expire yet.
+  reconcileDeliveries({ nowMs: T0 + 3600_000, lastActivity: () => null, liveSince: () => null })
+  expect(listDeliveries().find((r) => r.session_id === 's-deaf')?.state).toBe('deaf')
+  // Past 24h it EXPIRES. Before the fix, reconcile `continue`d on 'deaf' before ever reaching the
+  // expiry check, so a deaf row stayed open forever - and open rows are deliberately never pruned
+  // AND are selected as deliverable, so the courier re-drove its UI every five minutes for good.
+  reconcileDeliveries({
+    nowMs: T0 + 25 * 3600_000,
+    lastActivity: () => null,
+    liveSince: () => null,
+  })
+  const row = listDeliveries().find((r) => r.session_id === 's-deaf')
+  expect(row?.state).toBe('expired')
+  expect(row?.evidence).toContain('deaf for 24h')
+  expect(deliverableDeliveries().some((r) => r.session_id === 's-deaf')).toBe(false)
+})
+
+test('an expired deaf row can still be settled as delivered if the chat answers first', () => {
+  stageDelivery({ sessionId: 's-late', prompt: 'resume', instanceRef: 'desktop:C:/i1', nowMs: T0 })
+  reconcileDeliveries({ nowMs: T0 + 1000, lastActivity: () => null, liveSince: () => T0 + 500 })
+  expect(listDeliveries().find((r) => r.session_id === 's-late')?.state).toBe('deaf')
+  // The activity check runs BEFORE the deaf/expiry branch, so a late-starting engine still wins.
+  reconcileDeliveries({
+    nowMs: T0 + 30 * 3600_000,
+    lastActivity: () => T0 + 20 * 3600_000,
+    liveSince: () => null,
+  })
+  expect(listDeliveries().find((r) => r.session_id === 's-late')?.state).toBe('delivered')
+})
+
+test('the database waits for a lock instead of throwing - busy_timeout is set, not defaulted', () => {
+  // SQLite's default busy_timeout is ZERO: a locked write throws SQLITE_BUSY instantly. Several
+  // of this daemon's callers are bare timer ticks whose throw exits the process, and the tray
+  // host is a second process on the same file, so the default is a crash waiting for contention.
+  const row = db.query<{ timeout: number }, []>('pragma busy_timeout').get()
+  expect(row?.timeout).toBeGreaterThanOrEqual(1000)
+})

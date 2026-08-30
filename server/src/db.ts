@@ -17,6 +17,14 @@ try {
 export const db = new Database(DB_PATH, { create: true })
 db.exec('pragma journal_mode = WAL')
 db.exec('pragma foreign_keys = ON')
+// ⛔ WITHOUT THIS, EVERY LOCK COLLISION IS AN EXCEPTION. SQLite's default busy_timeout is ZERO:
+// a writer that finds the database locked throws SQLITE_BUSY instantly rather than waiting, and
+// several of this daemon's callers are bare timer ticks whose throw becomes an uncaughtException
+// and exits the process. Contention is not hypothetical here - the tray host is a second process
+// on the same file, and the self-updater deliberately runs the old and new daemon together for
+// 800ms, which is exactly when a migration's first write lands. Five seconds is far longer than
+// any statement this schema runs and turns a crash into a pause nobody notices.
+db.exec('pragma busy_timeout = 5000')
 try {
   chmodSync(DB_PATH, 0o600)
   chmodSync(`${DB_PATH}-wal`, 0o600)

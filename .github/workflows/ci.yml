@@ -106,6 +106,9 @@ jobs:
       - name: Guardrail (transcript index must not be born stale)
         run: bun scripts/checks/transcript-index-born-stale.mjs
 
+      - name: Guardrail (a repeating timer must not be able to kill the daemon)
+        run: bun scripts/checks/timer-callback-can-kill-the-daemon.mjs
+
       - name: Build (web SPA)
         run: bun run build
 
