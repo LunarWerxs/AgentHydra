@@ -30,10 +30,10 @@
 import { type ChatGate, type ChatGateDeps, type CrashKind, chatGate } from './chat-gate'
 import { resolveAutomatedTitle } from './chat-title'
 import { openInstance } from './core/instances'
-import { type FleetInstanceEntry, fleetInstances } from './fleet-instances'
+import { type FleetInstanceEntry, fleetInstances, planRank } from './fleet-instances'
 import { type FleetUsageEntry, fleetUsage, LANDING_OVERFLOW_PCT } from './fleet-usage'
 import { instanceRefForSession } from './instance-sessions'
-import { closedLandingEligible, pickLandingInstance } from './monitor'
+import { closedLandingEligible, pickLandingInstance, underLandingThreshold } from './monitor'
 import { pathKey } from './path-key'
 import {
   archiveDesktopChat,
@@ -41,6 +41,7 @@ import {
   importSessionToDesktop,
   isSessionSuperseded,
 } from './session-launch'
+import { type UiArchiveOutcome, uiArchiveChat } from './ui-archive'
 
 export type GateActionKind =
   | 'left-alone'
@@ -115,6 +116,8 @@ export interface GateActionDeps {
   resolveTitle?: typeof resolveAutomatedTitle
   superseded?: typeof isSessionSuperseded
   home?: typeof desktopHomeFor
+  /** The running-app UI archive click (ui-archive.ts) - seamed because it drives real UIA. */
+  uiArchive?: (profileDir: string, sessionId: string) => Promise<UiArchiveOutcome>
   pinnedRefFor?: (sessionId: string) => string | null
   /** How long to wait for a just-opened instance to reach running. */
   openWaitMs?: number
@@ -133,6 +136,7 @@ function real(deps: GateActionDeps) {
     resolveTitle: deps.resolveTitle ?? resolveAutomatedTitle,
     superseded: deps.superseded ?? isSessionSuperseded,
     home: deps.home ?? desktopHomeFor,
+    uiArchive: deps.uiArchive ?? uiArchiveChat,
     pinnedRefFor: deps.pinnedRefFor ?? instanceRefForSession,
     openWaitMs: deps.openWaitMs ?? 45_000,
     sleep: deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
@@ -197,12 +201,15 @@ export async function landSessionInDesktop(opts: {
       num: i.num,
       isRunning: i.isRunning,
       signedIn: i.signedIn,
+      // The owner's tier order (2026-08-30): highest plan first, then lowest usage.
+      planRank: planRank(i.account?.planLabel ?? null),
     })),
     usage.map((u) => ({
       ref: u.ref,
       weeklyPct: u.weeklyPct,
       sessionPct: u.sessionPct,
       stale: u.stale,
+      ageMins: u.ageMins,
     })),
   )
   if (!target)
@@ -286,15 +293,43 @@ export async function actOnGate(
           'recap says done and nothing is asked, but no desktop entry exists to archive - ' +
             'the transcript is already at rest',
         )
-      const underRunning = r.hits.some((h) => h.changed && h.wasRunning)
+      // A hit under a RUNNING app needs the app's own click to leave the sidebar now - and
+      // that includes an UNCHANGED hit (flag already on disk but the app still rendering it),
+      // so a re-act settles the row instead of reporting durable over a visible chat. A
+      // profile the fleet list does NOT manage - above all the DEFAULT %APPDATA% install,
+      // which never carries --user-data-dir and is therefore invisible to instance discovery
+      // (review-confirmed) - gets the click attempt too: the tool itself answers whether that
+      // app is running, and a closed one settles honestly via the disk flag.
+      const instances = await d.instances()
+      const clickProfiles = [...new Set(r.hits.map((h) => h.profile))].filter((p) => {
+        const managed = instances.find((i) => norm(i.dir) === norm(p))
+        return managed ? managed.isRunning : true
+      })
+      if (clickProfiles.length === 0)
+        return res(
+          'archived',
+          'archive flag written and durable (no running app holds this chat in memory)',
+          { archived: { profiles: r.hits.length, durable: true } },
+        )
+      // Owner ruling 2026-08-30 ("I will defer to your recommendation and say yes"): the
+      // server itself retires the row through the running app's own UI, so the chat leaves
+      // the sidebar now instead of at some future restart. ui-archive.ts holds the safety
+      // rails (real disk title, disk-unique title, verified by id after).
+      const clicks = await Promise.all(clickProfiles.map((p) => d.uiArchive(p, sessionId)))
+      const durable = clicks.every((c) => c.verified)
       return res(
         'archived',
-        underRunning
-          ? 'archive flag written, but a RUNNING app holds its chat list in memory - the chat ' +
-              "leaves the sidebar at that instance's next restart (misc/Manage-DesktopChat.ps1 " +
-              "retires it immediately through the app's own UI)"
-          : 'archive flag written and durable (no running app holds this chat in memory)',
-        { archived: { profiles: r.hits.length, durable: !underRunning } },
+        durable
+          ? clicks.some((c) => c.clicked)
+            ? "archive flag written AND the running app's own Archive was clicked (verified " +
+              'by id on disk) - the chat is gone from the sidebar now'
+            : 'already retired - archived by id on disk with no rendered row remaining'
+          : 'archive flag written; the UI click did not complete (' +
+              `${clicks
+                .map((c) => c.reason)
+                .filter(Boolean)
+                .join('; ')}) - the chat leaves the sidebar at that instance's next restart`,
+        { archived: { profiles: r.hits.length, durable } },
       )
     }
 
@@ -401,14 +436,16 @@ async function surfaceForMessage(
       )
     if (!inst.isRunning) {
       const running = instances.filter((i) => i.isRunning && i.signedIn)
+      const usageRows = d.usage().map((u) => ({
+        ref: u.ref,
+        weeklyPct: u.weeklyPct,
+        sessionPct: u.sessionPct,
+        stale: u.stale,
+        ageMins: u.ageMins,
+      }))
       const mayOpen = closedLandingEligible(
         running.map((i) => ({ ref: i.ref })),
-        d.usage().map((u) => ({
-          ref: u.ref,
-          weeklyPct: u.weeklyPct,
-          sessionPct: u.sessionPct,
-          stale: u.stale,
-        })),
+        usageRows,
       )
       if (!mayOpen)
         return res(
@@ -416,6 +453,16 @@ async function surfaceForMessage(
           `its home instance #${inst.num} is closed, and the open accounts still have headroom ` +
             `below the ${LANDING_OVERFLOW_PCT}% overflow threshold - automation may not boot an ` +
             'app (owner rule 2026-08-30); open it yourself or order a migration',
+        )
+      // "Just make sure that it is underneath our threshold" (owner, 2026-08-30): the account
+      // being OPENED must itself have a known reading under the line - booting a home that is
+      // already past 85% (or has no reading at all) just hits the wall it was fleeing.
+      if (!underLandingThreshold(usageRows.find((u) => norm(u.ref) === norm(inst.ref))))
+        return res(
+          'parked',
+          `its home instance #${inst.num} is closed and its own cached usage is at/over the ` +
+            `${LANDING_OVERFLOW_PCT}% threshold (or unknown) - booting it would just hit the ` +
+            'wall; order a migration instead',
         )
       const booted = await openAndAwait(inst, d)
       if (!booted.ok) return res('parked', booted.reason ?? 'open failed')
@@ -472,6 +519,7 @@ function dToDeps(d: ReturnType<typeof real>): GateActionDeps {
     resolveTitle: d.resolveTitle,
     superseded: d.superseded,
     home: d.home,
+    uiArchive: d.uiArchive,
     pinnedRefFor: d.pinnedRefFor,
     openWaitMs: d.openWaitMs,
     sleep: d.sleep,

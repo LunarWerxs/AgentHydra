@@ -100,11 +100,26 @@ function Wake([IntPtr]$hwnd) { [Ax]::Wake($hwnd); Start-Sleep -Milliseconds 800;
 function ByName($scope, $name) { $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name); return $scope.FindFirst($TREE, $c) }
 function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch { return $null } }
 
-# Running Claude desktop instances (main process = has --user-data-dir, no --type=).
+# Running Claude desktop instances: a main process (no --type=) with --user-data-dir is a
+# managed instance; one WITHOUT the flag is the DEFAULT %APPDATA%\Claude install (piece-10
+# review: the default profile was structurally invisible here, so the most common app - the
+# owner's primary install - could never be listed or clicked).
 $mains = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
-  Where-Object { $_.CommandLine -match '--user-data-dir=("?)([^"]+?)\1(\s|$)' -and $_.CommandLine -notmatch '--type=' } |
-  ForEach-Object { [pscustomobject]@{ ProcId = $_.ProcessId; Dir = ([regex]::Match($_.CommandLine, '--user-data-dir=("?)([^"]+?)\1(\s|$)').Groups[2].Value) } }
-if ($Instance) { $mains = @($mains | Where-Object { $_.Dir -like "*$Instance*" }) }
+  Where-Object { $_.CommandLine -and $_.CommandLine -notmatch '--type=' } |
+  ForEach-Object {
+    $m = [regex]::Match($_.CommandLine, '--user-data-dir=("?)([^"]+?)\1(\s|$)')
+    $dir = if ($m.Success) { $m.Groups[2].Value } else { Join-Path $env:APPDATA 'Claude' }
+    [pscustomobject]@{ ProcId = $_.ProcessId; Dir = $dir }
+  }
+if ($Instance) {
+  # A path-shaped hint (contains a slash) must match the dir EXACTLY - an unanchored substring
+  # let '...\i1' also match '...\i10' (piece-10 review), and a wrong instance means a wrong
+  # chat archived. Short names keep the convenient substring match for manual use.
+  $mains = @($mains | Where-Object {
+    if ($Instance -match '[\\/]') { $_.Dir.TrimEnd('\') -eq $Instance.TrimEnd('\') }
+    else { $_.Dir -like "*$Instance*" }
+  })
+}
 if (-not $mains) { Write-Output "FAIL: no running Claude desktop instance matches '$Instance'"; exit 1 }
 
 if ($Action -eq 'Rename') {

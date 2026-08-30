@@ -452,22 +452,25 @@ export interface LandingUsageRow {
   weeklyPct: number | null
   sessionPct?: number | null
   stale: boolean
+  /** Minutes since the reading was captured; lets the threshold test prove a 5-hour window
+   *  has reset since (a closed app's cache only ages). */
+  ageMins?: number | null
 }
 
 /**
- * THE OVERFLOW RULE (owner directive, 2026-08-30): closed signed-in instances become eligible
- * landing targets only when every RUNNING signed-in candidate has PROVABLY exceeded
- * LANDING_OVERFLOW_PCT on either the 5-hour or the weekly window. Proof means a FRESH reading:
- * unknown or stale usage is not "exceeded", so automation never boots an app on a guess.
- * NOT vacuous on purpose (review-confirmed the first cut wrong here, 2026-08-30): "only if the
- * accounts that are open have exceeded" cannot truthfully hold when no account is open at all,
- * so an all-closed fleet parks honestly instead of booting an app the rule never authorized.
+ * THE OVERFLOW RULE (owner directive, 2026-08-30, second ruling same day): closed signed-in
+ * instances become eligible landing targets when every RUNNING signed-in candidate has
+ * PROVABLY exceeded LANDING_OVERFLOW_PCT on either the 5-hour or the weekly window - proof
+ * means a FRESH reading; unknown or stale usage is not "exceeded", so automation never boots
+ * an app on a guess - OR when nothing is open at all ("all closed fleets may open an account
+ * if a chat needs a home"). Either way the account actually OPENED must itself pass
+ * {@link underLandingThreshold}: his words - "just make sure that it is underneath our
+ * threshold. preferably one of the lowest ones."
  */
 export function closedLandingEligible(
   running: Array<{ ref: string }>,
   usage: LandingUsageRow[],
 ): boolean {
-  if (running.length === 0) return false
   const norm = (p: string) => pathKey(p, true)
   const byRef = new Map(usage.map((u) => [norm(u.ref), u]))
   return running.every((i) => {
@@ -477,21 +480,51 @@ export function closedLandingEligible(
   })
 }
 
+/** How long the 5-hour session window lasts; a reading older than this is proof that window
+ *  has reset since, whatever it recorded. */
+const SESSION_WINDOW_MINS = 300
+
+/** May this specific account be OPENED by automation? "Make sure" demands PROOF on both
+ *  windows (review-confirmed the first cut let an unknown session slide): the cached weekly
+ *  must be KNOWN and under the line (stale is fine - a closed app's cache only ages, and the
+ *  weekly moves slowly), and the 5-hour window must be either provably under the line NOW or
+ *  provably reset (the reading is older than the window itself - the normal state of a closed
+ *  app's cache). No reading, no proof, no boot. */
+export function underLandingThreshold(u: LandingUsageRow | undefined): boolean {
+  if (!u || u.weeklyPct == null || u.weeklyPct >= LANDING_OVERFLOW_PCT) return false
+  const sessionReset = u.ageMins != null && u.ageMins >= SESSION_WINDOW_MINS
+  const sessionUnder = u.sessionPct != null && u.sessionPct < LANDING_OVERFLOW_PCT
+  return sessionReset || sessionUnder
+}
+
 /**
  * Which desktop instance a homeless chat lands in: its own pinned instance when that app is
- * RUNNING, else the signed-in candidate with the most weekly headroom (lowest weeklyPct; ties
- * broken by running-first - equal numbers never boot an app - then permanent #num so two reads
- * agree), else null - the caller parks honestly. CLOSED signed-in instances join the pool only
- * under {@link closedLandingEligible} (the owner's 85% overflow rule, 2026-08-30); a picked
- * closed one comes back with mustOpen: true and the CALLER performs the boot. Ranking stays
- * weekly-only (piece-2 pinning); the 5-hour window enters the overflow TEST, not the ranking.
- * A running candidate still needs a FRESH weekly to rank; a closed one ranks on its cached
- * weekly even stale (nothing refreshes a closed app, and a stale weekly still beats ignorance -
- * that window moves slowly). Pure over its inputs for tests.
+ * RUNNING (a pin is the owner's explicit per-chat choice and outranks everything), else the
+ * signed-in candidate ranked by the owner's stated order (2026-08-30): highest plan tier
+ * first ("We always will prefer the highest one. AKA Max 20x" - planRank, passed in by the
+ * caller from the account identity), then most weekly headroom (lowest weeklyPct), then
+ * running-first (equal candidates never boot an app), then permanent #num so two reads agree.
+ * Else null - the caller parks honestly.
+ *
+ * CLOSED signed-in instances join the pool only under {@link closedLandingEligible} (the 85%
+ * overflow rule, all-closed fleets included), and each one must ITSELF pass
+ * {@link underLandingThreshold} - "just make sure that it is underneath our threshold". A
+ * picked closed one comes back with mustOpen: true and the CALLER performs the boot. The
+ * 5-hour window enters the overflow tests, not the ranking. A running candidate still needs a
+ * FRESH weekly to rank; a closed one ranks on its cached weekly even stale (nothing refreshes
+ * a closed app, and its stale weekly still beats ignorance - that window moves slowly). Pure
+ * over its inputs for tests.
  */
 export function pickLandingInstance(
   pinnedRef: string | null,
-  instances: Array<{ ref: string; num: number; isRunning: boolean; signedIn: boolean }>,
+  instances: Array<{
+    ref: string
+    num: number
+    isRunning: boolean
+    signedIn: boolean
+    /** The account-tier rank (fleet-instances planRank); omitted = 0 (lowest). */
+    planRank?: number
+  }>,
   usage: LandingUsageRow[],
 ): { ref: string; num: number; mustOpen: boolean } | null {
   // Refs carry a 'desktop:' scheme; pathKey folds it harmlessly along with the path.
@@ -503,7 +536,9 @@ export function pickLandingInstance(
   }
   const byRef = new Map(usage.map((u) => [norm(u.ref), u]))
   const closed = closedLandingEligible(running, usage)
-    ? instances.filter((i) => !i.isRunning && i.signedIn)
+    ? instances.filter(
+        (i) => !i.isRunning && i.signedIn && underLandingThreshold(byRef.get(norm(i.ref))),
+      )
     : []
   const keyFor = (i: { ref: string; isRunning: boolean }): number => {
     const u = byRef.get(norm(i.ref))
@@ -512,7 +547,11 @@ export function pickLandingInstance(
     return u?.weeklyPct ?? Number.POSITIVE_INFINITY
   }
   const ranked = [...running, ...closed].sort(
-    (a, b) => keyFor(a) - keyFor(b) || Number(b.isRunning) - Number(a.isRunning) || a.num - b.num,
+    (a, b) =>
+      (b.planRank ?? 0) - (a.planRank ?? 0) ||
+      keyFor(a) - keyFor(b) ||
+      Number(b.isRunning) - Number(a.isRunning) ||
+      a.num - b.num,
   )
   const best = ranked[0]
   return best ? { ref: best.ref, num: best.num, mustOpen: !best.isRunning } : null

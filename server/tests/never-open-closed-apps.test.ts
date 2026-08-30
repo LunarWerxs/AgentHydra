@@ -4,11 +4,12 @@
 // for a closed app there is nothing to redraw, and quitting-then-opening one is pure harm. These
 // tests pin the shape of that rule at the level it can be tested without driving real apps.
 //
-// "Absolutely MUST" got its one defined exception on 2026-08-30: LANDING may open a closed
-// signed-in instance when at least one account is open AND every open candidate is provably
-// at/over the 85% overflow threshold (closedLandingEligible in monitor.ts, pinned by
-// gate-actions.test.ts - an all-closed fleet still parks). Restarts stay unconditional:
-// nothing here changed.
+// "Absolutely MUST" got its one defined exception on 2026-08-30 (two owner rulings that day):
+// LANDING may open a closed signed-in instance when every open candidate is provably at/over
+// the 85% overflow threshold OR nothing is open at all - and the account being opened must
+// itself have a KNOWN reading under the threshold, highest plan tier preferred
+// (closedLandingEligible / underLandingThreshold in monitor.ts, pinned by
+// gate-actions.test.ts). Restarts stay unconditional: nothing here changed.
 import { describe, expect, test } from 'bun:test'
 
 /** The decision the sweep makes per instance, extracted so the rule is testable: a pickup

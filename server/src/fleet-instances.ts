@@ -48,6 +48,21 @@ export interface FleetInstanceEntry {
   account: FleetInstanceIdentity | null
 }
 
+/** The owner's account-tier order (2026-08-30, verbatim: "there are four types of accounts.
+ *  free. pro. Max 5x. and Max 20x. We always will prefer the highest one. AKA Max 20x. and
+ *  the lowest usage"): Max 20x > Max 5x > Max (family known, multiplier unknown) > Pro >
+ *  everything else. Only the four he named are ranked; unlisted labels (Free, Team,
+ *  Enterprise, unknown) rank together at the bottom rather than being guessed. Accepts the
+ *  display '×' and a plain 'x' both, case-insensitively. */
+export function planRank(planLabel: string | null | undefined): number {
+  const l = (planLabel ?? '').toLowerCase()
+  if (/max\s*20\s*[x×]/.test(l)) return 4
+  if (/max\s*5\s*[x×]/.test(l)) return 3
+  if (/\bmax\b/.test(l)) return 2
+  if (/\bpro\b/.test(l)) return 1
+  return 0
+}
+
 export interface FleetInstancesDeps {
   /** Seams for tests; defaults are the real list and the no-network account resolve. */
   list?: () => Promise<CMInstance[]>

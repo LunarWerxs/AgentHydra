@@ -1,12 +1,15 @@
 // server/tests/gate-actions.test.ts - Piece 9 pinned: every deed the act call can perform, from
 // fake deps (the gate's own parsing is pinned in chat-gate.test.ts; these tests pin what a
-// verdict BECOMES). Includes the owner's 85% overflow rule (2026-08-30): closed instances open
-// only when at least one account is open AND every open candidate is provably saturated on
-// either window - fresh readings only, and never vacuously (an all-closed fleet parks).
+// verdict BECOMES). Includes the owner's three 2026-08-30 rulings: the 85% overflow rule
+// (closed instances open when every open candidate is provably saturated on either window, OR
+// nothing is open at all - and the opened account must itself have a known reading under the
+// line), the tier order (Max 20x > Max 5x > Max > Pro > rest, then lowest usage), and the
+// server-side UI archive click for chats under a running app.
 import { expect, test } from 'bun:test'
 import type { ChatGate, CrashKind, FinishedLane } from '../src/chat-gate'
+import { planRank } from '../src/fleet-instances'
 import { actOnGate, type GateActionDeps, parseActInput, resumeNotice } from '../src/gate-actions'
-import { closedLandingEligible, pickLandingInstance } from '../src/monitor'
+import { closedLandingEligible, pickLandingInstance, underLandingThreshold } from '../src/monitor'
 
 const gateOf = (over: Partial<ChatGate>): ChatGate => ({
   sessionId: 's',
@@ -51,12 +54,20 @@ function fixture(over: {
     stale?: boolean
     sessionResetsAt?: string | null
     weeklyResetsAt?: string | null
+    ageMins?: number | null
   }>
-  instances?: Array<{ num: number; dir: string; isRunning: boolean; signedIn: boolean }>
+  instances?: Array<{
+    num: number
+    dir: string
+    isRunning: boolean
+    signedIn: boolean
+    plan?: string
+  }>
   superseded?: boolean
   title?: string | null
   openFails?: boolean
   openStalls?: boolean
+  uiClick?: { clicked: boolean; verified: boolean; reason?: string }
   archiveHits?: Array<{ profile: string; wasRunning: boolean; changed: boolean }>
   pinnedRef?: string | null
   importOk?: boolean
@@ -86,7 +97,9 @@ function fixture(over: {
         pid: null,
         loginUuid: i.signedIn ? `uuid-${i.num}` : null,
         signedIn: i.signedIn,
-        account: null,
+        account: i.plan
+          ? { status: 'ok' as never, email: null, planLabel: i.plan, accountUuid: null }
+          : null,
       })),
     usage: () =>
       (over.usage ?? []).map((u) => ({
@@ -101,7 +114,9 @@ function fixture(over: {
         sessionResetsAt: u.sessionResetsAt ?? null,
         sessionResetsInMins: null,
         capturedAt: null,
-        ageMins: 0,
+        // Stale fixture rows model a closed app's aged cache (session window provably reset);
+        // fresh rows model a live refresher. Overridable per test.
+        ageMins: u.ageMins !== undefined ? u.ageMins : u.stale ? 999 : 0,
         stale: u.stale ?? false,
       })),
     archive: async (sessionId, archived) => {
@@ -120,6 +135,10 @@ function fixture(over: {
     importSession: async (o) => {
       events.push(`import:${o.instanceDir}:${o.title}`)
       return over.importOk === false ? { ok: false, reason: 'nope' } : { ok: true }
+    },
+    uiArchive: async (profileDir) => {
+      events.push(`uiarchive:${profileDir}`)
+      return over.uiClick ?? { clicked: true, verified: true }
     },
     openWaitMs: 5000,
     sleep: async () => {},
@@ -168,15 +187,55 @@ test('archive-candidate -> archive flag written; durable when no app was running
   expect(events).toEqual(['archive:sid:true'])
 })
 
-test('archive-candidate under a RUNNING app -> archived but honestly non-durable', async () => {
-  const { deps } = fixture({
+test("archive-candidate under a RUNNING app -> the server clicks the app's own Archive (owner: yes)", async () => {
+  const { deps, events } = fixture({
     gate: finishedGate('archive-candidate'),
     archiveHits: [{ profile: 'C:/i1', wasRunning: true, changed: true }],
   })
   const r = await actOnGate('sid', {}, deps)
   expect(r?.action).toBe('archived')
+  expect(r?.archived?.durable).toBe(true)
+  expect(r?.why).toContain('own Archive was clicked')
+  expect(events).toEqual(['archive:sid:true', 'uiarchive:C:/i1'])
+})
+
+test('a profile the fleet does NOT manage (the default APPDATA install) gets the click attempt', async () => {
+  // The default profile never carries --user-data-dir, so instance discovery cannot see it
+  // (review-confirmed blind spot): the tool itself must answer whether that app is running.
+  const { deps, events } = fixture({
+    gate: finishedGate('archive-candidate'),
+    archiveHits: [
+      { profile: 'C:/Users/x/AppData/Roaming/Claude', wasRunning: false, changed: true },
+    ],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.archived?.durable).toBe(true)
+  expect(events).toContain('uiarchive:C:/Users/x/AppData/Roaming/Claude')
+})
+
+test('an UNCHANGED hit under a running app still gets the click - a re-act settles the row', async () => {
+  // The flag can already sit on disk while the app still renders the chat (a prior act, or an
+  // outside write). Running-ness comes from the live instance list, not the flag-write.
+  const { deps, events } = fixture({
+    gate: finishedGate('archive-candidate'),
+    archiveHits: [{ profile: 'C:/i1', wasRunning: false, changed: false }],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.archived?.durable).toBe(true)
+  expect(events).toContain('uiarchive:C:/i1')
+})
+
+test('a UI click that cannot fire safely reports non-durable with the honest reason', async () => {
+  const { deps } = fixture({
+    gate: finishedGate('archive-candidate'),
+    archiveHits: [{ profile: 'C:/i1', wasRunning: true, changed: true }],
+    uiClick: { clicked: false, verified: false, reason: 'rendered twice' },
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('archived')
   expect(r?.archived?.durable).toBe(false)
-  expect(r?.why).toContain('Manage-DesktopChat.ps1')
+  expect(r?.why).toContain('rendered twice')
+  expect(r?.why).toContain('next restart')
 })
 
 test('archive-candidate with no desktop entry -> left alone, transcript already at rest', async () => {
@@ -213,7 +272,11 @@ test('crashed with a CLOSED home, every open account saturated -> home is booted
   const { deps, events } = fixture({
     gate: crashedGate('error'),
     home: 'C:/i2',
-    usage: [fresh('desktop:C:/i1', 90), fresh('desktop:C:/i3', 88)],
+    usage: [
+      fresh('desktop:C:/i1', 90),
+      fresh('desktop:C:/i3', 88),
+      { ref: 'desktop:C:/i2', weeklyPct: 20, stale: true },
+    ],
   })
   const r = await actOnGate('sid', {}, deps)
   expect(r?.action).toBe('surfaced')
@@ -225,7 +288,11 @@ test('the 5-HOUR window alone can prove saturation (owner: either threshold)', a
   const { deps } = fixture({
     gate: crashedGate('mid-turn'),
     home: 'C:/i2',
-    usage: [fresh('desktop:C:/i1', 50, 92), fresh('desktop:C:/i3', 40, 86)],
+    usage: [
+      fresh('desktop:C:/i1', 50, 92),
+      fresh('desktop:C:/i3', 40, 86),
+      { ref: 'desktop:C:/i2', weeklyPct: 20, stale: true },
+    ],
   })
   const r = await actOnGate('sid', {}, deps)
   expect(r?.action).toBe('surfaced')
@@ -275,10 +342,9 @@ test('homeless with every open account saturated -> the closed instance is opene
   expect(events).toEqual(['open:C:/i2', 'import:C:/i2:A Real Name'])
 })
 
-test('nothing open at all -> PARKED: the overflow rule is not vacuous (review-confirmed)', async () => {
-  // The owner's words - "only if the accounts that are open have exceeded" - cannot truthfully
-  // hold when no account is open, so an all-closed fleet parks instead of booting an app the
-  // rule never authorized. Whether an idle fleet should self-open is his call, not a default.
+test('nothing open at all -> the best under-threshold closed account opens (owner ruling #2)', async () => {
+  // Owner, 2026-08-30: "all closed fleets may open an account if a chat needs a home. just
+  // make sure that it is underneath our threshold. preferably one of the lowest ones."
   const { deps, events } = fixture({
     gate: crashedGate('mid-turn'),
     home: null,
@@ -292,8 +358,80 @@ test('nothing open at all -> PARKED: the overflow rule is not vacuous (review-co
     ],
   })
   const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('surfaced')
+  expect(r?.instance?.num).toBe(5)
+  expect(events[0]).toBe('open:C:/i5')
+})
+
+test('all-closed but every candidate at/over threshold or unknown -> parks ("make sure")', async () => {
+  const { deps, events } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: null,
+    instances: [
+      { num: 2, dir: 'C:/i2', isRunning: false, signedIn: true },
+      { num: 5, dir: 'C:/i5', isRunning: false, signedIn: true },
+    ],
+    // i2 is past the line, i5 has no reading at all - neither may be opened.
+    usage: [{ ref: 'desktop:C:/i2', weeklyPct: 88, stale: true }],
+  })
+  const r = await actOnGate('sid', {}, deps)
   expect(r?.action).toBe('parked')
   expect(events).toEqual([])
+})
+
+test('the account tier outranks usage: Max 20x is always preferred (owner ruling #3)', async () => {
+  // Two RUNNING accounts: a Pro at 5% and a Max 20x at 80%. His words: "We always will prefer
+  // the highest one. AKA Max 20x. and the lowest usage" - tier first, usage second.
+  const { deps } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: null,
+    instances: [
+      { num: 1, dir: 'C:/i1', isRunning: true, signedIn: true, plan: 'Pro' },
+      { num: 3, dir: 'C:/i3', isRunning: true, signedIn: true, plan: 'Max 20×' },
+    ],
+    usage: [fresh('desktop:C:/i1', 5), fresh('desktop:C:/i3', 80)],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.instance?.num).toBe(3)
+})
+
+test('tier decides WHICH closed account an all-closed fleet opens', async () => {
+  const { deps, events } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: null,
+    instances: [
+      { num: 2, dir: 'C:/i2', isRunning: false, signedIn: true, plan: 'Max 20×' },
+      { num: 5, dir: 'C:/i5', isRunning: false, signedIn: true, plan: 'Pro' },
+    ],
+    usage: [
+      { ref: 'desktop:C:/i2', weeklyPct: 60, stale: true },
+      { ref: 'desktop:C:/i5', weeklyPct: 15, stale: true },
+    ],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.instance?.num).toBe(2) // Max 20x at 60% beats Pro at 15%
+  expect(events[0]).toBe('open:C:/i2')
+})
+
+test('a closed HOME that is itself at/over threshold (or unknown) parks - booting hits the wall', async () => {
+  const saturated = [fresh('desktop:C:/i1', 90), fresh('desktop:C:/i3', 90)]
+  const over = await actOnGate(
+    'sid',
+    {},
+    fixture({
+      gate: crashedGate('mid-turn'),
+      home: 'C:/i2',
+      usage: [...saturated, { ref: 'desktop:C:/i2', weeklyPct: 91, stale: true }],
+    }).deps,
+  )
+  expect(over?.action).toBe('parked')
+  expect(over?.why).toContain('hit the wall')
+  const unknown = await actOnGate(
+    'sid',
+    {},
+    fixture({ gate: crashedGate('mid-turn'), home: 'C:/i2', usage: saturated }).deps,
+  )
+  expect(unknown?.action).toBe('parked')
 })
 
 test('crashed by the usage wall -> wait-for-reset, and nothing is imported or opened', async () => {
@@ -401,7 +539,11 @@ test('a failed open parks honestly', async () => {
   const { deps } = fixture({
     gate: crashedGate('mid-turn'),
     home: 'C:/i2',
-    usage: [fresh('desktop:C:/i1', 90), fresh('desktop:C:/i3', 90)],
+    usage: [
+      fresh('desktop:C:/i1', 90),
+      fresh('desktop:C:/i3', 90),
+      { ref: 'desktop:C:/i2', weeklyPct: 20, stale: true },
+    ],
     openFails: true,
   })
   const r = await actOnGate('sid', {}, deps)
@@ -413,7 +555,11 @@ test('an opened instance that never reaches running parks on the deadline, not a
   const { deps } = fixture({
     gate: crashedGate('mid-turn'),
     home: 'C:/i2',
-    usage: [fresh('desktop:C:/i1', 90), fresh('desktop:C:/i3', 90)],
+    usage: [
+      fresh('desktop:C:/i1', 90),
+      fresh('desktop:C:/i3', 90),
+      { ref: 'desktop:C:/i2', weeklyPct: 20, stale: true },
+    ],
     openStalls: true,
   })
   const r = await actOnGate('sid', {}, deps)
@@ -497,16 +643,18 @@ test('pickLandingInstance: closed stays ineligible while any open account has fr
 })
 
 test('pickLandingInstance: an 84.9 is headroom, an 85.0 is not - the line is exact', () => {
+  // The closed candidate carries an aged cache (ageMins past the 5h window): threshold-proven.
+  const closedRow = { ref: 'desktop:C:/i2', weeklyPct: 5, stale: true, ageMins: 999 }
   const below = pickLandingInstance(
     null,
     [inst(1, true), inst(2, false)],
-    [fresh('desktop:C:/i1', 84.9), { ref: 'desktop:C:/i2', weeklyPct: 5, stale: true }],
+    [fresh('desktop:C:/i1', 84.9), closedRow],
   )
   expect(below?.mustOpen).toBe(false)
   const at = pickLandingInstance(
     null,
     [inst(1, true), inst(2, false)],
-    [fresh('desktop:C:/i1', 85), { ref: 'desktop:C:/i2', weeklyPct: 5, stale: true }],
+    [fresh('desktop:C:/i1', 85), closedRow],
   )
   expect(at).toEqual({ ref: 'desktop:C:/i2', num: 2, mustOpen: true })
 })
@@ -528,9 +676,43 @@ test('pickLandingInstance: signed-out instances never join either pool', () => {
 
 test('closedLandingEligible: unknown usage on a running instance blocks the overflow', () => {
   expect(closedLandingEligible([{ ref: 'desktop:C:/i1' }], [])).toBe(false)
-  expect(closedLandingEligible([], [])).toBe(false) // NOT vacuous: nothing open proves nothing
+  // All-closed counts as eligible (owner ruling #2); underLandingThreshold guards the boot.
+  expect(closedLandingEligible([], [])).toBe(true)
   expect(closedLandingEligible([{ ref: 'desktop:C:/i1' }], [fresh('desktop:C:/i1', 85)])).toBe(true)
   expect(closedLandingEligible([{ ref: 'desktop:C:/i1' }], [fresh('desktop:C:/i1', 10, 85)])).toBe(
     true,
   )
+})
+
+test('underLandingThreshold: PROOF on both windows - unknown is never "made sure"', () => {
+  expect(underLandingThreshold(undefined)).toBe(false)
+  expect(underLandingThreshold({ ref: 'r', weeklyPct: null, stale: true, ageMins: 999 })).toBe(
+    false,
+  )
+  expect(underLandingThreshold({ ref: 'r', weeklyPct: 85, stale: true, ageMins: 999 })).toBe(false)
+  // Session proof, way one: a reading older than the 5-hour window itself - that window has
+  // provably reset (the normal state of a closed app's cache).
+  expect(underLandingThreshold({ ref: 'r', weeklyPct: 84.9, stale: true, ageMins: 999 })).toBe(true)
+  // Session proof, way two: a known session reading under the line.
+  expect(
+    underLandingThreshold({ ref: 'r', weeklyPct: 40, sessionPct: 20, stale: false, ageMins: 0 }),
+  ).toBe(true)
+  // No proof either way (recent reading, session unknown) -> no boot (review-confirmed).
+  expect(
+    underLandingThreshold({ ref: 'r', weeklyPct: 40, sessionPct: null, stale: false, ageMins: 30 }),
+  ).toBe(false)
+  expect(underLandingThreshold({ ref: 'r', weeklyPct: 10, sessionPct: 90, stale: false })).toBe(
+    false,
+  )
+})
+
+test('planRank pins the owner tier order, both x and the display ×', () => {
+  expect(planRank('Max 20×')).toBe(4)
+  expect(planRank('Max 20x')).toBe(4)
+  expect(planRank('Max 5×')).toBe(3)
+  expect(planRank('Max')).toBe(2)
+  expect(planRank('Pro')).toBe(1)
+  expect(planRank('Free')).toBe(0)
+  expect(planRank('Team')).toBe(0)
+  expect(planRank(null)).toBe(0)
 })

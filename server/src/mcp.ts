@@ -614,10 +614,13 @@ export const TOOLS: McpEngineTool[] = [
       'ACT on the gate verdict for one chat - the second half of the gate law. It re-runs the ' +
       'gate itself (a caller-supplied state is never trusted) and performs the deterministic ' +
       'deed: running or human-interrupted -> left alone; finished archive-candidate -> archive ' +
-      'flag written (durability reported honestly); crashed -> the chat is SURFACED dormant ' +
-      'into a running desktop app (its own home, or the best-headroom instance when homeless; ' +
-      'a CLOSED instance is booted ONLY when every open account is provably at/over the 85% ' +
-      'overflow threshold on the 5-hour or weekly window - owner rule 2026-08-30); ' +
+      "flag written, and under a RUNNING app the server clicks the app's own Archive itself " +
+      '(owner ruling; durability reported honestly either way); crashed -> the chat is ' +
+      'SURFACED dormant into a running desktop app (its own home, or the best instance when ' +
+      'homeless - highest plan tier first, Max 20x before all, then lowest weekly usage; a ' +
+      'CLOSED instance is booted only when every open account is provably at/over the 85% ' +
+      'overflow threshold on the 5-hour or weekly window OR nothing is open at all, and the ' +
+      'booted account must itself have a known reading under 85% - owner rules 2026-08-30); ' +
       'usage-limit crashes wait for their reset instead. finished needs-input-review requires ' +
       'YOUR autonomy judgment: read the gate evidence, then call again with decision ' +
       '"autonomous" plus the answer text (the owner prefers autonomous whenever the answer is ' +

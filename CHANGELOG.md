@@ -9,6 +9,36 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Three owner rulings on the act path, encoded (2026-08-30).** (1) Auto-archive under a
+  RUNNING app now CLICKS the app's own Archive itself (server/src/ui-archive.ts driving
+  misc/Manage-DesktopChat.ps1) so the chat leaves the sidebar immediately - with hard safety
+  rails: the click fires only when the chat's real disk title is rendered exactly once in that
+  instance's sidebar (rendered names are in-memory and can differ from disk - measured), and
+  success is verified BY ID on disk afterwards, never by title; anything else is an honest
+  no-click and the flag sticks at that instance's next restart. (2) An ALL-CLOSED fleet may now
+  open an account when a chat needs a home - and any account automation opens must itself have
+  a KNOWN cached reading under the 85% threshold ("just make sure that it is underneath our
+  threshold"): no reading means no boot, and a saturated closed home parks with the reason.
+  (3) Account-tier preference: Max 20x > Max 5x > Max > Pro > everything else
+  (fleet-instances.ts planRank), applied before the lowest-weekly-usage rule everywhere the
+  landing picker chooses - "We always will prefer the highest one. AKA Max 20x. and the lowest
+  usage." A chat's own pinned instance still outranks tier.
+
+  Adversarially reviewed before shipping (8 confirmed findings, all fixed): the DEFAULT
+  %APPDATA% Claude install was structurally invisible to both instance discovery and the UI
+  tool's process scan (no --user-data-dir flag), so the owner's primary app could never
+  receive the click and was falsely reported durable - the PS1 now recognizes a flagless main
+  process as the default profile, and unmanaged profiles get the click attempt (the tool
+  itself answers whether the app runs); the PS1's -Instance substring match could hit the
+  wrong instance (i1 vs i10) - path-shaped hints now match exactly; "make sure it is
+  underneath our threshold" now demands PROOF on both windows (a session reading, or a cache
+  older than the 5-hour window itself - the normal state of a closed app); exit 2 from the
+  click tool polls the disk flag instead of discarding a click that merely lagged; titles are
+  matched VERBATIM end to end (trimming made exact-name clicks miss); stderr from the tool
+  rides along so a thrown UIA call is diagnosable. Live: full click loop proven on the real
+  machine three ways (refused when ambiguous, clicked-and-verified by id, idempotent re-act
+  settles), and planRank verified against all 18 real accounts' labels.
+
 - **Orchestrator rebuild, piece 9: ACTING ON GATE VERDICTS** (`POST /api/chats/:id/act` +
   server/src/gate-actions.ts + the chat_act MCP tool; owner-ordered 2026-08-30: "yes gate
   verdicts should be acted on"). The act call re-runs the gate itself (a caller-supplied state

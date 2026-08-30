@@ -463,11 +463,22 @@ describe('landing instance pick', () => {
     expect(t?.ref).toBe('desktop:fresh')
   })
 
-  test('nothing running still means null - the overflow rule is NOT vacuous', () => {
-    // Owner directive 2026-08-30: closed instances open only when every OPEN account is provably
-    // past 85%. With nothing open that cannot truthfully hold (review-confirmed against a first
-    // cut that treated it as vacuously true), so the caller parks honestly.
+  test('nothing running: a closed account opens ONLY with a known under-threshold reading', () => {
+    // Owner ruling 2026-08-30 (second that day): "all closed fleets may open an account if a
+    // chat needs a home. just make sure that it is underneath our threshold." No reading = no
+    // proof = no boot; a known reading under 85 makes the closed one an offer with mustOpen.
     expect(pickLandingInstance(null, [inst('desktop:x', 1, false)], [])).toBe(null)
+    expect(
+      pickLandingInstance(
+        null,
+        [inst('desktop:x', 1, false)],
+        // An aged cache (past the 5h window) is the session-side proof a closed app carries.
+        [{ ref: 'desktop:x', weeklyPct: 40, stale: true, ageMins: 999 }],
+      ),
+    ).toEqual({ ref: 'desktop:x', num: 1, mustOpen: true })
+    expect(
+      pickLandingInstance(null, [inst('desktop:x', 1, false)], [use('desktop:x', 85, true)]),
+    ).toBe(null)
     expect(pickLandingInstance(null, [], [])).toBe(null)
   })
 })

@@ -1075,7 +1075,7 @@ function findChatMetaPathInDir(dir: string, sessionId: string): string | null {
   return null
 }
 
-function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
+export function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
   // Cached index first: it already knows this file's path under either naming shape, and the
   // walk below re-reads every metadata file in the store when the filename does not match.
   const hit = findDesktopChat(sessionId)
