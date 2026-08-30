@@ -7,6 +7,14 @@ THIS IS THE ORCHESTRATOR. It is no longer a separate subsystem: v1 was retired w
 tools. Same command name as v1 had, deliberately - the thing it does did not change.
 Extra instructions, if any: $ARGUMENTS
 
+⛔ **FIRST: if `prestart` is not a tool you can call, STOP AND SAY SO.** The AgentHydra MCP server
+is not registered in this session, and the whole command below is written against those tools. Do
+not quietly fall back to curling the daemon's REST API: that is what happened silently for weeks,
+and nobody found out until a pass went looking. Fix it with
+`claude mcp add --scope user agenthydra -- bun run --cwd <path-to-agenthydra> mcp` and start a new
+session (a session's tool list is fixed at startup). `bun run smoke:orchestrator` in the repo proves
+the whole chain end to end before you trust a pass.
+
 Work in this order and do not skip step 1 - acting on a chat without gating it first is the one
 thing this system forbids.
 
@@ -21,6 +29,15 @@ thing this system forbids.
    full context - hand off while they can still summarise themselves), `collisions` (live chats
    sharing one working tree), `suppressed` (the circuit breaker holding back a futile loop), and
    `pendingDeliveries` (staged prompts nobody has sent - these come first).
+
+   Three more that are easy to skip and should not be. **`junk.supersededVisible`** is retired
+   lineages still sitting in a sidebar: archive them, but note that `chat_act` and `chat_sweep`
+   will both PARK a superseded chat rather than act on it, so the deed is
+   `POST /api/sessions/:id/desktop-archive`. **`junk.liveButDoneMarked`** is the opposite and is
+   never automation's to resolve: a retired lineage with a LIVE process is a contradiction the
+   owner untangles. **`unusableInstances`** must be read BEFORE routing any work - and remember
+   closed is not a fault, so what appears there is damage (signed-out, no-config, unreadable
+   profile) or an open account at its usage wall.
 
 3. **`chat_sweep`** to act on the verdicts within caps. Then work the two things it hands back to
    you: each `needsJudgment` row is YOUR call (autonomous vs human - the owner prefers autonomous
