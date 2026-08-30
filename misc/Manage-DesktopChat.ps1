@@ -10,7 +10,8 @@
 # it). This drives that action with zero focus theft.
 #
 # THE MECHANISM, measured 2026-08-29 (do not "simplify" back to cursor clicks):
-#   - The row's kebab ("More options for <Title>") is exposed as an ExpandCollapse control, NOT
+#   - The row's kebab (localized: "More options for <Title>" / "Weitere Optionen fur <Title>")
+#     is exposed as an ExpandCollapse control, NOT
 #     an Invoke one. `ExpandCollapsePattern.Expand()` opens its context menu - focus-free.
 #   - The "Archive" context-menu item exposes InvokePattern. `Invoke()` fires it - focus-free,
 #     and it targets that EXACT element, so unlike a coordinate click it can never land on the
@@ -100,6 +101,65 @@ function Wake([IntPtr]$hwnd) { [Ax]::Wake($hwnd); Start-Sleep -Milliseconds 800;
 function ByName($scope, $name) { $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name); return $scope.FindFirst($TREE, $c) }
 function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch { return $null } }
 
+# THE KEBAB IS LOCALIZED (found live 2026-08-30 on a German-locale app: the row menu reads
+# 'Weitere Optionen für <title>', not 'More options for <title>'). Matching the English prefix
+# found NOTHING there, so archive/rename/list were silently inert on any non-English app -
+# they reported "not rendered" for chats sitting in plain view. Match structurally instead:
+# the kebab is the Button whose name ENDS WITH the title and exposes ExpandCollapse (the row
+# button itself carries a status prefix like 'Inaktiv <title>' and exposes Invoke, not
+# ExpandCollapse), so the pattern - not the language - identifies it.
+# THE MENU ITEMS ARE LOCALIZED TOO, and their AutomationIds are React churn
+# ('base-ui-_r_l0_'), so neither the English name nor an id can find Archive on a German app
+# (measured: 'Archivieren', 'Umbenennen', 'Löschen'). Position is NOT an option - Delete sits
+# directly below Archive, which is the one mistake this whole script exists to make
+# impossible. So: an explicit label table per action, and if nothing matches we REFUSE and
+# print the menu we saw. Never invoke an item we cannot name.
+$ACTION_LABELS = @{
+  'Archive'   = @('Archive', 'Archivieren', 'Archiver', 'Archivar', 'Archiviare', 'Archiveren')
+  'Unarchive' = @('Unarchive', 'Nicht mehr archivieren', 'Désarchiver', 'Desarchivar', 'Dearchiviare')
+  'Rename'    = @('Rename', 'Umbenennen', 'Renommer', 'Cambiar nombre', 'Rinomina', 'Hernoemen')
+}
+function MenuItemFor($cond, $action) {
+  $wanted = $ACTION_LABELS[$action]
+  $seen = @()
+  foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+    foreach ($e in $t.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+      if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.MenuItem') { continue }
+      $n = $e.Current.Name
+      if (-not $n) { continue }
+      $seen += $n
+      if ($wanted -contains $n) { return @{ Item = $e; Seen = $seen } }
+    }
+  }
+  return @{ Item = $null; Seen = $seen }
+}
+
+function KebabFor($scope, $title) {
+  $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
+  foreach ($b in $scope.FindAll($TREE, $c)) {
+    $n = $b.Current.Name
+    if ($n -and $n.EndsWith($title) -and (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern))) { return $b }
+  }
+  return $null
+}
+# -List emits each kebab's accessible name VERBATIM - '<localized more-options phrase>
+# <title>' - and does NOT try to carve the title out of it. Deriving the title needs the
+# localized phrase, and every heuristic for guessing it (longest common suffix against
+# sibling rows) produced junk entries on the real tree ('en', 'gen', 'ungen'). The caller
+# already knows the exact disk title it is looking for, so IT matches by suffix - exact,
+# language-independent, and with nothing to guess. ui-archive.ts parseListOutput owns that end.
+function RenderedKebabNames($scope) {
+  $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
+  $out = @()
+  foreach ($b in $scope.FindAll($TREE, $c)) {
+    $n = $b.Current.Name
+    if ($n -and (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)) -and $out -notcontains $n) {
+      $out += $n
+    }
+  }
+  return $out
+}
+
 # Running Claude desktop instances: a main process (no --type=) with --user-data-dir is a
 # managed instance; one WITHOUT the flag is the DEFAULT %APPDATA%\Claude install (piece-10
 # review: the default profile was structurally invisible here, so the most common app - the
@@ -143,23 +203,23 @@ foreach ($m in $mains) {
   if ($List) {
     Write-Output "== $($m.Dir) (pid $($m.ProcId)) rendered chats =="
     $bc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
-    foreach ($b in $el.FindAll($TREE, $bc)) { if ($b.Current.Name -like 'More options for *') { '  ' + $b.Current.Name.Substring('More options for '.Length) } }
+    foreach ($t in RenderedKebabNames $el) { '  ' + $t }
     continue
   }
 
   if (-not $Title) { Write-Output 'FAIL: -Title is required (or use -List)'; exit 1 }
 
-  $kebab = ByName $el "More options for $Title"
+  $kebab = KebabFor $el $Title
   if (-not $kebab) {
     # Try to bring it into view by expanding its folder group(s) (focus-free), then re-look.
     foreach ($e in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
       $ec = TryPattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-      if ($ec -and $ec.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed -and $e.Current.Name -notlike 'More options for *' -and $e.Current.Name -and $e.Current.Name.Length -lt 40) {
+      if ($ec -and $ec.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed -and $e.Current.Name -and $e.Current.Name.Length -lt 40 -and -not $e.Current.Name.EndsWith($Title)) {
         try { $ec.Expand(); Start-Sleep -Milliseconds 250 } catch { }
       }
     }
     $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
-    $kebab = ByName $el "More options for $Title"
+    $kebab = KebabFor $el $Title
   }
   if (-not $kebab) { continue }  # not in this instance; try the next
 
@@ -169,12 +229,15 @@ foreach ($m in $mains) {
   $ec.Expand()
   Start-Sleep -Milliseconds 800
 
-  $item = $null
-  foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
-    $h = ByName $t $Action
-    if ($h -and $h.Current.ControlType.ProgrammaticName -eq 'ControlType.MenuItem') { $item = $h; break }
+  $found = MenuItemFor $cond $Action
+  $item = $found.Item
+  if (-not $item) {
+    try { $ec.Collapse() } catch { }
+    Write-Output ("FAIL: menu opened but no '$Action' item matched a known label. Menu showed: " +
+      ($found.Seen -join ' | ') +
+      ". Add this locale's label to `$ACTION_LABELS - refusing rather than guessing by position, because Delete sits next to Archive.")
+    exit 1
   }
-  if (-not $item) { try { $ec.Collapse() } catch { }; Write-Output "FAIL: menu opened but no '$Action' item"; exit 1 }
   $inv = TryPattern $item ([System.Windows.Automation.InvokePattern]::Pattern)
   if (-not $inv) { Write-Output "FAIL: '$Action' item does not expose Invoke"; exit 1 }
   $inv.Invoke()
@@ -187,6 +250,13 @@ foreach ($m in $mains) {
     [Ax]::Wake($hwndTop); Start-Sleep -Milliseconds 800
     # The editor may live under a sibling top-level pane, not the main window subtree - search
     # every top-level element of this process (how the working probe found it).
+    # RENAME IS ENGLISH-ONLY AND KNOWN-INCOMPLETE (2026-08-30). Archive/Unarchive are now
+    # locale-independent (structural kebab + the $ACTION_LABELS table), but the inline rename
+    # EDITOR is not: on a German app the Rename item invokes and the menu closes, yet no
+    # writable Edit holding the old title ever appears in the tree - only the composer. The
+    # editor is presumably rendered in a way this build does not expose. Rather than ship a
+    # guess, this path stays as it was: it works on an English app, and says so plainly
+    # elsewhere. The delivery actuator does not depend on it.
     $edit = $null
     $ecEdit = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Rename')
     foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
@@ -195,7 +265,10 @@ foreach ($m in $mains) {
       }
       if ($edit) { break }
     }
-    if (-not $edit) { Write-Output 'FAIL: rename editor did not open'; exit 1 }
+    if (-not $edit) {
+      Write-Output 'FAIL: rename editor did not open (known limit: the inline editor is not exposed on non-English builds - archive/unarchive are locale-independent, rename is not)'
+      exit 1
+    }
     $vp = TryPattern $edit ([System.Windows.Automation.ValuePattern]::Pattern)
     if (-not $vp) { Write-Output 'FAIL: rename editor exposes no ValuePattern'; exit 1 }
     # Commit loop: SetValue, verify the editor actually holds the new text, post Enter, check
@@ -209,7 +282,7 @@ foreach ($m in $mains) {
       [Ax]::PostEnter($hwndTop)
       Start-Sleep -Milliseconds 1500
       $el = Wake $hwndTop
-      $renamed = [bool](ByName $el "More options for $NewTitle")
+      $renamed = [bool](KebabFor $el $NewTitle)
     }
     if (-not $renamed) { Write-Output 'RENAME INVOKED but the row does not render the new name - report this'; exit 2 }
     Write-Output "Rename done: '$Title' -> '$NewTitle' (focus-free; committed through the app, so disk and app memory agree)"
@@ -217,7 +290,7 @@ foreach ($m in $mains) {
   }
 
   $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
-  $still = [bool](ByName $el "More options for $Title")
+  $still = [bool](KebabFor $el $Title)
   if ($Action -eq 'Archive' -and $still) { Write-Output 'INVOKED but row still present - report this, do not blind-retry'; exit 2 }
   Write-Output "$Action done for '$Title' (focus-free: no SetForegroundWindow, no cursor)"
   exit 0

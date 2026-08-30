@@ -111,3 +111,25 @@ test('clicked but the disk flag never confirms -> clicked true, verified false, 
   expect(r.verified).toBe(false)
   expect(r.reason).toContain('did not confirm')
 })
+
+test('a LOCALIZED row menu still matches the chat - the phrase is chrome, the title is the key', async () => {
+  // Found live 2026-08-30 on a German app: the row menu reads 'Weitere Optionen fur <title>',
+  // so matching the English 'More options for' prefix made archive silently inert for chats
+  // sitting in plain view. The PS1 now emits menu names VERBATIM and the match happens here.
+  const { d, calls } = deps({
+    rendered: ['Weitere Navigationselemente', 'Weitere Optionen fur Real Chat Name', 'Filter'],
+  })
+  const r = await uiArchiveChat('C:/i1', 'sid', d)
+  expect(r.clicked).toBe(true)
+  expect(calls).toEqual(['invoke:Real Chat Name'])
+})
+
+test('a menu name that merely CONTAINS the title is not a match - only a suffix is', async () => {
+  const { d, calls } = deps({
+    rendered: ['Weitere Optionen fur Real Chat Name and then some'],
+    archivedAfter: false,
+  })
+  const r = await uiArchiveChat('C:/i1', 'sid', d)
+  expect(r.clicked).toBe(false)
+  expect(calls).toEqual([])
+})

@@ -7,6 +7,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **The UI archive click was silently inert on any non-English app** (found while wiring the
+  courier, fixed and proven live). The row menu's accessible name is LOCALIZED - a German app
+  reads "Weitere Optionen für <title>", not "More options for <title>" - so the English-prefix
+  lookup found nothing and reported "the sidebar does not render <title>" for chats sitting in
+  plain view. Every archive through that path was a no-op that read as a considered refusal.
+  The menu is now identified STRUCTURALLY (the button that ends with the title and exposes
+  ExpandCollapse), `-List` emits menu names verbatim so the caller matches by suffix against
+  the exact disk title, and the context-menu ITEMS - also localized ("Archivieren",
+  "Löschen") with React-churn AutomationIds - are matched against a known-label table that
+  REFUSES and prints what it saw rather than guessing by position, because Delete sits
+  directly below Archive. Archive verified live on the German app. Rename is NOT fixed: its
+  inline editor never appears in the tree on that build, so it stays English-only and now says
+  so instead of failing vaguely.
+
 ### Added
 
 - **THE LOOP RUNS ITSELF** (proven 2026-08-30): with nothing touched but a staged row, the

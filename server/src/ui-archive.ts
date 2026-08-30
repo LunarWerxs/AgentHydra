@@ -163,7 +163,12 @@ export async function uiArchiveChat(
         'could hit the wrong chat',
     }
   const rendered = await list(profileDir)
-  const matches = rendered.filter((t) => t === title)
+  // The PS1 emits each row menu's accessible name VERBATIM - '<localized more-options phrase>
+  // <title>' - because the phrase is localized ('Weitere Optionen für ...' on a German app,
+  // found live 2026-08-30, where matching the English prefix made archive silently inert for
+  // chats in plain view). We hold the exact disk title, so the match happens HERE, by suffix:
+  // exact, language-independent, nothing guessed.
+  const matches = rendered.filter((t) => t === title || t.endsWith(title))
   if (matches.length === 0) {
     // No row to click. If the disk flag is already set, the chat is settled - already retired
     // (this is also what an idempotent re-act sees after a successful click).
