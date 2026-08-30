@@ -1,8 +1,11 @@
 ---
-description: Run the AgentHydra orchestrator pass - census, gate every chat, act on the verdicts, deliver what was staged
+description: RUN THE ORCHESTRATOR - census, gate every chat, act on the verdicts, deliver what was staged
 ---
 
-Operate the fleet through AgentHydra's own MCP tools. Extra instructions, if any: $ARGUMENTS
+THIS IS THE ORCHESTRATOR. It is no longer a separate subsystem: v1 was retired whole on
+2026-08-29 and rebuilt as AgentHydra's own gate/act/deliver machinery, driven through its MCP
+tools. Same command name as v1 had, deliberately - the thing it does did not change.
+Extra instructions, if any: $ARGUMENTS
 
 Work in this order and do not skip step 1 - acting on a chat without gating it first is the one
 thing this system forbids.

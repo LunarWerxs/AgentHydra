@@ -20,11 +20,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   login that was never broken. Closed is deliberately never a fault (it is this fleet's resting
   state), and a probe that could not run reports UNKNOWN, never "fine".
 
-- **Slash commands, so operating this thing is not folklore.** `/hydra` runs the orchestrator pass
-  in the required order, `/hydra-status` reports everything and touches nothing, `/hydra-check`
-  runs every gate this repo has including its own CI locally. They ship with the repo now - the
-  ignore rule was hiding them on one machine, which is the same defect as a memory that only one
-  person can read.
+- **Slash commands, so operating this thing is not folklore.** `/orchestrate` runs the orchestrator
+  pass in the required order, `/hydra-status` reports everything and touches nothing,
+  `/hydra-check` runs every gate this repo has including its own CI locally. They ship with the
+  repo now - the ignore rule was hiding them on one machine, which is the same defect as a memory
+  that only one person can read.
+  `/orchestrate` keeps the name v1 used, on purpose. The orchestrator is not a separate subsystem
+  any more (retired whole on 2026-08-29, rebuilt as this daemon's own gate/act/deliver machinery),
+  but it is still the same thing to the person running it, and renaming it to match the internals
+  would have made the tool harder to find for no gain. The two `hydra-` commands keep that prefix
+  because they are about the app and the repo, not about the orchestration pass.
 
 ### Fixed
 
