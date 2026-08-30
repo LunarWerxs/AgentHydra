@@ -47,7 +47,8 @@ function deps(over: {
       sweepCaps.push({ maxArchive: opts.maxArchive, maxSurface: opts.maxSurface })
       return over.sweep ?? emptySweep()
     },
-    doneMarked: () => new Set(over.marked ?? []),
+    doneMarked: () =>
+      new Map((over.marked ?? []).map((id) => [id, Date.parse('2026-08-29T13:00:00Z')])),
     meta: () =>
       new Map(
         (over.meta ?? []).map((m) => [
@@ -130,7 +131,7 @@ test('junk: done-marked-but-visible and generic-titled chats are listed, archive
       { key: 'fine', title: 'Real work chat', cliSessionId: 'fine' },
     ],
   })
-  d.isLive = () => false
+  d.liveMap = () => new Map()
   const r = await prestartCheck(d)
   expect(r.junk.supersededVisible.map((x) => x.sessionId)).toEqual(['dead1'])
   expect(r.junk.genericTitled.map((x) => x.sessionId)).toEqual(['gen1'])
@@ -143,7 +144,7 @@ test('an entry with NO recorded transcript id cannot be trusted by the junk chec
     marked: ['mystery'],
     meta: [{ key: 'mystery', title: 'Old handoff' }], // cliSessionId null
   })
-  d.isLive = () => false
+  d.liveMap = () => new Map()
   const r = await prestartCheck(d)
   expect(r.junk.supersededVisible).toEqual([])
   expect(r.junk.identityUnresolvedCount).toBe(1)
@@ -157,7 +158,7 @@ test('one transcript under two metadata files is junk-listed ONCE (two-set dedup
       { key: 'f2', title: 'Dup chat', cliSessionId: 'S' },
     ],
   })
-  d.isLive = () => false
+  d.liveMap = () => new Map()
   const r = await prestartCheck(d)
   expect(r.junk.supersededVisible.map((x) => x.sessionId)).toEqual(['S'])
 })
@@ -189,10 +190,30 @@ test('a done-marked chat that is LIVE is a named CONTRADICTION, never an archive
     marked: ['zombie'],
     meta: [{ key: 'zombie', title: 'Gods Eye View integration review', cliSessionId: 'zombie' }],
   })
-  d.isLive = (sid) => sid === 'zombie'
+  d.liveMap = () => new Map([['zombie', Date.parse('2026-08-30T01:15:00Z')]])
   const r = await prestartCheck(d)
   expect(r.junk.supersededVisible).toEqual([])
   expect(r.junk.liveButDoneMarked.map((x) => x.sessionId)).toEqual(['zombie'])
+  // The decisive story: revived AFTER the mark (fixture mark 08-29 13:00, live 08-30 01:15).
+  expect(r.junk.liveButDoneMarked[0]?.story).toBe('revived-after-mark')
+  expect(r.junk.liveButDoneMarked[0]?.markedAt).toBe('2026-08-29T13:00:00.000Z')
+})
+
+test('a mark that landed on an already-running chat reads marked-while-live', async () => {
+  const { d } = deps({
+    marked: ['never-stopped'],
+    meta: [
+      {
+        key: 'never-stopped',
+        title: 'Leaky bucket and churn strategy',
+        cliSessionId: 'never-stopped',
+      },
+    ],
+  })
+  // Live since BEFORE the fixture mark time (08-29 13:00): the mark landed on a running chat.
+  d.liveMap = () => new Map([['never-stopped', Date.parse('2026-08-29T00:17:00Z')]])
+  const r = await prestartCheck(d)
+  expect(r.junk.liveButDoneMarked[0]?.story).toBe('marked-while-live')
 })
 
 test('the census reports open instances with plan and usage, and the totals', async () => {

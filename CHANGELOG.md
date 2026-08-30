@@ -7,7 +7,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-### Added
+### Changed
+
+- **The prestart's contradiction lane now tells the story** (owner-decoded 2026-08-30: all
+  three of the first run's liveButDoneMarked entries were FALSE marks from a migration that
+  never completed - the chats were never supposed to be retired, and he had resumed and
+  managed them himself). Each row now carries markedAt, liveSince and the verdict the
+  timestamps prove: 'revived-after-mark' (deliberately resumed after retirement) or
+  'marked-while-live' (the mark landed on a chat that never even stopped). The guidance
+  encoded with it: such a mark is usually the lie - read the chat's tail, then clear it via
+  the done route (done:false); never archive under the running writer. The marks table's
+  mixed timestamp formats (epoch-millis from the done route, ISO from older writers) are
+  parsed both ways. The three false marks were cleared the same day; the post-cleanup live
+  prestart reads a fully clean fleet.
 
 - **THE PRE-START CHECK** (`GET /api/prestart` + server/src/prestart.ts + the prestart MCP
   tool; owner-ordered 2026-08-30). READ-ONLY, in the owner's required order: the CENSUS first

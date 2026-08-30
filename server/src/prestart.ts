@@ -14,14 +14,16 @@
 // class of bug), and a census that starts wrong poisons every decision after it. plausible:
 // false means STOP and investigate detection before acting on anything.
 
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { isGenericChatTitle } from './chat-title'
 import { db } from './db'
 import { type FleetInstanceEntry, fleetInstances } from './fleet-instances'
 import { type FleetUsageEntry, fleetUsage } from './fleet-usage'
 import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
 import { sessionMetaMap } from './instance-sessions'
+import { readLiveRegistry } from './live-registry'
 import { pathKey } from './path-key'
-import { liveSessionEntry } from './session-launch'
 
 const norm = (p: string) => pathKey(p, true)
 
@@ -66,9 +68,20 @@ export interface PrestartReport {
     /** Naming-law violations: visible chats with no real name - rename or review. */
     genericTitled: Array<{ sessionId: string; title: string | null; instance: string }>
     /** CONTRADICTIONS: done-marked (retired lineage) yet a LIVE process is running it right
-     *  now. Someone revived a retired thread, or the mark is wrong - either way it is the
-     *  owner's to untangle, never automation's to archive under a running writer. */
-    liveButDoneMarked: Array<{ sessionId: string; title: string | null; instance: string }>
+     *  now. The timestamps tell the story (owner-decoded 2026-08-30, when all three of the
+     *  first live run's entries turned out to be FALSE marks from a migration that never
+     *  completed): 'revived-after-mark' = someone deliberately resumed it after retirement;
+     *  'marked-while-live' = the mark landed on a chat that never even stopped. Either way
+     *  the mark is usually the lie - READ THE CHAT'S TAIL, then clear the mark via
+     *  POST /api/sessions/:id/done {done:false}. Never archive under the running writer. */
+    liveButDoneMarked: Array<{
+      sessionId: string
+      title: string | null
+      instance: string
+      markedAt: string | null
+      liveSince: string | null
+      story: 'revived-after-mark' | 'marked-while-live' | 'unknown'
+    }>
     /** Visible entries whose TRUE transcript id is unrecorded: the marks table and the live
      *  registry are keyed by that id, so neither junk lookup can be trusted for these -
      *  counted honestly instead of silently passing both checks. */
@@ -81,18 +94,41 @@ export interface PrestartDeps extends SweepDeps {
   instancesList?: () => Promise<FleetInstanceEntry[]>
   usageList?: () => FleetUsageEntry[]
   sweep?: typeof sweepGateActions
-  doneMarked?: () => Set<string>
-  isLive?: (sessionId: string) => boolean
+  /** Done-marked session ids with WHEN each mark landed (ms) - the when is what separates a
+   *  false mark from a real one when a live process contradicts it. */
+  doneMarked?: () => Map<string, number>
+  /** Live session ids with each process's start time (ms). */
+  liveMap?: () => Map<string, number>
 }
 
-function realDoneMarked(): Set<string> {
+/** The marks table's updated_at is epoch-millis from the done route but ISO from older
+ *  writers - parse either, never trust one format. */
+function parseWhen(v: string): number {
+  const n = Number(v)
+  if (Number.isFinite(n) && n > 1e12) return n
+  const t = Date.parse(v)
+  return Number.isFinite(t) ? t : 0
+}
+
+function realDoneMarked(): Map<string, number> {
   try {
     const rows = db
-      .query<{ session_id: string }, []>('select session_id from session_marks where done = 1')
+      .query<{ session_id: string; updated_at: string }, []>(
+        'select session_id, updated_at from session_marks where done = 1',
+      )
       .all()
-    return new Set(rows.map((r) => r.session_id))
+    return new Map(rows.map((r) => [r.session_id, parseWhen(r.updated_at)]))
   } catch {
-    return new Set()
+    return new Map()
+  }
+}
+
+function realLiveMap(): Map<string, number> {
+  try {
+    const entries = readLiveRegistry(join(homedir(), '.claude'))
+    return new Map(entries.map((s) => [s.sessionId, s.startedAt]))
+  } catch {
+    return new Map()
   }
 }
 
@@ -214,7 +250,7 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
   // 5. JUNK: deterministic candidates only - done-marked-but-visible (retired lineages the
   // testing days left behind) and naming-law violations. Reported, never auto-deleted here.
   const marked = doneMarked()
-  const isLive = deps.isLive ?? ((sid: string) => liveSessionEntry(sid) !== null)
+  const liveMap = (deps.liveMap ?? realLiveMap)()
   const supersededVisible: PrestartReport['junk']['supersededVisible'] = []
   const genericTitled: PrestartReport['junk']['genericTitled'] = []
   const liveButDoneMarked: PrestartReport['junk']['liveButDoneMarked'] = []
@@ -238,12 +274,26 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
       // passing both checks (review-confirmed blindness).
       identityUnresolvedCount++
     } else if (marked.has(sessionId)) {
-      // A retired lineage with a LIVE process is a contradiction, not junk (found on the very
-      // first live run: three done-marked chats were actively running). Never archive under a
-      // running writer - hand the contradiction to the owner by name.
-      if (isLive(sessionId))
-        liveButDoneMarked.push({ sessionId, title: m.title, instance: m.instance })
-      else supersededVisible.push({ sessionId, title: m.title, instance: m.instance })
+      // A retired lineage with a LIVE process is a contradiction, not junk. The first live
+      // run found three, and the owner decoded all three as FALSE marks from a migration
+      // that never completed - so the row carries the decisive timestamps and the story.
+      const liveSince = liveMap.get(sessionId)
+      if (liveSince !== undefined) {
+        const markedAt = marked.get(sessionId) ?? 0
+        liveButDoneMarked.push({
+          sessionId,
+          title: m.title,
+          instance: m.instance,
+          markedAt: markedAt ? new Date(markedAt).toISOString() : null,
+          liveSince: new Date(liveSince).toISOString(),
+          story:
+            markedAt === 0
+              ? 'unknown'
+              : liveSince > markedAt
+                ? 'revived-after-mark'
+                : 'marked-while-live',
+        })
+      } else supersededVisible.push({ sessionId, title: m.title, instance: m.instance })
     }
     if (isGenericChatTitle(m.title))
       genericTitled.push({ sessionId, title: m.title, instance: m.instance })
