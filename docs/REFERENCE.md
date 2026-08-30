@@ -284,6 +284,12 @@ minutes and at logon:
 .\misc\Install-DaemonSupervisor.ps1 -Uninstall # remove it
 ```
 
+A stock Windows PowerShell prompt may refuse to run it at all ("running scripts is disabled on this
+system"). That is the machine's execution policy stopping the INSTALLER, not a problem with the
+task: run it from PowerShell 7 (`pwsh`), or as
+`powershell -ExecutionPolicy Bypass -File .\misc\Install-DaemonSupervisor.ps1`. The scheduled task
+itself is unaffected either way, because the tick already launches with `-ExecutionPolicy Bypass`.
+
 It needs no elevation and stores no credentials: the task runs as the current user in their own
 interactive session, which is also the only place a daemon can see and drive the desktop windows it
 exists to manage. The action is `Supervisor-Tick.vbs` rather than `powershell.exe` directly, because
