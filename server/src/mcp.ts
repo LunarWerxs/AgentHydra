@@ -603,7 +603,14 @@ export const TOOLS: McpEngineTool[] = [
       'sanity.plausible is false - one or zero open instances - the census is WRONG by the ' +
       "owner's own word (he practically never runs just one), so STOP and investigate instance " +
       'detection before acting on anything else in the report. When plausible, work the ' +
-      'nextSteps via chat_sweep/chat_act and archive junk.supersededVisible.',
+      'nextSteps via chat_sweep/chat_act and archive junk.supersededVisible. THREE MORE LANES, ' +
+      'all report-only and all worth reading before you route work: handoffSoon (chats whose ' +
+      'context is nearly full - hand the thread to a fresh chat WHILE it can still summarise ' +
+      'itself, rather than waiting for it to hit the wall mid-task); collisions (live chats ' +
+      'sharing one working tree - they can overwrite each other, and telling one to carry on ' +
+      'may have it commit what another is still writing); and suppressed (actions the circuit ' +
+      'breaker is holding back after repeated futile attempts - a held action is why something ' +
+      'that looks undone is not being retried, and a direct request from you is never blocked).',
     inputSchema: S({}),
     run: () => api('/api/prestart'),
   },

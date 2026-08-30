@@ -16,14 +16,17 @@
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { suppressedChats } from './breaker'
 import { isGenericChatTitle } from './chat-title'
+import { type Collision, liveCollisions } from './collisions'
+import { type HandoffAdvice, handoffCandidates } from './context-size'
 import { db } from './db'
 import { pendingDeliveries } from './deliveries'
 import { type FleetInstanceEntry, fleetInstances } from './fleet-instances'
 import { type FleetUsageEntry, fleetUsage } from './fleet-usage'
 import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
 import { sessionMetaMap } from './instance-sessions'
-import { readLiveRegistry } from './live-registry'
+import { findTranscriptById, readLiveRegistry } from './live-registry'
 import { pathKey } from './path-key'
 
 const norm = (p: string) => pathKey(p, true)
@@ -88,6 +91,16 @@ export interface PrestartReport {
      *  counted honestly instead of silently passing both checks. */
     identityUnresolvedCount: number
   }
+  /** Chats whose context is nearly full: hand them off to a fresh thread while they can still
+   *  summarise themselves, instead of waiting for the wall mid-task. Report-only. */
+  handoffSoon: HandoffAdvice[]
+  /** Live chats sharing one working tree - they can overwrite each other, and a resume prompt
+   *  to one may tell it to commit what another is still writing. Report-only: two chats in
+   *  one repo is often deliberate, so this informs routing rather than blocking anything. */
+  collisions: Collision[]
+  /** Actions the circuit breaker is currently holding back, so a suppressed loop is visible
+   *  rather than looking like nothing needed doing. */
+  suppressed: Array<{ kind: string; sessionId: string; attempts: number; retryAfter: string }>
   /** Prompts staged by past surfacings that NOBODY has delivered yet (deliveries.ts) -
    *  each one is a dormant chat waiting on a sender. Deliver these first. */
   pendingDeliveries: Array<{
@@ -108,6 +121,14 @@ export interface PrestartDeps extends SweepDeps {
   doneMarked?: () => Map<string, number>
   /** Live session ids with each process's start time (ms). */
   liveMap?: () => Map<string, number>
+  collisions?: () => Collision[]
+  handoff?: () => HandoffAdvice[]
+  suppressed?: () => Array<{
+    kind: string
+    sessionId: string
+    attempts: number
+    retryAfter: string
+  }>
   deliveries?: () => Array<{
     session_id: string
     prompt: string
@@ -328,6 +349,20 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
     nextSteps,
     sweepError,
     junk: { supersededVisible, genericTitled, liveButDoneMarked, identityUnresolvedCount },
+    // Context pressure is asked of the LIVE chats only: a dormant chat's context is not
+    // growing, so warning about it would be noise the reader has to filter every pass.
+    handoffSoon: (
+      deps.handoff ??
+      (() =>
+        handoffCandidates(
+          [...liveMap.keys()].map((sessionId) => ({
+            sessionId,
+            transcriptPath: findTranscriptById(join(homedir(), '.claude'), sessionId),
+          })),
+        ))
+    )(),
+    collisions: (deps.collisions ?? liveCollisions)(),
+    suppressed: (deps.suppressed ?? suppressedChats)(),
     pendingDeliveries: pending,
     tookMs: Date.now() - started,
   }

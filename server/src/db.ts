@@ -119,6 +119,20 @@ create table if not exists deliveries (
   evidence     text
 );
 
+-- THE CIRCUIT BREAKER's attempt log (breaker.ts, 2026-08-30). v1 measured the failure this
+-- exists to stop: the same finished chat was re-archived FOUR times in one evening - every
+-- pass individually correct (archive executed, the running app re-saved the sidebar entry
+-- un-archived, the sweep saw a done-marked visible chat again) - because nothing anywhere
+-- COUNTED. A deterministic gate makes a wrong verdict unlikely; it does nothing about a
+-- correct verdict repeated forever. On disk, not in memory, because a restart is exactly what
+-- a storm tends to cause and an in-memory counter would forget at the worst moment.
+create table if not exists action_attempts (
+  kind        text not null,
+  session_id  text not null,
+  at          integer not null,
+  primary key (kind, session_id, at)
+);
+
 -- Parsed transcript metadata (title / preview / counts), keyed by the file it was derived from.
 -- Producing one row means reading up to 12 MB of transcript tail and JSON.parsing every line of it,
 -- so an in-memory-only cache made the FIRST sessions list of every daemon re-pay that for all 200

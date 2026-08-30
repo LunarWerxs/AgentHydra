@@ -21,6 +21,7 @@
 //     HTTP caller deserves an answer): candidates past it are listed as unswept, never
 //     silently dropped.
 
+import { type BreakerKind, checkBreaker, clearAttempts, noteAttempt } from './breaker'
 import { type ChatGate, type CrashKind, chatGate } from './chat-gate'
 import { actOnGate, type GateActionDeps, type GateActionResult } from './gate-actions'
 import { sessionMetaMap } from './instance-sessions'
@@ -222,9 +223,28 @@ export async function sweepGateActions(
 
   /** One act, throw-safe: a rejected act becomes a parked row instead of killing the whole
    *  sweep mid-fleet (review-confirmed hazard once acts do real IO like landings). */
-  const tryAct = async (c: Candidate): Promise<GateActionResult | null> => {
+  const tryAct = async (c: Candidate, kind: BreakerKind): Promise<GateActionResult | null> => {
+    // THE CIRCUIT BREAKER, and it lives HERE rather than inside act() on purpose: this is the
+    // unattended path. A deed the owner or an AI session asks for directly must never be
+    // blocked by a counter - being asked is the point of asking. Only the machinery repeating
+    // itself is bounded (breaker.ts documents the four-archives-in-one-evening measurement).
+    const brake = checkBreaker(kind, c.sessionId, now())
+    if (brake.suppressed) {
+      return {
+        sessionId: c.sessionId,
+        gate: { state: 'crashed', crashedKind: null, lane: null },
+        action: 'parked',
+        why: `${brake.why} (retry allowed after ${brake.retryAfter})`,
+      }
+    }
     try {
-      return await act(c.sessionId, {}, deps)
+      noteAttempt(kind, c.sessionId, now())
+      const r = await act(c.sessionId, {}, deps)
+      // It stuck: forget the history. The brake is for futile repetition, not for work that
+      // is landing - otherwise a busy chat would eventually brake itself for succeeding.
+      if (r && (r.action === 'archived' || r.action === 'surfaced'))
+        clearAttempts(kind, c.sessionId)
+      return r
     } catch (err) {
       return {
         sessionId: c.sessionId,
@@ -265,7 +285,7 @@ export async function sweepGateActions(
         )
         continue
       }
-      const r = await tryAct(c)
+      const r = await tryAct(c, 'archive')
       if (!r) {
         report.archiveRows.push(goneRow(c, g))
         continue
@@ -294,7 +314,7 @@ export async function sweepGateActions(
         )
         continue
       }
-      const r = await tryAct(c)
+      const r = await tryAct(c, 'surface')
       report.waitForReset.push(r ? actedRow(c, r) : goneRow(c, g))
       continue
     }
@@ -311,7 +331,7 @@ export async function sweepGateActions(
       )
       continue
     }
-    const r = await tryAct(c)
+    const r = await tryAct(c, 'surface')
     if (!r) {
       report.crashedRows.push(goneRow(c, g))
       continue

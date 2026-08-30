@@ -62,6 +62,36 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   inline editor never appears in the tree on that build, so it stays English-only and now says
   so instead of failing vaguely.
 
+- **THREE CAPABILITIES THE RETIRED ORCHESTRATOR HAD AND THE REBUILD DID NOT** (found by
+  diffing the archive branch capability-by-capability, then verifying each claimed gap):
+
+  **Context handoff** (`context-size.ts`) - the biggest one. v1 rotated a long chat into a
+  fresh thread proactively; the rebuild only helped a chat AFTER it crashed, which is the
+  worst moment, because the thread that knew the plan is the one that died. A chat's current
+  context is the newest request's `input + cache_read + cache_creation` tokens - the same sum
+  the owner's own ctxsize tool uses, so the two cannot disagree about what "context" means -
+  and chats past the warn threshold surface in the pre-start check as `handoffSoon`. A
+  transcript with no usage record reads as UNKNOWN, never as zero, because an empty chat is
+  the opposite of one that needs rotating. Proven live: it flagged the fullest real chat on
+  the fleet at 922k tokens.
+
+  **The circuit breaker** (`breaker.ts`) - v1 measured the failure this prevents: the same
+  finished chat re-archived FOUR times in one evening, every pass individually correct (the
+  archive executed, the running app re-saved the sidebar entry un-archived, the sweep saw a
+  done-marked visible chat again) because nothing anywhere COUNTED. A deterministic gate makes
+  a wrong verdict unlikely and does nothing about a correct verdict repeated forever. Four
+  attempts per chat per action in a 6h window, on disk because a storm is exactly what causes
+  a restart, cleared the moment an action sticks. It bounds the UNATTENDED path only - a deed
+  the owner or an AI asks for directly is never blocked, and every suppression says what was
+  held, how often it was tried, and when it frees up.
+
+  **Same-repo collision detection** (`collisions.ts`) - a clobbering risk the owner has
+  already been burned by ("work was overridden by other chats"): two live chats in one working
+  tree overwrite each other, and telling one to carry on may have it commit what another is
+  half-way through writing. Live chats are grouped by repository root and reported in the
+  pre-start check. Report-only on purpose: two chats in one repo is often deliberate, and a
+  guard that refused on this signal would refuse constantly and get switched off.
+
 ### Changed
 
 - **The test suite runs its files in parallel: 34.9s -> 16.2s, a measured 2.2x** (four runs,
