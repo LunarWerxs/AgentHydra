@@ -618,8 +618,13 @@ export const TOOLS: McpEngineTool[] = [
       'READ unusableInstances BEFORE ROUTING ANY WORK: instances that cannot do work at all, said ' +
       'once per account with the reason (wedged - alive but its window is not answering, so every ' +
       'act against it fails one chat at a time until it is restarted; profile-unreadable, which ' +
-      'is damage and NOT fixed by signing in; signed-out; no-config; usage-wall). A CLOSED ' +
-      'instance is never listed - closed is this fleet’s resting state, not a fault. ' +
+      'is damage and NOT fixed by signing in; signed-out; no-config; usage-wall). Closed is ' +
+      "NEVER a fault by itself - it is this fleet's resting state and one gets booted on " +
+      'purpose. What that means per reason, exactly: DAMAGE (signed-out / no-config / ' +
+      'profile-unreadable) IS listed while closed, because it persists and it is precisely why ' +
+      'a later boot would fail; a USAGE WALL is listed only for an instance that is actually ' +
+      'OPEN, because it is transient, it heals on reset, and it says nothing about an account ' +
+      'nobody was going to use (listing those made the lane read as noise - fixed 2026-08-30). ' +
       '`responding: null` means the probe could not ask, which is not the same as healthy. ' +
       "⛔ SCOPE: this answers 'what next for every CHAT', never 'which PROJECT should be picked " +
       "up'. Repo-level backlog - which codebase has unstarted or stalled work, unpushed " +

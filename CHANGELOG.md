@@ -31,7 +31,50 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   would have made the tool harder to find for no gain. The two `hydra-` commands keep that prefix
   because they are about the app and the repo, not about the orchestration pass.
 
+- **The daemon is finally supervised, instead of staying up only because someone once typed a
+  command.** Every part needed to keep it alive already existed - `Ensure-Daemon.ps1` no-ops when a
+  healthy daemon of ours answers and restarts it when nothing does - and nothing ever called them on
+  a schedule. A census of the machine that runs the fleet found no scheduled task, no Startup
+  shortcut and no Run key entry for this app; the live daemon's parent was a bare
+  `cmd /c bun server/src/index.ts` from five hours earlier. That is the worst shape an outage can
+  take, because orchestration does not crash loudly, it just silently stops happening while every
+  automation fails one HTTP call at a time. `misc/Install-DaemonSupervisor.ps1` registers a
+  scheduled task that runs the ensure script every five minutes and at logon, needing no elevation
+  and storing no credentials; `-Status` reports the last tick's real exit code and `-Uninstall`
+  removes it. It is deliberately the smallest possible addition: a schedule in front of the script
+  that already knew how to do the work, so there is no second start path that could race the tray.
+
 ### Fixed
+
+- **The pre-check could hand you an instruction the actuator refuses, forever.** `nextSteps` was
+  derived from the gate, which judges a transcript on its own terms and knows nothing about
+  done-marks, while `junk.supersededVisible` came from the marks table - and nothing reconciled the
+  two. So a retired lineage whose transcript happened to end mid-question was filed under
+  "judge-then-act", and `chat_act` (which re-gates, and does see the mark) parked it as superseded
+  every single time. The advice was structurally impossible to follow and, being re-derived each
+  pass, it came back forever: an orchestration that could never reach an empty queue. A superseded
+  chat is now told to archive, and the reason names the route that actually works.
+
+- **A closed account near its usage cap was reported as broken.** The usage-wall branch had no
+  "is it even open?" guard, so any closed instance at 99% turned up in the unusable lane - and since
+  closed is this fleet's resting state, that lane filled with accounts nobody was going to touch.
+  `instance-health.ts` states the law it was breaking in its own header. The distinction is now
+  explicit: DAMAGE (signed-out, no-config, unreadable profile) is still reported while closed,
+  because it persists and it is precisely why a later boot would fail, whereas a transient usage
+  wall only means anything about an instance that is actually open. The docs claiming "a closed
+  instance is never listed" were wrong in the other direction and now describe the real rule.
+
+- **A gating guardrail passed under `node` and failed under `bun`, which is the runtime CI uses.**
+  `wmi-commandline-query-self-match.mjs` excluded itself from its own scan by comparing paths
+  case-sensitively. Bun canonicalises `import.meta.url` to the real on-disk spelling while Node
+  echoes the one you typed, so on a checkout reached as `...\agenthydra\...` whose folder is really
+  `AgentHydra` the check stopped recognising its own file and reported the two example queries in
+  its own header as violations. The existing test net could not catch it, because it drives every
+  audit with a root derived from `import.meta.dir` - the same canonical spelling - so the two halves
+  always agreed. Path identity is now case-folded on Windows only (on Linux and macOS two spellings
+  really are two files), the main-module guard gets the same treatment because a mismatch there
+  would silently skip the check entirely and exit 0, and a new test pins every check against a
+  differently-cased root.
 
 - **The delivery driver was still English-only where it mattered most, and a second audit caught
   it.** The composer - the box the whole channel types into - was found by the literal name

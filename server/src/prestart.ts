@@ -109,8 +109,13 @@ export interface PrestartReport {
   holds: Array<{ sessionId: string; reason: string; heldAt: string }>
   /** INSTANCES THAT CANNOT DO WORK, with the reason (instance-health.ts). Said ONCE per account
    *  here rather than discovered one failed chat at a time: a wedged app, a damaged profile and a
-   *  signed-out app all used to surface as the same guess. 'Closed' is never listed - a closed
-   *  app is this fleet's resting state, not a fault. */
+   *  signed-out app all used to surface as the same guess.
+   *
+   *  CLOSED IS NEVER A FAULT BY ITSELF - it is this fleet's resting state - but 'closed' and
+   *  'not listed' are NOT the same thing, and conflating them is how this lane started reporting
+   *  accounts nobody was going to touch. The exact rule: DAMAGE (signed-out / no-config /
+   *  profile-unreadable) is listed even while closed, because it persists and it is why a later
+   *  boot would fail; a transient USAGE WALL is listed only while the instance is actually OPEN. */
   unusableInstances: InstanceHealth[]
   /** Prompts staged by past surfacings that NOBODY has delivered yet (deliveries.ts) -
    *  each one is a dormant chat waiting on a sender. Deliver these first. */
@@ -355,6 +360,28 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
     }
     if (isGenericChatTitle(m.title))
       genericTitled.push({ sessionId, title: m.title, instance: m.instance })
+  }
+
+  // 5b. RECONCILE the two halves, or the report sends its reader into a loop it cannot exit.
+  // The lanes above are derived from the GATE, which judges a transcript on its own terms and
+  // knows nothing about done-marks; supersededVisible is derived from the marks table. So a
+  // retired lineage that happens to end mid-question lands in needsJudgment and gets told
+  // 'judge-then-act' - but chat_act re-gates, sees the mark, and PARKS it as superseded every
+  // single time. The advice was structurally impossible to follow, and being derived fresh each
+  // pass, it came back forever: an orchestration that can never reach an empty queue. Measured
+  // 2026-08-30, when a drill leftover did exactly this and had to be archived out of band.
+  // The mark is the stronger signal - a successor owns the work, so nothing here is worth
+  // judging or resuming - and the deed is the desktop-archive route, NOT chat_act/chat_sweep,
+  // both of which park it. Naming that route in `why` is the point: without it the next reader
+  // repeats the same dead end.
+  const supersededIds = new Set(supersededVisible.map((r) => r.sessionId))
+  for (const step of nextSteps) {
+    if (!supersededIds.has(step.sessionId)) continue
+    step.step = 'archive'
+    step.why =
+      'SUPERSEDED: this lineage is done-marked and a successor owns the work, so there is ' +
+      'nothing here to judge or resume. chat_act and chat_sweep will both PARK it - archive ' +
+      'it via POST /api/sessions/:id/desktop-archive instead.'
   }
 
   const pending = (deps.deliveries ?? pendingDeliveries)().map((r) => ({

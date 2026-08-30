@@ -139,7 +139,21 @@ export function healthOf(
         'the app process is alive but its window is not answering - it is wedged, so every act ' +
         'against it will fail one chat at a time until it is restarted',
     }
-  else if (typeof input.usagePct === 'number' && input.usagePct >= USAGE_WALL_PCT)
+  // ⛔ RUNNING-ONLY, and the ONLY reason here that is. The three login faults above are DAMAGE:
+  // they persist while the app is closed and they are exactly why a later boot would fail, so
+  // they are worth saying about a closed instance. A usage wall is neither - it is transient,
+  // it heals itself on reset, and it only means anything about an instance you were going to
+  // use right now. Reporting it against a CLOSED instance breaks this file's own first law
+  // ('CLOSED IS NOT UNUSABLE') and prestart's promise that a closed instance is never listed:
+  // closed is this fleet's resting state, so nearly every closed account would show up as a
+  // fault and the report would read as noise. Nothing ROUTES on this - boot-selection reads
+  // usage for itself against its own 85% overflow threshold - so suppressing it here costs no
+  // safety. (Owner ruling 2026-08-30, after a pass reported closed instance #37 as unusable.)
+  else if (
+    input.isRunning &&
+    typeof input.usagePct === 'number' &&
+    input.usagePct >= USAGE_WALL_PCT
+  )
     unusable = {
       reason: 'usage-wall',
       detail: `at ${Math.round(input.usagePct)}% of its binding usage window - nothing useful until it resets`,

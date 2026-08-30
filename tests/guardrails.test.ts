@@ -462,3 +462,32 @@ test('at least one check was actually discovered and exercised above', () => {
   // A guardrail that cannot fail is not a guardrail, and neither is a suite with nothing in it.
   expect(CHECK_FILES.length).toBeGreaterThan(0)
 })
+
+// ── CASE-INSENSITIVE SELF-EXCLUSION ────────────────────────────────────────────────────────────
+// The net above runs every audit against REPO_ROOT, which is derived from import.meta.dir — the
+// SAME canonical spelling a check's own `import.meta.url` resolves to. So the two always agreed,
+// and a case-sensitive self-comparison sailed through it.
+//
+// It did not sail through CI. `bun scripts/checks/wmi-commandline-query-self-match.mjs` uses
+// process.cwd(), which carries whatever casing the invoker typed, while Bun canonicalises
+// import.meta.url to the real on-disk spelling (Node echoes the typed one instead). On a checkout
+// reached as `...\agenthydra\...` whose folder is really `AgentHydra`, the check stopped excluding
+// itself and reported the two example queries in its own header — green under node, RED under bun,
+// which is the runtime CI uses. Found 2026-08-30 by a local CI run.
+//
+// This pins the property the fix relies on: a differently-cased root must not change any verdict.
+describe('checks survive a differently-cased repo root (Windows path identity)', () => {
+  const files = CHECK_FILES
+  for (const file of files) {
+    test.skipIf(process.platform !== 'win32')(`${file} is casing-stable`, async () => {
+      const mod = await import(pathToFileURL(join(CHECKS_DIR, file)).href)
+      if (typeof mod.audit?.run !== 'function') return
+      // Windows resolves both spellings to the same directory, so any difference in the verdict
+      // is the check reasoning about the STRING rather than about the file.
+      const lower = await mod.audit.run({ root: REPO_ROOT.toLowerCase() })
+      const upper = await mod.audit.run({ root: REPO_ROOT })
+      expect(lower.failed).toBe(upper.failed)
+      expect(lower.failed).toBe(false)
+    })
+  }
+})

@@ -71,6 +71,20 @@ const EXTS = [".ts", ".mjs", ".js", ".ps1", ".mts", ".cjs"];
  *  which was in SKIP_DIRS; now that it sits in `scripts/`, it has to exclude itself by name. */
 const SELF = fileURLToPath(import.meta.url);
 
+/** Are these two paths the same FILE? On Windows, case is not part of a file's identity, and the
+ *  two runtimes disagree about which casing you get back for the same file: Bun canonicalises
+ *  `import.meta.url` to the real on-disk spelling while Node echoes the spelling you typed. So on
+ *  a checkout reached as `...\agenthydra\...` whose folder is really named `AgentHydra`, SELF came
+ *  back capitalised and the scanned path did not — a case-SENSITIVE `!==` then failed to exclude
+ *  this file from its own scan, and it reported the two example queries in its own header as
+ *  violations. That made the guardrail pass under `node` and FAIL under `bun`, which is the
+ *  runtime CI actually invokes it with (found 2026-08-30 by a local CI run).
+ *
+ *  Fold case on win32 ONLY. On Linux and macOS two spellings genuinely are two different files,
+ *  and folding there would let a real violation hide behind a look-alike name. */
+const samePath = (a, b) =>
+  process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+
 /** Recursively yield every scannable source file under `dir`. */
 function* sourceFiles(dir) {
   let entries;
@@ -85,7 +99,7 @@ function* sourceFiles(dir) {
     if (e.isDirectory()) {
       if (!SKIP_DIRS.has(e.name)) yield* sourceFiles(p);
     } else if (EXTS.some((x) => e.name.endsWith(x))) {
-      if (resolve(p) !== SELF) yield p;
+      if (!samePath(resolve(p), SELF)) yield p;
     }
   }
 }
@@ -154,8 +168,12 @@ export const audit = {
 
 // ── Standalone CLI (used by CI): `bun|node <thisfile>` prints the report and exits 1 on any
 // violation. During an arkitect run the module is only IMPORTED (process.argv[1] = the arkitect
-// bin, not this file), so this block is inert there — it fires only on a direct invocation. ──
-if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) {
+// bin, not this file), so this block is inert there — it fires only on a direct invocation.
+// samePath, not `===`, for the reason given at its definition, and here the stakes are higher
+// than in the scan: a casing mismatch between argv[1] and import.meta.url would make this block
+// silently NOT run, so CI would invoke the guardrail, check nothing, and exit 0. A false green on
+// a gating check is worse than the false red that led us here. ──
+if (process.argv[1] && samePath(resolve(fileURLToPath(import.meta.url)), resolve(process.argv[1]))) {
   const res = await audit.run({ root: process.cwd() });
   console.log(res.report);
   if (res.failed) process.exit(1);
