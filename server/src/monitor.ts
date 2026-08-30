@@ -28,6 +28,7 @@ import { coerceQueueItem, db, getSetting, setSetting } from './db'
 // choosing not to. The compiler is the guard.
 import { isActive, isSessionActive } from './dispatch'
 import { sessionMetaMap } from './instance-sessions'
+import { pathKey } from './path-key'
 import { discoverPendingStops, type RateLimitedStop } from './rate-limit-discovery'
 import { isSessionSuperseded } from './session-launch'
 import type {
@@ -330,9 +331,6 @@ export function monitorStatus(): MonitorStatusRow[] {
 
 // --- resume enqueue ----------------------------------------------------------
 
-/** Enqueue a resume of the rate-limited item's session, scheduled for `notBefore`. When
- *  `instanceRefOverride` is set (migrate-on-limit), the resume runs on THAT account instead of
- *  the original pin — the whole point being that the original just hit its 5-hour wall. */
 /**
  * The thread's own name, with any resume/migration prefix this monitor (or the migrate route)
  * previously stapled on peeled back off.
@@ -353,7 +351,11 @@ export function baseTitle(title: string): string {
   return t || (title ?? '').trim()
 }
 
-function enqueueResume(item: QueueItem, notBefore: string, instanceRefOverride?: string): string {
+/** Enqueue a resume of the rate-limited item's session, scheduled for `notBefore`, on the
+ *  item's own account. (The migrate-on-limit override this once carried died with orchestrator
+ *  v1; the dead parameter and its four conditional branches were removed in the 2026-08-29
+ *  consolidation pass rather than left describing machinery that no longer exists.) */
+function enqueueResume(item: QueueItem, notBefore: string): string {
   const id = crypto.randomUUID()
   const prompt = getMonitorSettings().resumePrompt
   const posRow = db
@@ -363,43 +365,24 @@ function enqueueResume(item: QueueItem, notBefore: string, instanceRefOverride?:
   const name = baseTitle(item.title)
   db.query(
     `insert into queue_items
-       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at, import_to, import_title)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, ?, ?, ?, ?)`,
+       (id, session_id, title, cwd, prompt, model, effort, permission_mode, account_id, instance_ref, new_chat, fork, status, position, not_before, created_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, ?, ?)`,
   ).run(
     id,
     item.session_id,
-    `${instanceRefOverride ? 'Migrated resume' : 'Auto-resume'}: ${name}`.slice(0, 200),
+    `Auto-resume: ${name}`.slice(0, 200),
     item.cwd,
     prompt,
     item.model ?? null,
     item.effort ?? null,
     item.permission_mode ?? null,
-    // A migrated resume must not carry the original account_id either — the instance ref wins in
-    // the runner, but leaving a stale account id on the row misreports who paid.
-    instanceRefOverride ? null : (item.account_id ?? null),
+    item.account_id ?? null,
     // Carry the ORIGINAL item's pinning forward — otherwise an instance-pinned run that gets
     // auto-resumed loses its pin and resumes as Ambient (wrong credentials, defeats the pin).
-    instanceRefOverride ?? item.instance_ref ?? null,
+    item.instance_ref ?? null,
     position,
     notBefore,
     Date.now(),
-    // A MIGRATED resume runs on a BORROWED account, so without this it finishes headless and lands
-    // nowhere the owner looks — the one gap left in the migrate story. finalize() in dispatch.ts
-    // imports a completed run carrying import_to into that instance's desktop app, exactly as the
-    // "Migrate to another account" menu item does, so the borrowed run ends up visible on the
-    // account that can actually keep driving it (the original one is still behind its 5-hour wall).
-    //
-    // A same-account auto-resume deliberately imports NOTHING: that chat already sits in the app it
-    // belongs to, and importing would add a duplicate entry pointing at the same transcript.
-    //
-    // Unlike the menu route this does NOT archive the old desktop entries first. That route is
-    // user-initiated and settles in seconds; this one fires unattended and a migrated run can be
-    // long, so the target instance may have been closed by the time it finishes (the import refuses
-    // to boot a closed instance, by design). Archive-then-fail would leave the thread visible in no
-    // app at all — strictly worse than the duplicate entry not archiving can leave behind, and
-    // transcripts are shared across instances so the original entry keeps showing the real thread.
-    instanceRefOverride ?? null,
-    instanceRefOverride ? name.slice(0, 200) : null,
   )
   return id
 }
@@ -473,11 +456,8 @@ export function pickLandingInstance(
   instances: Array<{ ref: string; num: number; isRunning: boolean; signedIn: boolean }>,
   usage: Array<{ ref: string; weeklyPct: number | null; stale: boolean }>,
 ): { ref: string; num: number } | null {
-  const norm = (p: string) =>
-    p
-      .replace(/[\\/]+/g, '/')
-      .replace(/\/+$/, '')
-      .toLowerCase()
+  // Refs carry a 'desktop:' scheme; pathKey folds it harmlessly along with the path.
+  const norm = (p: string) => pathKey(p, true)
   const running = instances.filter((i) => i.isRunning && i.signedIn)
   if (pinnedRef?.startsWith('desktop:')) {
     const pinned = running.find((i) => norm(i.ref) === norm(pinnedRef))
@@ -562,20 +542,11 @@ async function deliverDesktopLanding(q: QueueItem): Promise<void> {
       )
       return
     }
-    // THE NAMING LAW: the same deterministic resolution the queue import uses - the row's
-    // title, else the session list's title; no real name means an honest failure, never an
-    // Untitled landing.
-    const { isGenericChatTitle } = await import('./chat-title')
-    let title = q.title
-    if (isGenericChatTitle(title)) {
-      try {
-        const { getSession } = await import('./sessions')
-        title = (await getSession(q.session_id, 'claude'))?.title ?? title
-      } catch {
-        // fall through
-      }
-    }
-    if (isGenericChatTitle(title)) {
+    // THE NAMING LAW: resolveAutomatedTitle is the one definition of how an AI-less path
+    // derives a real name or fails honestly.
+    const { resolveAutomatedTitle } = await import('./chat-title')
+    const title = await resolveAutomatedTitle(q.session_id, q.title)
+    if (title === null) {
       close(
         'failed',
         'window reset - no real name available for this chat (naming law); name it, then retry',

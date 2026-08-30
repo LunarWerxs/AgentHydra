@@ -18,6 +18,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   account's running desktop app and archived there through the app's own UI.
 
 ### Added
+- **Consolidation pass over the rebuild day (owner-ordered review): deduplicate, simplify,
+  enforce.** One definition now exists for each thing four modules had grown privately: the
+  path comparison key (new server/src/path-key.ts - two of the day's review-confirmed bugs
+  were this helper done slightly differently), the transcript-record text extractor (moved
+  beside classifyEnding in session-ending.ts), and the automated landing-title chain
+  (resolveAutomatedTitle in chat-title.ts, shared by the queue import and the monitor
+  landing). enqueueResume's dead migrate-on-limit machinery (unused override param, four
+  permanently-false branches, write-orphaned import columns, a comment narrating removed
+  behavior) is gone. The chat tool is renamed misc/Manage-DesktopChat.ps1 (it archives,
+  unarchives, renames and lists), all references updated, and a new drift-guard test binds
+  its hand-copied naming regexes to chat-title.ts's canonical patterns so the two can never
+  silently diverge - a keep-in-sync comment is not a mechanism. Stale tombstone lines about
+  terminal resumes corrected; the three fabricated drill transcripts deleted from the
+  transcript store. Suite 1326/0, localci clean.
+
 - **Orchestrator rebuild, piece 7: NO CONSOLE IN AUTOMATION** (owner ruling, 2026-08-29:
   console is only ever for chats a person deliberately created in a console; a chat with no
   desktop home is MIGRATED to a desktop, never resumed in a terminal). The monitor's

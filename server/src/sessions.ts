@@ -3,7 +3,7 @@ import { readForeignSession } from './foreign-sessions'
 import { resolveInstanceByOrigin, type SessionMeta, sessionMetaMap } from './instance-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
 import { createLimitStopTracker, type LimitStop } from './rate-limit-signal'
-import { classifyEnding, type SessionEnding } from './session-ending'
+import { classifyEnding, endingEventText, type SessionEnding } from './session-ending'
 import {
   decodeProjectKey,
   describeTaggedText,
@@ -45,20 +45,6 @@ function toEpoch(ts: unknown): number | null {
   if (typeof ts !== 'string') return null
   const n = Date.parse(ts)
   return Number.isNaN(n) ? null : n
-}
-
-/** The text a record carries, for the ending classifier. Mirrors limitEventText, kept local so a
- *  change to one cannot silently change what the other reads. */
-function endingText(ev: any): string {
-  const content = ev?.message?.content
-  if (typeof content === 'string') return content
-  if (Array.isArray(content))
-    return content
-      .map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : ''))
-      .filter(Boolean)
-      .join(' ')
-  if (typeof ev?.result === 'string') return ev.result
-  return ''
 }
 
 function oneLine(s: string, n = 140): string {
@@ -397,7 +383,7 @@ function applyMetaLine(
   // what the UI would show is blind to exactly the records this needs.
   limits?.observe(ev, toEpoch(ev.timestamp))
   if (!acc.threadKey && typeof ev.uuid === 'string' && ev.uuid) acc.threadKey = ev.uuid
-  if (tf.source === 'claude') acc.ending = classifyEnding(ev, endingText(ev)) ?? acc.ending
+  if (tf.source === 'claude') acc.ending = classifyEnding(ev, endingEventText(ev)) ?? acc.ending
 
   applyMetaMessage(acc, tf, ev)
 }

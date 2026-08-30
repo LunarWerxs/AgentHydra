@@ -76,3 +76,16 @@ test('a supplied title wins over a confirm when both are present', () => {
   const r = resolveRequiredTitle({ title: 'New name', confirmTitle: 'Old', currentTitle: 'Old' })
   expect(r).toEqual({ ok: true, title: 'New name' })
 })
+
+test('the PowerShell tool carries the canonical generic/plumbing patterns verbatim', () => {
+  // misc/Manage-DesktopChat.ps1 refuses generic rename targets with a hand-copied regex; this
+  // guard fails the moment chat-title.ts's canonical patterns change without that copy - an
+  // unenforced keep-in-sync comment is not a mechanism (consolidation review, 2026-08-29).
+  const { GENERIC_CHAT_TITLE, PLUMBING_CHAT_TITLE } = require('../src/chat-title')
+  const ps1 = require('node:fs').readFileSync(
+    require('node:path').join(import.meta.dir, '..', '..', 'misc', 'Manage-DesktopChat.ps1'),
+    'utf8',
+  )
+  expect(ps1.includes(GENERIC_CHAT_TITLE.source)).toBe(true)
+  expect(ps1.includes(PLUMBING_CHAT_TITLE.source)).toBe(true)
+})

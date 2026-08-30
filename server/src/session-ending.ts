@@ -63,6 +63,27 @@ const REFUSED = /\bsafeguards flagged this message\b/i
  * for the same reason: a run that merely TALKED about being overloaded is not overloaded, and the
  * only trustworthy report is the CLI's own.
  */
+/** The text a record carries, for {@link classifyEnding}. One definition (consolidation
+ *  pass, 2026-08-29): fleet.ts and sessions.ts each kept a private copy; they now share this
+ *  one, living beside the classifier that consumes it. */
+export function endingEventText(ev: unknown): string {
+  const e = ev as { message?: { content?: unknown }; result?: unknown }
+  const content = e?.message?.content
+  if (typeof content === 'string') return content
+  if (Array.isArray(content))
+    return content
+      .map((b) =>
+        (b as { type?: string })?.type === 'text' &&
+        typeof (b as { text?: unknown }).text === 'string'
+          ? (b as { text: string }).text
+          : '',
+      )
+      .filter(Boolean)
+      .join(' ')
+  if (typeof e?.result === 'string') return e.result
+  return ''
+}
+
 export function classifyEnding(ev: unknown, text: string): SessionEnding | null {
   const e = ev as any
   const type = e?.type

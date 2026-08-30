@@ -720,21 +720,11 @@ export async function attemptDesktopImport(id: string, importer?: DesktopImporte
     // Dynamic import keeps session-launch (which pulls in core/instances) out of dispatch's module
     // graph at load time.
     const run = importer ?? (await import('./session-launch')).importSessionToDesktop
-    // THE NAMING LAW (owner directive 2026-08-29): this automated path carries no AI to decide
-    // a name, so it resolves one deterministically - the row's stored title, else the session
-    // list's title for the thread - and when neither is a real name the import fails HONESTLY
-    // (visible in the queue row) instead of landing a chat called Untitled.
-    const { isGenericChatTitle } = await import('./chat-title')
-    let importTitle = row.import_title
-    if (isGenericChatTitle(importTitle)) {
-      try {
-        const { getSession } = await import('./sessions')
-        importTitle = (await getSession(row.session_id, 'claude'))?.title ?? importTitle
-      } catch {
-        // fall through to the generic check below
-      }
-    }
-    if (isGenericChatTitle(importTitle)) {
+    // THE NAMING LAW (owner directive 2026-08-29): resolveAutomatedTitle is the one
+    // definition of how an AI-less path derives a real name or fails honestly.
+    const { resolveAutomatedTitle } = await import('./chat-title')
+    const importTitle = await resolveAutomatedTitle(row.session_id, row.import_title)
+    if (importTitle === null) {
       result = {
         ok: false,
         reason:

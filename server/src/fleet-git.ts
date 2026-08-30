@@ -45,6 +45,8 @@ export interface FleetGit {
 const GIT_TIMEOUT_MS = 3000
 const MAIN_BRANCHES = new Set(['main', 'master'])
 
+import { pathKey } from './path-key'
+
 export interface FleetGitDeps {
   /** Seam for tests; the default shells out to real git with a timeout. */
   runGit?: (args: string[]) => Promise<{ ok: boolean; out: string; err: string }>
@@ -76,11 +78,6 @@ async function realRunGit(args: string[]): Promise<{ ok: boolean; out: string; e
   }
 }
 
-function normKey(p: string, caseFold: boolean): string {
-  const slashed = p.replace(/[\\/]+/g, '/').replace(/\/+$/, '')
-  return caseFold ? slashed.toLowerCase() : slashed
-}
-
 /**
  * Git hygiene for every repo the given cwds live in, deduped by repo root, dirtiest first.
  * Read-only: nothing here writes, locks, or fetches.
@@ -95,7 +92,7 @@ export async function fleetGit(cwds: string[], deps: FleetGitDeps = {}): Promise
   const seenCwd = new Set<string>()
   const uniqueCwds: string[] = []
   for (const cwd of cwds) {
-    const key = normKey(cwd, caseFold)
+    const key = pathKey(cwd, caseFold)
     if (seenCwd.has(key)) continue
     seenCwd.add(key)
     uniqueCwds.push(cwd)
@@ -111,7 +108,7 @@ export async function fleetGit(cwds: string[], deps: FleetGitDeps = {}): Promise
       notRepo.push(cwd)
       continue
     }
-    const rootKey = normKey(top.out, caseFold)
+    const rootKey = pathKey(top.out, caseFold)
     const entry = rootCwds.get(rootKey)
     if (entry) entry.cwds.push(cwd)
     else rootCwds.set(rootKey, { root: top.out, cwds: [cwd] })

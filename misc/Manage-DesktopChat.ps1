@@ -1,4 +1,5 @@
-# misc/Archive-DesktopChat.ps1 - archive a chat in a RUNNING Claude desktop app WITHOUT stealing
+# misc/Manage-DesktopChat.ps1 - manage a RUNNING Claude desktop app's chats (archive,
+# unarchive, rename, list) WITHOUT stealing
 # focus and WITHOUT moving the mouse, by invoking the app's own sidebar controls through the
 # Windows UI Automation patterns they expose.
 #
@@ -35,12 +36,12 @@
 # remote debugging, so CDP is not an option.
 #
 # USAGE
-#   powershell -File misc/Archive-DesktopChat.ps1 -Title "Exact chat title"
-#   powershell -File misc/Archive-DesktopChat.ps1 -Title "..." -Instance 5claude
-#   powershell -File misc/Archive-DesktopChat.ps1 -Title "..." -Action Unarchive   # (only reaches
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "Exact chat title"
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Instance 5claude
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Unarchive   # (only reaches
 #                                              a currently-rendered archived row)
-#   powershell -File misc/Archive-DesktopChat.ps1 -Title "..." -Action Rename -NewTitle "Real name"
-#   powershell -File misc/Archive-DesktopChat.ps1 -List -Instance 5claude          # rendered rows
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Rename -NewTitle "Real name"
+#   powershell -File misc/Manage-DesktopChat.ps1 -List -Instance 5claude          # rendered rows
 #
 # RENAME (piece 6 of the rebuild, proven live 2026-08-29): the app's own Rename control is the
 # ONE write a running app cannot undo (v1 measured every outside metadata write being re-saved

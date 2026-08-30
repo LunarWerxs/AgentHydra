@@ -35,6 +35,28 @@ export function isGenericChatTitle(title: string | null | undefined): boolean {
 export type TitleResolution = { ok: true; title: string } | { ok: false; error: string }
 
 /**
+ * The AUTOMATED landing paths' title resolution (queue imports, monitor landings): no AI is in
+ * the loop to decide a name, so it is derived deterministically - the stored row title, else
+ * the session list's title for the thread - and null means NO real name exists and the landing
+ * must fail honestly rather than produce an Untitled chat. One definition (consolidation pass,
+ * 2026-08-29): dispatch.ts and monitor.ts each grew this chain within hours of each other.
+ */
+export async function resolveAutomatedTitle(
+  sessionId: string,
+  rowTitle: string | null,
+): Promise<string | null> {
+  if (rowTitle !== null && !isGenericChatTitle(rowTitle)) return rowTitle.trim()
+  try {
+    const { getSession } = await import('./sessions')
+    const listed = (await getSession(sessionId, 'claude'))?.title ?? null
+    if (listed !== null && !isGenericChatTitle(listed)) return listed.trim()
+  } catch {
+    // fall through - no real name
+  }
+  return null
+}
+
+/**
  * The route-level contract. Exactly one of two doors:
  *   - `title`: a real new name (non-empty, not generic, not plumbing, <= 200 chars).
  *   - `confirmTitle`: the caller restates the chat's CURRENT title exactly (trimmed), which is

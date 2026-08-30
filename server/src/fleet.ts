@@ -24,7 +24,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { instanceRefForSession } from './instance-sessions'
 import { type LiveSession, readLiveRegistry } from './live-registry'
-import { classifyEnding, type SessionEnding } from './session-ending'
+import { samePathKey } from './path-key'
+import { classifyEnding, endingEventText, type SessionEnding } from './session-ending'
 import { usageProbeCwd } from './usage'
 
 /** What the transcript on disk says about a live session's most recent state. */
@@ -67,27 +68,6 @@ export interface FleetStatus {
 const TAIL_WINDOW_START = 64 * 1024
 const TAIL_WINDOW_CAP = 4 * 1024 * 1024
 
-/** The text a record carries, for the ending classifier. Mirrors sessions.ts's endingText -
- *  kept local, as that copy's own comment prescribes, so a change to one cannot silently change
- *  what the other reads. */
-function endingText(ev: unknown): string {
-  const e = ev as { message?: { content?: unknown }; result?: unknown }
-  const content = e?.message?.content
-  if (typeof content === 'string') return content
-  if (Array.isArray(content))
-    return content
-      .map((b) =>
-        (b as { type?: string })?.type === 'text' &&
-        typeof (b as { text?: unknown }).text === 'string'
-          ? (b as { text: string }).text
-          : '',
-      )
-      .filter(Boolean)
-      .join(' ')
-  if (typeof e?.result === 'string') return e.result
-  return ''
-}
-
 /**
  * The ending verdict for a blob of transcript-tail text.
  *
@@ -109,7 +89,7 @@ export function endingFromTailText(text: string, wholeFile: boolean): SessionEnd
     } catch {
       continue // a torn or non-JSON line says nothing; the records around it still count
     }
-    ending = classifyEnding(ev, endingText(ev)) ?? ending
+    ending = classifyEnding(ev, endingEventText(ev)) ?? ending
   }
   return ending
 }
@@ -160,17 +140,6 @@ export function classifyTranscriptTail(
   }
 }
 
-/** Case- and slash-insensitive path equality, for the one exact-cwd filter below. */
-function samePathLoose(a: string | null, b: string | null): boolean {
-  if (!a || !b) return false
-  const norm = (p: string) =>
-    p
-      .replace(/[\\/]+/g, '/')
-      .replace(/\/+$/, '')
-      .toLowerCase()
-  return norm(a) === norm(b)
-}
-
 export interface FleetDeps {
   claudeHome?: string
   nowMs?: number
@@ -192,7 +161,7 @@ export function fleetStatus(deps: FleetDeps = {}): FleetStatus {
   const attribute = deps.attribute ?? instanceRefForSession
   const sessions: FleetSession[] = []
   for (const s of registry(claudeHome)) {
-    if (samePathLoose(s.cwd, probe)) continue
+    if (samePathKey(s.cwd, probe)) continue
     let instanceRef: string | null = null
     try {
       instanceRef = attribute(s.sessionId)

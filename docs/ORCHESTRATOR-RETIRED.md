@@ -25,13 +25,15 @@ measured delivery matrix.
 
 General primitives the orchestrator merely used, which stand on their own:
 
-- `/api/sessions/:id/migrate`, `import-desktop`, `desktop-archive`, `automation`,
-  `launch-terminal` - moving, importing, archiving and visibly launching chats.
+- `/api/sessions/:id/migrate`, `import-desktop`, `desktop-archive`, `automation` - moving,
+  importing and archiving chats. `launch-terminal` survives strictly as a USER-EXPLICIT
+  primitive: since the no-console ruling (piece 7), no automated path opens a terminal.
 - `chat-dossier` (minus its joins into the orchestrator ledger tables), backed by the
   extracted `live-registry.ts`.
-- The auto-resume monitor, reduced to its pre-orchestrator shape: scheduled resumes into a
-  visible terminal, or a recorded "ready in its app" close-out for desktop threads
-  (migrate-on-limit and the proposal-gated native revive went with the reviewer).
+- The auto-resume monitor, reduced and then re-lawed: a desktop-living thread's reset is
+  recorded ("ready in its app"); a homeless thread is LANDED in a desktop app by import
+  (no-console ruling, piece 7 - the old visible-terminal resume is gone, as are
+  migrate-on-limit and the proposal-gated native revive, which went with the reviewer).
 - The no-headless and surface-purity owner laws, which are enforced in the primitives, not in
   the orchestrator: they bind the rebuild too.
 
@@ -39,7 +41,7 @@ General primitives the orchestrator merely used, which stand on their own:
 
 V1 papered over "archived but still in the sidebar" with a queued idle-restart. The real
 mechanism (owner's call) is driving the running app's OWN archive control, and the final form
-is FOCUS-FREE - no foreground steal, no mouse. `misc/Archive-DesktopChat.ps1` wakes the app's
+is FOCUS-FREE - no foreground steal, no mouse. `misc/Manage-DesktopChat.ps1` wakes the app's
 accessibility tree (an MSAA poke - Electron builds the tree lazily), finds the chat row by
 title, opens its "More options" menu via `ExpandCollapsePattern.Expand()`, and fires the
 "Archive" item via `InvokePattern.Invoke()`. Both are pure UI-Automation pattern calls: no

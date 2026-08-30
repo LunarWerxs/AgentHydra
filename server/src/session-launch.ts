@@ -38,6 +38,7 @@ import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
 import { db } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
+import { samePathKey } from './path-key'
 
 /**
  * One lineage, one continuation. A done-marked session (session_marks.done = 1) was handed off,
@@ -390,16 +391,9 @@ export function buildImportPlan(
 
 async function defaultInstanceRunning(instanceDir: string): Promise<boolean> {
   const { listInstances } = await import('./core/instances')
-  // Slash STYLE must not decide the answer: a forward-slash caller against the process list's
-  // backslash dirs read a RUNNING instance as "not running" (found live 2026-08-29, the same
-  // class of gap the trust-mirroring comment above documents for the CLI's trust keys).
-  const norm = (p: string) =>
-    p
-      .replace(/[\\/]+/g, '/')
-      .replace(/\/+$/, '')
-      .toLowerCase()
-  const needle = norm(instanceDir)
-  return (await listInstances()).some((i) => i.isRunning && norm(i.dir) === needle)
+  // Slash STYLE must not decide the answer (found live 2026-08-29: a forward-slash caller read
+  // a RUNNING instance as not running). path-key.ts is the one definition of that comparison.
+  return (await listInstances()).some((i) => i.isRunning && samePathKey(i.dir, instanceDir))
 }
 
 /** The live registry entry (with an alive pid) for this session, or null. Exported for the
