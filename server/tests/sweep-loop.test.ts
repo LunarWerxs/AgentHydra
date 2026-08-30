@@ -31,7 +31,13 @@ test('ABSENT settings read as the true defaults - never as zero (caught live)', 
   // as 0. Deleting the rows must yield the documented defaults.
   db.query("delete from settings where key like 'sweep_%'").run()
   const s = getSweepLoopSettings()
-  expect(s).toEqual({ enabled: false, intervalMin: 15, maxArchive: -1, maxSurface: 0 })
+  expect(s).toEqual({
+    enabled: false,
+    courierEnabled: true,
+    intervalMin: 15,
+    maxArchive: -1,
+    maxSurface: 0,
+  })
 })
 
 test('off by default, with the unattended-safe caps', () => {
@@ -273,4 +279,24 @@ test('an autonomous courier pass RECORDS what it did - silence is not evidence o
   expect(run?.held).toBe(1)
   // A refusal's REASON survives - that is the whole point of recording the pass.
   expect(run?.attempts.find((a) => a.sessionId === 's-2')?.detail).toContain('REFUSED')
+})
+
+test('the courier switch is visible in status and settable through the same route', async () => {
+  const { setSetting } = await import('../src/db')
+  setSetting('courier_enabled', '1')
+  expect(getSweepLoopSettings().courierEnabled).toBe(true)
+  // A mechanism that types into the owner's live windows must be switchable without him
+  // knowing a settings key exists (readiness audit).
+  const parsed = parseSweepLoopPatch({ courierEnabled: false })
+  expect(parsed.ok).toBe(true)
+  if (parsed.ok) setSweepLoopSettings(parsed.patch)
+  expect(getSweepLoopSettings().courierEnabled).toBe(false)
+  expect(sweepLoopStatus().settings.courierEnabled).toBe(false)
+  // ...and the sweep's own switch is untouched by it.
+  expect(getSweepLoopSettings().enabled).toBe(false)
+  setSetting('courier_enabled', '1')
+})
+
+test('a non-boolean courierEnabled is refused, never coerced', () => {
+  expect(parseSweepLoopPatch({ courierEnabled: 'yes' }).ok).toBe(false)
 })

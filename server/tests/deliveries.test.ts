@@ -11,6 +11,7 @@ import {
   listDeliveries,
   parseDeliveryState,
   pendingDeliveries,
+  pruneDeliveries,
   reconcileDeliveries,
   stageDelivery,
 } from '../src/deliveries'
@@ -255,4 +256,29 @@ test('deliverableDeliveries never carries a settled row', () => {
     liveSince: () => null,
   })
   expect(rows.length).toBe(0)
+})
+
+test('settled rows are pruned past the retention window; OPEN rows never are', () => {
+  const OLD = T0 - 40 * 24 * 3600 * 1000
+  // Settled long ago -> pruned.
+  stageDelivery({ sessionId: 'old-done', prompt: 'p', instanceRef: null, nowMs: OLD })
+  reconcileDeliveries({
+    nowMs: OLD + 10_000,
+    lastActivity: () => OLD + 5_000,
+    liveSince: () => null,
+  })
+  // Open and equally ancient -> KEPT, because an open row is work, not history.
+  stageDelivery({ sessionId: 'old-open', prompt: 'p', instanceRef: null, nowMs: OLD })
+  // Settled recently -> kept.
+  stageDelivery({ sessionId: 'new-done', prompt: 'p', instanceRef: null, nowMs: T0 })
+  reconcileDeliveries({ nowMs: T0 + 10_000, lastActivity: () => T0 + 5_000, liveSince: () => null })
+
+  const removed = pruneDeliveries(T0)
+  expect(removed).toBe(1)
+  const left = db
+    .query<{ session_id: string }, []>('select session_id from deliveries')
+    .all()
+    .map((r) => r.session_id)
+    .sort()
+  expect(left).toEqual(['new-done', 'old-open'])
 })

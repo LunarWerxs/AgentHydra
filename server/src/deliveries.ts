@@ -72,8 +72,11 @@ export function stageDelivery(opts: {
   nowMs?: number
 }): void {
   const now = opts.nowMs ?? Date.now()
+  // Supersede EVERY still-open row for this session, not just 'pending': deaf is equally
+  // deliverable (deliverableDeliveries), so retiring only pending left a session with TWO
+  // live rows - the courier would then deliver the same chat twice (review-confirmed).
   db.query(
-    "update deliveries set state = 'superseded', resolved_at = ?, evidence = ? where session_id = ? and state = 'pending'",
+    "update deliveries set state = 'superseded', resolved_at = ?, evidence = ? where session_id = ? and state in ('pending', 'deaf')",
   ).run(now, 'replaced by a newer staging before any delivery was observed', opts.sessionId)
   db.query(
     "insert into deliveries (id, session_id, prompt, instance_ref, state, staged_at) values (?, ?, ?, ?, 'pending', ?)",
@@ -223,6 +226,25 @@ export function reconcileDeliveries(deps: DeliveryDeps = {}): void {
   }
 }
 
+/**
+ * How long a SETTLED row is kept. The ledger is evidence, not an archive: a delivered or
+ * expired row answers "did that prompt land?" for as long as anyone would ask, and then it is
+ * noise. Nothing pruned it before, so it grew forever on a daemon that runs for months
+ * (readiness audit). OPEN rows (pending/deaf) are never pruned at any age - they are work.
+ */
+const KEEP_SETTLED_MS = 30 * 24 * 3600 * 1000
+
+/** Drop settled rows older than the retention window. Returns how many went. */
+export function pruneDeliveries(nowMs = Date.now()): number {
+  const cutoff = nowMs - KEEP_SETTLED_MS
+  const before = db.query<{ c: number }, []>('select count(*) c from deliveries').get()?.c ?? 0
+  db.query(
+    "delete from deliveries where state in ('delivered', 'expired', 'superseded') and coalesce(resolved_at, staged_at) < ?",
+  ).run(cutoff)
+  const after = db.query<{ c: number }, []>('select count(*) c from deliveries').get()?.c ?? 0
+  return before - after
+}
+
 /** The ledger, newest first; reconciles first so the answer is current, never a stale read. */
 export function listDeliveries(state?: DeliveryState, deps: DeliveryDeps = {}): DeliveryRow[] {
   reconcileDeliveries(deps)
@@ -259,7 +281,10 @@ export function deliverableDeliveries(deps: DeliveryDeps = {}): DeliveryRow[] {
   reconcileDeliveries(deps)
   return db
     .query<DeliveryRow, []>(
-      "select * from deliveries where state in ('pending', 'deaf') order by staged_at desc",
+      // OLDEST FIRST. The per-pass cap counts every attempt, including free refusals, so
+      // newest-first let a steady trickle of new rows starve an older one forever
+      // (review-confirmed). Delivery is a queue; the display list stays newest-first.
+      "select * from deliveries where state in ('pending', 'deaf') order by staged_at asc",
     )
     .all()
 }

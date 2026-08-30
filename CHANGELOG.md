@@ -9,6 +9,45 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Three production-readiness defects, from an audit asking "what bites in unattended daily
+  use?"** (1) The courier - the thing that types into live chat windows on a timer - had no
+  way to see or switch it off short of knowing a settings key existed; it is now reported in
+  the sweep-loop status as `courierEnabled` and toggled through the same route, separate from
+  the sweep's own switch because they authorise different things (the sweep decides, the
+  courier only finishes deliveries an authorised act already staged). (2) The delivery ledger
+  never pruned, so it grew forever on a daemon that runs for months; settled rows past 30 days
+  are now dropped from the ALWAYS-ON courier pass rather than the off-by-default sweep tick,
+  and open rows are never pruned at any age because they are work, not history. (3) The 60s
+  poll called its two jobs with a bare `void`, so a synchronous throw before either function's
+  own try/catch - a locked sqlite in a settings read, say - became an unhandled rejection that
+  exits the process: one bad tick could kill the whole daemon instead of being skipped.
+
+- **Rename works on non-English apps too, so the whole chat-management surface is now
+  locale-independent.** The inline editor is localized as well ('Sitzungsname' on a German
+  app), and - the actual blocker - Chromium materialises it LAZILY: without a fresh
+  accessibility poke after the menu Invoke the element is simply not in the tree yet, which
+  is what made rename look permanently impossible on that build. It is now found
+  structurally (the writable Edit holding the OLD title, which separates it from the message
+  composer without knowing either language) after a second poke. Renamed a real German-app
+  chat end to end.
+
+- **Six ways the courier could have delivered wrong, all found by an adversarial review of
+  tonight's own code and fixed before they ever fired.** (1) The aim proof came from a
+  chat's first user turn, but ~8% of sessions open with Claude Code's synthetic
+  "continued from a previous conversation" preamble - identical across every such chat - so
+  the actuator could have verified itself against a DIFFERENT conversation and typed there;
+  compaction summaries are now skipped. (2) That same proof was matched against every
+  element in the window including the sidebar's previews of OTHER chats; it must now be
+  on-screen. (3) A title suffix match meant asking for 'Notes' could hit 'My Notes' - both
+  scripts now REFUSE on ambiguity instead of taking the first row. (4) Re-staging a session
+  only superseded a 'pending' row, so a 'deaf' one survived and the same chat could be
+  delivered twice. (5) Nothing marked a row as just-sent, and the ledger cannot know until
+  the app writes the receipt seconds later - a following pass would have retyped the same
+  prompt; there is now a post-send cooldown, stamped on success only so refusals stay
+  retryable. (6) Newest-first ordering plus a per-pass cap could starve an old row forever -
+  delivery is now FIFO. Also: a failed send no longer leaves its text sitting in the owner's
+  composer, and the Stop/Unarchive label tables gained their missing locales.
+
 - **The UI archive click was silently inert on any non-English app** (found while wiring the
   courier, fixed and proven live). The row menu's accessible name is LOCALIZED - a German app
   reads "Weitere Optionen für <title>", not "More options for <title>" - so the English-prefix
@@ -22,6 +61,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   directly below Archive. Archive verified live on the German app. Rename is NOT fixed: its
   inline editor never appears in the tree on that build, so it stays English-only and now says
   so instead of failing vaguely.
+
+### Changed
+
+- **The test suite runs its files in parallel: 34.9s -> 16.2s, a measured 2.2x** (four runs,
+  1504 tests, zero failures; the local CI leg went 52s -> 33s and the container leg 45s ->
+  32s). Each file already gets its own process with its own throwaway state directory, so
+  there is nothing to share and nothing to race. The two slowest files were measured rather
+  than guessed - dispatch.test.ts is 39% of the serial total because it drives a REAL
+  detached OS process, and updater-engine.test.ts drives REAL git - and both were left alone
+  deliberately: their whole value is that they are not faked.
+
+- **THE COURIER'S SCHEDULER MODULE WAS DELETED** (desktop-tasks.ts and its suite, 429 lines).
+  Nothing called it once the scheduler transport was demolished, and code kept for a
+  hypothetical future consumer is exactly what the standing rules forbid. Git has it if the
+  "start fresh work in a dormant instance" feature is ever actually built.
 
 ### Added
 

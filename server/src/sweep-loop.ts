@@ -17,11 +17,17 @@
 
 import { courierPass } from './courier'
 import { getSetting, setSetting } from './db'
-import { reconcileDeliveries } from './deliveries'
+import { pruneDeliveries, reconcileDeliveries } from './deliveries'
 import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
 
 export interface SweepLoopSettings {
   enabled: boolean
+  /** The COURIER: delivers staged prompts by typing into the target chat and pressing Send.
+   *  Separate from `enabled` on purpose - the sweep decides things on its own (archiving,
+   *  surfacing), while this only finishes deliveries an authorized act already staged. It is
+   *  surfaced here because a mechanism that types into the owner's live windows must be
+   *  VISIBLE and switchable, not a setting he has to know exists (readiness audit). */
+  courierEnabled: boolean
   /** Minutes between ticks. */
   intervalMin: number
   /** -1 = unlimited (stored sentinel; the sweep gets Infinity). */
@@ -43,6 +49,7 @@ function num(key: string, fallback: number, min: number, max: number): number {
 export function getSweepLoopSettings(): SweepLoopSettings {
   return {
     enabled: getSetting('sweep_enabled') === '1',
+    courierEnabled: getSetting('courier_enabled') === '1',
     intervalMin: num('sweep_interval_min', 15, 5, 24 * 60),
     maxArchive: num('sweep_max_archive', -1, -1, 10_000),
     maxSurface: num('sweep_max_surface', 0, 0, 100),
@@ -51,6 +58,8 @@ export function getSweepLoopSettings(): SweepLoopSettings {
 
 export function setSweepLoopSettings(patch: Partial<SweepLoopSettings>): SweepLoopSettings {
   if (typeof patch.enabled === 'boolean') setSetting('sweep_enabled', patch.enabled ? '1' : '0')
+  if (typeof patch.courierEnabled === 'boolean')
+    setSetting('courier_enabled', patch.courierEnabled ? '1' : '0')
   if (typeof patch.intervalMin === 'number' && Number.isFinite(patch.intervalMin))
     setSetting(
       'sweep_interval_min',
@@ -173,6 +182,11 @@ export function parseSweepLoopPatch(
     if (typeof body.enabled !== 'boolean') return { ok: false, error: 'enabled must be a boolean' }
     patch.enabled = body.enabled
   }
+  if (body.courierEnabled !== undefined) {
+    if (typeof body.courierEnabled !== 'boolean')
+      return { ok: false, error: 'courierEnabled must be a boolean' }
+    patch.courierEnabled = body.courierEnabled
+  }
   const fields = [
     ['intervalMin', 5, 24 * 60],
     ['maxArchive', -1, 10_000],
@@ -276,6 +290,14 @@ export async function runCourierHousekeeping(
   courierTicking = true
   lastCourierPassAt = Date.now()
   try {
+    // Retention lives HERE, not in the sweep tick: the sweep is off by default, so a fleet
+    // that only ever runs the courier would have grown its ledger forever (readiness audit).
+    // This path is the always-on one, so it is the honest home for housekeeping.
+    try {
+      pruneDeliveries()
+    } catch (err) {
+      console.error('[agenthydra] delivery prune error:', err)
+    }
     const report = await (deps.courier ?? courierPass)({ act: true })
     lastCourierRun = {
       at: new Date().toISOString(),
@@ -311,13 +333,26 @@ let timer: ReturnType<typeof setInterval> | null = null
  *  consumed. An interval change takes effect without a restart, same trade the monitor makes. */
 export function startSweepLoop(): void {
   if (timer) return
+  // EVERY path out of this tick is caught. A bare `void fn()` turns a synchronous throw
+  // before the callee's own try/catch - a locked or corrupt sqlite in getSetting(), say -
+  // into an unhandled rejection, and this process exits on those: one bad tick would kill
+  // the whole daemon instead of being skipped (readiness audit). A timer that runs forever
+  // must never be able to take the process down with it.
   timer = setInterval(() => {
-    // Courier housekeeping first, on its own always-on cadence (see its header).
-    void runCourierHousekeeping()
-    const s = getSweepLoopSettings()
-    if (!s.enabled) return
-    if (Date.now() - lastTickAt < s.intervalMin * 60_000) return
-    void runSweepLoopOnce()
+    try {
+      // Courier housekeeping first, on its own always-on cadence (see its header).
+      void runCourierHousekeeping().catch((err) => {
+        console.error('[agenthydra] courier housekeeping tick failed:', err)
+      })
+      const s = getSweepLoopSettings()
+      if (!s.enabled) return
+      if (Date.now() - lastTickAt < s.intervalMin * 60_000) return
+      void runSweepLoopOnce().catch((err) => {
+        console.error('[agenthydra] sweep tick failed:', err)
+      })
+    } catch (err) {
+      console.error('[agenthydra] sweep-loop poll failed (skipping this tick):', err)
+    }
   }, POLL_MS)
 }
 
