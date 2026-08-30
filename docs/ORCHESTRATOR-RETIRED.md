@@ -71,5 +71,24 @@ reads or writes them anymore, and fresh installs do not create them. Chats seede
 carry `[orchestrator]`-prefixed fabricated first messages; the title scanner still recognises
 that prefix as replaceable plumbing.
 
-The five `~/.claude/commands` files (`/orchestrate`, `/orcstart`, `/orcstop`, `/orc-dryrun`,
-`/orc-move`) are retired with the server surface they called.
+Four of the five `~/.claude/commands` files (`/orcstart`, `/orcstop`, `/orc-dryrun`, `/orc-move`)
+are retired with the server surface they called.
+
+## Where the orchestrator lives now
+
+**`/orchestrate` came back on 2026-08-30, and it is the one name that survived the retirement.**
+The capability was rebuilt, but not as a subsystem: there is no orchestrator daemon, no reviewer
+chat, no proposal ledger, no placement balancer. There is AgentHydra, which now knows how to take
+a census, gate every chat deterministically, act on the verdict, and deliver a staged prompt into
+a dormant chat by driving that chat's own composer. `/orchestrate` runs that pass through the
+daemon's ordinary MCP tools - `prestart`, `chat_sweep`, `chat_act`, `courier` - and holds no state
+of its own.
+
+That is the whole difference from v1, and it is why the same command name is not a resurrection:
+v1 was a second system with its own opinions, running beside the daemon and disagreeing with it.
+The rebuild has exactly one place where a verdict becomes a deed.
+
+Two sibling commands cover the app rather than the pass: `/hydra-status` (read-only fleet, quota,
+loop and stuck-work report) and `/hydra-check` (every gate this repo has, including its own CI run
+locally). All three ship in this repo under `.claude/commands/` and are also installed globally, so
+they work from any directory.
