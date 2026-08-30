@@ -23,6 +23,11 @@ export type UsageBand = 'ok' | 'elevated' | 'high' | 'critical' | 'unknown'
 const SOFT_PCT = 80
 const WARN_PCT = 85
 const HARD_PCT = 90
+/** The owner's overflow line (2026-08-30, hard-coded at 85 by his word): load balancing may
+ *  open a CLOSED instance only when every OPEN candidate has provably exceeded this on either
+ *  the 5-hour or the weekly window. Deliberately the same number as the 'high' band boundary -
+ *  one vocabulary, one place to change it when he says so. */
+export const LANDING_OVERFLOW_PCT = WARN_PCT
 /** A cache entry older than this is not being refreshed (the refresher runs ~1/min while its
  *  app is up), so its numbers describe some earlier week, not now. */
 const STALE_MINS = 30

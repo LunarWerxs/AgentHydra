@@ -600,12 +600,56 @@ export const TOOLS: McpEngineTool[] = [
       'asked), needs-input-review (it awaits an answer - YOUR one judgment: can the answer be ' +
       'determined autonomously, the owner\u2019s preference, or must a human decide?), or human ' +
       '(a person deliberately interrupted it - leave it). The evidence for that judgment ' +
-      '(lastAssistantText, doneClaim, endsWithQuestion) is in the response - never re-derive it.',
+      '(lastAssistantText, doneClaim, endsWithQuestion) is in the response - never re-derive it. ' +
+      'Then ACT on the verdict with chat_act.',
     inputSchema: S(
       { session_id: { type: 'string', description: 'The chat/session id to gate.' } },
       ['session_id'],
     ),
     run: (a) => api(`/api/chats/${encodeURIComponent(str(a.session_id))}/gate`),
+  },
+  {
+    name: 'chat_act',
+    description:
+      'ACT on the gate verdict for one chat - the second half of the gate law. It re-runs the ' +
+      'gate itself (a caller-supplied state is never trusted) and performs the deterministic ' +
+      'deed: running or human-interrupted -> left alone; finished archive-candidate -> archive ' +
+      'flag written (durability reported honestly); crashed -> the chat is SURFACED dormant ' +
+      'into a running desktop app (its own home, or the best-headroom instance when homeless; ' +
+      'a CLOSED instance is booted ONLY when every open account is provably at/over the 85% ' +
+      'overflow threshold on the 5-hour or weekly window - owner rule 2026-08-30); ' +
+      'usage-limit crashes wait for their reset instead. finished needs-input-review requires ' +
+      'YOUR autonomy judgment: read the gate evidence, then call again with decision ' +
+      '"autonomous" plus the answer text (the owner prefers autonomous whenever the answer is ' +
+      'determinable), or decision "human" to leave it. WHENEVER the result is ' +
+      'action:"surfaced" you MUST then deliver result.prompt to that chat through the app\'s ' +
+      'native message channel (peer messaging) - that delivery is what boots the dormant chat ' +
+      'and makes the resume real; the daemon deliberately has no messaging channel of its own.',
+    inputSchema: S(
+      {
+        session_id: { type: 'string', description: 'The chat/session id to act on.' },
+        decision: {
+          type: 'string',
+          enum: ['autonomous', 'human'],
+          description:
+            'Only for the needs-input-review lane: your autonomy judgment. Omit on the first ' +
+            'call; the parked response tells you when it is required.',
+        },
+        answer: {
+          type: 'string',
+          description:
+            'With decision "autonomous": the answer text to deliver to the chat, written as ' +
+            'the reply it was waiting for.',
+        },
+      },
+      ['session_id'],
+    ),
+    run: (a) =>
+      api(`/api/chats/${encodeURIComponent(str(a.session_id))}/act`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ decision: a.decision, answer: a.answer }),
+      }),
   },
   {
     name: 'chat_dossier',

@@ -7,6 +7,40 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **Orchestrator rebuild, piece 9: ACTING ON GATE VERDICTS** (`POST /api/chats/:id/act` +
+  server/src/gate-actions.ts + the chat_act MCP tool; owner-ordered 2026-08-30: "yes gate
+  verdicts should be acted on"). The act call re-runs the gate itself (a caller-supplied state
+  is never trusted) and performs the deterministic deed: running or human-interrupted chats are
+  left alone; a finished archive-candidate gets its archive flag written with durability
+  reported honestly (a running app's memory-wins caveat is stated, never hidden); a crashed
+  chat is SURFACED dormant into a running desktop app - re-imported into its own home, or
+  landed in the best-headroom instance when homeless - and the result carries the deterministic
+  resume prompt the caller must deliver through the app's native message channel (the measured
+  wake path; the daemon deliberately has no messaging channel of its own); a usage-limit crash
+  waits for its reset instead of re-hitting the wall. The needs-input-review lane carries the
+  ONE AI step by contract: the caller supplies decision autonomous (with the answer text - the
+  owner's stated preference) or human, and the server only executes that judgment.
+
+  **THE 85% OVERFLOW RULE** (owner, 2026-08-30, hard-coded at 85 by his word -
+  LANDING_OVERFLOW_PCT): landing may open a CLOSED signed-in instance only when every OPEN
+  candidate has PROVABLY exceeded 85% on either the 5-hour or the weekly window - proof means
+  a fresh reading, so automation never boots an app on a stale number or a guess; and NOT
+  vacuous - with nothing open at all the rule cannot truthfully hold, so an all-closed fleet
+  parks honestly (adversarial review caught the first cut treating it as vacuously true). A
+  usage-limit crash reports the BINDING window's reset (a pegged weekly wins over a sooner
+  5-hour reset - the same review caught the first cut always preferring the session reset),
+  and a signed-out home instance parks instead of being booted or imported into. One
+  definition (closedLandingEligible +
+  pickLandingInstance in monitor.ts, now returning mustOpen) shared by the act path and the
+  auto-resume monitor's landing, whose delivery now routes through the same
+  landSessionInDesktop. Verified: 28 fixture tests over every deed and the overflow
+  boundaries; live drill on the real machine - a real running session left alone, a finished
+  homeless subject honestly at rest, and a crashed fabricated subject landed for real into
+  running instance #13 (metadata created by the app, titled per the naming law,
+  bypassPermissions stamped), then retired through the app's own UI.
+
 ### Fixed
 
 - **Four review-confirmed misclassification holes in the piece-8 gate** (adversarial review of

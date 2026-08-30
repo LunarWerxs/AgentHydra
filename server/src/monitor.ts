@@ -27,6 +27,7 @@ import { coerceQueueItem, db, getSetting, setSetting } from './db'
 // the auto-resume monitor has no way to start an invisible run at all, rather than merely
 // choosing not to. The compiler is the guard.
 import { isActive, isSessionActive } from './dispatch'
+import { LANDING_OVERFLOW_PCT } from './fleet-usage'
 import { sessionMetaMap } from './instance-sessions'
 import { pathKey } from './path-key'
 import { discoverPendingStops, type RateLimitedStop } from './rate-limit-discovery'
@@ -444,36 +445,77 @@ export function resumeSurfaceFor(
   return livesInDesktop ? 'native' : 'land'
 }
 
+/** The usage facts the landing picker reads. sessionPct joined weeklyPct when the owner
+ *  hard-coded the 85% overflow rule (2026-08-30): EITHER window past the line counts. */
+export interface LandingUsageRow {
+  ref: string
+  weeklyPct: number | null
+  sessionPct?: number | null
+  stale: boolean
+}
+
+/**
+ * THE OVERFLOW RULE (owner directive, 2026-08-30): closed signed-in instances become eligible
+ * landing targets only when every RUNNING signed-in candidate has PROVABLY exceeded
+ * LANDING_OVERFLOW_PCT on either the 5-hour or the weekly window. Proof means a FRESH reading:
+ * unknown or stale usage is not "exceeded", so automation never boots an app on a guess.
+ * NOT vacuous on purpose (review-confirmed the first cut wrong here, 2026-08-30): "only if the
+ * accounts that are open have exceeded" cannot truthfully hold when no account is open at all,
+ * so an all-closed fleet parks honestly instead of booting an app the rule never authorized.
+ */
+export function closedLandingEligible(
+  running: Array<{ ref: string }>,
+  usage: LandingUsageRow[],
+): boolean {
+  if (running.length === 0) return false
+  const norm = (p: string) => pathKey(p, true)
+  const byRef = new Map(usage.map((u) => [norm(u.ref), u]))
+  return running.every((i) => {
+    const u = byRef.get(norm(i.ref))
+    if (!u || u.stale) return false
+    return (u.weeklyPct ?? 0) >= LANDING_OVERFLOW_PCT || (u.sessionPct ?? 0) >= LANDING_OVERFLOW_PCT
+  })
+}
+
 /**
  * Which desktop instance a homeless chat lands in: its own pinned instance when that app is
- * RUNNING, else the running signed-in instance with the most fresh weekly headroom (lowest
- * weeklyPct; ties broken by permanent #num so two reads agree), else null - the caller parks
- * honestly. Deliberately NEVER opens a closed instance (that autonomy question is the
- * owner's, reserved for the migration piece). Pure over its inputs for tests.
+ * RUNNING, else the signed-in candidate with the most weekly headroom (lowest weeklyPct; ties
+ * broken by running-first - equal numbers never boot an app - then permanent #num so two reads
+ * agree), else null - the caller parks honestly. CLOSED signed-in instances join the pool only
+ * under {@link closedLandingEligible} (the owner's 85% overflow rule, 2026-08-30); a picked
+ * closed one comes back with mustOpen: true and the CALLER performs the boot. Ranking stays
+ * weekly-only (piece-2 pinning); the 5-hour window enters the overflow TEST, not the ranking.
+ * A running candidate still needs a FRESH weekly to rank; a closed one ranks on its cached
+ * weekly even stale (nothing refreshes a closed app, and a stale weekly still beats ignorance -
+ * that window moves slowly). Pure over its inputs for tests.
  */
 export function pickLandingInstance(
   pinnedRef: string | null,
   instances: Array<{ ref: string; num: number; isRunning: boolean; signedIn: boolean }>,
-  usage: Array<{ ref: string; weeklyPct: number | null; stale: boolean }>,
-): { ref: string; num: number } | null {
+  usage: LandingUsageRow[],
+): { ref: string; num: number; mustOpen: boolean } | null {
   // Refs carry a 'desktop:' scheme; pathKey folds it harmlessly along with the path.
   const norm = (p: string) => pathKey(p, true)
   const running = instances.filter((i) => i.isRunning && i.signedIn)
   if (pinnedRef?.startsWith('desktop:')) {
     const pinned = running.find((i) => norm(i.ref) === norm(pinnedRef))
-    if (pinned) return { ref: pinned.ref, num: pinned.num }
+    if (pinned) return { ref: pinned.ref, num: pinned.num, mustOpen: false }
   }
-  const pctFor = new Map(usage.filter((u) => !u.stale).map((u) => [norm(u.ref), u.weeklyPct]))
-  const ranked = [...running].sort((a, b) => {
-    const pa = pctFor.get(norm(a.ref))
-    const pb = pctFor.get(norm(b.ref))
-    // Known-fresh usage beats unknown; lower weekly beats higher; #num settles ties.
-    const ka = pa == null ? Number.POSITIVE_INFINITY : pa
-    const kb = pb == null ? Number.POSITIVE_INFINITY : pb
-    return ka - kb || a.num - b.num
-  })
+  const byRef = new Map(usage.map((u) => [norm(u.ref), u]))
+  const closed = closedLandingEligible(running, usage)
+    ? instances.filter((i) => !i.isRunning && i.signedIn)
+    : []
+  const keyFor = (i: { ref: string; isRunning: boolean }): number => {
+    const u = byRef.get(norm(i.ref))
+    if (i.isRunning)
+      return u && !u.stale && u.weeklyPct != null ? u.weeklyPct : Number.POSITIVE_INFINITY
+    return u?.weeklyPct ?? Number.POSITIVE_INFINITY
+  }
+  const ranked = [...running, ...closed].sort(
+    (a, b) => keyFor(a) - keyFor(b) || Number(b.isRunning) - Number(a.isRunning) || a.num - b.num,
+  )
   const best = ranked[0]
-  return best ? { ref: best.ref, num: best.num } : null
+  return best ? { ref: best.ref, num: best.num, mustOpen: !best.isRunning } : null
 }
 
 /** The `native` branch of dispatchDueResumes's per-row body: the thread lives in a desktop app,
@@ -520,52 +562,23 @@ async function deliverDesktopLanding(q: QueueItem): Promise<void> {
     )
   }
   try {
-    const [{ fleetInstances }, { fleetUsage }] = await Promise.all([
-      import('./fleet-instances'),
-      import('./fleet-usage'),
-    ])
-    const [instances, usage] = await Promise.all([fleetInstances(), Promise.resolve(fleetUsage())])
-    const target = pickLandingInstance(
-      q.instance_ref,
-      instances.map((i) => ({
-        ref: i.ref,
-        num: i.num,
-        isRunning: i.isRunning,
-        signedIn: i.signedIn,
-      })),
-      usage.map((u) => ({ ref: u.ref, weeklyPct: u.weeklyPct, stale: u.stale })),
-    )
-    if (!target) {
-      close(
-        'failed',
-        'window reset - no running desktop instance to land this chat in; open one and retry',
-      )
-      return
-    }
-    // THE NAMING LAW: resolveAutomatedTitle is the one definition of how an AI-less path
-    // derives a real name or fails honestly.
-    const { resolveAutomatedTitle } = await import('./chat-title')
-    const title = await resolveAutomatedTitle(q.session_id, q.title)
-    if (title === null) {
-      close(
-        'failed',
-        'window reset - no real name available for this chat (naming law); name it, then retry',
-      )
-      return
-    }
-    const { importSessionToDesktop } = await import('./session-launch')
-    const res = await importSessionToDesktop({
+    // ONE definition of landing (gate-actions.ts): naming law, the picker with the owner's 85%
+    // overflow rule, the boot-and-wait for a picked closed instance, then the import. Dynamic
+    // import because gate-actions imports this module's picker (no load-time cycle).
+    const { landSessionInDesktop } = await import('./gate-actions')
+    const landed = await landSessionInDesktop({
       sessionId: q.session_id,
-      instanceDir: target.ref.slice('desktop:'.length),
-      title,
+      pinnedRef: q.instance_ref,
+      fallbackTitle: q.title,
     })
     // `completed` means the LANDING happened, never that the work ran: the chat is visible in
     // that app, waiting to be resumed there (zero-click delivery is a future piece).
     close(
-      res.ok ? 'completed' : 'failed',
-      res.ok
-        ? `window reset - landed in instance #${target.num}'s app; resume it there`
-        : `window reset - could not land in instance #${target.num}: ${res.reason ?? 'unknown'}`,
+      landed.ok ? 'completed' : 'failed',
+      landed.ok
+        ? `window reset - landed in instance #${landed.instance.num}'s app` +
+            `${landed.openedInstance ? ' (opened under the 85% overflow rule)' : ''}; resume it there`
+        : `window reset - ${landed.reason}`,
     )
   } catch (err) {
     console.error('[agenthydra] desktop-landing resume failed:', err)

@@ -137,6 +137,7 @@ import { fleetStatus } from './fleet'
 import { fleetGit } from './fleet-git'
 import { fleetInstances } from './fleet-instances'
 import { fleetUsage } from './fleet-usage'
+import { actOnGate, parseActInput } from './gate-actions'
 import { cleanupStaleUpdateArtifacts } from './github-updater'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
 import {
@@ -774,6 +775,28 @@ app.get('/api/chats/:id/gate', (c) => {
   const gate = chatGate(id)
   if (!gate) return c.json({ error: 'unknown-session: no transcript found for this id' }, 404)
   return c.json(gate)
+})
+// --- acting on the verdict (orchestrator rebuild, piece 9 - see server/src/gate-actions.ts) --
+// The gate's second half: re-gates the chat itself (a caller-supplied state is never trusted)
+// and performs the deterministic deed - archive, surface-for-resume (with the owner's 85%
+// overflow rule deciding whether a closed instance may be booted), wait-for-reset, or an
+// honest park. The needs-input-review lane carries the caller's autonomy judgment in the body.
+app.post('/api/chats/:id/act', async (c) => {
+  const id = c.req.param('id').trim()
+  if (!id) return c.json({ error: 'session id required' }, 400)
+  const body = await jsonBody(c)
+  const parsed = parseActInput(body)
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400)
+  const result = await actOnGate(id, parsed.input)
+  if (!result)
+    return c.json(
+      {
+        error:
+          'unknown-session: no transcript found for this id - what cannot be gated cannot be acted on',
+      },
+      404,
+    )
+  return c.json(result)
 })
 app.get('/api/chats/dossier', (c) => {
   const q = c.req.query('q') ?? ''

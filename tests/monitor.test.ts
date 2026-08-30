@@ -463,7 +463,10 @@ describe('landing instance pick', () => {
     expect(t?.ref).toBe('desktop:fresh')
   })
 
-  test('no running signed-in instance means null - the caller parks honestly', () => {
+  test('nothing running still means null - the overflow rule is NOT vacuous', () => {
+    // Owner directive 2026-08-30: closed instances open only when every OPEN account is provably
+    // past 85%. With nothing open that cannot truthfully hold (review-confirmed against a first
+    // cut that treated it as vacuously true), so the caller parks honestly.
     expect(pickLandingInstance(null, [inst('desktop:x', 1, false)], [])).toBe(null)
     expect(pickLandingInstance(null, [], [])).toBe(null)
   })
