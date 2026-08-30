@@ -26,7 +26,7 @@ import { type FleetInstanceEntry, fleetInstances } from './fleet-instances'
 import { type FleetUsageEntry, fleetUsage } from './fleet-usage'
 import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
 import { sessionMetaMap } from './instance-sessions'
-import { findTranscriptById, readLiveRegistry } from './live-registry'
+import { readLiveRegistry } from './live-registry'
 import { pathKey } from './path-key'
 
 const norm = (p: string) => pathKey(p, true)
@@ -351,13 +351,16 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
     junk: { supersededVisible, genericTitled, liveButDoneMarked, identityUnresolvedCount },
     // Context pressure is asked of the LIVE chats only: a dormant chat's context is not
     // growing, so warning about it would be noise the reader has to filter every pass.
+    // The live registry ALREADY resolved each session's transcript path; re-deriving it with
+    // findTranscriptById would rescan the projects tree per chat for an answer we were handed
+    // for free (review-confirmed waste).
     handoffSoon: (
       deps.handoff ??
       (() =>
         handoffCandidates(
-          [...liveMap.keys()].map((sessionId) => ({
-            sessionId,
-            transcriptPath: findTranscriptById(join(homedir(), '.claude'), sessionId),
+          readLiveRegistry(join(homedir(), '.claude')).map((s) => ({
+            sessionId: s.sessionId,
+            transcriptPath: s.transcriptPath,
           })),
         ))
     )(),

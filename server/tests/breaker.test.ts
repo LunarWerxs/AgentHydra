@@ -12,7 +12,7 @@ import {
 import { db } from '../src/db'
 
 beforeEach(() => {
-  db.query('delete from action_attempts').run()
+  db.query('delete from action_attempt_log').run()
 })
 
 const T0 = Date.parse('2026-08-30T12:00:00Z')
@@ -59,7 +59,7 @@ test('kinds and sessions are counted separately - one loop cannot brake another 
 test('counts survive a restart - they are on disk, because a storm causes restarts', () => {
   for (let i = 0; i < ATTEMPT_CAP; i++) noteAttempt('archive', 's1', T0 + i)
   // A fresh read with no in-process state is exactly what a restarted daemon does.
-  const rows = db.query<{ c: number }, []>('select count(*) c from action_attempts').get()
+  const rows = db.query<{ c: number }, []>('select count(*) c from action_attempt_log').get()
   expect(rows?.c).toBe(ATTEMPT_CAP)
   expect(checkBreaker('archive', 's1', T0 + 100).suppressed).toBe(true)
 })
@@ -76,6 +76,6 @@ test('suppressedChats lists what is being held, for the status surfaces', () => 
 test('old attempts outside the window are pruned as new ones land', () => {
   noteAttempt('archive', 's1', T0 - ATTEMPT_WINDOW_MS - 10_000)
   noteAttempt('archive', 's1', T0)
-  const c = db.query<{ c: number }, []>('select count(*) c from action_attempts').get()?.c
+  const c = db.query<{ c: number }, []>('select count(*) c from action_attempt_log').get()?.c
   expect(c).toBe(1)
 })

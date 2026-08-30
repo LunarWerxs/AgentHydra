@@ -318,3 +318,52 @@ test('session_ids scoping sweeps exactly those, ignoring the fleet index', async
   expect(report.scanned).toBe(1)
   expect(acted).toEqual(['only'])
 })
+
+test('THE BREAKER STOPS THE ARCHIVE LOOP - the case it exists for, which needs no failing act', async () => {
+  // The motivating failure (measured by v1): the archive EXECUTES and verifies every time,
+  // then the running app re-saves the sidebar entry un-archived after the act returned, and
+  // the next sweep sees a done-marked visible chat again. Every pass returns 'archived'.
+  // Clearing the counter on that success made the cap unreachable for exactly this loop, so
+  // this test drives repeated SUCCESSFUL archives and demands the machinery eventually stops.
+  const { db } = await import('../src/db')
+  const { ATTEMPT_CAP } = await import('../src/breaker')
+  db.query('delete from action_attempt_log').run()
+
+  const runOnce = async () => {
+    const f = fixture({
+      gates: { s1: finishedGate('archive-candidate') },
+      meta: [{ key: 's1', cliSessionId: 's1' }],
+    })
+    const report = await sweepGateActions({}, f.deps)
+    return { acted: f.acted, report }
+  }
+
+  for (let i = 0; i < ATTEMPT_CAP; i++) {
+    const r = await runOnce()
+    expect(r.acted).toEqual(['s1']) // still trying - the chat keeps coming back
+  }
+  // The cap is now spent: the machinery must STOP calling act, and say so out loud.
+  const capped = await runOnce()
+  expect(capped.acted).toEqual([])
+  const row = capped.report.archiveRows[0]
+  expect(row?.action).toBe('parked')
+  expect(row?.why).toContain('without sticking')
+  // ...and the row must carry the chat's REAL state, not a fabricated 'crashed'.
+  expect(row?.state).toBe('finished')
+  db.query('delete from action_attempt_log').run()
+})
+
+test('a SURFACED chat clears its count - it becomes running, so it is self-limiting', async () => {
+  const { db } = await import('../src/db')
+  const { ATTEMPT_CAP, checkBreaker } = await import('../src/breaker')
+  db.query('delete from action_attempt_log').run()
+  for (let i = 0; i < ATTEMPT_CAP - 1; i++) {
+    const f = fixture({
+      gates: { s2: crashedGate('mid-turn') },
+      meta: [{ key: 's2', cliSessionId: 's2' }],
+    })
+    await sweepGateActions({}, f.deps)
+  }
+  expect(checkBreaker('surface', 's2').attempts).toBe(0)
+  db.query('delete from action_attempt_log').run()
+})

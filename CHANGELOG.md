@@ -75,6 +75,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the opposite of one that needs rotating. Proven live: it flagged the fullest real chat on
   the fleet at 922k tokens.
 
+  A regression review of these three (the owner's only condition was "make sure they're not
+  regressive") found the breaker could not catch its OWN motivating case, which would have
+  been worse than not building it: clearing the counter on every successful archive made the
+  cap unreachable for the loop where each archive genuinely succeeds and the app reverts it
+  afterwards. The counter now clears only on 'surfaced' - a durable archive needs no clear,
+  because the chat stops being a candidate and the window expires the count. A second defect
+  fell out of the test written for that: the attempt table keyed on (kind, session,
+  millisecond) and so MERGED attempts arriving in the same millisecond, under-counting exactly
+  the tight loops it exists to catch. Also fixed: a suppressed row reported a fabricated
+  'crashed' state instead of the chat's real one, and the handoff lane rescanned the projects
+  tree for a transcript path the live registry had already resolved.
+
   **The circuit breaker** (`breaker.ts`) - v1 measured the failure this prevents: the same
   finished chat re-archived FOUR times in one evening, every pass individually correct (the
   archive executed, the running app re-saved the sidebar entry un-archived, the sweep saw a

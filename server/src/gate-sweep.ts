@@ -223,16 +223,27 @@ export async function sweepGateActions(
 
   /** One act, throw-safe: a rejected act becomes a parked row instead of killing the whole
    *  sweep mid-fleet (review-confirmed hazard once acts do real IO like landings). */
-  const tryAct = async (c: Candidate, kind: BreakerKind): Promise<GateActionResult | null> => {
+  const tryAct = async (
+    c: Candidate,
+    kind: BreakerKind,
+    g: ChatGate,
+  ): Promise<GateActionResult | null> => {
     // THE CIRCUIT BREAKER, and it lives HERE rather than inside act() on purpose: this is the
     // unattended path. A deed the owner or an AI session asks for directly must never be
     // blocked by a counter - being asked is the point of asking. Only the machinery repeating
     // itself is bounded (breaker.ts documents the four-archives-in-one-evening measurement).
     const brake = checkBreaker(kind, c.sessionId, now())
     if (brake.suppressed) {
+      // Echo the REAL gate we already computed - not a fabricated 'crashed' stand-in
+      // (review-confirmed hazard: a throttled archive-candidate must not misreport as
+      // crashed to any caller keying off state/lane).
       return {
         sessionId: c.sessionId,
-        gate: { state: 'crashed', crashedKind: null, lane: null },
+        gate: {
+          state: g.state,
+          crashedKind: g.crashed?.kind ?? null,
+          lane: g.finished?.lane ?? null,
+        },
         action: 'parked',
         why: `${brake.why} (retry allowed after ${brake.retryAfter})`,
       }
@@ -240,10 +251,19 @@ export async function sweepGateActions(
     try {
       noteAttempt(kind, c.sessionId, now())
       const r = await act(c.sessionId, {}, deps)
-      // It stuck: forget the history. The brake is for futile repetition, not for work that
-      // is landing - otherwise a busy chat would eventually brake itself for succeeding.
-      if (r && (r.action === 'archived' || r.action === 'surfaced'))
-        clearAttempts(kind, c.sessionId)
+      // CLEAR ON 'surfaced' ONLY - never on 'archived', and this is the whole breaker.
+      // The loop it exists to catch is: the archive executes and verifies, the running app
+      // re-saves the sidebar entry un-archived AFTER the act returned, the next sweep sees a
+      // done-marked visible chat again. Every one of those passes returns 'archived', so
+      // clearing on it reset the counter every time and the cap was UNREACHABLE for exactly
+      // the case the breaker was built for (review-confirmed: worse than no breaker, because
+      // it looked like protection). An 'archived' return cannot certify the archive will
+      // STAY archived - nothing the act can see says that. A genuinely durable archive needs
+      // no clear either: the chat stops being a candidate, so no further attempts are
+      // recorded and the window simply expires the count. 'surfaced' is different - it makes
+      // the chat 'running', which the sweep leaves alone, so it is self-limiting and safe to
+      // clear.
+      if (r && r.action === 'surfaced') clearAttempts(kind, c.sessionId)
       return r
     } catch (err) {
       return {
@@ -285,7 +305,7 @@ export async function sweepGateActions(
         )
         continue
       }
-      const r = await tryAct(c, 'archive')
+      const r = await tryAct(c, 'archive', g)
       if (!r) {
         report.archiveRows.push(goneRow(c, g))
         continue
@@ -314,7 +334,7 @@ export async function sweepGateActions(
         )
         continue
       }
-      const r = await tryAct(c, 'surface')
+      const r = await tryAct(c, 'surface', g)
       report.waitForReset.push(r ? actedRow(c, r) : goneRow(c, g))
       continue
     }
@@ -331,7 +351,7 @@ export async function sweepGateActions(
       )
       continue
     }
-    const r = await tryAct(c, 'surface')
+    const r = await tryAct(c, 'surface', g)
     if (!r) {
       report.crashedRows.push(goneRow(c, g))
       continue

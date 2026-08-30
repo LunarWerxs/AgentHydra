@@ -62,6 +62,7 @@ export function readContextSize(transcriptPath: string): ContextReading {
       try {
         const rec = JSON.parse(t) as {
           timestamp?: string
+          isSidechain?: boolean
           message?: {
             usage?: {
               input_tokens?: number
@@ -70,6 +71,12 @@ export function readContextSize(transcriptPath: string): ContextReading {
             }
           }
         }
+        // A SIDECHAIN turn is a subagent's, and a subagent's context is not this thread's -
+        // counting it would report someone else's fullness as this chat's. Measured on a real
+        // 3348-record transcript here: subagents write separate files and none appeared
+        // inline, so this is cheap insurance against a format that does inline them, not a
+        // fix for an observed bug.
+        if (rec.isSidechain === true) continue
         const u = rec.message?.usage
         if (!u) continue
         const ctx =

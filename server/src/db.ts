@@ -126,12 +126,21 @@ create table if not exists deliveries (
 -- COUNTED. A deterministic gate makes a wrong verdict unlikely; it does nothing about a
 -- correct verdict repeated forever. On disk, not in memory, because a restart is exactly what
 -- a storm tends to cause and an in-memory counter would forget at the worst moment.
-create table if not exists action_attempts (
+-- ⛔ EVERY ATTEMPT IS A ROW. The first cut keyed on (kind, session_id, at), which silently
+-- COLLAPSED attempts landing in the same millisecond into one - and a tight loop is exactly
+-- where repeats arrive that fast, so the counter under-counted precisely the case it exists to
+-- catch (caught by a test that drove the real loop). Implicit rowid instead, with an index for
+-- the window query. The old table is dropped rather than migrated: it only ever held counters
+-- inside a 6h window, so there is nothing worth preserving and a stale shape would be a
+-- silent under-count forever.
+drop table if exists action_attempts;
+create table if not exists action_attempt_log (
   kind        text not null,
   session_id  text not null,
-  at          integer not null,
-  primary key (kind, session_id, at)
+  at          integer not null
 );
+create index if not exists action_attempt_log_lookup
+  on action_attempt_log (kind, session_id, at);
 
 -- Parsed transcript metadata (title / preview / counts), keyed by the file it was derived from.
 -- Producing one row means reading up to 12 MB of transcript tail and JSON.parsing every line of it,

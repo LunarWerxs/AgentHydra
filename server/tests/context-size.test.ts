@@ -88,3 +88,13 @@ test('the threshold is a parameter, so a different window size is expressible', 
   expect(handoffCandidates([{ sessionId: 'x', transcriptPath: p }], 40_000).length).toBe(1)
   expect(handoffCandidates([{ sessionId: 'x', transcriptPath: p }], 60_000).length).toBe(0)
 })
+
+test("a subagent's turn is not this thread's context", () => {
+  // Sidechain usage belongs to a subagent. Counting it would report someone else's fullness
+  // as this chat's, and the newest record is often a subagent's in a busy session.
+  const p = transcript([
+    turn(1_000, 50_000, 0, '2026-08-30T10:00:00Z'),
+    { ...turn(1_000, 900_000, 0, '2026-08-30T11:00:00Z'), isSidechain: true },
+  ])
+  expect(readContextSize(p).tokens).toBe(51_000)
+})

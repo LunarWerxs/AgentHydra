@@ -39,13 +39,13 @@ export interface BreakerVerdict {
 }
 
 function prune(nowMs: number): void {
-  db.query('delete from action_attempts where at < ?').run(nowMs - ATTEMPT_WINDOW_MS)
+  db.query('delete from action_attempt_log where at < ?').run(nowMs - ATTEMPT_WINDOW_MS)
 }
 
 function attemptsIn(kind: BreakerKind, sessionId: string, nowMs: number): number[] {
   return db
     .query<{ at: number }, [string, string, number]>(
-      'select at from action_attempts where kind = ? and session_id = ? and at >= ? order by at asc',
+      'select at from action_attempt_log where kind = ? and session_id = ? and at >= ? order by at asc',
     )
     .all(kind, sessionId, nowMs - ATTEMPT_WINDOW_MS)
     .map((r) => r.at)
@@ -83,9 +83,10 @@ export function checkBreaker(
 /** Record that the action went ahead. */
 export function noteAttempt(kind: BreakerKind, sessionId: string, nowMs = Date.now()): void {
   prune(nowMs)
-  // The PK is (kind, session, at); two attempts inside the same millisecond are the same
-  // attempt for our purposes, so a conflict is simply ignored.
-  db.query('insert or ignore into action_attempts (kind, session_id, at) values (?, ?, ?)').run(
+  // One row per attempt, always. An earlier cut keyed the table on (kind, session, at) and
+  // therefore MERGED attempts inside the same millisecond - which is where a tight loop puts
+  // them, so the counter under-counted exactly the case this module exists to catch.
+  db.query('insert into action_attempt_log (kind, session_id, at) values (?, ?, ?)').run(
     kind,
     sessionId,
     nowMs,
@@ -94,7 +95,7 @@ export function noteAttempt(kind: BreakerKind, sessionId: string, nowMs = Date.n
 
 /** The action stuck: forget the history, because the brake is for futility, not for work. */
 export function clearAttempts(kind: BreakerKind, sessionId: string): void {
-  db.query('delete from action_attempts where kind = ? and session_id = ?').run(kind, sessionId)
+  db.query('delete from action_attempt_log where kind = ? and session_id = ?').run(kind, sessionId)
 }
 
 /** Every chat currently being held back, for the status surfaces. */
@@ -103,7 +104,7 @@ export function suppressedChats(
 ): Array<{ kind: BreakerKind; sessionId: string; attempts: number; retryAfter: string }> {
   const rows = db
     .query<{ kind: string; session_id: string; c: number; oldest: number }, [number]>(
-      `select kind, session_id, count(*) c, min(at) oldest from action_attempts
+      `select kind, session_id, count(*) c, min(at) oldest from action_attempt_log
        where at >= ? group by kind, session_id having c >= ${ATTEMPT_CAP}`,
     )
     .all(nowMs - ATTEMPT_WINDOW_MS)
