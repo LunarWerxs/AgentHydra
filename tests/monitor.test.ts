@@ -20,6 +20,7 @@ import {
   type MonitorDeps,
   monitorEnabledForAccount,
   monitorStatus,
+  pickLandingInstance,
   resumeSurfaceFor,
   runMonitorOnce,
   setMonitorForAccount,
@@ -409,9 +410,61 @@ describe('resume surface', () => {
     expect(resumeSurfaceFor(true)).toBe('native')
   })
 
-  test('everything else opens a visible terminal, never headless', () => {
-    expect(resumeSurfaceFor(false)).toBe('terminal')
-    expect(resumeSurfaceFor(undefined)).toBe('terminal')
-    expect(resumeSurfaceFor()).toBe('terminal')
+  test('everything else LANDS in a desktop app - never a console, never headless', () => {
+    // Owner ruling 2026-08-29: automation never opens a console; a homeless chat is imported
+    // into a desktop instance. The type has no 'terminal' member to regress back to.
+    expect(resumeSurfaceFor(false)).toBe('land')
+    expect(resumeSurfaceFor(undefined)).toBe('land')
+    expect(resumeSurfaceFor()).toBe('land')
+  })
+})
+
+describe('landing instance pick', () => {
+  const inst = (ref: string, num: number, isRunning = true, signedIn = true) => ({
+    ref,
+    num,
+    isRunning,
+    signedIn,
+  })
+  const use = (ref: string, weeklyPct: number | null, stale = false) => ({ ref, weeklyPct, stale })
+
+  test('the pinned instance wins when it is running', () => {
+    // Backslashes built with fromCharCode on purpose (usage-probe.test.ts documents why):
+    // the point of this fixture is that slash STYLE must not break the pinned match.
+    const BS = String.fromCharCode(92)
+    const t = pickLandingInstance(
+      'desktop:C:/i/mine',
+      [inst('desktop:C:/i/other', 1), inst(`desktop:C:${BS}i${BS}mine`, 7)],
+      [use('desktop:C:/i/other', 5), use('desktop:C:/i/mine', 90)],
+    )
+    expect(t?.num).toBe(7) // pinned beats headroom, and slash style must not break the match
+  })
+
+  test('otherwise the running signed-in instance with lowest fresh weekly wins; #num settles ties', () => {
+    const t = pickLandingInstance(
+      null,
+      [
+        inst('desktop:a', 3),
+        inst('desktop:b', 1),
+        inst('desktop:c', 2, false),
+        inst('desktop:d', 4, true, false),
+      ],
+      [use('desktop:a', 40), use('desktop:b', 40), use('desktop:c', 1), use('desktop:d', 0)],
+    )
+    expect(t?.num).toBe(1) // c not running, d not signed in, a/b tie on 40 -> lower #num
+  })
+
+  test('stale usage counts as unknown and sorts behind fresh numbers', () => {
+    const t = pickLandingInstance(
+      null,
+      [inst('desktop:fresh', 9), inst('desktop:stale', 1)],
+      [use('desktop:fresh', 80), use('desktop:stale', 2, true)],
+    )
+    expect(t?.ref).toBe('desktop:fresh')
+  })
+
+  test('no running signed-in instance means null - the caller parks honestly', () => {
+    expect(pickLandingInstance(null, [inst('desktop:x', 1, false)], [])).toBe(null)
+    expect(pickLandingInstance(null, [], [])).toBe(null)
   })
 })

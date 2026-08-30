@@ -18,6 +18,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   account's running desktop app and archived there through the app's own UI.
 
 ### Added
+- **Orchestrator rebuild, piece 7: NO CONSOLE IN AUTOMATION** (owner ruling, 2026-08-29:
+  console is only ever for chats a person deliberately created in a console; a chat with no
+  desktop home is MIGRATED to a desktop, never resumed in a terminal). The monitor's
+  terminal-resume path is deleted: a homeless due resume now LANDS in a desktop app by
+  import - target picked deterministically (its own pinned instance when running, else the
+  running signed-in instance with the most fresh weekly headroom, ties by permanent #num;
+  closed instances are never opened), named per the naming law, and the row closes honestly
+  ('landed in instance #N; resume it there') or parks with the reason when no target or no
+  real name exists. ResumeSurface's vocabulary is now native|land - there is no 'terminal'
+  member to regress back to. The migrate route's terminal fallback is likewise deleted:
+  every migration lands in the target app. launch-terminal remains a user-explicit primitive
+  only. Verified: 4 landing-pick fixtures (pinned-wins incl. slash-style, headroom ranking,
+  stale-usage demotion, honest-null) + surface pins + suite 1325/0 + live inventory showing
+  zero console sessions on the machine.
+
 - **Orchestrator rebuild, piece 6: focus-free in-app RENAME** (misc/Archive-DesktopChat.ps1
   -Action Rename -NewTitle; owner-picked - fixes the 'lands as Untitled in the running
   window' display boundary). Drives the app's OWN Rename control: menu item Invoke, the

@@ -441,23 +441,59 @@ async function tick(deps: MonitorDeps): Promise<void> {
 /** Fire OUR scheduled resumes the moment they're due — independent of the global scheduler switch,
  *  since auto-resume is its own opt-in and shouldn't require the main scheduler to be on. */
 /**
- * Where a due resume is delivered. There are exactly two answers and neither is invisible, which
- * is the whole point: the type has no headless member to return, so the no-headless law is
- * enforced here by construction rather than by a branch someone could add back.
+ * Where a due resume is delivered. Two answers, and NEITHER is a console (owner ruling,
+ * 2026-08-29: console is only ever for chats a person deliberately created in a console, and
+ * automation never opens one) - nor headless (owner law 2026-08-27). The type has no console
+ * and no headless member to return, so both laws hold by construction.
  *
- * `native` means the thread lives in a desktop app and stays there (surface purity - owner law,
- * restated 2026-08-28: desktop stays desktop, console stays console, never cross-contaminate).
- * `terminal` opens a visible window for everything else.
+ * `native` means the thread lives in a desktop app and stays there (surface purity). `land`
+ * means the thread has NO desktop home, so it is IMPORTED into a desktop instance's app -
+ * visible, named per the naming law, ready for its owner to resume there.
  *
  * Pure and exported so the policy can be checked without launching anything.
  */
-export type ResumeSurface = 'native' | 'terminal'
+export type ResumeSurface = 'native' | 'land'
 
 export function resumeSurfaceFor(
   /** Does this thread LIVE in a desktop app right now? Passed in so the policy stays pure. */
   livesInDesktop?: boolean,
 ): ResumeSurface {
-  return livesInDesktop ? 'native' : 'terminal'
+  return livesInDesktop ? 'native' : 'land'
+}
+
+/**
+ * Which desktop instance a homeless chat lands in: its own pinned instance when that app is
+ * RUNNING, else the running signed-in instance with the most fresh weekly headroom (lowest
+ * weeklyPct; ties broken by permanent #num so two reads agree), else null - the caller parks
+ * honestly. Deliberately NEVER opens a closed instance (that autonomy question is the
+ * owner's, reserved for the migration piece). Pure over its inputs for tests.
+ */
+export function pickLandingInstance(
+  pinnedRef: string | null,
+  instances: Array<{ ref: string; num: number; isRunning: boolean; signedIn: boolean }>,
+  usage: Array<{ ref: string; weeklyPct: number | null; stale: boolean }>,
+): { ref: string; num: number } | null {
+  const norm = (p: string) =>
+    p
+      .replace(/[\\/]+/g, '/')
+      .replace(/\/+$/, '')
+      .toLowerCase()
+  const running = instances.filter((i) => i.isRunning && i.signedIn)
+  if (pinnedRef?.startsWith('desktop:')) {
+    const pinned = running.find((i) => norm(i.ref) === norm(pinnedRef))
+    if (pinned) return { ref: pinned.ref, num: pinned.num }
+  }
+  const pctFor = new Map(usage.filter((u) => !u.stale).map((u) => [norm(u.ref), u.weeklyPct]))
+  const ranked = [...running].sort((a, b) => {
+    const pa = pctFor.get(norm(a.ref))
+    const pb = pctFor.get(norm(b.ref))
+    // Known-fresh usage beats unknown; lower weekly beats higher; #num settles ties.
+    const ka = pa == null ? Number.POSITIVE_INFINITY : pa
+    const kb = pb == null ? Number.POSITIVE_INFINITY : pb
+    return ka - kb || a.num - b.num
+  })
+  const best = ranked[0]
+  return best ? { ref: best.ref, num: best.num } : null
 }
 
 /** The `native` branch of dispatchDueResumes's per-row body: the thread lives in a desktop app,
@@ -485,55 +521,83 @@ async function deliverNativeResume(q: QueueItem): Promise<void> {
   }
 }
 
-/** The `terminal` branch of dispatchDueResumes's per-row body: open a visible terminal running the
- *  resume. Fire-and-forget by design (the caller does `void deliverTerminalResume(q)`, matching
- *  the original inline `void (async () => {...})()`) — launchTerminalSession returns the instant
- *  the window spawns, so the loop must not wait on the turn itself. */
-async function deliverTerminalResume(q: QueueItem): Promise<void> {
-  try {
-    const { launchTerminalSession } = await import('./session-launch')
-    const res = await launchTerminalSession({
-      cwd: q.cwd,
-      prompt: q.prompt,
-      instanceRef: q.instance_ref,
-      model: q.model,
-      effort: q.effort,
-      resumeSessionId: q.session_id,
-      // NOBODY IS WATCHING THIS WINDOW. It opens on a timer while the owner is away,
-      // so a per-command approval prompt is a silent deadlock rather than a
-      // safeguard - measured 2026-08-27: a session started without this loaded its
-      // instructions, issued one shell command and froze for good. Same posture
-      // AgentHydra already stamps on every chat it seeds.
-      permissionMode: 'bypassPermissions',
-    })
-    // WHAT `completed` MEANS HERE, AND WHAT IT MUST NOT BE READ AS. This row is the
-    // SCHEDULED RESUME, and its job genuinely is finished once the resume has been
-    // actioned. The WORK has not finished: launchTerminalSession returns the instant the
-    // window is spawned (it pipes nothing and waits for nothing), so ok means "a terminal
-    // is open", never "the turn ran".
-    //
-    // So there is deliberately NO exit code. Writing 0 claimed a clean finish for work
-    // that had not begun, which is the failure this codebase already names in types.ts:
-    // conflating "the work finished" with "you can see it" is exactly how something goes
-    // missing while nothing looks wrong. A launch we could not make IS our own outcome,
-    // so that one keeps a real non-zero code.
+/** The `land` branch of dispatchDueResumes's per-row body: the thread has NO desktop home,
+ *  and the owner's ruling (2026-08-29) is that such a chat is MIGRATED to a desktop, never
+ *  resumed in a console. So it is imported into a chosen running desktop instance - visible,
+ *  named per the naming law - and the row closes honestly: the chat sits ready in that app. */
+async function deliverDesktopLanding(q: QueueItem): Promise<void> {
+  const close = (status: 'completed' | 'failed', message: string) => {
     db.query('update queue_items set status = ?, finished_at = ?, exit_code = ? where id = ?').run(
-      res.ok ? 'completed' : 'failed',
+      status,
       new Date().toISOString(),
-      res.ok ? null : 1,
+      status === 'failed' ? 1 : null,
       q.id,
     )
-    // Say which of the two happened, the way the native branch above does. Without this
-    // the row looked identical whether a window opened or the launch failed outright.
     db.query('update monitor_state set message = ?, updated_at = ? where resume_item_id = ?').run(
-      res.ok
-        ? 'window reset - resumed in a visible terminal; the run itself is not tracked here'
-        : `window reset - could not open a terminal: ${res.reason ?? 'unknown'}`,
+      message,
       new Date().toISOString(),
       q.id,
+    )
+  }
+  try {
+    const [{ fleetInstances }, { fleetUsage }] = await Promise.all([
+      import('./fleet-instances'),
+      import('./fleet-usage'),
+    ])
+    const [instances, usage] = await Promise.all([fleetInstances(), Promise.resolve(fleetUsage())])
+    const target = pickLandingInstance(
+      q.instance_ref,
+      instances.map((i) => ({
+        ref: i.ref,
+        num: i.num,
+        isRunning: i.isRunning,
+        signedIn: i.signedIn,
+      })),
+      usage.map((u) => ({ ref: u.ref, weeklyPct: u.weeklyPct, stale: u.stale })),
+    )
+    if (!target) {
+      close(
+        'failed',
+        'window reset - no running desktop instance to land this chat in; open one and retry',
+      )
+      return
+    }
+    // THE NAMING LAW: the same deterministic resolution the queue import uses - the row's
+    // title, else the session list's title; no real name means an honest failure, never an
+    // Untitled landing.
+    const { isGenericChatTitle } = await import('./chat-title')
+    let title = q.title
+    if (isGenericChatTitle(title)) {
+      try {
+        const { getSession } = await import('./sessions')
+        title = (await getSession(q.session_id, 'claude'))?.title ?? title
+      } catch {
+        // fall through
+      }
+    }
+    if (isGenericChatTitle(title)) {
+      close(
+        'failed',
+        'window reset - no real name available for this chat (naming law); name it, then retry',
+      )
+      return
+    }
+    const { importSessionToDesktop } = await import('./session-launch')
+    const res = await importSessionToDesktop({
+      sessionId: q.session_id,
+      instanceDir: target.ref.slice('desktop:'.length),
+      title,
+    })
+    // `completed` means the LANDING happened, never that the work ran: the chat is visible in
+    // that app, waiting to be resumed there (zero-click delivery is a future piece).
+    close(
+      res.ok ? 'completed' : 'failed',
+      res.ok
+        ? `window reset - landed in instance #${target.num}'s app; resume it there`
+        : `window reset - could not land in instance #${target.num}: ${res.reason ?? 'unknown'}`,
     )
   } catch (err) {
-    console.error('[agenthydra] visible auto-resume failed:', err)
+    console.error('[agenthydra] desktop-landing resume failed:', err)
   }
 }
 
@@ -567,17 +631,16 @@ async function dispatchDueResumes(): Promise<void> {
     }
     const due = !q.not_before || q.not_before <= now
     if (q.status === 'queued' && due && !isActive(q.id) && !isSessionActive(q.session_id)) {
-      // NO HEADLESS (owner law 2026-08-27) and SURFACE PURITY (2026-08-28): a thread that
-      // lives in a desktop app stays there (the reset is recorded; the owner resumes it in the
-      // app), and everything else opens a VISIBLE terminal. The decision itself is
-      // resumeSurfaceFor(), pure and tested, because a routing policy that can only be
-      // exercised by actually launching something is a policy nothing checks.
+      // NO HEADLESS (owner law 2026-08-27), SURFACE PURITY (2026-08-28), and NO CONSOLE IN
+      // AUTOMATION (owner ruling 2026-08-29): a desktop-living thread stays in its app; a
+      // homeless thread is LANDED in a desktop app by import, never resumed in a terminal.
+      // The decision itself is resumeSurfaceFor(), pure and tested.
       const { desktopHomeFor } = await import('./session-launch')
       const livesInDesktop = (await desktopHomeFor(q.session_id).catch(() => null)) !== null
       if (resumeSurfaceFor(livesInDesktop) === 'native') {
         await deliverNativeResume(q)
       } else {
-        void deliverTerminalResume(q)
+        await deliverDesktopLanding(q)
       }
     }
   }

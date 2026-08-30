@@ -2237,26 +2237,9 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // the target profile.
   await archiveDesktopChat(sessionId, true).catch(() => null)
 
-  // Surface purity (owner law, restated 2026-08-28: desktop stays desktop, console stays
-  // console, never cross-contaminate): a thread that lives in a desktop app migrates
-  // desktop-to-desktop; one with no desktop home continues in a visible terminal.
-  const livesInDesktop = (await desktopHomeFor(sessionId).catch(() => null)) !== null
-  const surface = livesInDesktop ? 'desktop' : 'terminal'
-  if (surface === 'terminal') {
-    const launched = await launchTerminalSession({
-      cwd: s.cwd,
-      prompt,
-      instanceRef: ref,
-      resumeSessionId: sessionId,
-      force: body.force === true,
-      // The migration continuation is unattended, so the window must not
-      // stop on a shell approval nobody is there to answer.
-      permissionMode: 'bypassPermissions',
-    })
-    if (!launched.ok)
-      return c.json({ ok: false, error: launched.reason ?? 'terminal launch failed' }, 422)
-    return c.json({ ok: true, surface: 'terminal', stoppedLive: !!live })
-  }
+  // NO CONSOLE IN AUTOMATION (owner ruling, 2026-08-29): every migration lands in the
+  // target desktop app - the old terminal fallback for homeless threads is gone. Console is
+  // only ever for chats a person deliberately created in a console.
   // Desktop surface: the thread lands in the target instance's app as a chat, dormant. The
   // daemon has no messaging tools of its own, so the PROMPT is not delivered here — an
   // interactive caller delivers it through the app's own message channel, which BOOTS the

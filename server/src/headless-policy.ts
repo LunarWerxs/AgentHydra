@@ -39,4 +39,4 @@ export function headlessRunsAllowed(): boolean {
 /** What a refused run records, so the queue row says why rather than merely failing. */
 export const NO_HEADLESS_REASON =
   'no-headless: AgentHydra does not run chats you cannot see (owner law, 2026-08-27). ' +
-  'Continue this thread in its app, or open it in a visible terminal. Nothing was run.'
+  'Continue this thread in its desktop app, or land it in one via import. Nothing was run.'
