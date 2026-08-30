@@ -7,6 +7,7 @@ this file is for running, configuring and hacking on it.
 - [Claude Desktop session mapping](#claude-desktop-session-mapping)
 - [Config (env)](#config-env)
 - [ChatGPT handoff](#chatgpt-handoff)
+- [Keeping the daemon alive](#keeping-the-daemon-alive)
 - [Auto-update](#auto-update)
 - [Instance appearance](#instance-appearance)
 - [Stack](#stack)
@@ -33,6 +34,30 @@ URL) or `AGENTHYDRA_PORT`.
   }
 }
 ```
+
+### Register it at USER scope, not project scope
+
+For Claude Code, the one-liner below is the supported way to write that entry, and the **scope is
+load-bearing**:
+
+```sh
+claude mcp add --scope user agenthydra -- bun run --cwd <path-to-agenthydra> mcp
+```
+
+`/orchestrate` is installed as a global slash command precisely so it works from any directory:
+you orchestrate the fleet from wherever you happen to be, not only from inside this checkout. A
+project-scoped registration would give it its tools in this repo and nowhere else, which is the
+same as not having them: the command would run, find no `prestart`, and fall back to hand-driving
+the REST API.
+
+That is not hypothetical. On 2026-08-30 an orchestration pass discovered the server was registered
+**nowhere at all**, not at user scope, not in a single project, so every `/orchestrate` since the
+command was written had been running without its tools. The server itself was fine the whole time
+(59 tools, all present); it had simply never been plugged in. If a pass ever reports that it is
+driving the daemon over HTTP directly, this registration is missing on that machine.
+
+Verify with `claude mcp list`. The entry should say `✔ Connected`. A session already open when you
+register it will not see the new tools; its tool list is fixed at startup, so start a new one.
 
 Tools cover sessions (list / get / tail / search / export across Claude, Codex, OpenCode and the
 foreign readers), project discovery (`list_projects`), chats a usage limit cut off
@@ -228,6 +253,48 @@ download before attaching private source code.
 
 The endpoint is `POST /api/chatgpt/context-pack` with `{ "cwd": "...", "task": "..." }`; it is
 available only while the provider toggle is enabled.
+
+## Keeping the daemon alive
+
+Everything that talks to AgentHydra talks to it over HTTP, so a daemon that is not running is not a
+degraded fleet, it is a silent one: orchestration stops happening rather than failing loudly, and
+each automation just fails its own call until a person happens to notice.
+
+Three scripts under `misc/` cover this, and the difference between them matters:
+
+- **`Ensure-Daemon.ps1`** is a preflight. If a healthy daemon of ours answers, it does nothing and
+  exits 0. Only when nothing of ours answers does it restart and then prove recovery. Call this
+  before the first API call of any automation.
+- **`Restart-Daemon.ps1`** is unconditional. Anything of ours dies, always, so a rebuild can never
+  leave you on stale code. Never use it as a preflight.
+- **`Wait-Daemon.ps1`** proves the daemon came up and *stayed* up, rather than answering once.
+
+"Ours" is a hard question with a hard answer in all three: `/api/health` must return JSON with
+`ok: true` and a `service` equal to this app's package name. Absence of identity is never identity,
+which is what stops a Vite dev server on a neighbouring port from being adopted or murdered.
+
+### The supervisor
+
+`Install-DaemonSupervisor.ps1` registers a scheduled task that runs `Ensure-Daemon.ps1` every five
+minutes and at logon:
+
+```powershell
+.\misc\Install-DaemonSupervisor.ps1            # install
+.\misc\Install-DaemonSupervisor.ps1 -Status    # what is registered, and the last tick's result
+.\misc\Install-DaemonSupervisor.ps1 -Uninstall # remove it
+```
+
+It needs no elevation and stores no credentials: the task runs as the current user in their own
+interactive session, which is also the only place a daemon can see and drive the desktop windows it
+exists to manage. The action is `Supervisor-Tick.vbs` rather than `powershell.exe` directly, because
+a task firing every five minutes forever must not flash a console window each time; the VBS runs it
+hidden and forwards the real exit code, so Task Scheduler's Last Run Result answers "is the
+supervisor actually keeping it up?" instead of always reading 0.
+
+This exists because it did not. On 2026-08-30 a census of the machine running the fleet found no
+scheduled task, no Startup shortcut and no Run key entry for this app; the live daemon's parent was
+a bare `cmd /c bun server/src/index.ts` typed five hours earlier, with nothing above it. Every piece
+needed to recover already existed and nothing ever called it.
 
 ## Auto-update
 
