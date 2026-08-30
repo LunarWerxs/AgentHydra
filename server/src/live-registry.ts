@@ -51,6 +51,58 @@ function transcriptPathFor(claudeHome: string, cwd: string, sessionId: string): 
   return null
 }
 
+/** A registry file that outlived its process: the session died un-gracefully (computer
+ *  restart, crash, kill) - a graceful exit deletes its own `<pid>.json`. Restored from the
+ *  archived v1 (piece 8 needs it as crash evidence): mid-process death is a resumable
+ *  scenario, so these are surfaced, never silently dropped. */
+export interface OrphanSession extends LiveSession {
+  registryPath: string
+}
+
+export function readOrphanedRegistry(claudeHome: string): OrphanSession[] {
+  const dir = join(claudeHome, 'sessions')
+  let files: string[] = []
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith('.json'))
+  } catch {
+    return []
+  }
+  const out: OrphanSession[] = []
+  for (const f of files) {
+    try {
+      const reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
+      if (typeof reg?.sessionId !== 'string' || typeof reg?.cwd !== 'string') continue
+      if (typeof reg.pid !== 'number' || pidAlive(reg.pid)) continue
+      out.push({
+        pid: reg.pid,
+        sessionId: reg.sessionId,
+        cwd: reg.cwd,
+        name: typeof reg.name === 'string' ? reg.name : reg.sessionId.slice(0, 8),
+        startedAt: typeof reg.startedAt === 'number' ? reg.startedAt : 0,
+        transcriptPath: transcriptPathFor(claudeHome, reg.cwd, reg.sessionId),
+        registryPath: join(dir, f),
+      })
+    } catch {
+      // One unreadable registry entry must not hide the others.
+    }
+  }
+  return out
+}
+
+/** Find a transcript by session id alone (no cwd known - e.g. gating a non-live chat): the
+ *  sessionId is globally unique, so a bounded scan across project dirs settles it. */
+export function findTranscriptById(claudeHome: string, sessionId: string): string | null {
+  try {
+    for (const dir of readdirSync(join(claudeHome, 'projects'))) {
+      const p = join(claudeHome, 'projects', dir, `${sessionId}.jsonl`)
+      if (existsSync(p)) return p
+    }
+  } catch {
+    // No projects dir at all.
+  }
+  return null
+}
+
 export function readLiveRegistry(claudeHome: string): LiveSession[] {
   const dir = join(claudeHome, 'sessions')
   let files: string[] = []

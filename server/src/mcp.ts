@@ -590,6 +590,24 @@ export const TOOLS: McpEngineTool[] = [
       ),
   },
   {
+    name: 'chat_gate',
+    description:
+      'THE GATE - call this BEFORE acting on any chat (owner law): one deterministic answer to ' +
+      'what state the chat is in. running = process alive, leave it alone (quietSecs reported; ' +
+      'long quiet can be background work). crashed = died without finishing (mid-turn, ' +
+      'usage-limit, overload, refused, error) - the resume candidates. finished = ended on a ' +
+      'completed turn, pre-classified into lanes: archive-candidate (recap says done, nothing ' +
+      'asked), needs-input-review (it awaits an answer - YOUR one judgment: can the answer be ' +
+      'determined autonomously, the owner\u2019s preference, or must a human decide?), or human ' +
+      '(a person deliberately interrupted it - leave it). The evidence for that judgment ' +
+      '(lastAssistantText, doneClaim, endsWithQuestion) is in the response - never re-derive it.',
+    inputSchema: S(
+      { session_id: { type: 'string', description: 'The chat/session id to gate.' } },
+      ['session_id'],
+    ),
+    run: (a) => api(`/api/chats/${encodeURIComponent(str(a.session_id))}/gate`),
+  },
+  {
     name: 'chat_dossier',
     description:
       'ONE query, everything the system knows about a chat: which desktop instance holds it, its ' +

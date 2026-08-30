@@ -101,39 +101,53 @@ export function endingFromTailText(text: string, wholeFile: boolean): SessionEnd
  * and the file is bigger than the window, grow it (x4) up to {@link TAIL_WINDOW_CAP}. A file
  * that yields nothing within the cap honestly reports `ending: null` rather than guessing.
  */
+/** The raw tail of a transcript, adaptive-window read (see the constants above): the LAST
+ *  window of bytes plus whether it starts at byte 0. Shared with chat-gate.ts so the window
+ *  logic has one definition. Returns null when the file cannot be read. */
+export function readTranscriptTailText(
+  path: string,
+  minWindow = TAIL_WINDOW_START,
+): { text: string; wholeFile: boolean } | null {
+  let size: number
+  try {
+    size = statSync(path).size
+  } catch {
+    return null
+  }
+  const window = Math.min(Math.max(minWindow, TAIL_WINDOW_START), TAIL_WINDOW_CAP)
+  const start = Math.max(0, size - window)
+  const len = size - start
+  try {
+    const fd = openSync(path, 'r')
+    try {
+      const buf = Buffer.alloc(len)
+      const read = readSync(fd, buf, 0, len, start)
+      return { text: buf.subarray(0, read).toString('utf8'), wholeFile: start === 0 }
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return null
+  }
+}
+
 export function classifyTranscriptTail(
   path: string,
   nowMs: number,
 ): Omit<FleetTranscriptState, 'path'> {
-  let size: number
   let mtimeMs: number
   try {
-    const st = statSync(path)
-    size = st.size
-    mtimeMs = st.mtimeMs
+    mtimeMs = statSync(path).mtimeMs
   } catch {
     return { mtimeMs: 0, quietSecs: 0, ending: null, unreadable: true }
   }
   const quietSecs = Math.max(0, Math.round((nowMs - mtimeMs) / 1000))
   let window = TAIL_WINDOW_START
   for (;;) {
-    const start = Math.max(0, size - window)
-    const len = size - start
-    let text: string
-    try {
-      const fd = openSync(path, 'r')
-      try {
-        const buf = Buffer.alloc(len)
-        const read = readSync(fd, buf, 0, len, start)
-        text = buf.subarray(0, read).toString('utf8')
-      } finally {
-        closeSync(fd)
-      }
-    } catch {
-      return { mtimeMs, quietSecs, ending: null, unreadable: true }
-    }
-    const ending = endingFromTailText(text, start === 0)
-    if (ending !== null || start === 0 || window >= TAIL_WINDOW_CAP) {
+    const raw = readTranscriptTailText(path, window)
+    if (!raw) return { mtimeMs, quietSecs, ending: null, unreadable: true }
+    const ending = endingFromTailText(raw.text, raw.wholeFile)
+    if (ending !== null || raw.wholeFile || window >= TAIL_WINDOW_CAP) {
       return { mtimeMs, quietSecs, ending, unreadable: false }
     }
     window *= 4

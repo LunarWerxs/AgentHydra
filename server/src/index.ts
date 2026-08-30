@@ -32,6 +32,7 @@ import {
 } from './auto-update'
 import { markDispatchReady } from './boot-state'
 import { chatDossier } from './chat-dossier'
+import { chatGate } from './chat-gate'
 import { resolveRequiredTitle } from './chat-title'
 import {
   appEnv,
@@ -764,6 +765,16 @@ app.get('/api/sessions/search', async (c) => {
 // hosting it (if any). Built 2026-08-28 because answering "what happened to chat X" used to
 // take an hour of hand-joins across the stores that each hold a quarter of the answer.
 // Query by title fragment or ANY id.
+// --- the gate (orchestrator rebuild, piece 8 - see server/src/chat-gate.ts) -----------------
+// THE mandatory pre-action call: what state is this chat in - running, crashed, or finished
+// (with the finished lane pre-classified and the evidence packaged). Deterministic, read-only.
+app.get('/api/chats/:id/gate', (c) => {
+  const id = c.req.param('id').trim()
+  if (!id) return c.json({ error: 'session id required' }, 400)
+  const gate = chatGate(id)
+  if (!gate) return c.json({ error: 'unknown-session: no transcript found for this id' }, 404)
+  return c.json(gate)
+})
 app.get('/api/chats/dossier', (c) => {
   const q = c.req.query('q') ?? ''
   if (!q.trim())

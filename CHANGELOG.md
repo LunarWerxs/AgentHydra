@@ -18,6 +18,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   account's running desktop app and archived there through the app's own UI.
 
 ### Added
+- **Orchestrator rebuild, piece 8: THE GATE** (`GET /api/chats/:id/gate` +
+  server/src/chat-gate.ts + the chat_gate MCP tool; owner-specified). The mandatory
+  pre-action call: one deterministic answer to what state a chat is in. running (process
+  alive - leave it; quietSecs reported since long quiet can be background work), crashed
+  (died without finishing: mid-turn on an unanswered message or closing tool traffic,
+  usage-limit, overload, refused, error - the resume candidates; dead-pid registry residue
+  is cited as evidence, restored from v1's orphan detection), or finished - pre-classified
+  by stated rules into archive-candidate (recap claims done, nothing asked),
+  needs-input-review (awaiting an answer; the ONE AI judgment in the design - can it be
+  answered autonomously, the owner's preference, or must a human decide - with the evidence
+  packaged: lastAssistantText, doneClaim, endsWithQuestion), or human (deliberately
+  interrupted). A session with no transcript gates to 404 - what cannot be gated cannot be
+  acted on. The adaptive tail reader is now shared (one definition) between fleet and gate.
+  Verified: 14 fixtures covering every state, kind and lane; live: all 6 running sessions
+  gate as running, 8 real non-live transcripts classify correctly (finished work ->
+  archive-candidate done:yes, an interrupted chat -> human, a killed drill -> crashed
+  mid-turn). Suite 1341/0; both localci legs clean.
+
 - **Consolidation pass over the rebuild day (owner-ordered review): deduplicate, simplify,
   enforce.** One definition now exists for each thing four modules had grown privately: the
   path comparison key (new server/src/path-key.ts - two of the day's review-confirmed bugs
