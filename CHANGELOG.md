@@ -31,6 +31,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   would have made the tool harder to find for no gain. The two `hydra-` commands keep that prefix
   because they are about the app and the repo, not about the orchestration pass.
 
+- **`bun run smoke:orchestrator` proves `/orchestrate` actually works, over the transport it
+  actually uses.** The command drives this app's MCP tools, and the MCP server had been registered
+  nowhere at all, so every run since the command was written had silently fallen back to
+  hand-driving the REST API and nothing would ever have said so. Testing the REST API proves the
+  fallback. This speaks the same JSON-RPC/stdio protocol a real pass speaks, through the same
+  `bun run mcp` entry, and walks the command's own steps in its own order: every named tool
+  resolves, the census is sane, every lane is present, no live chat is ever acted on, the courier
+  pass is not silently capped, and the queue is genuinely empty afterwards. It also pins the two
+  report-level defects fixed below, which no unit test could reach because both were about what a
+  LIVE report says. Report-only by default; `--act` performs the real pass. Deliberately not a CI
+  step and it must never become one, since it drives the real fleet.
+
 - **The daemon is finally supervised, instead of staying up only because someone once typed a
   command.** Every part needed to keep it alive already existed - `Ensure-Daemon.ps1` no-ops when a
   healthy daemon of ours answers and restarts it when nothing does - and nothing ever called them on

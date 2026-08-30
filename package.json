@@ -27,7 +27,9 @@
     "typecheck": "bun run --cwd web typecheck && bun run --cwd server typecheck",
     "format": "biome format --write .",
     "test": "bun test --parallel=4",
-    "audit": "bun run scripts/audit.ts"
+    "audit": "bun run scripts/audit.ts",
+    "//smoke:orchestrator": "LIVE end-to-end gate for /orchestrate over the real MCP stdio transport. NOT a CI step and must never become one: it drives the live fleet, and --act archives real chats and types into real desktop windows. Default is report-only.",
+    "smoke:orchestrator": "bun scripts/smoke-orchestrator.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.5"
