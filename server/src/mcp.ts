@@ -590,6 +590,24 @@ export const TOOLS: McpEngineTool[] = [
       ),
   },
   {
+    name: 'prestart',
+    description:
+      'THE PRE-START CHECK (owner law 2026-08-30): call this FIRST, before ANY orchestration ' +
+      'act. It runs the census in the required order - how many instances are OPEN, then every ' +
+      'chat across them - then gates everything (pure report, nothing touched), derives the ' +
+      'big-picture next step per chat (archive / surface-and-deliver / judge-then-act / ' +
+      'wait-for-reset / investigate), and lists junk: done-marked lineages still visible in a ' +
+      'sidebar (testing leftovers to archive), naming-law violations, and liveButDoneMarked ' +
+      'contradictions (a retired lineage actively RUNNING - the owner untangles those, never ' +
+      'automation). THE SANITY RAIL: if ' +
+      'sanity.plausible is false - one or zero open instances - the census is WRONG by the ' +
+      "owner's own word (he practically never runs just one), so STOP and investigate instance " +
+      'detection before acting on anything else in the report. When plausible, work the ' +
+      'nextSteps via chat_sweep/chat_act and archive junk.supersededVisible.',
+    inputSchema: S({}),
+    run: () => api('/api/prestart'),
+  },
+  {
     name: 'chat_gate',
     description:
       'THE GATE - call this BEFORE acting on any chat (owner law): one deterministic answer to ' +

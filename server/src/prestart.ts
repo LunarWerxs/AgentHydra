@@ -1,0 +1,261 @@
+// server/src/prestart.ts - THE PRE-START CHECK (owner directive, 2026-08-30): "before the
+// orchestrator does anything... go through all the chats and determine what should be done...
+// determine the status of every chat... what it should do next for every chat. From a big
+// picture standpoint." Plus the census that has to come first: "identify how many open
+// sessions there are or instances... then identify all of the chats across those. Before
+// starting its pre-check."
+//
+// READ-ONLY on purpose: a pre-start CHECK reports; the deeds go through the same act/sweep
+// machinery as always, so there is exactly one place a verdict becomes a deed.
+//
+// THE SANITY RAIL (owner, verbatim): "if it only sees one instance open. then it's wrong.
+// Because I pretty much never only have one." One (or zero) open instances is not a state of
+// the world - it is a symptom of broken instance detection (the --user-data-dir blind spot
+// class of bug), and a census that starts wrong poisons every decision after it. plausible:
+// false means STOP and investigate detection before acting on anything.
+
+import { isGenericChatTitle } from './chat-title'
+import { db } from './db'
+import { type FleetInstanceEntry, fleetInstances } from './fleet-instances'
+import { type FleetUsageEntry, fleetUsage } from './fleet-usage'
+import { type SweepDeps, type SweepReport, sweepGateActions } from './gate-sweep'
+import { sessionMetaMap } from './instance-sessions'
+import { pathKey } from './path-key'
+import { liveSessionEntry } from './session-launch'
+
+const norm = (p: string) => pathKey(p, true)
+
+export interface PrestartChatStep {
+  sessionId: string
+  title: string | null
+  instance: string | null
+  step:
+    | 'archive'
+    | 'surface-and-deliver'
+    | 'judge-then-act'
+    | 'wait-for-reset'
+    | 'leave-alone'
+    | 'investigate'
+  why: string
+}
+
+export interface PrestartReport {
+  instances: {
+    total: number
+    openCount: number
+    open: Array<{
+      num: number
+      name: string
+      label: string | null
+      plan: string | null
+      weeklyPct: number | null
+      sessionPct: number | null
+      usageStale: boolean
+    }>
+  }
+  sanity: { plausible: boolean; why: string }
+  /** The full pure-report sweep (caps 0/0): every visible chat, gated, nothing touched. */
+  chats: SweepReport
+  /** A sweep that THREW is reported beside the (empty) report - never instead of the census. */
+  sweepError: string | null
+  /** The big-picture answer per chat that needs anything: what to do next, in order. */
+  nextSteps: PrestartChatStep[]
+  junk: {
+    /** Done-marked lineages still visible in a sidebar AND not live: retired work to archive. */
+    supersededVisible: Array<{ sessionId: string; title: string | null; instance: string }>
+    /** Naming-law violations: visible chats with no real name - rename or review. */
+    genericTitled: Array<{ sessionId: string; title: string | null; instance: string }>
+    /** CONTRADICTIONS: done-marked (retired lineage) yet a LIVE process is running it right
+     *  now. Someone revived a retired thread, or the mark is wrong - either way it is the
+     *  owner's to untangle, never automation's to archive under a running writer. */
+    liveButDoneMarked: Array<{ sessionId: string; title: string | null; instance: string }>
+    /** Visible entries whose TRUE transcript id is unrecorded: the marks table and the live
+     *  registry are keyed by that id, so neither junk lookup can be trusted for these -
+     *  counted honestly instead of silently passing both checks. */
+    identityUnresolvedCount: number
+  }
+  tookMs: number
+}
+
+export interface PrestartDeps extends SweepDeps {
+  instancesList?: () => Promise<FleetInstanceEntry[]>
+  usageList?: () => FleetUsageEntry[]
+  sweep?: typeof sweepGateActions
+  doneMarked?: () => Set<string>
+  isLive?: (sessionId: string) => boolean
+}
+
+function realDoneMarked(): Set<string> {
+  try {
+    const rows = db
+      .query<{ session_id: string }, []>('select session_id from session_marks where done = 1')
+      .all()
+    return new Set(rows.map((r) => r.session_id))
+  } catch {
+    return new Set()
+  }
+}
+
+export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartReport> {
+  const started = Date.now()
+  const instancesList = deps.instancesList ?? (() => fleetInstances())
+  const usageList = deps.usageList ?? (() => fleetUsage())
+  const sweep = deps.sweep ?? sweepGateActions
+  const doneMarked = deps.doneMarked ?? realDoneMarked
+  const meta = deps.meta ?? sessionMetaMap
+
+  // 1. THE CENSUS FIRST: instances, then the chats across them.
+  const instances = await instancesList()
+  const usage = usageList()
+  const open = instances
+    .filter((i) => i.isRunning && i.signedIn)
+    .map((i) => {
+      const u = usage.find((x) => norm(x.ref) === norm(i.ref))
+      return {
+        num: i.num,
+        name: i.name,
+        label: i.label,
+        plan: i.account?.planLabel ?? null,
+        weeklyPct: u?.weeklyPct ?? null,
+        sessionPct: u?.sessionPct ?? null,
+        usageStale: u?.stale ?? true,
+      }
+    })
+
+  // 2. THE SANITY RAIL - before anything downstream is trusted.
+  const sanity =
+    open.length <= 1
+      ? {
+          plausible: false,
+          why:
+            `only ${open.length} open instance(s) detected - the owner practically never runs ` +
+            'just one, so instance detection is suspect (the --user-data-dir blind-spot class ' +
+            'of bug). STOP: investigate detection before acting on any verdict below.',
+        }
+      : { plausible: true, why: `${open.length} open instances - a plausible fleet` }
+
+  // 3. Gate EVERY visible chat, pure report (caps 0/0 - the sweep's report-only mode). A
+  // throwing sweep must not discard the census and sanity verdict already computed
+  // (review-confirmed): the error is reported beside an empty report, never instead of one.
+  let chats: SweepReport
+  let sweepError: string | null = null
+  try {
+    chats = await sweep({ maxArchive: 0, maxSurface: 0 }, deps)
+  } catch (err) {
+    sweepError = err instanceof Error ? err.message : String(err)
+    chats = {
+      scanned: 0,
+      leftAlone: 0,
+      acted: { archived: 0, surfaced: 0 },
+      caps: { maxArchive: 0, maxSurface: 0 },
+      archiveRows: [],
+      crashedRows: [],
+      waitForReset: [],
+      needsJudgment: [],
+      ungated: [],
+      unswept: [],
+      deadlineHit: false,
+    }
+  }
+
+  // 4. The big-picture next step per chat, derived from the gate lanes - stated rules only.
+  const nextSteps: PrestartChatStep[] = []
+  for (const r of chats.archiveRows)
+    nextSteps.push({
+      sessionId: r.sessionId,
+      title: r.title,
+      instance: r.instance,
+      step: 'archive',
+      why: 'finished, recap says done, nothing asked - archive it (chat_sweep or chat_act)',
+    })
+  for (const r of chats.crashedRows)
+    nextSteps.push({
+      sessionId: r.sessionId,
+      title: r.title,
+      instance: r.instance,
+      step: 'surface-and-deliver',
+      why: `crashed (${r.crashedKind ?? 'unknown'}) - act to surface it, then deliver its resume prompt natively`,
+    })
+  for (const r of chats.waitForReset)
+    nextSteps.push({
+      sessionId: r.sessionId,
+      title: r.title,
+      instance: r.instance,
+      step: 'wait-for-reset',
+      why: 'crashed at the usage wall - nothing useful before its reset',
+    })
+  for (const r of chats.needsJudgment)
+    nextSteps.push({
+      sessionId: r.sessionId,
+      title: r.title,
+      instance: r.instance,
+      step: 'judge-then-act',
+      why: 'waiting on an answer - the ONE AI step: judge autonomous-vs-human, then chat_act with the decision',
+    })
+  for (const r of chats.ungated)
+    nextSteps.push({
+      sessionId: r.sessionId,
+      title: r.title,
+      instance: r.instance,
+      step: 'investigate',
+      why: 'visible in a sidebar but no transcript found anywhere - inspect via the dossier',
+    })
+  // The sweep's deadline can cut candidates off; the owner asked for the status of EVERY
+  // chat, so the cut-off ones get explicit rows instead of vanishing (review-confirmed drop).
+  for (const r of chats.unswept)
+    nextSteps.push({
+      sessionId: r.sessionId,
+      title: r.title,
+      instance: r.instance,
+      step: 'investigate',
+      why: "the pre-check's sweep deadline cut this chat off before it was gated - re-run prestart, or sweep these ids directly",
+    })
+
+  // 5. JUNK: deterministic candidates only - done-marked-but-visible (retired lineages the
+  // testing days left behind) and naming-law violations. Reported, never auto-deleted here.
+  const marked = doneMarked()
+  const isLive = deps.isLive ?? ((sid: string) => liveSessionEntry(sid) !== null)
+  const supersededVisible: PrestartReport['junk']['supersededVisible'] = []
+  const genericTitled: PrestartReport['junk']['genericTitled'] = []
+  const liveButDoneMarked: PrestartReport['junk']['liveButDoneMarked'] = []
+  let identityUnresolvedCount = 0
+  // The SAME two-set dedup the sweep uses (review-confirmed weaker here): first the metadata
+  // FILE, then the resolved transcript id - one chat imported into two instances is two files
+  // but one identity, and double-listing it means double archive calls downstream.
+  const seenPaths = new Set<string>()
+  const seenIds = new Set<string>()
+  for (const [key, m] of meta()) {
+    if (m.archived) continue
+    const dedup = m.path || key
+    if (seenPaths.has(dedup)) continue
+    seenPaths.add(dedup)
+    const sessionId = m.cliSessionId ?? key
+    if (seenIds.has(sessionId)) continue
+    seenIds.add(sessionId)
+    if (m.cliSessionId === null) {
+      // The marks table and the live registry are keyed by the TRUE transcript id; without it,
+      // neither lookup can be trusted, so this entry is counted honestly instead of silently
+      // passing both checks (review-confirmed blindness).
+      identityUnresolvedCount++
+    } else if (marked.has(sessionId)) {
+      // A retired lineage with a LIVE process is a contradiction, not junk (found on the very
+      // first live run: three done-marked chats were actively running). Never archive under a
+      // running writer - hand the contradiction to the owner by name.
+      if (isLive(sessionId))
+        liveButDoneMarked.push({ sessionId, title: m.title, instance: m.instance })
+      else supersededVisible.push({ sessionId, title: m.title, instance: m.instance })
+    }
+    if (isGenericChatTitle(m.title))
+      genericTitled.push({ sessionId, title: m.title, instance: m.instance })
+  }
+
+  return {
+    instances: { total: instances.length, openCount: open.length, open },
+    sanity,
+    chats,
+    nextSteps,
+    sweepError,
+    junk: { supersededVisible, genericTitled, liveButDoneMarked, identityUnresolvedCount },
+    tookMs: Date.now() - started,
+  }
+}

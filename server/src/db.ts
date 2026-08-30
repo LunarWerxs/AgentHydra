@@ -430,6 +430,10 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   sweep_interval_min: '15',
   sweep_max_archive: '-1',
   sweep_max_surface: '0',
+  // New-chat defaults (owner rule 2026-08-30, new-chat-defaults.ts): "Opus 5 Ultra code" =
+  // model opus + the ultracode keyword in the first prompt; explicit caller choice wins.
+  new_chat_model: 'opus',
+  new_chat_ultracode: '1',
 }
 
 export function getSetting(key: string): string {

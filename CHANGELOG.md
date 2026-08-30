@@ -9,6 +9,41 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **THE PRE-START CHECK** (`GET /api/prestart` + server/src/prestart.ts + the prestart MCP
+  tool; owner-ordered 2026-08-30). READ-ONLY, in the owner's required order: the CENSUS first
+  (how many instances are OPEN - with plan and usage per account - then every chat across
+  them), then the full pure-report gate sweep, the big-picture next step per chat (archive /
+  surface-and-deliver / judge-then-act / wait-for-reset / investigate), and the junk lanes:
+  done-marked lineages still visible in a sidebar (testing leftovers to archive),
+  naming-law violations, and liveButDoneMarked CONTRADICTIONS - a retired lineage actively
+  running, the owner's to untangle, never automation's to archive under a running writer
+  (that lane exists because the very first live run found three). THE SANITY RAIL, verbatim
+  from the owner: one (or zero) open instances means the census is WRONG - "I pretty much
+  never only have one" - so sanity.plausible:false tells the caller to stop and investigate
+  instance detection before acting on anything. Live: 885ms over the real fleet (3/18 open,
+  11 chats), and its junk lane immediately caught 7 real testing leftovers - 4 were archived
+  through the proven machinery on the spot, 3 were live-and-done-marked contradictions left
+  for the owner by name. The post-cleanup re-run reports a clean fleet: 8 chats, all
+  running/human, zero junk, zero next steps. Adversarially reviewed pre-ship (9 findings
+  fixed, 4 refuted): the queue PATCH door could flip a row to new_chat without the defaults
+  (closed); deadline-cut chats vanished from nextSteps (now explicit investigate rows); the
+  junk dedup was weaker than the sweep's (now the same two-set rule); entries with no
+  recorded transcript id silently passed both junk checks (now counted as
+  identityUnresolvedCount, never guessed); and a throwing sweep discarded the census (now
+  reported beside it as sweepError).
+
+- **NEW-CHAT DEFAULTS: "Opus 5 Ultra code"** (owner-ordered 2026-08-30, decoded against the
+  machine rather than guessed: no 'ultra' model or effort exists anywhere - the CLI ladder
+  tops at max, and the thing a level ABOVE max is ULTRACODE, Claude Code's exhaustive session
+  mode, armed by the literal keyword in the prompt). Every automated NEW chat now starts on
+  model 'opus' with the ultracode keyword prepended to its first prompt
+  (server/src/new-chat-defaults.ts, applied at the queue-create insert and in
+  launchTerminalSession; resumes untouched; an explicit model or ultracode:false is the
+  compelling-reason escape and always wins; settings new_chat_model/new_chat_ultracode sync
+  across machines as preferences). SMOKE-TESTED live as the owner required: a pinned
+  single-turn probe with a sanitized env confirmed --model opus launches and runs on
+  claude-opus-5.
+
 - **LOAD-BALANCING MIGRATION** (the owner's standing order: "migrate chats between accounts.
   Properly. for load balancing"). A crashed (or autonomously-answered) chat whose home account
   is PROVABLY at/over the 85% threshold right now - a fresh reading on either window

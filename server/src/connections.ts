@@ -78,6 +78,11 @@ export const PREF_KEYS = [
   // Auto-resume monitor: its TUNING travels, its master switch does not (see NEVER_SYNCED).
   'monitor_max_attempts',
   'monitor_resume_buffer_min',
+  // New-chat defaults (owner rule 2026-08-30: every automated new chat starts "Opus 5 Ultra
+  // code" = model opus + the ultracode keyword). A doctrine about how chats start, identical
+  // on every machine - it travels.
+  'new_chat_model',
+  'new_chat_ultracode',
   'monitor_resume_prompt',
   // Notifications, including the SMTP endpoint — but never its password, which lives in
   // NEVER_SYNCED. Telling you something is not the same as acting for you, so unlike the

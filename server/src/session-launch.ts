@@ -38,6 +38,7 @@ import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
 import { db } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
+import { applyNewChatDefaults } from './new-chat-defaults'
 import { samePathKey } from './path-key'
 
 /**
@@ -312,16 +313,23 @@ export async function launchTerminalSession(opts: {
       `[agenthydra] mirrored an existing trust decision onto ${opts.cwd} (the CLI keys trust by the literal path string, so slash style can hide a yes)`,
     )
 
+  // Owner rule 2026-08-30 (new-chat-defaults.ts): a NEW session that names no model starts on
+  // Opus + the ultracode keyword. A resume is not a new chat; an explicit model passes through.
+  const spec = applyNewChatDefaults({
+    newChat: !opts.resumeSessionId,
+    model: opts.model,
+    prompt: opts.prompt,
+  })
   const dir = join(tmpdir(), 'agenthydra-launch')
   mkdirSync(dir, { recursive: true })
   const promptFile = join(dir, `prompt-${crypto.randomUUID()}.txt`)
-  writeFileSync(promptFile, opts.prompt)
+  writeFileSync(promptFile, spec.prompt)
 
   const plan = buildTerminalLaunchPlan(
     process.platform,
     exe ?? resolveClaudeExe(),
     promptFile,
-    opts.model?.trim() || null,
+    spec.model,
     opts.effort?.trim() || null,
     opts.resumeSessionId?.trim() || null,
     opts.permissionMode?.trim() || null,

@@ -166,6 +166,7 @@ import {
   setMonitorSettings,
   startMonitor,
 } from './monitor'
+import { applyNewChatDefaults } from './new-chat-defaults'
 import {
   getNotificationSettings,
   type NotificationSettingsPatch,
@@ -173,6 +174,7 @@ import {
 } from './notify-settings'
 import { openUi } from './open-ui'
 import { openPortableWindow } from './portable-window.mjs'
+import { prestartCheck } from './prestart'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { buildRelaunchArgv } from './relaunch-argv.mjs'
@@ -816,6 +818,11 @@ app.post('/api/chats/sweep', async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400)
   return c.json(await sweepGateActions(parsed.opts))
 })
+// --- the pre-start check (owner directive 2026-08-30) - see server/src/prestart.ts ----------
+// READ-ONLY: the census (instances, then every chat across them), the sanity rail (one open
+// instance = detection is wrong, by the owner's own word), the full pure-report gate sweep,
+// the big-picture next step per chat, and the junk lists. The FIRST call of any orchestration.
+app.get('/api/prestart', async (c) => c.json(await prestartCheck()))
 // --- the standing sweep loop (rebuild backlog) - see server/src/sweep-loop.ts ---------------
 // OFF by default; unattended-safe caps (archive unlimited, surface 0 - no deliverer, no
 // dormant parking). The last report is served verbatim so the loop's work is inspectable.
@@ -1269,6 +1276,21 @@ app.post('/api/queue', async (c) => {
   // Resolved once, HERE, so the choice is STORED on the row: visible on the card, editable, and
   // carried forward into an auto-resume (monitor.ts copies instance_ref).
   const instanceRef = resolveRunAsRef(body, sessionId)
+  // Owner rule 2026-08-30 (new-chat-defaults.ts): a NEW chat that names no model starts on
+  // Opus + the ultracode keyword; explicit choices pass through untouched. Applied HERE at
+  // storage so the queue row shows exactly what will run.
+  if (body.ultracode !== undefined && typeof body.ultracode !== 'boolean')
+    return c.json({ error: 'ultracode must be a boolean' }, 400)
+  // Same strictness as ultracode (review-confirmed asymmetry): a non-string model is a caller
+  // bug, and silently defaulting it to opus would hide that the intended value was dropped.
+  if (body.model !== undefined && body.model !== null && typeof body.model !== 'string')
+    return c.json({ error: 'model must be a string' }, 400)
+  const newChatSpec = applyNewChatDefaults({
+    newChat: body.new_chat === true,
+    model: typeof body.model === 'string' ? body.model : null,
+    prompt: body.prompt,
+    ultracode: body.ultracode,
+  })
   const posRow = db
     .query<{ m: number | null }, []>('select max(position) as m from queue_items')
     .get()
@@ -1282,8 +1304,8 @@ app.post('/api/queue', async (c) => {
     sessionId,
     body.title,
     body.cwd,
-    body.prompt,
-    body.model ?? null,
+    newChatSpec.prompt,
+    newChatSpec.model,
     body.effort ?? null,
     body.permission_mode ?? null,
     body.account_id ?? null,
@@ -1380,6 +1402,30 @@ app.patch('/api/queue/:id', async (c) => {
   if (fields.length) {
     values.push(id)
     db.query(`update queue_items set ${fields.join(', ')} where id = ?`).run(...(values as any[]))
+    // The new-chat defaults hold on the PATCH door too (review-confirmed backdoor: flipping
+    // new_chat true on a defaults-skipped resume row silently started a brand-new chat
+    // outside Opus+ultracode). Applied to the EFFECTIVE row after the update, so a patch that
+    // also sets model/prompt is respected as the explicit choice it is.
+    if (body.new_chat === true) {
+      const row = db
+        .query<{ model: string | null; prompt: string }, [string]>(
+          'select model, prompt from queue_items where id = ?',
+        )
+        .get(id)
+      if (row) {
+        const spec = applyNewChatDefaults({
+          newChat: true,
+          model: row.model,
+          prompt: row.prompt,
+        })
+        if (spec.model !== row.model || spec.prompt !== row.prompt)
+          db.query('update queue_items set model = ?, prompt = ? where id = ?').run(
+            spec.model,
+            spec.prompt,
+            id,
+          )
+      }
+    }
   }
   return c.json(coerceQueueItem(db.query('select * from queue_items where id = ?').get(id)))
 })
