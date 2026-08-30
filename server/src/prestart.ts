@@ -384,6 +384,32 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
       'it via POST /api/sessions/:id/desktop-archive instead.'
   }
 
+  // 5c. HOLDS, the same reconciliation and the same reason. nextSteps is advice about what the
+  // machinery should do ON ITS OWN INITIATIVE, and a hold means precisely "take no initiative on
+  // this chat" - so telling the operator to judge-or-resume a held chat is advice its own sweep
+  // will refuse (gate-sweep parks every held chat before it acts). Left unreconciled, a chat put
+  // on hold specifically BECAUSE an unattended pass must not touch it would be re-offered as
+  // actionable on every pass, which is how a hold quietly stops meaning anything.
+  //
+  // Rewritten, never dropped: holds.ts is explicit that nothing about a held chat is hidden and
+  // that it still shows up in the pre-start check WITH its reason. A vanished chat would be worse
+  // than one that got acted on. So the row stays and becomes 'leave-alone', carrying the reason,
+  // and the operator can still see there is something here a person owes an answer to.
+  //
+  // NOTE it does not contradict chat_act ignoring holds: that is a DIRECT request, and a hold is
+  // "leave this alone unprompted", not a lock. Being asked is the point of asking.
+  const holdList = (deps.holds ?? listHolds)()
+  const holdBySession = new Map(holdList.map((h) => [h.sessionId, h]))
+  for (const step of nextSteps) {
+    const held = holdBySession.get(step.sessionId)
+    if (!held) continue
+    step.step = 'leave-alone'
+    step.why =
+      `ON HOLD since ${held.heldAt}: ${held.reason} - the automation leaves this chat alone, ` +
+      'so there is no step to take on your own initiative here (a DIRECT request still runs). ' +
+      'Release it with POST /api/sessions/:id/release when it is ready to rejoin the machinery.'
+  }
+
   const pending = (deps.deliveries ?? pendingDeliveries)().map((r) => ({
     sessionId: r.session_id,
     prompt: r.prompt,
@@ -415,7 +441,9 @@ export async function prestartCheck(deps: PrestartDeps = {}): Promise<PrestartRe
     )(),
     collisions: (deps.collisions ?? liveCollisions)(),
     suppressed: (deps.suppressed ?? suppressedChats)(),
-    holds: (deps.holds ?? listHolds)(),
+    // The SAME list the nextSteps reconciliation above used - read once, so the holds lane and the
+    // advice derived from it can never disagree about what is held.
+    holds: holdList,
     // Asked of EVERY known instance, not just the open ones: a signed-out or damaged profile is
     // exactly as unusable while the app is closed, and it is the reason a later boot would fail.
     // The responsiveness probe runs once for the whole fleet, not once per instance.

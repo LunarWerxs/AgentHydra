@@ -58,6 +58,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A chat put ON HOLD was still advertised as actionable on every pass.** Same split as the
+  superseded bug below, in a second place: the lanes come from the gate, holds live in their own
+  table, and nothing reconciled them. So a chat held precisely BECAUSE an unattended pass must not
+  touch it kept being offered as "judge-then-act", which is how a hold quietly stops meaning
+  anything, and the standing risk is real: a later pass reading the owner's stated preference for
+  autonomy could act on the very thing the hold was protecting. A held chat's step is now
+  `leave-alone`, carrying the hold's reason and the release route. It is rewritten and never
+  dropped, because holds.ts is explicit that a held chat stays visible with its reason, and a hold
+  outranks the superseded rewrite: archiving is exactly the unprompted deed a hold exists to
+  prevent. This does not contradict `chat_act` ignoring holds, which is correct, as a direct
+  request is not the machinery acting on its own initiative.
+
 - **The pre-check could hand you an instruction the actuator refuses, forever.** `nextSteps` was
   derived from the gate, which judges a transcript on its own terms and knows nothing about
   done-marks, while `junk.supersededVisible` came from the marks table - and nothing reconciled the

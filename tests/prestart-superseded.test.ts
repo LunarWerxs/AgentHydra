@@ -14,7 +14,7 @@
 // route that actually works. A step of 'judge-then-act' or 'surface-and-deliver' on a superseded
 // chat is the regression.
 
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import type { PrestartDeps } from '../server/src/prestart'
 import { prestartCheck } from '../server/src/prestart'
 
@@ -175,4 +175,59 @@ test('a LIVE done-marked chat is a contradiction, not junk — and keeps its own
   expect(r.junk.liveButDoneMarked.map((x) => x.sessionId)).toEqual([SUPERSEDED])
   // Not rewritten: it is not superseded, so it keeps whatever the gate said.
   expect(r.nextSteps.find((s) => s.sessionId === SUPERSEDED)?.step).toBe('judge-then-act')
+})
+
+// ── HOLDS: the same reconciliation, the same failure shape ─────────────────────────────────────
+// A hold means "take no initiative on this chat", and gate-sweep honours it by parking every held
+// chat before it acts. But nextSteps is built from the GATE, which knows nothing about the holds
+// table - the identical split that produced the superseded bug above. So a chat put on hold
+// SPECIFICALLY because an unattended pass must not touch it was still advertised as
+// "judge-then-act" on every single pass, which is how a hold quietly stops meaning anything.
+//
+// It is rewritten, never dropped: holds.ts is explicit that nothing about a held chat is hidden
+// and that it still appears in the pre-start check with its reason, because a chat that silently
+// vanished from the fleet view would be worse than one that got acted on.
+describe('a held chat is never advertised as actionable', () => {
+  const HELD_AT = '2026-08-30T23:55:02.048Z'
+  const heldDeps = (over: Partial<PrestartDeps> = {}) =>
+    baseDeps({
+      sweep: sweepBothNeedJudgment,
+      doneMarked: () => new Map(),
+      holds: () => [
+        { sessionId: SUPERSEDED, reason: 'needs the owner personally', heldAt: HELD_AT },
+      ],
+      ...over,
+    })
+
+  test('its step becomes leave-alone, carrying the hold reason', async () => {
+    const r = await prestartCheck(heldDeps())
+    const row = r.nextSteps.find((s) => s.sessionId === SUPERSEDED)
+    expect(row?.step).toBe('leave-alone')
+    expect(row?.why).toContain('ON HOLD')
+    expect(row?.why).toContain('needs the owner personally')
+    // The operator must be able to undo it, so the release route is named.
+    expect(row?.why).toContain('release')
+  })
+
+  test('the row is NOT dropped - a vanished chat is worse than an acted-on one', async () => {
+    const r = await prestartCheck(heldDeps())
+    expect(r.nextSteps.some((s) => s.sessionId === SUPERSEDED)).toBe(true)
+    expect(r.holds.map((h) => h.sessionId)).toEqual([SUPERSEDED])
+  })
+
+  test('an unheld chat in the same report is untouched', async () => {
+    const r = await prestartCheck(heldDeps())
+    expect(r.nextSteps.find((s) => s.sessionId === NORMAL)?.step).toBe('judge-then-act')
+  })
+
+  test('a hold outranks a superseded rewrite - no initiative beats archive-it', async () => {
+    // Both reconciliations can match one chat. The hold must win: superseded says "archive this",
+    // and archiving is exactly the unprompted deed a hold exists to prevent.
+    const r = await prestartCheck(
+      heldDeps({ doneMarked: () => new Map([[SUPERSEDED, 1_700_000_000_000]]) }),
+    )
+    const row = r.nextSteps.find((s) => s.sessionId === SUPERSEDED)
+    expect(row?.step).toBe('leave-alone')
+    expect(row?.why).toContain('ON HOLD')
+  })
 })
