@@ -679,6 +679,145 @@ test('acts are serialized process-wide - two concurrent calls never interleave',
   expect(order).toEqual(['start:a', 'end:a', 'start:b', 'end:b'])
 })
 
+test('LOAD BALANCING: a crashed chat on a provably saturated home migrates - LAND FIRST, flag second', async () => {
+  // Home #1 is fresh-proven hot on the 5-hour window; #3 is fresh-proven cool. Nothing is
+  // flagged until the new home EXISTS (review-confirmed: flag-first hid chats on failures).
+  const { deps, events } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: 'C:/i1',
+    usage: [fresh('desktop:C:/i1', 20, 86), fresh('desktop:C:/i3', 10, 5)],
+    archiveHits: [{ profile: 'C:/i1', wasRunning: true, changed: true }],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('surfaced')
+  expect(r?.instance?.num).toBe(3)
+  expect(r?.why).toContain('migrated off its saturated home instance #1')
+  expect(r?.why).not.toContain('WARNING')
+  expect(events).toEqual(['import:C:/i3:A Real Name', 'archive:sid:true'])
+})
+
+test('LOAD BALANCING: no cooler taker means NOTHING is ever flagged - the chat surfaces at home', async () => {
+  const { deps, events } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: 'C:/i1',
+    usage: [fresh('desktop:C:/i1', 20, 86), fresh('desktop:C:/i3', 91)],
+    archiveHits: [{ profile: 'C:/i1', wasRunning: true, changed: true }],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('surfaced')
+  expect(r?.instance?.num).toBe(1)
+  expect(r?.why).toContain('no cooler account could take the chat')
+  // Land-first: with no landing there is no flag write and nothing to restore.
+  expect(events).toEqual(['import:C:/i1:A Real Name'])
+})
+
+test('LOAD BALANCING: a stale or unknown home reading never migrates - no moves on a guess', async () => {
+  const { deps, events } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: 'C:/i1',
+    usage: [
+      { ref: 'desktop:C:/i1', weeklyPct: 90, sessionPct: 90, stale: true },
+      fresh('desktop:C:/i3', 5),
+    ],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('surfaced')
+  expect(r?.instance?.num).toBe(1)
+  expect(events).toEqual(['import:C:/i1:A Real Name'])
+})
+
+test('LOAD BALANCING: a failed landing owes ZERO cleanup - no flag was ever written', async () => {
+  const { deps, events } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: 'C:/i1',
+    usage: [fresh('desktop:C:/i1', 20, 86), fresh('desktop:C:/i3', 10)],
+    archiveHits: [{ profile: 'C:/i1', wasRunning: true, changed: true }],
+    importOk: false,
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('parked')
+  expect(r?.why).toContain('surfacing at home also failed')
+  expect(events).toEqual(['import:C:/i3:A Real Name', 'import:C:/i1:A Real Name'])
+})
+
+test('LOAD BALANCING: a source flag that fails to stick is a WARNING in the why, never hidden', async () => {
+  const { deps, events } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: 'C:/i1',
+    usage: [fresh('desktop:C:/i1', 20, 86), fresh('desktop:C:/i3', 10)],
+    // No archiveHits: the flag write reports ok:false (no-desktop-chat-found).
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('surfaced')
+  expect(r?.instance?.num).toBe(3)
+  expect(r?.why).toContain('WARNING: the source entries could not be flagged')
+  expect(events).toEqual(['import:C:/i3:A Real Name', 'archive:sid:true'])
+})
+
+test('LOAD BALANCING: an UNKNOWN target reading is not "cool" - migration demands positive proof', async () => {
+  const { deps } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: 'C:/i1',
+    // i3 is running but has NO usage row at all - unverified, not a migration target.
+    usage: [fresh('desktop:C:/i1', 20, 86)],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('surfaced')
+  expect(r?.instance?.num).toBe(1)
+  expect(r?.why).toContain('no cooler account could take the chat')
+})
+
+test('LOAD BALANCING: the only-open-home case may open a closed under-threshold account', async () => {
+  // Home #1 is the ONLY running instance and it is saturated - the owner's overflow rule then
+  // permits opening closed #2, which carries an aged under-threshold cache (the closed-app
+  // proof standard). requireUnsaturated defers to that standard for mustOpen targets.
+  const { deps, events } = fixture({
+    gate: crashedGate('mid-turn'),
+    home: 'C:/i1',
+    instances: [
+      { num: 1, dir: 'C:/i1', isRunning: true, signedIn: true },
+      { num: 2, dir: 'C:/i2', isRunning: false, signedIn: true },
+    ],
+    usage: [
+      fresh('desktop:C:/i1', 20, 86),
+      { ref: 'desktop:C:/i2', weeklyPct: 20, stale: true, ageMins: 999 },
+    ],
+    archiveHits: [{ profile: 'C:/i1', wasRunning: true, changed: true }],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('surfaced')
+  expect(r?.instance?.num).toBe(2)
+  expect(r?.openedInstance).toBe(true)
+  expect(events).toEqual(['open:C:/i2', 'import:C:/i2:A Real Name', 'archive:sid:true'])
+})
+
+test('superseded outranks the usage wall - no resumeAt promise for a retired lineage', async () => {
+  const { deps } = fixture({
+    gate: crashedGate('usage-limit'),
+    superseded: true,
+    pinnedRef: 'desktop:C:/i1',
+    usage: [{ ref: 'desktop:C:/i1', weeklyPct: 100, weeklyResetsAt: '2026-09-03T07:00:00Z' }],
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('parked')
+  expect(r?.why).toContain('superseded')
+  expect(r?.resumeAt).toBeUndefined()
+})
+
+test('an autonomous ANSWER rides the same balancing branch as a crash resume', async () => {
+  const { deps } = fixture({
+    gate: finishedGate('needs-input-review'),
+    home: 'C:/i1',
+    usage: [fresh('desktop:C:/i1', 20, 86), fresh('desktop:C:/i3', 10)],
+    archiveHits: [{ profile: 'C:/i1', wasRunning: true, changed: true }],
+  })
+  const r = await actOnGate('sid', { decision: 'autonomous', answer: 'Yes - proceed.' }, deps)
+  expect(r?.action).toBe('surfaced')
+  expect(r?.instance?.num).toBe(3)
+  expect(r?.prompt).toBe('Yes - proceed.')
+  expect(r?.why).toContain('migrated off its saturated home')
+})
+
 // --- the picker itself, pure ---------------------------------------------------------------
 
 const inst = (num: number, isRunning: boolean, signedIn = true) => ({

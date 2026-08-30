@@ -819,9 +819,13 @@ export async function stampImportedChat(
  */
 export async function desktopHomeFor(sessionId: string): Promise<string | null> {
   try {
-    const { sessionMetaMap } = await import('./instance-sessions')
+    const { instanceDirForLabel, sessionMetaMap } = await import('./instance-sessions')
     const hit = sessionMetaMap().get(sessionId)
-    if (hit) return hit.instance
+    // The DIR, not the raw label: the index stores an instance LABEL ('default' | dir name)
+    // while the filename-walk fallback below returns a real dir, and callers match dirs.
+    // Live-drill-confirmed 2026-08-30: the label leaked out of the index path and the gate's
+    // home-instance matching (and the /automation route's stamp) failed on every indexed chat.
+    if (hit) return instanceDirForLabel(hit.instance)
   } catch {
     // No readable metadata store: fall through to the filename walk rather than answering "no".
   }

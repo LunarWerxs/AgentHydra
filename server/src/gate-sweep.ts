@@ -220,6 +220,21 @@ export async function sweepGateActions(
   const goneRow = (c: Candidate, g: ChatGate): SweepRow =>
     gateRow(c, g, 'parked', 'the act returned nothing - the transcript vanished mid-sweep')
 
+  /** One act, throw-safe: a rejected act becomes a parked row instead of killing the whole
+   *  sweep mid-fleet (review-confirmed hazard once acts do real IO like landings). */
+  const tryAct = async (c: Candidate): Promise<GateActionResult | null> => {
+    try {
+      return await act(c.sessionId, {}, deps)
+    } catch (err) {
+      return {
+        sessionId: c.sessionId,
+        gate: { state: 'crashed', crashedKind: null, lane: null },
+        action: 'parked',
+        why: `the act threw: ${err instanceof Error ? err.message : String(err)}`,
+      }
+    }
+  }
+
   // SEQUENTIAL on purpose - see the header.
   for (const [i, c] of candidates.entries()) {
     if (now() >= deadline) {
@@ -250,7 +265,7 @@ export async function sweepGateActions(
         )
         continue
       }
-      const r = await act(c.sessionId, {}, deps)
+      const r = await tryAct(c)
       if (!r) {
         report.archiveRows.push(goneRow(c, g))
         continue
@@ -279,7 +294,7 @@ export async function sweepGateActions(
         )
         continue
       }
-      const r = await act(c.sessionId, {}, deps)
+      const r = await tryAct(c)
       report.waitForReset.push(r ? actedRow(c, r) : goneRow(c, g))
       continue
     }
@@ -296,7 +311,7 @@ export async function sweepGateActions(
       )
       continue
     }
-    const r = await act(c.sessionId, {}, deps)
+    const r = await tryAct(c)
     if (!r) {
       report.crashedRows.push(goneRow(c, g))
       continue

@@ -293,6 +293,22 @@ test('acts run SEQUENTIALLY in enumeration order - never interleaved', async () 
   expect(order).toEqual(['start:a1', 'end:a1', 'start:c1', 'end:c1', 'start:a2', 'end:a2'])
 })
 
+test('an act that THROWS becomes a parked row - one bad chat never kills the sweep', async () => {
+  const { deps } = fixture({
+    gates: { boom: finishedGate('archive-candidate'), fine: finishedGate('archive-candidate') },
+    meta: [{ key: 'boom' }, { key: 'fine' }],
+  })
+  const inner = deps.act
+  if (!inner) throw new Error('fixture always sets act')
+  deps.act = async (id, input, d) => {
+    if (id === 'boom') throw new Error('IPC exploded')
+    return inner(id, input, d)
+  }
+  const report = await sweepGateActions({}, deps)
+  expect(report.archiveRows.map((r) => r.action)).toEqual(['parked', 'archived'])
+  expect(report.archiveRows[0]?.why).toContain('the act threw: IPC exploded')
+})
+
 test('session_ids scoping sweeps exactly those, ignoring the fleet index', async () => {
   const { deps, acted } = fixture({
     gates: { only: finishedGate('archive-candidate') },

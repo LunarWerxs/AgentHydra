@@ -467,17 +467,22 @@ export interface LandingUsageRow {
  * {@link underLandingThreshold}: his words - "just make sure that it is underneath our
  * threshold. preferably one of the lowest ones."
  */
+/** Is this account PROVABLY at/over the threshold RIGHT NOW - a FRESH reading with either
+ *  window at/past the line? Unknown or stale is not proof, in either direction: it neither
+ *  licenses opening a closed app (closedLandingEligible) nor migrating work off a home
+ *  (the load-balancing order). One definition for both. */
+export function saturatedNow(u: LandingUsageRow | undefined): boolean {
+  if (!u || u.stale) return false
+  return (u.weeklyPct ?? 0) >= LANDING_OVERFLOW_PCT || (u.sessionPct ?? 0) >= LANDING_OVERFLOW_PCT
+}
+
 export function closedLandingEligible(
   running: Array<{ ref: string }>,
   usage: LandingUsageRow[],
 ): boolean {
   const norm = (p: string) => pathKey(p, true)
   const byRef = new Map(usage.map((u) => [norm(u.ref), u]))
-  return running.every((i) => {
-    const u = byRef.get(norm(i.ref))
-    if (!u || u.stale) return false
-    return (u.weeklyPct ?? 0) >= LANDING_OVERFLOW_PCT || (u.sessionPct ?? 0) >= LANDING_OVERFLOW_PCT
-  })
+  return running.every((i) => saturatedNow(byRef.get(norm(i.ref))))
 }
 
 /** How long the 5-hour session window lasts; a reading older than this is proof that window

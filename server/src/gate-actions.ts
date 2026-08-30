@@ -33,7 +33,12 @@ import { openInstance } from './core/instances'
 import { type FleetInstanceEntry, fleetInstances, planRank } from './fleet-instances'
 import { type FleetUsageEntry, fleetUsage, LANDING_OVERFLOW_PCT } from './fleet-usage'
 import { instanceRefForSession } from './instance-sessions'
-import { closedLandingEligible, pickLandingInstance, underLandingThreshold } from './monitor'
+import {
+  closedLandingEligible,
+  pickLandingInstance,
+  saturatedNow,
+  underLandingThreshold,
+} from './monitor'
 import { pathKey } from './path-key'
 import {
   archiveDesktopChat,
@@ -191,13 +196,28 @@ export async function landSessionInDesktop(opts: {
   /** A better name the caller already holds (e.g. a queue row title); the transcript-derived
    *  name backs it up. Naming law: no real name, no landing. */
   fallbackTitle?: string | null
+  /** Instances the picker must not choose - the load-balancing path excludes the saturated
+   *  home it is migrating AWAY from. */
+  excludeRefs?: string[]
+  /** Refuse a target that is itself provably at/over the threshold (saturatedNow) - moving
+   *  work hot-to-hot buys nothing. */
+  requireUnsaturated?: boolean
   deps?: GateActionDeps
 }): Promise<LandingOutcome> {
   const d = real(opts.deps ?? {})
   // Eligibility first (pure, no side effects), THEN the naming law, THEN any boot: a caller
   // hears about the real blocker - no instance - before being sent off to rename a chat that
   // could not land anyway, and nothing boots or imports until both checks pass.
-  const [instances, usage] = [await d.instances(), d.usage()]
+  const [allInstances, usage] = [await d.instances(), d.usage()]
+  const excluded = new Set((opts.excludeRefs ?? []).map(norm))
+  const instances = allInstances.filter((i) => !excluded.has(norm(i.ref)))
+  const usageRows = usage.map((u) => ({
+    ref: u.ref,
+    weeklyPct: u.weeklyPct,
+    sessionPct: u.sessionPct,
+    stale: u.stale,
+    ageMins: u.ageMins,
+  }))
   const target = pickLandingInstance(
     opts.pinnedRef,
     instances.map((i) => ({
@@ -208,13 +228,7 @@ export async function landSessionInDesktop(opts: {
       // The owner's tier order (2026-08-30): highest plan first, then lowest usage.
       planRank: planRank(i.account?.planLabel ?? null),
     })),
-    usage.map((u) => ({
-      ref: u.ref,
-      weeklyPct: u.weeklyPct,
-      sessionPct: u.sessionPct,
-      stale: u.stale,
-      ageMins: u.ageMins,
-    })),
+    usageRows,
   )
   if (!target)
     return {
@@ -223,6 +237,25 @@ export async function landSessionInDesktop(opts: {
         'no eligible instance: no running signed-in instance to land in, and no closed ' +
         'signed-in instance the overflow rule would allow opening',
     }
+  if (opts.requireUnsaturated && !target.mustOpen) {
+    // Migrating onto a RUNNING account demands POSITIVE proof of headroom: a fresh reading
+    // with both windows under the line. Unknown or stale is not "cool" (review-confirmed:
+    // a missing reading passed as unsaturated and licensed migrating onto an unverified
+    // account). A mustOpen target needs no re-check here - the picker only offers closed
+    // candidates that already passed underLandingThreshold, the owner's proof standard for
+    // opening an app.
+    const tu = usageRows.find((u) => norm(u.ref) === norm(target.ref))
+    const provenCool =
+      !!tu &&
+      !tu.stale &&
+      (tu.weeklyPct ?? 101) < LANDING_OVERFLOW_PCT &&
+      (tu.sessionPct ?? 101) < LANDING_OVERFLOW_PCT
+    if (!provenCool)
+      return {
+        ok: false,
+        reason: `the best available instance is not fresh-proven under ${LANDING_OVERFLOW_PCT}% on both windows - migration demands positive proof of headroom`,
+      }
+  }
   const title = await d.resolveTitle(opts.sessionId, opts.fallbackTitle ?? null)
   if (title === null)
     return {
@@ -401,7 +434,13 @@ async function actOnGateInner(
     return surfaceForMessage(sessionId, answer, gateEcho, d)
   }
 
-  // crashed
+  // crashed - superseded outranks EVERY crash kind (review-confirmed: the usage-limit lane
+  // skipped it and promised a resumeAt for a lineage whose successor owns the work).
+  if (d.superseded(sessionId))
+    return res(
+      'parked',
+      'superseded: this session is done-marked (handed off/migrated) - its successor owns the work',
+    )
   const kind = g.crashed?.kind ?? 'error'
   if (kind === 'usage-limit') {
     const resumeAt = await resetTimeFor(sessionId, d)
@@ -527,6 +566,75 @@ async function surfaceForMessage(
         prompt,
         promptDelivery: 'deliver-natively-via-the-app-message-channel',
       })
+    }
+    // THE LOAD-BALANCING ORDER (owner, standing since the account-capabilities session; wired
+    // 2026-08-30): a chat must not resurface onto a home that is PROVABLY at/over the 85%
+    // threshold right now while a cooler account can take it. LAND FIRST, FLAG SECOND
+    // (review-confirmed: the first cut flagged the source before landing, and every failure
+    // shape - a lost flag write, a thrown landing, a failed restore - either hid the chat
+    // from every sidebar or overclaimed a migration). With this order nothing is ever flagged
+    // until the new home EXISTS; a failed or thrown landing falls through to surfacing at
+    // home with zero cleanup owed; and a source flag that fails to stick is REPORTED, never
+    // papered over. Stale or unknown home usage stays home - no migration on a guess - and so
+    // does a fleet with no fresh-proven-cool taker (hot-to-hot or hot-to-unknown buys nothing).
+    const homeUsage = d.usage().find((u) => norm(u.ref) === norm(inst.ref))
+    const homeRow = homeUsage && {
+      ref: homeUsage.ref,
+      weeklyPct: homeUsage.weeklyPct,
+      sessionPct: homeUsage.sessionPct,
+      stale: homeUsage.stale,
+      ageMins: homeUsage.ageMins,
+    }
+    if (saturatedNow(homeRow || undefined)) {
+      let landed: LandingOutcome
+      try {
+        landed = await landSessionInDesktop({
+          sessionId,
+          pinnedRef: null,
+          deps: dToDeps(d),
+          excludeRefs: [inst.ref],
+          requireUnsaturated: true,
+        })
+      } catch (err) {
+        landed = {
+          ok: false,
+          reason: `the landing threw (${err instanceof Error ? err.message : String(err)})`,
+        }
+      }
+      if (landed.ok) {
+        const flagged = await d.archive(sessionId, true).catch(() => ({ ok: false }) as const)
+        return res(
+          'surfaced',
+          `migrated off its saturated home instance #${inst.num} (at/over ${LANDING_OVERFLOW_PCT}% - the load-balancing order)` +
+            `${flagged.ok ? '' : ' - WARNING: the source entries could not be flagged archived, so the chat may render in both sidebars; re-act once it settles'} - ` +
+            surfacedWhy(landed.instance.num, landed.openedInstance),
+          {
+            instance: landed.instance,
+            openedInstance: landed.openedInstance,
+            prompt,
+            promptDelivery: 'deliver-natively-via-the-app-message-channel',
+          },
+        )
+      }
+      // No fresh-proven-cool taker: nothing was flagged, so simply surface at home - a hot
+      // home that is running still beats a chat nobody can see.
+      const stayed = await d.importSession({ sessionId, instanceDir: inst.dir, title })
+      if (!stayed.ok)
+        return res(
+          'parked',
+          `its home instance #${inst.num} is saturated and no cooler account could take it (${landed.reason}); surfacing at home also failed: ${stayed.reason ?? 'unknown'}`,
+        )
+      return res(
+        'surfaced',
+        `home instance #${inst.num} is at/over ${LANDING_OVERFLOW_PCT}% but no cooler account could take the chat (${landed.reason}) - ` +
+          surfacedWhy(inst.num, false),
+        {
+          instance: { ref: inst.ref, num: inst.num },
+          openedInstance: false,
+          prompt,
+          promptDelivery: 'deliver-natively-via-the-app-message-channel',
+        },
+      )
     }
     const imported = await d.importSession({ sessionId, instanceDir: inst.dir, title })
     if (!imported.ok)

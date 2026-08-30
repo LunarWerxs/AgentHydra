@@ -9,6 +9,50 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **LOAD-BALANCING MIGRATION** (the owner's standing order: "migrate chats between accounts.
+  Properly. for load balancing"). A crashed (or autonomously-answered) chat whose home account
+  is PROVABLY at/over the 85% threshold right now - a fresh reading on either window
+  (saturatedNow, one definition in monitor.ts) - no longer resurfaces onto that wall: it is
+  MIGRATED to the best other account (highest tier, then lowest weekly; the saturated home
+  excluded from the pick; the target must itself be under the threshold - hot-to-hot buys
+  nothing). Mechanics are LAND FIRST, FLAG SECOND (the adversarial review confirmed a
+  flag-first draft could hide the chat from every sidebar on a lost write, a thrown landing,
+  or a failed restore): nothing is flagged until the new home exists, a failed or thrown
+  landing owes zero cleanup and surfaces the chat at home, and a source flag that fails to
+  stick is a WARNING in the result, never papered over. The target needs POSITIVE proof of
+  headroom - a fresh reading under the line on both windows for a running account, the
+  aged-cache standard for a closed one - so an unverified account is never migrated onto;
+  stale or unknown home usage never migrates at all. Superseded now outranks every crash kind
+  including the usage wall (the review caught wait-for-reset promising a resumeAt for a
+  retired lineage), and a sweep act that throws becomes a parked row instead of killing the
+  whole sweep. 10 review findings fixed pre-ship, 1 refuted; 9 new fixtures. Live-proven
+  under real saturation: a crashed subject homed on the genuinely hot account (session 88%,
+  fresh) migrated to the top-tier coolest account with its resume prompt attached, source
+  store left clean - a run that also caught a real bug (the desktopHomeFor label leak, below)
+  the fixtures could not.
+
+### Fixed
+
+- **The recurring "command prompt that says starting"** (owner-reported): every auto-update
+  relaunch routed the successor daemon (a console-subsystem bun process) through WMI's
+  Win32_Process.Create, whose default STARTUPINFO gives a console program a REAL, VISIBLE
+  console window - the detached-spawn primitive's own header had warned about exactly this
+  since 2026-07-12, and the dispatch-runner fixed it for itself on 2026-07-15, but the
+  relaunch path never did. buildDetachedSpawn (kit, lunarwerx-ui 18848e7) gains an opt-in
+  hideWindow (Win32_ProcessStartup ShowWindow=0); the relaunch passes it. Same fix landed in
+  RepoYeti, DevWebUI and ReDesign, whose relaunch paths shared the bug; the running daemon
+  was hand-swapped onto the fixed code (WMI-created, hidden, verified handle 0). The two
+  other console-flashing culprits on the machine (two hourly scheduled tasks launching a
+  .cmd/powershell directly) were rewrapped through a windowless wscript wrapper
+  (~/.claude/tools/run-hidden.vbs), live-verified result 0.
+
+- **desktopHomeFor leaked the instance LABEL instead of the DIR** for every index-resolved
+  chat (the fallback filename walk returned a dir, the index hit returned 'pap3r'-style
+  labels) - live-drill-confirmed: the gate's home-instance matching parked real homed chats
+  as "not a managed instance", and the /api/sessions/:id/automation route passed the label
+  into a dir-expecting stamp. Now resolved through instanceDirForLabel, the one shared
+  label-to-dir mapping.
+
 - **The STANDING sweep** (`GET/POST /api/sweep-loop`, `POST /api/sweep-loop/check`,
   server/src/sweep-loop.ts, the sweep_loop MCP tool): the daemon runs the gate sweep on a
   schedule, so the fleet is gated and the safe deeds happen with no AI awake. Monitor-pattern
