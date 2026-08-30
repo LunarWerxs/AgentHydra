@@ -389,10 +389,16 @@ export function buildImportPlan(
 
 async function defaultInstanceRunning(instanceDir: string): Promise<boolean> {
   const { listInstances } = await import('./core/instances')
-  const needle = instanceDir.replace(/[\\/]+$/, '').toLowerCase()
-  return (await listInstances()).some(
-    (i) => i.isRunning && i.dir.replace(/[\\/]+$/, '').toLowerCase() === needle,
-  )
+  // Slash STYLE must not decide the answer: a forward-slash caller against the process list's
+  // backslash dirs read a RUNNING instance as "not running" (found live 2026-08-29, the same
+  // class of gap the trust-mirroring comment above documents for the CLI's trust keys).
+  const norm = (p: string) =>
+    p
+      .replace(/[\\/]+/g, '/')
+      .replace(/\/+$/, '')
+      .toLowerCase()
+  const needle = norm(instanceDir)
+  return (await listInstances()).some((i) => i.isRunning && norm(i.dir) === needle)
 }
 
 /** The live registry entry (with an alive pid) for this session, or null. Exported for the
