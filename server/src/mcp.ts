@@ -1348,12 +1348,13 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'import_session_to_desktop',
     description:
-      "MUTATES: import a FINISHED session into a desktop instance's app as a visible chat (the app's own claude://resume one-way import, targeted at one instance). ALWAYS pass `title` (the thread's real title) — an import without one lands as 'Untitled'. Refuses a currently-live session (the import rewrites the transcript under an active writer) and a non-running instance (importing would boot it). Finish all headless work FIRST and import LAST; a just-imported chat does not process peer messages until the user first interacts with it.",
+      "MUTATES: import a FINISHED session into a desktop instance's app as a visible chat (the app's own claude://resume one-way import, targeted at one instance). A TITLE DECISION IS REQUIRED (owner rule): pass `title` (a real, non-generic name) or `confirm_title` (the chat's current title restated exactly, after reviewing it — the dossier answers in one query); without one the import is refused. Refuses a currently-live session (the import rewrites the transcript under an active writer) and a non-running instance (importing would boot it). Finish all headless work FIRST and import LAST; a just-imported chat does not process peer messages until the user first interacts with it.",
     inputSchema: S(
       {
         session_id: { type: 'string' },
         instance_ref: { type: 'string' },
         title: { type: 'string' },
+        confirm_title: { type: 'string' },
       },
       ['session_id'],
     ),
@@ -1361,7 +1362,11 @@ export const TOOLS: McpEngineTool[] = [
       api(`/api/sessions/${encodeURIComponent(str(a.session_id))}/import-desktop`, {
         method: 'POST',
         headers: JSON_HEADERS,
-        body: JSON.stringify({ instance_ref: a.instance_ref, title: a.title }),
+        body: JSON.stringify({
+          instance_ref: a.instance_ref,
+          title: a.title,
+          confirm_title: a.confirm_title,
+        }),
       }),
   },
   {

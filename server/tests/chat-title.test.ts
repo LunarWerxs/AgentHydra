@@ -1,0 +1,69 @@
+// server/tests/chat-title.test.ts - Piece 5 pinned: every door of the naming contract.
+import { expect, test } from 'bun:test'
+import { isGenericChatTitle, resolveRequiredTitle } from '../src/chat-title'
+
+test('generic detection: the manufactured non-names, plumbing, and emptiness', () => {
+  for (const t of [
+    'Untitled',
+    'untitled',
+    'General Coding Session',
+    'New chat',
+    'New Session',
+    '',
+    '   ',
+    null,
+    undefined,
+    '[orchestrator] seeded thing',
+  ])
+    expect(isGenericChatTitle(t as string | null | undefined)).toBe(true)
+  for (const t of [
+    'Postal Kumo warmup feature',
+    'Migration drill 0829',
+    'untitled thoughts on naming',
+  ])
+    expect(isGenericChatTitle(t)).toBe(false)
+})
+
+test('a real new title is accepted, trimmed', () => {
+  const r = resolveRequiredTitle({ title: '  Fix the widget pipeline  ', currentTitle: null })
+  expect(r).toEqual({ ok: true, title: 'Fix the widget pipeline' })
+})
+
+test('a generic or overlong new title is refused', () => {
+  expect(resolveRequiredTitle({ title: 'Untitled', currentTitle: null }).ok).toBe(false)
+  expect(resolveRequiredTitle({ title: 'new session', currentTitle: null }).ok).toBe(false)
+  expect(resolveRequiredTitle({ title: '[orchestrator] x', currentTitle: null }).ok).toBe(false)
+  expect(resolveRequiredTitle({ title: 'x'.repeat(201), currentTitle: null }).ok).toBe(false)
+})
+
+test('confirming the existing title works only with an exact restatement', () => {
+  const ok = resolveRequiredTitle({
+    confirmTitle: 'Real work thread',
+    currentTitle: 'Real work thread',
+  })
+  expect(ok).toEqual({ ok: true, title: 'Real work thread' })
+  const wrong = resolveRequiredTitle({
+    confirmTitle: 'Real work',
+    currentTitle: 'Real work thread',
+  })
+  expect(wrong.ok).toBe(false)
+  // The refusal must NOT leak the actual title - review is proven by reading, not by copying
+  // it out of the error.
+  if (!wrong.ok) expect(wrong.error.includes('Real work thread')).toBe(false)
+})
+
+test('confirming a generic current title is refused - a real name is required', () => {
+  const r = resolveRequiredTitle({ confirmTitle: 'Untitled', currentTitle: 'Untitled' })
+  expect(r.ok).toBe(false)
+})
+
+test('no decision at all is refused with the contract spelled out', () => {
+  const r = resolveRequiredTitle({ currentTitle: 'Something' })
+  expect(r.ok).toBe(false)
+  if (!r.ok) expect(r.error).toContain('title decision is required')
+})
+
+test('a supplied title wins over a confirm when both are present', () => {
+  const r = resolveRequiredTitle({ title: 'New name', confirmTitle: 'Old', currentTitle: 'Old' })
+  expect(r).toEqual({ ok: true, title: 'New name' })
+})

@@ -31,6 +31,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
+import { GENERIC_CHAT_TITLE, PLUMBING_CHAT_TITLE } from './chat-title'
 import { resolveClaudeExe } from './config'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
@@ -577,12 +578,10 @@ export function desktopChatArchiveState(
  * writes only when the scanner has something better than an id or a generic label. Metadata
  * writes show in a RUNNING app after its next restart — the standing caveat.
  */
-const GENERIC_TITLE = /^(untitled|general coding session|new (chat|session))$/i
-// The retired v1 orchestrator's seed preamble (archive/orchestrator-v1). Chats it seeded are
-// still on disk with fabricated first messages, and the title scanner derives titles from the
-// first user message, so without this the old plumbing NAMES the chat. Such a title is
-// replaceable, and never writable.
-const PLUMBING_TITLE = /^\[orchestrator\]/i
+// One definition of generic/plumbing, shared with the naming contract (chat-title.ts) so
+// the janitor and the routes cannot drift apart on what counts as a non-name.
+const GENERIC_TITLE = GENERIC_CHAT_TITLE
+const PLUMBING_TITLE = PLUMBING_CHAT_TITLE
 
 /** If `path`'s stored title is empty/generic/plumbing AND the scanner has something real for it,
  *  write the better title in place and report the rename. Returns null when nothing needed

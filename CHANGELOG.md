@@ -7,7 +7,28 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **A RUNNING instance could read as "not running" to the import/archive path when the caller
+  spelled the dir with forward slashes** (defaultInstanceRunning compared dirs without
+  normalizing slash style). Found live during the owner's account-switch drill: temp1 was up
+  for hours while importSessionToDesktop refused with instance-not-running. Both comparison
+  sides now normalize. The drill then completed end to end: a chat created on one account
+  (visible terminal pinned to its credentials, marker reply verified) imported into another
+  account's running desktop app and archived there through the app's own UI.
+
 ### Added
+- **Orchestrator rebuild, piece 5: the naming requirement** (server/src/chat-title.ts;
+  owner directive: a chat must never land with a generic name). import-desktop and migrate
+  now REQUIRE a title decision: `title` (a real, non-generic, non-plumbing name) or
+  `confirm_title` (the current title restated exactly - accepted only when that title is a
+  real name, and a mismatch is refused WITHOUT echoing the actual title, so review is proven
+  by reading, not by copying the error). One definition of generic/plumbing now shared with
+  the title janitor. The MCP import tool speaks the contract. Verified: 7 contract fixture
+  tests plus a live, CONSOLE-FREE drill (owner rule: no console windows without a very good
+  reason) - a fabricated minimal transcript walked all three refusal doors, landed with the
+  required title, disk title verified exact, then archived through the app's own UI.
+
 
 - **Piece 4 hardened by adversarial review (2 confirmed bugs fixed, 1 more taken).** The
   `identityStale` flag was structurally unreachable - resolveAccount's cache guard already

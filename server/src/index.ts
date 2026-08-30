@@ -32,6 +32,7 @@ import {
 } from './auto-update'
 import { markDispatchReady } from './boot-state'
 import { chatDossier } from './chat-dossier'
+import { resolveRequiredTitle } from './chat-title'
 import {
   appEnv,
   CLIPBOARD_DIR,
@@ -2093,10 +2094,20 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
       },
       409,
     )
+  // THE NAMING REQUIREMENT (owner directive, 2026-08-29): a chat must not land with a generic
+  // name. The caller supplies a real title, or restates the current one exactly (proof of a
+  // programmatic review) - chat-title.ts is the one definition of both doors.
+  const imported = await getSession(sessionId, 'claude')
+  const titled = resolveRequiredTitle({
+    title: body.title,
+    confirmTitle: body.confirm_title,
+    currentTitle: imported?.title ?? null,
+  })
+  if (!titled.ok) return c.json({ ok: false, error: titled.error }, 400)
   const result = await importSessionToDesktop({
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
-    title: typeof body.title === 'string' ? body.title : null,
+    title: titled.title,
     force: body.force === true,
   })
   return c.json(result, result.ok ? 200 : 422)
@@ -2184,6 +2195,14 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       : MIGRATION_NOTICE
   const s = await getSession(sessionId, 'claude')
   if (!s) return c.json({ ok: false, error: 'session not found' }, 404)
+  // THE NAMING REQUIREMENT (owner directive, 2026-08-29): a migration is a landing, so the
+  // same contract as import-desktop - a real new title, or the current one restated exactly.
+  const migrateTitle = resolveRequiredTitle({
+    title: body.title,
+    confirmTitle: body.confirm_title,
+    currentTitle: s.title ?? null,
+  })
+  if (!migrateTitle.ok) return c.json({ ok: false, error: migrateTitle.error }, 400)
   // One lineage, one continuation — checked BEFORE the kill below, so a refused migrate never
   // leaves the thread stopped. A done-marked session was already handed off or migrated; moving
   // it again would spin up a second continuation of work its successor owns.
@@ -2246,7 +2265,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   const imported = await importSessionToDesktop({
     sessionId,
     instanceDir: ref.slice('desktop:'.length),
-    title: s.title,
+    title: migrateTitle.title,
     force: body.force === true,
   })
   if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
