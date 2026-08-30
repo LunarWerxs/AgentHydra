@@ -9,6 +9,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **THE LOOP RUNS ITSELF** (proven 2026-08-30): with nothing touched but a staged row, the
+  daemon's own 5-minute timer delivered it and the chat answered - no route call, no human.
+  The sweep-loop status now records what each autonomous pass DID (`lastCourierRun`:
+  delivered count plus every attempt's outcome and reason), because a timer-driven pass that
+  ran and refused every row was previously indistinguishable from one that never ran, and
+  "nothing happened, no error" is exactly the shape of a silently broken loop. Also banked:
+  a changed DEFAULT cannot switch on an instance whose setting was explicitly stored off -
+  the live daemon needed courier_enabled set, not just re-defaulted.
+
 - **THE COURIER LOOP IS CLOSED AND ON** (courier_enabled defaults '1'). One
   `POST /api/couriers/run` now takes a staged prompt all the way to an answer with no human:
   the daemon finds the pending row, resolves its chat, derives the aim proof, types into that

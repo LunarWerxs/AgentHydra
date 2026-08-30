@@ -85,6 +85,16 @@ export interface SweepLoopStatus {
   lastReconcileError: { at: string; message: string } | null
   /** The courier pass failing (tick or always-on housekeeping) - same durable convention. */
   lastCourierError: { at: string; message: string } | null
+  /** What the last AUTONOMOUS courier pass actually did. Without this a timer-driven pass
+   *  that ran and refused every row is indistinguishable from one that never ran - and
+   *  "nothing happened, no error" is exactly the shape of a silently broken loop. */
+  lastCourierRun: {
+    at: string
+    delivered: number
+    attempts: Array<{ sessionId: string; outcome: string; detail: string }>
+    held: number
+    unroutable: number
+  } | null
   /** ISO of the next tick when enabled (never earlier than now; before the first tick it
    *  reads as imminent, not as 1970); null when off. */
   nextDueAt: string | null
@@ -94,6 +104,7 @@ let lastRun: SweepLoopStatus['lastRun'] = null
 let lastError: SweepLoopStatus['lastError'] = null
 let lastReconcileError: { at: string; message: string } | null = null
 let lastCourierError: { at: string; message: string } | null = null
+let lastCourierRun: SweepLoopStatus['lastCourierRun'] = null
 let lastTickAt = 0
 let overlapSkips = 0
 let ticking = false
@@ -113,6 +124,7 @@ export function sweepLoopStatus(): SweepLoopStatus {
     overlapSkips,
     lastReconcileError,
     lastCourierError,
+    lastCourierRun,
     nextDueAt: s.enabled
       ? new Date(Math.max(Date.now(), lastTickAt + s.intervalMin * 60_000)).toISOString()
       : null,
@@ -237,13 +249,14 @@ export async function runSweepLoopOnce(
 }
 
 /**
- * Courier housekeeping (arm / re-arm / disarm from the settled ledger) is ALWAYS-ON, not
- * gated behind sweep_enabled (review-confirmed hole: with the sweep off - its documented
- * default - nothing ever DISARMED a cleared courier task, and the one-shot cron is genuinely
- * annual, so it would re-fire an empty courier every year; nothing re-armed failed fires
- * either). Same rationale as the always-on import-delivery sweep: sweep_enabled governs
- * hours-scale autonomy (archiving, surfacing); this only finishes deliveries an authorized
- * act already staged. courier_enabled is its own gate.
+ * THE COURIER PASS ON A TIMER - this is what makes delivery autonomous rather than
+ * on-demand: every 5 minutes (and immediately after each sweep tick) the daemon delivers any
+ * staged prompt that has cleared its grace window, through the target chat's own composer.
+ *
+ * ALWAYS-ON, not gated behind sweep_enabled, and the distinction is deliberate: sweep_enabled
+ * governs hours-scale autonomy (deciding to archive or surface chats on its own); this only
+ * FINISHES deliveries an authorized act already staged. Same rationale as the always-on
+ * import-delivery sweep. courier_enabled is its own gate.
  */
 const COURIER_HOUSEKEEP_MS = 5 * 60_000
 let lastCourierPassAt = 0
@@ -254,15 +267,29 @@ export async function runCourierHousekeeping(
 ): Promise<boolean> {
   if (getSetting('courier_enabled') !== '1') return false
   // In-flight guard (review-confirmed): the poll's unforced call and the sweep tick's forced
-  // one can land together, and a cycle takes real seconds - two concurrent passes would each
-  // decide from their own snapshot and quit/relaunch the same app twice. (courierPass also
-  // serializes through the act lock, but skipping here is cheaper than queueing a duplicate.)
+  // one can land together, and a delivery pass takes real seconds of UI driving - two
+  // concurrent passes would each read their own snapshot and could type the same prompt
+  // twice. (courierPass also serializes through the act lock, but skipping here is cheaper
+  // than queueing a duplicate.)
   if (courierTicking) return false
   if (!deps.force && Date.now() - lastCourierPassAt < COURIER_HOUSEKEEP_MS) return false
   courierTicking = true
   lastCourierPassAt = Date.now()
   try {
-    await (deps.courier ?? courierPass)({ act: true })
+    const report = await (deps.courier ?? courierPass)({ act: true })
+    lastCourierRun = {
+      at: new Date().toISOString(),
+      delivered: report.attempts.filter((a) => a.outcome === 'delivered').length,
+      // Kept small but COMPLETE per attempt: a refusal's reason is the whole point of
+      // recording this, so it is never trimmed away.
+      attempts: report.attempts.map((a) => ({
+        sessionId: a.sessionId,
+        outcome: a.outcome,
+        detail: a.detail,
+      })),
+      held: report.held.length,
+      unroutable: report.unroutable.length,
+    }
     lastCourierError = null
   } catch (err) {
     lastCourierError = {

@@ -243,3 +243,34 @@ test('courier housekeeping is ALWAYS-ON but throttled - force bypasses the caden
   expect(runs).toBe(2)
   setSetting('courier_enabled', '1')
 })
+
+test('an autonomous courier pass RECORDS what it did - silence is not evidence of success', async () => {
+  const { setSetting } = await import('../src/db')
+  const { runCourierHousekeeping } = await import('../src/sweep-loop')
+  setSetting('courier_enabled', '1')
+  await runCourierHousekeeping({
+    force: true,
+    courier: async () => ({
+      dryRun: false,
+      attempts: [
+        { sessionId: 's-1', title: 't', instanceDir: 'd', outcome: 'delivered', detail: 'ok' },
+        {
+          sessionId: 's-2',
+          title: 't',
+          instanceDir: 'd',
+          outcome: 'wrong-chat',
+          detail: 'REFUSED: conversation mismatch',
+        },
+      ],
+      held: [{ sessionId: 's-3', reason: 'grace' }],
+      unroutable: [],
+      instancesTouched: 1,
+      checkedAt: 'x',
+    }),
+  })
+  const run = sweepLoopStatus().lastCourierRun
+  expect(run?.delivered).toBe(1)
+  expect(run?.held).toBe(1)
+  // A refusal's REASON survives - that is the whole point of recording the pass.
+  expect(run?.attempts.find((a) => a.sessionId === 's-2')?.detail).toContain('REFUSED')
+})
