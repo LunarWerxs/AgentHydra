@@ -257,13 +257,24 @@ export async function landSessionInDesktop(opts: {
  *  single-instance import twice at once for the same chat. Every mutating entry point queues
  *  here; landSessionInDesktop itself stays unlocked because it always runs UNDER this lock. */
 let actLock: Promise<void> = Promise.resolve()
+let actBusyCount = 0
+
+/** Is any deed queued or executing RIGHT NOW? Auto-update's busy check reads this so a
+ *  daemon relaunch never lands mid-UIA-click or mid-instance-boot (review-confirmed). */
+export function isActBusy(): boolean {
+  return actBusyCount > 0
+}
+
 export function withActSerialized<T>(fn: () => Promise<T>): Promise<T> {
+  actBusyCount++
   const run = actLock.then(fn)
   actLock = run.then(
     () => undefined,
     () => undefined,
   )
-  return run
+  return run.finally(() => {
+    actBusyCount--
+  })
 }
 
 /**

@@ -136,6 +136,13 @@ export const NEVER_SYNCED = [
   // rather than quietly narrowed, because taking away sync someone already relies on is its own
   // surprise. Worth an explicit decision rather than a drive-by one.
   'monitor_enabled',
+  // The standing sweep is the same class of unattended-action switch as monitor_enabled - it
+  // archives chats and (if capped up) boots apps on a timer - and its caps/interval describe
+  // THIS machine's fleet. None of it should follow a sign-in to another computer.
+  'sweep_enabled',
+  'sweep_interval_min',
+  'sweep_max_archive',
+  'sweep_max_surface',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

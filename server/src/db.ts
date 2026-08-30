@@ -424,6 +424,12 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   monitor_enabled: '0',
   monitor_max_attempts: '3',
   monitor_resume_buffer_min: '3',
+  // The standing sweep (sweep-loop.ts) — OFF by default; unattended-safe caps (archive
+  // unlimited via the -1 sentinel, surface 0 because an unattended tick has no deliverer).
+  sweep_enabled: '0',
+  sweep_interval_min: '15',
+  sweep_max_archive: '-1',
+  sweep_max_surface: '0',
 }
 
 export function getSetting(key: string): string {

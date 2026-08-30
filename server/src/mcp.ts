@@ -699,6 +699,45 @@ export const TOOLS: McpEngineTool[] = [
       }),
   },
   {
+    name: 'sweep_loop',
+    description:
+      "The STANDING sweep: the daemon's scheduled gate-sweep tick. OFF by default (a person " +
+      'turns it on); unattended-safe caps by default - archive unlimited (click-verified, ' +
+      "reversible), surface 0 (an unattended tick has no one to deliver a surfaced chat's " +
+      'prompt, so it only reports the crashed/needs-judgment lanes for a caller to work ' +
+      "through chat_sweep/chat_act). With no arguments: current settings, the last run's " +
+      'full report, and when the next tick is due. Pass fields to change settings; pass ' +
+      'check_now:true to run one tick immediately (caps still apply).',
+    inputSchema: S({
+      enabled: { type: 'boolean', description: 'Turn the standing loop on or off.' },
+      interval_min: { type: 'number', description: 'Minutes between ticks (5 to 1440).' },
+      max_archive: { type: 'number', description: 'Archive cap per tick; -1 = unlimited.' },
+      max_surface: { type: 'number', description: 'Surface cap per tick; default 0 (see above).' },
+      check_now: { type: 'boolean', description: 'Run one tick immediately.' },
+    }),
+    run: async (a) => {
+      if (
+        a.enabled !== undefined ||
+        a.interval_min !== undefined ||
+        a.max_archive !== undefined ||
+        a.max_surface !== undefined
+      )
+        await api('/api/sweep-loop', {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            enabled: a.enabled,
+            intervalMin: a.interval_min,
+            maxArchive: a.max_archive,
+            maxSurface: a.max_surface,
+          }),
+        })
+      if (a.check_now === true)
+        return api('/api/sweep-loop/check', { method: 'POST', headers: JSON_HEADERS })
+      return api('/api/sweep-loop')
+    },
+  },
+  {
     name: 'chat_dossier',
     description:
       'ONE query, everything the system knows about a chat: which desktop instance holds it, its ' +

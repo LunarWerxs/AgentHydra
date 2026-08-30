@@ -86,6 +86,9 @@ export interface SweepReport {
   /** Candidates the deadline cut off - listed, never silently dropped. */
   unswept: Array<{ sessionId: string; title: string | null; instance: string | null }>
   deadlineHit: boolean
+  /** Set by a BOUNDED copy of this report (the sweep loop's status keeps at most 100 rows per
+   *  lane) - flagged so a cut can never read as complete coverage. */
+  rowsTruncated?: boolean
 }
 
 export interface SweepOpts {

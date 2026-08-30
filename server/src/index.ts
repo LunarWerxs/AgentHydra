@@ -137,7 +137,7 @@ import { fleetStatus } from './fleet'
 import { fleetGit } from './fleet-git'
 import { fleetInstances } from './fleet-instances'
 import { fleetUsage } from './fleet-usage'
-import { actOnGate, parseActInput } from './gate-actions'
+import { actOnGate, isActBusy, parseActInput } from './gate-actions'
 import { parseSweepInput, sweepGateActions } from './gate-sweep'
 import { cleanupStaleUpdateArtifacts } from './github-updater'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
@@ -206,6 +206,14 @@ import {
   warmSessionScanCache,
 } from './sessions'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
+import {
+  isSweepTicking,
+  parseSweepLoopPatch,
+  runSweepLoopOnce,
+  setSweepLoopSettings,
+  startSweepLoop,
+  sweepLoopStatus,
+} from './sweep-loop'
 import { findTranscriptAsync, listTranscriptFiles, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
 import {
@@ -807,6 +815,22 @@ app.post('/api/chats/sweep', async (c) => {
   const parsed = parseSweepInput(await jsonBody(c))
   if (!parsed.ok) return c.json({ error: parsed.error }, 400)
   return c.json(await sweepGateActions(parsed.opts))
+})
+// --- the standing sweep loop (rebuild backlog) - see server/src/sweep-loop.ts ---------------
+// OFF by default; unattended-safe caps (archive unlimited, surface 0 - no deliverer, no
+// dormant parking). The last report is served verbatim so the loop's work is inspectable.
+app.get('/api/sweep-loop', (c) => c.json(sweepLoopStatus()))
+app.post('/api/sweep-loop', async (c) => {
+  const parsed = parseSweepLoopPatch(await jsonBody(c))
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400)
+  setSweepLoopSettings(parsed.patch)
+  return c.json(sweepLoopStatus())
+})
+app.post('/api/sweep-loop/check', async (c) => {
+  // Run one tick NOW regardless of the enabled switch (the "check now" pattern the monitor
+  // has); the tick still applies the configured caps and the act lock.
+  const report = await runSweepLoopOnce({ force: true })
+  return c.json({ ran: report !== null, ...sweepLoopStatus() })
 })
 app.get('/api/chats/dossier', (c) => {
   const q = c.req.query('q') ?? ''
@@ -2606,7 +2630,9 @@ function relaunchDaemon(): boolean {
 loadAutoUpdateSettings()
 setAutoUpdateHooks({
   // Don't auto-update (which relaunches the daemon) while dispatch runs are in flight.
-  hasActiveRuns: () => activeCount() > 0,
+  // Busy means MORE than dispatch runs (review-confirmed): a standing-sweep tick or any act
+  // (UIA archive click, instance boot+import) mid-flight must not be killed by a relaunch.
+  hasActiveRuns: () => activeCount() > 0 || isSweepTicking() || isActBusy(),
   relaunch: relaunchDaemon,
 })
 
@@ -2644,6 +2670,7 @@ startImportSweep()
 // sweep above, not here), gates each on the weekly cap via checkUsage, and schedules a
 // `claude --resume` for just after the 5-hour reset.
 startMonitor()
+startSweepLoop()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

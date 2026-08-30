@@ -9,6 +9,25 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The STANDING sweep** (`GET/POST /api/sweep-loop`, `POST /api/sweep-loop/check`,
+  server/src/sweep-loop.ts, the sweep_loop MCP tool): the daemon runs the gate sweep on a
+  schedule, so the fleet is gated and the safe deeds happen with no AI awake. Monitor-pattern
+  rails: OFF by default (flip `enabled` when ready); unattended-safe caps by default - archive
+  unlimited (click-verified, reversible) but surface 0, because an unattended tick has no one
+  to deliver a surfaced chat's prompt; the last run's full report is kept and served (bounded
+  to 100 rows per lane, flagged when cut) beside lastError and an overlap-skip counter, so a
+  failing or blocked loop can never impersonate a healthy idle one. Ticks stamp their own
+  start (a slot blocked by an in-flight tick retries next poll instead of being silently
+  consumed - review-confirmed), a manual check-now resets the schedule, and settings live in
+  DEFAULT_SETTINGS + the machine-local (never-synced) list beside the monitor's switch.
+  Auto-update's busy check now also refuses to relaunch the daemon while a sweep tick or ANY
+  act (UIA click, instance boot/import) is in flight. Review: 11 confirmed findings fixed
+  pre-ship (schedule-slot swallowing, the 1970 nextDueAt, the relaunch-mid-click hole, strict
+  route validation replacing silent clamps, the absent-setting-reads-as-zero default bug
+  caught live) - plus the repo's own settings-sync guard caught the four new keys
+  unclassified. Also retired the leftover v1 'Orchestrate' loop chat found crashed in 5claude
+  (archived by id, done-marked - waking it would have revived the retired v1 wake loop).
+
 - **The SWEEP** (`POST /api/chats/sweep` + server/src/gate-sweep.ts + the chat_sweep MCP
   tool): gate every visible desktop chat - or exactly the given ids - and act on the verdicts
   in one call, sequentially, within caps (surface 3 by default, archive unlimited; 0s make a

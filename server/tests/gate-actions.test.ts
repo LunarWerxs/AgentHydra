@@ -8,7 +8,13 @@
 import { expect, test } from 'bun:test'
 import type { ChatGate, CrashKind, FinishedLane } from '../src/chat-gate'
 import { planRank } from '../src/fleet-instances'
-import { actOnGate, type GateActionDeps, parseActInput, resumeNotice } from '../src/gate-actions'
+import {
+  actOnGate,
+  type GateActionDeps,
+  isActBusy,
+  parseActInput,
+  resumeNotice,
+} from '../src/gate-actions'
 import { closedLandingEligible, pickLandingInstance, underLandingThreshold } from '../src/monitor'
 
 const gateOf = (over: Partial<ChatGate>): ChatGate => ({
@@ -632,6 +638,23 @@ test('a session that turns LIVE mid-act skips the UI click - a person may be usi
   expect(r?.archived?.durable).toBe(false)
   expect(r?.why).toContain('became LIVE')
   expect(events).not.toContain('uiarchive:C:/i1')
+})
+
+test('isActBusy is true while any deed is queued or running - the relaunch guard reads it', async () => {
+  const { deps } = fixture({
+    gate: finishedGate('archive-candidate'),
+    archiveHits: [{ profile: 'C:/i2', wasRunning: false, changed: true }],
+  })
+  const inner = deps.archive
+  if (!inner) throw new Error('fixture always sets archive')
+  let busyDuring = false
+  deps.archive = async (sid, archived) => {
+    busyDuring = isActBusy()
+    return inner(sid, archived)
+  }
+  await actOnGate('sid', {}, deps)
+  expect(busyDuring).toBe(true)
+  expect(isActBusy()).toBe(false)
 })
 
 test('acts are serialized process-wide - two concurrent calls never interleave', async () => {
