@@ -151,6 +151,13 @@ export const NEVER_SYNCED = [
   // unattended-action class, same reason it stays home.
   'courier_enabled',
   'sweep_max_surface',
+  // The waiting-lane caller OPENS A TERMINAL WINDOW on this machine when the sweep finds chats
+  // waiting on a judgment. That is the most local act in the file - it belongs to whoever is
+  // sitting at this computer, and its cooldown stamp is a fact about this machine's clock, not
+  // a preference about a person.
+  'sweep_judge_enabled',
+  'sweep_judge_cooldown_min',
+  'sweep_judge_last_at',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

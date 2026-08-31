@@ -797,16 +797,28 @@ export const TOOLS: McpEngineTool[] = [
     description:
       "The STANDING sweep: the daemon's scheduled gate-sweep tick. OFF by default (a person " +
       'turns it on); unattended-safe caps by default - archive unlimited (click-verified, ' +
-      "reversible), surface 0 (an unattended tick has no one to deliver a surfaced chat's " +
-      'prompt, so it only reports the crashed/needs-judgment lanes for a caller to work ' +
-      "through chat_sweep/chat_act). With no arguments: current settings, the last run's " +
-      'full report, and when the next tick is due. Pass fields to change settings; pass ' +
+      'reversible), surface 0. EVERY GATED CHAT IS RUNNING, WAITING, OR DONE: the tick ' +
+      "finishes 'done' itself, leaves 'running' alone, and for WAITING chats - the ones " +
+      'needing a judgment no daemon can make - it opens ONE orchestrator session to work ' +
+      'them (judge_enabled, held apart by judge_cooldown_min). Before that existed those ' +
+      'rows were merely reported and piled up until a person typed /orchestrate. With no ' +
+      "arguments: current settings, the last run's full report, what the last tick did about " +
+      'waiting chats, and when the next tick is due. Pass fields to change settings; pass ' +
       'check_now:true to run one tick immediately (caps still apply).',
     inputSchema: S({
       enabled: { type: 'boolean', description: 'Turn the standing loop on or off.' },
       interval_min: { type: 'number', description: 'Minutes between ticks (5 to 1440).' },
       max_archive: { type: 'number', description: 'Archive cap per tick; -1 = unlimited.' },
       max_surface: { type: 'number', description: 'Surface cap per tick; default 0 (see above).' },
+      judge_enabled: {
+        type: 'boolean',
+        description:
+          'Open an orchestrator for WAITING chats when a tick finds them. On by default.',
+      },
+      judge_cooldown_min: {
+        type: 'number',
+        description: 'Minimum minutes between orchestrator launches (5 to 1440; default 60).',
+      },
       check_now: { type: 'boolean', description: 'Run one tick immediately.' },
     }),
     run: async (a) => {
@@ -814,7 +826,9 @@ export const TOOLS: McpEngineTool[] = [
         a.enabled !== undefined ||
         a.interval_min !== undefined ||
         a.max_archive !== undefined ||
-        a.max_surface !== undefined
+        a.max_surface !== undefined ||
+        a.judge_enabled !== undefined ||
+        a.judge_cooldown_min !== undefined
       )
         await api('/api/sweep-loop', {
           method: 'POST',
@@ -824,6 +838,8 @@ export const TOOLS: McpEngineTool[] = [
             intervalMin: a.interval_min,
             maxArchive: a.max_archive,
             maxSurface: a.max_surface,
+            judgeEnabled: a.judge_enabled,
+            judgeCooldownMin: a.judge_cooldown_min,
           }),
         })
       if (a.check_now === true)

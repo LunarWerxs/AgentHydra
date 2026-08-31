@@ -7,14 +7,21 @@
 //   - UNATTENDED-SAFE CAPS by default: archive UNLIMITED (the owner's stated wish,
 //     reversible, click-verified) but surface 0 - a surfaced chat is DORMANT until someone
 //     delivers its prompt, and an unattended tick has no deliverer, so surfacing would park
-//     invisible work. The AI-residue lanes (crashed beyond report, needs-input judgments)
-//     are left in the last report for a courier/caller to work through chat_sweep/chat_act.
+//     invisible work.
+//   - THE WAITING LANE HAS A CALLER. Every gated chat is running, waiting, or done; the tick
+//     finishes 'done' and leaves 'running' alone, but a WAITING chat needs one judgment -
+//     autonomous or human - that no daemon can make. This file used to leave those rows in
+//     the report "for a courier/caller to work through", and no such caller existed unless a
+//     person typed /orchestrate, so waiting chats piled up while the loop reported healthy.
+//     A tick that finds them now opens ONE orchestrator to work them (judgeEnabled, with a
+//     cooldown so a stuck or refused launch cannot open a window every tick).
 //   - One tick at a time (re-entrancy guard), and every act inside the sweep already holds
 //     the process-wide act lock, so a tick can never interleave with a manual sweep or the
 //     monitor's landing.
 //   - The last report is kept and served verbatim - a loop whose work cannot be inspected
 //     is v1's mistake with a timer attached.
 
+import { join } from 'node:path'
 import { courierPass } from './courier'
 import { getSetting, setSetting } from './db'
 import { pruneDeliveries, reconcileDeliveries } from './deliveries'
@@ -33,6 +40,19 @@ export interface SweepLoopSettings {
   /** -1 = unlimited (stored sentinel; the sweep gets Infinity). */
   maxArchive: number
   maxSurface: number
+  /** THE WAITING LANE'S CALLER. A gated chat is running, waiting, or done. The sweep finishes
+   *  'done' on its own and leaves 'running' alone, but a WAITING chat needs one judgment -
+   *  autonomous or human - that only an AI can make. This file used to leave those rows in the
+   *  report "for a caller to work through", and no such caller existed unless a person typed
+   *  /orchestrate, so waiting chats accumulated indefinitely while the loop reported healthy.
+   *  With this on, a tick that finds waiting chats opens ONE visible orchestrator session to
+   *  work them. Switchable for the same reason the courier is: a mechanism that opens windows
+   *  on the owner's machine must be visible and off-able, not a hidden behaviour. */
+  judgeEnabled: boolean
+  /** Minimum minutes between orchestrator launches. The bound that makes this safe: a judge
+   *  that hangs or fails cannot spawn another window every tick, because the waiting rows it
+   *  failed to clear are still there on the next one. */
+  judgeCooldownMin: number
 }
 
 function num(key: string, fallback: number, min: number, max: number): number {
@@ -46,6 +66,17 @@ function num(key: string, fallback: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.floor(n)))
 }
 
+/** Same "'' is ABSENT, not a value" discipline as num(), for a flag whose registered default
+ *  is ON. Reading a missing row as `=== '1'` would make it OFF, so deleting or failing to
+ *  migrate one row would silently switch the waiting-lane caller off and the loop would go
+ *  right back to reporting waiting chats at nobody - the exact failure this feature exists to
+ *  end, reinstated by a falsy default. */
+function bool(key: string, fallback: boolean): boolean {
+  const raw = getSetting(key).trim()
+  if (raw === '') return fallback
+  return raw === '1'
+}
+
 export function getSweepLoopSettings(): SweepLoopSettings {
   return {
     enabled: getSetting('sweep_enabled') === '1',
@@ -53,6 +84,8 @@ export function getSweepLoopSettings(): SweepLoopSettings {
     intervalMin: num('sweep_interval_min', 15, 5, 24 * 60),
     maxArchive: num('sweep_max_archive', -1, -1, 10_000),
     maxSurface: num('sweep_max_surface', 0, 0, 100),
+    judgeEnabled: bool('sweep_judge_enabled', true),
+    judgeCooldownMin: num('sweep_judge_cooldown_min', 60, 5, 24 * 60),
   }
 }
 
@@ -60,6 +93,13 @@ export function setSweepLoopSettings(patch: Partial<SweepLoopSettings>): SweepLo
   if (typeof patch.enabled === 'boolean') setSetting('sweep_enabled', patch.enabled ? '1' : '0')
   if (typeof patch.courierEnabled === 'boolean')
     setSetting('courier_enabled', patch.courierEnabled ? '1' : '0')
+  if (typeof patch.judgeEnabled === 'boolean')
+    setSetting('sweep_judge_enabled', patch.judgeEnabled ? '1' : '0')
+  if (typeof patch.judgeCooldownMin === 'number' && Number.isFinite(patch.judgeCooldownMin))
+    setSetting(
+      'sweep_judge_cooldown_min',
+      String(Math.min(24 * 60, Math.max(5, Math.floor(patch.judgeCooldownMin)))),
+    )
   if (typeof patch.intervalMin === 'number' && Number.isFinite(patch.intervalMin))
     setSetting(
       'sweep_interval_min',
@@ -107,6 +147,11 @@ export interface SweepLoopStatus {
   /** ISO of the next tick when enabled (never earlier than now; before the first tick it
    *  reads as imminent, not as 1970); null when off. */
   nextDueAt: string | null
+  /** What the last tick did about WAITING chats. Recorded even when it declined to launch,
+   *  and only when something was actually waiting - a loop that quietly stops working the
+   *  waiting lane must not look identical to a fleet with nothing waiting, which is exactly
+   *  how the missing caller went unnoticed in the first place. */
+  lastJudgeRun: { at: string; waiting: number; launched: boolean; why: string } | null
 }
 
 let lastRun: SweepLoopStatus['lastRun'] = null
@@ -137,6 +182,7 @@ export function sweepLoopStatus(): SweepLoopStatus {
     nextDueAt: s.enabled
       ? new Date(Math.max(Date.now(), lastTickAt + s.intervalMin * 60_000)).toISOString()
       : null,
+    lastJudgeRun,
   }
 }
 
@@ -189,10 +235,16 @@ export function parseSweepLoopPatch(
       return { ok: false, error: 'courierEnabled must be a boolean' }
     patch.courierEnabled = body.courierEnabled
   }
+  if (body.judgeEnabled !== undefined) {
+    if (typeof body.judgeEnabled !== 'boolean')
+      return { ok: false, error: 'judgeEnabled must be a boolean' }
+    patch.judgeEnabled = body.judgeEnabled
+  }
   const fields = [
     ['intervalMin', 5, 24 * 60],
     ['maxArchive', -1, 10_000],
     ['maxSurface', 0, 100],
+    ['judgeCooldownMin', 5, 24 * 60],
   ] as const
   for (const [k, min, max] of fields) {
     const v = body[k]
@@ -204,12 +256,58 @@ export function parseSweepLoopPatch(
   return { ok: true, patch }
 }
 
+/**
+ * Should this tick open an orchestrator for the WAITING lane, and if not, why not?
+ *
+ * Pure, so the one behaviour in this file that opens a window on the owner's machine can be
+ * pinned by tests without opening any. `waiting` is the count of rows that need the AI
+ * judgment: needs-input reviews, plus crashed chats the tick declined to surface because
+ * maxSurface capped it - both are chats sitting still that automation alone cannot move.
+ */
+export function judgeDecision(input: {
+  enabled: boolean
+  judgeEnabled: boolean
+  waiting: number
+  lastJudgeAt: number
+  cooldownMin: number
+  now: number
+}): { launch: boolean; why: string } {
+  if (!input.enabled) return { launch: false, why: 'the standing sweep is off' }
+  if (!input.judgeEnabled) return { launch: false, why: 'the waiting-lane caller is switched off' }
+  if (input.waiting <= 0) return { launch: false, why: 'no chats are waiting' }
+  const readyAt = input.lastJudgeAt + input.cooldownMin * 60_000
+  if (input.lastJudgeAt > 0 && input.now < readyAt)
+    return {
+      launch: false,
+      // Not an error: the previous orchestrator may still be working these very rows. Saying
+      // so beats silence, which is indistinguishable from the caller being broken again.
+      why: `an orchestrator was opened ${Math.round((input.now - input.lastJudgeAt) / 60_000)}m ago; the next may open at ${new Date(readyAt).toISOString()}`,
+    }
+  return { launch: true, why: `${input.waiting} chat(s) waiting on a judgment` }
+}
+
+/** What a launched orchestrator is told to do. Kept here, and kept SHORT: the /orchestrate
+ *  command itself carries the procedure, so duplicating it would create a second copy to
+ *  drift. This only says which pass to run and why it was opened. */
+export function judgePrompt(waiting: number): string {
+  return (
+    '/orchestrate The standing sweep opened this session because ' +
+    `${waiting} chat(s) across the open accounts are WAITING on a judgment that only an AI ` +
+    'can make - they are neither running nor done, and the daemon cannot decide autonomous ' +
+    'vs human on its own. Work every waiting chat, not just the first: gate, judge each one ' +
+    '(the owner prefers autonomous whenever the answer is determinable), act, and deliver. ' +
+    'Report what you changed and name any chat you left alone and why.'
+  )
+}
+
 export async function runSweepLoopOnce(
   deps: SweepDeps & {
     sweep?: typeof sweepGateActions
     force?: boolean
     reconcile?: typeof reconcileDeliveries
     courier?: typeof courierPass
+    /** Seam for tests; the default opens a real terminal orchestrator. */
+    launchJudge?: (prompt: string) => Promise<{ ok: boolean; reason?: string }>
   } = {},
 ): Promise<SweepReport | null> {
   const s = getSweepLoopSettings()
@@ -246,6 +344,9 @@ export async function runSweepLoopOnce(
     }
     // Arm/disarm couriers from the settled ledger, freshly after the acts above.
     await runCourierHousekeeping({ courier: deps.courier, force: true })
+    // THE WAITING LANE, worked rather than merely reported. Runs AFTER the courier so a chat
+    // whose prompt just got delivered is no longer waiting by the time we count.
+    await runJudgePass(report, s, deps.launchJudge)
     lastRun = {
       at: new Date(started).toISOString(),
       tookMs: Date.now() - started,
@@ -261,6 +362,85 @@ export async function runSweepLoopOnce(
     return null
   } finally {
     ticking = false
+  }
+}
+
+let lastJudgeRun: SweepLoopStatus['lastJudgeRun'] = null
+
+/** THE COOLDOWN IS PERSISTED, NOT HELD IN MEMORY. Module state resets when the daemon
+ *  restarts, and the daemon restarts on every auto-update - so an in-memory stamp would let a
+ *  restart open another orchestrator immediately, which is precisely the window storm the
+ *  cooldown exists to prevent. A settings row survives it. */
+function judgeStamp(): number {
+  const raw = getSetting('sweep_judge_last_at').trim()
+  const n = Number(raw)
+  return raw === '' || !Number.isFinite(n) ? 0 : n
+}
+
+/**
+ * Open ONE orchestrator for the waiting lane, when this tick's state says to.
+ *
+ * The launch runs in the app's own directory (always trusted, so the terminal cannot stall on
+ * a folder-trust prompt with nobody there to answer) and in bypassPermissions, because an
+ * unattended window that stops on the first shell approval is a deadlock, not a safeguard -
+ * the same reasoning the import stamp already applies to surfaced chats.
+ *
+ * A REFUSED OR THROWN LAUNCH STILL STAMPS THE COOLDOWN. Retrying a broken launch every tick
+ * would open windows in a loop, which is the one failure mode that would make this worse than
+ * the silence it replaces. The reason is recorded instead, and the next tick sees the rows are
+ * still waiting.
+ */
+async function runJudgePass(
+  report: SweepReport,
+  s: SweepLoopSettings,
+  launch?: (prompt: string) => Promise<{ ok: boolean; reason?: string }>,
+): Promise<void> {
+  const waiting = report.needsJudgment.length + report.crashedRows.length
+  const decision = judgeDecision({
+    enabled: s.enabled,
+    judgeEnabled: s.judgeEnabled,
+    waiting,
+    lastJudgeAt: judgeStamp(),
+    cooldownMin: s.judgeCooldownMin,
+    now: Date.now(),
+  })
+  if (!decision.launch) {
+    // Only worth recording when there was something to do; "no chats are waiting" every tick
+    // is noise that would bury the one line that matters.
+    if (waiting > 0)
+      lastJudgeRun = { at: new Date().toISOString(), waiting, launched: false, why: decision.why }
+    return
+  }
+  setSetting('sweep_judge_last_at', String(Date.now()))
+  const prompt = judgePrompt(waiting)
+  try {
+    const run =
+      launch ??
+      (async (p: string) => {
+        const { launchTerminalSession } = await import('./session-launch')
+        return launchTerminalSession({
+          cwd: join(import.meta.dir, '..', '..'),
+          prompt: p,
+          permissionMode: 'bypassPermissions',
+        })
+      })
+    const res = await run(prompt)
+    lastJudgeRun = {
+      at: new Date().toISOString(),
+      waiting,
+      launched: res.ok,
+      why: res.ok ? decision.why : `launch refused: ${res.reason ?? 'unknown'}`,
+    }
+    if (!res.ok) console.error('[agenthydra] waiting-lane orchestrator refused:', res.reason)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    lastJudgeRun = {
+      at: new Date().toISOString(),
+      waiting,
+      launched: false,
+      why: `threw: ${message}`,
+    }
+    console.error('[agenthydra] waiting-lane orchestrator error:', err)
   }
 }
 

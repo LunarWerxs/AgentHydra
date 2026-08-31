@@ -6,6 +6,7 @@ import { db } from '../src/db'
 import type { SweepReport } from '../src/gate-sweep'
 import {
   getSweepLoopSettings,
+  judgeDecision,
   parseSweepLoopPatch,
   runSweepLoopOnce,
   setSweepLoopSettings,
@@ -38,6 +39,10 @@ test('ABSENT settings read as the true defaults - never as zero (caught live)', 
     intervalMin: 15,
     maxArchive: -1,
     maxSurface: 0,
+    // ON when absent, matching its registered default: a deleted row must not silently stop
+    // the waiting lane from being worked.
+    judgeEnabled: true,
+    judgeCooldownMin: 60,
   })
 })
 
@@ -312,4 +317,103 @@ test('the courier switch is visible in status and settable through the same rout
 
 test('a non-boolean courierEnabled is refused, never coerced', () => {
   expect(parseSweepLoopPatch({ courierEnabled: 'yes' }).ok).toBe(false)
+})
+
+// THE WAITING LANE. Every gated chat is running, waiting, or done. 'done' the tick finishes
+// itself and 'running' it leaves alone, but a WAITING chat needs one judgment no daemon can
+// make - and this file used to leave those rows in the report for a caller that did not
+// exist, so they accumulated forever while the loop reported healthy.
+test('judgeDecision opens an orchestrator only when chats are actually waiting', () => {
+  const base = { enabled: true, judgeEnabled: true, cooldownMin: 60, lastJudgeAt: 0, now: 1_000 }
+  expect(judgeDecision({ ...base, waiting: 2 }).launch).toBe(true)
+  expect(judgeDecision({ ...base, waiting: 0 }).launch).toBe(false)
+  expect(judgeDecision({ ...base, waiting: 2, enabled: false }).launch).toBe(false)
+  expect(judgeDecision({ ...base, waiting: 2, judgeEnabled: false }).launch).toBe(false)
+})
+
+test('judgeDecision holds the cooldown, so a stuck judge cannot open a window every tick', () => {
+  const at = 10 * 60_000
+  const base = { enabled: true, judgeEnabled: true, waiting: 3, cooldownMin: 60, lastJudgeAt: at }
+  const early = judgeDecision({ ...base, now: at + 59 * 60_000 })
+  expect(early.launch).toBe(false)
+  expect(early.why).toContain('59m ago')
+  expect(judgeDecision({ ...base, now: at + 61 * 60_000 }).launch).toBe(true)
+})
+
+test('a tick with waiting chats launches one orchestrator and records what it did', async () => {
+  db.query("delete from settings where key like 'sweep_%'").run()
+  setSweepLoopSettings({ enabled: true, judgeCooldownMin: 60 })
+  const report = emptyReport()
+  report.needsJudgment = [
+    {
+      sessionId: 's-waiting',
+      title: 'A chat waiting on a judgment',
+      instance: 'temp2',
+      doneClaim: 'no',
+      endsWithQuestion: true,
+      lastAssistantText: 'should I keep going?',
+    },
+  ]
+  const prompts: string[] = []
+  await runSweepLoopOnce({
+    force: true,
+    sweep: async () => report,
+    courier: async () => ({
+      dryRun: false,
+      attempts: [],
+      held: [],
+      unroutable: [],
+      deliverable: 0,
+      notAttempted: 0,
+      capHit: false,
+      instancesTouched: 0,
+      checkedAt: 'x',
+    }),
+    reconcile: () => {},
+    launchJudge: async (p) => {
+      prompts.push(p)
+      return { ok: true }
+    },
+  })
+  expect(prompts.length).toBe(1)
+  expect(prompts[0]).toContain('/orchestrate')
+  expect(prompts[0]).toContain('WAITING')
+  const st = sweepLoopStatus()
+  expect(st.lastJudgeRun?.launched).toBe(true)
+  expect(st.lastJudgeRun?.waiting).toBe(1)
+})
+
+test('a refused launch is recorded, not retried into a window storm', async () => {
+  db.query("delete from settings where key like 'sweep_%'").run()
+  setSweepLoopSettings({ enabled: true, judgeCooldownMin: 60 })
+  const report = emptyReport()
+  report.crashedRows = [
+    {
+      sessionId: 's-crashed',
+      title: 'A crashed chat nobody surfaced',
+      instance: 'temp2',
+      state: 'crashed',
+      crashedKind: 'mid-turn',
+      lane: 'crashed',
+      action: 'report-only',
+      why: 'surface cap',
+    },
+  ]
+  let calls = 0
+  const run = async () =>
+    runSweepLoopOnce({
+      force: true,
+      sweep: async () => report,
+      reconcile: () => {},
+      launchJudge: async () => {
+        calls++
+        return { ok: false, reason: 'no terminal' }
+      },
+    })
+  await run()
+  await run()
+  // The second tick still sees a waiting chat, and still must not open a second window.
+  expect(calls).toBe(1)
+  const st = sweepLoopStatus()
+  expect(st.lastJudgeRun?.launched).toBe(false)
 })

@@ -488,6 +488,19 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   sweep_interval_min: '15',
   sweep_max_archive: '-1',
   sweep_max_surface: '0',
+  // THE WAITING LANE'S CALLER (sweep-loop.ts). A gated chat is running, waiting, or done. The
+  // sweep finishes 'done' by itself and leaves 'running' alone, but a WAITING chat needs one
+  // judgment - autonomous or human - that only an AI can make, and the loop's design left
+  // those rows "for a caller to work through" with no caller in existence. So they piled up
+  // until a person happened to type /orchestrate, which is the whole complaint: the fleet was
+  // gated but not orchestrated. When the loop is on and a tick finds waiting chats, it opens
+  // ONE visible orchestrator session to work them. Gated behind sweep_enabled, capped by a
+  // cooldown so a stuck judge cannot spawn a window every tick.
+  sweep_judge_enabled: '1',
+  sweep_judge_cooldown_min: '60',
+  // Persisted so the cooldown survives a daemon restart (auto-update restarts it): an
+  // in-memory stamp would let every restart open another orchestrator immediately.
+  sweep_judge_last_at: '0',
   // The courier (courier.ts): delivers staged prompts by driving the target chat's own
   // composer in the running app. ON (2026-08-30) now that the transport is proven end to end
   // on the real fleet - a dormant chat answered with zero clicks and no human - and every
