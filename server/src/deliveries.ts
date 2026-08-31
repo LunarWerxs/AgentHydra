@@ -73,6 +73,25 @@ export function stageDelivery(opts: {
   nowMs?: number
 }): void {
   const now = opts.nowMs ?? Date.now()
+  // ⛔ THE WAIT CLOCK BELONGS TO THE SESSION, NOT THE ROW, and getting that wrong was a
+  // LIVELOCK. The courier holds a freshly staged row for a grace window so the AI that surfaced
+  // it can deliver first. Re-staging used to mint a row with a fresh staged_at, which restarts
+  // that window - so once the sweep interval (2 minutes) dropped below the grace (5 minutes),
+  // every re-surface reset the clock and the courier could NEVER deliver. Measured on the live
+  // fleet 2026-08-31 by a peer: three chats, each re-staged under a new row id ~330s apart,
+  // all three refused on every pass with "staged less than 5min ago" - a reason that could not
+  // stop being true. The ledger read perfectly healthy throughout: three pending rows, nothing
+  // unroutable, capHit false, and delivery structurally impossible.
+  //
+  // So the new row INHERITS the oldest open row's staged_at. The grace then measures what it
+  // was always meant to measure - how long this chat has been waiting for someone to deliver -
+  // instead of how recently the machinery last thought about it.
+  const oldest = db
+    .query<{ staged_at: number }, [string]>(
+      "select min(staged_at) as staged_at from deliveries where session_id = ? and state in ('pending', 'deaf')",
+    )
+    .get(opts.sessionId)
+  const waitingSince = oldest?.staged_at ?? now
   // Supersede EVERY still-open row for this session, not just 'pending': deaf is equally
   // deliverable (deliverableDeliveries), so retiring only pending left a session with TWO
   // live rows - the courier would then deliver the same chat twice (review-confirmed).
@@ -81,7 +100,7 @@ export function stageDelivery(opts: {
   ).run(now, 'replaced by a newer staging before any delivery was observed', opts.sessionId)
   db.query(
     "insert into deliveries (id, session_id, prompt, instance_ref, state, staged_at) values (?, ?, ?, ?, 'pending', ?)",
-  ).run(crypto.randomUUID(), opts.sessionId, opts.prompt, opts.instanceRef, now)
+  ).run(crypto.randomUUID(), opts.sessionId, opts.prompt, opts.instanceRef, waitingSince)
 }
 
 export interface DeliveryDeps {

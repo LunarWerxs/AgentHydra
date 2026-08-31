@@ -380,3 +380,46 @@ test('settling a row to DEAF does NOT clear the breaker', async () => {
   expect(stateOf(sid)).toBe('deaf')
   expect(checkBreaker('deliver', sid, T0 + 1001).suppressed).toBe(true)
 })
+
+// THE LIVELOCK. The courier holds a freshly staged row for a grace window so the AI that
+// surfaced it can deliver first. Re-staging used to mint a row with a fresh staged_at, restarting
+// that window - so once the sweep interval (2 minutes) dropped below the grace (5 minutes), every
+// re-surface reset the clock and delivery became structurally impossible. Measured live
+// 2026-08-31: three chats re-staged under new row ids ~330s apart, refused on every pass with a
+// reason that could never stop being true, while the ledger read perfectly healthy.
+test('re-staging inherits the ORIGINAL wait time, so the grace can actually elapse', () => {
+  stageDelivery({ sessionId: 's-live', prompt: 'first', instanceRef: null, nowMs: T0 })
+  // The sweep re-surfaces two minutes later, well inside a five-minute grace.
+  stageDelivery({ sessionId: 's-live', prompt: 'second', instanceRef: null, nowMs: T0 + 120_000 })
+  const open = db
+    .query<{ staged_at: number; prompt: string }, [string]>(
+      "select staged_at, prompt from deliveries where session_id = ? and state = 'pending'",
+    )
+    .get('s-live')
+  // Newest PROMPT, oldest CLOCK: the chat has been waiting since T0, not since the re-stage.
+  expect(open?.prompt).toBe('second')
+  expect(open?.staged_at).toBe(T0)
+})
+
+test('a first staging starts its own clock - inheritance never invents a wait', () => {
+  stageDelivery({ sessionId: 's-fresh', prompt: 'only', instanceRef: null, nowMs: T0 + 5_000 })
+  const row = db
+    .query<{ staged_at: number }, [string]>(
+      "select staged_at from deliveries where session_id = ? and state = 'pending'",
+    )
+    .get('s-fresh')
+  expect(row?.staged_at).toBe(T0 + 5_000)
+})
+
+test('a SETTLED history does not resurrect an old clock for genuinely new work', () => {
+  stageDelivery({ sessionId: 's-done', prompt: 'first', instanceRef: null, nowMs: T0 })
+  reconcileDeliveries({ nowMs: T0 + 1_000, lastActivity: () => T0 + 500, liveSince: () => null })
+  // That one delivered and closed. A later staging is a NEW wait, not a continuation of it.
+  stageDelivery({ sessionId: 's-done', prompt: 'later', instanceRef: null, nowMs: T0 + 900_000 })
+  const row = db
+    .query<{ staged_at: number }, [string]>(
+      "select staged_at from deliveries where session_id = ? and state = 'pending'",
+    )
+    .get('s-done')
+  expect(row?.staged_at).toBe(T0 + 900_000)
+})
