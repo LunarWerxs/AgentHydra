@@ -1075,6 +1075,11 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // override, it is the old behaviour behind a flag. The column stays so existing queue rows still
   // read back, it simply cannot authorise a run any more. See headless-policy.ts for the one
   // remaining switch and why its default is off.
+  // ⛔ EVERY headless dispatch stops here, unconditionally. There is no setting left to check -
+  // headlessRunsAllowed() returns false as a constant (owner, 2026-08-31: "I have zero interest
+  // of you ever using headless"). Everything below this line is therefore unreachable, and is
+  // kept only until the queue subsystem it belongs to is demolished deliberately rather than
+  // half-removed in passing.
   if (!headlessRunsAllowed()) {
     failPreLaunch(item, NO_HEADLESS_REASON)
     return

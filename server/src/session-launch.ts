@@ -10,14 +10,13 @@
 // DESKTOP-app chat cannot be created externally at all — there is no stable interface for
 // it; the terminal window is the visible surface that exists.)
 //
-// ⛔ THE WINDOW IS NOW HIDDEN BY DEFAULT — see terminalWindowHidden below. The header above
-// describes why a VISIBLE window was once the right default, and that reasoning still holds for
-// a session a PERSON asks for. It stopped holding when the standing sweep began opening
-// sessions on its own, and the sessions it opens began opening more: measured 2026-08-31, three
-// windows in one pass and six in the next, closed by hand both times. Callers that want a
-// window ask for one; the owner can restore the old behaviour fleet-wide with
-// terminal_windows_visible. This file keeps its guard exemption (spawn-console-window.mjs)
-// because it is still the file that CAN open one.
+// ⛔ THE WINDOW IS ALWAYS VISIBLE, and the hidden option that briefly existed here is gone.
+// It was added to stop automation stacking consoles on the owner's screen, and it produced
+// something worse: sessions running where nobody could see them, in no app - headless by every
+// definition except the name, and past the guard in headless-policy.ts because it never touched
+// that chokepoint. Measured 2026-08-31; the owner's verdict was immediate. If a launch would be
+// unwelcome as a visible window then it should not happen, and automation should land the work
+// in a DESKTOP app instead (importSessionToDesktop), which is a surface he actually reads.
 //
 // CREDENTIALS. A launch pinned to an instance runs on THAT instance's account:
 //   · 'cli:<id>'      → CLAUDE_CONFIG_DIR points at the CLI instance's config dir. No token
@@ -42,7 +41,7 @@ import { resolveClaudeExe } from './config'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
-import { db, getSetting } from './db'
+import { db } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
 import { applyNewChatDefaults } from './new-chat-defaults'
 import { samePathKey } from './path-key'
@@ -96,30 +95,6 @@ export function bundledClaudeExe(instanceDir: string): string | null {
   }
 }
 
-/**
- * ⛔ THE ONE PLACE THAT DECIDES WHETHER A CONSOLE APPEARS. Every terminal launch in this
- * process passes through here, so no caller can put a window on the owner's screen by
- * forgetting a flag.
- *
- * IT DEFAULTS TO HIDDEN, and that inversion was earned. The old default was visible, on the
- * premise that a PERSON asked for the session and meant to watch it. That premise is now false
- * for most callers: the standing sweep opens an orchestrator on its own, and the orchestrator
- * it opens then launches handoff sessions of its own. Measured 2026-08-31, twice in one night -
- * three windows the first time, six the second, the second batch from a layer nobody had
- * counted. The owner closed them by hand both times.
- *
- * A caller that genuinely wants a window asks for one (`hidden: false`), and the owner can
- * restore the old behaviour fleet-wide by setting terminal_windows_visible. Both are explicit;
- * neither is the accident.
- */
-export function terminalWindowHidden(callerHidden?: boolean): boolean {
-  // A caller's explicit choice wins - a person clicking "open a terminal" gets their terminal.
-  if (typeof callerHidden === 'boolean') return callerHidden
-  // Absent means ABSENT, not false: an unregistered key must not silently mean "show windows".
-  const raw = getSetting('terminal_windows_visible').trim()
-  return raw === '' ? true : raw !== '1'
-}
-
 export interface TerminalLaunchPlan {
   /** What to spawn. Empty when this platform has no known way to open a terminal. */
   argv: string[]
@@ -137,7 +112,6 @@ export function buildTerminalLaunchPlan(
   effort: string | null = null,
   resumeSessionId: string | null = null,
   permissionMode: string | null = null,
-  hidden = false,
 ): TerminalLaunchPlan {
   // With resumeSessionId, the window CONTINUES an existing thread (--resume) with the prompt as
   // its next turn — the visible alternative to a headless queue resume, per the owner's standing
@@ -150,14 +124,6 @@ export function buildTerminalLaunchPlan(
     // over as ONE argv element, which cmd cannot do. -NoExit keeps the window (and any startup
     // error) on screen, the same reason session-resume uses `cmd /k`.
     const ps = `& '${exe.replaceAll("'", "''")}'${modelArgs} (Get-Content -Raw '${promptFile.replaceAll("'", "''")}')`
-    // HIDDEN is for a launch the MACHINE decided to make. A visible window is right when a
-    // person asked for the session and is going to watch it; it is wrong for a recurring
-    // unattended pass, which just piles consoles on the owner's screen every few minutes -
-    // measured live: three stacked up before anyone said stop. `cmd /c start` is what creates
-    // the window, so a hidden launch runs powershell directly (the caller also passes
-    // windowsHide, which only takes effect without the start shim) and drops -NoExit, whose
-    // only purpose is keeping a window open to be read.
-    if (hidden) return { argv: ['powershell', '-NoProfile', '-Command', ps], command: ps }
     return {
       argv: ['cmd', '/c', 'start', '', 'powershell', '-NoExit', '-Command', ps],
       command: ps,
@@ -189,6 +155,29 @@ export function buildTerminalLaunchPlan(
  * the hang is at least visible. Returns why, so the caller can say so instead of opening a
  * window that dies quietly.
  */
+/**
+ * The nearest ANCESTOR of `cwd` this account has already trusted, or null.
+ *
+ * Pure enough to pin: walks upward one segment at a time and asks the same trust question the
+ * pre-flight asks, so it can never accept a directory the CLI would still prompt about. Never
+ * returns `cwd` itself - the caller has already established that one is not trusted.
+ */
+export function nearestTrustedAncestor(
+  cwd: string,
+  configDir: string | null,
+  isTrusted: (p: string, c: string | null) => boolean = (p, c) =>
+    ensureProjectTrusted(p, c).trusted,
+): string | null {
+  const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/)
+  // Stop before the bare drive/root: 'D:' is not a project anybody meant to work in, and
+  // starting a session at a drive root is its own hazard.
+  for (let i = parts.length - 1; i >= 2; i--) {
+    const candidate = parts.slice(0, i).join(sep)
+    if (isTrusted(candidate, configDir)) return candidate
+  }
+  return null
+}
+
 export function ensureProjectTrusted(
   cwd: string,
   configDir: string | null,
@@ -306,12 +295,6 @@ export async function launchTerminalSession(opts: {
   /** Start the session in this permission mode. An UNATTENDED window needs
    *  'bypassPermissions' or it stops on the first shell approval with nobody to answer. */
   permissionMode?: string | null
-  /** Run without putting a console on screen. The visible window is right for a session a
-   *  PERSON asked for and intends to watch; it is wrong for a recurring launch the machine
-   *  decided to make on its own, which simply stacks consoles on the owner's desktop (measured
-   *  live: three of them appeared before anyone said stop). The session is still fully
-   *  visible where it belongs - the fleet list, the peer registry, AgentHydra's own UI. */
-  hidden?: boolean
 }): Promise<TerminalLaunchResult> {
   if (opts.resumeSessionId && !opts.force && isSessionSuperseded(opts.resumeSessionId))
     return {
@@ -342,17 +325,35 @@ export async function launchTerminalSession(opts: {
   // waits forever on a keypress nobody can give, while this function has already returned
   // ok:true. Found 2026-08-27 starting a reviewer: a hang that is invisible from the API is
   // worse than a refusal, because nothing anywhere says the launch did not take.
-  const trust = ensureProjectTrusted(opts.cwd, env.CLAUDE_CONFIG_DIR ?? null)
-  if (!trust.trusted)
-    return {
-      ok: false,
-      reason:
-        `folder-not-trusted (${trust.reason}): the CLI would stop on its trust prompt for ` +
-        `${opts.cwd} and wait for a keypress. Open that folder once in this account's app or ` +
-        `CLI and accept, then relaunch. AgentHydra deliberately will not answer that question ` +
-        'for you.',
-      command: '',
-    }
+  let cwd = opts.cwd
+  const trust = ensureProjectTrusted(cwd, env.CLAUDE_CONFIG_DIR ?? null)
+  if (!trust.trusted) {
+    // FALL BACK TO THE NEAREST TRUSTED ANCESTOR rather than refusing. Refusing was correct in
+    // principle and useless in practice: the owner keeps the ROOTS trusted on every account and
+    // rarely the individual project beneath them, so an ordinary launch into a subfolder failed
+    // for a directory whose parent had been accepted all along. Measured 2026-08-31 - the
+    // successor a handed-off chat had written a whole brief for was refused this way, and
+    // simply never ran, which from outside looks like the handoff being ignored.
+    //
+    // This does NOT answer the trust dialog on the owner's behalf; that stays forbidden. It
+    // picks a directory he has ALREADY accepted, and only ever an ancestor of the one asked
+    // for, so the session still reaches the work.
+    const ancestor = nearestTrustedAncestor(cwd, env.CLAUDE_CONFIG_DIR ?? null)
+    if (!ancestor)
+      return {
+        ok: false,
+        reason:
+          `folder-not-trusted (${trust.reason}): the CLI would stop on its trust prompt for ` +
+          `${opts.cwd}, and no ancestor of it is trusted either. Open that folder (or any ` +
+          "parent) once in this account's app or CLI and accept, then relaunch. AgentHydra " +
+          'deliberately will not answer that question for you.',
+        command: '',
+      }
+    console.log(
+      `[agenthydra] ${opts.cwd} is not trusted for this account; starting in its nearest trusted ancestor ${ancestor}`,
+    )
+    cwd = ancestor
+  }
   if (trust.mirrored)
     console.log(
       `[agenthydra] mirrored an existing trust decision onto ${opts.cwd} (the CLI keys trust by the literal path string, so slash style can hide a yes)`,
@@ -378,7 +379,6 @@ export async function launchTerminalSession(opts: {
     opts.effort?.trim() || null,
     opts.resumeSessionId?.trim() || null,
     opts.permissionMode?.trim() || null,
-    terminalWindowHidden(opts.hidden),
   )
   if (plan.argv.length === 0) return { ok: false, reason: 'no-terminal', command: plan.command }
   // The child gets a SANITIZED environment: every CLAUDE*/ANTHROPIC* variable the daemon itself
@@ -396,12 +396,16 @@ export async function launchTerminalSession(opts: {
   }
   try {
     Bun.spawn(plan.argv, {
-      // No windowsHide by default: see the header. That window is the point - a person asked
-      // for the session and is going to watch it. A launch the MACHINE decided to make passes
-      // hidden:true, and then the flag is not an exception to that rule but the same rule
-      // applied honestly: nobody asked to watch this one.
-      windowsHide: opts.hidden === true,
-      cwd: opts.cwd,
+      // ⛔ NO windowsHide, EVER, and no option to add one. A hidden terminal is a chat nobody
+      // can see, which is precisely what headless-policy.ts forbids - the ban is a property of
+      // the running chat, not a code path, and hiding the window walked straight around it.
+      // Measured 2026-08-31: three sessions started that way were invisible in every app the
+      // owner had open, and he found out by looking. If a launch would be unwelcome as a
+      // visible window it should not happen; automation lands work in a desktop app instead.
+      // The RESOLVED cwd, not the requested one: when the requested folder was untrusted this
+      // is its nearest trusted ancestor, and spawning into the original would reinstate the
+      // trust prompt the fallback exists to avoid.
+      cwd,
       env: { ...cleanEnv, ...env },
       stdin: 'ignore',
       stdout: 'ignore',

@@ -518,16 +518,18 @@ async function runJudgePass(
         if (!account)
           return { ok: false, reason: 'no running signed-in account to run the orchestrator on' }
         const { launchTerminalSession } = await import('./session-launch')
+        // ⛔ THIS OPENS A VISIBLE WINDOW, and that is now the deliberate cost of the feature
+        // rather than something to engineer around. The two attempts to avoid it both failed
+        // in the owner's face on 2026-08-31: visible windows stacked up on his screen, and
+        // hiding them produced sessions running where nobody could see them, which is the
+        // headless chat this program does not do. There is no third option that is honest, so
+        // the cadence (judgeCooldownMin) is the only lever - a window the owner did not ask
+        // for is a real cost, and the fix for too many is fewer, not invisible ones.
         return launchTerminalSession({
           cwd: await judgeCwd(),
           prompt: p,
           instanceRef: account.ref,
           permissionMode: 'bypassPermissions',
-          // NO CONSOLE ON SCREEN. This launch happens every cooldown without anyone asking for
-          // it, and visible windows stacked up on the owner's desktop within half an hour of
-          // the feature going live. The session is still fully visible where it should be -
-          // the fleet list, the peer registry, this loop's own status.
-          hidden: true,
         })
       })
     const res = await run(prompt)

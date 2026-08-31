@@ -21,11 +21,11 @@ import {
   importSessionToDesktop,
   isSessionSuperseded,
   launchTerminalSession,
+  nearestTrustedAncestor,
   reassertAutomationStamps,
   reassertChatAutomation,
   stampImportedChat,
   sweepUntitledDesktopChats,
-  terminalWindowHidden,
 } from '../src/session-launch'
 
 function markDone(sessionId: string, done: boolean): void {
@@ -497,64 +497,19 @@ test('darwin and linux read the file via cat; unknown platforms still return the
   expect(other.command).toContain('claude')
 })
 
-// A VISIBLE TERMINAL IS RIGHT WHEN A PERSON ASKED FOR THE SESSION and means to watch it. It is
-// wrong for a launch the machine makes on its own every cooldown: three consoles stacked up on
-// the owner's desktop within twenty minutes of the auto-launch going live. `cmd /c start` is
-// what creates the window, so a hidden launch must not go through it.
-test('a hidden launch opens no console, and the visible one is unchanged', () => {
-  const seen = buildTerminalLaunchPlan('win32', 'C:\\c.exe', 'C:\\p.txt', null, null, null, null)
-  expect(seen.argv.slice(0, 4)).toEqual(['cmd', '/c', 'start', ''])
-  expect(seen.argv).toContain('-NoExit')
-
-  const hidden = buildTerminalLaunchPlan(
-    'win32',
-    'C:\\c.exe',
-    'C:\\p.txt',
-    null,
-    null,
-    null,
-    'bypassPermissions',
-    true,
-  )
-  expect(hidden.argv[0]).toBe('powershell')
-  expect(hidden.argv).not.toContain('start')
-  // -NoExit exists only to keep a window open to be read; a hidden run has no window.
-  expect(hidden.argv).not.toContain('-NoExit')
-  // Hiding the console must not change WHAT runs: same binary, same prompt file, and the
-  // unattended permission mode still applied.
-  expect(hidden.command).toContain("& 'C:\\c.exe'")
-  expect(hidden.command).toContain("Get-Content -Raw 'C:\\p.txt'")
-  expect(hidden.command).toContain('--permission-mode bypassPermissions')
-  const bothHidden = buildTerminalLaunchPlan(
-    'win32',
-    'C:\\c.exe',
-    'C:\\p.txt',
-    null,
-    null,
-    null,
-    null,
-    true,
-  )
-  expect(bothHidden.command).toBe(seen.command)
-})
-
-// ⛔ THE DEFAULT IS HIDDEN, and that is the whole fix. Twice in one night the machinery put
-// consoles on the owner's screen - three, then six - and the second batch came from a layer
-// nobody had counted: an auto-opened orchestrator launching handoff sessions of its own. A
-// per-caller flag cannot fix that, because the problem is every caller that forgets it.
-test('terminalWindowHidden: hidden unless someone explicitly asks otherwise', async () => {
-  const { setSetting } = await import('../src/db')
-  setSetting('terminal_windows_visible', '0')
-  expect(terminalWindowHidden(undefined)).toBe(true)
-  // An explicit caller choice still wins - a person clicking "open a terminal" gets a terminal.
-  expect(terminalWindowHidden(false)).toBe(false)
-  expect(terminalWindowHidden(true)).toBe(true)
-  // The owner can bring windows back fleet-wide.
-  setSetting('terminal_windows_visible', '1')
-  expect(terminalWindowHidden(undefined)).toBe(false)
-  // ABSENT must mean hidden, never "show windows" - an unregistered key is exactly how this
-  // regressed the first time.
-  setSetting('terminal_windows_visible', '')
-  expect(terminalWindowHidden(undefined)).toBe(true)
-  setSetting('terminal_windows_visible', '0')
+// THE OWNER TRUSTS ROOTS, NOT EVERY PROJECT UNDER THEM. Refusing an untrusted subfolder was
+// correct in principle and useless in practice: measured 2026-08-31, the successor a handed-off
+// chat had written an entire brief for was refused because its own project folder had never been
+// accepted, while its parent had been accepted on every account - so the handoff never ran.
+test('an untrusted folder falls back to its nearest trusted ancestor, never higher', () => {
+  const ROOT = 'D:\\PublicProjects'
+  const SUB = 'D:\\PublicProjects\\Stackspire\\sub'
+  const trusted = new Set([ROOT, SUB])
+  const is = (p: string) => trusted.has(p)
+  expect(nearestTrustedAncestor(`${SUB}\\deep`, null, is)).toBe(SUB)
+  expect(nearestTrustedAncestor('D:\\PublicProjects\\Stackspire', null, is)).toBe(ROOT)
+  // Nothing trusted anywhere above it: refuse rather than guess.
+  expect(nearestTrustedAncestor('E:\\Other\\Thing', null, is)).toBe(null)
+  // Never the bare drive root - starting a session at a drive root is its own hazard.
+  expect(nearestTrustedAncestor(ROOT, null, (p) => p === 'D:')).toBe(null)
 })
