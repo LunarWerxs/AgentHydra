@@ -9,6 +9,7 @@ import {
   getSweepLoopSettings,
   judgeDecision,
   parseSweepLoopPatch,
+  pickTrustedCwd,
   runSweepLoopOnce,
   setSweepLoopSettings,
   sweepLoopStatus,
@@ -497,4 +498,23 @@ test('a fleet whose only waiting chat is HELD opens no orchestrator', async () =
     },
   })
   expect(calls).toBe(0)
+})
+
+// The first cut opened the orchestrator in the app's own directory and the launch was refused -
+// correctly - because the CLI would have stopped on its folder-trust prompt with nobody there to
+// answer it. Hardcoding a different folder only moves the guess, so ask the CLI which folders it
+// has already been told to trust.
+test('pickTrustedCwd chooses a folder already trusted, never a guess', () => {
+  const projects = {
+    'D:/Untrusted': { hasTrustDialogAccepted: false, a: 1, b: 2, c: 3 },
+    'D:/Trusted/Sparse': { hasTrustDialogAccepted: true },
+    'D:/Trusted/Worked': { hasTrustDialogAccepted: true, a: 1, b: 2 },
+  }
+  expect(pickTrustedCwd(projects, 'D:\\Fallback')).toBe('D:\\Trusted\\Worked')
+  // Nothing trusted at all: the caller's fallback, and the launch will refuse loudly rather
+  // than open a window that hangs on a dialog.
+  expect(pickTrustedCwd({ 'D:/No': { hasTrustDialogAccepted: false } }, 'D:\\Fallback')).toBe(
+    'D:\\Fallback',
+  )
+  expect(pickTrustedCwd({}, 'D:\\Fallback')).toBe('D:\\Fallback')
 })

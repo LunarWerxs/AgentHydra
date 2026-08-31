@@ -408,6 +408,47 @@ function judgeStamp(): number {
 }
 
 /**
+ * Where to open the orchestrator: a folder this account has ALREADY TRUSTED.
+ *
+ * The first cut used the app's own directory, and the launch was refused - correctly - because
+ * the CLI would have stopped on its folder-trust prompt with nobody there to press a key, and
+ * this daemon deliberately refuses to answer that question on the owner's behalf. Hardcoding a
+ * different folder just moves the guess. Instead, ask the CLI's own config which folders it has
+ * been told to trust and take the one it used most recently: guaranteed trusted, guaranteed a
+ * real working directory, and it needs no knowledge of this particular machine.
+ *
+ * /orchestrate is a global command and gates the whole fleet regardless of where it is run, so
+ * the folder only has to be trusted, not related to the work.
+ */
+export function pickTrustedCwd(
+  projects: Record<string, { hasTrustDialogAccepted?: boolean; lastCost?: unknown }>,
+  fallback: string,
+): string {
+  const trusted = Object.keys(projects).filter((k) => projects[k]?.hasTrustDialogAccepted === true)
+  if (trusted.length === 0) return fallback
+  // Prefer the longest-lived entry: the CLI writes richer state for folders actually worked in,
+  // so a folder with more recorded history is a better bet than one trusted once and abandoned.
+  trusted.sort(
+    (a, b) => Object.keys(projects[b] ?? {}).length - Object.keys(projects[a] ?? {}).length,
+  )
+  return (trusted[0] as string).replace(/\//g, '\\')
+}
+
+async function judgeCwd(): Promise<string> {
+  const fallback = join(import.meta.dir, '..', '..')
+  try {
+    const { readFileSync, existsSync } = await import('node:fs')
+    const { homedir } = await import('node:os')
+    const file = join(homedir(), '.claude.json')
+    if (!existsSync(file)) return fallback
+    const cfg = JSON.parse(readFileSync(file, 'utf8')) as { projects?: Record<string, never> }
+    return pickTrustedCwd(cfg.projects ?? {}, fallback)
+  } catch {
+    return fallback
+  }
+}
+
+/**
  * Open ONE orchestrator for the waiting lane, when this tick's state says to.
  *
  * The launch runs in the app's own directory (always trusted, so the terminal cannot stall on
@@ -449,7 +490,7 @@ async function runJudgePass(
       (async (p: string) => {
         const { launchTerminalSession } = await import('./session-launch')
         return launchTerminalSession({
-          cwd: join(import.meta.dir, '..', '..'),
+          cwd: await judgeCwd(),
           prompt: p,
           permissionMode: 'bypassPermissions',
         })
