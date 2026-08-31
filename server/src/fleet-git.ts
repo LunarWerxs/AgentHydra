@@ -1,4 +1,4 @@
-// server/src/fleet-git.ts - PIECE 3 of the orchestrator rebuild (owner-picked, 2026-08-29):
+// server/src/fleet-git.ts -
 // git hygiene for the repos the live sessions are working in, observed deterministically.
 //
 // Same doctrine as fleet.ts / fleet-usage.ts: 100% programmatic, read-only, zero AI. Every fact
@@ -82,25 +82,33 @@ async function realRunGit(args: string[]): Promise<{ ok: boolean; out: string; e
  * Git hygiene for every repo the given cwds live in, deduped by repo root, dirtiest first.
  * Read-only: nothing here writes, locks, or fetches.
  */
-export async function fleetGit(cwds: string[], deps: FleetGitDeps = {}): Promise<FleetGit> {
-  const runGit = deps.runGit ?? realRunGit
-  const caseFold = deps.caseFold ?? process.platform === 'win32'
-  const notRepo: string[] = []
-  // cwd -> root, deduped by normalized cwd first so one repo is asked about once per distinct
-  // dir. All root resolutions run concurrently; results are applied in input order so the
-  // outcome is deterministic regardless of completion order.
-  const seenCwd = new Set<string>()
-  const uniqueCwds: string[] = []
+type GitResult = { ok: boolean; out: string; err: string }
+type RunGit = (args: string[]) => Promise<GitResult>
+
+/** The distinct cwds in input order, first occurrence winning, so one repo is asked about once
+ *  per distinct dir. */
+function dedupeCwds(cwds: string[], caseFold: boolean): string[] {
+  const seen = new Set<string>()
+  const unique: string[] = []
   for (const cwd of cwds) {
     const key = pathKey(cwd, caseFold)
-    if (seenCwd.has(key)) continue
-    seenCwd.add(key)
-    uniqueCwds.push(cwd)
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(cwd)
   }
-  const tops = await Promise.all(
-    uniqueCwds.map((cwd) => runGit(['-C', cwd, 'rev-parse', '--show-toplevel'])),
-  )
+  return unique
+}
+
+/** Fold the resolved toplevels back onto the cwds that produced them: one entry per repo root,
+ *  plus the cwds that are inside no repo at all. Applied in INPUT order, so the outcome is
+ *  deterministic regardless of which rev-parse finished first. */
+function groupCwdsByRoot(
+  uniqueCwds: string[],
+  tops: (GitResult | undefined)[],
+  caseFold: boolean,
+): { rootCwds: Map<string, { root: string; cwds: string[] }>; notRepo: string[] } {
   const rootCwds = new Map<string, { root: string; cwds: string[] }>()
+  const notRepo: string[] = []
   for (let i = 0; i < uniqueCwds.length; i++) {
     const cwd = uniqueCwds[i] as string
     const top = tops[i]
@@ -113,40 +121,58 @@ export async function fleetGit(cwds: string[], deps: FleetGitDeps = {}): Promise
     if (entry) entry.cwds.push(cwd)
     else rootCwds.set(rootKey, { root: top.out, cwds: [cwd] })
   }
+  return { rootCwds, notRepo }
+}
 
+/** Every fact for ONE repo. Split out of {@link fleetGit}'s orchestration verbatim - the failure
+ *  honesty here (first error wins; a null is never a silent zero) is this function's whole job. */
+async function readRepoState(
+  runGit: RunGit,
+  root: string,
+  members: string[],
+): Promise<FleetRepoState> {
+  // The three facts are independent read-only queries: ask concurrently, so a repo's cost
+  // is its slowest single call, never their sum.
+  const [branchRes, statusRes, aheadRes] = await Promise.all([
+    runGit(['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD']),
+    runGit(['-C', root, 'status', '--porcelain']),
+    // No upstream is an ordinary condition (fresh branch, local-only repo): null, no error.
+    runGit(['-C', root, 'rev-list', '--count', '@{upstream}..HEAD']),
+  ])
+  let error: string | null = null
+  const fail = (r: { err: string }) => {
+    if (error === null) error = (r.err || 'git failed').slice(0, 200)
+  }
+  const branch = branchRes.ok && branchRes.out ? branchRes.out : null
+  if (!branchRes.ok) fail(branchRes)
+  const detached = branch === null ? null : branch === 'HEAD'
+  const dirtyCount = statusRes.ok ? statusRes.out.split('\n').filter((l) => l.trim()).length : null
+  if (!statusRes.ok) fail(statusRes)
+  const aheadCount = aheadRes.ok && /^\d+$/.test(aheadRes.out) ? Number(aheadRes.out) : null
+  return {
+    root,
+    cwds: members.sort(),
+    branch,
+    detached,
+    offMain: branch === null ? null : detached || !MAIN_BRANCHES.has(branch),
+    dirtyCount,
+    aheadCount,
+    error,
+  }
+}
+
+export async function fleetGit(cwds: string[], deps: FleetGitDeps = {}): Promise<FleetGit> {
+  const runGit = deps.runGit ?? realRunGit
+  const caseFold = deps.caseFold ?? process.platform === 'win32'
+  // Dedupe by normalized cwd first, so one repo is asked about once per distinct dir; then
+  // resolve every root concurrently.
+  const uniqueCwds = dedupeCwds(cwds, caseFold)
+  const tops = await Promise.all(
+    uniqueCwds.map((cwd) => runGit(['-C', cwd, 'rev-parse', '--show-toplevel'])),
+  )
+  const { rootCwds, notRepo } = groupCwdsByRoot(uniqueCwds, tops, caseFold)
   const repos: FleetRepoState[] = await Promise.all(
-    [...rootCwds.values()].map(async ({ root, cwds: members }) => {
-      // The three facts are independent read-only queries: ask concurrently, so a repo's cost
-      // is its slowest single call, never their sum.
-      const [branchRes, statusRes, aheadRes] = await Promise.all([
-        runGit(['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD']),
-        runGit(['-C', root, 'status', '--porcelain']),
-        // No upstream is an ordinary condition (fresh branch, local-only repo): null, no error.
-        runGit(['-C', root, 'rev-list', '--count', '@{upstream}..HEAD']),
-      ])
-      let error: string | null = null
-      const fail = (r: { err: string }) => {
-        if (error === null) error = (r.err || 'git failed').slice(0, 200)
-      }
-      const branch = branchRes.ok && branchRes.out ? branchRes.out : null
-      if (!branchRes.ok) fail(branchRes)
-      const detached = branch === null ? null : branch === 'HEAD'
-      const dirtyCount = statusRes.ok
-        ? statusRes.out.split('\n').filter((l) => l.trim()).length
-        : null
-      if (!statusRes.ok) fail(statusRes)
-      const aheadCount = aheadRes.ok && /^\d+$/.test(aheadRes.out) ? Number(aheadRes.out) : null
-      return {
-        root,
-        cwds: members.sort(),
-        branch,
-        detached,
-        offMain: branch === null ? null : detached || !MAIN_BRANCHES.has(branch),
-        dirtyCount,
-        aheadCount,
-        error,
-      }
-    }),
+    [...rootCwds.values()].map(({ root, cwds: members }) => readRepoState(runGit, root, members)),
   )
   // Dirtiest first (null = could-not-ask sorts above clean, below genuinely dirty), then root.
   repos.sort(

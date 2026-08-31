@@ -32,6 +32,58 @@ import { fileURLToPath } from 'node:url'
 
 const ID = 'timer-callback-can-kill-the-daemon'
 
+// The three literal forms blankNonCode has to step over. Each takes the source and the index of
+// the construct's FIRST character and returns the blanked text plus the index to resume at, so
+// the scanner loop below stays a flat three-way choice instead of three nested while loops.
+
+/** Blank a line comment, stopping AT the newline - which is code and must survive. */
+function scanLineComment(src, i) {
+  const n = src.length
+  let out = ''
+  while (i < n && src[i] !== '\n') {
+    out += ' '
+    i++
+  }
+  return { i, out }
+}
+
+/** Blank a block comment through its closing delimiter, keeping newlines so line numbers hold.
+ *  An unterminated one runs to the end, exactly as before. */
+function scanBlockComment(src, i) {
+  const n = src.length
+  let out = ''
+  while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+    out += src[i] === '\n' ? '\n' : ' '
+    i++
+  }
+  out += '  '
+  i += 2
+  return { i, out }
+}
+
+/** Blank one string or template literal, honouring backslash escapes and keeping newlines. */
+function scanStringLiteral(src, i) {
+  const n = src.length
+  const quote = src[i]
+  let out = ' '
+  i++
+  while (i < n) {
+    if (src[i] === '\\') {
+      out += '  '
+      i += 2
+      continue
+    }
+    if (src[i] === quote) {
+      out += ' '
+      i++
+      break
+    }
+    out += src[i] === '\n' ? '\n' : ' '
+    i++
+  }
+  return { i, out }
+}
+
 /** Blank comments and string/template literals so prose can never be read as code. */
 function blankNonCode(src) {
   let out = ''
@@ -40,40 +92,14 @@ function blankNonCode(src) {
   while (i < n) {
     const c = src[i]
     const next = src[i + 1]
-    if (c === '/' && next === '/') {
-      while (i < n && src[i] !== '\n') {
-        out += ' '
-        i++
-      }
-      continue
-    }
-    if (c === '/' && next === '*') {
-      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
-        out += src[i] === '\n' ? '\n' : ' '
-        i++
-      }
-      out += '  '
-      i += 2
-      continue
-    }
-    if (c === '"' || c === "'" || c === '`') {
-      const quote = c
-      out += ' '
-      i++
-      while (i < n) {
-        if (src[i] === '\\') {
-          out += '  '
-          i += 2
-          continue
-        }
-        if (src[i] === quote) {
-          out += ' '
-          i++
-          break
-        }
-        out += src[i] === '\n' ? '\n' : ' '
-        i++
-      }
+    // Mutually exclusive by construction, as the three sequential ifs here always were.
+    let scanned = null
+    if (c === '/' && next === '/') scanned = scanLineComment(src, i)
+    else if (c === '/' && next === '*') scanned = scanBlockComment(src, i)
+    else if (c === '"' || c === "'" || c === '`') scanned = scanStringLiteral(src, i)
+    if (scanned) {
+      out += scanned.out
+      i = scanned.i
       continue
     }
     out += c

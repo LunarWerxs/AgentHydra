@@ -3,7 +3,7 @@
 //
 // WHY THIS EXISTS. The standing sweep is the thing that keeps the fleet decided: it gates every
 // chat every couple of minutes, archives what is done, delivers staged prompts, and opens an
-// orchestrator when chats are waiting. All of that lives in ONE process, and on this machine
+// work when chats are waiting. All of that lives in ONE process, and on this machine
 // that process had no supervisor at all - no tray host, no service wrapper, nothing. If it died
 // or its loop stopped, the fleet simply stopped being managed and NOTHING SAID SO.
 //
@@ -164,59 +164,84 @@ function installTask() {
   return r.status === 0
 }
 
-async function main() {
-  const argv = process.argv.slice(2)
+/** --install / --status short-circuit before anything is probed. Neither returns. */
+function handleFlags(argv) {
   if (argv.includes('--install')) process.exit(installTask() ? 0 : 1)
   if (argv.includes('--status')) {
     console.log(JSON.stringify(readState(), null, 2))
     process.exit(0)
   }
+}
+
+/** The verdict from one probe: down (restarted first, when that is allowed), wedged, or healthy. */
+async function firstVerdict(first, now, mayRestart) {
+  if (first.up) {
+    const w = wedgedVerdict(first.status, now)
+    return w.wedged
+      ? {
+          status: 'wedged',
+          detail: `The daemon answers but ${w.why}. The fleet is not being swept.`,
+        }
+      : { status: 'healthy', detail: w.why }
+  }
+  const detail = `The AgentHydra daemon is not responding on port ${PORT} (${first.reason}).`
+  if (!mayRestart)
+    return { status: 'down', detail: `${detail} Restart is disabled (--no-restart).` }
+  const r = await restart()
+  return {
+    status: r.ok ? 'restarted' : 'down',
+    detail:
+      detail +
+      (r.ok
+        ? ` It was restarted and answered after ${r.secs}s.`
+        : ' The restart FAILED - the fleet is not being managed right now.'),
+  }
+}
+
+/**
+ * A WEDGED daemon is restarted only on the SECOND consecutive sighting. One long tick is not a
+ * fault, and killing a daemon mid-UI-click to fix a problem it did not have would be its own
+ * outage. The alarm, however, goes out on the first.
+ *
+ * Returns the consecutive-wedged run to persist; appends the restart outcome to `verdict.detail`
+ * exactly as the inline version did.
+ */
+async function escalateWedged(verdict, state, mayRestart) {
+  if (verdict.status !== 'wedged') return 0
+  const wedgedRun = (state.consecutiveWedged ?? 0) + 1
+  if (wedgedRun < 2 || !mayRestart) return wedgedRun
+  const r = await restart()
+  verdict.detail += r.ok ? ' It was restarted.' : ' The restart FAILED.'
+  return r.ok ? 0 : wedgedRun
+}
+
+/** Alarm on every unhealthy verdict that is new or has gone unacknowledged for a while, and once
+ *  on recovery - a fault that clears silently leaves the last thing you saw being a lie. */
+function raiseAlarm(verdict, state, changed, stale) {
+  const healthy = verdict.status === 'healthy'
+  if (!healthy && (changed || stale))
+    return alarm('AgentHydra: the fleet is not being managed', verdict.detail)
+  if (healthy && changed && state.status !== 'unknown')
+    return alarm('AgentHydra: back to normal', verdict.detail)
+  return false
+}
+
+async function main() {
+  const argv = process.argv.slice(2)
+  handleFlags(argv)
   const mayRestart = !argv.includes('--no-restart')
 
   const now = Date.now()
   const state = readState()
   const first = await probe()
 
-  let verdict
-  if (!first.up) {
-    let detail = `The AgentHydra daemon is not responding on port ${PORT} (${first.reason}).`
-    if (mayRestart) {
-      const r = await restart()
-      detail += r.ok
-        ? ` It was restarted and answered after ${r.secs}s.`
-        : ' The restart FAILED - the fleet is not being managed right now.'
-      verdict = { status: r.ok ? 'restarted' : 'down', detail }
-    } else {
-      verdict = { status: 'down', detail: `${detail} Restart is disabled (--no-restart).` }
-    }
-  } else {
-    const w = wedgedVerdict(first.status, now)
-    verdict = w.wedged
-      ? { status: 'wedged', detail: `The daemon answers but ${w.why}. The fleet is not being swept.` }
-      : { status: 'healthy', detail: w.why }
-  }
-
-  // A WEDGED daemon is restarted only on the SECOND consecutive sighting. One long tick is not a
-  // fault, and killing a daemon mid-UI-click to fix a problem it did not have would be its own
-  // outage. The alarm, however, goes out on the first.
-  let wedgedRun = verdict.status === 'wedged' ? (state.consecutiveWedged ?? 0) + 1 : 0
-  if (verdict.status === 'wedged' && wedgedRun >= 2 && mayRestart) {
-    const r = await restart()
-    verdict.detail += r.ok ? ' It was restarted.' : ' The restart FAILED.'
-    if (r.ok) wedgedRun = 0
-  }
+  const verdict = await firstVerdict(first, now, mayRestart)
+  const wedgedRun = await escalateWedged(verdict, state, mayRestart)
 
   const healthy = verdict.status === 'healthy'
   const changed = state.status !== verdict.status
   const stale = now - (state.lastAlarmAt ?? 0) > REALARM_MS
-  // Alarm on every unhealthy verdict that is new or has gone unacknowledged for a while, and
-  // once on recovery - a fault that clears silently leaves the last thing you saw being a lie.
-  let alarmed = false
-  if (!healthy && (changed || stale)) {
-    alarmed = alarm('AgentHydra: the fleet is not being managed', verdict.detail)
-  } else if (healthy && changed && state.status !== 'unknown') {
-    alarmed = alarm('AgentHydra: back to normal', verdict.detail)
-  }
+  const alarmed = raiseAlarm(verdict, state, changed, stale)
 
   writeState({
     status: verdict.status,

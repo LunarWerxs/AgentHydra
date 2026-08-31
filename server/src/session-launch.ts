@@ -1019,6 +1019,38 @@ export async function reassertChatAutomation(
  * mechanism existed (census 2026-08-27: 26 of 30 imports fleet-wide had lost the stamp).
  * Idempotent, non-throwing; returns how many files it changed.
  */
+/** Stamp ONE chat file, if it is import-shape and not already stamped. True when the file was
+ *  rewritten. Non-throwing by the same rule as its caller: one unreadable metadata file says
+ *  nothing about the others. */
+function stampImportShapeFile(dir: string, f: string): boolean {
+  try {
+    const p = join(dir, f)
+    const meta = JSON.parse(readFileSync(p, 'utf8'))
+    if (typeof meta.cliSessionId !== 'string' || f !== `local_${meta.cliSessionId}.json`)
+      return false // app-created shape, or unreadable identity: not ours to touch
+    if (meta.permissionMode === 'bypassPermissions') return false
+    meta.permissionMode = 'bypassPermissions'
+    writeFileSync(p, JSON.stringify(meta))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** How many chats this pass stamped in ONE org/user leaf directory, split out of
+ *  {@link reassertAutomationStamps}'s walk in the same shape as {@link findChatMetaPathInDir}, so
+ *  that function's complexity reflects only the walk. An unreadable directory throws to the
+ *  caller's guard exactly as the inline `readdirSync` did, and cannot lose a count: nothing has
+ *  been counted yet at that point. Behaviour is unchanged. */
+function stampDirBypassPermissions(dir: string): number {
+  let stamped = 0
+  for (const f of readdirSync(dir)) {
+    if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+    if (stampImportShapeFile(dir, f)) stamped++
+  }
+  return stamped
+}
+
 export function reassertAutomationStamps(profileDir: string): number {
   const store = join(profileDir, 'claude-code-sessions')
   let stamped = 0
@@ -1027,22 +1059,7 @@ export function reassertAutomationStamps(profileDir: string): number {
       if (!org.isDirectory()) continue
       for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
         if (!user.isDirectory()) continue
-        const dir = join(store, org.name, user.name)
-        for (const f of readdirSync(dir)) {
-          if (!f.startsWith('local_') || !f.endsWith('.json')) continue
-          try {
-            const p = join(dir, f)
-            const meta = JSON.parse(readFileSync(p, 'utf8'))
-            if (typeof meta.cliSessionId !== 'string' || f !== `local_${meta.cliSessionId}.json`)
-              continue // app-created shape, or unreadable identity: not ours to touch
-            if (meta.permissionMode === 'bypassPermissions') continue
-            meta.permissionMode = 'bypassPermissions'
-            writeFileSync(p, JSON.stringify(meta))
-            stamped++
-          } catch {
-            // one unreadable metadata file says nothing about the others
-          }
-        }
+        stamped += stampDirBypassPermissions(join(store, org.name, user.name))
       }
     }
   } catch {

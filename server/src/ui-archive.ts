@@ -93,6 +93,24 @@ function diskArchivedOf(profileDir: string, sessionId: string): boolean | null {
 
 /** How many chats in this profile's store carry `title` on disk, ANY archive state. More than
  *  one means a rendered row with that title is ambiguous and must not be clicked. */
+/** How many chats carry `title` in ONE org/user leaf directory, split out of
+ *  {@link diskTitleCountOf}'s walk so that function's complexity reflects only the walk. An
+ *  unreadable directory throws to the caller's guard exactly as the inline `readdirSync` did, and
+ *  cannot lose a count: nothing has been counted yet at that point. Behaviour is unchanged. */
+function dirTitleCountOf(dir: string, title: string, liveOnly: boolean): number {
+  let n = 0
+  for (const f of readdirSync(dir)) {
+    if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+    try {
+      const meta = JSON.parse(readFileSync(join(dir, f), 'utf8'))
+      if (meta.title === title && (!liveOnly || meta.isArchived !== true)) n++
+    } catch {
+      // one unreadable file says nothing about the others
+    }
+  }
+  return n
+}
+
 function diskTitleCountOf(profileDir: string, title: string, liveOnly = false): number {
   let n = 0
   try {
@@ -101,16 +119,7 @@ function diskTitleCountOf(profileDir: string, title: string, liveOnly = false): 
       if (!org.isDirectory()) continue
       for (const user of readdirSync(join(storeDir, org.name), { withFileTypes: true })) {
         if (!user.isDirectory()) continue
-        const dir = join(storeDir, org.name, user.name)
-        for (const f of readdirSync(dir)) {
-          if (!f.startsWith('local_') || !f.endsWith('.json')) continue
-          try {
-            const meta = JSON.parse(readFileSync(join(dir, f), 'utf8'))
-            if (meta.title === title && (!liveOnly || meta.isArchived !== true)) n++
-          } catch {
-            // one unreadable file says nothing about the others
-          }
-        }
+        n += dirTitleCountOf(join(storeDir, org.name, user.name), title, liveOnly)
       }
     }
   } catch {
@@ -223,7 +232,7 @@ export async function uiArchiveChat(
   // rendered in two sidebar sections (measured live) is safe - every matching row is it.
   const holders = readTitleCount(profileDir, title)
   // ⛔ THE HAZARD IS A CHAT THAT SHOULD SURVIVE, not a shared name. Refusing on the count alone
-  // stranded rows nothing could ever clear: two retired chats both called 'Orchestrate' sat in
+  // stranded rows nothing could ever clear: two retired chats sharing one title sat in
   // the sidebar permanently, because every pass refused to click either one on the grounds that
   // it might hit "the wrong one" - when both were already archived and either click was right.
   // So the question is not how many chats carry this title, it is whether any of them is still
