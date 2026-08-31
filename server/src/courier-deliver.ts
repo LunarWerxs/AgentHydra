@@ -72,14 +72,44 @@ export function deriveVerifyCandidates(transcriptPath: string): string[] {
     return []
   }
   const inOrder: string[] = []
+  const assistantInOrder: string[] = []
   for (const line of text.split('\n')) {
     const t = line.trim()
-    if (!t.startsWith('{') || !t.includes('"user"')) continue
+    if (!t.startsWith('{') || !(t.includes('"user"') || t.includes('"assistant"'))) continue
     try {
       const rec = JSON.parse(t) as {
         type?: string
         isCompactSummary?: boolean
         message?: { content?: unknown }
+      }
+      // ASSISTANT TEXT IS THE FALLBACK, not the preference. A chat that has worked for an
+      // hour can have nothing but tool traffic in the whole tail buffer - measured live
+      // 2026-08-31 on a 2MB transcript whose only recent user turn was the 6-char "resume" -
+      // and then the user-turn scan above yields zero and the row strands as no-aim-proof.
+      // The newest assistant text IS what the bottom-scrolled pane is showing. It renders
+      // through markdown, so only spans free of markdown punctuation are usable: a span the
+      // renderer would restyle fails Contains in the SAFE direction (refusal), but there is
+      // no reason to hand the actuator a candidate that cannot match.
+      if (rec.type === 'assistant') {
+        const content = rec.message?.content
+        if (!Array.isArray(content)) continue
+        const first = content.find(
+          (b): b is { type: string; text: string } =>
+            typeof b === 'object' && b !== null && (b as { type?: string }).type === 'text',
+        )
+        if (!first?.text) continue
+        const flat = first.text.replace(/\s+/g, ' ').trim()
+        // Longest markdown-free span: markdown control chars start/end styled runs, so a
+        // span between them survives rendering verbatim.
+        const span = flat
+          .split(/[#*`_~[\]()<>|]/)
+          .map((s) => s.trim())
+          .filter((s) => s.length >= VERIFY_MIN)
+          .sort((a, b) => b.length - a.length)[0]
+        if (!span) continue
+        if (BOILERPLATE_PREFIXES.some((p) => span.startsWith(p))) continue
+        assistantInOrder.push(span.slice(0, VERIFY_MAX))
+        continue
       }
       if (rec.type !== 'user') continue
       // A COMPACTION SUMMARY IS NOT THIS CHAT'S OWN WORDS. Claude Code writes the synthetic
@@ -113,11 +143,16 @@ export function deriveVerifyCandidates(transcriptPath: string): string[] {
   }
   const seen = new Set<string>()
   const newestFirst: string[] = []
-  for (let i = inOrder.length - 1; i >= 0 && newestFirst.length < MAX_CANDIDATES; i--) {
-    const c = inOrder[i] as string
-    if (seen.has(c)) continue
-    seen.add(c)
-    newestFirst.push(c)
+  // User turns first (rendered verbatim, the strongest proof), newest first; assistant-derived
+  // spans only fill remaining ladder slots, so they can rescue an all-tool-traffic tail
+  // without ever outranking a real user turn.
+  for (const pool of [inOrder, assistantInOrder]) {
+    for (let i = pool.length - 1; i >= 0 && newestFirst.length < MAX_CANDIDATES; i--) {
+      const c = pool[i] as string
+      if (seen.has(c)) continue
+      seen.add(c)
+      newestFirst.push(c)
+    }
   }
   return newestFirst
 }

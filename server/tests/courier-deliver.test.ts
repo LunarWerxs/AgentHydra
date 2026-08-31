@@ -133,12 +133,54 @@ test('a large transcript is read from the TAIL - the head is beyond the viewport
   expect(c).not.toContain('HEAD marker turn, long gone off screen')
 })
 
+test('an all-tool-traffic tail falls back to the newest assistant text, markdown stripped', () => {
+  // Measured live 2026-08-31: after an hour of work a 2MB transcript's whole tail buffer held
+  // no eligible user turn (only the 6-char "resume"), and the row stranded as no-aim-proof.
+  const p = transcript([
+    { type: 'user', message: { content: [{ type: 'text', text: 'resume' }] } },
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: '## What I did\n- Fixed **66 checks** that reported clean on files they never opened, closing them all',
+          },
+        ],
+      },
+    },
+  ])
+  const c = deriveVerifyCandidates(p)
+  expect(c.length).toBe(1)
+  // The longest span free of markdown punctuation, so it survives rendering verbatim.
+  expect(c[0]).toBe('that reported clean on files they never opened, closing them'.slice(0, 60))
+})
+
+test('assistant spans never outrank a real user turn in the ladder', () => {
+  const p = transcript([
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'A real user instruction for this chat only' }] },
+    },
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'A long plain assistant sentence with no markdown in it at all' },
+        ],
+      },
+    },
+  ])
+  expect(deriveVerifyCandidates(p)[0]).toBe('A real user instruction for this chat only')
+})
+
 test('a too-short or missing user turn yields NO aim proof - never a guess', () => {
   expect(deriveVerifyText(transcript([{ type: 'user', message: { content: 'hi' } }]))).toBeNull()
+  // A too-short assistant span is no better than a too-short user turn.
   expect(
     deriveVerifyText(
       transcript([
-        { type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(40) }] } },
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'short words' }] } },
       ]),
     ),
   ).toBeNull()
