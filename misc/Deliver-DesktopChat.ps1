@@ -223,7 +223,11 @@ foreach ($m in $mains) {
       foreach ($c in ($candidates | Select-Object -First 12)) {
         $ci = TryPattern $c ([System.Windows.Automation.InvokePattern]::Pattern)
         if (-not $ci) { continue }
-        $ci.Invoke()
+        # A DISABLED candidate must be SKIPPED, not fatal: Invoke on one throws
+        # ElementNotEnabledException, and before this guard a single greyed-out button
+        # anywhere in the candidate list crashed the whole delivery pass (measured
+        # 2026-08-31, first live run of the content-search fallback).
+        try { $ci.Invoke() } catch { continue }
         Start-Sleep -Milliseconds 1400
         [AxD]::Wake($hwnd); Start-Sleep -Milliseconds 500
         $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
