@@ -399,6 +399,24 @@ export async function runSweepLoopOnce(
     } catch (err) {
       console.error('[agenthydra] naming pass failed:', err)
     }
+    // KEEP THE BYPASS STAMP CONVERGED ON DISK, every tick (owner rule, restated angrily
+    // 2026-08-31: machinery chats run bypassPermissions, and he keeps finding acceptEdits).
+    // The per-import watcher only guards 10 minutes; the running app re-saves the old mode
+    // whenever a chat boots, and whatever is ON DISK at the app's NEXT restart becomes
+    // permanent. A standing re-assert makes that snapshot always the right one. Import-shape
+    // chats only, by construction - an owner's own in-app choice is never touched.
+    try {
+      const { reassertAutomationStamps } = await import('./session-launch')
+      const { fleetInstances } = await import('./fleet-instances')
+      let stamped = 0
+      for (const i of await fleetInstances()) stamped += reassertAutomationStamps(i.dir)
+      if (stamped > 0)
+        console.log(
+          `[agenthydra] re-stamped bypassPermissions on ${stamped} import-shape chat(s) the app had reverted`,
+        )
+    } catch (err) {
+      console.error('[agenthydra] automation stamp pass failed:', err)
+    }
     // THE WAITING LANE, worked rather than merely reported. Runs AFTER the courier so a chat
     // whose prompt just got delivered is no longer waiting by the time we count.
     await runJudgePass(report, s, deps.launchJudge)
