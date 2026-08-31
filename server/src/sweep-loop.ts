@@ -338,6 +338,8 @@ export async function runSweepLoopOnce(
     courier?: typeof courierPass
     /** Seam for tests; the default opens a real terminal orchestrator. */
     launchJudge?: (prompt: string) => Promise<{ ok: boolean; reason?: string }>
+    /** Seam for tests; the default renames real chats in real windows. */
+    nameUntitled?: () => Promise<{ named: unknown[]; unnameable: number }>
   } = {},
 ): Promise<SweepReport | null> {
   const s = getSweepLoopSettings()
@@ -379,10 +381,18 @@ export async function runSweepLoopOnce(
     // nowhere. The owner kept seeing chats titled "General coding session" while the codebase
     // held a function whose whole job was to prevent that. A rule with no runner is not a rule.
     try {
-      const { nameUntitledChats } = await import('./name-untitled')
-      const { fleetInstances } = await import('./fleet-instances')
-      const running = (await fleetInstances()).filter((i) => i.isRunning).map((i) => i.dir)
-      const named = await nameUntitledChats({ runningProfiles: running })
+      // Seamed like every other UI-driving step here: this renames chats in real windows, which
+      // a unit test must never do to whatever apps happen to be open on the machine running it.
+      // The reconcile lane learned that the hard way when a missed call shape drove real
+      // PowerShell for five seconds; same rule, stated up front this time.
+      const named = deps.nameUntitled
+        ? await deps.nameUntitled()
+        : await (async () => {
+            const { nameUntitledChats } = await import('./name-untitled')
+            const { fleetInstances } = await import('./fleet-instances')
+            const running = (await fleetInstances()).filter((i) => i.isRunning).map((i) => i.dir)
+            return nameUntitledChats({ runningProfiles: running })
+          })()
       if (named.named.length || named.unnameable)
         console.log(
           `[agenthydra] named ${named.named.length} untitled chat(s); ${named.unnameable} had no derivable name and were left alone`,

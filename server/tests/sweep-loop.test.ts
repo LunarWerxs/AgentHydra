@@ -114,9 +114,15 @@ test('a disabled loop does not tick; force runs it anyway and records the run', 
     calls++
     return emptyReport()
   }
-  expect(await runSweepLoopOnce({ sweep })).toBe(null)
+  expect(
+    await runSweepLoopOnce({ sweep, nameUntitled: async () => ({ named: [], unnameable: 0 }) }),
+  ).toBe(null)
   expect(calls).toBe(0)
-  const report = await runSweepLoopOnce({ sweep, force: true })
+  const report = await runSweepLoopOnce({
+    sweep,
+    force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
+  })
   expect(report).not.toBe(null)
   expect(calls).toBe(1)
   const status = sweepLoopStatus()
@@ -129,6 +135,7 @@ test('the -1 sentinel reaches the sweep as UNLIMITED (undefined), surface cap ve
   const seen: Array<{ maxArchive?: number; maxSurface?: number }> = []
   await runSweepLoopOnce({
     force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
     sweep: async (opts = {}) => {
       seen.push({ maxArchive: opts.maxArchive, maxSurface: opts.maxSurface })
       return emptyReport()
@@ -151,8 +158,16 @@ test('re-entrancy: an in-flight tick blocks the next one, counted as an overlap 
     await gate
     return emptyReport()
   }
-  const first = runSweepLoopOnce({ sweep: slow, force: true })
-  const second = await runSweepLoopOnce({ sweep: slow, force: true })
+  const first = runSweepLoopOnce({
+    sweep: slow,
+    force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
+  })
+  const second = await runSweepLoopOnce({
+    sweep: slow,
+    force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
+  })
   expect(second).toBe(null)
   expect(sweepLoopStatus().overlapSkips).toBe(before + 1)
   release?.()
@@ -162,17 +177,26 @@ test('re-entrancy: an in-flight tick blocks the next one, counted as an overlap 
 
 test('a tick stamps the schedule itself - a forced check-now pushes the next due time out', async () => {
   setSweepLoopSettings({ enabled: true, intervalMin: 15 })
-  await runSweepLoopOnce({ force: true, sweep: async () => emptyReport() })
+  await runSweepLoopOnce({
+    force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
+    sweep: async () => emptyReport(),
+  })
   const due = Date.parse(sweepLoopStatus().nextDueAt ?? '')
   expect(due - Date.now()).toBeGreaterThan(13 * 60_000)
   setSweepLoopSettings({ enabled: false })
 })
 
 test('a failing tick records lastError and KEEPS the previous good report', async () => {
-  await runSweepLoopOnce({ force: true, sweep: async () => emptyReport() })
+  await runSweepLoopOnce({
+    force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
+    sweep: async () => emptyReport(),
+  })
   const goodAt = sweepLoopStatus().lastRun?.at
   const r = await runSweepLoopOnce({
     force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
     sweep: async () => {
       throw new Error('boom in the tick')
     },
@@ -195,7 +219,11 @@ test('the STATUS copy of a huge report is bounded and flagged; the return is unt
     action: 'over-cap' as const,
     why: 'x',
   }))
-  const r = await runSweepLoopOnce({ force: true, sweep: async () => big })
+  const r = await runSweepLoopOnce({
+    force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
+    sweep: async () => big,
+  })
   expect(r?.crashedRows.length).toBe(150)
   const status = sweepLoopStatus()
   expect(status.lastRun?.report.crashedRows.length).toBe(100)
@@ -208,6 +236,7 @@ test('the tick runs the courier pass when enabled, and a throwing pass is a DURA
   let courierRuns = 0
   await runSweepLoopOnce({
     force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
     sweep: async () => emptyReport(),
     courier: async () => {
       courierRuns++
@@ -219,6 +248,7 @@ test('the tick runs the courier pass when enabled, and a throwing pass is a DURA
   // A clean pass CLEARS it - a healed courier must stop reading as broken.
   await runSweepLoopOnce({
     force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
     sweep: async () => emptyReport(),
     courier: async () => ({
       dryRun: false,
@@ -241,6 +271,7 @@ test('courier_enabled=0 keeps the tick from arming anything', async () => {
   let courierRuns = 0
   await runSweepLoopOnce({
     force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
     sweep: async () => emptyReport(),
     courier: async () => {
       courierRuns++
@@ -388,6 +419,7 @@ test('a tick with waiting chats launches one orchestrator and records what it di
   const prompts: string[] = []
   await runSweepLoopOnce({
     force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
     sweep: async () => report,
     courier: async () => ({
       dryRun: false,
@@ -434,6 +466,7 @@ test('a refused launch is recorded, not retried into a window storm', async () =
   const run = async () =>
     runSweepLoopOnce({
       force: true,
+      nameUntitled: async () => ({ named: [], unnameable: 0 }),
       sweep: async () => report,
       reconcile: () => {},
       launchJudge: async () => {
@@ -479,6 +512,7 @@ test('a fleet whose only waiting chat is HELD opens no orchestrator', async () =
   let calls = 0
   await runSweepLoopOnce({
     force: true,
+    nameUntitled: async () => ({ named: [], unnameable: 0 }),
     sweep: async () => report,
     courier: async () => ({
       dryRun: false,
