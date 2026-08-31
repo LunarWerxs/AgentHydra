@@ -17,8 +17,8 @@ import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { REPO_ROOT } from './repo-root'
 
-const REPO_ROOT = join(import.meta.dir, '..')
 // The checks used to live under .arkitect/your-checks/code. That directory was deleted wholesale
 // on 2026-07-27 while both this file and ci.yml still pointed at it, which is exactly the
 // can-a-guardrail-silently-stop-running failure this file exists to catch. They now live in

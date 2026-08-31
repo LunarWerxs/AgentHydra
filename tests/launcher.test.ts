@@ -33,9 +33,9 @@
 import { describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { REPO_ROOT } from './repo-root'
 
-const REPO_ROOT = resolve(import.meta.dir, '..') // tests -> repo root (flat layout: server/web live at root)
 const MISC = join(REPO_ROOT, 'misc')
 const APP = REPO_ROOT
 
