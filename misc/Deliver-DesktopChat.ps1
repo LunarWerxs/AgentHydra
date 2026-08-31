@@ -84,8 +84,15 @@ $PROMPT_NAMES = @('Prompt', 'Eingabe', 'Nachricht', 'Message', 'Mensaje', 'Messa
 $mains = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
   Where-Object { $_.CommandLine -and $_.CommandLine -notmatch '--type=' } |
   ForEach-Object {
-    $m = [regex]::Match($_.CommandLine, '--user-data-dir=("?)([^"]+?)\1(\s|$)')
-    $dir = if ($m.Success) { $m.Groups[2].Value } else { Join-Path $env:APPDATA 'Claude' }
+    # ⛔ SAME PARSE, SAME BUG - see the long note in Manage-DesktopChat.ps1. Windows quotes the
+    # WHOLE argument ("--user-data-dir=C:\...\pap3r rotate2"), so a pattern expecting the quote
+    # after the '=' truncated any profile path at its first space and that account became
+    # undeliverable as well as unmanageable. Kept identical in both files on purpose: one of
+    # them silently disagreeing about which instance is which is worse than either being wrong.
+    $m = [regex]::Match($_.CommandLine, '"--user-data-dir=([^"]+)"')
+    if (-not $m.Success) { $m = [regex]::Match($_.CommandLine, '--user-data-dir="([^"]+)"') }
+    if (-not $m.Success) { $m = [regex]::Match($_.CommandLine, '--user-data-dir=(\S+)') }
+    $dir = if ($m.Success) { $m.Groups[1].Value.Trim() } else { Join-Path $env:APPDATA 'Claude' }
     [pscustomobject]@{ ProcId = $_.ProcessId; Dir = $dir }
   }
 if ($Instance) {

@@ -189,8 +189,19 @@ function RenderedKebabNames($scope) {
 $mains = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
   Where-Object { $_.CommandLine -and $_.CommandLine -notmatch '--type=' } |
   ForEach-Object {
-    $m = [regex]::Match($_.CommandLine, '--user-data-dir=("?)([^"]+?)\1(\s|$)')
-    $dir = if ($m.Success) { $m.Groups[2].Value } else { Join-Path $env:APPDATA 'Claude' }
+    # ⛔ A PROFILE PATH CONTAINING A SPACE MADE THAT WHOLE ACCOUNT INVISIBLE. The old pattern
+    # was '--user-data-dir=("?)([^"]+?)\1(\s|$)', which assumes the quote (if any) sits after
+    # the '='. Windows quotes the WHOLE argument instead - "--user-data-dir=C:\...\pap3r
+    # rotate2" - so there is no quote after the '=', the lazy body stops at the first space,
+    # and the instance resolves to 'C:\...\pap3r'. That never matches any real directory, so
+    # every archive, rename, list and delivery for that account reported "no running instance
+    # matches" and returned nothing. Measured 2026-08-31: the owner's 'pap3r rotate2' account
+    # had been structurally unmanageable, which read from outside as the orchestrator simply
+    # ignoring accounts. Three shapes, most specific first.
+    $m = [regex]::Match($_.CommandLine, '"--user-data-dir=([^"]+)"')
+    if (-not $m.Success) { $m = [regex]::Match($_.CommandLine, '--user-data-dir="([^"]+)"') }
+    if (-not $m.Success) { $m = [regex]::Match($_.CommandLine, '--user-data-dir=(\S+)') }
+    $dir = if ($m.Success) { $m.Groups[1].Value.Trim() } else { Join-Path $env:APPDATA 'Claude' }
     [pscustomobject]@{ ProcId = $_.ProcessId; Dir = $dir }
   }
 if ($Instance) {

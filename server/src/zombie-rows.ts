@@ -115,8 +115,14 @@ export function scanChatRows(profileDir: string): Array<{
 export function zombieCandidates(
   rendered: string[],
   rows: Array<{ sessionId: string; title: string | null; archived: boolean }>,
+  /** The prefix derived across the WHOLE fleet. An account holding a single chat cannot derive
+   *  one from itself - one title proves nothing about what decorates it - and deriving per
+   *  account therefore reported zero chats for exactly the quietest accounts. The app is the
+   *  same app in every profile, so the phrase is the same phrase; derive it where there is
+   *  evidence and apply it where there is not. */
+  fleetPrefix?: string,
 ): Array<{ sessionId: string; title: string }> {
-  const prefix = chatRowPrefix(rendered, rows)
+  const prefix = fleetPrefix ?? chatRowPrefix(rendered, rows)
   const out: Array<{ sessionId: string; title: string }> = []
   const claimed = new Set<string>()
   for (const row of rows) {
@@ -208,7 +214,15 @@ export async function reconcileRenderedRows(
   const cap = deps.maxPerPass ?? 10
 
   const report: ZombieReport = { rows: [], unreadInstances: [], renderedSeen: 0 }
-  let cleared = 0
+
+  // READ EVERY ACCOUNT FIRST, then derive the chat-row phrase across all of them together.
+  // Per-account derivation needs two chats to compare, so an account holding ONE chat reported
+  // zero chats - and the quiet accounts are exactly the ones nobody notices going unmanaged.
+  const reads: Array<{
+    inst: (typeof instances)[number]
+    titles: string[]
+    rows: ReturnType<typeof scanChatRows>
+  }> = []
   for (const inst of instances) {
     if (!inst.isRunning) continue
     const read = await list(inst.dir)
@@ -220,7 +234,16 @@ export async function reconcileRenderedRows(
       continue
     }
     report.renderedSeen += read.titles.length
-    for (const z of zombieCandidates(read.titles, scan(inst.dir))) {
+    reads.push({ inst, titles: read.titles, rows: scan(inst.dir) })
+  }
+  const fleetPrefix = chatRowPrefix(
+    reads.flatMap((r) => r.titles),
+    reads.flatMap((r) => r.rows),
+  )
+
+  let cleared = 0
+  for (const { inst, titles, rows } of reads) {
+    for (const z of zombieCandidates(titles, rows, fleetPrefix)) {
       if (cleared >= cap) {
         report.rows.push({
           ...z,
