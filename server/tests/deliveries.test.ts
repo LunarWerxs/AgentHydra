@@ -22,6 +22,12 @@ beforeEach(() => {
 
 const T0 = Date.parse('2026-08-30T12:00:00Z')
 
+/** That session's row state, read straight from the ledger. */
+const stateOf = (sessionId: string): string | undefined =>
+  db
+    .query<{ state: string }, [string]>('select state from deliveries where session_id = ?')
+    .get(sessionId)?.state
+
 test('staging is one PENDING row per session - the earlier one is SUPERSEDED, never erased', () => {
   stageDelivery({ sessionId: 's1', prompt: 'first', instanceRef: 'desktop:C:/i1', nowMs: T0 })
   stageDelivery({ sessionId: 's1', prompt: 'second', instanceRef: 'desktop:C:/i2', nowMs: T0 + 1 })
@@ -329,4 +335,48 @@ test('the database waits for a lock instead of throwing - busy_timeout is set, n
   // host is a second process on the same file, so the default is a crash waiting for contention.
   const row = db.query<{ timeout: number }, []>('pragma busy_timeout').get()
   expect(row?.timeout).toBeGreaterThanOrEqual(1000)
+})
+
+// ⛔ SUCCESS MUST FORGIVE THE BREAKER. The courier clears the failure count when IT delivers,
+// but the LEDGER settles a row the moment the transcript moves - however that happened. So a
+// delivery that provably worked used to leave the count standing, and the breaker kept refusing
+// that chat for the rest of its 6h window. Measured live 2026-08-31: session 8bdb589d settled
+// to 'delivered' at 02:21 and was still listed as suppressed until 07:54. The cosmetic harm is
+// a suppressed lane full of rows that are not stuck; the real harm is a chat going dormant
+// inside that window and the courier refusing to wake it - a chat sitting dead for hours while
+// the machinery believes it is handled.
+test('settling a row to DELIVERED clears the breaker for that chat', async () => {
+  const { checkBreaker, noteAttempt, ATTEMPT_CAP } = await import('../src/breaker')
+  const sid = 'sess-breaker-clear'
+  db.query('delete from action_attempt_log where session_id = ?').run(sid)
+  stageDelivery({ sessionId: sid, prompt: 'wake up', instanceRef: null, nowMs: T0 })
+  for (let i = 0; i < ATTEMPT_CAP; i++) noteAttempt('deliver', sid, T0 + i)
+  expect(checkBreaker('deliver', sid, T0 + 100).suppressed).toBe(true)
+
+  reconcileDeliveries({
+    nowMs: T0 + 1000,
+    lastActivity: () => T0 + 500, // the transcript moved after staging: it landed
+    liveSince: () => null,
+  })
+  expect(stateOf(sid)).toBe('delivered')
+  expect(checkBreaker('deliver', sid, T0 + 1001).suppressed).toBe(false)
+})
+
+// DELIBERATE, NOT INCIDENTAL: only 'delivered' clears it. A DEAF row means a process started and
+// the engine never drained the message - that is not evidence the channel works, and clearing on
+// it would leave the breaker unable to brake the one thing it exists to brake.
+test('settling a row to DEAF does NOT clear the breaker', async () => {
+  const { checkBreaker, noteAttempt, ATTEMPT_CAP } = await import('../src/breaker')
+  const sid = 'sess-breaker-deaf'
+  db.query('delete from action_attempt_log where session_id = ?').run(sid)
+  stageDelivery({ sessionId: sid, prompt: 'wake up', instanceRef: null, nowMs: T0 })
+  for (let i = 0; i < ATTEMPT_CAP; i++) noteAttempt('deliver', sid, T0 + i)
+
+  reconcileDeliveries({
+    nowMs: T0 + 1000,
+    lastActivity: () => null, // never moved
+    liveSince: () => T0 + 500, // but a process did start
+  })
+  expect(stateOf(sid)).toBe('deaf')
+  expect(checkBreaker('deliver', sid, T0 + 1001).suppressed).toBe(true)
 })

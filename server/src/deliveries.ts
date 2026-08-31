@@ -25,6 +25,7 @@
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { clearAttempts } from './breaker'
 import { db } from './db'
 import { findTranscriptById, readLiveRegistry } from './live-registry'
 
@@ -195,6 +196,24 @@ export function reconcileDeliveries(deps: DeliveryDeps = {}): void {
             : ''),
         row.id,
       )
+      // ⛔ SUCCESS MUST FORGIVE THE BREAKER, and settling here is the only place that sees it.
+      // The courier clears the count when IT delivers, but the ledger settles a row the moment
+      // the transcript moves - however that happened: a hand-delivery, a person typing, a peer
+      // message. So a delivery that provably worked left the failure count standing and the
+      // breaker kept refusing that chat for the rest of its 6h window. Measured 2026-08-31:
+      // session 8bdb589d delivered at 02:21 and was still suppressed until 07:54.
+      //
+      // The cosmetic harm is a suppressed lane full of rows that are not stuck, which teaches
+      // the reader to skip the lane - and the lane's whole value is being short and true. The
+      // real harm is worse: if that chat goes dormant again inside the window, the courier
+      // refuses to wake it, so a chat sits dead for hours while the machinery believes it is
+      // handled. That is the exact failure this system exists to stop.
+      //
+      // DELIBERATE, NOT INCIDENTAL: only 'delivered' clears it. 'deaf' means a process started
+      // and the engine never drained the message; 'expired' means nobody delivered it in 24h;
+      // 'superseded' means a newer prompt replaced it. None of those is evidence the channel
+      // works, and clearing on them would leave the breaker unable to brake anything.
+      clearAttempts('deliver', row.session_id)
       continue
     }
     // ⛔ A DEAF ROW STILL AGES OUT. This used to be a bare `continue`, which read as "nothing new
