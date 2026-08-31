@@ -264,6 +264,27 @@ export function parseSweepLoopPatch(
  * judgment: needs-input reviews, plus crashed chats the tick declined to surface because
  * maxSurface capped it - both are chats sitting still that automation alone cannot move.
  */
+/**
+ * How many chats are genuinely WAITING on the one judgment a daemon cannot make.
+ *
+ * Pure and deliberately narrow, because this number decides whether a window opens. It counts
+ * only chats that are stuck AND actionable:
+ *   · needs-input reviews the owner has not put on hold. A held chat is the owner saying
+ *     "leave this alone"; summoning an orchestrator to re-learn that on every cooldown is a
+ *     futile cycle, and this file must not manufacture one.
+ *   · crashed chats the tick did NOT surface - report-only or over the surface cap. A chat it
+ *     did surface already has its prompt staged and the courier delivering, so it is moving;
+ *     one it PARKED was refused for a reason (a hold, the breaker) that a new session cannot
+ *     talk its way past either.
+ */
+export function countWaiting(report: SweepReport): number {
+  const judging = report.needsJudgment.filter((r) => !r.heldReason).length
+  const stuckCrashed = report.crashedRows.filter(
+    (r) => r.action === 'report-only' || r.action === 'over-cap',
+  ).length
+  return judging + stuckCrashed
+}
+
 export function judgeDecision(input: {
   enabled: boolean
   judgeEnabled: boolean
@@ -395,7 +416,7 @@ async function runJudgePass(
   s: SweepLoopSettings,
   launch?: (prompt: string) => Promise<{ ok: boolean; reason?: string }>,
 ): Promise<void> {
-  const waiting = report.needsJudgment.length + report.crashedRows.length
+  const waiting = countWaiting(report)
   const decision = judgeDecision({
     enabled: s.enabled,
     judgeEnabled: s.judgeEnabled,

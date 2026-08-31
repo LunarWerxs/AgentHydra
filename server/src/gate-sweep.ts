@@ -73,6 +73,14 @@ export interface NeedsJudgmentRow {
   endsWithQuestion: boolean
   /** The evidence for the autonomy judgment - never re-derive it from the transcript. */
   lastAssistantText: string
+  /** ON HOLD: the owner has told the machinery to leave this chat alone, so it is reported
+   *  but is NOT work anyone should be summoned for. This lane skips tryAct entirely, so it
+   *  never met the hold check that every acting lane goes through, and a reader could not
+   *  tell a held chat from an actionable one without cross-referencing another call. That
+   *  matters now that something ACTS on this count: without the flag, a single held chat
+   *  would summon an orchestrator forever to discover, every time, that it must not touch
+   *  it - the exact futile cycle the circuit breaker exists to end. */
+  heldReason: string | null
 }
 
 export interface SweepReport {
@@ -366,6 +374,7 @@ export async function sweepGateActions(
         doneClaim: g.finished.doneClaim,
         endsWithQuestion: g.finished.endsWithQuestion,
         lastAssistantText: g.finished.lastAssistantText,
+        heldReason: (deps.heldSession ?? isHeld)(c.sessionId)?.reason ?? null,
       })
       continue
     }

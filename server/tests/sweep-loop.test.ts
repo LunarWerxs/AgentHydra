@@ -5,6 +5,7 @@ import { expect, test } from 'bun:test'
 import { db } from '../src/db'
 import type { SweepReport } from '../src/gate-sweep'
 import {
+  countWaiting,
   getSweepLoopSettings,
   judgeDecision,
   parseSweepLoopPatch,
@@ -26,6 +27,27 @@ const emptyReport = (): SweepReport => ({
   ungated: [],
   unswept: [],
   deadlineHit: false,
+})
+
+const judgingRow = (sessionId: string) => ({
+  sessionId,
+  title: 'A chat waiting on a judgment',
+  instance: 'temp2',
+  doneClaim: 'no',
+  endsWithQuestion: true,
+  lastAssistantText: 'should I keep going?',
+  heldReason: null,
+})
+
+const crashRow = (sessionId: string) => ({
+  sessionId,
+  title: 'A crashed chat',
+  instance: 'temp2',
+  state: 'crashed' as const,
+  crashedKind: 'mid-turn' as const,
+  lane: null,
+  action: 'report-only' as const,
+  why: 'x',
 })
 
 test('ABSENT settings read as the true defaults - never as zero (caught live)', () => {
@@ -352,6 +374,7 @@ test('a tick with waiting chats launches one orchestrator and records what it di
       doneClaim: 'no',
       endsWithQuestion: true,
       lastAssistantText: 'should I keep going?',
+      heldReason: null,
     },
   ]
   const prompts: string[] = []
@@ -416,4 +439,55 @@ test('a refused launch is recorded, not retried into a window storm', async () =
   expect(calls).toBe(1)
   const st = sweepLoopStatus()
   expect(st.lastJudgeRun?.launched).toBe(false)
+})
+
+// A HELD chat is the owner saying "leave this alone". It still appears in the report (a chat
+// that vanished from the fleet view would be worse), but summoning an orchestrator to
+// rediscover the hold on every cooldown - forever - is exactly the futile cycle the circuit
+// breaker exists to end, and this file must not manufacture one.
+test('countWaiting ignores held chats and chats that are already moving', () => {
+  const r = emptyReport()
+  r.needsJudgment = [
+    { ...judgingRow('s-open'), heldReason: null },
+    { ...judgingRow('s-held'), heldReason: 'the owner parked this one' },
+  ]
+  r.crashedRows = [
+    { ...crashRow('s-uncovered'), action: 'report-only' },
+    { ...crashRow('s-overcap'), action: 'over-cap' },
+    // Surfaced: its prompt is staged and the courier is delivering, so it is moving.
+    { ...crashRow('s-surfaced'), action: 'surfaced' },
+    // Parked: refused for a reason a fresh session cannot talk past either.
+    { ...crashRow('s-parked'), action: 'parked' },
+  ]
+  expect(countWaiting(r)).toBe(3)
+  expect(countWaiting(emptyReport())).toBe(0)
+})
+
+test('a fleet whose only waiting chat is HELD opens no orchestrator', async () => {
+  db.query("delete from settings where key like 'sweep_%'").run()
+  setSweepLoopSettings({ enabled: true })
+  const report = emptyReport()
+  report.needsJudgment = [{ ...judgingRow('s-held-only'), heldReason: 'parked by the owner' }]
+  let calls = 0
+  await runSweepLoopOnce({
+    force: true,
+    sweep: async () => report,
+    courier: async () => ({
+      dryRun: false,
+      attempts: [],
+      held: [],
+      unroutable: [],
+      deliverable: 0,
+      notAttempted: 0,
+      capHit: false,
+      instancesTouched: 0,
+      checkedAt: 'x',
+    }),
+    reconcile: () => {},
+    launchJudge: async () => {
+      calls++
+      return { ok: true }
+    },
+  })
+  expect(calls).toBe(0)
 })

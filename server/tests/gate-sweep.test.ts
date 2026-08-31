@@ -127,6 +127,7 @@ test('lane dispatch: running and human left alone; every other lane routed', asy
       doneClaim: 'unknown',
       endsWithQuestion: true,
       lastAssistantText: 'the evidence text',
+      heldReason: null,
     },
   ])
   expect(acted.sort()).toEqual(['arc', 'cra', 'lim'])
