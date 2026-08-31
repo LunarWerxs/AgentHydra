@@ -346,11 +346,41 @@ async function actOnGateInner(
     extra: Partial<GateActionResult> = {},
   ): GateActionResult => ({ sessionId, gate: gateEcho, action, why, ...extra })
 
-  if (g.state === 'running')
+  // ⛔ IDLE IS NOT RUNNING, HERE TOO. The sweep learned this and started routing live-but-quiet
+  // chats to the judgment lane; this function did not, so a chat the sweep correctly presented
+  // for a decision was refused the moment anyone tried to act on it - "left-alone: running (pid
+  // ...)" for a chat that had done nothing for nineteen minutes. Classification and action
+  // disagreeing is worse than either being wrong alone: the fleet shows work to do and then
+  // declines to do it, which reads as the orchestrator ignoring its own findings. Found by a
+  // peer session 2026-08-31 that could see the lane and could not act on it.
+  //
+  // A turn genuinely IN FLIGHT is still untouchable - that is what the live rail protects, and
+  // g.idle is null for anything mid-turn however long it has been quiet.
+  if (g.state === 'running' && !g.idle)
     return res(
       'left-alone',
       `running (pid ${g.live?.pid}) - the rule is leave it alone; a long quiet can be background work`,
     )
+  if (g.state === 'running' && g.idle) {
+    // It is on screen already (it has a process and a rendered row), so nothing needs importing.
+    // What it needs is the prompt typed into its own composer, which is exactly what the courier
+    // does - and the courier refuses independently if a Stop button says a turn is in flight.
+    const answer = input.decision === 'autonomous' ? (input.answer ?? '').trim() : ''
+    if (!answer)
+      return res(
+        'parked',
+        `idle for ${g.idle.quietSecs}s and waiting for its next instruction. This is the ONE AI ` +
+          'step: read the evidence and call again with decision "autonomous" plus the answer ' +
+          'text, or decision "human" to leave it.',
+      )
+    d.stage({ sessionId, prompt: answer, instanceRef: d.pinnedRefFor(sessionId) ?? null })
+    return res(
+      'surfaced',
+      `idle for ${g.idle.quietSecs}s - it finished its turn and stopped, so its next instruction ` +
+        'is staged for delivery into its own composer (it is already on screen; nothing was imported)',
+      { prompt: answer, promptDelivery: 'deliver-natively-via-the-app-message-channel' },
+    )
+  }
 
   if (g.state === 'finished' && g.finished) {
     const fin = g.finished
