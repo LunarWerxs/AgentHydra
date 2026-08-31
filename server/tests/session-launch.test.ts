@@ -473,7 +473,11 @@ test('the import chokepoint refuses a generic or missing title - the naming law 
   }
 })
 
-test('a terminal resume of a done-marked lineage is refused before anything launches', async () => {
+// ⛔ THE LAUNCHER IS GONE, so this now refuses for a blunter reason than superseded, and that is
+// the point: nothing opens a console any more, whatever the caller's intent. The owner closed
+// unwanted terminal windows by hand four times on 2026-08-31; hiding them made headless chats and
+// switching the launcher off with a setting lasted minutes before something turned it back on.
+test('every terminal launch is refused - a done-marked lineage no longer even gets that far', async () => {
   markDone('lineage-c', true)
   const res = await launchTerminalSession({
     cwd: 'D:\\Fake',
@@ -481,8 +485,13 @@ test('a terminal resume of a done-marked lineage is refused before anything laun
     resumeSessionId: 'lineage-c',
   })
   expect(res.ok).toBe(false)
-  expect(res.reason).toStartWith('superseded')
+  expect(res.reason).toContain('terminal launches are removed')
   markDone('lineage-c', false)
+
+  // And a plain new-session launch, with nothing objectionable about it, is refused identically.
+  const plain = await launchTerminalSession({ cwd: 'D:\\Fake', prompt: 'anything' })
+  expect(plain.ok).toBe(false)
+  expect(plain.reason).toContain('headless')
 })
 
 test('darwin and linux read the file via cat; unknown platforms still return the command text', () => {

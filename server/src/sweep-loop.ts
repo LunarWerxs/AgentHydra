@@ -21,7 +21,6 @@
 //   - The last report is kept and served verbatim - a loop whose work cannot be inspected
 //     is v1's mistake with a timer attached.
 
-import { join } from 'node:path'
 import { courierPass } from './courier'
 import { getSetting, setSetting } from './db'
 import { pruneDeliveries, reconcileDeliveries } from './deliveries'
@@ -434,66 +433,6 @@ function judgeStamp(): number {
 }
 
 /**
- * Where to open the orchestrator: a folder this account has ALREADY TRUSTED.
- *
- * The first cut used the app's own directory, and the launch was refused - correctly - because
- * the CLI would have stopped on its folder-trust prompt with nobody there to press a key, and
- * this daemon deliberately refuses to answer that question on the owner's behalf. Hardcoding a
- * different folder just moves the guess. Instead, ask the CLI's own config which folders it has
- * been told to trust and take the one it used most recently: guaranteed trusted, guaranteed a
- * real working directory, and it needs no knowledge of this particular machine.
- *
- * /orchestrate is a global command and gates the whole fleet regardless of where it is run, so
- * the folder only has to be trusted, not related to the work.
- */
-export function pickTrustedCwd(
-  projects: Record<string, { hasTrustDialogAccepted?: boolean; lastCost?: unknown }>,
-  fallback: string,
-): string {
-  const trusted = Object.keys(projects).filter((k) => projects[k]?.hasTrustDialogAccepted === true)
-  if (trusted.length === 0) return fallback
-  // Prefer the longest-lived entry: the CLI writes richer state for folders actually worked in,
-  // so a folder with more recorded history is a better bet than one trusted once and abandoned.
-  trusted.sort(
-    (a, b) => Object.keys(projects[b] ?? {}).length - Object.keys(projects[a] ?? {}).length,
-  )
-  return (trusted[0] as string).replace(/\//g, '\\')
-}
-
-/** The account to run the orchestrator on: a RUNNING, SIGNED-IN instance chosen by the fleet's
- *  own landing picker (plan tier first, then lowest weekly usage). `mustOpen` is refused - the
- *  picker will happily nominate a closed instance under the overflow rule, and booting an app
- *  is not something an unattended judgment pass may do. Null when nothing qualifies, which the
- *  caller reports rather than papering over with the ambient login. */
-async function judgeAccount(): Promise<{ ref: string; num: number } | null> {
-  try {
-    const [{ pickLandingInstance }, { fleetInstances }, { fleetUsage }] = await Promise.all([
-      import('./monitor'),
-      import('./fleet-instances'),
-      import('./fleet-usage'),
-    ])
-    const picked = pickLandingInstance(null, await fleetInstances(), fleetUsage())
-    return picked && !picked.mustOpen ? { ref: picked.ref, num: picked.num } : null
-  } catch {
-    return null
-  }
-}
-
-async function judgeCwd(): Promise<string> {
-  const fallback = join(import.meta.dir, '..', '..')
-  try {
-    const { readFileSync, existsSync } = await import('node:fs')
-    const { homedir } = await import('node:os')
-    const file = join(homedir(), '.claude.json')
-    if (!existsSync(file)) return fallback
-    const cfg = JSON.parse(readFileSync(file, 'utf8')) as { projects?: Record<string, never> }
-    return pickTrustedCwd(cfg.projects ?? {}, fallback)
-  } catch {
-    return fallback
-  }
-}
-
-/**
  * Open ONE orchestrator for the waiting lane, when this tick's state says to.
  *
  * The launch runs in the app's own directory (always trusted, so the terminal cannot stall on
@@ -533,30 +472,23 @@ async function runJudgePass(
     const run =
       launch ??
       (async (p: string) => {
-        // WHICH ACCOUNT. Launching on the ambient login opened a session that said "Login
-        // expired - please run /login" and could do nothing at all: it received the prompt,
-        // it just had no credentials. A launch onto a dead account is worse than no launch,
-        // because the ledger and the cooldown both record it as done. So pick a RUNNING,
-        // SIGNED-IN instance through the fleet's own landing picker - the same one the
-        // surfacing path uses, so account choice cannot drift into a second opinion here -
-        // and never boot a closed one: automation does not open the owner's accounts.
-        const account = await judgeAccount()
-        if (!account)
-          return { ok: false, reason: 'no running signed-in account to run the orchestrator on' }
-        const { launchTerminalSession } = await import('./session-launch')
-        // ⛔ THIS OPENS A VISIBLE WINDOW, and that is now the deliberate cost of the feature
-        // rather than something to engineer around. The two attempts to avoid it both failed
-        // in the owner's face on 2026-08-31: visible windows stacked up on his screen, and
-        // hiding them produced sessions running where nobody could see them, which is the
-        // headless chat this program does not do. There is no third option that is honest, so
-        // the cadence (judgeCooldownMin) is the only lever - a window the owner did not ask
-        // for is a real cost, and the fix for too many is fewer, not invisible ones.
-        return launchTerminalSession({
-          cwd: await judgeCwd(),
-          prompt: p,
-          instanceRef: account.ref,
-          permissionMode: 'bypassPermissions',
-        })
+        void p
+        // ⛔ AUTOMATION MAY NOT START A SESSION AT ALL. This used to launch a terminal, and both
+        // possible shapes of that are forbidden: a VISIBLE window is a console the owner did not
+        // ask for (he closed them by hand three times on 2026-08-31, then again after the
+        // revert), and a HIDDEN one is a chat nobody can see, which headless-policy.ts bans
+        // outright. There is no third shape, so there is no launch.
+        //
+        // What remains is the honest route and it is already built: the courier types the next
+        // instruction into an EXISTING desktop chat's own composer. Work needing a NEW chat waits
+        // for a person to open one, and the app offers no external way to create one anyway.
+        return {
+          ok: false,
+          reason:
+            'automation does not start sessions: a visible terminal is a console nobody asked ' +
+            'for, and a hidden one is a headless chat. Waiting chats are worked by delivering ' +
+            'into their own composer instead.',
+        }
       })
     const res = await run(prompt)
     lastJudgeRun = {

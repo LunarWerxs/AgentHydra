@@ -33,17 +33,15 @@
 // never a secret, and is left for the OS temp cleaner (deleting it too early would race the
 // terminal still starting up).
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { GENERIC_CHAT_TITLE, isGenericChatTitle, PLUMBING_CHAT_TITLE } from './chat-title'
-import { resolveClaudeExe } from './config'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
 import { db } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
-import { applyNewChatDefaults } from './new-chat-defaults'
 import { samePathKey } from './path-key'
 
 /**
@@ -259,7 +257,7 @@ type InstanceEnvResolution =
  *  override) executable a launch needs. Pulled out of launchTerminalSession so the three-way ref
  *  dispatch isn't inline in the middle of the launch sequence — same await ordering, same checks,
  *  just named. */
-async function resolveInstanceEnv(ref: string | null): Promise<InstanceEnvResolution> {
+async function _resolveInstanceEnv(ref: string | null): Promise<InstanceEnvResolution> {
   const env: Record<string, string> = {}
   let exe: string | null = null
   if (ref?.startsWith('cli:')) {
@@ -296,128 +294,28 @@ export async function launchTerminalSession(opts: {
    *  'bypassPermissions' or it stops on the first shell approval with nobody to answer. */
   permissionMode?: string | null
 }): Promise<TerminalLaunchResult> {
-  if (opts.resumeSessionId && !opts.force && isSessionSuperseded(opts.resumeSessionId))
-    return {
-      ok: false,
-      reason:
-        'superseded: this session is done-marked (handed off/migrated) — resuming it would duplicate its successor’s work; pass force to override',
-      command: '',
-    }
-  // TWO WRITERS, ONE TRANSCRIPT — refused in the primitive, so every caller inherits it. The
-  // interactive route checked this itself, but the auto-resume monitor's terminal branch calls
-  // straight in here and did not, so an unattended resume could open a second writer on a chat
-  // that is live in the desktop app right now (found by an adversarial audit, 2026-08-26). There
-  // is deliberately NO force escape: superseded is a judgement call the owner may overrule,
-  // while two processes appending to one transcript is never the thing anyone wanted.
-  if (opts.resumeSessionId && liveSessionEntry(opts.resumeSessionId))
-    return {
-      ok: false,
-      reason:
-        'session-live: that thread already has a running process (it is open in an app or a terminal) — resuming it here would put two writers on one transcript',
-      command: '',
-    }
-  const ref = opts.instanceRef?.trim() || null
-  const resolved = await resolveInstanceEnv(ref)
-  if (!resolved.ok) return { ok: false, reason: resolved.reason, command: '' }
-  const { env, exe } = resolved
-
-  // THE TRUST PRE-FLIGHT. Without it the window opens, asks 'do you trust this folder', and
-  // waits forever on a keypress nobody can give, while this function has already returned
-  // ok:true. Found 2026-08-27 starting a reviewer: a hang that is invisible from the API is
-  // worse than a refusal, because nothing anywhere says the launch did not take.
-  let cwd = opts.cwd
-  const trust = ensureProjectTrusted(cwd, env.CLAUDE_CONFIG_DIR ?? null)
-  if (!trust.trusted) {
-    // FALL BACK TO THE NEAREST TRUSTED ANCESTOR rather than refusing. Refusing was correct in
-    // principle and useless in practice: the owner keeps the ROOTS trusted on every account and
-    // rarely the individual project beneath them, so an ordinary launch into a subfolder failed
-    // for a directory whose parent had been accepted all along. Measured 2026-08-31 - the
-    // successor a handed-off chat had written a whole brief for was refused this way, and
-    // simply never ran, which from outside looks like the handoff being ignored.
-    //
-    // This does NOT answer the trust dialog on the owner's behalf; that stays forbidden. It
-    // picks a directory he has ALREADY accepted, and only ever an ancestor of the one asked
-    // for, so the session still reaches the work.
-    const ancestor = nearestTrustedAncestor(cwd, env.CLAUDE_CONFIG_DIR ?? null)
-    if (!ancestor)
-      return {
-        ok: false,
-        reason:
-          `folder-not-trusted (${trust.reason}): the CLI would stop on its trust prompt for ` +
-          `${opts.cwd}, and no ancestor of it is trusted either. Open that folder (or any ` +
-          "parent) once in this account's app or CLI and accept, then relaunch. AgentHydra " +
-          'deliberately will not answer that question for you.',
-        command: '',
-      }
-    console.log(
-      `[agenthydra] ${opts.cwd} is not trusted for this account; starting in its nearest trusted ancestor ${ancestor}`,
-    )
-    cwd = ancestor
-  }
-  if (trust.mirrored)
-    console.log(
-      `[agenthydra] mirrored an existing trust decision onto ${opts.cwd} (the CLI keys trust by the literal path string, so slash style can hide a yes)`,
-    )
-
-  // Owner rule 2026-08-30 (new-chat-defaults.ts): a NEW session that names no model starts on
-  // Opus + the ultracode keyword. A resume is not a new chat; an explicit model passes through.
-  const spec = applyNewChatDefaults({
-    newChat: !opts.resumeSessionId,
-    model: opts.model,
-    prompt: opts.prompt,
-  })
-  const dir = join(tmpdir(), 'agenthydra-launch')
-  mkdirSync(dir, { recursive: true })
-  const promptFile = join(dir, `prompt-${crypto.randomUUID()}.txt`)
-  writeFileSync(promptFile, spec.prompt)
-
-  const plan = buildTerminalLaunchPlan(
-    process.platform,
-    exe ?? resolveClaudeExe(),
-    promptFile,
-    spec.model,
-    opts.effort?.trim() || null,
-    opts.resumeSessionId?.trim() || null,
-    opts.permissionMode?.trim() || null,
-  )
-  if (plan.argv.length === 0) return { ok: false, reason: 'no-terminal', command: plan.command }
-  // The child gets a SANITIZED environment: every CLAUDE*/ANTHROPIC* variable the daemon itself
-  // inherited is dropped before the pinned credentials go in. Measured 2026-08-25: a daemon that
-  // had been (re)started from inside a Claude session leaked that session's CLAUDE_CODE_* vars
-  // into the launched terminal — the new session came up marked as a CHILD session (transcript
-  // saving off, never registered as a live peer), on the WRONG account, with bypass-permissions
-  // inherited. Exactly the trap AI_USAGE_SELFCHECK.md documents: spawned-claude runs must start
-  // from a clean env or the parent's environment masks everything.
-  const cleanEnv: Record<string, string> = {}
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v !== 'string') continue
-    if (/^(CLAUDE|ANTHROPIC)/i.test(k)) continue
-    cleanEnv[k] = v
-  }
-  try {
-    Bun.spawn(plan.argv, {
-      // ⛔ NO windowsHide, EVER, and no option to add one. A hidden terminal is a chat nobody
-      // can see, which is precisely what headless-policy.ts forbids - the ban is a property of
-      // the running chat, not a code path, and hiding the window walked straight around it.
-      // Measured 2026-08-31: three sessions started that way were invisible in every app the
-      // owner had open, and he found out by looking. If a launch would be unwelcome as a
-      // visible window it should not happen; automation lands work in a desktop app instead.
-      // The RESOLVED cwd, not the requested one: when the requested folder was untrusted this
-      // is its nearest trusted ancestor, and spawning into the original would reinstate the
-      // trust prompt the fallback exists to avoid.
-      cwd,
-      env: { ...cleanEnv, ...env },
-      stdin: 'ignore',
-      stdout: 'ignore',
-      stderr: 'ignore',
-    })
-    return { ok: true, command: plan.command }
-  } catch (err) {
-    return {
-      ok: false,
-      reason: err instanceof Error ? err.message : 'spawn-failed',
-      command: plan.command,
-    }
+  // ⛔ NOTHING OPENS A CONSOLE. Not this daemon, not a peer session, not an MCP caller, not a
+  // route. The owner closed unwanted terminal windows by hand four separate times on 2026-08-31,
+  // and every attempt to keep the capability while avoiding the annoyance failed: hiding the
+  // window produced a chat nobody could see, which headless-policy.ts bans outright, and turning
+  // the launcher off with a SETTING lasted minutes before something switched it back on. A
+  // capability that must never be used is not a setting, it is a capability to delete.
+  //
+  // The honest routes remain and are already built: the courier types the next instruction into
+  // an EXISTING desktop chat's own composer, and importSessionToDesktop lands a finished session
+  // in an app as a real chat. Work needing a NEW chat waits for a person to open one - the app
+  // offers no external way to create one anyway.
+  //
+  // The signature stays so every caller still compiles and gets a reason it can report, rather
+  // than the call site vanishing and the refusal becoming invisible.
+  void opts
+  return {
+    ok: false,
+    reason:
+      'terminal launches are removed: a visible console is a window nobody asked for, and a ' +
+      'hidden one is a headless chat. Deliver into an existing chat, or import a finished ' +
+      'session into a desktop app.',
+    command: '',
   }
 }
 
