@@ -495,3 +495,44 @@ test('darwin and linux read the file via cat; unknown platforms still return the
   expect(other.argv).toHaveLength(0)
   expect(other.command).toContain('claude')
 })
+
+// A VISIBLE TERMINAL IS RIGHT WHEN A PERSON ASKED FOR THE SESSION and means to watch it. It is
+// wrong for a launch the machine makes on its own every cooldown: three consoles stacked up on
+// the owner's desktop within twenty minutes of the auto-launch going live. `cmd /c start` is
+// what creates the window, so a hidden launch must not go through it.
+test('a hidden launch opens no console, and the visible one is unchanged', () => {
+  const seen = buildTerminalLaunchPlan('win32', 'C:\\c.exe', 'C:\\p.txt', null, null, null, null)
+  expect(seen.argv.slice(0, 4)).toEqual(['cmd', '/c', 'start', ''])
+  expect(seen.argv).toContain('-NoExit')
+
+  const hidden = buildTerminalLaunchPlan(
+    'win32',
+    'C:\\c.exe',
+    'C:\\p.txt',
+    null,
+    null,
+    null,
+    'bypassPermissions',
+    true,
+  )
+  expect(hidden.argv[0]).toBe('powershell')
+  expect(hidden.argv).not.toContain('start')
+  // -NoExit exists only to keep a window open to be read; a hidden run has no window.
+  expect(hidden.argv).not.toContain('-NoExit')
+  // Hiding the console must not change WHAT runs: same binary, same prompt file, and the
+  // unattended permission mode still applied.
+  expect(hidden.command).toContain("& 'C:\\c.exe'")
+  expect(hidden.command).toContain("Get-Content -Raw 'C:\\p.txt'")
+  expect(hidden.command).toContain('--permission-mode bypassPermissions')
+  const bothHidden = buildTerminalLaunchPlan(
+    'win32',
+    'C:\\c.exe',
+    'C:\\p.txt',
+    null,
+    null,
+    null,
+    null,
+    true,
+  )
+  expect(bothHidden.command).toBe(seen.command)
+})
