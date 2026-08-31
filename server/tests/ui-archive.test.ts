@@ -10,6 +10,8 @@ function deps(over: {
   invokeCode?: number
   archivedAfter?: boolean
   titleCount?: number
+  /** How many chats with that title are NOT archived - i.e. could be wrongly retired. */
+  liveTitleCount?: number
 }): { d: UiArchiveDeps; calls: string[] } {
   const calls: string[] = []
   let t = 0
@@ -22,6 +24,7 @@ function deps(over: {
     },
     readArchived: () => over.archivedAfter ?? true,
     readTitleCount: () => over.titleCount ?? 1,
+    readLiveTitleCount: () => over.liveTitleCount ?? over.titleCount ?? 1,
     sleep: async () => {},
     now: () => (t += 1000),
   }
@@ -71,8 +74,8 @@ test('the SAME chat rendered twice is safe to click - disk holds one chat with t
   expect(calls).toEqual(['invoke:Real Chat Name'])
 })
 
-test('two DIFFERENT chats sharing the title on disk -> refuse; the click could hit the wrong one', async () => {
-  const { d, calls } = deps({ titleCount: 2 })
+test('two chats sharing the title, one still LIVE -> refuse; the click could hit the wrong one', async () => {
+  const { d, calls } = deps({ titleCount: 2, liveTitleCount: 1 })
   const r = await uiArchiveChat('C:/i1', 'sid', d)
   expect(r.clicked).toBe(false)
   expect(r.reason).toContain('2 chats')
@@ -175,4 +178,17 @@ test('a failed rename is reported as a failure, with whatever the tool said', as
   }))
   expect(r.ok).toBe(false)
   expect(r.detail).toContain('ambiguous')
+})
+
+// ⛔ REFUSING ON THE COUNT ALONE STRANDED ROWS NOTHING COULD EVER CLEAR. Measured live: two
+// retired chats both titled 'Orchestrate' sat in the sidebar permanently, because every pass
+// declined to click either on the grounds it might hit "the wrong one" - when both were already
+// archived and either click was correct. The hazard is a chat that should SURVIVE, not a shared
+// name, so the question is whether any holder of that title is still live.
+test('two chats sharing the title, ALL already archived -> click, because none can be lost', async () => {
+  const { d, calls } = deps({ titleCount: 2, liveTitleCount: 0 })
+  const r = await uiArchiveChat('C:/i1', 'sid', d)
+  expect(r.clicked).toBe(true)
+  expect(r.verified).toBe(true)
+  expect(calls).toContain('invoke:Real Chat Name')
 })

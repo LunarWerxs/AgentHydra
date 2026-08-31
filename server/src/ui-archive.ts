@@ -93,7 +93,7 @@ function diskArchivedOf(profileDir: string, sessionId: string): boolean | null {
 
 /** How many chats in this profile's store carry `title` on disk, ANY archive state. More than
  *  one means a rendered row with that title is ambiguous and must not be clicked. */
-function diskTitleCountOf(profileDir: string, title: string): number {
+function diskTitleCountOf(profileDir: string, title: string, liveOnly = false): number {
   let n = 0
   try {
     const storeDir = join(profileDir, 'claude-code-sessions')
@@ -106,7 +106,7 @@ function diskTitleCountOf(profileDir: string, title: string): number {
           if (!f.startsWith('local_') || !f.endsWith('.json')) continue
           try {
             const meta = JSON.parse(readFileSync(join(dir, f), 'utf8'))
-            if (meta.title === title) n++
+            if (meta.title === title && (!liveOnly || meta.isArchived !== true)) n++
           } catch {
             // one unreadable file says nothing about the others
           }
@@ -164,6 +164,8 @@ export interface UiArchiveDeps {
   readArchived?: (profileDir: string, sessionId: string) => boolean | null
   /** How many chats in the profile's store carry this title on disk, any archive state. */
   readTitleCount?: (profileDir: string, title: string) => number
+  /** How many of those are NOT archived - i.e. how many could be wrongly retired by a click. */
+  readLiveTitleCount?: (profileDir: string, title: string) => number
   sleep?: (ms: number) => Promise<void>
   now?: () => number
 }
@@ -181,6 +183,8 @@ export async function uiArchiveChat(
   const readTitle = deps.readTitle ?? diskTitleOf
   const readArchived = deps.readArchived ?? diskArchivedOf
   const readTitleCount = deps.readTitleCount ?? diskTitleCountOf
+  const readLiveTitleCount =
+    deps.readLiveTitleCount ?? ((dir: string, t: string) => diskTitleCountOf(dir, t, true))
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const now = deps.now ?? Date.now
 
@@ -218,11 +222,18 @@ export async function uiArchiveChat(
   // The hazard is a DIFFERENT chat sharing this title; disk answers that. The same chat
   // rendered in two sidebar sections (measured live) is safe - every matching row is it.
   const holders = readTitleCount(profileDir, title)
-  if (holders > 1)
+  // ⛔ THE HAZARD IS A CHAT THAT SHOULD SURVIVE, not a shared name. Refusing on the count alone
+  // stranded rows nothing could ever clear: two retired chats both called 'Orchestrate' sat in
+  // the sidebar permanently, because every pass refused to click either one on the grounds that
+  // it might hit "the wrong one" - when both were already archived and either click was right.
+  // So the question is not how many chats carry this title, it is whether any of them is still
+  // live. If one is, clicking by title could retire it and the refusal stands.
+  const live = readLiveTitleCount(profileDir, title)
+  if (holders > 1 && live > 0)
     return {
       clicked: false,
       verified: false,
-      reason: `${holders} chats in this profile's store carry the title '${title}' - clicking by title could archive the wrong one`,
+      reason: `${holders} chats in this profile's store carry the title '${title}' and ${live} of them ${live === 1 ? 'is' : 'are'} not archived - clicking by title could archive the wrong one`,
     }
   const { code, out } = await invoke(profileDir, title)
   // Exit 0 = row left the sidebar; exit 2 = Archive was INVOKED but the row still rendered at
