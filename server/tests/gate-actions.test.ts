@@ -167,14 +167,45 @@ const fresh = (ref: string, weeklyPct: number, sessionPct = 0) => ({
   stale: false,
 })
 
-test('running -> left alone, always', async () => {
+// 'running' is no longer one state. A chat mid-turn is untouchable; a chat whose process is
+// alive but which has been QUIET past the in-flight window is idle, and idle is waiting - the
+// sweep has routed those to the judgment lane since 9bed808, and the act path refusing them was
+// the two halves disagreeing (a peer could see the lane and could not act on it).
+test('running and mid-turn -> left alone', async () => {
   const { deps, events } = fixture({
-    gate: gateOf({ state: 'running', live: { pid: 7, name: 'x' } }),
+    gate: gateOf({ state: 'running', live: { pid: 7, name: 'x' }, quietSecs: 0 }),
   })
   const r = await actOnGate('sid', {}, deps)
   expect(r?.action).toBe('left-alone')
-  expect(r?.why).toContain('leave it alone')
+  expect(r?.why).toContain('in-flight window')
   expect(events).toEqual([])
+})
+
+test('running but STUCK -> left alone; a person must look, automation does not touch it', async () => {
+  const { deps, events } = fixture({
+    gate: gateOf({
+      state: 'running',
+      live: { pid: 7, name: 'x' },
+      quietSecs: 9_000,
+      stalled: { tool: 'Bash', quietSecs: 9_000, why: 'a shell command nobody approved' },
+    }),
+  })
+  const r = await actOnGate('sid', {}, deps)
+  expect(r?.action).toBe('left-alone')
+  expect(r?.why).toContain('STUCK')
+  expect(events).toEqual([])
+})
+
+test('running but long QUIET -> actionable: it is waiting, and the answer is staged for it', async () => {
+  const { deps } = fixture({
+    gate: gateOf({ state: 'running', live: { pid: 7, name: 'x' }, quietSecs: 9_000 }),
+  })
+  // Without an answer it PARKS rather than pretending a decision was made.
+  const parked = await actOnGate('sid', {}, deps)
+  expect(parked?.action).toBe('parked')
+  const acted = await actOnGate('sid', { decision: 'autonomous', answer: 'carry on' }, deps)
+  expect(acted?.action).toBe('surfaced')
+  expect(acted?.prompt).toBe('carry on')
 })
 
 test('human-interrupted -> left alone', async () => {

@@ -27,7 +27,13 @@
 // picker (closedLandingEligible / pickLandingInstance) so the auto-resume landing path and this
 // module cannot drift apart on it.
 
-import { type ChatGate, type ChatGateDeps, type CrashKind, chatGate } from './chat-gate'
+import {
+  type ChatGate,
+  type ChatGateDeps,
+  type CrashKind,
+  chatGate,
+  IDLE_AFTER_SECS,
+} from './chat-gate'
 import { resolveAutomatedTitle } from './chat-title'
 import { openInstance } from './core/instances'
 import { stageDelivery } from './deliveries'
@@ -356,12 +362,21 @@ async function actOnGateInner(
   //
   // A turn genuinely IN FLIGHT is still untouchable - that is what the live rail protects, and
   // g.idle is null for anything mid-turn however long it has been quiet.
-  if (g.state === 'running' && !g.idle)
+  // The SWEEP's rule, mirrored exactly, because these two disagreeing is the bug. It routes a
+  // live chat on `idle` OR on the catch-all (unarchived, quiet past the in-flight window, no
+  // lane could place it) - and the second is how a dormant IMPORTED chat arrives, since its
+  // transcript tail is not a clean completed turn and `idle` is therefore null. Acting only on
+  // `idle` left exactly those chats presented for a decision and then refused.
+  const quietEnough = g.quietSecs >= IDLE_AFTER_SECS
+  const actionableLive = g.state === 'running' && !g.stalled && (!!g.idle || quietEnough)
+  if (g.state === 'running' && !actionableLive)
     return res(
       'left-alone',
-      `running (pid ${g.live?.pid}) - the rule is leave it alone; a long quiet can be background work`,
+      g.stalled
+        ? `running (pid ${g.live?.pid}) but STUCK: ${g.stalled.why} - a person must look; automation does not touch it`
+        : `running (pid ${g.live?.pid}) and quiet only ${g.quietSecs}s - inside the in-flight window, so it is working`,
     )
-  if (g.state === 'running' && g.idle) {
+  if (actionableLive) {
     // It is on screen already (it has a process and a rendered row), so nothing needs importing.
     // What it needs is the prompt typed into its own composer, which is exactly what the courier
     // does - and the courier refuses independently if a Stop button says a turn is in flight.
@@ -369,14 +384,14 @@ async function actOnGateInner(
     if (!answer)
       return res(
         'parked',
-        `idle for ${g.idle.quietSecs}s and waiting for its next instruction. This is the ONE AI ` +
+        `idle for ${g.quietSecs}s and waiting for its next instruction. This is the ONE AI ` +
           'step: read the evidence and call again with decision "autonomous" plus the answer ' +
           'text, or decision "human" to leave it.',
       )
     d.stage({ sessionId, prompt: answer, instanceRef: d.pinnedRefFor(sessionId) ?? null })
     return res(
       'surfaced',
-      `idle for ${g.idle.quietSecs}s - it finished its turn and stopped, so its next instruction ` +
+      `idle for ${g.quietSecs}s - it finished its turn or was imported dormant and stopped, so its next instruction ` +
         'is staged for delivery into its own composer (it is already on screen; nothing was imported)',
       { prompt: answer, promptDelivery: 'deliver-natively-via-the-app-message-channel' },
     )
