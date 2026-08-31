@@ -128,6 +128,26 @@ foreach ($m in $mains) {
       $n = $e.Current.Name
       if (-not $n -or -not $n.Contains($VerifyText)) { continue }
       try { if ($e.Current.IsOffscreen) { continue } } catch { continue }
+      # ⛔ A SIDEBAR PREVIEW IS NOT THE CONVERSATION. IsOffscreen alone is NOT enough: a chat
+      # row's own preview snippet renders the chat's newest turn ON SCREEN in the sidebar, so
+      # a window-wide scan can "prove" the target while a DIFFERENT conversation is open -
+      # and if the row click silently no-opped, the prompt then goes into that other chat's
+      # composer. Measured live 2026-08-31: a staged drill prompt was typed into a real work
+      # chat twice this way. Conversation text does not live inside a Button/ListItem;
+      # sidebar previews do. Walk up: any Button/ListItem ancestor disqualifies the match.
+      $inRow = $false
+      $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+      $p = $e
+      for ($i = 0; $i -lt 20 -and $p; $i++) {
+        try { $p = $walker.GetParent($p) } catch { break }
+        if (-not $p) { break }
+        try {
+          $ct = $p.Current.ControlType
+          if ($ct -eq [System.Windows.Automation.ControlType]::Button -or
+              $ct -eq [System.Windows.Automation.ControlType]::ListItem) { $inRow = $true; break }
+        } catch { break }
+      }
+      if ($inRow) { continue }
       return $e
     }
     return $null
