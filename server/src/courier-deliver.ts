@@ -34,29 +34,44 @@ const TAIL_BYTES = 256 * 1024
 const VERIFY_MIN = 24
 const VERIFY_MAX = 60
 
+/** How many aim candidates to hand the actuator. Each rejected candidate costs one UIA pass
+ *  (~seconds) and types nothing, so a short ladder is cheap; an endless one would be a stall. */
+const MAX_CANDIDATES = 3
+/** Machinery-written prompts that are IDENTICAL across chats (the crashed-lane resume notice).
+ *  Using one as the aim proof would let the actuator "verify" against a DIFFERENT chat that
+ *  received the same boilerplate - the exact compact-summary trap, one layer up. */
+const BOILERPLATE_PREFIXES = ['[agenthydra]']
+
 /**
- * A snippet of THIS session's own conversation, for ui-deliver's on-screen aim check.
+ * Snippets of THIS session's own conversation, for ui-deliver's on-screen aim check -
+ * NEWEST eligible user turn first. Empty when nothing usable is found: the caller must then
+ * leave the row pending rather than aim at nothing.
  *
- * The FIRST user turn is used, not the newest: it is the most stable thing on screen (a
- * newest-turn snippet can be mid-render, or scrolled out) and it is what the app shows as
- * "Du hast gesagt: ..." in the conversation pane. Null when nothing usable is found - the
- * caller must then leave the row pending rather than aim at nothing.
+ * Newest-first is measured, not aesthetic (2026-08-31): the conversation pane opens scrolled
+ * to the BOTTOM, so on any long chat the first user turn is far above the viewport and the
+ * old first-turn rule made the actuator refuse every long-running chat on this fleet - the
+ * two chats that most needed rescuing were exactly the two it could not aim at. The ladder
+ * keeps the short-chat case working (its oldest turn is still on screen AND still in the
+ * tail buffer) because a wrong-chat refusal types nothing, so trying the next candidate is
+ * free. The transcript TAIL is read for the same reason: on a transcript bigger than the
+ * buffer, the head holds turns the pane cannot possibly be showing.
  */
-export function deriveVerifyText(transcriptPath: string): string | null {
+export function deriveVerifyCandidates(transcriptPath: string): string[] {
   let text: string
   try {
     const size = statSync(transcriptPath).size
     const buf = Buffer.alloc(Math.min(size, TAIL_BYTES))
     const fd = openSync(transcriptPath, 'r')
     try {
-      readSync(fd, buf, 0, buf.length, 0)
+      readSync(fd, buf, 0, buf.length, Math.max(0, size - buf.length))
     } finally {
       closeSync(fd)
     }
     text = buf.toString('utf8')
   } catch {
-    return null
+    return []
   }
+  const inOrder: string[] = []
   for (const line of text.split('\n')) {
     const t = line.trim()
     if (!t.startsWith('{') || !t.includes('"user"')) continue
@@ -88,12 +103,29 @@ export function deriveVerifyText(transcriptPath: string): string | null {
       // One line, collapsed - the accessible name the app renders is a single string.
       const flat = s.replace(/\s+/g, ' ').trim()
       if (flat.length < VERIFY_MIN) continue
-      return flat.slice(0, VERIFY_MAX)
+      // Same cross-chat trap as the compact summary, machinery-made: the resume notice is a
+      // code constant delivered to every crashed chat, so it proves nothing about WHICH one.
+      if (BOILERPLATE_PREFIXES.some((p) => flat.startsWith(p))) continue
+      inOrder.push(flat.slice(0, VERIFY_MAX))
     } catch {
       // A truncated or half-written line - skip it, never guess.
     }
   }
-  return null
+  const seen = new Set<string>()
+  const newestFirst: string[] = []
+  for (let i = inOrder.length - 1; i >= 0 && newestFirst.length < MAX_CANDIDATES; i--) {
+    const c = inOrder[i] as string
+    if (seen.has(c)) continue
+    seen.add(c)
+    newestFirst.push(c)
+  }
+  return newestFirst
+}
+
+/** The single best aim snippet (the newest eligible turn), or null. Kept for callers and
+ *  tests that need one string; the courier itself walks the full ladder. */
+export function deriveVerifyText(transcriptPath: string): string | null {
+  return deriveVerifyCandidates(transcriptPath)[0] ?? null
 }
 
 export interface CourierDeliveryAttempt {
@@ -242,8 +274,8 @@ export async function deliverPendingRows(
       continue
     }
     const path = transcriptOf(row.session_id)
-    const verifyText = path ? deriveVerifyText(path) : null
-    if (!verifyText) {
+    const candidates = path ? deriveVerifyCandidates(path) : []
+    if (candidates.length === 0) {
       out.push({
         sessionId: row.session_id,
         title: chat.title,
@@ -259,12 +291,24 @@ export async function deliverPendingRows(
       row.session_id,
       now(),
     )
-    const r = await deliver({
-      instanceDir,
-      title: chat.title,
-      message: row.prompt,
-      verifyText,
-    })
+    // Walk the ladder: a wrong-chat refusal PROVED nothing was typed, so the next candidate
+    // (an older turn - the pane may be scrolled up, or the newest turn mid-render) is free to
+    // try. Any other outcome - delivered, busy, error - ends the walk; those all mean the
+    // aim question was settled or the attempt actually engaged the window.
+    let r: DeliverResult = {
+      ok: false,
+      outcome: 'error',
+      detail: 'no delivery attempted',
+    }
+    for (const verifyText of candidates) {
+      r = await deliver({
+        instanceDir,
+        title: chat.title,
+        message: row.prompt,
+        verifyText,
+      })
+      if (r.outcome !== 'wrong-chat') break
+    }
     // Stamp on SUCCESS only: a refusal typed nothing, so it must stay retryable.
     // A delivery that LANDED also forgets the count - the brake is for futility, not for work
     // that works (same rule as the surface lane).

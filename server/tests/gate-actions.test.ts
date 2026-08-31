@@ -16,6 +16,7 @@ import {
   resumeNotice,
 } from '../src/gate-actions'
 import { closedLandingEligible, pickLandingInstance, underLandingThreshold } from '../src/monitor'
+import { withUltracode } from '../src/new-chat-defaults'
 
 const gateOf = (over: Partial<ChatGate>): ChatGate => ({
   sessionId: 's',
@@ -205,7 +206,10 @@ test('running but long QUIET -> actionable: it is waiting, and the answer is sta
   expect(parked?.action).toBe('parked')
   const acted = await actOnGate('sid', { decision: 'autonomous', answer: 'carry on' }, deps)
   expect(acted?.action).toBe('surfaced')
-  expect(acted?.prompt).toBe('carry on')
+  // The staged answer is armed with the ultracode keyword (owner rule: every prompt the
+  // machinery hands a chat runs ultracode; withUltracode is idempotent for answers that
+  // already carry it).
+  expect(acted?.prompt).toBe(withUltracode('carry on'))
 })
 
 test('human-interrupted -> left alone', async () => {
@@ -295,7 +299,7 @@ test('crashed with a RUNNING home -> surfaced there, resume prompt attached, not
   expect(r?.action).toBe('surfaced')
   expect(r?.instance).toEqual({ ref: 'desktop:C:/i1', num: 1 })
   expect(r?.openedInstance).toBe(false)
-  expect(r?.prompt).toBe(resumeNotice('mid-turn'))
+  expect(r?.prompt).toBe(withUltracode(resumeNotice('mid-turn')))
   expect(r?.promptDelivery).toBe('deliver-natively-via-the-app-message-channel')
   expect(events).toEqual(['import:C:/i1:A Real Name'])
 })
@@ -858,7 +862,11 @@ test('every surfaced result STAGES its prompt in the delivery ledger', async () 
   const home = fixture({ gate: crashedGate('mid-turn'), home: 'C:/i1' })
   await actOnGate('sid', {}, home.deps)
   expect(home.staged).toEqual([
-    { sessionId: 'sid', prompt: resumeNotice('mid-turn'), instanceRef: 'desktop:C:/i1' },
+    {
+      sessionId: 'sid',
+      prompt: withUltracode(resumeNotice('mid-turn')),
+      instanceRef: 'desktop:C:/i1',
+    },
   ])
 
   // The migration path stages too, pointed at the NEW home.

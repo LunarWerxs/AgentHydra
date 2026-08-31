@@ -9,6 +9,7 @@ import {
   type CourierDeliverDeps,
   clearRecentlySent,
   deliverPendingRows,
+  deriveVerifyCandidates,
   deriveVerifyText,
   distinctInstances,
 } from '../src/courier-deliver'
@@ -56,7 +57,7 @@ function deps(over: Partial<CourierDeliverDeps> = {}): CourierDeliverDeps {
   }
 }
 
-test('the aim proof comes from the target chat OWN first user turn', () => {
+test('the aim proof comes from the target chat OWN user turns', () => {
   const p = transcript([
     {
       type: 'user',
@@ -65,6 +66,71 @@ test('the aim proof comes from the target chat OWN first user turn', () => {
     { type: 'assistant', message: { content: [{ type: 'text', text: 'Ready.' }] } },
   ])
   expect(deriveVerifyText(p)).toBe('Fix the widget pipeline please')
+})
+
+test('the NEWEST turn leads the ladder - a bottom-scrolled pane shows the end, not the start', () => {
+  // Measured 2026-08-31: the first-turn rule refused every long chat on the fleet, because
+  // the conversation pane opens scrolled to the bottom and the opening turn is far above it.
+  const p = transcript([
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'The very first instruction of this chat' }] },
+    },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Working on it.' }] } },
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'A later correction only this chat received' }] },
+    },
+  ])
+  expect(deriveVerifyCandidates(p)).toEqual([
+    'A later correction only this chat received',
+    'The very first instruction of this chat',
+  ])
+})
+
+test('[agenthydra] boilerplate is never the aim proof - it is identical across resumed chats', () => {
+  const p = transcript([
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'Convert the corpus, worst-first, until zero' }] },
+    },
+    {
+      type: 'user',
+      message: {
+        content: [
+          {
+            type: 'text',
+            text: '[agenthydra] Gate verdict: crashed (mid-turn) - this chat stopped without finishing its last turn.',
+          },
+        ],
+      },
+    },
+  ])
+  expect(deriveVerifyCandidates(p)).toEqual(['Convert the corpus, worst-first, until zero'])
+})
+
+test('a large transcript is read from the TAIL - the head is beyond the viewport anyway', () => {
+  // Regression pin for the offset bug: TAIL_BYTES was read from position 0, so on any
+  // transcript past 256KB the aim proof came from turns the pane could not possibly show.
+  const pad = {
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'x'.repeat(4000) }] },
+  }
+  const lines: object[] = [
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'HEAD marker turn, long gone off screen' }] },
+    },
+  ]
+  for (let i = 0; i < 80; i++) lines.push(pad)
+  lines.push({
+    type: 'user',
+    message: { content: [{ type: 'text', text: 'TAIL marker turn, the one actually visible' }] },
+  })
+  const p = transcript(lines)
+  const c = deriveVerifyCandidates(p)
+  expect(c[0]).toBe('TAIL marker turn, the one actually visible')
+  expect(c).not.toContain('HEAD marker turn, long gone off screen')
 })
 
 test('a too-short or missing user turn yields NO aim proof - never a guess', () => {
@@ -220,6 +286,63 @@ test('a compaction-summary preamble is NEVER the aim proof - it is identical acr
     },
   ])
   expect(deriveVerifyText(p)).toBe('Now fix the widget pipeline for real')
+})
+
+test('a wrong-chat refusal walks the ladder: the next candidate is tried, and it delivers', async () => {
+  // The refusal PROVED nothing was typed, so trying an older turn is free - and it is the
+  // difference between rescuing a long chat and stranding it forever.
+  const tried: string[] = []
+  const p = transcript([
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'The opening instruction, still on screen' }] },
+    },
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'The newest turn, mid-render right now' }] },
+    },
+  ])
+  const out = await deliverPendingRows(
+    deps({
+      transcriptOf: () => p,
+      deliver: async (o) => {
+        tried.push(o.verifyText)
+        if (tried.length === 1)
+          return { ok: false, outcome: 'wrong-chat', detail: 'REFUSED: not visible' }
+        return { ok: true, outcome: 'delivered', detail: 'DELIVERED' }
+      },
+    }),
+  )
+  expect(tried).toEqual([
+    'The newest turn, mid-render right now',
+    'The opening instruction, still on screen',
+  ])
+  expect(out[0]?.outcome).toBe('delivered')
+})
+
+test('a busy refusal does NOT walk the ladder - the aim was settled, the chat is just working', async () => {
+  const tried: string[] = []
+  const p = transcript([
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'First instruction of the chat' }] },
+    },
+    {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'Second instruction of the chat' }] },
+    },
+  ])
+  const out = await deliverPendingRows(
+    deps({
+      transcriptOf: () => p,
+      deliver: async (o) => {
+        tried.push(o.verifyText)
+        return { ok: false, outcome: 'chat-busy', detail: 'turn in flight' }
+      },
+    }),
+  )
+  expect(tried).toHaveLength(1)
+  expect(out[0]?.outcome).toBe('chat-busy')
 })
 
 test('a row delivered moments ago is NOT re-sent - the receipt lags the send', async () => {

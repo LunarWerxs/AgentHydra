@@ -46,6 +46,7 @@ import {
   saturatedNow,
   underLandingThreshold,
 } from './monitor'
+import { withUltracode } from './new-chat-defaults'
 import { pathKey } from './path-key'
 import {
   archiveDesktopChat,
@@ -388,12 +389,16 @@ async function actOnGateInner(
           'step: read the evidence and call again with decision "autonomous" plus the answer ' +
           'text, or decision "human" to leave it.',
       )
-    d.stage({ sessionId, prompt: answer, instanceRef: d.pinnedRefFor(sessionId) ?? null })
+    // Owner rule (2026-08-30, reaffirmed angrily 2026-08-31): every prompt the machinery
+    // hands a chat arms ultracode. Idempotent, so an answer that already carries it is
+    // untouched, and the ledger copy matches the copy handed back to the caller.
+    const armed = withUltracode(answer)
+    d.stage({ sessionId, prompt: armed, instanceRef: d.pinnedRefFor(sessionId) ?? null })
     return res(
       'surfaced',
       `idle for ${g.quietSecs}s - it finished its turn or was imported dormant and stopped, so its next instruction ` +
         'is staged for delivery into its own composer (it is already on screen; nothing was imported)',
-      { prompt: answer, promptDelivery: 'deliver-natively-via-the-app-message-channel' },
+      { prompt: armed, promptDelivery: 'deliver-natively-via-the-app-message-channel' },
     )
   }
 
@@ -502,7 +507,9 @@ async function actOnGateInner(
       { resumeAt },
     )
   }
-  return surfaceForMessage(sessionId, resumeNotice(kind), gateEcho, d)
+  // Same owner rule as the autonomous-answer seam: every machinery-staged prompt arms
+  // ultracode, the generic resume notice included.
+  return surfaceForMessage(sessionId, withUltracode(resumeNotice(kind)), gateEcho, d)
 }
 
 /** The earliest known reset for the account this chat runs on, from the usage cache. */
