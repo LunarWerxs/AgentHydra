@@ -509,7 +509,7 @@ async function actOnGateInner(
   }
   // Same owner rule as the autonomous-answer seam: every machinery-staged prompt arms
   // ultracode, the generic resume notice included.
-  return surfaceForMessage(sessionId, withUltracode(resumeNotice(kind)), gateEcho, d)
+  return surfaceForMessage(sessionId, resumeNotice(kind), gateEcho, d)
 }
 
 /** The earliest known reset for the account this chat runs on, from the usage cache. */
@@ -539,10 +539,14 @@ async function resetTimeFor(sessionId: string, d: ReturnType<typeof real>): Prom
  */
 async function surfaceForMessage(
   sessionId: string,
-  prompt: string,
+  rawPrompt: string,
   gateEcho: GateActionResult['gate'],
   d: ReturnType<typeof real>,
 ): Promise<GateActionResult> {
+  // Owner rule (2026-08-31): every machinery-staged prompt arms ultracode. Wrapped HERE, the
+  // one chokepoint every surface path funnels through, after the needs-input-review answer
+  // path (line ~488) shipped unwrapped - a third seam the two call-site wraps missed.
+  const prompt = withUltracode(rawPrompt)
   const res = (
     action: GateActionKind,
     why: string,

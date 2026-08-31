@@ -532,7 +532,7 @@ test('needs-input judged autonomous -> surfaced with the ANSWER as the prompt', 
   const { deps } = fixture({ gate: finishedGate('needs-input-review'), home: 'C:/i1' })
   const r = await actOnGate('sid', { decision: 'autonomous', answer: 'Yes - ship it.' }, deps)
   expect(r?.action).toBe('surfaced')
-  expect(r?.prompt).toBe('Yes - ship it.')
+  expect(r?.prompt).toBe(withUltracode('Yes - ship it.'))
 })
 
 test('autonomous without answer text -> parked', async () => {
@@ -854,7 +854,7 @@ test('an autonomous ANSWER rides the same balancing branch as a crash resume', a
   const r = await actOnGate('sid', { decision: 'autonomous', answer: 'Yes - proceed.' }, deps)
   expect(r?.action).toBe('surfaced')
   expect(r?.instance?.num).toBe(3)
-  expect(r?.prompt).toBe('Yes - proceed.')
+  expect(r?.prompt).toBe(withUltracode('Yes - proceed.'))
   expect(r?.why).toContain('migrated off its saturated home')
 })
 
