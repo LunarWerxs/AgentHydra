@@ -158,6 +158,8 @@ export const NEVER_SYNCED = [
   'sweep_judge_enabled',
   'sweep_judge_cooldown_min',
   'sweep_judge_last_at',
+  // Whether consoles appear on THIS screen. About this machine's desktop, not about a person.
+  'terminal_windows_visible',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

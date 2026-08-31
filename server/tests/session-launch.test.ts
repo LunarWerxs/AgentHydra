@@ -25,6 +25,7 @@ import {
   reassertChatAutomation,
   stampImportedChat,
   sweepUntitledDesktopChats,
+  terminalWindowHidden,
 } from '../src/session-launch'
 
 function markDone(sessionId: string, done: boolean): void {
@@ -535,4 +536,25 @@ test('a hidden launch opens no console, and the visible one is unchanged', () =>
     true,
   )
   expect(bothHidden.command).toBe(seen.command)
+})
+
+// ⛔ THE DEFAULT IS HIDDEN, and that is the whole fix. Twice in one night the machinery put
+// consoles on the owner's screen - three, then six - and the second batch came from a layer
+// nobody had counted: an auto-opened orchestrator launching handoff sessions of its own. A
+// per-caller flag cannot fix that, because the problem is every caller that forgets it.
+test('terminalWindowHidden: hidden unless someone explicitly asks otherwise', async () => {
+  const { setSetting } = await import('../src/db')
+  setSetting('terminal_windows_visible', '0')
+  expect(terminalWindowHidden(undefined)).toBe(true)
+  // An explicit caller choice still wins - a person clicking "open a terminal" gets a terminal.
+  expect(terminalWindowHidden(false)).toBe(false)
+  expect(terminalWindowHidden(true)).toBe(true)
+  // The owner can bring windows back fleet-wide.
+  setSetting('terminal_windows_visible', '1')
+  expect(terminalWindowHidden(undefined)).toBe(false)
+  // ABSENT must mean hidden, never "show windows" - an unregistered key is exactly how this
+  // regressed the first time.
+  setSetting('terminal_windows_visible', '')
+  expect(terminalWindowHidden(undefined)).toBe(true)
+  setSetting('terminal_windows_visible', '0')
 })

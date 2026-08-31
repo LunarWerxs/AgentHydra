@@ -501,6 +501,11 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // Persisted so the cooldown survives a daemon restart (auto-update restarts it): an
   // in-memory stamp would let every restart open another orchestrator immediately.
   sweep_judge_last_at: '0',
+  // ⛔ CONSOLE WINDOWS ARE OFF BY DEFAULT (owner, 2026-08-31, after closing them by hand twice
+  // in one night - three the first time, six the second). A terminal launch used to be visible
+  // on the premise that a person asked for it; the standing sweep now opens sessions on its
+  // own, and those sessions open more. Set to '1' to bring the windows back fleet-wide.
+  terminal_windows_visible: '0',
   // The courier (courier.ts): delivers staged prompts by driving the target chat's own
   // composer in the running app. ON (2026-08-30) now that the transport is proven end to end
   // on the real fleet - a dormant chat answered with zero clicks and no human - and every

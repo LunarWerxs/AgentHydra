@@ -10,8 +10,14 @@
 // DESKTOP-app chat cannot be created externally at all — there is no stable interface for
 // it; the terminal window is the visible surface that exists.)
 //
-// THIS WINDOW IS MEANT TO BE SEEN — `windowsHide` is deliberately ABSENT, same posture and
-// same guard exemption as session-resume.ts (scripts/checks/spawn-console-window.mjs).
+// ⛔ THE WINDOW IS NOW HIDDEN BY DEFAULT — see terminalWindowHidden below. The header above
+// describes why a VISIBLE window was once the right default, and that reasoning still holds for
+// a session a PERSON asks for. It stopped holding when the standing sweep began opening
+// sessions on its own, and the sessions it opens began opening more: measured 2026-08-31, three
+// windows in one pass and six in the next, closed by hand both times. Callers that want a
+// window ask for one; the owner can restore the old behaviour fleet-wide with
+// terminal_windows_visible. This file keeps its guard exemption (spawn-console-window.mjs)
+// because it is still the file that CAN open one.
 //
 // CREDENTIALS. A launch pinned to an instance runs on THAT instance's account:
 //   · 'cli:<id>'      → CLAUDE_CONFIG_DIR points at the CLI instance's config dir. No token
@@ -36,7 +42,7 @@ import { resolveClaudeExe } from './config'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
-import { db } from './db'
+import { db, getSetting } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
 import { applyNewChatDefaults } from './new-chat-defaults'
 import { samePathKey } from './path-key'
@@ -88,6 +94,30 @@ export function bundledClaudeExe(instanceDir: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * ⛔ THE ONE PLACE THAT DECIDES WHETHER A CONSOLE APPEARS. Every terminal launch in this
+ * process passes through here, so no caller can put a window on the owner's screen by
+ * forgetting a flag.
+ *
+ * IT DEFAULTS TO HIDDEN, and that inversion was earned. The old default was visible, on the
+ * premise that a PERSON asked for the session and meant to watch it. That premise is now false
+ * for most callers: the standing sweep opens an orchestrator on its own, and the orchestrator
+ * it opens then launches handoff sessions of its own. Measured 2026-08-31, twice in one night -
+ * three windows the first time, six the second, the second batch from a layer nobody had
+ * counted. The owner closed them by hand both times.
+ *
+ * A caller that genuinely wants a window asks for one (`hidden: false`), and the owner can
+ * restore the old behaviour fleet-wide by setting terminal_windows_visible. Both are explicit;
+ * neither is the accident.
+ */
+export function terminalWindowHidden(callerHidden?: boolean): boolean {
+  // A caller's explicit choice wins - a person clicking "open a terminal" gets their terminal.
+  if (typeof callerHidden === 'boolean') return callerHidden
+  // Absent means ABSENT, not false: an unregistered key must not silently mean "show windows".
+  const raw = getSetting('terminal_windows_visible').trim()
+  return raw === '' ? true : raw !== '1'
 }
 
 export interface TerminalLaunchPlan {
@@ -348,7 +378,7 @@ export async function launchTerminalSession(opts: {
     opts.effort?.trim() || null,
     opts.resumeSessionId?.trim() || null,
     opts.permissionMode?.trim() || null,
-    opts.hidden === true,
+    terminalWindowHidden(opts.hidden),
   )
   if (plan.argv.length === 0) return { ok: false, reason: 'no-terminal', command: plan.command }
   // The child gets a SANITIZED environment: every CLAUDE*/ANTHROPIC* variable the daemon itself
