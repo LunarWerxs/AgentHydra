@@ -119,6 +119,15 @@ export interface SweepReport {
   /** Candidates the deadline cut off - listed, never silently dropped. */
   unswept: Array<{ sessionId: string; title: string | null; instance: string | null }>
   deadlineHit: boolean
+  /** ROWS THE OWNER SEES THAT THIS SWEEP CANNOT: archived on disk, still rendered by a running
+   *  app. They are filtered out of every lane above BECAUSE they are archived, so without this
+   *  they can never be retried - the owner keeps seeing them while the machinery reports the
+   *  fleet clean. Null when the reconcile did not run. */
+  zombieRows?: {
+    rows: Array<{ sessionId: string; title: string; instance: string; action: string; why: string }>
+    unreadInstances: Array<{ instance: string; why: string }>
+    renderedSeen: number
+  } | null
   /** Set by a BOUNDED copy of this report (the sweep loop's status keeps at most 100 rows per
    *  lane) - flagged so a cut can never read as complete coverage. */
   rowsTruncated?: boolean
@@ -133,6 +142,9 @@ export interface SweepOpts {
   maxSurface?: number
   /** Wall-clock bound; candidates past it land in `unswept`. Default 4 minutes. */
   deadlineMs?: number
+  /** Reconcile rendered rows against disk archive state (default on). Off for pure-report
+   *  callers and for tests that must not drive a real app's UI. */
+  reconcileRendered?: boolean
   /** THE CATCH-ALL WINDOW (owner rule): an unarchived chat touched this recently is part of
    *  live work, so if no lane could place it, the AI examines it rather than the sweep filing
    *  it under leftAlone. Default 2 hours. */
@@ -483,6 +495,33 @@ export async function sweepGateActions(
     }
     if (r.action === 'surfaced') report.acted.surfaced++
     report.crashedRows.push(actedRow(c, r))
+  }
+  // RECONCILE WHAT THE OWNER SEES AGAINST WHAT WE JUST GATED. Everything above enumerates from
+  // disk and skips archived rows; a running app can still be RENDERING one of those, and that
+  // chat is then permanently unreachable by this sweep - archived, so filtered, and on screen,
+  // so still the owner's problem. Measured 2026-08-31: the owner saw ~10 chats in one account
+  // while a whole-fleet sweep reported six. Runs last so it reconciles against the state this
+  // pass has just produced, and never blocks the gating work above.
+  if (opts.reconcileRendered !== false) {
+    try {
+      const { reconcileRenderedRows } = await import('./zombie-rows')
+      const insts = await (deps.instances ?? (async () => []))()
+      report.zombieRows = await reconcileRenderedRows(
+        insts.map((i) => ({ dir: i.dir, name: i.ref ?? i.dir, isRunning: i.isRunning })),
+      )
+    } catch (err) {
+      // A failed reconcile must never read as a clean one.
+      report.zombieRows = {
+        rows: [],
+        unreadInstances: [
+          {
+            instance: '(all)',
+            why: `the reconcile threw: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        renderedSeen: 0,
+      }
+    }
   }
   return report
 }

@@ -59,8 +59,10 @@ export function parseListOutput(out: string): string[] {
     .filter((l) => l.trim().length > 0)
 }
 
-/** The titles the instance's sidebar currently RENDERS (in-memory names, not disk names). */
-async function listRenderedTitles(profileDir: string): Promise<string[]> {
+/** The titles the instance's sidebar currently RENDERS (in-memory names, not disk names).
+ *  Exported for zombie-rows.ts, which reconciles rendered rows against disk state - the disk
+ *  is what the sweep reads and the sidebar is what the owner reads, and they drift. */
+export async function listRenderedTitles(profileDir: string): Promise<string[]> {
   const { code, out } = await runPs1(['-List', '-Instance', profileDir])
   if (code !== 0) return []
   return parseListOutput(out)

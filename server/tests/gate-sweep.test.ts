@@ -2,6 +2,11 @@
 // transcript-id preferred), lane dispatch, cap accounting, sequential acting, honest ungated
 // listing, and the never-auto-acted judgment lane. The act itself is pinned in
 // gate-actions.test.ts; these tests pin WHICH chats it is called for and in what order.
+// ⛔ EVERY CALL PASSES reconcileRendered:false. The sweep's last step asks each RUNNING app what
+// its sidebar shows, which drives real UIA against real windows - correct in production, and
+// absolutely not something a unit test may do to whatever apps happen to be open on the machine
+// running it. The reconcile has its own tests in zombie-rows.test.ts, with every dependency
+// injected.
 import { expect, test } from 'bun:test'
 import type { ChatGate, CrashKind, FinishedLane } from '../src/chat-gate'
 import type { GateActionResult } from '../src/gate-actions'
@@ -95,7 +100,7 @@ test('enumeration: archived entries skipped, duplicate keys deduped by file, tra
       { key: 's3' },
     ],
   })
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   expect(report.scanned).toBe(2)
   expect(acted.sort()).toEqual(['cli-1', 's3'])
 })
@@ -113,7 +118,7 @@ test('lane dispatch: only a chat mid-turn is left alone; every other lane routed
     },
     meta: ['run', 'hum', 'arc', 'cra', 'lim', 'inp', 'gone'].map((key) => ({ key })),
   })
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   // ONLY the live chat mid-turn is left alone now. The human-interrupted one is unarchived and
   // was touched moments ago, so the catch-all sends it to the AI to look at rather than filing
   // it under a counter - a chat sitting interrupted for hours is a decision somebody owes.
@@ -168,7 +173,10 @@ test('caps: spent caps record over-cap rows instead of acting; 0 means pure repo
     },
     meta: ['a1', 'a2', 'c1', 'c2'].map((key) => ({ key })),
   })
-  const report = await sweepGateActions({ maxArchive: 1, maxSurface: 0 }, deps)
+  const report = await sweepGateActions(
+    { reconcileRendered: false, maxArchive: 1, maxSurface: 0 },
+    deps,
+  )
   expect(acted).toEqual(['a1'])
   expect(report.acted).toEqual({ archived: 1, surfaced: 0 })
   expect(report.archiveRows.map((r) => r.action)).toEqual(['archived', 'over-cap'])
@@ -181,7 +189,7 @@ test('a PRESENT-but-empty session_ids sweeps NOTHING - never the whole fleet', a
     gates: { x: finishedGate('archive-candidate') },
     meta: [{ key: 'x' }],
   })
-  const report = await sweepGateActions({ sessionIds: [] }, deps)
+  const report = await sweepGateActions({ reconcileRendered: false, sessionIds: [] }, deps)
   expect(report.scanned).toBe(0)
   expect(acted).toEqual([])
 })
@@ -191,7 +199,10 @@ test('usage-limit acts only when the surface lane is live: 0/0 is a genuinely pu
     gates: { lim: crashedGate('usage-limit') },
     meta: [{ key: 'lim' }],
   })
-  const report = await sweepGateActions({ maxArchive: 0, maxSurface: 0 }, deps)
+  const report = await sweepGateActions(
+    { reconcileRendered: false, maxArchive: 0, maxSurface: 0 },
+    deps,
+  )
   expect(acted).toEqual([])
   expect(report.waitForReset.map((r) => r.action)).toEqual(['report-only'])
 })
@@ -210,7 +221,7 @@ test('acted rows echo the ACT result (fresh re-gate), carrying prompt and surfac
       promptDelivery: 'deliver-natively-via-the-app-message-channel',
     },
   })
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   const row = report.crashedRows[0]
   expect(row?.prompt).toBe('THE EXACT PROMPT')
   expect(row?.surfacedIn).toEqual({ ref: 'desktop:C:/i9', num: 9 })
@@ -229,7 +240,7 @@ test('a verdict that moved between gate and act is reported as the ACT saw it', 
       why: 'running (pid 7) - the rule is leave it alone',
     },
   })
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   expect(report.crashedRows[0]?.state).toBe('running')
   expect(report.crashedRows[0]?.action).toBe('left-alone')
 })
@@ -242,7 +253,7 @@ test('one transcript imported into TWO instances is swept once (dedup by resolve
       { key: 'f2', cliSessionId: 'X', path: 'P:instanceB' },
     ],
   })
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   expect(report.scanned).toBe(1)
   expect(acted).toEqual(['X'])
 })
@@ -253,7 +264,7 @@ test('an act that returns nothing leaves a parked row, never a vanished candidat
     meta: [{ key: 'a1' }],
     actNull: ['a1'],
   })
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   expect(report.archiveRows[0]?.action).toBe('parked')
   expect(report.archiveRows[0]?.why).toContain('vanished')
 })
@@ -269,7 +280,7 @@ test('the deadline cuts off honestly: remaining candidates listed as unswept', a
     meta: ['a1', 'a2', 'a3'].map((key) => ({ key })),
   })
   deps.now = () => (t += 400)
-  const report = await sweepGateActions({ deadlineMs: 1000 }, deps)
+  const report = await sweepGateActions({ reconcileRendered: false, deadlineMs: 1000 }, deps)
   expect(report.deadlineHit).toBe(true)
   expect(report.unswept.length).toBeGreaterThan(0)
   expect(report.unswept.length + report.archiveRows.length).toBe(3)
@@ -292,7 +303,7 @@ test('a surface that PARKS does not spend the surface cap', async () => {
     meta: ['c1', 'c2'].map((key) => ({ key })),
     actResult: { action: 'parked', why: 'no eligible instance' },
   })
-  const report = await sweepGateActions({ maxSurface: 1 }, deps)
+  const report = await sweepGateActions({ reconcileRendered: false, maxSurface: 1 }, deps)
   // Both attempted: the first parked, so the cap was still unspent for the second.
   expect(report.crashedRows.map((r) => r.action)).toEqual(['parked', 'parked'])
   expect(report.acted.surfaced).toBe(0)
@@ -316,7 +327,7 @@ test('acts run SEQUENTIALLY in enumeration order - never interleaved', async () 
     order.push(`end:${id}`)
     return r
   }
-  await sweepGateActions({}, deps)
+  await sweepGateActions({ reconcileRendered: false }, deps)
   expect(order).toEqual(['start:a1', 'end:a1', 'start:c1', 'end:c1', 'start:a2', 'end:a2'])
 })
 
@@ -331,7 +342,7 @@ test('an act that THROWS becomes a parked row - one bad chat never kills the swe
     if (id === 'boom') throw new Error('IPC exploded')
     return inner(id, input, d)
   }
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   expect(report.archiveRows.map((r) => r.action)).toEqual(['parked', 'archived'])
   expect(report.archiveRows[0]?.why).toContain('the act threw: IPC exploded')
 })
@@ -341,7 +352,7 @@ test('session_ids scoping sweeps exactly those, ignoring the fleet index', async
     gates: { only: finishedGate('archive-candidate') },
     meta: [{ key: 'other' }],
   })
-  const report = await sweepGateActions({ sessionIds: ['only'] }, deps)
+  const report = await sweepGateActions({ reconcileRendered: false, sessionIds: ['only'] }, deps)
   expect(report.scanned).toBe(1)
   expect(acted).toEqual(['only'])
 })
@@ -361,7 +372,7 @@ test('THE BREAKER STOPS THE ARCHIVE LOOP - the case it exists for, which needs n
       gates: { s1: finishedGate('archive-candidate') },
       meta: [{ key: 's1', cliSessionId: 's1' }],
     })
-    const report = await sweepGateActions({}, f.deps)
+    const report = await sweepGateActions({ reconcileRendered: false }, f.deps)
     return { acted: f.acted, report }
   }
 
@@ -389,7 +400,7 @@ test('a SURFACED chat clears its count - it becomes running, so it is self-limit
       gates: { s2: crashedGate('mid-turn') },
       meta: [{ key: 's2', cliSessionId: 's2' }],
     })
-    await sweepGateActions({}, f.deps)
+    await sweepGateActions({ reconcileRendered: false }, f.deps)
   }
   expect(checkBreaker('surface', 's2').attempts).toBe(0)
   db.query('delete from action_attempt_log').run()
@@ -405,7 +416,7 @@ test('a HELD chat is parked, not acted on, and the reason travels with the row',
     reason: 'owner working it by hand',
     heldAt: 'WHEN',
   })
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   expect(acted).toEqual([])
   expect(report.acted.archived).toBe(0)
   expect(report.archiveRows[0]?.action).toBe('parked')
@@ -422,7 +433,7 @@ test('a hold outranks the breaker - it is checked first, so its reason is what g
   })
   for (let i = 0; i < ATTEMPT_CAP; i++) noteAttempt('archive', 'arc', Date.now())
   deps.heldSession = () => ({ sessionId: 'arc', reason: 'parked mid-experiment', heldAt: 'WHEN' })
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   expect(report.archiveRows[0]?.why).toContain('parked mid-experiment')
   db.query('delete from action_attempt_log').run()
 })
@@ -439,7 +450,7 @@ test('a STALLED live chat is still left alone, but it is listed instead of hidde
     },
     meta: [{ key: 'stuck' }, { key: 'busy' }],
   })
-  const report = await sweepGateActions({}, deps)
+  const report = await sweepGateActions({ reconcileRendered: false }, deps)
   expect(acted).toEqual([])
   expect(report.leftAlone).toBe(2)
   expect(report.stalled.map((r) => r.sessionId)).toEqual(['stuck'])
