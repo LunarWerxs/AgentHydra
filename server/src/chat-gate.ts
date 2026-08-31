@@ -63,7 +63,35 @@ export interface ChatGate {
     quietSecs: number
     why: string
   } | null
+  /**
+   * A LIVE chat that has FINISHED ITS TURN and gone quiet - the fleet's most common state, and
+   * the one this gate used to have no word for.
+   *
+   * 'running' meant nothing more than "a process is alive", so a chat that answered two hours
+   * ago and has been sitting there ever since was classified identically to one mid-build. The
+   * sweep leaves 'running' alone, so those chats were never anybody's work: an orchestrator
+   * would gate the whole fleet, find every chat either alive-therefore-running or already
+   * archived, and have nothing left to do but recite a status - which is precisely the
+   * complaint that a fleet full of idle chats produces.
+   *
+   * The state stays 'running' on purpose: nothing may archive a chat that still has a writer.
+   * This is the evidence that it is WAITING for its next instruction rather than working, and
+   * the sweep routes it to the judgment lane on the strength of it. Null when the chat is not
+   * live, is still inside the quiet window, or its tail shows a turn genuinely in flight.
+   */
+  idle?: {
+    quietSecs: number
+    doneClaim: 'yes' | 'no' | 'unknown'
+    endsWithQuestion: boolean
+    recapPresent: boolean
+    lastAssistantText: string
+  } | null
 }
+
+/** How long a live chat must be quiet AFTER a completed turn before it counts as idle rather
+ *  than thinking. Three minutes: long enough that a model pausing between tool calls is never
+ *  mistaken for an idle chat, short enough that the fleet is worked while the owner watches. */
+export const IDLE_AFTER_SECS = 180
 
 const EVIDENCE_CAP = 2000
 const RECAP_HEADER = /##\s*Am I 100% done\?/i
@@ -216,6 +244,8 @@ export interface ChatGateDeps {
   registry?: typeof readLiveRegistry
   orphans?: typeof readOrphanedRegistry
   findTranscript?: typeof findTranscriptById
+  /** Seam for tests; defaults to IDLE_AFTER_SECS. */
+  idleAfterSecs?: number
 }
 
 /**
@@ -234,33 +264,66 @@ export function chatGate(sessionId: string, deps: ChatGateDeps = {}): ChatGate |
   if (!transcriptPath) return null
   const tailMeta = classifyTranscriptTail(transcriptPath, nowMs)
 
+  // Adaptive read, same growth discipline as fleet's classifier: a single closing record can
+  // exceed the starting window, and a truncated tail must widen rather than let 'no records'
+  // masquerade as a mid-turn death (review-confirmed misclassification in the first cut).
+  const readRecords = (): TailRecord[] => {
+    let out: TailRecord[] = []
+    for (let window = 64 * 1024; ; window *= 4) {
+      const raw = readTranscriptTailText(transcriptPath, window)
+      if (!raw) break
+      out = parseTailRecords(raw.text, raw.wholeFile)
+      if (out.length > 0 || raw.wholeFile || window >= 4 * 1024 * 1024) break
+    }
+    return out
+  }
+
   if (live) {
     const stalled = detectStall(transcriptPath, tailMeta.quietSecs)
+    // The tail is only read once the quiet window has passed: a chat quiet for less than that
+    // is busy by definition, and this runs over every chat in the fleet on every tick.
+    const idleAfter = deps.idleAfterSecs ?? IDLE_AFTER_SECS
+    let idle: ChatGate['idle'] = null
+    if (!stalled && tailMeta.quietSecs >= idleAfter) {
+      const recs = readRecords()
+      const tail = recs[recs.length - 1] ?? null
+      // The same completed-turn test the finished branch below uses. A turn genuinely in
+      // flight - an unanswered user message, a dangling tool call, pure tool traffic - is NOT
+      // idle no matter how long it has been quiet; that is a stall or a crash, and those lanes
+      // already own it.
+      const completed =
+        tail && tail.type !== 'user' && tail.hasText && !tail.hasToolUse && !tail.apiError
+      if (completed) {
+        const evidence = lastAssistantText(recs)
+        const view = recapView(evidence)
+        idle = {
+          quietSecs: tailMeta.quietSecs,
+          doneClaim: parseDoneClaim(view),
+          endsWithQuestion: /\?\s*$/.test(evidence.trim()),
+          recapPresent: RECAP_HEADER.test(view),
+          lastAssistantText: evidence,
+        }
+      }
+    }
     return {
       sessionId,
       state: 'running',
       cause: stalled
         ? `process ${live.pid} is alive but looks STUCK: ${stalled.why}`
-        : `process ${live.pid} is alive (quiet ${tailMeta.quietSecs}s - a long quiet can be background work, not a stall)`,
+        : idle
+          ? `process ${live.pid} is alive but IDLE - it finished its turn and has been quiet ${idle.quietSecs}s, so it is waiting for its next instruction, not working`
+          : `process ${live.pid} is alive (quiet ${tailMeta.quietSecs}s - a long quiet can be background work, not a stall)`,
       transcriptPath,
       quietSecs: tailMeta.quietSecs,
       live: { pid: live.pid, name: live.name },
       crashed: null,
       finished: null,
       stalled,
+      idle,
     }
   }
 
-  // Adaptive read, same growth discipline as fleet's classifier: a single closing record can
-  // exceed the starting window, and a truncated tail must widen rather than let 'no records'
-  // masquerade as a mid-turn death (review-confirmed misclassification in the first cut).
-  let records: TailRecord[] = []
-  for (let window = 64 * 1024; ; window *= 4) {
-    const raw = readTranscriptTailText(transcriptPath, window)
-    if (!raw) break
-    records = parseTailRecords(raw.text, raw.wholeFile)
-    if (records.length > 0 || raw.wholeFile || window >= 4 * 1024 * 1024) break
-  }
+  const records = readRecords()
   const orphaned = orphans(claudeHome).some((o) => o.sessionId === sessionId)
   const orphanNote = orphaned
     ? '; a dead-pid registry file confirms the process died un-gracefully'

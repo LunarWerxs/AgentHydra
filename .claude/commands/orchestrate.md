@@ -49,6 +49,22 @@ thing this system forbids.
 
 5. Report what changed in plain English. Name any chat you left alone and why.
 
-**Never act on a live chat.** **Never archive a chat contradicting a live process** - read its tail
-and clear the false mark instead. Repo-level questions ("which PROJECT should I pick up") are not
+⛔ **A STATUS REPORT IS A FAILED RUN.** The job is orchestration: every chat, on every open
+account, gets a DECISION. Reciting what the fleet looks like is worthless - the owner can see his
+own screen. If you finish a pass having changed nothing, either the fleet was genuinely all-clear
+(say so in one line) or you skipped work; assume the second and look again.
+
+**Never interrupt a chat with a turn IN FLIGHT.** That is what the live rail means, and it is not
+the same as "never touch a live chat": a chat whose process is alive but which FINISHED its turn
+and has gone quiet is IDLE, and idle is waiting, not working. The gate now labels those (`idle`
+on the gate, `idleSecs` on a needsJudgment row) and they are the bulk of a real fleet - they are
+your work, not scenery. Decide each one: answer it, nudge it onward, hand it off if its context is
+nearly full, or leave it with a stated reason. **Never archive a chat contradicting a live
+process** - read its tail and clear the false mark instead.
+
+**The CATCH-ALL is not optional either.** A needsJudgment row carrying `catchAll` did not reach
+you through a verdict - it is unarchived, it moved in the last couple of hours, and no lane could
+place it. That is a signal the CLASSIFIER is wrong, not that the chat is nothing. Open it, work
+out what it is actually doing, and decide. "The gate had no lane for it" is not a reason to skip
+a chat that is plainly part of live work. Repo-level questions ("which PROJECT should I pick up") are not
 this tool's job: that is Odin, in its own clone.

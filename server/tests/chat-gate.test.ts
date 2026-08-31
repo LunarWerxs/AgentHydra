@@ -315,3 +315,47 @@ test('a twenty-minute command is still a command - the threshold is half an hour
   const g = chatGate('st6', liveDeps('st6', line(user('go')) + line(shellCall('Bash')), 20))
   expect(g?.stalled ?? null).toBe(null)
 })
+
+// A LIVE CHAT THAT FINISHED ITS TURN AND WENT QUIET IS THE FLEET'S MOST COMMON STATE, and the
+// gate had no word for it: 'running' meant only "a process is alive", so a chat that answered
+// hours ago was classified identically to one mid-build and the sweep left both alone. A whole
+// fleet of them is why an orchestrator run could find nothing to do but recite a status.
+function liveHome(sid: string, transcript: string, ageSecs: number): ChatGateDeps {
+  const deps = home(sid, transcript)
+  const transcriptPath = join(String(deps.claudeHome), 'projects', 'D--Work', `${sid}.jsonl`)
+  deps.registry = () => [
+    {
+      sessionId: sid,
+      pid: 4242,
+      name: 'chat',
+      startedAt: 1,
+      cwd: 'D:Work',
+      transcriptPath,
+    } satisfies LiveSession,
+  ]
+  deps.nowMs = statSync(transcriptPath).mtimeMs + ageSecs * 1000
+  return deps
+}
+
+test('live + finished turn + quiet = IDLE, and it stays running so nothing archives it', () => {
+  const g = chatGate('idle-1', liveHome('idle-1', line(assistant(RECAP_DONE)), 600))
+  expect(g?.state).toBe('running') // never archivable: it still has a writer
+  expect(g?.live?.pid).toBe(4242)
+  expect(g?.idle?.doneClaim).toBe('yes')
+  expect(g?.idle?.quietSecs).toBeGreaterThanOrEqual(600)
+  expect(g?.cause).toContain('IDLE')
+})
+
+test('live and only briefly quiet is NOT idle - a pause between tool calls is not waiting', () => {
+  const g = chatGate('idle-2', liveHome('idle-2', line(assistant(RECAP_DONE)), 30))
+  expect(g?.state).toBe('running')
+  expect(g?.idle ?? null).toBe(null)
+})
+
+test('live with a turn genuinely IN FLIGHT is never idle, however long it has been quiet', () => {
+  // A dangling tool call is a stall or a crash, and those lanes already own it. Calling it
+  // idle would invite a nudge into a chat that is mid-work - the thing the live rail forbids.
+  const g = chatGate('idle-3', liveHome('idle-3', line(user('go')) + line(toolAssistant()), 9_000))
+  expect(g?.state).toBe('running')
+  expect(g?.idle ?? null).toBe(null)
+})

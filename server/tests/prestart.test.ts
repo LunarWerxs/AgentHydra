@@ -108,6 +108,8 @@ test('next steps are derived per lane, in the stated vocabulary', async () => {
           endsWithQuestion: true,
           lastAssistantText: 'evidence',
           heldReason: null,
+          idleSecs: null,
+          catchAll: null,
         },
       ],
       ungated: [{ sessionId: 'g', title: null, instance: 'i1' }],

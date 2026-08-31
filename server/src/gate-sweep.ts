@@ -22,7 +22,7 @@
 //     silently dropped.
 
 import { type BreakerKind, checkBreaker, clearAttempts, noteAttempt } from './breaker'
-import { type ChatGate, type CrashKind, chatGate } from './chat-gate'
+import { type ChatGate, type CrashKind, chatGate, IDLE_AFTER_SECS } from './chat-gate'
 import { actOnGate, type GateActionDeps, type GateActionResult } from './gate-actions'
 import { type Hold, isHeld } from './holds'
 import { sessionMetaMap } from './instance-sessions'
@@ -81,6 +81,16 @@ export interface NeedsJudgmentRow {
    *  would summon an orchestrator forever to discover, every time, that it must not touch
    *  it - the exact futile cycle the circuit breaker exists to end. */
   heldReason: string | null
+  /** Set when this row is a LIVE chat that finished its turn and went quiet - how long it has
+   *  been sitting there. Null for a chat with no process. The distinction matters to whoever
+   *  acts: an idle chat is nudged or handed off through its own composer, while a chat with no
+   *  process has to be surfaced first. */
+  idleSecs: number | null
+  /** Set when the row reached this lane through the CATCH-ALL rather than a deterministic
+   *  verdict: unarchived, recently touched, and not placed by any lane. Says why, because
+   *  "examine this, my classifier may be wrong" is a different instruction from "judge this
+   *  chat's stated question" and the AI must be able to tell them apart. */
+  catchAll: string | null
 }
 
 export interface SweepReport {
@@ -123,6 +133,14 @@ export interface SweepOpts {
   maxSurface?: number
   /** Wall-clock bound; candidates past it land in `unswept`. Default 4 minutes. */
   deadlineMs?: number
+  /** THE CATCH-ALL WINDOW (owner rule): an unarchived chat touched this recently is part of
+   *  live work, so if no lane could place it, the AI examines it rather than the sweep filing
+   *  it under leftAlone. Default 2 hours. */
+  catchAllSecs?: number
+  /** Below this much quiet, a LIVE chat is visibly mid-turn and the catch-all leaves it be -
+   *  the one case where "unplaced" is not a classifier blind spot. Default 3 minutes, the same
+   *  window the gate uses to call a live chat idle. */
+  catchAllInFlightSecs?: number
 }
 
 /** The route's body contract, pure and pinned by tests (same reasoning as parseActInput):
@@ -160,6 +178,8 @@ export async function sweepGateActions(
   const maxArchive = opts.maxArchive ?? Number.POSITIVE_INFINITY
   const maxSurface = opts.maxSurface ?? 3
   const deadline = now() + (opts.deadlineMs ?? 240_000)
+  const catchAllSecs = opts.catchAllSecs ?? 2 * 60 * 60
+  const catchAllInFlightSecs = opts.catchAllInFlightSecs ?? IDLE_AFTER_SECS
 
   interface Candidate {
     sessionId: string
@@ -327,8 +347,31 @@ export async function sweepGateActions(
       report.ungated.push({ sessionId: c.sessionId, title: c.title, instance: c.instance })
       continue
     }
+    // A LIVE CHAT THAT FINISHED ITS TURN AND WENT QUIET IS WAITING, NOT WORKING, and it is the
+    // most common chat in this fleet. 'running' used to mean nothing more than "a process is
+    // alive", so those chats fell into leave-alone and belonged to nobody: a sweep would find
+    // every chat either alive-therefore-running or already archived, and an orchestrator run
+    // could only recite a status. Routing them to the judgment lane is what turns the sweep
+    // from a reporter into something that actually decides.
+    //
+    // The rail it looks like it breaks, it does not. "Never act on a live chat" exists to stop
+    // work being interrupted mid-turn; an idle chat has no turn to interrupt, and the delivery
+    // path still refuses independently if a Stop button says otherwise when it gets there.
+    if (g.state === 'running' && g.idle) {
+      report.needsJudgment.push({
+        sessionId: c.sessionId,
+        title: c.title,
+        instance: c.instance,
+        doneClaim: g.idle.doneClaim,
+        endsWithQuestion: g.idle.endsWithQuestion,
+        lastAssistantText: g.idle.lastAssistantText,
+        heldReason: (deps.heldSession ?? isHeld)(c.sessionId)?.reason ?? null,
+        idleSecs: g.idle.quietSecs,
+        catchAll: null,
+      })
+      continue
+    }
     if (g.state === 'running' || (g.state === 'finished' && g.finished?.lane === 'human')) {
-      report.leftAlone++
       // A live chat is never acted on - but "alive and stuck on a shell command nobody is
       // present to approve" is the one shape a human must SEE, and counting it as left-alone
       // hides it behind a number. Reported, never touched.
@@ -341,6 +384,33 @@ export async function sweepGateActions(
           quietSecs: g.stalled.quietSecs,
           why: g.stalled.why,
         })
+      // THE CATCH-ALL (owner rule): a chat that is not archived and has been touched in the
+      // last couple of hours is almost certainly part of live work. If the deterministic lanes
+      // could not place it, the likeliest explanation is that THEY are wrong, not that the
+      // chat is nothing - so it goes to the AI to look at and decide, rather than into a
+      // leftAlone counter where it is indistinguishable from a chat nobody needs to think
+      // about. This lane exists precisely because a classifier's blind spot is invisible from
+      // inside the classifier.
+      //
+      // The ONE exclusion is a turn genuinely IN FLIGHT: live, and quiet for less than the
+      // idle window. That is not a misclassification risk - it is a chat visibly working, and
+      // pulling it in could only lead to interrupting it.
+      const inFlight = !!g.live && !g.idle && g.quietSecs < catchAllInFlightSecs
+      if (!inFlight && g.quietSecs <= catchAllSecs) {
+        report.needsJudgment.push({
+          sessionId: c.sessionId,
+          title: c.title,
+          instance: c.instance,
+          doneClaim: g.finished?.doneClaim ?? 'unknown',
+          endsWithQuestion: g.finished?.endsWithQuestion ?? false,
+          lastAssistantText: g.finished?.lastAssistantText ?? '',
+          heldReason: (deps.heldSession ?? isHeld)(c.sessionId)?.reason ?? null,
+          idleSecs: g.live ? g.quietSecs : null,
+          catchAll: `the lanes could not place this one (${g.cause}), but it is unarchived and moved ${Math.round(g.quietSecs / 60)}m ago - work out what it is actually doing and decide`,
+        })
+        continue
+      }
+      report.leftAlone++
       continue
     }
     if (g.state === 'finished' && g.finished?.lane === 'archive-candidate') {
@@ -375,6 +445,8 @@ export async function sweepGateActions(
         endsWithQuestion: g.finished.endsWithQuestion,
         lastAssistantText: g.finished.lastAssistantText,
         heldReason: (deps.heldSession ?? isHeld)(c.sessionId)?.reason ?? null,
+        idleSecs: null,
+        catchAll: null,
       })
       continue
     }

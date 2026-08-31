@@ -100,7 +100,7 @@ test('enumeration: archived entries skipped, duplicate keys deduped by file, tra
   expect(acted.sort()).toEqual(['cli-1', 's3'])
 })
 
-test('lane dispatch: running and human left alone; every other lane routed', async () => {
+test('lane dispatch: only a chat mid-turn is left alone; every other lane routed', async () => {
   const { deps, acted } = fixture({
     gates: {
       run: gateOf({ state: 'running', live: { pid: 1, name: 'x' } }),
@@ -114,23 +114,48 @@ test('lane dispatch: running and human left alone; every other lane routed', asy
     meta: ['run', 'hum', 'arc', 'cra', 'lim', 'inp', 'gone'].map((key) => ({ key })),
   })
   const report = await sweepGateActions({}, deps)
-  expect(report.leftAlone).toBe(2)
+  // ONLY the live chat mid-turn is left alone now. The human-interrupted one is unarchived and
+  // was touched moments ago, so the catch-all sends it to the AI to look at rather than filing
+  // it under a counter - a chat sitting interrupted for hours is a decision somebody owes.
+  expect(report.leftAlone).toBe(1)
   expect(report.acted).toEqual({ archived: 1, surfaced: 1 })
   expect(report.waitForReset.length).toBe(1)
   expect(report.ungated).toEqual([{ sessionId: 'gone', title: null, instance: 'i1' }])
   // The judgment lane is packaged, never acted (the one AI step stays the caller's).
-  expect(report.needsJudgment).toEqual([
-    {
-      sessionId: 'inp',
-      title: null,
-      instance: 'i1',
-      doneClaim: 'unknown',
-      endsWithQuestion: true,
-      lastAssistantText: 'the evidence text',
-      heldReason: null,
-    },
-  ])
+  const judged = report.needsJudgment.map((r) => r.sessionId).sort()
+  expect(judged).toEqual(['hum', 'inp'])
+  expect(report.needsJudgment.find((r) => r.sessionId === 'inp')?.catchAll).toBe(null)
+  expect(report.needsJudgment.find((r) => r.sessionId === 'hum')?.catchAll).toContain('decide')
   expect(acted.sort()).toEqual(['arc', 'cra', 'lim'])
+})
+
+// THE CATCH-ALL (owner rule): an unarchived chat touched in the last couple of hours is part of
+// live work. If no lane could place it, the likeliest explanation is that the LANES are wrong -
+// so the AI examines it. A classifier's blind spot is invisible from inside the classifier.
+test('catch-all: a stale unplaced chat is left alone, a recent one is sent to be examined', async () => {
+  const stale = await sweepGateActions(
+    {},
+    fixture({
+      gates: { old: { ...finishedGate('human'), quietSecs: 5 * 60 * 60 } },
+      meta: [{ key: 'old' }],
+    }).deps,
+  )
+  expect(stale.leftAlone).toBe(1)
+  expect(stale.needsJudgment).toEqual([])
+
+  // A LIVE chat mid-turn is the one exclusion: it is visibly working, not misfiled, and
+  // pulling it in could only lead to interrupting it.
+  const busy = await sweepGateActions(
+    {},
+    fixture({
+      gates: {
+        busy: { ...gateOf({ state: 'running', live: { pid: 9, name: 'x' } }), quietSecs: 4 },
+      },
+      meta: [{ key: 'busy' }],
+    }).deps,
+  )
+  expect(busy.leftAlone).toBe(1)
+  expect(busy.needsJudgment).toEqual([])
 })
 
 test('caps: spent caps record over-cap rows instead of acting; 0 means pure report', async () => {

@@ -55,6 +55,13 @@ export interface SweepLoopSettings {
   judgeCooldownMin: number
 }
 
+/** THE FLOOR ON THE TICK. Was 5 minutes, which is slower than a person watching a fleet is
+ *  willing to wait - the owner's standard is "checking every couple of minutes". A tick is a
+ *  metadata scan plus, at most, a few UIA clicks, and every act underneath it is already
+ *  serialized by the process-wide act lock and bounded by the circuit breaker, so the cost of
+ *  a shorter interval is bounded work, not a storm. */
+export const MIN_INTERVAL_MIN = 1
+
 function num(key: string, fallback: number, min: number, max: number): number {
   const raw = getSetting(key)
   // '' is ABSENT, not zero: Number('') === 0 is finite, and treating it as a value silently
@@ -81,7 +88,7 @@ export function getSweepLoopSettings(): SweepLoopSettings {
   return {
     enabled: getSetting('sweep_enabled') === '1',
     courierEnabled: getSetting('courier_enabled') === '1',
-    intervalMin: num('sweep_interval_min', 15, 5, 24 * 60),
+    intervalMin: num('sweep_interval_min', 15, MIN_INTERVAL_MIN, 24 * 60),
     maxArchive: num('sweep_max_archive', -1, -1, 10_000),
     maxSurface: num('sweep_max_surface', 0, 0, 100),
     judgeEnabled: bool('sweep_judge_enabled', true),
@@ -103,7 +110,7 @@ export function setSweepLoopSettings(patch: Partial<SweepLoopSettings>): SweepLo
   if (typeof patch.intervalMin === 'number' && Number.isFinite(patch.intervalMin))
     setSetting(
       'sweep_interval_min',
-      String(Math.min(24 * 60, Math.max(5, Math.floor(patch.intervalMin)))),
+      String(Math.min(24 * 60, Math.max(MIN_INTERVAL_MIN, Math.floor(patch.intervalMin)))),
     )
   if (typeof patch.maxArchive === 'number' && Number.isFinite(patch.maxArchive))
     setSetting(
@@ -241,7 +248,7 @@ export function parseSweepLoopPatch(
     patch.judgeEnabled = body.judgeEnabled
   }
   const fields = [
-    ['intervalMin', 5, 24 * 60],
+    ['intervalMin', MIN_INTERVAL_MIN, 24 * 60],
     ['maxArchive', -1, 10_000],
     ['maxSurface', 0, 100],
     ['judgeCooldownMin', 5, 24 * 60],
@@ -315,9 +322,11 @@ export function judgePrompt(waiting: number): string {
     '/orchestrate The standing sweep opened this session because ' +
     `${waiting} chat(s) across the open accounts are WAITING on a judgment that only an AI ` +
     'can make - they are neither running nor done, and the daemon cannot decide autonomous ' +
-    'vs human on its own. Work every waiting chat, not just the first: gate, judge each one ' +
-    '(the owner prefers autonomous whenever the answer is determinable), act, and deliver. ' +
-    'Report what you changed and name any chat you left alone and why.'
+    'vs human on its own. Most will be chats whose process is alive but which finished their ' +
+    'turn and went quiet: idle is WAITING, not working, and they are the job. Work every one, ' +
+    'not just the first: gate, judge each (the owner prefers autonomous whenever the answer is ' +
+    'determinable), act, and deliver. A pass that changes nothing and reports status is a ' +
+    'FAILED pass - decide each chat or state plainly why it must be left.'
   )
 }
 

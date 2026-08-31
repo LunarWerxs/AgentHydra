@@ -37,6 +37,8 @@ const judgingRow = (sessionId: string) => ({
   endsWithQuestion: true,
   lastAssistantText: 'should I keep going?',
   heldReason: null,
+  idleSecs: null,
+  catchAll: null,
 })
 
 const crashRow = (sessionId: string) => ({
@@ -76,9 +78,9 @@ test('off by default, with the unattended-safe caps', () => {
   expect(s.maxSurface).toBe(0) // no deliverer, no dormant parking
 })
 
-test('settings clamp: interval floors at 5 minutes, caps stay in range', () => {
-  const s = setSweepLoopSettings({ intervalMin: 1, maxArchive: -99, maxSurface: 5000 })
-  expect(s.intervalMin).toBe(5)
+test('settings clamp: interval floors at 1 minute, caps stay in range', () => {
+  const s = setSweepLoopSettings({ intervalMin: 0, maxArchive: -99, maxSurface: 5000 })
+  expect(s.intervalMin).toBe(1)
   expect(s.maxArchive).toBe(-1)
   expect(s.maxSurface).toBe(100)
   setSweepLoopSettings({ intervalMin: 15, maxArchive: -1, maxSurface: 0 })
@@ -96,7 +98,10 @@ test('parseSweepLoopPatch: out-of-range and mistyped fields error, never silentl
   expect(parseSweepLoopPatch({ enabled: 'yes' }).ok).toBe(false)
   expect(parseSweepLoopPatch({ maxArchive: -50 }).ok).toBe(false) // NOT the unlimited sentinel
   expect(parseSweepLoopPatch({ maxSurface: 101 }).ok).toBe(false)
-  expect(parseSweepLoopPatch({ intervalMin: 1 }).ok).toBe(false)
+  expect(parseSweepLoopPatch({ intervalMin: 0 }).ok).toBe(false)
+  // A couple of minutes is a legal cadence now - the old 5-minute floor was slower than a
+  // person watching a fleet is willing to wait.
+  expect(parseSweepLoopPatch({ intervalMin: 2 }).ok).toBe(true)
   const good = parseSweepLoopPatch({ enabled: true, maxArchive: -1, maxSurface: 2.9 })
   expect(good.ok && good.patch).toEqual({ enabled: true, maxArchive: -1, maxSurface: 2 })
 })
@@ -375,6 +380,8 @@ test('a tick with waiting chats launches one orchestrator and records what it di
       endsWithQuestion: true,
       lastAssistantText: 'should I keep going?',
       heldReason: null,
+      idleSecs: null,
+      catchAll: null,
     },
   ]
   const prompts: string[] = []
