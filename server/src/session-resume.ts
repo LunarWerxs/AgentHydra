@@ -101,7 +101,13 @@ export function resumeSessionInTerminal(
   if (plan.argv.length === 0) return { ok: false, command: plan.command, reason: 'no-terminal' }
   try {
     Bun.spawn(plan.argv, {
-      // No windowsHide: see the header. This window is the point.
+      // No windowsHide: see the header. This window is the point, and it STAYS the point even
+      // after consoles became hidden-by-default everywhere else (session-launch.ts). Audited
+      // 2026-08-31 and kept deliberately: the only caller is POST /api/sessions/:id/resume-terminal,
+      // which is a button in the web UI and is not exposed through MCP - a person clicking
+      // "resume in a terminal" is asking for exactly one terminal, and handing them a hidden
+      // session would read as the click doing nothing. The rule that changed was about windows
+      // NOBODY asked for; this one is asked for by definition.
       ...(cwd ? { cwd } : {}),
       stdin: 'ignore',
       stdout: 'ignore',

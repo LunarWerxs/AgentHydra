@@ -1644,7 +1644,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'launch_terminal_session',
     description:
-      "MUTATES: open a VISIBLE terminal window running a NEW interactive Claude session in `cwd` with `prompt` as its first message, pinned to `instance_ref`'s account ('desktop:<dir>' or 'cli:<id>'; omitted = ambient login). Unlike a headless queue run, the session is on the user's screen and joins the live peer registry, so peer messaging can reach it.",
+      "MUTATES: start a NEW interactive Claude session in `cwd` with `prompt` as its first message, pinned to `instance_ref`'s account ('desktop:<dir>' or 'cli:<id>'; omitted = ambient login). It joins the live peer registry, so peer messaging can reach it, and it appears in the session list. NO CONSOLE WINDOW OPENS by default (owner rule, after automation stacked six of them on his screen in one night): pass visible:true ONLY when a person has asked to watch this particular session, never for routine or automated work.",
     inputSchema: S(
       {
         cwd: { type: 'string' },
@@ -1653,6 +1653,11 @@ export const TOOLS: McpEngineTool[] = [
         model: { type: 'string' },
         effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
         resume_session_id: { type: 'string' },
+        visible: {
+          type: 'boolean',
+          description:
+            'Put a console window on screen. Default false. Only when a person asked to watch this session.',
+        },
       },
       ['cwd', 'prompt'],
     ),

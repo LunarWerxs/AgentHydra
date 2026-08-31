@@ -2240,6 +2240,9 @@ app.post('/api/sessions/launch-terminal', async (c) => {
     resumeSessionId: typeof body.resume_session_id === 'string' ? body.resume_session_id : null,
     force: body.force === true,
     permissionMode: typeof body.permission_mode === 'string' ? body.permission_mode : null,
+    // `visible` is the caller SAYING SO. Absent means "no opinion", which the chokepoint reads
+    // as hidden - the whole point being that a caller who forgets cannot put a window on screen.
+    hidden: typeof body.visible === 'boolean' ? !body.visible : undefined,
   })
   return c.json(result, result.ok ? 200 : 422)
 })

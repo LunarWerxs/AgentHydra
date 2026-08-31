@@ -100,7 +100,13 @@ async function alarm(title, body) {
     const r = spawnSync(
       'powershell',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodePowerShellCommand(script)],
-      { encoding: 'utf8', timeout: 20_000 },
+      // ⛔ windowsHide, or the alarm becomes the nuisance it is warning about. This runs from a
+      // scheduled task with no console of its own, so powershell.exe would allocate a NEW
+      // visible one every time it fires - a console flashing on the owner's screen on a timer,
+      // which is exactly the complaint that produced the hidden-by-default rule. The toast is
+      // the alarm; the window is not part of it. Found by an audit of every spawn in the repo,
+      // not by noticing it here.
+      { encoding: 'utf8', timeout: 20_000, windowsHide: true },
     )
     // The alarm failing is itself worth saying out loud, into the log the scheduled task keeps.
     if (r.status !== 0)
@@ -150,7 +156,9 @@ function installTask() {
       '/TR', cmd,
       '/RL', 'LIMITED',
     ],
-    { encoding: 'utf8' },
+    // Same reason as the alarm: schtasks is a console program, and a silent install path with
+    // no console of its own would flash a window registering the task.
+    { encoding: 'utf8', windowsHide: true },
   )
   console.log((r.stdout || r.stderr || '').trim())
   return r.status === 0
