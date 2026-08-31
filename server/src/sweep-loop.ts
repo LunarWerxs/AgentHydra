@@ -374,6 +374,22 @@ export async function runSweepLoopOnce(
     }
     // Arm/disarm couriers from the settled ledger, freshly after the acts above.
     await runCourierHousekeeping({ courier: deps.courier, force: true })
+    // IF A CHAT HAS NO REAL NAME, NAME IT. A deterministic rule with no judgement in it, and
+    // until 2026-08-31 nothing ran it: the janitor existed, complete and correct, called from
+    // nowhere. The owner kept seeing chats titled "General coding session" while the codebase
+    // held a function whose whole job was to prevent that. A rule with no runner is not a rule.
+    try {
+      const { nameUntitledChats } = await import('./name-untitled')
+      const { fleetInstances } = await import('./fleet-instances')
+      const running = (await fleetInstances()).filter((i) => i.isRunning).map((i) => i.dir)
+      const named = await nameUntitledChats({ runningProfiles: running })
+      if (named.named.length || named.unnameable)
+        console.log(
+          `[agenthydra] named ${named.named.length} untitled chat(s); ${named.unnameable} had no derivable name and were left alone`,
+        )
+    } catch (err) {
+      console.error('[agenthydra] naming pass failed:', err)
+    }
     // THE WAITING LANE, worked rather than merely reported. Runs AFTER the courier so a chat
     // whose prompt just got delivered is no longer waiting by the time we count.
     await runJudgePass(report, s, deps.launchJudge)
