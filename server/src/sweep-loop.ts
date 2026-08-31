@@ -434,6 +434,25 @@ export function pickTrustedCwd(
   return (trusted[0] as string).replace(/\//g, '\\')
 }
 
+/** The account to run the orchestrator on: a RUNNING, SIGNED-IN instance chosen by the fleet's
+ *  own landing picker (plan tier first, then lowest weekly usage). `mustOpen` is refused - the
+ *  picker will happily nominate a closed instance under the overflow rule, and booting an app
+ *  is not something an unattended judgment pass may do. Null when nothing qualifies, which the
+ *  caller reports rather than papering over with the ambient login. */
+async function judgeAccount(): Promise<{ ref: string; num: number } | null> {
+  try {
+    const [{ pickLandingInstance }, { fleetInstances }, { fleetUsage }] = await Promise.all([
+      import('./monitor'),
+      import('./fleet-instances'),
+      import('./fleet-usage'),
+    ])
+    const picked = pickLandingInstance(null, await fleetInstances(), fleetUsage())
+    return picked && !picked.mustOpen ? { ref: picked.ref, num: picked.num } : null
+  } catch {
+    return null
+  }
+}
+
 async function judgeCwd(): Promise<string> {
   const fallback = join(import.meta.dir, '..', '..')
   try {
@@ -488,10 +507,21 @@ async function runJudgePass(
     const run =
       launch ??
       (async (p: string) => {
+        // WHICH ACCOUNT. Launching on the ambient login opened a session that said "Login
+        // expired - please run /login" and could do nothing at all: it received the prompt,
+        // it just had no credentials. A launch onto a dead account is worse than no launch,
+        // because the ledger and the cooldown both record it as done. So pick a RUNNING,
+        // SIGNED-IN instance through the fleet's own landing picker - the same one the
+        // surfacing path uses, so account choice cannot drift into a second opinion here -
+        // and never boot a closed one: automation does not open the owner's accounts.
+        const account = await judgeAccount()
+        if (!account)
+          return { ok: false, reason: 'no running signed-in account to run the orchestrator on' }
         const { launchTerminalSession } = await import('./session-launch')
         return launchTerminalSession({
           cwd: await judgeCwd(),
           prompt: p,
+          instanceRef: account.ref,
           permissionMode: 'bypassPermissions',
         })
       })
