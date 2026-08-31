@@ -151,7 +151,16 @@ function KebabFor($scope, $title) {
   $clean = @($hits | Where-Object { $_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title })
   $others = @($hits | Where-Object { -not ($_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title) })
   if ($clean.Count -eq 1 -and $others.Count -eq 0) { return $clean[0] }
-  Write-Output ("AMBIGUOUS: " + $hits.Count + " rendered chats end with '$title' (" +
+  # THE REFUSAL MESSAGE MUST NOT GO TO THE OUTPUT STREAM. A PowerShell function returns
+  # EVERYTHING written to stdout, so a Write-Output here made KebabFor return the two-element
+  # array @('AMBIGUOUS: ...', $null). The caller's `if (-not $kebab)` then saw a non-empty
+  # array, skipped its not-found branch, and handed a STRING to TryPattern - which threw, so
+  # the run died on 'FAIL: kebab does not expose ExpandCollapse (app UI changed?)'. Every
+  # duplicate-title refusal was therefore reported as a broken app UI, sending the reader off
+  # to hunt an app regression that did not exist (measured 2026-08-31: a rename and an archive
+  # both failed this way against a perfectly healthy app). Park the reason on a script-scope
+  # variable; the caller prints it.
+  $script:KebabAmbiguity = ("AMBIGUOUS: " + $hits.Count + " rendered chats end with '$title' (" +
     (($hits | ForEach-Object { "'" + $_.Current.Name + "'" }) -join ', ') + ') - refusing to guess')
   return $null
 }
@@ -222,8 +231,12 @@ foreach ($m in $mains) {
 
   if (-not $Title) { Write-Output 'FAIL: -Title is required (or use -List)'; exit 1 }
 
+  $script:KebabAmbiguity = $null
   $kebab = KebabFor $el $Title
-  if (-not $kebab) {
+  # An ambiguous match is a decided refusal, not a miss - expanding groups cannot make two
+  # identically-named rows into one, so do not re-look, and do not fall through to the next
+  # instance as if the chat were absent. Report it and stop.
+  if (-not $kebab -and -not $script:KebabAmbiguity) {
     # Try to bring it into view by expanding its folder group(s) (focus-free), then re-look.
     foreach ($e in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
       $ec = TryPattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
@@ -234,6 +247,7 @@ foreach ($m in $mains) {
     $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
     $kebab = KebabFor $el $Title
   }
+  if ($script:KebabAmbiguity) { Write-Output $script:KebabAmbiguity; exit 1 }
   if (-not $kebab) { continue }  # not in this instance; try the next
 
   Write-Output "found '$Title' in $($m.Dir)"

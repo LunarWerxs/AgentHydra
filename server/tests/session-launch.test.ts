@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../src/db'
 import {
+  alreadyRendersIn,
   applyDesktopChatAutomation,
   applyDesktopChatTitle,
   archiveDesktopChat,
@@ -107,6 +108,49 @@ test('import refuses a non-running instance instead of booting it', async () => 
     isInstanceRunning: async () => true,
   })
   expect(live.reason).toContain('session-live')
+})
+
+// A SECOND IMPORT OF AN ALREADY-RENDERED CHAT IS THE BUG THAT MADE SURFACED CHATS
+// UNREACHABLE: the app draws a second row with the same name, and every name-aimed operation
+// (courier delivery, UI archive, rename) then correctly refuses as ambiguous - so the resume
+// never arrives and the chat sits dormant with its prompt staged. Measured 2026-08-31 on a
+// chat that collected three identical rows across three surfaces.
+test('alreadyRendersIn only claims residency for a live chat under that instance', () => {
+  const dir = 'C:\\Users\\x\\.claude-instances\\temp2'
+  const inside = `${dir}\\claude-code-sessions\\org\\user\\local_abc.json`
+  expect(alreadyRendersIn({ archived: false, path: inside }, dir)).toBe(true)
+  // Slash style and a trailing separator must not change the answer.
+  expect(alreadyRendersIn({ archived: false, path: inside.replace(/\\/g, '/') }, `${dir}\\`)).toBe(
+    true,
+  )
+  // An ARCHIVED row draws nothing, so importing is exactly right there.
+  expect(alreadyRendersIn({ archived: true, path: inside }, dir)).toBe(false)
+  // A row in a DIFFERENT instance is not this instance's row.
+  expect(
+    alreadyRendersIn({ archived: false, path: inside }, 'C:\\Users\\x\\.claude-instances\\temp1'),
+  ).toBe(false)
+  // A sibling whose name merely starts the same must not count as being inside it.
+  expect(
+    alreadyRendersIn(
+      { archived: false, path: 'C:\\Users\\x\\.claude-instances\\temp20\\a\\local_abc.json' },
+      dir,
+    ),
+  ).toBe(false)
+  expect(alreadyRendersIn(null, dir)).toBe(false)
+})
+
+test('import skips the spawn when the chat already renders in that instance', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-import-dup-'))
+  const r = await importSessionToDesktop({
+    title: 'A real duplicate-guard title',
+    sessionId: 'already-there',
+    instanceDir: dir,
+    isLive: () => false,
+    isInstanceRunning: async () => true,
+    findRendered: () => ({ archived: false, path: join(dir, 'claude-code-sessions', 'x.json') }),
+  })
+  expect(r.ok).toBe(true)
+  expect(r.alreadyRendered).toBe(true)
 })
 
 test('applyDesktopChatTitle writes the same field pair the app itself writes', () => {

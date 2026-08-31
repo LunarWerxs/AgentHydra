@@ -148,13 +148,32 @@ foreach ($m in $mains) {
       if (-not (TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern))) { continue }
       $rowMatches += $b
     }
+    $ambiguous = @()
     if ($rowMatches.Count -gt 1) {
       # An exact-name row (no status prefix) is unambiguous; otherwise refuse.
       $exact = @($rowMatches | Where-Object { $_.Current.Name -eq $Title })
       if ($exact.Count -eq 1) { $rowMatches = $exact }
+      elseif ($SearchByContent) {
+        # A NAME COLLISION IS NOT A REASON TO GIVE UP, IT IS A REASON TO USE THE STRONGER
+        # TEST. Refusing here was correct only while the name was the sole evidence available;
+        # this script already carries a better one - open a row and see whether the
+        # conversation itself shows the expected text. Two rows bearing one title is the NORMAL
+        # state after a chat has been surfaced more than once, and a flat refusal made those
+        # chats permanently undeliverable: the prompt stayed staged, the chat stayed dormant,
+        # and the fleet looked unmanaged (measured 2026-08-31 on a chat with three such rows).
+        # Narrowing the content search to exactly the colliding rows is also STRICTER than the
+        # untargeted fallback below - every candidate already carries the right title - and the
+        # send is still gated by RAIL 3, which proves the conversation on screen before typing.
+        # So this can no more reach the wrong chat than the refusal could.
+        Write-Output ("'$Title' matches " + $rowMatches.Count +
+          ' rendered rows - identifying by content rather than refusing')
+        $ambiguous = $rowMatches
+        $rowMatches = @()
+      }
       else {
         Write-Output ("REFUSED: '$Title' is ambiguous - " + $rowMatches.Count + " rendered rows end with it (" +
-          (($rowMatches | ForEach-Object { "'" + $_.Current.Name + "'" }) -join ', ') + ')')
+          (($rowMatches | ForEach-Object { "'" + $_.Current.Name + "'" }) -join ', ') +
+          ') - rerun with -SearchByContent to resolve it by conversation content')
         exit 4
       }
     }
@@ -176,13 +195,21 @@ foreach ($m in $mains) {
       # and keep the one whose conversation shows VerifyText. This can never deliver to the
       # wrong chat - the same on-screen proof still gates the send below - it only costs a
       # few navigations. Bounded, and it skips rows that already matched another title.
-      Write-Output "'$Title' is not rendered; searching by content for the target..."
       $candidates = @()
-      foreach ($b in Buttons $el) {
-        $n = $b.Current.Name
-        if ($n -and $n -notlike 'More options for *' -and $n -notlike '*Optionen*' -and
-            $n -notlike '*Feedback*' -and (TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern))) {
-          $candidates += $b
+      if ($ambiguous.Count -gt 0) {
+        # Already narrowed to the rows that carry this exact title - do not widen back out to
+        # every button on screen, which would only add ways to open the wrong conversation.
+        Write-Output ('  candidates: the ' + $ambiguous.Count + ' rows carrying this title')
+        $candidates = $ambiguous
+      }
+      else {
+        Write-Output "'$Title' is not rendered; searching by content for the target..."
+        foreach ($b in Buttons $el) {
+          $n = $b.Current.Name
+          if ($n -and $n -notlike 'More options for *' -and $n -notlike '*Optionen*' -and
+              $n -notlike '*Feedback*' -and (TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern))) {
+            $candidates += $b
+          }
         }
       }
       $hit = $false

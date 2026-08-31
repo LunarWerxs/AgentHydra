@@ -382,6 +382,27 @@ export async function launchTerminalSession(opts: {
 //     FIRST and import LAST — import is how finished work lands on the user's screen, not a
 //     channel for driving further work.
 
+/**
+ * Does this session ALREADY render as a live (non-archived) chat inside `instanceDir`?
+ *
+ * Pure, so the duplicate-row rule can be pinned by tests without a store, a running app, or a
+ * spawn. Residency is decided by where the chat's own metadata FILE sits, not by comparing a
+ * directory name: the default install and the isolated instances then obey one rule, and a
+ * trailing separator or slash style cannot change the answer.
+ */
+export function alreadyRendersIn(
+  rendered: { archived: boolean; path: string } | null,
+  instanceDir: string,
+): boolean {
+  if (!rendered || rendered.archived) return false
+  const norm = (s: string) =>
+    s
+      .replace(/[\\/]+/g, '\\')
+      .replace(/\\+$/, '')
+      .toLowerCase()
+  return norm(rendered.path).startsWith(`${norm(instanceDir)}\\`)
+}
+
 /** Pure and platform-parameterised, like the launch plan above. `binary` is the desktop
  *  binary ('Claude' is the darwin open -na marker resolveLaunchBinary returns). */
 export function buildImportPlan(
@@ -708,7 +729,16 @@ export async function importSessionToDesktop(opts: {
   isInstanceRunning?: (dir: string) => Promise<boolean>
   /** Import a done-marked (superseded) lineage anyway. See isSessionSuperseded. */
   force?: boolean
-}): Promise<{ ok: boolean; reason?: string; titled?: boolean; titleDurable?: boolean }> {
+  /** Seam for tests; the default asks the cached desktop-chat index. */
+  findRendered?: (sessionId: string) => { archived: boolean; path: string } | null
+}): Promise<{
+  ok: boolean
+  reason?: string
+  titled?: boolean
+  titleDurable?: boolean
+  /** True when no import was performed because the chat already renders in that instance. */
+  alreadyRendered?: boolean
+}> {
   // THE NAMING LAW HOLDS AT THE CHOKEPOINT (owner directive 2026-08-29), not only at the
   // routes: adversarial review found the queue's auto-import landing chats with a null or
   // generic title because it never passed through the route contract. Every caller now
@@ -735,6 +765,20 @@ export async function importSessionToDesktop(opts: {
   const running = await (opts.isInstanceRunning ?? defaultInstanceRunning)(opts.instanceDir)
   if (!running)
     return { ok: false, reason: 'instance-not-running: importing would boot that instance' }
+  // IMPORTING A CHAT THAT IS ALREADY ON SCREEN CREATES A SECOND ROW WITH THE SAME NAME, and
+  // that is how a surfaced chat becomes permanently unreachable. Every UI operation here aims
+  // by rendered name - the courier's delivery, the UI archive, rename - and every one of them
+  // correctly REFUSES an ambiguous name rather than risk driving the wrong chat. So the second
+  // import does not merely waste a spawn: it disables the delivery that was the entire point of
+  // surfacing, and the chat then sits dormant forever with its prompt staged and unsendable.
+  // Measured 2026-08-31: three surfaces of one chat produced three identical rows, and the
+  // resume never reached it once. The import exists to MAKE a row; when one already exists the
+  // caller's next step (deliver into it) is what it actually wanted, so report success and let
+  // it proceed. Matching on the metadata file's own location rather than a dir-name guess keeps
+  // the default install and the isolated instances on one rule.
+  const rendered = (opts.findRendered ?? findDesktopChat)(opts.sessionId)
+  if (alreadyRendersIn(rendered, opts.instanceDir))
+    return { ok: true, alreadyRendered: true, titled: false, titleDurable: false }
   const binary = await resolveLaunchBinary()
   if (!binary) return { ok: false, reason: 'desktop-binary-not-found' }
   const argv = buildImportPlan(process.platform, binary, opts.instanceDir, opts.sessionId)
