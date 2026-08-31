@@ -107,6 +107,7 @@ export function buildTerminalLaunchPlan(
   effort: string | null = null,
   resumeSessionId: string | null = null,
   permissionMode: string | null = null,
+  hidden = false,
 ): TerminalLaunchPlan {
   // With resumeSessionId, the window CONTINUES an existing thread (--resume) with the prompt as
   // its next turn — the visible alternative to a headless queue resume, per the owner's standing
@@ -119,6 +120,14 @@ export function buildTerminalLaunchPlan(
     // over as ONE argv element, which cmd cannot do. -NoExit keeps the window (and any startup
     // error) on screen, the same reason session-resume uses `cmd /k`.
     const ps = `& '${exe.replaceAll("'", "''")}'${modelArgs} (Get-Content -Raw '${promptFile.replaceAll("'", "''")}')`
+    // HIDDEN is for a launch the MACHINE decided to make. A visible window is right when a
+    // person asked for the session and is going to watch it; it is wrong for a recurring
+    // unattended pass, which just piles consoles on the owner's screen every few minutes -
+    // measured live: three stacked up before anyone said stop. `cmd /c start` is what creates
+    // the window, so a hidden launch runs powershell directly (the caller also passes
+    // windowsHide, which only takes effect without the start shim) and drops -NoExit, whose
+    // only purpose is keeping a window open to be read.
+    if (hidden) return { argv: ['powershell', '-NoProfile', '-Command', ps], command: ps }
     return {
       argv: ['cmd', '/c', 'start', '', 'powershell', '-NoExit', '-Command', ps],
       command: ps,
@@ -267,6 +276,12 @@ export async function launchTerminalSession(opts: {
   /** Start the session in this permission mode. An UNATTENDED window needs
    *  'bypassPermissions' or it stops on the first shell approval with nobody to answer. */
   permissionMode?: string | null
+  /** Run without putting a console on screen. The visible window is right for a session a
+   *  PERSON asked for and intends to watch; it is wrong for a recurring launch the machine
+   *  decided to make on its own, which simply stacks consoles on the owner's desktop (measured
+   *  live: three of them appeared before anyone said stop). The session is still fully
+   *  visible where it belongs - the fleet list, the peer registry, AgentHydra's own UI. */
+  hidden?: boolean
 }): Promise<TerminalLaunchResult> {
   if (opts.resumeSessionId && !opts.force && isSessionSuperseded(opts.resumeSessionId))
     return {
@@ -333,6 +348,7 @@ export async function launchTerminalSession(opts: {
     opts.effort?.trim() || null,
     opts.resumeSessionId?.trim() || null,
     opts.permissionMode?.trim() || null,
+    opts.hidden === true,
   )
   if (plan.argv.length === 0) return { ok: false, reason: 'no-terminal', command: plan.command }
   // The child gets a SANITIZED environment: every CLAUDE*/ANTHROPIC* variable the daemon itself
@@ -350,7 +366,11 @@ export async function launchTerminalSession(opts: {
   }
   try {
     Bun.spawn(plan.argv, {
-      // No windowsHide: see the header. This window is the point.
+      // No windowsHide by default: see the header. That window is the point - a person asked
+      // for the session and is going to watch it. A launch the MACHINE decided to make passes
+      // hidden:true, and then the flag is not an exception to that rule but the same rule
+      // applied honestly: nobody asked to watch this one.
+      windowsHide: opts.hidden === true,
       cwd: opts.cwd,
       env: { ...cleanEnv, ...env },
       stdin: 'ignore',

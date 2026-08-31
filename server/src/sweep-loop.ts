@@ -523,6 +523,11 @@ async function runJudgePass(
           prompt: p,
           instanceRef: account.ref,
           permissionMode: 'bypassPermissions',
+          // NO CONSOLE ON SCREEN. This launch happens every cooldown without anyone asking for
+          // it, and visible windows stacked up on the owner's desktop within half an hour of
+          // the feature going live. The session is still fully visible where it should be -
+          // the fleet list, the peer registry, this loop's own status.
+          hidden: true,
         })
       })
     const res = await run(prompt)
