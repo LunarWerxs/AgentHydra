@@ -123,10 +123,20 @@ export function zombieCandidates(
   fleetPrefix?: string,
 ): Array<{ sessionId: string; title: string }> {
   const prefix = fleetPrefix ?? chatRowPrefix(rendered, rows)
+  // ⛔ A TITLE IS NOT AN IDENTITY. If a LIVE chat carries this title too, the rendered row is
+  // very likely that live chat - so the archived namesakes are not stranded, they simply are
+  // not on screen at all. Measured live: two retired chats named 'Orchestrate' were reported as
+  // stranded every pass, matched against the one rendered 'Orchestrate' row, which belonged to
+  // the running orchestrator session. The archive then refused, correctly, forever. The report
+  // was the wrong half: nothing was stuck, so nothing should have been claimed.
+  const liveTitles = new Set(
+    rows.filter((r) => !r.archived && r.title).map((r) => r.title as string),
+  )
   const out: Array<{ sessionId: string; title: string }> = []
   const claimed = new Set<string>()
   for (const row of rows) {
     if (!row.archived || !row.title || isGenericChatTitle(row.title)) continue
+    if (liveTitles.has(row.title)) continue
     if (claimed.has(row.sessionId)) continue
     const title = row.title
     // Only a row carrying the app's own chat-menu prefix counts. Bare endsWith matched UI

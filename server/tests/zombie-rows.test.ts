@@ -178,3 +178,24 @@ test('no running instances reconciles nothing and must not look clean', async ()
   expect(r.rows).toEqual([])
   expect(r.renderedSeen).toBe(0)
 })
+
+// ⛔ A TITLE IS NOT AN IDENTITY. Measured live: two retired chats named 'Orchestrate' were
+// reported stranded on every pass, matched against the single rendered 'Orchestrate' row - which
+// belonged to the RUNNING orchestrator session. The archive then refused, correctly and forever.
+// The detection was the wrong half: nothing was stuck, so nothing should have been claimed.
+test('a rendered row whose title is also carried by a LIVE chat is not a zombie', () => {
+  const rows = [
+    row('s-old-1', 'Orchestrate', true),
+    row('s-old-2', 'Orchestrate', true),
+    row('s-running', 'Orchestrate', false), // the live session, same name
+    row('s-real', 'Fix 54 tests', true),
+    row('s-anchor', 'Another chat', false),
+  ]
+  const rendered = [
+    'More options for Orchestrate',
+    'More options for Fix 54 tests',
+    'More options for Another chat',
+  ]
+  // Only the genuinely stranded one. The Orchestrate row is the live chat's own row.
+  expect(zombieCandidates(rendered, rows).map((z) => z.sessionId)).toEqual(['s-real'])
+})
