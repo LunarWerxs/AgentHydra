@@ -139,7 +139,7 @@ test('lane dispatch: only a chat mid-turn is left alone; every other lane routed
 // so the AI examines it. A classifier's blind spot is invisible from inside the classifier.
 test('catch-all: a stale unplaced chat is left alone, a recent one is sent to be examined', async () => {
   const stale = await sweepGateActions(
-    {},
+    { reconcileRendered: false },
     fixture({
       gates: { old: { ...finishedGate('human'), quietSecs: 5 * 60 * 60 } },
       meta: [{ key: 'old' }],
@@ -151,7 +151,7 @@ test('catch-all: a stale unplaced chat is left alone, a recent one is sent to be
   // A LIVE chat mid-turn is the one exclusion: it is visibly working, not misfiled, and
   // pulling it in could only lead to interrupting it.
   const busy = await sweepGateActions(
-    {},
+    { reconcileRendered: false },
     fixture({
       gates: {
         busy: { ...gateOf({ state: 'running', live: { pid: 9, name: 'x' } }), quietSecs: 4 },

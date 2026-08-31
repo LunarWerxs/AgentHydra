@@ -505,10 +505,31 @@ export async function sweepGateActions(
   if (opts.reconcileRendered !== false) {
     try {
       const { reconcileRenderedRows } = await import('./zombie-rows')
-      const insts = await (deps.instances ?? (async () => []))()
-      report.zombieRows = await reconcileRenderedRows(
-        insts.map((i) => ({ dir: i.dir, name: i.ref ?? i.dir, isRunning: i.isRunning })),
-      )
+      const { fleetInstances } = await import('./fleet-instances')
+      // ⛔ NOT `deps.instances ?? (() => [])`. That fallback shipped for one run and produced the
+      // precise failure this lane exists to end: an empty instance list reconciles nothing, finds
+      // nothing, reports nothing unread, and reads as a clean fleet. deps.instances is optional on
+      // SweepDeps and the daemon does not set it, so the fallback WAS the live path. Ask the fleet.
+      const insts = await (deps.instances ?? fleetInstances)()
+      const running = insts.filter((i) => i.isRunning)
+      if (running.length === 0) {
+        // Zero running apps during a sweep that just gated chats is not a clean fleet, it is a
+        // failed instance read - say so rather than printing a reassuring nothing.
+        report.zombieRows = {
+          rows: [],
+          unreadInstances: [
+            {
+              instance: '(none)',
+              why: `the fleet reported ${insts.length} instance(s) and none running - nothing could be reconciled, so coverage here is UNKNOWN`,
+            },
+          ],
+          renderedSeen: 0,
+        }
+      } else {
+        report.zombieRows = await reconcileRenderedRows(
+          running.map((i) => ({ dir: i.dir, name: i.ref ?? i.dir, isRunning: true })),
+        )
+      }
     } catch (err) {
       // A failed reconcile must never read as a clean one.
       report.zombieRows = {

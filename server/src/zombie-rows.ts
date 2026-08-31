@@ -116,18 +116,58 @@ export function zombieCandidates(
   rendered: string[],
   rows: Array<{ sessionId: string; title: string | null; archived: boolean }>,
 ): Array<{ sessionId: string; title: string }> {
+  const prefix = chatRowPrefix(rendered, rows)
   const out: Array<{ sessionId: string; title: string }> = []
   const claimed = new Set<string>()
   for (const row of rows) {
     if (!row.archived || !row.title || isGenericChatTitle(row.title)) continue
     if (claimed.has(row.sessionId)) continue
     const title = row.title
-    if (rendered.some((r) => r === title || r.endsWith(title))) {
+    // Only a row carrying the app's own chat-menu prefix counts. Bare endsWith matched UI
+    // CHROME: measured live, an effort selector rendering 'Effort: Ultracode' matched a chat
+    // genuinely titled 'Ultracode', and the archive then refused as ambiguous every pass.
+    if (rendered.some((r) => r === `${prefix}${title}`)) {
       claimed.add(row.sessionId)
       out.push({ sessionId: row.sessionId, title })
     }
   }
   return out
+}
+
+/**
+ * The app's own chat-row prefix, derived from the rendered list rather than assumed.
+ *
+ * The prefix is LOCALIZED ('More options for ', 'Weitere Optionen für '), so it cannot be a
+ * constant, and the sidebar's rendered names are not all chats - navigation items, filters,
+ * account names and per-turn controls come back too. The discriminator is that the real chat
+ * prefix is the one shared across rows for SEVERAL DIFFERENT chats. A control like 'Effort: '
+ * decorates one value; 'More options for ' decorates every chat in the account.
+ *
+ * Returns '' when no prefix qualifies, which makes the caller fall back to exact-title rows
+ * only - fewer candidates, never a wrong one.
+ */
+export function chatRowPrefix(rendered: string[], rows: Array<{ title: string | null }>): string {
+  const titles = [...new Set(rows.map((r) => r.title).filter((t): t is string => !!t))]
+  const byPrefix = new Map<string, Set<string>>()
+  for (const r of rendered) {
+    for (const t of titles) {
+      if (r.length > t.length && r.endsWith(t)) {
+        const p = r.slice(0, r.length - t.length)
+        const set = byPrefix.get(p) ?? new Set<string>()
+        set.add(t)
+        byPrefix.set(p, set)
+      }
+    }
+  }
+  let best = ''
+  let bestCount = 1 // a prefix seen for only ONE title proves nothing - that is the chrome case
+  for (const [p, set] of byPrefix) {
+    if (set.size > bestCount) {
+      best = p
+      bestCount = set.size
+    }
+  }
+  return best
 }
 
 export interface ZombieDeps {
