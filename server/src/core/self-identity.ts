@@ -36,7 +36,7 @@
 // are different answers, and collapsing them is precisely how the original bug reported a confident
 // wrong number.
 
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { claudeUserDataDir, instancesRoot, normalizeInstancePath } from './paths'
@@ -85,6 +85,11 @@ export interface SelfIdentityDetection {
   /** True when two independent signals named DIFFERENT directories. The winner is still returned
    *  (highest-priority signal), but a caller about to spend quota should say so out loud. */
   conflict: boolean
+  /** Set when the winning signal had to CHOOSE between several instance dirs that all held the same
+   *  evidence — a migrated chat leaves its session file behind in every home it has had. Names the
+   *  rule used and the dirs passed over, so a caller can say the identification was disambiguated
+   *  rather than observed. Absent when the winner was unique. */
+  disambiguated?: string
 }
 
 /** Injection seams. Every one defaults to the real thing; tests pass fakes and touch no disk. */
@@ -94,6 +99,10 @@ export interface SelfIdentityDeps {
   exists?: (p: string) => boolean
   /** Directory entry names, or null when unreadable. */
   readDir?: (p: string) => string[] | null
+  /** Last-modified time of a path in ms, or null when it cannot be read. Consulted ONLY to break a
+   *  tie when more than one instance holds this session's file (a migrated chat leaves a copy in
+   *  every home it has had); the live instance is the one still writing its copy. */
+  mtimeMs?: (p: string) => number | null
   /** Ancestor process chain, nearest parent first. Null when it cannot be enumerated. */
   ancestry?: () => Promise<AncestorProcess[] | null>
   /** `~/.claude-instances`. */
@@ -203,6 +212,9 @@ function candidateUserDataDirs(
 interface EnvSignalResult {
   clue: SelfIdentityClue | null
   ruledOut: string
+  /** A signal that resolved, but only by choosing among several equally-matching candidates.
+   *  Surfaced as `disambiguated` on the detection so the choice is never silent. */
+  note?: string
 }
 
 /** Stage 1 — CODEX_HOME names its own home outright. */
@@ -287,6 +299,7 @@ function checkHostSessionSignal(
   defaultUdd: () => string,
   readDir: (p: string) => string[] | null,
   exists: (p: string) => boolean,
+  mtimeMs: (p: string) => number | null,
 ): EnvSignalResult {
   const hostSessionId = env.CLAUDE_CODE_HOST_SESSION_ID?.trim()
   if (!hostSessionId) {
@@ -295,20 +308,57 @@ function checkHostSessionSignal(
       ruledOut: 'CLAUDE_CODE_HOST_SESSION_ID is unset (not a Claude Desktop session)',
     }
   }
+  // EVERY holder, not the first (2026-09-01). A migrated chat leaves its session file behind in
+  // each instance it has lived in, so several dirs can hold this id at once. Returning the first
+  // hit made the answer depend on directory ORDER: an Orchestrate chat moved to temp1 was reported
+  // as funzypops for hours, because 'f' sorts before 't', and every usage check it made that day
+  // read the wrong account's meter — the exact bug this module exists to prevent, back in through
+  // a side door. The 0% weekly it kept seeing was real; it just belonged to someone else.
+  const hits: { dir: string; path: string; mtime: number | null }[] = []
   for (const dir of candidateUserDataDirs({ readDir }, rootOf(), defaultUdd())) {
     const sessionsRoot = join(dir, 'claude-code-sessions')
     if (!exists(sessionsRoot)) continue
     const hit = findFileUnder(sessionsRoot, `${hostSessionId}.json`, readDir, exists)
-    if (hit) {
-      return {
-        clue: { method: 'host-session-file', kind: 'desktop', configDir: dir, proof: hit },
-        ruledOut: '',
-      }
+    if (hit) hits.push({ dir, path: hit, mtime: mtimeMs(hit) })
+  }
+  const first = hits[0]
+  if (!first) {
+    return {
+      clue: null,
+      ruledOut: `no instance holds a claude-code-sessions file for CLAUDE_CODE_HOST_SESSION_ID=${hostSessionId}`,
     }
   }
+  if (hits.length === 1) {
+    return {
+      clue: {
+        method: 'host-session-file',
+        kind: 'desktop',
+        configDir: first.dir,
+        proof: first.path,
+      },
+      ruledOut: '',
+    }
+  }
+  // The live instance is the one still WRITING its copy, so the newest file is the home. When no
+  // timestamp can be read at all, the pick is not knowledge and is labelled so — it must never be
+  // reported with the same confidence as a unique hit.
+  const dated = hits.filter((h) => h.mtime !== null)
+  const winner = dated.length
+    ? dated.reduce((a, b) => ((b.mtime as number) > (a.mtime as number) ? b : a))
+    : first
+  const losers = hits.filter((h) => h !== winner).map((h) => h.dir)
+  const note = dated.length
+    ? `${hits.length} instances hold this session's file (a migrated chat leaves one behind in each home it has had); chose ${winner.dir} by newest file, over ${losers.join(', ')}`
+    : `AMBIGUOUS: ${hits.length} instances hold this session's file and no timestamp could be read to tell them apart; ${winner.dir} was taken as the first match, over ${losers.join(', ')} — confirm before spending quota on it`
   return {
-    clue: null,
-    ruledOut: `no instance holds a claude-code-sessions file for CLAUDE_CODE_HOST_SESSION_ID=${hostSessionId}`,
+    clue: {
+      method: 'host-session-file',
+      kind: 'desktop',
+      configDir: winner.dir,
+      proof: winner.path,
+    },
+    ruledOut: '',
+    note,
   }
 }
 
@@ -384,6 +434,15 @@ export async function detectSelfIdentity(
         return null
       }
     })
+  const mtimeMs =
+    deps.mtimeMs ??
+    ((p: string) => {
+      try {
+        return statSync(p).mtimeMs
+      } catch {
+        return null
+      }
+    })
   const rootOf = deps.instancesRoot ?? instancesRoot
   const defaultUdd = deps.defaultUserDataDir ?? claudeUserDataDir
   const defaultCfg = deps.defaultConfigDir ?? defaultClaudeConfigDir
@@ -403,9 +462,12 @@ export async function detectSelfIdentity(
   }
 
   // --- 4. CLAUDE_CODE_HOST_SESSION_ID → the instance dir that holds this session's own file. -----
-  const hostSignal = checkHostSessionSignal(env, rootOf, defaultUdd, readDir, exists)
+  const hostSignal = checkHostSessionSignal(env, rootOf, defaultUdd, readDir, exists, mtimeMs)
   if (hostSignal.clue) add(hostSignal.clue)
   else ruledOut.push(hostSignal.ruledOut)
+  // A choice among equals is recorded where a human will read it, never folded into "exact".
+  const disambiguated = hostSignal.note
+  if (disambiguated) ruledOut.push(disambiguated)
 
   // --- 5. Process ancestry — the last resort, and the only one that survives a stripped env. -----
   // Skipped entirely when something above already answered: it is the one step that spawns a
@@ -432,6 +494,7 @@ export async function detectSelfIdentity(
       clues,
       ruledOut,
       conflict,
+      ...(disambiguated ? { disambiguated } : {}),
     }
   }
 

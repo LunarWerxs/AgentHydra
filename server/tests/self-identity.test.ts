@@ -192,6 +192,78 @@ describe('detectSelfIdentity — env signals', () => {
   })
 })
 
+describe('detectSelfIdentity — a MIGRATED session (the same file in more than one instance)', () => {
+  // THE SECOND REGRESSION (2026-09-01). A chat that has been migrated leaves its claude-code-sessions
+  // file behind in every home it has had. An Orchestrate chat moved pap3r rotate2 -> funzypops ->
+  // temp1 was reported as funzypops for HOURS, because the scan returned the first directory holding
+  // the file and 'funzypops' sorts before 'temp1'. Every quota decision it made that day read the
+  // wrong meter - it kept seeing a weekly of 0% that was real and belonged to someone else.
+  const STALE_DIR = join(INSTANCES_ROOT, 'funzypops')
+  const LIVE_DIR = join(INSTANCES_ROOT, 'temp1')
+  const staleFile = join(STALE_DIR, 'claude-code-sessions', 'a', 'b', `${HOST_SESSION_ID}.json`)
+  const liveFile = join(LIVE_DIR, 'claude-code-sessions', 'c', 'd', `${HOST_SESSION_ID}.json`)
+  const fs = fakeFs({
+    files: [marker(STALE_DIR), marker(LIVE_DIR), staleFile, liveFile],
+    dirs: {
+      [INSTANCES_ROOT]: ['funzypops', 'temp1'],
+      [join(STALE_DIR, 'claude-code-sessions')]: ['a'],
+      [join(STALE_DIR, 'claude-code-sessions', 'a')]: ['b'],
+      [join(STALE_DIR, 'claude-code-sessions', 'a', 'b')]: [],
+      [join(LIVE_DIR, 'claude-code-sessions')]: ['c'],
+      [join(LIVE_DIR, 'claude-code-sessions', 'c')]: ['d'],
+      [join(LIVE_DIR, 'claude-code-sessions', 'c', 'd')]: [],
+    },
+  })
+
+  test('the NEWEST session file wins, not the first directory alphabetically', async () => {
+    const mtimeMs = (p: string) => (p === liveFile ? 2_000 : p === staleFile ? 1_000 : null)
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...fs, mtimeMs, ancestry: async () => null }),
+    )
+    expect(got.configDir).toBe(LIVE_DIR)
+    expect(got.method).toBe('host-session-file')
+    expect(got.clues[0]?.proof).toBe(liveFile)
+    // The choice is recorded, naming what was passed over - never a silent pick.
+    expect(got.disambiguated).toContain('funzypops')
+    expect(got.ruledOut.some((r) => r.includes('newest file'))).toBe(true)
+  })
+
+  test('the OLD BUG, pinned: alphabetical order alone must never decide it', async () => {
+    // Same fixture, but the STALE copy is the newer file - the answer has to follow the
+    // timestamp, proving directory order is not what is being consulted.
+    const mtimeMs = (p: string) => (p === staleFile ? 2_000 : p === liveFile ? 1_000 : null)
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...fs, mtimeMs, ancestry: async () => null }),
+    )
+    expect(got.configDir).toBe(STALE_DIR)
+  })
+
+  test('with no timestamps to tell them apart it still answers, but says AMBIGUOUS', async () => {
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...fs, mtimeMs: () => null, ancestry: async () => null }),
+    )
+    expect(got.method).toBe('host-session-file')
+    expect(got.disambiguated).toMatch(/AMBIGUOUS/)
+  })
+
+  test('a UNIQUE holder is untouched by any of this - no note, no disambiguation', async () => {
+    const one = fakeFs({
+      files: [marker(LIVE_DIR), liveFile],
+      dirs: {
+        [INSTANCES_ROOT]: ['temp1'],
+        [join(LIVE_DIR, 'claude-code-sessions')]: ['c'],
+        [join(LIVE_DIR, 'claude-code-sessions', 'c')]: ['d'],
+        [join(LIVE_DIR, 'claude-code-sessions', 'c', 'd')]: [],
+      },
+    })
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...one, ancestry: async () => null }),
+    )
+    expect(got.configDir).toBe(LIVE_DIR)
+    expect(got.disambiguated).toBeUndefined()
+  })
+})
+
 describe('detectSelfIdentity — the Claude Desktop MCP case (the regression)', () => {
   const fs = fakeFs({
     files: [
