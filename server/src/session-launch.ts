@@ -167,10 +167,13 @@ export function nearestTrustedAncestor(
     ensureProjectTrusted(p, c).trusted,
 ): string | null {
   const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/)
+  // Rejoin with the separator the caller used, not the host's: a Windows path walked on the
+  // ubuntu CI leg came back as 'D:/PublicProjects/...' and matched nothing (CI, 2026-09-02).
+  const joiner = cwd.includes('\\') ? '\\' : '/'
   // Stop before the bare drive/root: 'D:' is not a project anybody meant to work in, and
   // starting a session at a drive root is its own hazard.
   for (let i = parts.length - 1; i >= 2; i--) {
-    const candidate = parts.slice(0, i).join(sep)
+    const candidate = parts.slice(0, i).join(joiner)
     if (isTrusted(candidate, configDir)) return candidate
   }
   return null
