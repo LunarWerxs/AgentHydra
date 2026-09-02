@@ -353,7 +353,7 @@ export function baseTitle(title: string): string {
 }
 
 /** Enqueue a resume of the rate-limited item's session, scheduled for `notBefore`, on the
- *  item's own account. (The migrate-on-limit override this once carried died with orchestrator
+ *  item's own account. (The migrate-on-limit override this once carried died with the retired
  *  v1; the dead parameter and its four conditional branches were removed in the 2026-08-29
  *  consolidation pass rather than left describing machinery that no longer exists.) */
 function enqueueResume(item: QueueItem, notBefore: string): string {
@@ -617,12 +617,12 @@ async function deliverDesktopLanding(q: QueueItem): Promise<void> {
     )
   }
   try {
-    // ONE definition of landing (gate-actions.ts): naming law, the picker with the owner's 85%
-    // overflow rule, the boot-and-wait for a picked closed instance, then the import. Dynamic
-    // import because gate-actions imports this module's picker (no load-time cycle). Runs
+    // ONE definition of landing (desktop-landing.ts): naming law, the picker with the owner's
+    // 85% overflow rule, the boot-and-wait for a picked closed instance, then the import.
+    // Dynamic import because desktop-landing imports this module's picker (no load-time cycle). Runs
     // under the process-wide act lock so it can never interleave with a sweep's or a direct
     // act's boot/import (review-confirmed race).
-    const { landSessionInDesktop, withActSerialized } = await import('./gate-actions')
+    const { landSessionInDesktop, withActSerialized } = await import('./desktop-landing')
     const landed = await withActSerialized(() =>
       landSessionInDesktop({
         sessionId: q.session_id,

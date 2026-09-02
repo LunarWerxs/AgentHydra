@@ -7,6 +7,40 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-09-02
+
+### Removed
+
+- **THE ORCHESTRATOR IS GONE FROM THIS REPO, ENTIRELY** (owner order, Michael, 2026-08-31). Every
+  line of it now lives in a separate program, `orchestrator/`, which talks to this daemon over
+  HTTP. AgentHydra is the fleet daemon again: it knows what instances and chats exist and acts on
+  one when asked. Deciding what *should* happen to a chat is no longer its business, and the HTTP
+  boundary is there so the two cannot grow back together.
+
+  Removed: 15 modules (`prestart`, `chat-gate`, `gate-actions`, `gate-sweep`, `sweep-loop`,
+  `zombie-rows`, `deliveries`, `courier`, `courier-deliver`, `ui-deliver`, `holds`, `breaker`,
+  `collisions`, `reconcile`, `name-untitled`) with their 16 test files; 8 MCP tools (`prestart`,
+  `chat_gate`, `chat_act`, `chat_sweep`, `chat_hold`, `courier`, `deliveries`, `sweep_loop`); the
+  `/api/chats/:id/gate`, `/api/chats/:id/act`, `/api/chats/sweep`, `/api/prestart`,
+  `/api/deliveries`, `/api/holds`, `/api/sessions/:id/{hold,release}`, `/api/couriers*` and
+  `/api/sweep-loop*` routes; the `deliveries`, `session_holds` and `action_attempt_log` tables and
+  every `sweep_*` / `courier_enabled` setting; the `/orchestrate` command and `smoke:orchestrator`.
+
+  **Why, in one line each.** It archived chats that were waiting on a person - the gate called a
+  recap saying "done" finished unless the message ended in a literal `?`, so *"say the word and
+  I'll start"* was filed away; 6 of 29 chats archived in one day were waiting, and one was archived
+  twice, the second time by the very call trying to hand it the answer. And a 2-minute loop
+  re-drove the app's Archive control for rows it could never clear (227 chats archived on disk
+  under an app open for a day - those flags only re-read at restart), with no memory of failure
+  anywhere, including for a refusal that was deterministic.
+
+- **KEPT, because they are primitives the orchestrator merely used**: `chat-dossier`,
+  `live-registry`, `ui-archive`, `chat-title`, the auto-resume monitor, and the
+  `desktop-archive` / `import-desktop` / `chats/:id/rename` routes. The landing path and the act
+  lock the monitor depends on were extracted into the new `desktop-landing.ts` before
+  `gate-actions.ts` left, so the monitor still lands a homeless chat when its window resets. The
+  landing deliberately no longer stages any prompt - that was orchestration and went with it.
+
 ### Added
 
 - **The fleet can now say "this account cannot do work, and here is why" ONCE, instead of finding

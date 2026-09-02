@@ -3,7 +3,7 @@
   Register (or remove) the scheduled task that keeps the AgentHydra daemon alive.
 
 .DESCRIPTION
-  WHY THIS EXISTS (owner directive, Michael, 2026-08-30, after an orchestration pass found the
+  WHY THIS EXISTS (owner directive, Michael, 2026-08-30, after a fleet pass found the
   hole): every piece needed to keep the daemon up already existed - Ensure-Daemon.ps1 is a proper
   idempotent preflight, Restart-Daemon.ps1 kills stale code, Wait-Daemon.ps1 proves recovery -
   and NOTHING EVER CALLED THEM ON A SCHEDULE. The daemon was alive only because a person had
@@ -11,8 +11,8 @@
   server/src/index.ts` with no supervisor above it. A census that day found no scheduled task, no
   Startup shortcut and no Run key entry for this app on the machine that runs the fleet.
 
-  That is the worst shape an outage can take: orchestration does not crash loudly, it simply
-  stops happening, and every automation that talks to it fails one HTTP call at a time until a
+  That is the worst shape an outage can take: the daemon does not crash loudly, it simply
+  stops answering, and every automation that talks to it fails one HTTP call at a time until a
   human happens to notice. This closes it with the smallest possible addition - a schedule in
   front of the ensure script that already knew how to do the work.
 
@@ -28,7 +28,7 @@
 .PARAMETER IntervalMinutes
   How often to check. Default 5. The check is a single HTTP call against /api/health when
   everything is healthy, so this is cheap; the cost of a longer interval is dead-air minutes
-  where orchestration is silently down.
+  where the daemon is silently down.
 
 .PARAMETER TaskName
   Scheduled task name. Default 'AgentHydra Daemon Supervisor'.

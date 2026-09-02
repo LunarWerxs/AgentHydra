@@ -44,17 +44,14 @@ load-bearing**:
 claude mcp add --scope user agenthydra -- bun run --cwd <path-to-agenthydra> mcp
 ```
 
-`/orchestrate` is installed as a global slash command precisely so it works from any directory:
-you orchestrate the fleet from wherever you happen to be, not only from inside this checkout. A
-project-scoped registration would give it its tools in this repo and nowhere else, which is the
-same as not having them: the command would run, find no `prestart`, and fall back to hand-driving
-the REST API.
+User scope is load-bearing: it makes the tools available from any directory, not only from
+inside this checkout. A project-scoped registration gives the server its tools in this repo and
+nowhere else, which is the same as not having them.
 
-That is not hypothetical. On 2026-08-30 an orchestration pass discovered the server was registered
-**nowhere at all**, not at user scope, not in a single project, so every `/orchestrate` since the
-command was written had been running without its tools. The server itself was fine the whole time
-(59 tools, all present); it had simply never been plugged in. If a pass ever reports that it is
-driving the daemon over HTTP directly, this registration is missing on that machine.
+That is not hypothetical. On 2026-08-30 the server was found registered **nowhere at all**, not at
+user scope, not in a single project. The server itself was fine the whole time (all tools
+present); it had simply never been plugged in. If anything reports that it is driving the daemon
+over HTTP directly, this registration is missing on that machine.
 
 Verify with `claude mcp list`. The entry should say `✔ Connected`. A session already open when you
 register it will not see the new tools; its tool list is fixed at startup, so start a new one.
@@ -257,8 +254,8 @@ available only while the provider toggle is enabled.
 ## Keeping the daemon alive
 
 Everything that talks to AgentHydra talks to it over HTTP, so a daemon that is not running is not a
-degraded fleet, it is a silent one: orchestration stops happening rather than failing loudly, and
-each automation just fails its own call until a person happens to notice.
+degraded fleet, it is a silent one: it stops answering rather than failing loudly, and each
+automation just fails its own call until a person happens to notice.
 
 Three scripts under `misc/` cover this, and the difference between them matters:
 

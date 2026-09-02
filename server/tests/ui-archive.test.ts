@@ -181,7 +181,7 @@ test('a failed rename is reported as a failure, with whatever the tool said', as
 })
 
 // ⛔ REFUSING ON THE COUNT ALONE STRANDED ROWS NOTHING COULD EVER CLEAR. Measured live: two
-// retired chats both titled 'Orchestrate' sat in the sidebar permanently, because every pass
+// retired chats sharing one title sat in the sidebar permanently, because every pass
 // declined to click either on the grounds it might hit "the wrong one" - when both were already
 // archived and either click was correct. The hazard is a chat that should SURVIVE, not a shared
 // name, so the question is whether any holder of that title is still live.

@@ -141,23 +141,6 @@ export const NEVER_SYNCED = [
   // rather than quietly narrowed, because taking away sync someone already relies on is its own
   // surprise. Worth an explicit decision rather than a drive-by one.
   'monitor_enabled',
-  // The standing sweep is the same class of unattended-action switch as monitor_enabled - it
-  // archives chats and (if capped up) boots apps on a timer - and its caps/interval describe
-  // THIS machine's fleet. None of it should follow a sign-in to another computer.
-  'sweep_enabled',
-  'sweep_interval_min',
-  'sweep_max_archive',
-  // The courier rides the sweep tick and spawns sessions in THIS machine's instances - same
-  // unattended-action class, same reason it stays home.
-  'courier_enabled',
-  'sweep_max_surface',
-  // The waiting-lane caller OPENS A TERMINAL WINDOW on this machine when the sweep finds chats
-  // waiting on a judgment. That is the most local act in the file - it belongs to whoever is
-  // sitting at this computer, and its cooldown stamp is a fact about this machine's clock, not
-  // a preference about a person.
-  'sweep_judge_enabled',
-  'sweep_judge_cooldown_min',
-  'sweep_judge_last_at',
   // Whether consoles appear on THIS screen. About this machine's desktop, not about a person.
   'terminal_windows_visible',
 ] as const

@@ -1,4 +1,4 @@
-// server/src/fleet.ts - PIECE 1 of the orchestrator rebuild (owner-led, 2026-08-29): the
+// server/src/fleet.ts - the
 // deterministic fleet observation. Which Claude sessions are live on this machine, and what
 // state is each one in - answered entirely from disk, with zero AI, zero tokens, zero writes.
 //

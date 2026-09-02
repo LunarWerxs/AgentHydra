@@ -13,7 +13,7 @@ test('generic detection: the manufactured non-names, plumbing, and emptiness', (
     '   ',
     null,
     undefined,
-    '[orchestrator] seeded thing',
+    '[plumbing] seeded thing',
   ])
     expect(isGenericChatTitle(t as string | null | undefined)).toBe(true)
   for (const t of [
@@ -41,7 +41,7 @@ test('a real new title is accepted, trimmed', () => {
 test('a generic or overlong new title is refused', () => {
   expect(resolveRequiredTitle({ title: 'Untitled', currentTitle: null }).ok).toBe(false)
   expect(resolveRequiredTitle({ title: 'new session', currentTitle: null }).ok).toBe(false)
-  expect(resolveRequiredTitle({ title: '[orchestrator] x', currentTitle: null }).ok).toBe(false)
+  expect(resolveRequiredTitle({ title: '[plumbing] x', currentTitle: null }).ok).toBe(false)
   expect(resolveRequiredTitle({ title: 'x'.repeat(201), currentTitle: null }).ok).toBe(false)
 })
 

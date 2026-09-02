@@ -1005,6 +1005,62 @@ export async function reassertChatAutomation(
 }
 
 /**
+ * THE DURABLE FIX for the zombie-twin leak (owner ask, 2026-09-01). After a migrate archives
+ * the SOURCE chat's meta on disk, a RUNNING source app holds its chat list in memory and
+ * re-saves isArchived=false within seconds - resurrecting a visible stale twin that then makes
+ * the chat ambiguous to resolve. This is the archive-flag twin of reassertChatAutomation: a
+ * bounded watcher that re-writes isArchived=true whenever the app flips it back, scoped to the
+ * SOURCE dir only (never the fresh target import), until the app's next boot reads the store
+ * and the flag sticks for good - or the caps below fire. Non-throwing; returns restore count.
+ */
+export async function reassertChatArchive(
+  instanceDir: string,
+  sessionId: string,
+  opts?: {
+    windowMs?: number
+    intervalMs?: number
+    maxRestores?: number
+    maxMisses?: number
+    sleep?: (ms: number) => Promise<void>
+    now?: () => number
+  },
+): Promise<number> {
+  const windowMs = opts?.windowMs ?? 10 * 60_000
+  const intervalMs = opts?.intervalMs ?? 1_500
+  const maxRestores = opts?.maxRestores ?? 8
+  const maxMisses = opts?.maxMisses ?? 40
+  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = opts?.now ?? Date.now
+  const deadline = now() + windowMs
+  let restores = 0
+  let misses = 0
+  let metaPath: string | null = null
+  while (now() < deadline && restores < maxRestores) {
+    await sleep(intervalMs)
+    try {
+      if (!metaPath || !existsSync(metaPath)) metaPath = findChatMetaPath(instanceDir, sessionId)
+      if (!metaPath) {
+        if (++misses >= maxMisses) return restores
+        continue
+      }
+      misses = 0
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+      if (meta.isArchived === true) continue
+      meta.isArchived = true
+      writeFileSync(metaPath, JSON.stringify(meta))
+      invalidateSessionMetaCache()
+      restores++
+      console.log(
+        `[agenthydra] re-asserted archived on ${sessionId} in ${instanceDir} (the app's re-save resurrected the twin)`,
+      )
+    } catch {
+      // a contended or half-written pass says nothing about the next tick
+    }
+  }
+  return restores
+}
+
+/**
  * Stamp `bypassPermissions` onto every IMPORT-SHAPE chat in one profile's store whose file
  * says otherwise. Import shape means the file is named after the CLI id
  * (`local_<cliSessionId>.json`) — the one shape only OUR imports and seeds produce; a chat

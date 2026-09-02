@@ -4,7 +4,7 @@
 // `~/.claude/sessions/<pid>.json` is the CLI's own live registry - `name` is the peer address,
 // `sessionId` is the transcript id, plus cwd and pid. This module validates the pid is alive
 // and joins the registry world to the transcript store. Extracted from the retired v1
-// orchestrator (archive/orchestrator-v1) because "who is live" is general infrastructure:
+// retired subsystem because "who is live" is general infrastructure:
 // the chat dossier answers "is a process hosting this chat right now" from it.
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'

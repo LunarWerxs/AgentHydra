@@ -1,4 +1,4 @@
-// server/src/chat-title.ts - PIECE 5 of the orchestrator rebuild (owner-picked, 2026-08-29):
+// server/src/chat-title.ts -
 // the naming REQUIREMENT. A chat must never end a move with a generic name, so every surface
 // that lands a chat somewhere demands a title decision from its caller: supply a real new
 // name, or explicitly confirm the existing one - and confirming means restating it exactly,
@@ -12,8 +12,8 @@
 
 /** Titles the desktop app manufactures when nothing named the chat - never acceptable. */
 export const GENERIC_CHAT_TITLE = /^(untitled|general coding session|new (chat|session))$/i
-/** The retired v1 orchestrator's seed preamble marker - replaceable, never writable. */
-export const PLUMBING_CHAT_TITLE = /^\[orchestrator\]/i
+/** A retired seed-preamble marker - replaceable, never writable. */
+export const PLUMBING_CHAT_TITLE = /^\[plumbing\]/i
 
 const MAX_TITLE_LEN = 200
 

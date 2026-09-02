@@ -53,7 +53,9 @@
 # app memory AGREE on the name (verified). -NewTitle must be a real name: generic non-names are
 # refused here with the same patterns chat-title.ts owns (that file is canonical; keep in sync).
 #
-# Exit: 0 done (row left the sidebar) - 1 error - 2 invoked but row still present - 3 not rendered.
+# Exit: 0 done (Archive: row left the sidebar - Unarchive: row now present in the active view -
+#   Rename: row still present, under NewTitle) - 1 error - 2 invoked but not confirmed (Archive:
+#   row still present - Rename: new name not rendered) - 3 not rendered.
 param(
   [string]$Title,
   [string]$Instance = '',
@@ -196,7 +198,7 @@ $mains = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
     # and the instance resolves to 'C:\...\pap3r'. That never matches any real directory, so
     # every archive, rename, list and delivery for that account reported "no running instance
     # matches" and returned nothing. Measured 2026-08-31: the owner's 'pap3r rotate2' account
-    # had been structurally unmanageable, which read from outside as the orchestrator simply
+    # had been structurally unmanageable, which read from outside as the machinery simply
     # ignoring accounts. Three shapes, most specific first.
     $m = [regex]::Match($_.CommandLine, '"--user-data-dir=([^"]+)"')
     if (-not $m.Success) { $m = [regex]::Match($_.CommandLine, '--user-data-dir="([^"]+)"') }
@@ -220,7 +222,7 @@ if ($Action -eq 'Rename') {
   # a real name. Canonicalize the same way: strip zero-width chars, collapse whitespace.
   $canon = ($NewTitle -replace "[\u200B-\u200D\uFEFF\u00AD]", '') -replace '\s+', ' '
   $canon = $canon.Trim()
-  if (-not $canon -or $canon -match '^(untitled|general coding session|new (chat|session))$' -or $canon -match '^\[orchestrator\]') {
+  if (-not $canon -or $canon -match '^(untitled|general coding session|new (chat|session))$' -or $canon -match '^\[plumbing\]') {
     Write-Output "FAIL: -NewTitle '$NewTitle' is a generic non-name (owner rule: real names only)"
     exit 1
   }
@@ -249,11 +251,37 @@ foreach ($m in $mains) {
   # instance as if the chat were absent. Report it and stop.
   if (-not $kebab -and -not $script:KebabAmbiguity) {
     # Try to bring it into view by expanding its folder group(s) (focus-free), then re-look.
+    #
+    # ⛔⛔ ONLY GROUP-SHAPED CONTROLS IN THE SIDEBAR (owner, 2026-09-01: "it's still clicking
+    # random shit... I think it's the script trying to select the model"). This loop used to
+    # expand EVERY collapsed ExpandCollapse element with a name under 40 characters - and the
+    # MODEL PICKER is an ExpandCollapse control whose name ("Opus 4.5", "Fable 5") is well
+    # under 40. So every archive and every rename that had to hunt for a row was popping the
+    # model menu open on a live account. Expanding a folder group is harmless; opening the
+    # model picker is one stray click from changing a chat's model, which is a standing rule
+    # never to touch. Identify the group POSITIVELY - control type plus the left column,
+    # where no picker or toolbar dropdown lives - instead of blacklisting names.
+    # The allow-list is DERIVED FROM THE APP: every sidebar project group has a companion
+    # button named "New session in <that group>", and nothing else in the window does
+    # (measured across five live instances 2026-09-01). A name not in that set is not a group.
+    $groupNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($b in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+      try {
+        $n = $b.Current.Name
+        if ($n -and $n.Length -gt 15 -and $n.StartsWith('New session in ')) {
+          [void]$groupNames.Add($n.Substring(15).Trim())
+        }
+      } catch { continue }
+    }
     foreach ($e in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
-      $ec = TryPattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-      if ($ec -and $ec.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed -and $e.Current.Name -and $e.Current.Name.Length -lt 40 -and -not $e.Current.Name.EndsWith($Title)) {
-        try { $ec.Expand(); Start-Sleep -Milliseconds 250 } catch { }
-      }
+      try {
+        $n = $e.Current.Name
+        if (-not $n -or -not $groupNames.Contains($n.Trim())) { continue }
+        $ec = TryPattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+        if (-not $ec) { continue }
+        if ($ec.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Collapsed) { continue }
+        $ec.Expand(); Start-Sleep -Milliseconds 250
+      } catch { continue }
     }
     $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
     $kebab = KebabFor $el $Title

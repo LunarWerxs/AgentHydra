@@ -33,7 +33,8 @@
 # Reach limit (same as Manage-DesktopChat.ps1): only a RENDERED sidebar row can be actioned.
 #
 # Exit: 0 delivered - 1 error - 3 target row not rendered - 4 wrong chat / unverified -
-#       5 composer did not accept the text - 6 chat busy (turn in flight).
+#       5 composer did not accept the text - 6 chat busy (turn in flight) -
+#       7 the composer already holds a draft that is not ours (never overwritten).
 param(
   [Parameter(Mandatory = $true)][string]$Title,
   [Parameter(Mandatory = $true)][string]$Message,
@@ -110,6 +111,61 @@ foreach ($m in $mains) {
   $hwnd = [IntPtr]$win.Current.NativeWindowHandle
   [AxD]::Wake($hwnd); Start-Sleep -Milliseconds 1000
   $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+
+  # EXPAND EVERY COLLAPSED SIDEBAR GROUP FIRST (2026-09-01). "Not rendered in any searched
+  # running instance (collapsed group or virtualized out)" was the single commonest delivery
+  # refusal on a real fleet - and for a COLLAPSED group it is not a reach limit at all, it is
+  # a closed drawer. The app exposes ExpandCollapse on those group headers, so open them and
+  # the rows underneath become ordinary rendered rows. Read-only in effect (expanding a list
+  # changes no chat), bounded, and it makes every later rail - the row match, the content
+  # verify, the composer - work on the chats that were merely out of sight.
+  # ⛔⛔ IDENTIFY A GROUP POSITIVELY - A BLACKLIST IS NOT GOOD ENOUGH (owner, 2026-09-01: "it's
+  # still clicking random shit... I think it's the script trying to select the model"). The
+  # first cut expanded EVERY ExpandCollapse element in the window and skipped only the kebabs
+  # by name. The MODEL PICKER is an ExpandCollapse control too, and so is every other dropdown
+  # in the app - so this opened the model menu, on a real account, repeatedly. Expanding a
+  # sidebar group is harmless; opening the model picker is one stray click away from changing
+  # a chat's model, which is a standing owner rule never to touch.
+  #
+  # So: a candidate must be a GROUP-SHAPED control (never a ComboBox/Button/MenuItem), and it
+  # must physically live in the SIDEBAR - the left column - which no model picker does.
+  try {
+    $expanded = 0
+    # THE ALLOW-LIST IS BUILT FROM THE APP ITSELF. Every project group in the sidebar has a
+    # companion button named "New session in <that group>" - measured across five live
+    # instances 2026-09-01 (connections, NormWind, odin, PublicProjects, RoloDexter). Nothing
+    # else in the window has one. So the set of names worth expanding is derived, not guessed,
+    # and it cannot include 'More models', 'Effort: Max', 'Bypass permissions', the account
+    # menu, 'Filter', 'Remote Control' or a 'Ran 6 commands' disclosure - every one of which
+    # the old blacklist happily opened.
+    $groupNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($b in $el.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                               [System.Windows.Automation.Condition]::TrueCondition)) {
+      try {
+        $n = $b.Current.Name
+        if ($n -and $n.Length -gt 15 -and $n.StartsWith('New session in ')) {
+          [void]$groupNames.Add($n.Substring(15).Trim())
+        }
+      } catch { continue }
+    }
+    foreach ($g in $el.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                               [System.Windows.Automation.Condition]::TrueCondition)) {
+      try {
+        $n = $g.Current.Name
+        if (-not $n -or -not $groupNames.Contains($n.Trim())) { continue }
+        $ecp = TryPattern $g ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+        if (-not $ecp) { continue }
+        if ($ecp.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Collapsed) { continue }
+        $ecp.Expand(); $expanded++
+        if ($expanded -ge 40) { break }
+      } catch { continue }
+    }
+    if ($expanded -gt 0) {
+      Write-Output "expanded $expanded collapsed sidebar group(s) so their chats are reachable"
+      Start-Sleep -Milliseconds 900
+      $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    }
+  } catch { }
 
   # RAIL 2: get the target chat ON SCREEN. It may ALREADY be the open conversation - an open
   # chat renders no selectable sidebar row (measured), so requiring a row would refuse the
@@ -210,7 +266,25 @@ foreach ($m in $mains) {
       $inv = TryPattern $row ([System.Windows.Automation.InvokePattern]::Pattern)
       if (-not $inv) { Write-Output 'FAIL: chat row does not expose Invoke'; exit 1 }
       $inv.Invoke()
-      Start-Sleep -Milliseconds 2000
+      # SELECTION IS NOT A CLICK RECEIPT (measured live 2026-09-01: the row Invoke can
+      # silently no-op, and a switching pane paints async, so the content verify below ran
+      # against the PREVIOUS conversation and refused a healthy delivery). The pane header
+      # button is the app's own switch receipt - its name is "<title>, rename session" - so
+      # wait for it (up to 10s), retry the Invoke once against a silent no-op, and only then
+      # hand off to the content verify. The header is a receipt, never the proof: the
+      # -VerifyText content check still gates the send exactly as before.
+      $headerSeen = $false
+      for ($hw = 0; $hw -lt 20; $hw++) {
+        Start-Sleep -Milliseconds 500
+        $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+        foreach ($hb in Buttons $el) {
+          $hn = $hb.Current.Name
+          if ($hn -and $hn.StartsWith("$Title,")) { $headerSeen = $true; break }
+        }
+        if ($headerSeen) { break }
+        if ($hw -eq 7) { $inv.Invoke() }
+      }
+      if (-not $headerSeen) { Write-Output "note: pane header for '$Title' never appeared - the content verify decides" }
       [AxD]::Wake($hwnd); Start-Sleep -Milliseconds 800
       $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
     }
@@ -270,7 +344,17 @@ foreach ($m in $mains) {
   # Invoke silently no-opped, the target's own still-rendered SIDEBAR PREVIEW satisfied this
   # check and the prompt went into whatever chat happened to be open. Found by an adversarial
   # audit 2026-08-30, after the offscreen fix had already been applied - to one copy.
-  $proof = TargetVisible $el
+  # A SWITCHING PANE PAINTS ASYNC: this check used to run once, milliseconds after the row
+  # Invoke, and refused healthy deliveries because the conversation had not rendered yet
+  # (measured on a real fleet 2026-09-01). Poll instead - same proof, given a moment to
+  # appear. A genuinely wrong chat still fails every attempt and is still refused.
+  $proof = $null
+  for ($vt = 0; $vt -lt 8; $vt++) {
+    $proof = TargetVisible $el
+    if ($proof) { break }
+    Start-Sleep -Milliseconds 900
+    $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+  }
   if (-not $proof) {
     Write-Output "REFUSED: after selecting '$Title' the conversation does not show the expected text - not typing into the wrong chat"
     exit 4
@@ -355,6 +439,18 @@ foreach ($m in $mains) {
   if (-not $sendScope) { $sendScope = $el }
   $sendBtn = SendIn $sendScope
   $wasEnabled = if ($sendBtn) { $sendBtn.Current.IsEnabled } else { $false }
+  # RAIL 7: NEVER OVERWRITE THE OWNER'S OWN DRAFT (review 2026-09-01). The targets of an
+  # unattended send are idle chats and chats waiting on a person - exactly the ones he may be
+  # answering by hand, and an unsent draft leaves a chat looking idle. SetValue replaced that
+  # draft (and the failure path blanked it) without ever reading the box first; the script even
+  # captured the tell ($wasEnabled: Send is enabled only once the composer holds text) and
+  # proceeded anyway. Text that is not ours means refuse, distinctly, and touch nothing.
+  $existing = ''
+  try { $existing = [string]$vp.Current.Value } catch { $existing = '' }
+  if ($existing.Trim().Length -gt 0 -and $existing.Trim() -ne $Message.Trim()) {
+    Write-Output "REFUSED: the composer of '$Title' already holds text ($($existing.Trim().Length) chars; Send enabled: $wasEnabled) - not overwriting a draft that is not ours"
+    exit 7
+  }
   $delivered = $false
   for ($try = 1; $try -le 3 -and -not $delivered; $try++) {
     $vp.SetValue($Message)
@@ -370,13 +466,17 @@ foreach ($m in $mains) {
     if (-not $sendBtn.Current.IsEnabled) { Start-Sleep -Milliseconds 500; continue }
     $si = TryPattern $sendBtn ([System.Windows.Automation.InvokePattern]::Pattern)
     if (-not $si) { Write-Output 'FAIL: Send exposes no Invoke'; exit 5 }
-    $si.Invoke()
+    # Every other UIA call here is guarded; an Invoke that throws (the tree re-rendered under
+    # us) used to abort the whole script with $ErrorActionPreference=Stop and NO cleanup, so
+    # the typed text stayed in the composer. Treat it as one failed try, like a disabled Send.
+    try { $si.Invoke() } catch { Write-Output "  send Invoke threw: $($_.Exception.Message)"; Start-Sleep -Milliseconds 500; continue }
     $delivered = $true
   }
   if (-not $delivered) {
     # Leave nothing behind: an un-sent message sitting in the owner's composer is our litter,
-    # and worse, he could send it by hand later without context (review-confirmed).
-    try { $vp.SetValue('') } catch { }
+    # and worse, he could send it by hand later without context (review-confirmed). ONLY our
+    # own text is cleared - never whatever else the box may hold by now (rail 7).
+    try { if (([string]$vp.Current.Value).Trim() -eq $Message.Trim()) { $vp.SetValue('') } } catch { }
     Write-Output "FAIL: the composer never reported the text (Send stayed disabled; was enabled before: $wasEnabled) - composer cleared"
     exit 5
   }

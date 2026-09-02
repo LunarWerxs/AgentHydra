@@ -111,56 +111,6 @@ create table if not exists session_marks (
   updated_at integer not null
 );
 
--- The DELIVERY LEDGER (deliveries.ts, 2026-08-30): every prompt the act path stages for a
--- surfaced chat, tracked until something actually delivers it. One-shot staging was the
--- silent-loss shape the import-retry lesson warned about: a surfaced chat whose prompt nobody
--- sent sits dormant forever, indistinguishable from delivered-and-thinking. One PENDING row
--- per session (a re-surface replaces the staged prompt); terminal rows keep their evidence.
-create table if not exists deliveries (
-  id           text primary key,
-  session_id   text not null,
-  prompt       text not null,
-  instance_ref text,
-  state        text not null default 'pending',
-  staged_at    integer not null,
-  resolved_at  integer,
-  evidence     text
-);
-
--- THE CIRCUIT BREAKER's attempt log (breaker.ts, 2026-08-30). v1 measured the failure this
--- exists to stop: the same finished chat was re-archived FOUR times in one evening - every
--- pass individually correct (archive executed, the running app re-saved the sidebar entry
--- un-archived, the sweep saw a done-marked visible chat again) - because nothing anywhere
--- COUNTED. A deterministic gate makes a wrong verdict unlikely; it does nothing about a
--- correct verdict repeated forever. On disk, not in memory, because a restart is exactly what
--- a storm tends to cause and an in-memory counter would forget at the worst moment.
--- PER-CHAT AUTOMATION OPT-OUT (holds.ts, 2026-08-30, owner request). The fleet-wide switches
--- are too blunt: turning the sweep off to protect ONE delicate thread abandons the other
--- twenty. A hold stops the UNATTENDED machinery touching this chat; a directly requested deed
--- still runs. The reason is stored because "why is nothing happening to this chat?" is the
--- question a hold creates and it should answer itself weeks later.
-create table if not exists session_holds (
-  session_id text primary key,
-  reason     text not null,
-  held_at    integer not null
-);
-
--- ⛔ EVERY ATTEMPT IS A ROW. The first cut keyed on (kind, session_id, at), which silently
--- COLLAPSED attempts landing in the same millisecond into one - and a tight loop is exactly
--- where repeats arrive that fast, so the counter under-counted precisely the case it exists to
--- catch (caught by a test that drove the real loop). Implicit rowid instead, with an index for
--- the window query. The old table is dropped rather than migrated: it only ever held counters
--- inside a 6h window, so there is nothing worth preserving and a stale shape would be a
--- silent under-count forever.
-drop table if exists action_attempts;
-create table if not exists action_attempt_log (
-  kind        text not null,
-  session_id  text not null,
-  at          integer not null
-);
-create index if not exists action_attempt_log_lookup
-  on action_attempt_log (kind, session_id, at);
-
 -- Parsed transcript metadata (title / preview / counts), keyed by the file it was derived from.
 -- Producing one row means reading up to 12 MB of transcript tail and JSON.parsing every line of it,
 -- so an in-memory-only cache made the FIRST sessions list of every daemon re-pay that for all 200
@@ -482,37 +432,11 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   monitor_enabled: '0',
   monitor_max_attempts: '3',
   monitor_resume_buffer_min: '3',
-  // The standing sweep (sweep-loop.ts) — OFF by default; unattended-safe caps (archive
-  // unlimited via the -1 sentinel, surface 0 because an unattended tick has no deliverer).
-  sweep_enabled: '0',
-  sweep_interval_min: '15',
-  sweep_max_archive: '-1',
-  sweep_max_surface: '0',
-  // THE WAITING LANE'S CALLER (sweep-loop.ts). A gated chat is running, waiting, or done. The
-  // sweep finishes 'done' by itself and leaves 'running' alone, but a WAITING chat needs one
-  // judgment - autonomous or human - that only an AI can make, and the loop's design left
-  // those rows "for a caller to work through" with no caller in existence. So they piled up
-  // until a person happened to type /orchestrate, which is the whole complaint: the fleet was
-  // gated but not orchestrated. When the loop is on and a tick finds waiting chats, it opens
-  // ONE visible orchestrator session to work them. Gated behind sweep_enabled, capped by a
-  // cooldown so a stuck judge cannot spawn a window every tick.
-  sweep_judge_enabled: '1',
-  sweep_judge_cooldown_min: '60',
-  // Persisted so the cooldown survives a daemon restart (auto-update restarts it): an
-  // in-memory stamp would let every restart open another orchestrator immediately.
-  sweep_judge_last_at: '0',
   // ⛔ CONSOLE WINDOWS ARE OFF BY DEFAULT (owner, 2026-08-31, after closing them by hand twice
   // in one night - three the first time, six the second). A terminal launch used to be visible
   // on the premise that a person asked for it; the standing sweep now opens sessions on its
   // own, and those sessions open more. Set to '1' to bring the windows back fleet-wide.
   terminal_windows_visible: '0',
-  // The courier (courier.ts): delivers staged prompts by driving the target chat's own
-  // composer in the running app. ON (2026-08-30) now that the transport is proven end to end
-  // on the real fleet - a dormant chat answered with zero clicks and no human - and every
-  // send is gated on proving the target's conversation is on screen first. It still only
-  // runs when something asks (the sweep tick or a caller), and only for rows an authorized
-  // act already staged.
-  courier_enabled: '1',
   // New-chat defaults (owner rule 2026-08-30, new-chat-defaults.ts): "Opus 5 Ultra code" =
   // model opus + the ultracode keyword in the first prompt; explicit caller choice wins.
   new_chat_model: 'opus',

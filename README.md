@@ -229,11 +229,6 @@ and hitting a wall halfway through it: [docs/AI_USAGE_SELFCHECK.md](docs/AI_USAG
 [Reference](docs/REFERENCE.md) covers configuration, the MCP tools, auto-update, the stack, the repo
 layout and how to run the checks.
 
-[Orchestrator, retired](docs/ORCHESTRATOR-RETIRED.md) records the v1 orchestrator's retirement
-(2026-08-29), where its complete implementation is archived, and where the capability lives now:
-rebuilt as AgentHydra's own gate/act/deliver machinery rather than as a second system beside it,
-run with `/orchestrate`.
-
 ## FAQ
 
 **Is AgentHydra free?**

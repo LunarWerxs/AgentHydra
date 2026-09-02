@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
+import { homedir } from 'node:os'
 import { basename, join, relative } from 'node:path'
 import { type Context, Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
@@ -32,7 +33,6 @@ import {
 } from './auto-update'
 import { markDispatchReady } from './boot-state'
 import { chatDossier } from './chat-dossier'
-import { chatGate } from './chat-gate'
 import { resolveRequiredTitle } from './chat-title'
 import {
   appEnv,
@@ -116,9 +116,7 @@ import { createInstance, removeInstance } from './core/lifecycle'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from './core/shared'
 import { createInstanceShortcut } from './core/shortcut'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
-import { courierPass } from './courier'
 import { coerceQueueItem, db, getSetting, runOutcome, setSetting } from './db'
-import { listDeliveries, parseDeliveryState } from './deliveries'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import {
   activeCount,
@@ -139,11 +137,8 @@ import { fleetStatus } from './fleet'
 import { fleetGit } from './fleet-git'
 import { fleetInstances } from './fleet-instances'
 import { fleetUsage } from './fleet-usage'
-import { actOnGate, isActBusy, parseActInput } from './gate-actions'
-import { parseSweepInput, sweepGateActions } from './gate-sweep'
 import { cleanupStaleUpdateArtifacts } from './github-updater'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
-import { holdSession, listHolds, releaseSession } from './holds'
 import {
   clearInstanceInfo,
   findLiveInstance,
@@ -158,6 +153,7 @@ import {
   invalidateSessionMetaCache,
   resolveRunAsRef,
 } from './instance-sessions'
+import { findTranscriptById, readLiveRegistry } from './live-registry'
 import { initFileLogging } from './log-file.mjs'
 import { isLoopbackOrigin, loopbackGuard } from './loopback-guard.mjs'
 import {
@@ -177,8 +173,8 @@ import {
   setNotificationSettings,
 } from './notify-settings'
 import { openUi } from './open-ui'
+import { samePathKey } from './path-key'
 import { openPortableWindow } from './portable-window.mjs'
-import { prestartCheck } from './prestart'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { buildRelaunchArgv } from './relaunch-argv.mjs'
@@ -200,6 +196,7 @@ import {
   isSessionSuperseded,
   launchTerminalSession,
   liveSessionEntry,
+  reassertChatArchive,
 } from './session-launch'
 import { resumeSessionInTerminal } from './session-resume'
 import { searchSessionBodies } from './session-search'
@@ -212,14 +209,6 @@ import {
   warmSessionScanCache,
 } from './sessions'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
-import {
-  isSweepTicking,
-  parseSweepLoopPatch,
-  runSweepLoopOnce,
-  setSweepLoopSettings,
-  startSweepLoop,
-  sweepLoopStatus,
-} from './sweep-loop'
 import { findTranscriptAsync, listTranscriptFiles, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
 import {
@@ -782,73 +771,6 @@ app.get('/api/sessions/search', async (c) => {
 // hosting it (if any). Built 2026-08-28 because answering "what happened to chat X" used to
 // take an hour of hand-joins across the stores that each hold a quarter of the answer.
 // Query by title fragment or ANY id.
-// --- the gate (orchestrator rebuild, piece 8 - see server/src/chat-gate.ts) -----------------
-// THE mandatory pre-action call: what state is this chat in - running, crashed, or finished
-// (with the finished lane pre-classified and the evidence packaged). Deterministic, read-only.
-app.get('/api/chats/:id/gate', (c) => {
-  const id = c.req.param('id').trim()
-  if (!id) return c.json({ error: 'session id required' }, 400)
-  const gate = chatGate(id)
-  if (!gate) return c.json({ error: 'unknown-session: no transcript found for this id' }, 404)
-  return c.json(gate)
-})
-// --- acting on the verdict (orchestrator rebuild, piece 9 - see server/src/gate-actions.ts) --
-// The gate's second half: re-gates the chat itself (a caller-supplied state is never trusted)
-// and performs the deterministic deed - archive, surface-for-resume (with the owner's 85%
-// overflow rule deciding whether a closed instance may be booted), wait-for-reset, or an
-// honest park. The needs-input-review lane carries the caller's autonomy judgment in the body.
-app.post('/api/chats/:id/act', async (c) => {
-  const id = c.req.param('id').trim()
-  if (!id) return c.json({ error: 'session id required' }, 400)
-  const body = await jsonBody(c)
-  const parsed = parseActInput(body)
-  if (!parsed.ok) return c.json({ error: parsed.error }, 400)
-  const result = await actOnGate(id, parsed.input)
-  if (!result)
-    return c.json(
-      {
-        error:
-          'unknown-session: no transcript found for this id - what cannot be gated cannot be acted on',
-      },
-      404,
-    )
-  return c.json(result)
-})
-// --- the sweep (owner-authorized 2026-08-30) - see server/src/gate-sweep.ts -----------------
-// Gate every visible desktop chat (or the given ids) and act within caps, sequentially.
-// Caps of 0 make it a pure report. The needs-input lane is never auto-acted: the response
-// packages its evidence for the caller's judgment.
-app.post('/api/chats/sweep', async (c) => {
-  const parsed = parseSweepInput(await jsonBody(c))
-  if (!parsed.ok) return c.json({ error: parsed.error }, 400)
-  return c.json(await sweepGateActions(parsed.opts))
-})
-// --- the pre-start check (owner directive 2026-08-30) - see server/src/prestart.ts ----------
-// READ-ONLY: the census (instances, then every chat across them), the sanity rail (one open
-// instance = detection is wrong, by the owner's own word), the full pure-report gate sweep,
-// the big-picture next step per chat, and the junk lists. The FIRST call of any orchestration.
-app.get('/api/prestart', async (c) => c.json(await prestartCheck()))
-// --- the delivery ledger (deliveries.ts) ----------------------------------------------------
-// What the act path staged for surfaced chats and whether anything ever delivered it. The
-// list reconciles first (delivered / deaf / expired settled from transcript+registry
-// evidence), so the answer is always current. The daemon never SENDS - that stays with an AI
-// session's native per-instance channel, per the measured boundary and the no-relay ban.
-app.get('/api/deliveries', (c) => {
-  const parsed = parseDeliveryState(c.req.query('state'))
-  if (!parsed.ok) return c.json({ error: parsed.error }, 400)
-  return c.json({ deliveries: listDeliveries(parsed.state) })
-})
-// --- per-chat automation opt-out - see server/src/holds.ts ----------------------------------
-// A hold stops the UNATTENDED machinery touching one chat (no archive, no surface, no
-// delivery) while leaving directly requested deeds working. The reason is required.
-app.get('/api/holds', (c) => c.json({ holds: listHolds() }))
-app.post('/api/sessions/:id/hold', async (c) => {
-  const body = await jsonBody(c)
-  const r = holdSession(c.req.param('id'), typeof body.reason === 'string' ? body.reason : '')
-  return c.json(r, r.ok ? 200 : 400)
-})
-app.post('/api/sessions/:id/release', (c) => c.json(releaseSession(c.req.param('id'))))
-
 // --- rename a chat through the app's own control ---------------------------------------------
 // The one write the daemon cannot make on disk: a RUNNING app holds its chat list in memory and
 // re-saves over any file edit. It exists because an IMPORTED chat renders as 'Untitled' whatever
@@ -876,33 +798,23 @@ app.post('/api/chats/:id/rename', async (c) => {
   return c.json(await uiRenameChat(chat.instance, from, newTitle))
 })
 
-// --- the courier (rebuild backlog) - see server/src/courier.ts ------------------------------
-// Delivers each pending staged prompt by driving that chat's OWN composer in the running app
-// (ui-deliver.ts), after proving the target's conversation is on screen. GET plans without
-// typing anything; POST delivers.
-app.get('/api/couriers', async (c) => c.json(await courierPass({ act: false })))
-app.post('/api/couriers/run', async (c) => c.json(await courierPass({ act: true })))
-// --- the standing sweep loop (rebuild backlog) - see server/src/sweep-loop.ts ---------------
-// OFF by default; unattended-safe caps (archive unlimited, surface 0 - no deliverer, no
-// dormant parking). The last report is served verbatim so the loop's work is inspectable.
-app.get('/api/sweep-loop', (c) => c.json(sweepLoopStatus()))
-app.post('/api/sweep-loop', async (c) => {
-  const parsed = parseSweepLoopPatch(await jsonBody(c))
-  if (!parsed.ok) return c.json({ error: parsed.error }, 400)
-  setSweepLoopSettings(parsed.patch)
-  return c.json(sweepLoopStatus())
-})
-app.post('/api/sweep-loop/check', async (c) => {
-  // Run one tick NOW regardless of the enabled switch (the "check now" pattern the monitor
-  // has); the tick still applies the configured caps and the act lock.
-  const report = await runSweepLoopOnce({ force: true })
-  return c.json({ ran: report !== null, ...sweepLoopStatus() })
-})
 app.get('/api/chats/dossier', (c) => {
   const q = c.req.query('q') ?? ''
   if (!q.trim())
     return c.json({ error: 'q required: a title fragment or any session/chat id' }, 400)
   return c.json(chatDossier(q.trim()))
+})
+// How many sessions hold a LIVE engine process right now — ONE cheap authoritative read of
+// the same pid-checked registry the dossier's `live` field answers from, so the two can
+// never disagree. Built 2026-08-31 for the orchestrator's machine-wide concurrency cap
+// ("18 chats running at one time"); its fallback was one dossier walk per visible chat.
+app.get('/api/sessions/live', (c) => {
+  const sessions = readLiveRegistry(join(homedir(), '.claude'))
+  const seen = new Set<string>()
+  const rows = sessions.filter((s) =>
+    seen.has(s.sessionId) ? false : (seen.add(s.sessionId), true),
+  )
+  return c.json({ count: rows.length, sessions: rows })
 })
 app.get('/api/sessions/:id', async (c) => {
   const rawSource = c.req.query('source')
@@ -2153,7 +2065,7 @@ app.post('/api/monitor/check', async (c) => {
   return c.json({ ok: true, ...monitorView() })
 })
 
-// --- fleet observation (orchestrator rebuild - see server/src/fleet.ts) ----------------------
+// --- fleet observation (see server/src/fleet.ts) ------------------------------------------
 // Deterministic and read-only: the observation core every later rebuild piece reads. Grows one
 // key per landed piece: sessions (piece 1, fleet.ts), usage (piece 2, fleet-usage.ts), git
 // (piece 3, fleet-git.ts), instances (piece 4, fleet-instances.ts - account identity). Zero
@@ -2322,6 +2234,16 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   // stayed in the sidebar. Reporting that as success is how "archived" came to mean "still
   // there".
   const underRunningApp = (result.hits ?? []).some((h) => h.changed && h.wasRunning)
+  // THE DURABLE FIX BELONGS HERE TOO (owner, 2026-09-01: "it's also duplicating chats"). A
+  // RUNNING app re-saves isArchived=false within seconds and resurrects the row it was just
+  // told to put away — so a chat archived on its old account came back and appeared in BOTH
+  // apps at once. /migrate already fired this watcher; this route did not, and this route is
+  // what every archive and every account move actually goes through. Fire-and-forget: it must
+  // not delay the response, and its own caps bound it.
+  for (const hit of result.hits ?? []) {
+    if (!hit.changed || !hit.wasRunning) continue
+    void reassertChatArchive(hit.profile, sessionId).catch(() => {})
+  }
   if (underRunningApp)
     return c.json({
       ...result,
@@ -2411,7 +2333,24 @@ app.post('/api/sessions/:id/migrate', async (c) => {
 
   // Old desktop entries: flagged archived now, BEFORE the import creates the fresh entry in
   // the target profile.
-  await archiveDesktopChat(sessionId, true).catch(() => null)
+  const archived0 = await archiveDesktopChat(sessionId, true).catch(() => null)
+  // ...and the meta cache dropped NOW, not only after the import: within the scan cache's
+  // 15s TTL, importSessionToDesktop's alreadyRendered check could read the PRE-archive rows
+  // and skip the reimport entirely while this handler still answered ok (adversarial review
+  // finding, 2026-08-31; bit live 2026-09-01).
+  invalidateSessionMetaCache()
+  // THE DURABLE FIX for the zombie twin (owner ask, 2026-09-01): a RUNNING source app
+  // re-saves isArchived=false within seconds and resurrects the stale row. For each source
+  // profile whose app was running, fire a bounded background watcher that keeps the flag true
+  // until the app's next boot makes it stick. Fire-and-forget: it must never delay the
+  // migrate's own response, and its own caps bound it. The TARGET dir is excluded so the
+  // fresh import is never touched.
+  const targetDir = ref.slice('desktop:'.length)
+  for (const hit of archived0?.hits ?? []) {
+    if (!hit.changed || !hit.wasRunning) continue
+    if (samePathKey(hit.profile, targetDir)) continue
+    void reassertChatArchive(hit.profile, sessionId).catch(() => {})
+  }
 
   // NO CONSOLE IN AUTOMATION (owner ruling, 2026-08-29): every migration lands in the
   // target desktop app - the old terminal fallback for homeless threads is gone. Console is
@@ -2440,6 +2379,329 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     ranHeadless: false,
     prompt,
     promptDelivery: 'deliver-natively-via-the-app-message-channel (boots the chat; no click)',
+  })
+})
+
+// Deliver a MESSAGE into a desktop chat, end to end - the real message endpoint (owner word,
+// 2026-09-01). One call: find where the chat renders, type the text through the app's own
+// composer (accessibility-API control invocation - the proven Deliver-DesktopChat actuator,
+// no cursor, no coordinates), and VERIFY the turn started from the transcript itself. The
+// composer send is also what boots a dormant or crashed chat's engine (measured 2026-08-26),
+// so delivery doubles as the revive. NOTHING HEADLESS: the turn runs in the app.
+//
+// THE COLLAPSED-SIDEBAR FIX (the owner's exact complaint: a virtualized/collapsed row must
+// not break delivery): when the actuator reports the row NOT RENDERED and the session has no
+// live writer, this fires the app's OWN `claude://resume` import targeted at the instance -
+// the app re-renders the chat at the top of its sidebar - then retries the type once. A live
+// unrendered session is refused honestly (resume-importing over a live writer is forbidden).
+app.post('/api/sessions/:id/message', async (c) => {
+  const sessionId = c.req.param('id')
+  const body = await jsonBody(c)
+  const text = typeof body.text === 'string' ? body.text.trim() : ''
+  if (!text) return c.json({ ok: false, error: 'text required' }, 400)
+
+  const { findDesktopChat } = await import('./instance-sessions')
+  const meta = findDesktopChat(sessionId)
+  const home = await desktopHomeFor(sessionId).catch(() => null)
+  if (!meta || !home) return c.json({ ok: false, error: 'no desktop chat holds this session' }, 404)
+  const { listInstances } = await import('./core/instances')
+  const inst = (await listInstances()).find((i) => samePathKey(i.dir, home))
+  if (!inst) return c.json({ ok: false, error: `no instance owns ${home}` }, 404)
+  if (!inst.isRunning)
+    return c.json(
+      {
+        ok: false,
+        error: `instance '${inst.name}' is not running - open it first (delivery types into the app)`,
+      },
+      409,
+    )
+
+  const { statSync } = await import('node:fs')
+  const transcript = findTranscriptById(join(homedir(), '.claude'), sessionId)
+  const sizeOf = () => {
+    try {
+      return transcript ? statSync(transcript).size : 0
+    } catch {
+      return 0
+    }
+  }
+
+  // ROUTE 1 - THE OFFICIAL CHANNEL (peer messaging): if the session is LIVE, inject the text
+  // into its own message pipe exactly as one session's SendMessage reaches another. It lands
+  // in the native input queue (no UI, no composer click, no verify snippet needed - the token
+  // authenticates and the session id addresses) and runs when the current turn ends. Only a
+  // live session has a pipe, so a dormant/crashed chat falls through to the composer, the one
+  // route that can BOOT it. (owner, 2026-09-01: "why don't we use the old method" - this is
+  // it, preferred wherever it applies; proven end to end the same day.)
+  {
+    const { deliverPeerMessage } = await import('./peer-message')
+    const peer = await deliverPeerMessage(
+      sessionId,
+      transcript,
+      text,
+      Math.min(120, Math.max(10, Number(body.confirm_secs) || 45)) * 1000,
+    )
+    if (peer.ok)
+      return c.json({
+        ok: true,
+        route: 'peer',
+        delivered: true,
+        typed: false,
+        detail: 'delivered over the native peer channel - queued in the chat, no UI',
+      })
+    if (peer.reason !== 'not-live')
+      // the pipe existed but did not confirm - honest failure; do NOT also composer-type
+      // (that would risk a duplicate into a live chat)
+      return c.json(
+        {
+          ok: false,
+          route: 'peer',
+          delivered: false,
+          detail: `peer channel did not confirm (${peer.reason})`,
+        },
+        422,
+      )
+    // 'not-live' => no pipe (dormant/crashed): fall through to the composer, which boots it.
+  }
+  // The verify snippet: a line of the chat's OWN last words, so the actuator proves it found
+  // the right conversation before typing one character. Caller may supply one; otherwise it
+  // is derived from the transcript tail, and no derivable snippet is an honest refusal.
+  // THE FLOOR APPLIES TO THE CALLER TOO (2026-09-01). The derivation below refuses anything under
+  // 10 characters, but a SUPPLIED verify_text was taken at any length - and three deliveries
+  // arrived carrying "x". One character matches essentially any pane, so for those the wrong-chat
+  // guard was off while appearing to be on, and one of them reported "typed, but the transcript
+  // did not grow". A too-short snippet is a placeholder, not a proof: derive a real one from the
+  // transcript instead, and fall back to the placeholder only for a chat with no words yet.
+  const MIN_VERIFY = 10
+  const supplied = typeof body.verify_text === 'string' ? body.verify_text.trim() : ''
+  const placeholder = supplied.length > 0 && supplied.length < MIN_VERIFY ? supplied : ''
+  let verify = supplied.length >= MIN_VERIFY ? supplied : ''
+  if (!verify && transcript) {
+    try {
+      const raw = readFileSync(transcript, 'utf8')
+      const tail = raw.length > 60000 ? raw.slice(-60000) : raw
+      for (const line of tail.split('\n').reverse()) {
+        if (!line.includes('"text"')) continue
+        try {
+          const rec = JSON.parse(line)
+          const parts = Array.isArray(rec?.message?.content) ? rec.message.content : []
+          for (const p of parts.reverse()) {
+            if (p?.type === 'text' && typeof p.text === 'string') {
+              // TWO render truths (measured live 2026-09-01): the transcript holds RAW
+              // MARKDOWN while the pane shows RENDERED text (strip `*_#> and the line
+              // matches - inline code keeps its characters), AND the pane shows the END of
+              // a long message, so the snippet must come from the LAST lines, never an
+              // earlier "cleaner" one that is scrolled off-screen. Skip only link lines
+              // ("[text](url)" renders as just "text").
+              const lines = p.text
+                .split('\n')
+                .map((s: string) => s.trim())
+                .filter((s: string) => s.length >= 10)
+              for (const raw of lines.reverse()) {
+                if (raw.includes('](')) continue
+                // a leading "- " / "1. " renders as a bullet GLYPH, not text (measured
+                // live 2026-09-01: the pane's ListItem name starts at the first word)
+                const cand = raw
+                  .replace(/^([-*+]|\d+[.)])\s+/, '')
+                  .replace(/[`*_#>]/g, '')
+                  .trim()
+                // A line EVERY chat ends with proves nothing: the house style signs off
+                // with "- Signed: <Employee>", and preferring the last line handed that
+                // footer back as the snippet (seen live 2026-09-01). It would match a dozen
+                // panes. Walk past it to real content.
+                if (/^signed\s*[:-]/i.test(cand)) continue
+                if (cand.length >= MIN_VERIFY) {
+                  verify = cand.slice(0, 80)
+                  break
+                }
+              }
+            }
+            if (verify) break
+          }
+        } catch {
+          continue
+        }
+        if (verify) break
+      }
+    } catch {
+      /* fall through to the refusal below */
+    }
+  }
+  if (!verify && placeholder) {
+    // Nothing derivable AND the caller sent a placeholder: the one legitimate case is a chat
+    // that has no words yet (a fresh console landing). Allowed, but never quietly - this is the
+    // wrong-chat guard running at its weakest, and the log must say so.
+    verify = placeholder
+    console.warn(
+      `[message] ${meta.title ?? sessionId}: typing on a PLACEHOLDER verify_text (${JSON.stringify(placeholder)}) - no transcript text to prove the pane; acceptable only for a chat with no words yet`,
+    )
+  }
+  if (!verify)
+    return c.json(
+      {
+        ok: false,
+        error: `no verify snippet derivable from the transcript (pass verify_text of at least ${MIN_VERIFY} characters) - refusing to type blind`,
+      },
+      422,
+    )
+
+  const { spawnSync, spawn } = await import('node:child_process')
+  const actuator = join(process.cwd(), 'misc', 'Deliver-DesktopChat.ps1')
+  if (!existsSync(actuator))
+    return c.json({ ok: false, error: `delivery actuator missing at ${actuator}` }, 500)
+  const type = () =>
+    spawnSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        actuator,
+        '-Title',
+        meta.title ?? '',
+        '-Message',
+        text,
+        '-VerifyText',
+        verify,
+        '-IfBusyAbort',
+        '-SearchByContent',
+        '-Instance',
+        inst.name,
+      ],
+      { timeout: 240000, windowsHide: true, encoding: 'utf8' },
+    )
+
+  const before = sizeOf()
+  let attempt = type()
+  let rendered = attempt.status === 0
+  let rerendered = false
+  const saidNotRendered = /not rendered/i.test(`${attempt.stdout}${attempt.stderr}`)
+  if (!rendered && saidNotRendered) {
+    // A live writer normally forbids the resume-import - but an engine whose transcript has
+    // been QUIET for minutes has no in-flight turn to protect (the idle-booted shape: the
+    // app boots a chat's engine that then writes nothing). Stop it the way the daemon's own
+    // migrate does, kill-wait included; an engine that keeps respawning belongs to an app
+    // that has the chat OPEN, and that stays an honest refusal.
+    const live = liveSessionEntry(sessionId)
+    if (live) {
+      // mtime is NOT a safe quiet signal here: an idle-booted engine touches its transcript
+      // periodically without appending (measured 2026-09-01, size static for 100 minutes
+      // while mtime stayed under a minute old). Whether a turn is in flight is the CALLER'S
+      // gate to judge from the tail records; this primitive acts only on that word.
+      if (body.allow_stop_idle !== true)
+        return c.json(
+          {
+            ok: false,
+            error:
+              'the row is not rendered AND the session has a live writer - pass allow_stop_idle:true ONLY after your own gate verified no turn is in flight (the last tail record is a completed assistant turn), or migrate it',
+          },
+          409,
+        )
+      try {
+        process.kill(live.pid)
+      } catch {
+        /* already exiting */
+      }
+      const killDeadline = Date.now() + 8000
+      while (Date.now() < killDeadline && liveSessionEntry(sessionId))
+        await new Promise((r) => setTimeout(r, 250))
+      if (liveSessionEntry(sessionId))
+        return c.json(
+          {
+            ok: false,
+            error:
+              'the live writer keeps respawning - an app holds this chat open; deliver there or migrate it',
+          },
+          409,
+        )
+    }
+    // ⛔ THE SELF-HEAL GOES THROUGH THE GUARDED IMPORT, NEVER A RAW DEEPLINK (owner,
+    // 2026-09-01: "it's also duplicating chats"). Firing `claude://resume` at a profile that
+    // ALREADY carries the chat makes the app create a SECOND desktop entry, with its own
+    // chatId, for the same conversation - proved live: temp1 ended up with two rendered rows
+    // titled identically, and from then on nothing could act on either, because the sidebar
+    // actuator (correctly) refuses to guess between two identical titles. A duplicate is
+    // therefore not just clutter: it makes the chat permanently unmanageable.
+    //
+    // "The row is not rendered" is exactly the condition under which that mistake is easiest
+    // to make, because the row often IS there and merely unreachable - collapsed group,
+    // virtualized out of view. importSessionToDesktop asks the chat index first and returns
+    // alreadyRendered instead of importing, which is the check the raw spawn skipped.
+    const { importSessionToDesktop } = await import('./session-launch')
+    const healed = await importSessionToDesktop({
+      sessionId,
+      instanceDir: home,
+      title: meta.title ?? null,
+    })
+    if (healed.alreadyRendered)
+      return c.json(
+        {
+          ok: false,
+          error:
+            'the row is present in that instance but the actuator could not reach it (collapsed ' +
+            'group or scrolled out of the virtualized list) - re-importing would create a ' +
+            'DUPLICATE chat, so this refuses. Expand its group or scroll it into view, or ' +
+            'migrate the chat to another instance.',
+        },
+        409,
+      )
+    await new Promise((r) => setTimeout(r, 8000))
+    rerendered = true
+    attempt = type()
+    rendered = attempt.status === 0
+    // A freshly re-rendered conversation paints its content ASYNC: the row selects but the
+    // pane can still be loading when the verify check looks (measured live 2026-09-01 -
+    // "after selecting ... the conversation does not show the expected text"). One more
+    // wait-and-retry covers the paint; a real wrong-chat still refuses on both tries.
+    if (
+      !rendered &&
+      /does not show the expected text/i.test(`${attempt.stdout}${attempt.stderr}`)
+    ) {
+      await new Promise((r) => setTimeout(r, 8000))
+      attempt = type()
+      rendered = attempt.status === 0
+    }
+  }
+  if (!rendered) {
+    const lines = `${attempt.stdout ?? ''}${attempt.stderr ?? ''}`.trim().split('\n')
+    const last = lines.pop() ?? ''
+    return c.json(
+      {
+        ok: false,
+        rerendered,
+        verify_used: verify,
+        actuator_tail: lines.slice(-4),
+        error: `composer refused: ${last.slice(0, 240) || `exit ${attempt.status}`}`,
+      },
+      422,
+    )
+  }
+
+  // CONFIRM from the artifact, never the keystroke: the transcript must grow (a boot from
+  // dormant can take a while, so the window covers an engine start).
+  // A DORMANT chat must BOOT before its first byte lands, and a cold boot on a busy
+  // machine runs well past the old 45s default - healthy wakes were being reported as
+  // 'typed, but the transcript did not grow' (measured 2026-09-01). The composer route
+  // therefore waits longer by default; a caller may still pin confirm_secs.
+  const confirmMs = Math.min(240, Math.max(10, Number(body.confirm_secs) || 120)) * 1000
+  const deadline = Date.now() + confirmMs
+  let delivered = false
+  while (Date.now() < deadline) {
+    if (sizeOf() > before) {
+      delivered = true
+      break
+    }
+    await new Promise((r) => setTimeout(r, 2000))
+  }
+  return c.json({
+    ok: delivered,
+    typed: true,
+    rerendered,
+    delivered,
+    detail: delivered
+      ? 'typed, and the transcript is growing - the turn is running in the app'
+      : `typed, but the transcript did not grow within ${confirmMs / 1000}s - not claiming delivery`,
   })
 })
 
@@ -2743,9 +3005,7 @@ function relaunchDaemon(): boolean {
 loadAutoUpdateSettings()
 setAutoUpdateHooks({
   // Don't auto-update (which relaunches the daemon) while dispatch runs are in flight.
-  // Busy means MORE than dispatch runs (review-confirmed): a standing-sweep tick or any act
-  // (UIA archive click, instance boot+import) mid-flight must not be killed by a relaunch.
-  hasActiveRuns: () => activeCount() > 0 || isSweepTicking() || isActBusy(),
+  hasActiveRuns: () => activeCount() > 0,
   relaunch: relaunchDaemon,
 })
 
@@ -2801,7 +3061,6 @@ startImportSweep()
 // sweep above, not here), gates each on the weekly cap via checkUsage, and schedules a
 // `claude --resume` for just after the 5-hour reset.
 startMonitor()
-startSweepLoop()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

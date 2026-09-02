@@ -4,7 +4,7 @@
 // A closed app is this fleet's RESTING STATE. Most of the 18 instances are closed at any moment,
 // so the moment a closed instance can be called "unusable" for an ordinary reason, the unusable
 // lane fills with accounts nobody was going to touch and the report becomes noise — which is
-// precisely how a real orchestration pass came to tell the owner not to route work to closed
+// precisely how a real fleet pass came to tell the owner not to route work to closed
 // instance #37, an instance that was never a candidate for work in the first place.
 //
 // The distinction being pinned is NOT "closed instances are invisible". It is:

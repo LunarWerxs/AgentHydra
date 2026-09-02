@@ -462,7 +462,7 @@ test('import refuses a done-marked lineage; force falls through to the next guar
 
 test('the import chokepoint refuses a generic or missing title - the naming law has no bypass', async () => {
   const { importSessionToDesktop } = await import('../src/session-launch')
-  for (const title of [null, undefined, '', 'Untitled', '[orchestrator] seeded']) {
+  for (const title of [null, undefined, '', 'Untitled', '[plumbing] seeded']) {
     const r = await importSessionToDesktop({
       sessionId: 'any-session',
       instanceDir: 'C:\nowhere',

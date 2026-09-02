@@ -1,4 +1,4 @@
-// server/src/fleet-instances.ts - PIECE 4 of the orchestrator rebuild (owner-picked,
+// server/src/fleet-instances.ts - (owner-picked,
 // 2026-08-29): account identity. Which instances exist, which is WHICH (the one question the
 // owner named), whether each is running, and who each is signed in as.
 //

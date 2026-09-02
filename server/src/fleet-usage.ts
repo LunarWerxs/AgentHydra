@@ -1,4 +1,4 @@
-// server/src/fleet-usage.ts - PIECE 2 of the orchestrator rebuild (owner-picked, 2026-08-29):
+// server/src/fleet-usage.ts -
 // per-account usage bands, observed deterministically from the existing usage cache.
 //
 // Same doctrine as fleet.ts: 100% programmatic, read-only, zero AI, zero network - this module
