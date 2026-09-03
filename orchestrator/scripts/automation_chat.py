@@ -152,6 +152,93 @@ def running_rows(fleet: dict) -> list[dict]:
     return rows
 
 
+def _mode_retry_status(sid: str) -> str | None:
+    """A RATE LIMIT, NOT A BREAKER (owner, 2026-09-01: "a constant check for any chats not in
+    bypass permissions, auto-set them - autonomously, as long as it's programmatically").
+    -Select flips what the owner is looking at in that window, so one attempt per chat per
+    MODE_RETRY_SECS - but never a six-hour suppression: a picker hidden behind a pending
+    prompt clears the moment unblock_prompts presses it, and the next pass must try again.
+    None when the chat may be tried now; otherwise the 'tried Nm ago' message."""
+    now_ms = int(time.time() * 1000)
+    recent = [r for r in ledgerlib._load()
+              if r.get("kind") == "mode" and r.get("session") == sid
+              and now_ms - int(r.get("at") or 0) < MODE_RETRY_SECS * 1000]
+    if not recent:
+        return None
+    age_min = (now_ms - max(int(r.get("at") or 0) for r in recent)) // 60000
+    return f"tried {age_min}m ago - next try after {MODE_RETRY_SECS // 60}m"
+
+
+def _verify_text_for_row(row: dict, fleet: dict) -> str:
+    """Its own last words; failing those, its FIRST prompt as the pane renders it (a slash
+    command shows its arguments) - the picker refused the reborn manager on its raw
+    '/orchestrate ...' prompt (live soak, 2026-09-01).
+    SEVERAL of the chat's own lines, any one of which on screen proves the chat ('|||'
+    separated, the actuator's rule): the pane renders markdown and shows the END of a long
+    message, so a single snippet missed real chats ("pane does not show its own words")."""
+    from lib import deliverylib, gatelib
+
+    tp = stamplib.transcript_index(fleet).get(str(row.get("sessionId") or ""))
+    if not tp:
+        return ""
+    tail = deliverylib.transcript_tail_text(str(tp))
+    alts: list[str] = []
+    for cand in (deliverylib._verify_snippet(tail),
+                 deliverylib._verify_snippet("\n".join(tail.splitlines()[:-1]) if tail else ""),
+                 deliverylib._verify_snippet(gatelib.pane_words(gatelib.first_user_prompt(str(tp))))):
+        if cand and cand not in alts:
+            alts.append(cand)
+    return "|||".join(alts)
+
+
+def _actuator_args(row: dict, inst_dir: str, verify: str) -> list[str]:
+    args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(MODE_ACTUATOR),
+            "-Title", str(row.get("title") or ""), "-Instance", inst_dir,
+            "-Select", "-SetMode", REQUIRED_MODE]
+    if verify:
+        args += ["-VerifyText", verify]
+    return args
+
+
+def _run_actuator(args: list[str], inst_dir: str):
+    """Runs the actuator under the instance's window lock. Returns (returncode, output_lines)
+    on completion, or a str error message; never raises."""
+    from lib import windowlib
+
+    try:
+        with windowlib.instance_lock(inst_dir, wait_secs=60) as mine:
+            if not mine:
+                return "window busy - next pass"
+            r = clilib.run_text(args, timeout=180)
+    except Exception as err:  # configuration is never worth crashing the lane over
+        return f"actuator error: {str(err)[:120]}"
+    said = (str(r.stdout or "") + str(r.stderr or "")).strip().splitlines()
+    return r.returncode, said
+
+
+def _record_chip_lines(said: list[str], row: dict) -> list[str]:
+    """A chip seen on the way past (the actuator prints 'CHIP: <title>' when the selected
+    chat's pane carries a Suggested task card): hand it to the chips lane, which starts it
+    locally on its own clock. Never an act here."""
+    for line in said:
+        if line.startswith("CHIP: "):
+            try:
+                import chips
+
+                chips.record(str(row.get("instance") or ""), str(row.get("title") or ""), line[6:].strip())
+            except Exception:  # a note-taking courtesy must never fail the mode step
+                pass
+    return [line for line in said if not line.startswith("CHIP: ")]
+
+
+def _finalize_mode_attempt(sid: str, returncode: int, last: str) -> None:
+    if returncode == 0:
+        ledgerlib.clear("mode", sid)  # set (or already right): no reason to wait next time
+        mark_confirmed(sid, last)     # the app itself said bypass - THIS is the verdict
+    else:
+        ledgerlib.annotate("mode", sid, last)
+
+
 def set_mode_via_app(row: dict, fleet: dict) -> str:
     """THE ROUTE FOR A LIVE CHAT (2026-09-01): a running app holds the chat's record in memory
     and re-saves it over any disk stamp, so a live chat off-doctrine stays off-doctrine until
@@ -161,75 +248,139 @@ def set_mode_via_app(row: dict, fleet: dict) -> str:
     Returns the actuator's last line; never raises."""
     if not MODE_ACTUATOR.exists():
         return "actuator missing"
-    from lib import deliverylib
-    from lib import windowlib
 
-    # A RATE LIMIT, NOT A BREAKER (owner, 2026-09-01: "a constant check for any chats not in
-    # bypass permissions, auto-set them - autonomously, as long as it's programmatically").
-    # -Select flips what the owner is looking at in that window, so one attempt per chat per
-    # MODE_RETRY_SECS - but never a six-hour suppression: a picker hidden behind a pending
-    # prompt clears the moment unblock_prompts presses it, and the next pass must try again.
     sid = str(row.get("sessionId") or "")
-    now_ms = int(time.time() * 1000)
-    recent = [r for r in ledgerlib._load()
-              if r.get("kind") == "mode" and r.get("session") == sid
-              and now_ms - int(r.get("at") or 0) < MODE_RETRY_SECS * 1000]
-    if recent:
-        return f"tried {(now_ms - max(int(r.get('at') or 0) for r in recent)) // 60000}m ago - next try after {MODE_RETRY_SECS // 60}m"
+    retry = _mode_retry_status(sid)
+    if retry is not None:
+        return retry
     ledgerlib.note("mode", sid, note=f"picker -> {REQUIRED_MODE} for '{row.get('title') or ''}'")
 
     inst = hydralib.resolve_instance(fleet, str(row.get("instance") or "")) or {}
     inst_dir = str(inst.get("dir") or row.get("instance") or "")
-    tp = stamplib.transcript_index(fleet).get(str(row.get("sessionId") or ""))
-    from lib import gatelib
+    verify = _verify_text_for_row(row, fleet)
+    args = _actuator_args(row, inst_dir, verify)
 
-    # Its own last words; failing those, its FIRST prompt as the pane renders it (a slash
-    # command shows its arguments) - the picker refused the reborn manager on its raw
-    # '/orchestrate ...' prompt (live soak, 2026-09-01).
-    # SEVERAL of the chat's own lines, any one of which on screen proves the chat ('|||'
-    # separated, the actuator's rule): the pane renders markdown and shows the END of a long
-    # message, so a single snippet missed real chats ("pane does not show its own words").
-    alts: list[str] = []
-    if tp:
-        tail = deliverylib.transcript_tail_text(str(tp))
-        for cand in (deliverylib._verify_snippet(tail),
-                     deliverylib._verify_snippet("\n".join(tail.splitlines()[:-1]) if tail else ""),
-                     deliverylib._verify_snippet(gatelib.pane_words(gatelib.first_user_prompt(str(tp))))):
-            if cand and cand not in alts:
-                alts.append(cand)
-    verify = "|||".join(alts)
-    args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(MODE_ACTUATOR),
-            "-Title", str(row.get("title") or ""), "-Instance", inst_dir,
-            "-Select", "-SetMode", REQUIRED_MODE]
-    if verify:
-        args += ["-VerifyText", verify]
-    try:
-        with windowlib.instance_lock(inst_dir, wait_secs=60) as mine:
-            if not mine:
-                return "window busy - next pass"
-            r = clilib.run_text(args, timeout=180)
-    except Exception as err:  # configuration is never worth crashing the lane over
-        return f"actuator error: {str(err)[:120]}"
-    said = (str(r.stdout or "") + str(r.stderr or "")).strip().splitlines()
-    # A chip seen on the way past (the actuator prints 'CHIP: <title>' when the selected
-    # chat's pane carries a Suggested task card): hand it to the chips lane, which starts it
-    # locally on its own clock. Never an act here.
-    for line in said:
-        if line.startswith("CHIP: "):
-            try:
-                import chips
-
-                chips.record(str(row.get("instance") or ""), str(row.get("title") or ""), line[6:].strip())
-            except Exception:  # a note-taking courtesy must never fail the mode step
-                pass
-    said = [line for line in said if not line.startswith("CHIP: ")]
-    last = said[-1][:160] if said else f"exit {r.returncode}"
-    if r.returncode == 0:
-        ledgerlib.clear("mode", sid)  # set (or already right): no reason to wait next time
-        mark_confirmed(sid, last)     # the app itself said bypass - THIS is the verdict
-    else:
-        ledgerlib.annotate("mode", sid, last)
+    outcome = _run_actuator(args, inst_dir)
+    if isinstance(outcome, str):
+        return outcome
+    returncode, said = outcome
+    said = _record_chip_lines(said, row)
+    last = said[-1][:160] if said else f"exit {returncode}"
+    _finalize_mode_attempt(sid, returncode, last)
     return last
+
+
+def _fetch_live_ids(fleet: dict) -> set:
+    """The daemon's own view of which sessions are live, read (and discarded if unreachable)
+    purely to keep this pass's daemon round-trip identical to before the refactor."""
+    try:
+        return {s.get("sessionId") for s in
+                hydralib.api_get("/api/sessions/live").get("sessions", [])}
+    except hydralib.DaemonError:
+        return set()
+
+
+def _maybe_ensure_allow_all(act: bool) -> dict:
+    """THE ENGINE-SIDE HALF, programmatic and ungated (stamplib.ensure_allow_all): allow rules
+    in the user settings pre-approve every tool in every mode, so a chat the app still runs
+    as 'Accept edits' stops stalling on prompts without any window being touched."""
+    if act:
+        return stamplib.ensure_allow_all()
+    return {"changed": False, "added": [], "rules": 0, "error": None}
+
+
+def _stamp_rows(rows: list[dict]) -> list[dict]:
+    """THE DISK WRITE IS THE STAMP, both halves, in one go (stamplib.stamp_doctrine). The
+    permission half used to go only through the daemon endpoint, which 404s for any chat its
+    index does not carry - so those chats sat on acceptEdits forever while the sweep quietly
+    recorded a failure. The endpoint is now the extra, not the route."""
+    results = []
+    for r in rows:
+        got = stamplib.stamp_doctrine(r["metaPath"])
+        bypass_ok, uc_ok = got["bypass"], got["ultracode"]
+        if r["sessionId"]:
+            try:  # best-effort: tells the daemon so its own cache agrees
+                hydralib.api_post(f"/api/sessions/{r['sessionId']}/automation", {})
+            except hydralib.DaemonError:
+                pass
+        results.append({**r, "ok": bypass_ok and uc_ok,
+                        "bypassStamped": bypass_ok, "ultracodeStamped": uc_ok,
+                        "viaApp": "", "error": got["error"]})
+    return results
+
+
+def _pending_in_app_rows(in_app: list[dict], confirmed: dict) -> list[dict]:
+    """Every chat in a running app the app has not yet confirmed - the set the picker pass has
+    to drive one by one. A confirmation is dropped (disk and the passed-in `confirmed`, in
+    place) the moment the disk reads anything but bypass again (the app re-saved its real
+    mode), so the next tick drives that chat once more. Missing-on-disk first."""
+    pending: list[dict] = []
+    for r in in_app:
+        sid = r["sessionId"]
+        if not sid:
+            continue
+        if r["missing"] and sid in confirmed:
+            drop_confirmed(sid)
+            confirmed.pop(sid, None)
+        if sid not in confirmed:
+            pending.append(r)
+    pending.sort(key=lambda r: (not r["missing"], str(r.get("title") or "")))
+    return pending
+
+
+def _run_picker_pass(pending: list[dict], fleet: dict) -> list[dict]:
+    """THE PICKER PASS - the app is the truth for a running app (PICKER_PER_TICK, above): a
+    few pending chats per tick get their row selected and the app's own picker set, until all
+    of them are confirmed."""
+    picked: list[dict] = []
+    tried = 0
+    for r in pending:
+        if tried >= PICKER_PER_TICK:
+            break
+        said = set_mode_via_app(r, fleet)
+        if not said.startswith("tried "):
+            tried += 1
+        picked.append({**r, "viaApp": said})
+    return picked
+
+
+def _missing_header(rows: list[dict], held: list[dict]) -> str:
+    return (f"{len(rows)} chat(s) missing a stamp ({len(held)} of them HELD - stamped anyway: "
+            "a hold covers a chat's work, not its permission mode)")
+
+
+def _inapp_confirmation_line(in_app: list[dict], still: list[dict], act: bool, ui_ok: bool) -> str:
+    if act and ui_ok and still:
+        suffix = f" ({PICKER_PER_TICK} tried per tick)"
+    elif act and still:
+        suffix = " - the picker pass touches the app and waits for the tray icon"
+    else:
+        suffix = ""
+    return (f"in-app: {len(in_app) - len(still)} of {len(in_app)} chat(s) in running apps "
+            f"CONFIRMED through the app's own picker; {len(still)} pending{suffix}")
+
+
+def _picker_report_lines(picked: list[dict]) -> list[str]:
+    return [f"  picker [{p['instance']}] {p['title']}: {p['viaApp']}" for p in picked]
+
+
+def _settings_line(settings: dict) -> str:
+    if settings.get("error"):
+        return f"engine settings: FAILED ({settings['error']})"
+    if settings.get("changed"):
+        return (f"engine settings: added {len(settings['added'])} allow rule(s) "
+                f"({settings['rules']} total) - every tool and MCP server pre-approved in every mode")
+    return f"engine settings: {settings['rules']} allow rule(s) already cover every tool and MCP server"
+
+
+def _row_report_lines(rows: list[dict], act: bool) -> list[str]:
+    lines = []
+    for r in rows:
+        mark = ("✓" if r.get("ok") else "✗") if act else "-"
+        caveat = " [app running - re-save can lag]" if r["appRunning"] else ""
+        via = f" | picker: {r['viaApp']}" if r.get("viaApp") else ""
+        lines.append(f"  {mark} [{r['instance']}] {r['title']}: missing {'+'.join(r['missing'])}{caveat}{via}")
+    return lines
 
 
 def enforce_all(act: bool, as_json: bool, ui_ok: bool = False) -> int:
@@ -247,11 +398,7 @@ def enforce_all(act: bool, as_json: bool, ui_ok: bool = False) -> int:
     # real (wrong) mode is the evidence that drops a confirmation, and the stamp below would
     # paper over it.
     in_app = running_rows(fleet)
-    try:
-        live_ids = {s.get("sessionId") for s in
-                    hydralib.api_get("/api/sessions/live").get("sessions", [])}
-    except hydralib.DaemonError:
-        live_ids = set()
+    _fetch_live_ids(fleet)
     # ⛔ A HOLD DOES NOT EXEMPT A CHAT FROM ITS PERMISSION MODE (owner, 2026-09-01: "I am
     # getting sick of having to change things from manual edits to bypass permissions"). A
     # hold means do not act on the chat's WORK - no messages, no archive, no move. The
@@ -260,76 +407,23 @@ def enforce_all(act: bool, as_json: bool, ui_ok: bool = False) -> int:
     # and nothing else about them is touched.
     held = [r for r in rows if r["sessionId"] and holdlib.why_blocked(r["sessionId"])]
     todo = list(rows)
-    results = []
-    # THE ENGINE-SIDE HALF, programmatic and ungated (stamplib.ensure_allow_all): allow rules
-    # in the user settings pre-approve every tool in every mode, so a chat the app still runs
-    # as 'Accept edits' stops stalling on prompts without any window being touched.
-    settings = stamplib.ensure_allow_all() if act else {"changed": False, "added": [], "rules": 0, "error": None}
-    if act:
-        for r in todo:
-            # THE DISK WRITE IS THE STAMP, both halves, in one go (stamplib.stamp_doctrine).
-            # The permission half used to go only through the daemon endpoint, which 404s for
-            # any chat its index does not carry - so those chats sat on acceptEdits forever
-            # while the sweep quietly recorded a failure. The endpoint is now the extra, not
-            # the route.
-            got = stamplib.stamp_doctrine(r["metaPath"])
-            bypass_ok, uc_ok = got["bypass"], got["ultracode"]
-            if r["sessionId"]:
-                try:  # best-effort: tells the daemon so its own cache agrees
-                    hydralib.api_post(f"/api/sessions/{r['sessionId']}/automation", {})
-                except hydralib.DaemonError:
-                    pass
-            results.append({**r, "ok": bypass_ok and uc_ok,
-                            "bypassStamped": bypass_ok, "ultracodeStamped": uc_ok,
-                            "viaApp": "", "error": got["error"]})
-    # THE PICKER PASS - the app is the truth for a running app (PICKER_PER_TICK, above). Every
-    # chat in a running app that the app has not yet confirmed gets its row selected and the
-    # app's own picker set, a few per tick, until all of them are confirmed; a confirmation
-    # is dropped the moment the disk reads anything but bypass again (the app re-saved its
-    # real mode), so the next tick drives that chat once more. Missing-on-disk first.
+    settings = _maybe_ensure_allow_all(act)
+    results = _stamp_rows(todo) if act else []
+
     confirmed = load_confirmed()
-    pending: list[dict] = []
-    for r in in_app:
-        sid = r["sessionId"]
-        if not sid:
-            continue
-        if r["missing"] and sid in confirmed:
-            drop_confirmed(sid)
-            confirmed.pop(sid, None)
-        if sid not in confirmed:
-            pending.append(r)
-    pending.sort(key=lambda r: (not r["missing"], str(r.get("title") or "")))
+    pending = _pending_in_app_rows(in_app, confirmed)
     picked: list[dict] = []
     if act and ui_ok:
-        tried = 0
-        for r in pending:
-            if tried >= PICKER_PER_TICK:
-                break
-            said = set_mode_via_app(r, fleet)
-            if not said.startswith("tried "):
-                tried += 1
-            picked.append({**r, "viaApp": said})
+        picked = _run_picker_pass(pending, fleet)
         confirmed = load_confirmed()
     still = [r for r in pending if r["sessionId"] not in confirmed]
     failed = [x for x in results if not x["ok"]]
-    lines = [f"{len(rows)} chat(s) missing a stamp ({len(held)} of them HELD - stamped anyway: a hold covers a chat's work, not its permission mode)"]
-    lines.append(f"in-app: {len(in_app) - len(still)} of {len(in_app)} chat(s) in running apps CONFIRMED through "
-                 f"the app's own picker; {len(still)} pending" + (
-                     f" ({PICKER_PER_TICK} tried per tick)" if act and ui_ok and still else
-                     " - the picker pass touches the app and waits for the tray icon" if act and still else ""))
-    for p in picked:
-        lines.append(f"  picker [{p['instance']}] {p['title']}: {p['viaApp']}")
+
+    lines = [_missing_header(rows, held), _inapp_confirmation_line(in_app, still, act, ui_ok)]
+    lines += _picker_report_lines(picked)
     if act:
-        lines.append("engine settings: " + (
-            f"FAILED ({settings['error']})" if settings.get("error") else
-            f"added {len(settings['added'])} allow rule(s) ({settings['rules']} total) - every tool and MCP server "
-            "pre-approved in every mode" if settings.get("changed") else
-            f"{settings['rules']} allow rule(s) already cover every tool and MCP server"))
-    for r in (results if act else todo):
-        mark = ("✓" if r.get("ok") else "✗") if act else "-"
-        caveat = " [app running - re-save can lag]" if r["appRunning"] else ""
-        via = f" | picker: {r['viaApp']}" if r.get("viaApp") else ""
-        lines.append(f"  {mark} [{r['instance']}] {r['title']}: missing {'+'.join(r['missing'])}{caveat}{via}")
+        lines.append(_settings_line(settings))
+    lines += _row_report_lines(results if act else todo, act)
     if not act and todo:
         lines.append("PLAN ONLY - add --yes to stamp them.")
     return out({"ok": not failed, "missing": len(rows), "held": len(held),
@@ -342,40 +436,27 @@ def enforce_all(act: bool, as_json: bool, ui_ok: bool = False) -> int:
                as_json, 0 if not failed else 2)
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
-    as_json = "--json" in argv
-    if "--all" in argv:
-        # ⛔ THE DISK STAMP IS NOT GATED BY THE ICON (owner, 2026-09-01, the same evening the
-        # icon became the switch): "a constant check for any chats/threads that are not bypass
-        # permissions and it should auto set them to that. This can be done autonomously, as
-        # long as it's PROGRAMMATICALLY." The stamp is configuration written to disk - it
-        # touches no chat's work and no window - so it runs with or without the icon, every
-        # two minutes (schedule_jobs UNGATED_JOBS).
-        # ⛔ THE PICKER PASS IS (same owner, later that night, after it flipped his windows
-        # with the icon down: "I didn't authorize you to start one yet"): selecting chats and
-        # driving the app's picker is an act on his screen like any other, so it waits for the
-        # icon - or --force by hand.
-        from lib import armlib
+def _run_fleet_pass(argv: list[str], as_json: bool) -> int:
+    """⛔ THE DISK STAMP IS NOT GATED BY THE ICON (owner, 2026-09-01, the same evening the icon
+    became the switch): "a constant check for any chats/threads that are not bypass
+    permissions and it should auto set them to that. This can be done autonomously, as long as
+    it's PROGRAMMATICALLY." The stamp is configuration written to disk - it touches no chat's
+    work and no window - so it runs with or without the icon, every two minutes (schedule_jobs
+    UNGATED_JOBS).
+    ⛔ THE PICKER PASS IS (same owner, later that night, after it flipped his windows with the
+    icon down: "I didn't authorize you to start one yet"): selecting chats and driving the
+    app's picker is an act on his screen like any other, so it waits for the icon - or --force
+    by hand."""
+    from lib import armlib
 
-        ui_ok = armlib.refuse_unless_armed(argv, "the doctrine lane's in-app picker pass") is None
-        return enforce_all(act="--yes" in argv, as_json=as_json, ui_ok=ui_ok)
-    args = [a for a in argv if not a.startswith("--")]
-    if len(args) != 1:
-        print(__doc__.strip(), file=sys.stderr)
-        return 3
+    ui_ok = armlib.refuse_unless_armed(argv, "the doctrine lane's in-app picker pass") is None
+    return enforce_all(act="--yes" in argv, as_json=as_json, ui_ok=ui_ok)
 
-    try:
-        match = hydralib.resolve_one(args[0])
-        fleet = hydralib.fleet()
-    except (hydralib.ChatNotFound, hydralib.AmbiguousChat) as err:
-        return out({"ok": False, "report": f"REFUSED (deterministic): {err}"}, as_json, 3)
-    except hydralib.DaemonError as err:
-        return out({"ok": False, "report": f"automation stamp FAILED: {err}"}, as_json, 1)
 
+def _stamp_single_target(match: dict, fleet: dict, as_json: bool) -> int:
+    """The single-chat doctrine stamp (both halves, one disk write) plus the daemon's own
+    primitive as a best-effort extra - the same shape as the fleet pass's `_stamp_rows`, for
+    exactly one chat, with the fuller report a single target warrants."""
     session_id = match.get("cliSessionId") or ""
     title = match.get("title")
 
@@ -464,6 +545,30 @@ def main(argv: list[str]) -> int:
         as_json,
         0 if ok else 2 if (bypass_ok or uc_ok) else 1,
     )
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    as_json = "--json" in argv
+    if "--all" in argv:
+        return _run_fleet_pass(argv, as_json)
+    args = [a for a in argv if not a.startswith("--")]
+    if len(args) != 1:
+        print(__doc__.strip(), file=sys.stderr)
+        return 3
+
+    try:
+        match = hydralib.resolve_one(args[0])
+        fleet = hydralib.fleet()
+    except (hydralib.ChatNotFound, hydralib.AmbiguousChat) as err:
+        return out({"ok": False, "report": f"REFUSED (deterministic): {err}"}, as_json, 3)
+    except hydralib.DaemonError as err:
+        return out({"ok": False, "report": f"automation stamp FAILED: {err}"}, as_json, 1)
+
+    return _stamp_single_target(match, fleet, as_json)
 
 
 if __name__ == "__main__":
