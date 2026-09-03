@@ -55,6 +55,7 @@ from __future__ import annotations
 import json
 import time
 import sys
+from dataclasses import dataclass
 from pathlib import Path as _Path
 
 from lib import clilib, holdlib
@@ -203,16 +204,35 @@ def _archive_source_on_disk(session_id: str, src_instance: str) -> bool:
     return done
 
 
-def out(payload: dict, as_json: bool, code: int) -> int:
-    print(json.dumps(payload, indent=2) if as_json else payload["report"])
-    return code
+@dataclass
+class MigrateArgs:
+    """Parsed migrate_chat.py argv - see main()'s Usage docstring for the flags."""
+
+    as_json: bool
+    force: bool
+    stop_idle: bool
+    to: str
+    title: str | None
+    idle_wait: int
+    query: str
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
+class _MigrateRefusal(Exception):
+    """Carries a finished out() payload up to main(): every phase below raises this instead
+    of returning early, so main() reads as one straight line wrapped in a single try/except
+    rather than a refusal check after every step."""
+
+    def __init__(self, payload: dict, code: int):
+        super().__init__(payload.get("report", ""))
+        self.payload = payload
+        self.code = code
+
+
+def _parse_migrate_argv(argv: list[str]) -> MigrateArgs | int:
+    """Hand-rolled flag parsing (kept out of argparse so an unknown flag is just ignored, not
+    a hard error - other scripts in this suite share that convention). Returns the parsed
+    flags, or prints usage/an error and returns the exit code to use when parsing itself
+    fails (never routed through out(), matching the original behaviour)."""
     as_json = "--json" in argv
     force = "--force" in argv
     stop_idle = "--stop-idle" in argv
@@ -252,121 +272,136 @@ def main(argv: list[str]) -> int:
     if len(args) != 1 or not to:
         print(__doc__.strip(), file=sys.stderr)
         return 3
+    return MigrateArgs(as_json, force, stop_idle, to, title, idle_wait, args[0])
 
+
+def _resolve_chat_or_raise(query: str) -> tuple[dict, dict]:
+    """Resolve the chat to migrate plus the fleet, or raise the same refusal main() used to
+    return inline."""
     try:
-        match = resolve_for_migrate(args[0])
+        match = resolve_for_migrate(query)
         fleet = hydralib.fleet()
     except (hydralib.ChatNotFound, hydralib.AmbiguousChat) as err:
-        return out({"landed": False, "report": f"REFUSED (deterministic): {err}"}, as_json, 3)
+        raise _MigrateRefusal({"landed": False, "report": f"REFUSED (deterministic): {err}"}, 3) from err
     except hydralib.DaemonError as err:
-        return out({"landed": False, "report": f"migrate FAILED: {err}"}, as_json, 1)
+        raise _MigrateRefusal({"landed": False, "report": f"migrate FAILED: {err}"}, 1) from err
+    return match, fleet
 
-    session_id = match.get("cliSessionId") or ""
-    chat_title = match.get("title")
-    door_title = _untruncated_title(session_id, chat_title)
 
+def _resolve_target_or_raise(fleet: dict, to: str, match: dict, session_id: str, chat_title) -> dict:
+    """Resolve --to to a real instance, and short-circuit a no-op move."""
     target = resolve_instance(fleet, to)
     if target is None:
         known = ", ".join(f"#{i.get('num')} {i.get('name')}" for i in fleet.get("instances", []))
         ledgerlib.note("migrate", session_id, deterministic=True, note=f"no instance matches {to!r}")
-        return out(
+        raise _MigrateRefusal(
             {
                 "landed": False,
                 "report": f"REFUSED (deterministic): no instance matches {to!r}. Known: {known}",
             },
-            as_json,
             3,
         )
     if str(match.get("instance", "")).lower() == str(target.get("name", "")).lower():
-        return out(
+        raise _MigrateRefusal(
             {"landed": False, "report": f"nothing to do: '{chat_title}' already lives in {target.get('name')}"},
-            as_json,
             0,
         )
+    return target
 
-    # A HOLD is a person's word: the unattended machinery leaves held chats alone (--force
-    # is that person speaking again).
+
+def _check_hold_or_raise(session_id: str, force: bool) -> None:
+    """A HOLD is a person's word: the unattended machinery leaves held chats alone (--force
+    is that person speaking again)."""
     hold_why = holdlib.why_blocked(session_id)
     if hold_why and not force:
-        return out({"landed": False, "held": True, "report": f"REFUSED: {hold_why}"}, as_json, 6)
+        raise _MigrateRefusal({"landed": False, "held": True, "report": f"REFUSED: {hold_why}"}, 6)
 
-    # Rule 2, absolute: the import rewrites the transcript, and the daemon itself refuses a
-    # live session - refusing here first keeps the reason honest and the attempt un-spent.
-    #
-    # --stop-idle (live smoke, 2026-09-01): the desktop keeps an engine alive indefinitely
-    # after the turn ends, so without this every desktop chat had a "live writer" forever
-    # and nothing could ever move. The owner's line is "only chats that are stopped,
-    # waiting, chilling": lib/enginelib stops an engine that finished its turn and has been
-    # quiet for minutes - never one mid-turn or stuck - and confirms it is gone before we go
-    # on. The sweep's move and land lanes pass it; a hand run may too.
-    if match.get("live") and stop_idle:
-        from lib import enginelib
 
+def _stop_idle_engine_or_raise(match: dict, query: str, chat_title, session_id: str,
+                                idle_wait: int, force: bool) -> dict:
+    """--stop-idle's wait dance: stop an engine that is idle, or wait out the one refusal
+    (R_TOO_SOON) that more time actually cures, re-checking liveness and any newly-placed
+    hold on every lap. Returns the re-resolved match once it is safe to proceed; raises the
+    same refusal main() used to return inline otherwise."""
+    from lib import enginelib
+
+    stopped = enginelib.stop_idle_engine(match)
+    # --idle-wait: the ONE refusal that more time actually cures is R_TOO_SOON - the engine
+    # finished its turn and simply has not been quiet long enough yet. Every other code
+    # (STUCK, WORKING, ungateable, unreadable) falls straight through to the refusal below at
+    # today's speed, because no amount of sleeping makes those safe.
+    deadline = time.time() + idle_wait
+    waited_for = 0
+    # The budget is bounded TWO ways on purpose - by the wall clock and by the seconds we
+    # have actually slept. Either alone is a way to hang: a clock that does not advance (a
+    # suspended host, a frozen mock) defeats the deadline, and a sleep that returns early
+    # defeats the counter. Whichever runs out first ends the wait.
+    while (idle_wait
+           and stopped.get("reason") == enginelib.R_TOO_SOON
+           and waited_for < idle_wait
+           and time.time() < deadline):
+        # Sleep the actual deficit when we know it, never a fixed poll: that is the whole
+        # point of carrying needs_secs, and it turns four guessed retries into one wait.
+        deficit = int(stopped.get("needs_secs") or 0) - int(stopped.get("quiet_secs") or 0)
+        left = min(idle_wait - waited_for, max(0, int(deadline - time.time())))
+        nap = max(1, min(deficit if deficit > 0 else IDLE_WAIT_POLL_SECS, left))
+        time.sleep(nap)
+        waited_for += nap
+        # ⛔ RE-RESOLVE, never re-use the pre-sleep match: stop_idle_engine taskkills
+        # match["live"]["pid"], and a pid captured minutes ago can have been recycled by the
+        # OS onto an unrelated process by the time we would act on it.
+        try:
+            match = resolve_for_migrate(query)
+        except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
+            raise _MigrateRefusal(
+                {"landed": False, "report": f"migrate FAILED while waiting out the idle window: {err}"}, 1
+            ) from err
+        if not match.get("live"):
+            stopped = {"stopped": True, "pid": None, "reason": enginelib.R_IDLE,
+                       "why": f"the engine exited on its own while waiting {int(waited_for)}s"}
+            break
+        # ⛔ A HOLD PLACED DURING THE WAIT MUST STILL LAND. The check above ran minutes ago; a
+        # person who said "leave this one alone" in the meantime outranks a move that was
+        # already in flight.
+        hold_now = holdlib.why_blocked(session_id)
+        if hold_now and not force:
+            raise _MigrateRefusal({"landed": False, "held": True, "report": f"REFUSED: {hold_now}"}, 6)
         stopped = enginelib.stop_idle_engine(match)
-        # --idle-wait: the ONE refusal that more time actually cures is R_TOO_SOON - the
-        # engine finished its turn and simply has not been quiet long enough yet. Every
-        # other code (STUCK, WORKING, ungateable, unreadable) falls straight through to the
-        # refusal below at today's speed, because no amount of sleeping makes those safe.
-        deadline = time.time() + idle_wait
-        waited_for = 0
-        # The budget is bounded TWO ways on purpose - by the wall clock and by the seconds we
-        # have actually slept. Either alone is a way to hang: a clock that does not advance
-        # (a suspended host, a frozen mock) defeats the deadline, and a sleep that returns
-        # early defeats the counter. Whichever runs out first ends the wait.
-        while (idle_wait
-               and stopped.get("reason") == enginelib.R_TOO_SOON
-               and waited_for < idle_wait
-               and time.time() < deadline):
-            # Sleep the actual deficit when we know it, never a fixed poll: that is the whole
-            # point of carrying needs_secs, and it turns four guessed retries into one wait.
-            deficit = int(stopped.get("needs_secs") or 0) - int(stopped.get("quiet_secs") or 0)
-            left = min(idle_wait - waited_for, max(0, int(deadline - time.time())))
-            nap = max(1, min(deficit if deficit > 0 else IDLE_WAIT_POLL_SECS, left))
-            time.sleep(nap)
-            waited_for += nap
-            # ⛔ RE-RESOLVE, never re-use the pre-sleep match: stop_idle_engine taskkills
-            # match["live"]["pid"], and a pid captured minutes ago can have been recycled by
-            # the OS onto an unrelated process by the time we would act on it.
-            try:
-                match = resolve_for_migrate(args[0])
-            except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
-                return out({"landed": False,
-                            "report": f"migrate FAILED while waiting out the idle window: {err}"},
-                           as_json, 1)
-            if not match.get("live"):
-                stopped = {"stopped": True, "pid": None, "reason": enginelib.R_IDLE,
-                           "why": f"the engine exited on its own while waiting {int(waited_for)}s"}
-                break
-            # ⛔ A HOLD PLACED DURING THE WAIT MUST STILL LAND. The check above ran minutes
-            # ago; a person who said "leave this one alone" in the meantime outranks a move
-            # that was already in flight.
-            hold_now = holdlib.why_blocked(session_id)
-            if hold_now and not force:
-                return out({"landed": False, "held": True,
-                            "report": f"REFUSED: {hold_now}"}, as_json, 6)
-            stopped = enginelib.stop_idle_engine(match)
-        if stopped.get("stopped"):
-            waited = f" after waiting {int(waited_for)}s" if waited_for else ""
-            ledgerlib.annotate("migrate", session_id,
-                               f"stopped idle engine pid {stopped.get('pid')}{waited} ({stopped.get('why')})")
-            try:
-                match = resolve_for_migrate(args[0])
-            except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
-                return out({"landed": False, "report": f"migrate FAILED after stopping the idle engine: {err}"},
-                           as_json, 1)
-        else:
-            waited = f" (waited {int(waited_for)}s)" if waited_for else ""
-            return out(
-                {"landed": False,
-                 "stopReason": stopped.get("reason"),
-                 "waitedSecs": int(waited_for),
-                 "report": f"REFUSED: '{chat_title}' has a live engine and it is not safely idle - "
-                           f"{stopped.get('why')}{waited}. Not moving."},
-                as_json, 4,
-            )
+    if stopped.get("stopped"):
+        waited = f" after waiting {int(waited_for)}s" if waited_for else ""
+        ledgerlib.annotate("migrate", session_id,
+                           f"stopped idle engine pid {stopped.get('pid')}{waited} ({stopped.get('why')})")
+        try:
+            return resolve_for_migrate(query)
+        except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
+            raise _MigrateRefusal(
+                {"landed": False, "report": f"migrate FAILED after stopping the idle engine: {err}"}, 1
+            ) from err
+    waited = f" (waited {int(waited_for)}s)" if waited_for else ""
+    raise _MigrateRefusal(
+        {
+            "landed": False,
+            "stopReason": stopped.get("reason"),
+            "waitedSecs": int(waited_for),
+            "report": f"REFUSED: '{chat_title}' has a live engine and it is not safely idle - "
+                      f"{stopped.get('why')}{waited}. Not moving.",
+        },
+        4,
+    )
+
+
+def _settle_live_writer_or_raise(match: dict, query: str, chat_title, session_id: str,
+                                  stop_idle: bool, idle_wait: int, force: bool) -> dict:
+    """Rule 2, absolute: the import rewrites the transcript, and the daemon itself refuses a
+    live session - refusing here first keeps the reason honest and the attempt un-spent.
+    --stop-idle (live smoke, 2026-09-01) is the one escape hatch: the desktop keeps an engine
+    alive indefinitely after the turn ends, so without it every desktop chat had a "live
+    writer" forever and nothing could ever move."""
+    if match.get("live") and stop_idle:
+        match = _stop_idle_engine_or_raise(match, query, chat_title, session_id, idle_wait, force)
     if match.get("live"):
         pid = match["live"].get("pid")
-        return out(
+        raise _MigrateRefusal(
             {
                 "landed": False,
                 "report": (
@@ -377,40 +412,44 @@ def main(argv: list[str]) -> int:
                 # No stopReason: this refusal is reached WITHOUT --stop-idle, so nothing
                 # gated it. A caller must not read its absence as "waiting might help".
             },
-            as_json,
             4,
         )
+    return match
 
+
+def _check_breaker_or_raise(session_id: str, force: bool) -> None:
     brake = ledgerlib.check("migrate", session_id)
     if brake["suppressed"] and not force:
-        return out(
+        raise _MigrateRefusal(
             {"landed": False, "breaker": brake, "report": f"SUPPRESSED by the breaker: {brake['why']}"},
-            as_json,
             5,
         )
 
+
+def _build_import_body(target: dict, title: str | None, door_title, force: bool) -> dict:
+    """THE NAMING DOOR (daemon rule): every import must carry a real title, or restate the
+    current one exactly as proof of a programmatic review. We just read it from the dossier -
+    that IS the review - so restate it. Without this the daemon 400s every bare invocation.
+
+    RESTATE THE SESSION'S TITLE, NOT THE ON-SCREEN ONE, when they differ: the desktop record
+    elides a long title with an ellipsis and the daemon compares against the untruncated one,
+    so a bare move of any long-titled chat was a deterministic 400 that only --title could
+    clear (hit live 2026-09-03, moving the Agos chats)."""
     body: dict = {"instance_ref": target.get("ref") or f"desktop:{target.get('dir')}"}
     if title:
         body["title"] = title
     else:
-        # THE NAMING DOOR (daemon rule): every import must carry a real title, or restate the
-        # current one exactly as proof of a programmatic review. We just read it from the
-        # dossier - that IS the review - so restate it. Without this the daemon 400s every
-        # bare invocation, and v2's shape would have retried that forever.
-        #
-        # RESTATE THE SESSION'S TITLE, NOT THE ON-SCREEN ONE, when they differ: the desktop
-        # record elides a long title with an ellipsis and the daemon compares against the
-        # untruncated one, so a bare move of any long-titled chat was a deterministic 400
-        # that only --title could clear (hit live 2026-09-03, moving the Agos chats).
-        # chat_title itself stays as-is - the settle actuator matches the ROW ON SCREEN.
         body["confirm_title"] = door_title
     if force:
         body["force"] = True
+    return body
 
-    # TRUST THE WORKSPACE FIRST (owner, 2026-09-01): a chat whose cwd the app does not trust
-    # stops on a human dialog no rail can answer - so the landing pre-writes the trust flag
-    # for its own working folder. Best-effort and silent-on-success: the trust list is shared
-    # by every instance, so one write covers wherever this chat ends up.
+
+def _pretrust_workspace(session_id: str) -> None:
+    """TRUST THE WORKSPACE FIRST (owner, 2026-09-01): a chat whose cwd the app does not trust
+    stops on a human dialog no rail can answer - so the landing pre-writes the trust flag for
+    its own working folder. Best-effort and silent-on-success: the trust list is shared by
+    every instance, so one write covers wherever this chat ends up."""
     try:
         import trust_workspace
 
@@ -420,93 +459,100 @@ def main(argv: list[str]) -> int:
     except Exception:  # trust is a convenience rail; never let it block a landing
         pass
 
-    ledgerlib.note("migrate", session_id, note=f"'{chat_title}' -> {target.get('name')}")
-    try:
-        from lib import windowlib
 
-        # The landing drives the TARGET app (the daemon fires its resume deeplink at it, which
-        # foregrounds and can re-show the window): put it back if that moved it.
+def _migrate_import_error(err: "hydralib.DaemonError", session_id: str) -> _MigrateRefusal:
+    """Translate a failed import-desktop POST into the right refusal. A 409/400 is
+    deterministic (the daemon is rejecting these exact inputs, so retrying is futile); a 422
+    on a live session is transient; anything else is a bare failure with the attempt already
+    recorded by the caller."""
+    if err.status == 409:
+        ledgerlib.note("migrate", session_id, deterministic=True, note="superseded lineage")
+        return _MigrateRefusal(
+            {
+                "landed": False,
+                "report": (
+                    f"REFUSED (deterministic): the daemon says this lineage is SUPERSEDED "
+                    f"({err.detail[:200]}). It was retired on purpose; only a person's "
+                    "--force re-lands it."
+                ),
+            },
+            3,
+        )
+    if err.status == 400:
+        # A 400 is the daemon rejecting these exact inputs (bad instance_ref, title door):
+        # the same call will 400 again, so retrying it is v2's futile loop. Stop after one.
+        ledgerlib.note("migrate", session_id, deterministic=True, note=f"400: {err.detail[:150]}")
+        return _MigrateRefusal(
+            {
+                "landed": False,
+                "report": (
+                    f"REFUSED (deterministic): the daemon rejected the request "
+                    f"({err.detail[:200]}). Same inputs will be rejected again - fix the "
+                    "inputs (e.g. pass --title) rather than retrying."
+                ),
+            },
+            3,
+        )
+    if err.status == 422 and "live" in err.detail.lower():
+        # The daemon refused a LIVE session - transient, not deterministic: the same call is
+        # fine once the session's writer finishes. Attempt stays counted; the breaker bounds
+        # a hot retry loop.
+        return _MigrateRefusal(
+            {
+                "landed": False,
+                "report": (
+                    f"REFUSED by the daemon: the session is LIVE and the import rewrites "
+                    f"the transcript ({err.detail[:150]}). Retry after it finishes its turn."
+                ),
+            },
+            4,
+        )
+    return _MigrateRefusal(
+        {"landed": False, "report": f"migrate FAILED: {err} (attempt recorded)"}, 1
+    )
+
+
+def _post_import_or_raise(session_id: str, target: dict, body: dict) -> dict:
+    """POST the import and translate a daemon failure into the right refusal (see
+    _migrate_import_error). Runs under the target app's own window-placement guard, since the
+    daemon's resume deeplink can foreground and reshow the target window mid-call."""
+    from lib import windowlib
+
+    try:
         with windowlib.keep_placement(target.get("dir") or target.get("name")):
             result = hydralib.api_post(f"/api/sessions/{session_id}/import-desktop", body)
     except hydralib.DaemonError as err:
-        if err.status == 409:
-            ledgerlib.note("migrate", session_id, deterministic=True, note="superseded lineage")
-            return out(
-                {
-                    "landed": False,
-                    "report": (
-                        f"REFUSED (deterministic): the daemon says this lineage is SUPERSEDED "
-                        f"({err.detail[:200]}). It was retired on purpose; only a person's "
-                        "--force re-lands it."
-                    ),
-                },
-                as_json,
-                3,
-            )
-        if err.status == 400:
-            # A 400 is the daemon rejecting these exact inputs (bad instance_ref, title door):
-            # the same call will 400 again, so retrying it is v2's futile loop. Stop after one.
-            ledgerlib.note("migrate", session_id, deterministic=True, note=f"400: {err.detail[:150]}")
-            return out(
-                {
-                    "landed": False,
-                    "report": (
-                        f"REFUSED (deterministic): the daemon rejected the request "
-                        f"({err.detail[:200]}). Same inputs will be rejected again - fix the "
-                        "inputs (e.g. pass --title) rather than retrying."
-                    ),
-                },
-                as_json,
-                3,
-            )
-        if err.status == 422 and "live" in err.detail.lower():
-            # The daemon refused a LIVE session - transient, not deterministic: the same call
-            # is fine once the session's writer finishes. Attempt stays counted; the breaker
-            # bounds a hot retry loop.
-            return out(
-                {
-                    "landed": False,
-                    "report": (
-                        f"REFUSED by the daemon: the session is LIVE and the import rewrites "
-                        f"the transcript ({err.detail[:150]}). Retry after it finishes its turn."
-                    ),
-                },
-                as_json,
-                4,
-            )
-        return out(
-            {"landed": False, "report": f"migrate FAILED: {err} (attempt recorded)"}, as_json, 1
-        )
-
+        raise _migrate_import_error(err, session_id) from err
     if not (isinstance(result, dict) and result.get("ok", True)):
-        return out(
+        raise _MigrateRefusal(
             {
                 "landed": False,
                 "daemon": result,
-                "report": f"migrate did NOT land: daemon says ok=false. Attempt recorded.",
+                "report": "migrate did NOT land: daemon says ok=false. Attempt recorded.",
             },
-            as_json,
             1,
         )
+    return result
 
-    # Verify the landing: the dossier must now place the chat in the target instance.
+
+def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: dict) -> list[dict]:
+    """Verify the landing: the dossier must now place the chat in the target instance."""
     try:
         after = hydralib.dossier(session_id)
     except hydralib.DaemonError as err:
-        return out(
+        raise _MigrateRefusal(
             {
                 "landed": None,
                 "daemon": result,
                 "report": f"import posted ok but VERIFY FAILED ({err}) - not claiming success.",
             },
-            as_json,
             1,
-        )
+        ) from err
     landed = any(
         str(m.get("instance", "")).lower() == str(target.get("name", "")).lower() for m in after
     )
     if not landed:
-        return out(
+        raise _MigrateRefusal(
             {
                 "landed": False,
                 "daemon": result,
@@ -515,61 +561,61 @@ def main(argv: list[str]) -> int:
                     f"{target.get('name')} yet - NOT claiming success. Attempt recorded."
                 ),
             },
-            as_json,
             1,
         )
+    return after
 
-    # (The 'migrate' attempt is cleared below, AFTER the settle - a landing whose source row
-    # is still visible is not a clean move, and its annotation must have a row to land on.)
 
-    # Settle the superseded SOURCE row (_settle_source docstring): only when the chat came
-    # from a desktop instance whose app is RUNNING - a closed app's disk flag is durable on
-    # its own. Best-effort and loud: a failed settle leaves a stale twin, and the report
-    # says exactly that.
+def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str, chat_title) -> str:
+    """Settle the superseded SOURCE row (_settle_source docstring): only when the chat came
+    from a desktop instance whose app is RUNNING - a closed app's disk flag is durable on its
+    own. Best-effort and loud: a failed settle leaves a stale twin, and the report says
+    exactly that. Returns the settle_note suffix for the final report ("" when there is
+    nothing to settle)."""
     src_name = str(match.get("instance") or "")
-    settle_note = ""
-    if src_name and src_name.lower() != str(target.get("name", "")).lower():
-        src_inst = resolve_instance(fleet, src_name)
-        if src_inst and src_inst.get("isRunning"):
-            code_s, out_s = _settle_source(src_name, str(chat_title))
-            # DOUBLE-CHECK, NEVER ASSUME (owner, 2026-09-01: "it can't do it blind; it must
-            # always double check, confirm"). Exit 3 used to be read as "already settled";
-            # a row the app virtualized off-screen is not rendered AND still visible when
-            # scrolled. So the source meta is re-read from disk after the settle, and only an
-            # archived flag that STAYS archived counts - otherwise the twin is named, the
-            # attempt annotated, and the twins lane keeps settling it every pass.
-            if code_s in (0, 3):
-                time.sleep(2)
-                still = _source_still_visible(session_id, src_name)
-                if still:
-                    ledgerlib.annotate("migrate", session_id,
-                                       f"landed in {target.get('name')} but the source row in "
-                                       f"{src_name} is still visible (settle exit {code_s})")
-                    settle_note = (f" ⚠ Source row in {src_name} is STILL VISIBLE after the settle "
-                                   f"(actuator exit {code_s}) - a twin is on screen; the twins lane "
-                                   "will keep settling it. Not claiming a clean move.")
-                else:
-                    settle_note = " Source row settled through its app's own control (verified on disk)."
-            else:
-                # ⛔ NEVER LEAVE THE SOURCE VISIBLE (owner, 2026-09-01: "there are a few
-                # duplicate chats happening"). The app's own control is the immediate and
-                # durable route, but it can fail - an ambiguous title, a row not rendered - and
-                # every one of those failures left a twin on screen until a later sweep caught
-                # it. The disk flag is weaker under a running app, and weaker beats nothing.
-                fallback = _archive_source_on_disk(session_id, src_name)
-                settle_note = (
-                    f" Source row could not be settled through the app ({code_s}); its archive "
-                    "flag was written on disk instead - it clears at that app's next restart."
-                    if fallback else
-                    f" Source row NOT settled (actuator said: "
-                    f"{(out_s.splitlines()[-1][:100] if out_s else code_s)}) - a stale twin "
-                    f"may linger in {src_name}; archive it there."
-                )
+    if not src_name or src_name.lower() == str(target.get("name", "")).lower():
+        return ""
+    src_inst = resolve_instance(fleet, src_name)
+    if not (src_inst and src_inst.get("isRunning")):
+        return ""
+    code_s, out_s = _settle_source(src_name, str(chat_title))
+    # DOUBLE-CHECK, NEVER ASSUME (owner, 2026-09-01: "it can't do it blind; it must always
+    # double check, confirm"). Exit 3 used to be read as "already settled"; a row the app
+    # virtualized off-screen is not rendered AND still visible when scrolled. So the source
+    # meta is re-read from disk after the settle, and only an archived flag that STAYS
+    # archived counts - otherwise the twin is named, the attempt annotated, and the twins
+    # lane keeps settling it every pass.
+    if code_s in (0, 3):
+        time.sleep(2)
+        still = _source_still_visible(session_id, src_name)
+        if still:
+            ledgerlib.annotate("migrate", session_id,
+                               f"landed in {target.get('name')} but the source row in "
+                               f"{src_name} is still visible (settle exit {code_s})")
+            return (f" ⚠ Source row in {src_name} is STILL VISIBLE after the settle "
+                    f"(actuator exit {code_s}) - a twin is on screen; the twins lane "
+                    "will keep settling it. Not claiming a clean move.")
+        return " Source row settled through its app's own control (verified on disk)."
+    # ⛔ NEVER LEAVE THE SOURCE VISIBLE (owner, 2026-09-01: "there are a few duplicate chats
+    # happening"). The app's own control is the immediate and durable route, but it can fail
+    # - an ambiguous title, a row not rendered - and every one of those failures left a twin
+    # on screen until a later sweep caught it. The disk flag is weaker under a running app,
+    # and weaker beats nothing.
+    fallback = _archive_source_on_disk(session_id, src_name)
+    return (
+        f" Source row could not be settled through the app ({code_s}); its archive "
+        "flag was written on disk instead - it clears at that app's next restart."
+        if fallback else
+        f" Source row NOT settled (actuator said: "
+        f"{(out_s.splitlines()[-1][:100] if out_s else code_s)}) - a stale twin "
+        f"may linger in {src_name}; archive it there."
+    )
 
-    if "STILL VISIBLE" not in settle_note:
-        ledgerlib.clear("migrate", session_id)  # a clean move: the brake is for futility
 
-    # The automation doctrine (docstring): stamp bypassPermissions on every verified landing.
+def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict]) -> tuple[bool, str, bool, str]:
+    """The automation doctrine (module docstring): stamp bypassPermissions on every verified
+    landing, and ultracode, mechanically, into the landed chat's meta record (stamplib
+    docstring). Returns (stamped, stamp_note, ultracode_ok, ultracode_note)."""
     try:
         stamp = hydralib.api_post(f"/api/sessions/{session_id}/automation", {})
         stamped = bool(isinstance(stamp, dict) and stamp.get("ok"))
@@ -582,7 +628,6 @@ def main(argv: list[str]) -> int:
         stamped = False
         stamp_note = f"automation stamp failed ({err}) - stamp bypassPermissions before it boots"
 
-    # ...and ultracode, mechanically, into the landed chat's meta record (stamplib docstring).
     landed_match = next(
         (m for m in after
          if str(m.get("instance", "")).lower() == str(target.get("name", "")).lower()),
@@ -591,11 +636,12 @@ def main(argv: list[str]) -> int:
     meta_path = landed_match.get("metaPath")
     if meta_path:
         # ⛔ BOTH STAMPS ON DISK, AND STAMPED TWICE (owner, 2026-09-01: "I am getting sick of
-        # having to change things from manual edits to bypass permissions"). Three chats moved
-        # minutes earlier were sitting on acceptEdits: the daemon's /automation endpoint is the
-        # only thing that had been setting the permission half, and the app writes the landed
-        # chat's record on its own schedule - so our single stamp raced it and lost. Writing
-        # both halves ourselves, then again after the app has settled, is what makes it stick.
+        # having to change things from manual edits to bypass permissions"). Three chats
+        # moved minutes earlier were sitting on acceptEdits: the daemon's /automation
+        # endpoint is the only thing that had been setting the permission half, and the app
+        # writes the landed chat's record on its own schedule - so our single stamp raced it
+        # and lost. Writing both halves ourselves, then again after the app has settled, is
+        # what makes it stick.
         got = stamplib.stamp_doctrine(meta_path)
         if not (got["bypass"] and got["ultracode"]):
             time.sleep(4)
@@ -610,6 +656,53 @@ def main(argv: list[str]) -> int:
     else:
         uc_ok = False
         uc_note = "not stamped - the dossier gave no metaPath; run automation_chat.py on it"
+    return stamped, stamp_note, uc_ok, uc_note
+
+
+def out(payload: dict, as_json: bool, code: int) -> int:
+    print(json.dumps(payload, indent=2) if as_json else payload["report"])
+    return code
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+
+    parsed = _parse_migrate_argv(argv)
+    if isinstance(parsed, int):
+        return parsed
+    as_json, force, stop_idle = parsed.as_json, parsed.force, parsed.stop_idle
+    to, title, idle_wait, query = parsed.to, parsed.title, parsed.idle_wait, parsed.query
+
+    try:
+        match, fleet = _resolve_chat_or_raise(query)
+        session_id = match.get("cliSessionId") or ""
+        chat_title = match.get("title")
+        door_title = _untruncated_title(session_id, chat_title)
+
+        target = _resolve_target_or_raise(fleet, to, match, session_id, chat_title)
+        _check_hold_or_raise(session_id, force)
+        match = _settle_live_writer_or_raise(match, query, chat_title, session_id, stop_idle, idle_wait, force)
+        _check_breaker_or_raise(session_id, force)
+
+        body = _build_import_body(target, title, door_title, force)
+        _pretrust_workspace(session_id)
+
+        ledgerlib.note("migrate", session_id, note=f"'{chat_title}' -> {target.get('name')}")
+        result = _post_import_or_raise(session_id, target, body)
+        after = _verify_landing_or_raise(session_id, target, chat_title, result)
+    except _MigrateRefusal as refusal:
+        return out(refusal.payload, as_json, refusal.code)
+
+    # (The 'migrate' attempt is cleared below, AFTER the settle - a landing whose source row
+    # is still visible is not a clean move, and its annotation must have a row to land on.)
+    settle_note = _settle_source_row(match, target, fleet, session_id, chat_title)
+    if "STILL VISIBLE" not in settle_note:
+        ledgerlib.clear("migrate", session_id)  # a clean move: the brake is for futility
+
+    stamped, stamp_note, uc_ok, uc_note = _stamp_automation_doctrine(session_id, target, after)
 
     return out(
         {
