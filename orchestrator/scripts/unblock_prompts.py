@@ -177,6 +177,56 @@ def press(row: dict) -> dict:
             "detail": detail}
 
 
+def _resolve_max_cap(argv: list[str]) -> tuple[int, str | None]:
+    """--max N from argv, or DEFAULT_MAX when the flag is absent. `error` is set (and `cap`
+    unusable) when the value given is not a positive whole number - the caller prints it to
+    stderr and exits 1."""
+    if "--max" not in argv:
+        return DEFAULT_MAX, None
+    i = argv.index("--max")
+    raw = argv[i + 1] if i + 1 < len(argv) else ""
+    if not raw.isdigit() or int(raw) < 1:
+        return DEFAULT_MAX, f"unblock FAILED: --max needs a positive whole number, got {raw!r}"
+    return int(raw), None
+
+
+def _ineligible_reason(row: dict) -> str:
+    """Why one stuck-but-not-eligible chat was left alone, for the text report.
+    r["ineligibleWhy"] is already computed (find_stuck) for the verify-snippet failure - use
+    it first so a chat whose app IS running but only failed that check never gets blamed for
+    "its app is not running" (a bug found on review, 2026-09-01: the verify-snippet reason was
+    computed and then never read here)."""
+    if row["ineligibleWhy"]:
+        return row["ineligibleWhy"]
+    if row["held"]:
+        return "the owner put it on HOLD"
+    if row["mode"] != stamplib.BYPASS:
+        return (f"its mode is {row['mode']}, not bypassPermissions - this one is genuinely "
+                "a person's call")
+    return "its app is not running"
+
+
+def _print_text_report(stuck: list[dict], results: list[dict], eligible: list[dict],
+                        act: bool) -> None:
+    """The human-readable (non --json) report: what is stuck, what was pressed (if anything),
+    and why every remaining stuck chat was left alone."""
+    if not stuck:
+        print("no chat is waiting on a permission prompt.")
+        return
+    print(f"{len(stuck)} chat(s) waiting on a permission prompt:")
+    for r in (results or eligible):
+        mark = ("OK " if r.get("ok") else "XX ") if results else "-  "
+        print(f"  {mark}[{r['instance']}] {r['title'][:52]} - waiting {r['quietMins']:.0f}m"
+              + (f" -> {r['outcome']}" if results else ""))
+    for r in stuck:
+        if r["eligible"]:
+            continue
+        print(f"  ?? [{r['instance']}] {r['title'][:52]} - waiting {r['quietMins']:.0f}m: "
+              f"{_ineligible_reason(r)}")
+    if not act and eligible:
+        print("\nPLAN ONLY - add --yes to answer the prompts these chats should never have seen.")
+
+
 def main(argv: list[str]) -> int:
     clilib.use_utf8_console()
     if "--help" in argv or "-h" in argv:
@@ -191,15 +241,10 @@ def main(argv: list[str]) -> int:
         if refusal:
             print(refusal)
             act = False
-    cap = DEFAULT_MAX
-    if "--max" in argv:
-        i = argv.index("--max")
-        raw = argv[i + 1] if i + 1 < len(argv) else ""
-        if not raw.isdigit() or int(raw) < 1:
-            print(f"unblock FAILED: --max needs a positive whole number, got {raw!r}",
-                  file=sys.stderr)
-            return 1
-        cap = int(raw)
+    cap, cap_error = _resolve_max_cap(argv)
+    if cap_error:
+        print(cap_error, file=sys.stderr)
+        return 1
 
     try:
         stuck = find_stuck()
@@ -213,29 +258,7 @@ def main(argv: list[str]) -> int:
         print(json.dumps({"stuck": stuck, "results": results}, indent=2))
         return 2 if [r for r in results if not r["ok"]] else 0
 
-    if not stuck:
-        print("no chat is waiting on a permission prompt.")
-        return 0
-    print(f"{len(stuck)} chat(s) waiting on a permission prompt:")
-    for r in (results or eligible):
-        mark = ("OK " if r.get("ok") else "XX ") if results else "-  "
-        print(f"  {mark}[{r['instance']}] {r['title'][:52]} - waiting {r['quietMins']:.0f}m"
-              + (f" -> {r['outcome']}" if results else ""))
-    for r in stuck:
-        if r["eligible"]:
-            continue
-        # r["ineligibleWhy"] is already computed (find_stuck) for the verify-snippet failure -
-        # use it first so a chat whose app IS running but only failed that check never gets
-        # blamed for "its app is not running" (a bug found on review, 2026-09-01: the
-        # verify-snippet reason was computed and then never read here).
-        why = (r["ineligibleWhy"] or
-               ("the owner put it on HOLD" if r["held"]
-                else f"its mode is {r['mode']}, not bypassPermissions - this one is genuinely "
-                     "a person's call" if r["mode"] != stamplib.BYPASS
-                else "its app is not running"))
-        print(f"  ?? [{r['instance']}] {r['title'][:52]} - waiting {r['quietMins']:.0f}m: {why}")
-    if not act and eligible:
-        print("\nPLAN ONLY - add --yes to answer the prompts these chats should never have seen.")
+    _print_text_report(stuck, results, eligible, act)
     return 2 if [r for r in results if not r["ok"]] else 0
 
 
