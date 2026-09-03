@@ -1571,11 +1571,9 @@ using a config file, because the config files on this machine are exactly what l
 list_usage {} surveys every account at once. Route heavy work to one with headroom, by its number.
 Mutating tools say MUTATES: in their description; never run /login for a human.
 
-THE ORCHESTRATOR IS INSIDE THIS SERVER. Deciding what should happen to a chat - the dry loop, the
-sweep, moving chats between accounts, archiving, naming - is orchestrator_menu / orchestrator_run /
-orchestrator_loop / orchestrator_switch. There is no second program to find. Nothing there acts
-unless the tray icon is up (orchestrator_switch {action:"armed"} first); a disarmed fleet looks
-exactly like a quiet one.`
+THE ORCHESTRATOR IS INSIDE THIS SERVER: what should happen to a chat (dry loop, sweep, moving
+chats between accounts, archiving) is orchestrator_menu/run/loop/switch - no second program.
+Nothing there acts unless the tray icon is up: orchestrator_switch {action:"armed"} first.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {
