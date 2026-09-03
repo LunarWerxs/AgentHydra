@@ -202,8 +202,9 @@ export default {
   // land in a running app.
   moveChats: 'Move all chats to another account',
   moveChatsNoTargets: 'No other instances',
-  moveChatsClosedLands:
-    'Not running - chats land in its store, with their settings, ready when it starts',
+  // Shown under EVERY closed target in the submenu and again in the confirm dialog, so it has to
+  // read at a glance seven rows deep: one clause, same wording as the Sessions flyout's group.
+  moveChatsClosedLands: 'Not running - lands in its store, ready when it starts',
   moveChatsCounting: 'Counting active chats…',
   moveChatsNone: 'No active chats to move from {from}.',
   moveChatsFailed: "Couldn't list the chats on {from}.",
