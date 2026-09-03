@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from dataclasses import dataclass
 
 from lib import clilib
 from lib import hydralib
@@ -210,152 +211,196 @@ def move(rows: list[dict], target: str, act: bool, cap: int, idle_wait: int = 0)
     }
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
-    as_json = "--json" in argv
-    act = "--yes" in argv
-    include_archived = "--all" in argv
-    console_only = "--console" in argv
-    account = instance = search = move_to = None
-    cap = 10
-    idle_wait = 0
+_STRING_FLAGS = {"--account": "account", "--instance": "instance",
+                  "--search": "search", "--move-to": "move_to"}
+_NUMERIC_FLAGS = {"--max": "cap", "--idle-wait": "idle_wait"}
+
+
+class _ArgError(Exception):
+    """Raised once the usage/value error has already been printed; carries the exit code."""
+
+    def __init__(self, code: int) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+@dataclass
+class ChatArgs:
+    as_json: bool
+    act: bool
+    include_archived: bool
+    console_only: bool
+    account: str | None
+    instance: str | None
+    search: str | None
+    move_to: str | None
+    cap: int
+    idle_wait: int
+
+
+def _take_string_flag(argv: list[str], i: int) -> tuple[str, str] | None:
+    """If argv[i] names one of the string flags, return (field, value); else None."""
+    field = _STRING_FLAGS.get(argv[i])
+    if field is None:
+        return None
+    if i + 1 >= len(argv):
+        print(__doc__.strip(), file=sys.stderr)
+        raise _ArgError(3)
+    return field, argv[i + 1]
+
+
+def _take_numeric_flag(argv: list[str], i: int) -> tuple[str, int] | None:
+    """If argv[i] is --max/--idle-wait, return (field, value); else None.
+
+    Both take a NUMBER, and every way of getting that wrong used to be silent or fatal in
+    the wrong direction: a trailing "--max" was dropped and the run proceeded on the default
+    cap, "--max -1" sliced [: -1] and moved all but the last chat, and "--max abc" raised
+    ValueError as a traceback instead of the documented exit 3. A flag that decides HOW MANY
+    CHATS MOVE must never fail open.
+    """
+    flag = argv[i]
+    field = _NUMERIC_FLAGS.get(flag)
+    if field is None:
+        return None
+    if i + 1 >= len(argv):
+        print(__doc__.strip(), file=sys.stderr)
+        raise _ArgError(3)
+    raw = argv[i + 1]
+    try:
+        val = int(raw)
+    except ValueError:
+        print(f"{flag} needs a whole number, got {raw!r}", file=sys.stderr)
+        raise _ArgError(3) from None
+    if val < 0:
+        print(f"{flag} cannot be negative", file=sys.stderr)
+        raise _ArgError(3)
+    return field, val
+
+
+def _parse_args(argv: list[str]) -> ChatArgs:
+    """Walk argv once, filling in the value flags; unknown tokens are simply skipped."""
+    fields: dict[str, object] = {"account": None, "instance": None, "search": None,
+                                  "move_to": None, "cap": 10, "idle_wait": 0}
     i = 0
     while i < len(argv):
-        a = argv[i]
-        for flag, setter in (("--account", "account"), ("--instance", "instance"),
-                             ("--search", "search"), ("--move-to", "move_to")):
-            if a == flag:
-                if i + 1 >= len(argv):
-                    print(__doc__.strip(), file=sys.stderr)
-                    return 3
-                val = argv[i + 1]
-                if setter == "account":
-                    account = val
-                elif setter == "instance":
-                    instance = val
-                elif setter == "search":
-                    search = val
-                else:
-                    move_to = val
-                i += 1
-                break
-        # --max and --idle-wait take a NUMBER, and every way of getting that wrong used to be
-        # silent or fatal in the wrong direction: a trailing "--max" was dropped and the run
-        # proceeded on the default cap, "--max -1" sliced [: -1] and moved all but the last
-        # chat, and "--max abc" raised ValueError as a traceback instead of the documented
-        # exit 3. A flag that decides HOW MANY CHATS MOVE must never fail open.
-        for flag in ("--max", "--idle-wait"):
-            if a != flag:
-                continue
-            if i + 1 >= len(argv):
-                print(__doc__.strip(), file=sys.stderr)
-                return 3
-            try:
-                val = int(argv[i + 1])
-            except ValueError:
-                print(f"{flag} needs a whole number, got {argv[i + 1]!r}", file=sys.stderr)
-                return 3
-            if val < 0:
-                print(f"{flag} cannot be negative", file=sys.stderr)
-                return 3
-            if flag == "--max":
-                cap = val
-            else:
-                idle_wait = val
+        taken = _take_string_flag(argv, i) or _take_numeric_flag(argv, i)
+        if taken is None:
             i += 1
-            break
-        i += 1
+            continue
+        field, value = taken
+        fields[field] = value
+        i += 2
+    return ChatArgs(
+        as_json="--json" in argv, act="--yes" in argv,
+        include_archived="--all" in argv, console_only="--console" in argv,
+        account=fields["account"], instance=fields["instance"], search=fields["search"],
+        move_to=fields["move_to"], cap=fields["cap"], idle_wait=fields["idle_wait"],
+    )
 
+
+def _diagnose_empty_account_filter(account: str, include_archived: bool) -> int | None:
+    """--account matched zero rows: tell "no such account" apart from "account is empty"
+    apart from "couldn't tell" (fleet unreachable - that case returns None to fall through
+    to the normal empty-result handling).
+
+    Built from the FLEET, not from the rows: an account with zero chats is absent from the
+    rows, so checking against those would report a real, currently-empty account as
+    "unknown" - swapping one wrong answer for another. Three outcomes, kept distinct.
+    """
+    names = account_names()
+    known: dict[str, str] = {}
     try:
-        rows = collect(include_archived, account, instance, search, console_only)
-    except hydralib.DaemonError as err:
-        print(f"chats read FAILED: {err}", file=sys.stderr)
-        return 1
-
-    # A FILTER THAT MATCHED NOTHING IS NOT AN EMPTY ACCOUNT. Both used to print the same bare
-    # "no chats match.", so a mistyped account read exactly like a clean one - and "that account
-    # has nothing on it" is a conclusion someone acts on. Say which it was.
-    if not rows and account:
-        # Built from the FLEET, not from the rows: an account with zero chats is absent from the
-        # rows, so checking against those would report a real, currently-empty account as
-        # "unknown" - swapping one wrong answer for another. Three outcomes, kept distinct.
-        names = account_names()
+        for iname, acct in hydralib.instances_by_name().items():
+            known[iname] = f"{names.get(iname) or ''} {acct.get('email') or ''}".strip()
+    except hydralib.DaemonError:
         known = {}
-        try:
-            for iname, acct in hydralib.instances_by_name().items():
-                known[iname] = f"{names.get(iname) or ''} {acct.get('email') or ''}".strip()
-        except hydralib.DaemonError:
-            known = {}
-        hit = [v for v in known.values() if v and account.lower() in v.lower()]
-        if known and not hit:
-            print(f"no ACCOUNT matches {account!r} - nothing matched the filter, which is NOT the "
-                  "same as an account with no chats. Known: "
-                  + ", ".join(sorted({v for v in known.values() if v})), file=sys.stderr)
-            return 3
-        if hit:
-            print(f"{', '.join(sorted(set(hit)))} - matched, and it holds NO chats"
-                  + ("" if include_archived else " (archived ones are hidden; --all includes them)")
-                  + ".")
-            return 0
-
-    if not move_to:
-        print(json.dumps({"chats": rows}, indent=2) if as_json else render(rows))
+    hit = [v for v in known.values() if v and account.lower() in v.lower()]
+    if known and not hit:
+        print(f"no ACCOUNT matches {account!r} - nothing matched the filter, which is NOT the "
+              "same as an account with no chats. Known: "
+              + ", ".join(sorted({v for v in known.values() if v})), file=sys.stderr)
+        return 3
+    if hit:
+        print(f"{', '.join(sorted(set(hit)))} - matched, and it holds NO chats"
+              + ("" if include_archived else " (archived ones are hidden; --all includes them)")
+              + ".")
         return 0
+    return None
 
-    # A FILTER THAT MATCHED NOTHING MUST NOT EXIT 0 ON THE MOVE PATH. The guard above covers
-    # --account only, so `--search "typo" --move-to work --yes` moved nothing and reported
-    # success - indistinguishable from "everything was already there".
-    if not rows:
-        picked = ", ".join(f"{k}={v!r}" for k, v in (("--search", search), ("--instance", instance),
-                                                     ("--account", account),
-                                                     ("--console", console_only or None)) if v)
-        print(f"REFUSED: no chat matched {picked or 'the current filters'} - nothing to move.",
-              file=sys.stderr)
-        return 3
 
-    plan = move(rows, move_to, act, cap, idle_wait)
-    if plan.get("error"):
-        print(f"REFUSED: {plan['error']}", file=sys.stderr)
-        return 3
-    if as_json:
-        print(json.dumps(plan, indent=2))
-    else:
-        t = plan["target"]
-        state = "OPEN" if t["isRunning"] else "CLOSED - it would need opening first"
-        print(f"target: {t['instance']} ({t['email']}) - {state}")
-        # THE HEADLINE COUNTS WHAT LANDED, NOT WHAT WAS PLANNED. `planned` is fixed before a
-        # single child runs, so printing it in the past tense produced the literal line
-        # "3 chat(s) moved" above three refusals with nothing moved - a false green of exactly
-        # the kind this toolbox exists to refuse.
-        landed_ids = {r["sessionId"] for r in plan["results"] if r.get("landed")} if act else None
-        n = len(landed_ids) if act else len(plan["planned"])
-        print(f"{n} chat(s) {'landed' if act else 'would move'}"
-              + (f" of {len(plan['planned'])} attempted" if act and n != len(plan["planned"]) else "")
-              + (f", {plan['alreadyThere']} already there" if plan["alreadyThere"] else "")
-              + (f" (+{plan['overCap']} over --max)" if plan["overCap"] else ""))
-        for p in plan["planned"]:
-            mark = "  -> " if landed_ids is None else (
-                "  -> " if p["sessionId"] in landed_ids else "  !! NOT MOVED  ")
-            print(f"{mark}{p['from'] or 'console'} -> {t['instance']}   {str(p['title'])[:60]}")
-        for r in plan["results"]:
-            print(f"  {'✓' if r.get('landed') else '✗'} {r['outcome']}: {str(r['title'])[:56]}")
-            if not r.get("landed") and r["detail"]:
-                for line in r["detail"].splitlines():
-                    print(f"      {line}")
-            if r["exit"] == 5:
-                print(f"      fix: python orch.py attempts --clear migrate {r['sessionId']}")
-        # The one refusal a re-run WOULD cure is the one worth pointing at: a chat whose turn
-        # is finished but whose five quiet minutes are not up. Say so once, with the flag,
-        # rather than leaving the operator to re-run the whole batch on a guess.
-        young = [r for r in plan["results"] if r.get("stopReason") == "too_soon"]
-        if young and not idle_wait:
-            print(f"\n{len(young)} chat(s) refused only because the engine is not quiet enough YET - "
-                  "re-run with --idle-wait 330 and the command waits that out itself.")
-        if not act:
-            print("\nPLAN ONLY - nothing moved. Add --yes to do it.")
+def _refuse_no_match(search: str | None, instance: str | None, account: str | None,
+                      console_only: bool) -> int:
+    """A FILTER THAT MATCHED NOTHING MUST NOT EXIT 0 ON THE MOVE PATH: `--search "typo"
+    --move-to work --yes` must not move nothing and report success - indistinguishable from
+    "everything was already there".
+    """
+    picked = ", ".join(f"{k}={v!r}" for k, v in (("--search", search), ("--instance", instance),
+                                                 ("--account", account),
+                                                 ("--console", console_only or None)) if v)
+    print(f"REFUSED: no chat matched {picked or 'the current filters'} - nothing to move.",
+          file=sys.stderr)
+    return 3
+
+
+def _landed_ids(plan: dict, act: bool) -> set[str] | None:
+    """sessionIds that actually moved, or None when this was a plan-only (dry) run."""
+    return {r["sessionId"] for r in plan["results"] if r.get("landed")} if act else None
+
+
+def _print_move_headline(plan: dict, act: bool, landed_ids: set[str] | None) -> None:
+    t = plan["target"]
+    state = "OPEN" if t["isRunning"] else "CLOSED - it would need opening first"
+    print(f"target: {t['instance']} ({t['email']}) - {state}")
+    # THE HEADLINE COUNTS WHAT LANDED, NOT WHAT WAS PLANNED. `planned` is fixed before a
+    # single child runs, so printing it in the past tense produced the literal line
+    # "3 chat(s) moved" above three refusals with nothing moved - a false green of exactly
+    # the kind this toolbox exists to refuse.
+    n = len(landed_ids) if act else len(plan["planned"])
+    print(f"{n} chat(s) {'landed' if act else 'would move'}"
+          + (f" of {len(plan['planned'])} attempted" if act and n != len(plan["planned"]) else "")
+          + (f", {plan['alreadyThere']} already there" if plan["alreadyThere"] else "")
+          + (f" (+{plan['overCap']} over --max)" if plan["overCap"] else ""))
+
+
+def _print_move_planned_lines(plan: dict, landed_ids: set[str] | None) -> None:
+    t = plan["target"]
+    for p in plan["planned"]:
+        mark = "  -> " if landed_ids is None else (
+            "  -> " if p["sessionId"] in landed_ids else "  !! NOT MOVED  ")
+        print(f"{mark}{p['from'] or 'console'} -> {t['instance']}   {str(p['title'])[:60]}")
+
+
+def _print_move_result_lines(plan: dict) -> None:
+    for r in plan["results"]:
+        print(f"  {'✓' if r.get('landed') else '✗'} {r['outcome']}: {str(r['title'])[:56]}")
+        if not r.get("landed") and r["detail"]:
+            for line in r["detail"].splitlines():
+                print(f"      {line}")
+        if r["exit"] == 5:
+            print(f"      fix: python orch.py attempts --clear migrate {r['sessionId']}")
+
+
+def _print_move_footnotes(plan: dict, act: bool, idle_wait: int) -> None:
+    # The one refusal a re-run WOULD cure is the one worth pointing at: a chat whose turn
+    # is finished but whose five quiet minutes are not up. Say so once, with the flag,
+    # rather than leaving the operator to re-run the whole batch on a guess.
+    young = [r for r in plan["results"] if r.get("stopReason") == "too_soon"]
+    if young and not idle_wait:
+        print(f"\n{len(young)} chat(s) refused only because the engine is not quiet enough YET - "
+              "re-run with --idle-wait 330 and the command waits that out itself.")
+    if not act:
+        print("\nPLAN ONLY - nothing moved. Add --yes to do it.")
+
+
+def _print_move_plan_text(plan: dict, act: bool, idle_wait: int) -> None:
+    landed_ids = _landed_ids(plan, act)
+    _print_move_headline(plan, act, landed_ids)
+    _print_move_planned_lines(plan, landed_ids)
+    _print_move_result_lines(plan)
+    _print_move_footnotes(plan, act, idle_wait)
+
+
+def _move_exit_code(plan: dict, act: bool) -> int:
     if not act:
         return 0
     # all() over an empty list is True, so a run that attempted nothing used to exit 0. A cap
@@ -363,6 +408,49 @@ def main(argv: list[str]) -> int:
     if plan["overCap"] and not plan["results"]:
         return 2
     return 0 if all(r["ok"] for r in plan["results"]) else 2
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    try:
+        args = _parse_args(argv)
+    except _ArgError as err:
+        return err.code
+
+    try:
+        rows = collect(args.include_archived, args.account, args.instance, args.search,
+                        args.console_only)
+    except hydralib.DaemonError as err:
+        print(f"chats read FAILED: {err}", file=sys.stderr)
+        return 1
+
+    # A FILTER THAT MATCHED NOTHING IS NOT AN EMPTY ACCOUNT. Both used to print the same bare
+    # "no chats match.", so a mistyped account read exactly like a clean one - and "that account
+    # has nothing on it" is a conclusion someone acts on. Say which it was.
+    if not rows and args.account:
+        code = _diagnose_empty_account_filter(args.account, args.include_archived)
+        if code is not None:
+            return code
+
+    if not args.move_to:
+        print(json.dumps({"chats": rows}, indent=2) if args.as_json else render(rows))
+        return 0
+
+    if not rows:
+        return _refuse_no_match(args.search, args.instance, args.account, args.console_only)
+
+    plan = move(rows, args.move_to, args.act, args.cap, args.idle_wait)
+    if plan.get("error"):
+        print(f"REFUSED: {plan['error']}", file=sys.stderr)
+        return 3
+    if args.as_json:
+        print(json.dumps(plan, indent=2))
+    else:
+        _print_move_plan_text(plan, args.act, args.idle_wait)
+    return _move_exit_code(plan, args.act)
 
 
 if __name__ == "__main__":
