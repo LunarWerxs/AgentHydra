@@ -162,7 +162,7 @@ const { t } = useI18n()
 // resolves accounts. A private fetch would show the folder name here while the Instances tab
 // showed the account name for the very same instance. `computed`, so the chips fill in on their
 // own as each account resolves. A failed load just leaves the named entries out.
-const { instances: desktopInstances, refreshInstances, open: openDesktopInstance } = useInstances()
+const { instances: desktopInstances, refreshInstances } = useInstances()
 const namedInstances = computed(() =>
   desktopInstances.value.map((i) => ({ name: i.name, label: displayName(i) })),
 )
@@ -945,35 +945,11 @@ async function loadMigrateTargets(s: SessionSummary | null) {
   }
 }
 
-/** A closed target is opened first and waited for. The wait polls the instance list rather than
- *  trusting the open call's ok: that only says the spawn happened. The extra beat after the
- *  process appears is for Electron to take its single-instance lock, which is what the import
- *  spawn aims at; too early and the import boots a SECOND copy instead of landing in this one. */
-async function ensureRunning(target: MigrateTarget): Promise<boolean> {
-  if (target.isRunning) return true
-  const id = `start-${target.ref}`
-  toast.loading(t('sessions.migrateStarting', { name: target.name }), { id })
-  const opened = await openDesktopInstance(target.dir)
-  if (!opened?.ok) {
-    toast.error(t('sessions.migrateStartFailed', { name: target.name }), { id })
-    return false
-  }
-  const deadline = Date.now() + 60_000
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1500))
-    const list = await api.listInstances().catch(() => [] as api.CMInstance[])
-    if (list.find((i) => i.dir === target.dir)?.isRunning) {
-      await new Promise((r) => setTimeout(r, 3000))
-      toast.dismiss(id)
-      return true
-    }
-  }
-  toast.error(t('sessions.migrateStartFailed', { name: target.name }), { id })
-  return false
-}
-
+// A closed target is NOT started. The server lands the chat straight in that instance's store,
+// settings intact, and the app finds it there when it next starts - the one landing where "what it
+// was set to" survives without a restart. Starting the app first was the old workaround for the
+// server refusing closed targets, and it is gone with the refusal.
 async function migrateTo(s: SessionSummary, target: MigrateTarget) {
-  if (!(await ensureRunning(target))) return
   migrating.value = true
   try {
     // The row's title IS the current title (same listing the server reads), restated as required.
@@ -1193,7 +1169,6 @@ async function runBulkMigrate() {
   const job = bulkConfirm.value
   if (!job) return
   bulkConfirm.value = null
-  if (!(await ensureRunning(job.target))) return
   migrating.value = true
   const id = `bulk-migrate-${job.target.ref}`
   let ok = 0
@@ -1879,7 +1854,7 @@ function copy(text: string) {
                         >
                           <ArrowRightLeft class="size-3.5" />
                           <span class="flex flex-col">
-                            <span>{{ $t('sessions.migrateStartAndMove', { name: target.name }) }}</span>
+                            <span>{{ $t('sessions.migrateClosedMove', { name: target.name }) }}</span>
                             <span v-if="target.account" class="text-xs text-muted-foreground">
                               {{ target.account }}
                             </span>
@@ -1959,7 +1934,7 @@ function copy(text: string) {
                         >
                           <ArrowRightLeft class="size-3.5" />
                           <span class="flex flex-col">
-                            <span>{{ $t('sessions.migrateStartAndMove', { name: target.name }) }}</span>
+                            <span>{{ $t('sessions.migrateClosedMove', { name: target.name }) }}</span>
                             <span v-if="target.account" class="text-xs text-muted-foreground">
                               {{ target.account }}
                             </span>
@@ -2253,7 +2228,7 @@ function copy(text: string) {
                               >
                                 <ArrowRightLeft class="size-3.5" />
                                 <span class="flex flex-col">
-                                  <span>{{ $t('sessions.migrateStartAndMove', { name: target.name }) }}</span>
+                                  <span>{{ $t('sessions.migrateClosedMove', { name: target.name }) }}</span>
                                   <span v-if="target.account" class="text-xs text-muted-foreground">
                                     {{ target.account }}
                                   </span>

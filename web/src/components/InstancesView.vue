@@ -612,21 +612,9 @@ function moveTargets(from: CMInstance): CMInstance[] {
         Number(b.isRunning) - Number(a.isRunning) || instLabel(a).localeCompare(instLabel(b)),
     )
 }
-/** Poll the instance list (the same 4s cache every tab reads) until `dir` is running, then give
- *  Electron a beat to take its single-instance lock - the import spawn aims at that lock, and too
- *  early it boots a SECOND copy instead of landing in this one. */
-async function waitForRunning(dir: string, ms = 60_000): Promise<boolean> {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1500))
-    await refreshInstances({ silent: true })
-    if (instances.value.find((i) => i.dir === dir)?.isRunning) {
-      await new Promise((r) => setTimeout(r, 3000))
-      return true
-    }
-  }
-  return false
-}
+// A closed destination is NOT started: the server lands each chat straight in that instance's
+// store, settings intact, and the app finds them there when it next starts. That is the whole
+// point of moving to a closed account, and it is the one landing that needs no restart afterwards.
 async function prepareMoveAll(from: CMInstance, to: CMInstance) {
   // One count at a time. The submenu item is disabled while busy, but a second click can still
   // arrive through a reopened menu, and two overlapping counts share one toast id - the first's
@@ -636,14 +624,6 @@ async function prepareMoveAll(from: CMInstance, to: CMInstance) {
   moveAllBusy.value = true
   const id = `move-all-${from.dir}`
   try {
-    if (!to.isRunning) {
-      toast.loading(t('instances.moveChatsStarting', { to: instLabel(to) }), { id })
-      const r = await open(to.dir)
-      if (!r?.ok || !(await waitForRunning(to.dir))) {
-        toast.error(t('instances.moveChatsStartFailed', { to: instLabel(to) }), { id })
-        return
-      }
-    }
     toast.loading(t('instances.moveChatsCounting'), { id })
     // `instance` is matched server-side against the instance NAME a session's desktop entry records
     // (the same field the session list's isCurrent compares), over all time, live rows only.
@@ -1366,7 +1346,7 @@ onUnmounted(() => {
                           <span class="flex flex-col">
                             <span>{{ instLabel(to) }}</span>
                             <span class="text-xs text-muted-foreground">
-                              {{ to.isRunning ? $t('instances.running') : $t('instances.moveChatsWillStart') }}
+                              {{ to.isRunning ? $t('instances.running') : $t('instances.moveChatsClosedLands') }}
                             </span>
                           </span>
                         </DropdownMenuItem>

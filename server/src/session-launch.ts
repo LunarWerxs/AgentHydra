@@ -33,14 +33,21 @@
 // never a secret, and is left for the OS temp cleaner (deleting it too early would race the
 // terminal still starting up).
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
+import {
+  applyCarriedSettings,
+  buildColdImportRecord,
+  type CarriedSettings,
+  carriedSettingsMatch,
+  chooseStoreLeaf,
+} from './chat-settings-carry'
 import { GENERIC_CHAT_TITLE, isGenericChatTitle, PLUMBING_CHAT_TITLE } from './chat-title'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
-import { db } from './db'
+import { allMigratedSettings, db, pruneMigratedSettings } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
 import { samePathKey } from './path-key'
 
@@ -686,6 +693,9 @@ export async function importSessionToDesktop(opts: {
   force?: boolean
   /** Seam for tests; the default asks the cached desktop-chat index. */
   findRendered?: (sessionId: string) => { archived: boolean; path: string } | null
+  /** The source chat's settings (chat-settings-carry.ts), merged onto the record the app creates.
+   *  Absent for an import that is not a migration. */
+  carried?: CarriedSettings
 }): Promise<{
   ok: boolean
   reason?: string
@@ -744,7 +754,14 @@ export async function importSessionToDesktop(opts: {
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : 'spawn-failed' }
   }
-  const titled = await stampImportedChat(opts.instanceDir, opts.sessionId, opts.title)
+  const titled = await stampImportedChat(
+    opts.instanceDir,
+    opts.sessionId,
+    opts.title,
+    undefined,
+    undefined,
+    opts.carried,
+  )
   // The stamp just written measurably LOSES to the running app (and the guard above means the
   // app is always running here): the app re-saves this chat's metadata from memory — where the
   // import handler put 'acceptEdits' — on its first boot, which erases the stamp from disk and
@@ -783,6 +800,7 @@ export async function stampImportedChat(
   rawTitle?: string | null,
   deadlineMs = 20_000,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  carried?: CarriedSettings,
 ): Promise<boolean> {
   const title = rawTitle?.trim()
   const deadline = Date.now() + deadlineMs
@@ -793,10 +811,106 @@ export async function stampImportedChat(
     // Runs every pass, and its boolean doubles as the "has the app created the file yet?" probe
     // for the untitled case, which has no title outcome to read.
     const stamped = applyDesktopChatAutomation(instanceDir, sessionId)
-    if (outcome !== 'not-found' || stamped) return outcome === 'titled'
+    if (outcome !== 'not-found' || stamped) {
+      // The file exists now: the carried settings go on in the same breath as the stamp. Same
+      // caveat as the stamp and the title - a RUNNING app re-saves over this from memory, which
+      // is what the sweep (restoreMigratedSettings) exists to keep converging until its restart.
+      if (carried && Object.keys(carried).length)
+        applyCarriedSettingsToChat(instanceDir, sessionId, carried)
+      return outcome === 'titled'
+    }
     if (Date.now() >= deadline) return false
     await sleep(500)
   }
+}
+
+/** Merge carried settings onto a chat's record in `instanceDir`. True when written. */
+export function applyCarriedSettingsToChat(
+  instanceDir: string,
+  sessionId: string,
+  carried: CarriedSettings,
+): boolean {
+  const metaPath = findChatMetaPath(instanceDir, sessionId)
+  if (!metaPath) return false
+  try {
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as Record<string, unknown>
+    if (carriedSettingsMatch(meta, carried)) return false
+    writeFileSync(metaPath, JSON.stringify(applyCarriedSettings(meta, carried)))
+    invalidateSessionMetaCache()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Land a chat in a CLOSED instance without starting it: write its record straight into that
+ * profile's store. The app finds it there, settings intact, when it next starts - there is no
+ * in-memory copy to fight, so this is the one landing where "what it was set to" survives without
+ * a restart dance. The owner's case (2026-09-03): move chats to an account that is not open, open
+ * it later, and everything is already right.
+ *
+ * Refuses exactly what the hot import refuses (a live writer, a superseded lineage, a chat that
+ * already renders there) plus its own two: the target must NOT be running (a running app would
+ * not see the file until restart AND may overwrite it - the hot path is the honest one there), and
+ * the profile must have a store leaf (a profile never signed in has nowhere the app would look).
+ */
+export async function coldImportSessionToDesktop(opts: {
+  sessionId: string
+  instanceDir: string
+  title: string
+  /** The source chat's record, read BEFORE it was archived. */
+  sourceMeta: Record<string, unknown>
+  force?: boolean
+  isLive?: (sessionId: string) => boolean
+  isInstanceRunning?: (dir: string) => Promise<boolean>
+  findRendered?: (sessionId: string) => { archived: boolean; path: string } | null
+  chooseLeaf?: (instanceDir: string) => string | null
+  now?: () => number
+}): Promise<{ ok: boolean; reason?: string; path?: string; alreadyRendered?: boolean }> {
+  if (isGenericChatTitle(opts.title))
+    return {
+      ok: false,
+      reason:
+        'title-required: a chat must not land with a generic or missing name (owner rule); resolve a real title first',
+    }
+  if ((opts.isLive ?? sessionIsLive)(opts.sessionId))
+    return { ok: false, reason: 'session-live: refusing to import under an active writer' }
+  if (!opts.force && isSessionSuperseded(opts.sessionId))
+    return {
+      ok: false,
+      reason:
+        'superseded: this session is done-marked (handed off/migrated) — importing it would revive a retired lineage; pass force to override',
+    }
+  if (!existsSync(opts.instanceDir)) return { ok: false, reason: 'instance-dir-not-found' }
+  if (await (opts.isInstanceRunning ?? defaultInstanceRunning)(opts.instanceDir))
+    return { ok: false, reason: 'instance-running: use the app import for a running instance' }
+  const rendered = (opts.findRendered ?? findDesktopChat)(opts.sessionId)
+  if (alreadyRendersIn(rendered, opts.instanceDir)) return { ok: true, alreadyRendered: true }
+  const leaf = (opts.chooseLeaf ?? chooseStoreLeaf)(opts.instanceDir)
+  if (!leaf)
+    return {
+      ok: false,
+      reason: 'no-session-store: this instance has never signed in; open it once and sign in first',
+    }
+  const record = buildColdImportRecord(
+    opts.sourceMeta,
+    opts.sessionId,
+    opts.title,
+    (opts.now ?? Date.now)(),
+  )
+  const path = join(leaf, `local_${opts.sessionId}.json`)
+  try {
+    // Write beside, then rename: the app must never read a half-written record if it starts
+    // mid-write, and a rename is atomic on the same volume.
+    const tmp = `${path}.agenthydra-tmp`
+    writeFileSync(tmp, JSON.stringify(record))
+    renameSync(tmp, path)
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : 'write-failed' }
+  }
+  invalidateSessionMetaCache()
+  return { ok: true, path }
 }
 
 /**
@@ -1124,8 +1238,42 @@ export function reassertAutomationStamps(profileDir: string): number {
   } catch {
     return stamped // no store in this profile
   }
+  stamped += restoreMigratedSettings(profileDir)
   if (stamped > 0) invalidateSessionMetaCache()
   return stamped
+}
+
+/** A month is far past any app restart; after it a row is more likely to be fighting a setting
+ *  the person changed on purpose than restoring one the app clobbered. */
+export const MIGRATED_SETTINGS_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * The carried-settings half of the sweep: for every chat migrated INTO this profile while its app
+ * was running (db migrated_chat_settings), put the carried settings back if the app's re-save took
+ * them off. Only chats whose record still exists here; a record that moved on is left alone. Returns
+ * how many records were rewritten. Rows past their month are forgotten on the way.
+ */
+export function restoreMigratedSettings(
+  profileDir: string,
+  rows: ReturnType<typeof allMigratedSettings> = allMigratedSettings(),
+  prune: (maxAgeMs: number) => number = pruneMigratedSettings,
+): number {
+  let restored = 0
+  for (const row of rows) {
+    if (!samePathKey(row.target_dir, profileDir)) continue
+    try {
+      if (applyCarriedSettingsToChat(profileDir, row.session_id, row.settings as CarriedSettings))
+        restored++
+    } catch {
+      // one contended record says nothing about the others
+    }
+  }
+  try {
+    prune(MIGRATED_SETTINGS_TTL_MS)
+  } catch {
+    // a failed prune costs nothing this tick
+  }
+  return restored
 }
 
 /**

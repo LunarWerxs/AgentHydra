@@ -111,6 +111,18 @@ create table if not exists session_marks (
   updated_at integer not null
 );
 
+-- The settings a migrated chat carried onto a RUNNING target app's record (chat-settings-carry.ts),
+-- kept so the standing sweep can put them back each time that app re-saves its in-memory copy over
+-- them, until the app's next start makes them permanent. A closed target needs no row: its record
+-- is written straight into the store and nothing re-saves it. JSON in the settings column; target_dir is
+-- the instance dir as given, compared with path-key.ts's rule at read time.
+create table if not exists migrated_chat_settings (
+  session_id text primary key,
+  target_dir text not null,
+  settings   text not null,
+  updated_at integer not null
+);
+
 -- Parsed transcript metadata (title / preview / counts), keyed by the file it was derived from.
 -- Producing one row means reading up to 12 MB of transcript tail and JSON.parsing every line of it,
 -- so an in-memory-only cache made the FIRST sessions list of every daemon re-pay that for all 200
@@ -454,6 +466,61 @@ export function setSetting(key: string, value: string): void {
   db.query(
     'insert into settings (key, value) values (?, ?) on conflict(key) do update set value = ?',
   ).run(key, value, value)
+}
+
+// --- migrated chat settings (see chat-settings-carry.ts) ----------------------------------------
+export interface MigratedSettingsRow {
+  session_id: string
+  target_dir: string
+  settings: Record<string, unknown>
+  updated_at: number
+}
+
+export function rememberMigratedSettings(
+  sessionId: string,
+  targetDir: string,
+  settings: Record<string, unknown>,
+): void {
+  const now = Date.now()
+  db.query(
+    'insert into migrated_chat_settings (session_id, target_dir, settings, updated_at) values (?, ?, ?, ?) on conflict(session_id) do update set target_dir = ?, settings = ?, updated_at = ?',
+  ).run(
+    sessionId,
+    targetDir,
+    JSON.stringify(settings),
+    now,
+    targetDir,
+    JSON.stringify(settings),
+    now,
+  )
+}
+
+/** Every remembered row. The caller matches target_dir with the path-key rule; SQL cannot. */
+export function allMigratedSettings(): MigratedSettingsRow[] {
+  const rows = db
+    .query<{ session_id: string; target_dir: string; settings: string; updated_at: number }, []>(
+      'select session_id, target_dir, settings, updated_at from migrated_chat_settings',
+    )
+    .all()
+  const out: MigratedSettingsRow[] = []
+  for (const r of rows) {
+    try {
+      out.push({ ...r, settings: JSON.parse(r.settings) as Record<string, unknown> })
+    } catch {
+      // a corrupt row is dropped from the answer, not from the table; the next remember overwrites it
+    }
+  }
+  return out
+}
+
+/** Rows older than `maxAgeMs` are forgotten: by then the target app has restarted and re-saved the
+ *  carried values itself, and a row that keeps re-asserting a setting the person later changed on
+ *  purpose would be the sweep fighting the owner. */
+export function pruneMigratedSettings(maxAgeMs: number): number {
+  const r = db
+    .query('delete from migrated_chat_settings where updated_at < ?')
+    .run(Date.now() - maxAgeMs)
+  return Number(r.changes ?? 0)
 }
 
 // Seed defaults once.

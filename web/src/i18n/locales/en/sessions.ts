@@ -138,7 +138,7 @@ export default {
   resumeUnsupported: 'Only Claude sessions can be resumed. The command is on your clipboard.',
   resumeFailed: "Couldn't reopen this session.",
   migrateAccount: 'Migrate to another account',
-  migrateNoTargets: 'No other running instances',
+  migrateNoTargets: 'No other instances',
   migrateStarted: 'Migrated to {name} — the chat is in that desktop app now, ready to carry on.',
   migrateFailed: "Couldn't migrate this chat.",
   // --- readable export ---
@@ -212,13 +212,12 @@ export default {
   matchCount: '{n} match(es)',
   truncatedMatches: 'more not shown',
 
-  // Migrate flyout groups + the "start it first" path for a closed target, and the multi-select
-  // bulk actions (Ctrl/Cmd-click or Shift-click rows, then right-click one of them).
+  // Migrate flyout groups (a closed target is NOT started: the chat lands in its store, settings
+  // intact, for the app to find at its next start) and the multi-select bulk actions
+  // (Ctrl/Cmd-click or Shift-click rows, then right-click one of them).
   migrateRunningGroup: 'Running',
-  migrateClosedGroup: 'Not running',
-  migrateStartAndMove: 'Start {name} and move there',
-  migrateStarting: 'Starting {name}…',
-  migrateStartFailed: "Couldn't start {name}.",
+  migrateClosedGroup: 'Not running - lands in its store, ready when it starts',
+  migrateClosedMove: 'Move to {name}',
   copyNIds: 'Copy {n} session ids',
   migrateBulkLabel: 'Migrate {n} chats to another account',
   migrateConfirmTitle: 'Move {n} chats to {name}?',

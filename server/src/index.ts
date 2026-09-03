@@ -34,6 +34,7 @@ import {
 import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { chatDossier } from './chat-dossier'
+import { pickCarriedSettings } from './chat-settings-carry'
 import { resolveRequiredTitle } from './chat-title'
 import {
   APP_ROOT,
@@ -118,7 +119,14 @@ import { createInstance, removeInstance } from './core/lifecycle'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from './core/shared'
 import { createInstanceShortcut } from './core/shortcut'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
-import { coerceQueueItem, db, getSetting, runOutcome, setSetting } from './db'
+import {
+  coerceQueueItem,
+  db,
+  getSetting,
+  rememberMigratedSettings,
+  runOutcome,
+  setSetting,
+} from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import {
   activeCount,
@@ -151,6 +159,7 @@ import {
 } from './instance'
 import {
   findDesktopChat,
+  findDesktopChat as findDesktopChatMeta,
   instanceRefForSession,
   invalidateSessionMetaCache,
   resolveRunAsRef,
@@ -194,6 +203,7 @@ import { type ExportFormat, exportSession, scanSessionSecrets } from './session-
 import {
   applyDesktopChatAutomation,
   archiveDesktopChat,
+  coldImportSessionToDesktop,
   desktopHomeFor,
   importSessionToDesktop,
   isSessionSuperseded,
@@ -2325,6 +2335,21 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       409,
     )
 
+  // What the chat WAS SET TO, read before anything below touches its record: model, effort, the
+  // ultracode toggle, the Chrome permission mode, its permission grants (chat-settings-carry.ts).
+  // The app's import creates the target record with defaults, and the owner was putting these
+  // back by hand on every moved chat (2026-09-03, 13 of 16 reset). The whole source record is kept
+  // too: a CLOSED target receives a copy of it rather than an app-created record.
+  const sourceRendered = findDesktopChatMeta(sessionId)
+  let sourceMeta: Record<string, unknown> = {}
+  try {
+    if (sourceRendered?.path)
+      sourceMeta = JSON.parse(readFileSync(sourceRendered.path, 'utf8')) as Record<string, unknown>
+  } catch {
+    // an unreadable source record means nothing to carry; the move still proceeds
+  }
+  const carried = pickCarriedSettings(sourceMeta)
+
   // A live chat's process must stop before anything appends to its transcript. User-initiated:
   // clicking "migrate" means "move this thread", current turn included.
   const live = liveSessionEntry(sessionId)
@@ -2371,13 +2396,48 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // interactive caller delivers it through the app's own message channel, which BOOTS the
   // dormant chat's engine and runs the turn in the app (measured 2026-08-26). No click is
   // involved, and no headless process is created.
-  const imported = await importSessionToDesktop({
-    sessionId,
-    instanceDir: ref.slice('desktop:'.length),
-    title: migrateTitle.title,
-    force: body.force === true,
-  })
-  if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
+  //
+  // TWO LANDINGS, chosen by whether the target app is running (owner ask, 2026-09-03):
+  //   · running -> the app's own import creates the record; the carried settings are merged onto
+  //     it with the title and the bypass stamp, and remembered so the sweep keeps them there until
+  //     that app's next start makes them permanent.
+  //   · closed  -> the record is written straight into the target's store, a near-copy of the
+  //     source's, and the app finds it there - settings intact - when it starts. No boot, nothing
+  //     to fight. This used to be refused outright ("importing would boot that instance"); the
+  //     refusal still holds for the app import, and this is the path that does not need one.
+  const targetRunning = (await listInstances()).some(
+    (i) => i.isRunning && samePathKey(i.dir, targetDir),
+  )
+  let landing: 'hot' | 'cold'
+  if (targetRunning) {
+    landing = 'hot'
+    const imported = await importSessionToDesktop({
+      sessionId,
+      instanceDir: targetDir,
+      title: migrateTitle.title,
+      force: body.force === true,
+      carried,
+    })
+    if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
+    if (Object.keys(carried).length) rememberMigratedSettings(sessionId, targetDir, carried)
+  } else {
+    landing = 'cold'
+    const cold = await coldImportSessionToDesktop({
+      sessionId,
+      instanceDir: targetDir,
+      title: migrateTitle.title,
+      sourceMeta,
+      force: body.force === true,
+    })
+    if (!cold.ok) {
+      // The source was archived above and the chat has landed nowhere: put it back where it was
+      // rather than leave a thread that shows in no app. The hot path cannot do this (its import
+      // is a spawn whose failure is not always knowable); this one can.
+      await archiveDesktopChat(sessionId, false).catch(() => null)
+      invalidateSessionMetaCache()
+      return c.json({ ok: false, error: cold.reason ?? 'cold import failed' }, 422)
+    }
+  }
   // The move rewrote metadata in TWO stores (archived in the source, created in the target), and
   // the scan behind every session listing caches for 15s. Without this the very next read serves
   // the pre-migrate rows: the caller sees the chat still on the old account, and setPreferred
@@ -2386,6 +2446,8 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   return c.json({
     ok: true,
     surface: 'desktop',
+    landing,
+    carried: Object.keys(carried),
     stoppedLive: !!live,
     ranHeadless: false,
     // Owner ask 2026-09-03: a migrated chat should come up armed the way a new one does. The

@@ -202,9 +202,8 @@ export default {
   // land in a running app.
   moveChats: 'Move all chats to another account',
   moveChatsNoTargets: 'No other instances',
-  moveChatsWillStart: 'Not running - will be started first',
-  moveChatsStarting: 'Starting {to}…',
-  moveChatsStartFailed: "Couldn't start {to}.",
+  moveChatsClosedLands:
+    'Not running - chats land in its store, with their settings, ready when it starts',
   moveChatsCounting: 'Counting active chats…',
   moveChatsNone: 'No active chats to move from {from}.',
   moveChatsFailed: "Couldn't list the chats on {from}.",
