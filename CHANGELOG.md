@@ -54,6 +54,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   now stripped before the tail is judged (`strip_local_tail` in `orchestrator/scripts/lib/gatelib.py`).
   A slash command still awaiting the model, and anything in flight under an auto-compaction
   summary, still read as mid-turn.
+- **A chat parked at a usage wall no longer reads as "may be working".** An account out of
+  budget until its reset cannot write, so its chat is stopped, waiting - the plainest case
+  there is. But the wall arrives as an api_error record, which the gate's completed-turn test
+  excludes, so such a chat was unmovable for as long as its engine lived, and moving it OFF the
+  exhausted account is the one thing that would have helped. Quota walls only: a transient
+  overload is one the engine may retry on its own, and moving a chat that is about to resume
+  would rewrite a live transcript.
 - **`python orch.py <script> --help` prints that script's manual.** It printed the driver's own
   docstring for every subcommand, so the menu's promise ("`orch.py <script> --help` for any of
   them") was false for all of them. The manual is read with `ast`, never by running the script, so

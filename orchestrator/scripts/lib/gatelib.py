@@ -633,9 +633,22 @@ def gate(
                 last and last["has_tool_use"] and not last["has_tool_result"]
                 and _predates(last, engine_started)
             )
-            if completed or orphaned:
+            # A QUOTA WALL IS THE PLAINEST "STOPPED, WAITING, CHILLING" THERE IS (2026-09-03).
+            # The account is out of budget until its reset, so the engine is parked: it is not
+            # writing and cannot write. But the wall arrives as an api_error record, which
+            # `completed` excludes, so such a chat read as "may be working" for as long as its
+            # engine lived and could never be moved off the exhausted account - the one move
+            # that would actually help it. Found on a chat sitting at "You've hit your session
+            # limit", which is exactly the chat you most want to relocate.
+            #
+            # QUOTA ONLY, never 'transient': an overload (529) is a wall the engine may retry
+            # on its own, and moving a chat that is about to resume rewrites a live transcript.
+            walled = bool(last and last["api_error"]
+                          and classify_limit(last["text"]) == "quota")
+            if completed or orphaned or walled:
                 fe = _finished_evidence(records)
                 idle = {"quiet_secs": quiet, "orphaned_tool_call": orphaned,
+                        "usage_wall": walled,
                         **{k: fe[k] for k in (
                             "done_claim", "ends_with_question", "recap_present",
                             "last_assistant_text")}}
@@ -647,6 +660,9 @@ def gate(
                  f"(a resume), so nothing is in flight; quiet {idle['quiet_secs']}s and waiting "
                  "for its next instruction"
                  if idle.get("orphaned_tool_call") else
+                 f"process {pid} is alive but IDLE - it is parked at a USAGE WALL, so it cannot "
+                 f"write until the account resets; quiet {idle['quiet_secs']}s"
+                 if idle.get("usage_wall") else
                  f"process {pid} is alive but IDLE - it finished its turn and has been quiet "
                  f"{idle['quiet_secs']}s, so it is waiting for its next instruction, not working")
                 if idle

@@ -312,6 +312,44 @@ class LocalPlumbingTailTest(TranscriptCase):
         self.assertEqual([r["type"] for r in recs], ["user", "user", "user", "assistant"])
 
 
+class UsageWallIsIdleTest(TranscriptCase):
+    """A chat parked at a QUOTA wall is stopped, waiting, chilling - the plainest case of it.
+    The account is out of budget until reset, so the engine is not writing and cannot write.
+    But the wall arrives as an api_error record, which the completed-turn test excludes, so
+    such a chat read as "may be working" for as long as its engine lived and could never be
+    moved OFF the exhausted account - the one move that would actually help it. Found live
+    2026-09-03 on a chat sitting at "You've hit your session limit"."""
+
+    WALL = "You've hit your session limit · resets 4:50pm (America/Chicago)"
+
+    def test_a_live_chat_at_a_quota_wall_is_idle_and_says_why(self):
+        p = self.transcript([user("go"), assistant(self.WALL, api_error=True)], age_secs=600)
+        v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
+        self.assertEqual(v["state"], "running")
+        self.assertIsNotNone(v["idle"])
+        self.assertTrue(v["idle"]["usage_wall"])
+        self.assertIn("USAGE WALL", v["cause"])
+
+    def test_a_transient_overload_is_NOT_idle(self):
+        # The engine may retry a 529 on its own, and moving a chat that is about to resume
+        # rewrites a live transcript. Quota only.
+        p = self.transcript([user("go"), assistant("API Error: 529 overloaded_error", api_error=True)],
+                            age_secs=600)
+        v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
+        self.assertIsNone(v["idle"])
+
+    def test_a_wall_still_needs_the_quiet_window(self):
+        p = self.transcript([assistant(self.WALL, api_error=True)], age_secs=5)
+        self.assertIsNone(gatelib.gate("s", p, {"pid": 123, "name": "x"})["idle"])
+
+    def test_a_stopped_chat_at_a_wall_is_still_a_usage_limit_crash(self):
+        # The no-writer branch is untouched: with no engine this is a resume candidate, and
+        # that verdict is what the wake lanes act on.
+        p = self.transcript([assistant(self.WALL, api_error=True)])
+        v = gatelib.gate("s", p, None)
+        self.assertEqual((v["state"], v["crashed"]["kind"]), ("crashed", "usage-limit"))
+
+
 class DoneClaimSectionTest(unittest.TestCase):
     """done_claim_section: the one definition of where the done-claim line lives, shared by
     parse_done_claim and harvest_todos."""
