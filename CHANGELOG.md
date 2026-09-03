@@ -20,6 +20,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   A chat outside the current time window widens the window to everything and selects it the
   moment the list carries it.
 
+### Fixed
+
+- **Migrating a chat from the web UI works again.** Since the naming law landed on 2026-08-29 the
+  migrate route has required a title decision - a real new `title`, or `confirm_title` restating
+  the chat's current title exactly - and the web client sent neither, so every migrate started
+  from the UI, one chat or sixteen, was refused with 400 before it touched anything. The UI now
+  restates each row's own title. A chat whose current title is generic ("General coding session")
+  is still refused, by design: the toast names the reason, and giving that chat a real name in the
+  app is the way through.
+- **A failed move says why.** The bulk toasts carried "details are in the browser console"; they
+  now carry the server's first reason too, and read as an error rather than a warning when nothing
+  moved at all.
+
 ## [0.38.1] - 2026-09-03
 
 ### Fixed

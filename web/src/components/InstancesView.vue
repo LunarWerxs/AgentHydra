@@ -678,7 +678,9 @@ async function runMoveAll() {
         id,
       })
       try {
-        const r = await migrateSession(s.session_id, ref)
+        // The row's title IS the current title (same listing the server reads), restated as the
+        // server's required title decision. A chat whose title is generic is refused by name below.
+        const r = await migrateSession(s.session_id, ref, { confirmTitle: s.title })
         if (r.ok) ok++
         else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
       } catch (e) {
@@ -694,10 +696,15 @@ async function runMoveAll() {
     n: job.sessions.length,
     to: instLabel(job.to),
   })
+  // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
+  // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
   if (failed.length)
-    toast.warning(`${summary} ${t('instances.moveChatsSomeFailed', { failed: failed.length })}`, {
-      id,
-    })
+    (ok === 0 ? toast.error : toast.warning)(
+      `${summary} ${t('instances.moveChatsSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}`,
+      {
+        id,
+      },
+    )
   else toast.success(summary, { id })
 }
 

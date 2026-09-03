@@ -742,8 +742,25 @@ export const runMonitorCheck = () =>
 /** Move a chat to another account: stops its live process if any, archives its old desktop
  *  entries, runs a one-turn migration on the target account, then imports it into that
  *  instance's desktop app under its real title (the finalize hook fires the import). */
-export const migrateSession = (sessionId: string, instanceRef: string) =>
+export const migrateSession = (
+  sessionId: string,
+  instanceRef: string,
+  // THE TITLE DECISION IS REQUIRED (server, since 2026-08-29: a migration is a landing, and a chat
+  // must not land without a real name). Exactly one of: `title`, a real new name; or
+  // `confirmTitle`, the chat's CURRENT title restated exactly, accepted only when that title is
+  // itself a real name. This client sent neither for a month, so every migrate from the UI -
+  // single or bulk - was refused with 400 before it did anything (owner's console, 2026-09-03:
+  // sixteen 400s for sixteen chats). Callers pass the row's own title as the confirmation.
+  opts: { title?: string; confirmTitle?: string } = {},
+) =>
   j<{ ok: boolean; itemId?: string; stoppedLive?: boolean; error?: string }>(
     `/api/sessions/${encodeURIComponent(sessionId)}/migrate`,
-    { method: 'POST', body: JSON.stringify({ instance_ref: instanceRef }) },
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        instance_ref: instanceRef,
+        ...(opts.title ? { title: opts.title } : {}),
+        ...(opts.confirmTitle ? { confirm_title: opts.confirmTitle } : {}),
+      }),
+    },
   )

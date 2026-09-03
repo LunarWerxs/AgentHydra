@@ -976,7 +976,8 @@ async function migrateTo(s: SessionSummary, target: MigrateTarget) {
   if (!(await ensureRunning(target))) return
   migrating.value = true
   try {
-    const r = await api.migrateSession(s.session_id, target.ref)
+    // The row's title IS the current title (same listing the server reads), restated as required.
+    const r = await api.migrateSession(s.session_id, target.ref, { confirmTitle: s.title })
     if (r.ok) toast.success(t('sessions.migrateStarted', { name: target.name }))
     else toast.error(r.error ?? t('sessions.migrateFailed'))
   } catch {
@@ -1205,7 +1206,7 @@ async function runBulkMigrate() {
         id,
       })
       try {
-        const r = await api.migrateSession(s.session_id, job.target.ref)
+        const r = await api.migrateSession(s.session_id, job.target.ref, { confirmTitle: s.title })
         if (r.ok) ok++
         else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
       } catch (e) {
@@ -1222,10 +1223,15 @@ async function runBulkMigrate() {
     n: job.sessions.length,
     name: job.target.name,
   })
+  // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
+  // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
   if (failed.length)
-    toast.warning(`${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })}`, {
-      id,
-    })
+    (ok === 0 ? toast.error : toast.warning)(
+      `${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}`,
+      {
+        id,
+      },
+    )
   else toast.success(summary, { id })
   checkedIds.value = new Set()
 }
