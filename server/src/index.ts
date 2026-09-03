@@ -31,10 +31,13 @@ import {
   startAutoUpdate,
   stopAutoUpdate,
 } from './auto-update'
+import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { chatDossier } from './chat-dossier'
+import { pickCarriedSettings } from './chat-settings-carry'
 import { resolveRequiredTitle } from './chat-title'
 import {
+  APP_ROOT,
   appEnv,
   CLIPBOARD_DIR,
   CONFIG_DIR,
@@ -116,7 +119,14 @@ import { createInstance, removeInstance } from './core/lifecycle'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from './core/shared'
 import { createInstanceShortcut } from './core/shortcut'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
-import { coerceQueueItem, db, getSetting, runOutcome, setSetting } from './db'
+import {
+  coerceQueueItem,
+  db,
+  getSetting,
+  rememberMigratedSettings,
+  runOutcome,
+  setSetting,
+} from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import {
   activeCount,
@@ -149,6 +159,7 @@ import {
 } from './instance'
 import {
   findDesktopChat,
+  findDesktopChat as findDesktopChatMeta,
   instanceRefForSession,
   invalidateSessionMetaCache,
   resolveRunAsRef,
@@ -166,7 +177,8 @@ import {
   setMonitorSettings,
   startMonitor,
 } from './monitor'
-import { applyNewChatDefaults } from './new-chat-defaults'
+import { applyNewChatDefaults, newChatUltracodeEnabled, withUltracode } from './new-chat-defaults'
+import { sendOsNotification } from './notify-os'
 import {
   getNotificationSettings,
   type NotificationSettingsPatch,
@@ -192,6 +204,7 @@ import { type ExportFormat, exportSession, scanSessionSecrets } from './session-
 import {
   applyDesktopChatAutomation,
   archiveDesktopChat,
+  coldImportSessionToDesktop,
   desktopHomeFor,
   importSessionToDesktop,
   isSessionSuperseded,
@@ -212,6 +225,7 @@ import {
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
 import { findTranscriptAsync, listTranscriptFiles, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
+import { startTrayHostIfMissing } from './tray-host'
 import {
   type Account,
   AMBIENT_RUN_AS,
@@ -416,7 +430,14 @@ app.get('/api/health', (c) =>
 
 // --- self-update (source: git engine; compiled: GitHub Releases — see server/src/updater.ts) --
 app.get('/api/update', async (c) => {
-  const status = await checkForUpdate()
+  // fresh: this is the route a PERSON hits by clicking "Check for updates", and the honest answer
+  // to that is a live check. checkForUpdate caches for 5 minutes, and the background tick keeps
+  // that cache warm (it runs at boot and on a timer), so without fresh the click that matters most
+  // is exactly the one most likely to be served a stale "you're up to date" - a release published
+  // in the last five minutes stays invisible to the user who just asked to be told about it, with
+  // nothing on screen admitting the answer is cached. The background loop and /api/update/available
+  // still use the cache, so this costs one extra API call per deliberate human action, not a poll.
+  const status = await checkForUpdate({ fresh: true })
   // Feed the passive hint with this REAL check, not just the background tick's. Otherwise opening
   // Settings could tell you an update exists while the dot beside it stayed dark for hours.
   recordUpdateCheck(status)
@@ -2339,6 +2360,21 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       409,
     )
 
+  // What the chat WAS SET TO, read before anything below touches its record: model, effort, the
+  // ultracode toggle, the Chrome permission mode, its permission grants (chat-settings-carry.ts).
+  // The app's import creates the target record with defaults, and the owner was putting these
+  // back by hand on every moved chat (2026-09-03, 13 of 16 reset). The whole source record is kept
+  // too: a CLOSED target receives a copy of it rather than an app-created record.
+  const sourceRendered = findDesktopChatMeta(sessionId)
+  let sourceMeta: Record<string, unknown> = {}
+  try {
+    if (sourceRendered?.path)
+      sourceMeta = JSON.parse(readFileSync(sourceRendered.path, 'utf8')) as Record<string, unknown>
+  } catch {
+    // an unreadable source record means nothing to carry; the move still proceeds
+  }
+  const carried = pickCarriedSettings(sourceMeta)
+
   // A live chat's process must stop before anything appends to its transcript. User-initiated:
   // clicking "migrate" means "move this thread", current turn included.
   const live = liveSessionEntry(sessionId)
@@ -2385,13 +2421,48 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // interactive caller delivers it through the app's own message channel, which BOOTS the
   // dormant chat's engine and runs the turn in the app (measured 2026-08-26). No click is
   // involved, and no headless process is created.
-  const imported = await importSessionToDesktop({
-    sessionId,
-    instanceDir: ref.slice('desktop:'.length),
-    title: migrateTitle.title,
-    force: body.force === true,
-  })
-  if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
+  //
+  // TWO LANDINGS, chosen by whether the target app is running (owner ask, 2026-09-03):
+  //   · running -> the app's own import creates the record; the carried settings are merged onto
+  //     it with the title and the bypass stamp, and remembered so the sweep keeps them there until
+  //     that app's next start makes them permanent.
+  //   · closed  -> the record is written straight into the target's store, a near-copy of the
+  //     source's, and the app finds it there - settings intact - when it starts. No boot, nothing
+  //     to fight. This used to be refused outright ("importing would boot that instance"); the
+  //     refusal still holds for the app import, and this is the path that does not need one.
+  const targetRunning = (await listInstances()).some(
+    (i) => i.isRunning && samePathKey(i.dir, targetDir),
+  )
+  let landing: 'hot' | 'cold'
+  if (targetRunning) {
+    landing = 'hot'
+    const imported = await importSessionToDesktop({
+      sessionId,
+      instanceDir: targetDir,
+      title: migrateTitle.title,
+      force: body.force === true,
+      carried,
+    })
+    if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
+    if (Object.keys(carried).length) rememberMigratedSettings(sessionId, targetDir, carried)
+  } else {
+    landing = 'cold'
+    const cold = await coldImportSessionToDesktop({
+      sessionId,
+      instanceDir: targetDir,
+      title: migrateTitle.title,
+      sourceMeta,
+      force: body.force === true,
+    })
+    if (!cold.ok) {
+      // The source was archived above and the chat has landed nowhere: put it back where it was
+      // rather than leave a thread that shows in no app. The hot path cannot do this (its import
+      // is a spawn whose failure is not always knowable); this one can.
+      await archiveDesktopChat(sessionId, false).catch(() => null)
+      invalidateSessionMetaCache()
+      return c.json({ ok: false, error: cold.reason ?? 'cold import failed' }, 422)
+    }
+  }
   // The move rewrote metadata in TWO stores (archived in the source, created in the target), and
   // the scan behind every session listing caches for 15s. Without this the very next read serves
   // the pre-migrate rows: the caller sees the chat still on the old account, and setPreferred
@@ -2400,9 +2471,18 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   return c.json({
     ok: true,
     surface: 'desktop',
+    landing,
+    carried: Object.keys(carried),
     stoppedLive: !!live,
     ranHeadless: false,
-    prompt,
+    // Owner ask 2026-09-03: a migrated chat should come up armed the way a new one does. The
+    // bypass half is the metadata stamp above (durable now via automation-stamp-sweep.ts); the
+    // ultracode half is a KEYWORD in the first prompt, so it can only ride on a prompt something
+    // actually delivers. This route delivers none itself - the caller does, through the app - so
+    // the prompt it hands back carries the keyword when the new-chat default is on. A person who
+    // opens the chat and types their own first message is typing the keyword themselves, or not;
+    // nothing here can reach into the desktop composer.
+    prompt: newChatUltracodeEnabled() ? withUltracode(prompt) : prompt,
     promptDelivery: 'deliver-natively-via-the-app-message-channel (boots the chat; no click)',
   })
 })
@@ -2939,6 +3019,46 @@ writeInstanceInfo(boundPort, {
   portableMode: portableModeEnabled(),
   hideTrayIcon: hideTrayIconEnabled(),
 })
+// Say ONCE that this build has no tray icon. The single-file .exe carries no misc\ sidecar, so
+// misc\lunarwerx-tray.exe cannot exist and no tray icon can ever appear whatever the in-app
+// setting says (release.yml's asset table states this, but only on the Releases page - the .exe
+// is the bigger, more obvious download and nothing at the moment of RUNNING it admits the
+// difference). The build is also --windows-hide-console, so a console.log here reaches nobody;
+// an OS toast is the only channel that actually lands. Gated three ways so it stays quiet:
+// IS_COMPILED is false in every dev and test run, so this is a true no-op under `bun test`;
+// isRelaunchSuccessor() skips the auto-update hop, which happens every few days; and the settings
+// flag means a person who knows and doesn't care is told exactly once, never again.
+if (IS_COMPILED && !isRelaunchSuccessor() && !existsSync(join(APP_ROOT, 'misc'))) {
+  if (getSetting('no_tray_build_notified') !== '1') {
+    setSetting('no_tray_build_notified', '1')
+    void sendOsNotification({
+      title: 'AgentHydra has no tray icon in this build',
+      body: 'This is the single-file .exe. For the tray icon and the auto-restart supervisor, download the .zip release instead.',
+    })
+  }
+}
+// The other half of the same story: this build HAS the tray toolkit and nothing started it. The
+// release ZIP says "double-click AgentHydra.exe", install.ps1's shortcut used to point at the exe,
+// and neither launches misc\lunarwerx-tray.exe - so the daemon ran, the UI opened, and the tray
+// icon never appeared on a machine that did everything it was told (owner's PC, 2026-09-03). The
+// host is built to be started second: it finds this daemon and attaches (onStrayDaemon: attach).
+// Fire-and-forget after the port is published, because the host's first act is to look for us
+// there; see tray-host.ts for the decision and why a probe failure can only ever mean "skip".
+void startTrayHostIfMissing({
+  appRoot: APP_ROOT,
+  compiled: IS_COMPILED,
+  hideTray: hideTrayIconEnabled,
+})
+  .then((r) => {
+    if (r.start) console.log(`[agenthydra] started the tray host (${r.exe}) - nothing else had`)
+    // Say WHY when a compiled build with the toolkit present did not start it. The first live
+    // relaunch under this code (2026-09-03) skipped correctly - the old host had survived and the
+    // probe found it - and the silence still read as "the tray is gone" to the person checking the
+    // log. A skip that names its reason is a skip nobody has to investigate.
+    else if (r.reason === 'already-running' || r.reason === 'hidden-by-setting')
+      console.log(`[agenthydra] tray host not started: ${r.reason}`)
+  })
+  .catch((err) => console.error('[agenthydra] tray host start failed:', err))
 // Clear any stale full-shutdown sentinel left by a previous (possibly hard-killed) run, so a
 // leftover file can't make the tray quit the instant it next polls. The tray clears it at its own
 // startup too; this covers a daemon started without the tray (dev).
@@ -3086,6 +3206,10 @@ startImportSweep()
 // sweep above, not here), gates each on the weekly cap via checkUsage, and schedules a
 // `claude --resume` for just after the 5-hour reset.
 startMonitor()
+// Keeps every imported chat's bypassPermissions stamp true on disk across the running app's
+// re-saves, so the app's next boot makes it permanent - the durable half of the migrate fix.
+// See automation-stamp-sweep.ts for why the per-import watcher alone could not do this.
+startAutomationStampSweep()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

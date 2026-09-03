@@ -3,4 +3,5 @@ export default {
   liveOutput: 'Live output',
   toolActivity: 'Tool activity',
   noOutputYet: 'No output yet. Events stream here live once the run starts.',
+  reconnecting: 'Reconnecting…',
 }

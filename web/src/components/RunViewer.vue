@@ -11,13 +11,22 @@ const props = defineProps<{ itemId: string }>()
 const events = ref<RunEvent[]>([])
 const showTools = ref(false)
 const scroller = ref<HTMLElement | null>(null)
+// The stream dropped and has not delivered anything since. EventSource reconnects on its own, so
+// this is not an error state to act on - it is the difference between "this run is quiet" and
+// "you are not connected to it", which otherwise look identical: both are a panel that stops
+// moving. Only surfaced for a run still in flight; see the template.
+const connectionLost = ref(false)
 let es: EventSource | null = null
 
 function connect(id: string) {
   disconnect()
   events.value = []
+  connectionLost.value = false
   es = new EventSource(streamUrl(id))
   es.onmessage = (e) => {
+    // Anything arriving proves the stream is live again, keepalive included - so clear the flag
+    // here rather than in onopen, which does not fire on every browser's silent retry.
+    connectionLost.value = false
     try {
       const msg = JSON.parse(e.data)
       if (msg.type === 'event') {
@@ -31,7 +40,11 @@ function connect(id: string) {
     }
   }
   es.onerror = () => {
-    /* browser auto-reconnects; nothing to do */
+    // The browser retries by itself, so there is nothing to DO here - but there was also nothing
+    // to SEE, and a frozen panel reads the same as an idle run. Flag it; the template only shows
+    // the badge while the run is still in flight, because a finished run's stream is closed by the
+    // server and lands here too, where "reconnecting" would be a lie on every completed run.
+    connectionLost.value = true
   }
 }
 function disconnect() {
@@ -58,6 +71,12 @@ onBeforeUnmount(disconnect)
     <div class="flex items-center justify-between border-b border-border px-3 py-2">
       <div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Terminal class="size-3.5" /> {{ $t('run.liveOutput') }}
+        <span
+          v-if="connectionLost && !finished"
+          class="animate-pulse font-normal text-[11px] text-muted-foreground/70"
+        >
+          {{ $t('run.reconnecting') }}
+        </span>
       </div>
       <div class="flex items-center gap-2.5">
         <template v-if="item && finished">

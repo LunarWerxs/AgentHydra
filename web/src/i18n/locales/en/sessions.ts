@@ -138,7 +138,7 @@ export default {
   resumeUnsupported: 'Only Claude sessions can be resumed. The command is on your clipboard.',
   resumeFailed: "Couldn't reopen this session.",
   migrateAccount: 'Migrate to another account',
-  migrateNoTargets: 'No other running instances',
+  migrateNoTargets: 'No other instances',
   migrateStarted: 'Migrated to {name} — the chat is in that desktop app now, ready to carry on.',
   migrateFailed: "Couldn't migrate this chat.",
   // --- readable export ---
@@ -211,4 +211,24 @@ export default {
   noBodyMatches: 'No sessions matched.',
   matchCount: '{n} match(es)',
   truncatedMatches: 'more not shown',
+
+  // Migrate flyout groups (a closed target is NOT started: the chat lands in its store, settings
+  // intact, for the app to find at its next start) and the multi-select bulk actions
+  // (Ctrl/Cmd-click or Shift-click rows, then right-click one of them).
+  migrateRunningGroup: 'Running',
+  migrateClosedGroup: 'Not running - lands in its store, ready when it starts',
+  migrateClosedMove: 'Move to {name}',
+  copyNIds: 'Copy {n} session ids',
+  migrateBulkLabel: 'Migrate {n} chats to another account',
+  migrateConfirmTitle: 'Move {n} chats to {name}?',
+  migrateConfirmBody:
+    'Each chat is stopped if it is running, archived on its current account, and imported into {name}. They move one at a time; this cannot be undone in one step.',
+  migrateConfirmCancel: 'Cancel',
+  migrateConfirmSubmit: 'Move {n} chats',
+  migrateBulkProgress: 'Moving chat {done} of {n}…',
+  migrateBulkDone: 'Moved {ok} of {n} chats to {name}.',
+  migrateBulkSomeFailed: '{failed} could not be moved; details are in the browser console.',
+  // The chat list inside the bulk-move dialog: grouped by project, each row opens that chat.
+  groupCount: '{n} chat(s)',
+  dialogRowHint: 'Grouped by project. Click a chat to open it.',
 }

@@ -196,4 +196,27 @@ export default {
   toastSaveFailed: 'Failed to save changes.',
   toastShortcutCreated: 'Desktop shortcut created.',
   toastShortcutFailed: 'Failed to create desktop shortcut.',
+
+  // "Move all chats" on a row's menu (the kebab, or right-click on the row): every active chat on
+  // this instance, one hop to another. A closed target is opened first, since the import has to
+  // land in a running app.
+  moveChats: 'Move all chats to another account',
+  moveChatsNoTargets: 'No other instances',
+  // Shown under EVERY closed target in the submenu and again in the confirm dialog, so it has to
+  // read at a glance seven rows deep: one clause, same wording as the Sessions flyout's group.
+  moveChatsClosedLands: 'Not running - lands in its store, ready when it starts',
+  moveChatsCounting: 'Counting active chats…',
+  moveChatsNone: 'No active chats to move from {from}.',
+  moveChatsFailed: "Couldn't list the chats on {from}.",
+  moveChatsConfirmTitle: 'Move {n} chats from {from} to {to}?',
+  moveChatsConfirmBody:
+    'Every active chat on {from} (not archived, not marked done) is stopped if it is running, archived there, and imported into {to}. They move one at a time; this cannot be undone in one step.',
+  moveChatsCancel: 'Cancel',
+  moveChatsConfirmSubmit: 'Move {n} chats',
+  moveChatsProgress: 'Moving chat {done} of {n}…',
+  moveChatsDone: 'Moved {ok} of {n} chats to {to}.',
+  moveChatsSomeFailed: '{failed} could not be moved; details are in the browser console.',
+  // The chat list inside the move dialog: grouped by project, each row opens that chat in Sessions.
+  moveChatsGroupCount: '{n} chat(s)',
+  moveChatsRowHint: 'Grouped by project. Click a chat to open it in Sessions.',
 }

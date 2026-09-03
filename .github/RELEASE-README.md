@@ -6,13 +6,14 @@ to the executable.
 
 ## Run it
 
-- **Windows**: double-click `AgentHydra.exe` (or run it from a terminal). For a system-tray icon
-  (Open / Restart / Quit), run `misc\Create-Shortcut.ps1` once, then launch from the `AgentHydra`
-  shortcut it puts beside the executable. The icon is drawn by `misc\lunarwerx-tray.exe`, a small
-  separate launcher, so starting `AgentHydra.exe` directly never produces one no matter what the
-  in-app settings say. If the native launcher misbehaves, `misc\Create-Shortcut.ps1 -Legacy`
-  rebuilds the same shortcut against the older PowerShell tray host.
-  (The single-file `.exe` download has no `misc\` folder, so use the ZIP if you want the tray icon.)
+- **Windows**: double-click `AgentHydra.exe` (or run it from a terminal). The system-tray icon
+  (Open / Restart / Quit) is drawn by `misc\lunarwerx-tray.exe`, a small separate launcher; when
+  that folder is beside the executable the daemon starts the launcher itself if nothing else has,
+  so the icon appears either way. `misc\Create-Shortcut.ps1` makes an `AgentHydra` shortcut beside
+  the executable that launches through the tray host directly, which is the tidier way in. If the
+  native launcher misbehaves, `misc\Create-Shortcut.ps1 -Legacy` rebuilds the same shortcut against
+  the older PowerShell tray host. (The single-file `.exe` download has no `misc\` folder, so it can
+  never show a tray icon and tells you so once; use the ZIP if you want one.)
 - **macOS / Linux**: `./agenthydra`
 
 The daemon serves the UI and API on <http://localhost:7787> (it hops to the next free port if

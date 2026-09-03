@@ -65,6 +65,121 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   docstring for every subcommand, so the menu's promise ("`orch.py <script> --help` for any of
   them") was false for all of them. The manual is read with `ast`, never by running the script, so
   the branch stays incapable of acting.
+## [0.38.3] - 2026-09-03
+
+### Added
+
+- **A moved chat keeps what it was set to.** Model, effort, the ultracode toggle, the Chrome
+  permission mode and the chat's own permission grants travel with it. Measured before the change
+  on 16 moved chats: effort reset on 13, ultracode reset on 13, Chrome mode reset on 14, every one
+  arriving as "manual / extra / ultracode off" for the owner to fix by hand. Not carried, on purpose:
+  the permission mode (every migrated chat is bypass, the standing rule) and the enabled MCP tools
+  (those ids belong to the source account's connectors).
+- **Move chats to a CLOSED account without starting it.** The chat's record is written straight
+  into that instance's store, a near-copy of the original, and the app finds it there, settings
+  intact, when it next starts. This is the landing that needs no restart afterwards, and the flyouts
+  say so: a closed target reads "Move to X" under "Not running - lands in its store, ready when it
+  starts". The old "Start X and move there" step is gone with the refusal it worked around.
+- For a **running** target the app still creates the record, the carried settings are merged onto it
+  with the title and the bypass stamp, and the minute-by-minute sweep puts them back whenever the
+  running app re-saves over them, until that app's next start makes them permanent (the same shape
+  as the bypass stamp). The migrate response says which landing happened (`landing: hot | cold`)
+  and which settings were carried.
+
+## [0.38.2] - 2026-09-03
+
+### Added
+
+- **The move dialogs group chats by project.** Both "Move all chats to another account" (Instances)
+  and the bulk "Migrate N chats" (Sessions) list what is about to move under a header per project
+  folder (the same name the sessions list shows), largest group first, with a count - so eighteen
+  titles read as "eleven Connections, five Agent Hydra, two TavernBag" before the click, not after.
+- **Click a chat in either list to open it.** The Sessions view switches in (from Instances), the
+  search box takes that session's id so the list shows exactly that one row, and it is selected.
+  A chat outside the current time window widens the window to everything and selects it the
+  moment the list carries it.
+
+### Fixed
+
+- **Migrating a chat from the web UI works again.** Since the naming law landed on 2026-08-29 the
+  migrate route has required a title decision - a real new `title`, or `confirm_title` restating
+  the chat's current title exactly - and the web client sent neither, so every migrate started
+  from the UI, one chat or sixteen, was refused with 400 before it touched anything. The UI now
+  restates each row's own title. A chat whose current title is generic ("General coding session")
+  is still refused, by design: the toast names the reason, and giving that chat a real name in the
+  app is the way through.
+- **A failed move says why.** The bulk toasts carried "details are in the browser console"; they
+  now carry the server's first reason too, and read as an error rather than a warning when nothing
+  moved at all.
+
+## [0.38.1] - 2026-09-03
+
+### Fixed
+
+- **Migrate destinations carry the name the Instances table shows.** The Move-all submenu, the
+  migrate flyouts and their confirmation dialogs offered folder names (`5claude`, `arama`) where the
+  table shows apebrain and Martin; they used `label ?? name` and skipped the account-name step the
+  table's own helper takes. Found by exercising 0.38.0 in the browser.
+- **The daemon says why it did not start the tray host.** A skip for "already running" or "hidden
+  by setting" is logged by reason now. On the first live relaunch under 0.38.0 the skip was correct
+  and its silence still read as a missing tray to the person checking the log.
+
+## [0.38.0] - 2026-09-03
+
+### Added
+
+- **Move chats in bulk.** In Sessions, Ctrl/Cmd-click or Shift-click rows to pick several (this
+  turns select mode on by itself), then right-click one of them: the menu leads with *Copy N
+  session ids* and *Migrate N chats to another account*, behind a confirmation that names the count
+  and the destination and lists the chats. In Instances, every row's menu has *Move all chats to
+  another account*: every active chat on that account (not archived, not marked done), one hop to
+  another, again behind a confirmation. Both move chats one at a time on purpose, because each
+  migrate may stop a live run and the desktop app takes imports serially anyway; a summary toast
+  says how many landed, and anything that did not is named in the browser console.
+- **Migrate from the right-click menu.** A session row's context menu now carries the same *Migrate
+  to another account* flyout the open chat's ⋯ menu had, so moving one chat no longer means opening
+  its transcript first.
+- **Right-click an instance row** to get its ⋮ menu, same items, same position.
+- **Closed accounts appear in the migrate flyout.** Targets are in two groups, *Running* and *Not
+  running*. A running one takes the chat as it stands; a closed one reads *Start X and move there*:
+  the click opens that instance the ordinary way, waits for it to come up, then migrates. The server
+  still refuses to import into a closed app on its own (the import spawn would boot it, and nothing
+  opens an account without being asked); the click is the asking.
+- **The daemon starts the tray host.** A release ZIP has the whole tray toolkit in `misc\`, and
+  nothing started it unless you knew to run `misc\Create-Shortcut.ps1` first: double-clicking
+  `AgentHydra.exe` ran the daemon, opened the UI, and never showed a tray icon, on a machine that
+  did exactly what the release notes said. Now a compiled daemon that finds `misc\lunarwerx-tray.exe`
+  beside itself, with the tray not hidden by setting and no host already running, starts the host,
+  which attaches to the daemon (its shipped `onStrayDaemon: attach` behaviour) and shows the icon.
+  The decision is a pure function with its own tests; a source checkout never gets a tray it did not
+  ask for. `install.ps1`'s Start Menu shortcut now launches through the tray host too, using the kit's
+  own shortcut recipe instead of a second copy that had drifted to point at the bare exe.
+
+### Fixed
+
+- **Migrated chats stay on `bypassPermissions`.** The stamp was always written on import, and the
+  running app always re-saved `acceptEdits` over it on the chat's first wake; a bounded watcher
+  fought that for ten minutes and eight restores, and a chat opened eleven minutes after migrating
+  reverted for life. `reassertAutomationStamps`, which re-stamps every import-shaped chat in a
+  profile and was called from nowhere but its own test, now runs every minute over every RUNNING
+  instance for as long as the daemon does. Only imported chats (`local_<cliSessionId>.json`) are
+  touched, never one a person created in the app. The migrate route also hands back its notice
+  prompt with the `ultracode` keyword when the new-chat default is on; a first message you type
+  yourself in the desktop app is yours to arm, nothing here can reach into that composer.
+- **A manual *Check for updates* always asks GitHub.** The result was cached for five minutes and
+  the background tick kept that cache warm, so the one click that exists to ask "right now" was the
+  click most likely to be told a stale "up to date". HTTP 429 (GitHub's secondary rate limit) now
+  reads as the rate limit it is rather than "couldn't reach the Releases API".
+- **The single-file `.exe` says once that it has no tray icon**, by OS toast (the build hides its
+  console, so nothing else lands). The flag is never synced: it is a fact about that copy's packaging.
+- **Quick Instances' success notice can be dismissed**, like the error banner beside it always could.
+- **A run's live output says *Reconnecting…*** when its stream drops, instead of freezing in a way
+  indistinguishable from a quiet run. Not shown for a finished run, whose stream the server closes.
+
+### Changed
+
+- The root-level `AgentHydra.exe` and `FINDINGS-*.md` write-ups are gitignored: on a public repo an
+  untracked 100 MB binary is one careless add away from being published for good.
 
 ## [0.37.0] - 2026-09-02
 

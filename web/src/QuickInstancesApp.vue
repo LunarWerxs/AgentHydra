@@ -425,9 +425,12 @@ onBeforeUnmount(() => {
       </div>
       <div
         v-else-if="notice"
-        class="rounded-lg border border-primary/25 bg-primary/8 px-3 py-2 text-sm"
+        class="flex items-start justify-between gap-3 rounded-lg border border-primary/25 bg-primary/8 px-3 py-2 text-sm"
       >
-        {{ notice }}
+        <span>{{ notice }}</span>
+        <button class="shrink-0 text-xs underline underline-offset-2" @click="notice = null">
+          Dismiss
+        </button>
       </div>
 
       <div v-if="loading" class="space-y-2" aria-label="Loading instances">
