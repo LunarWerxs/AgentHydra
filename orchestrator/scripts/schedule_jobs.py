@@ -505,6 +505,102 @@ def orphan_wrappers() -> list[Path]:
                   if p.suffix.lower() in (".cmd", ".vbs") and p.stem not in known)
 
 
+def _select_jobs(argv: list[str]) -> tuple[dict[str, dict], int | None]:
+    """Resolve --only into the job subset main() should act on.
+
+    Returns (jobs, None) on success, or ({}, exit_code) when argv is bad enough that main()
+    should stop and return exit_code without doing anything else.
+    """
+    if "--only" not in argv:
+        return dict(JOBS), None
+    i = argv.index("--only")
+    if i + 1 >= len(argv):
+        print(__doc__.strip(), file=sys.stderr)
+        return {}, 3
+    only = argv[i + 1]
+    if only not in JOBS:
+        print(f"unknown job {only!r} - known: {', '.join(JOBS)}", file=sys.stderr)
+        return {}, 3
+    return {only: JOBS[only]}, None
+
+
+def _cmd_status(jobs: dict[str, dict], as_json: bool) -> int:
+    live = registered()
+    rows = []
+    for job, spec in jobs.items():
+        for name in task_names(job, spec):
+            r = live.get(name)
+            rows.append({"task": name, "job": job, "registered": bool(r), **(r or {})})
+    if as_json:
+        print(json.dumps({"tasks": rows, "logs": str(_state() / "logs")}, indent=2))
+        return 0
+    for r in rows:
+        if r["registered"]:
+            paused = "  ⏸ PAUSED (resume with --resume)" if str(r.get("state", "")).lower() == "disabled" else ""
+            print(f"  [registered] {r['task']}{paused}")
+            print(f"      last run {r.get('lastRun')} (result {r.get('lastResult')}) · next {r.get('nextRun')}")
+        else:
+            print(f"  [ missing  ] {r['task']}")
+    for orphan in orphan_wrappers():
+        print(f"  [ ORPHAN   ] {orphan.name} - a wrapper for a lane that no longer exists")
+    print(f"\nlogs: {_state() / 'logs'}")
+    return 0
+
+
+def _cmd_pause_resume(jobs: dict[str, dict], argv: list[str]) -> int:
+    enable = "--resume" in argv
+    results = set_enabled(jobs, enable)
+    word = "resumed" if enable else "paused "
+    for r in results:
+        # An ungated lane (dashboard, doctrine, chat-journal) is never switched off by
+        # --pause/--resume: say so, instead of listing it as "paused" beside the ones that
+        # were (2026-09-01: the report read as though the bypass check had been switched
+        # off). Matched on "always on", the stable half of the detail - keying this on the
+        # word "untouched" broke the moment that string changed to "kept enabled", and the
+        # readout went straight back to claiming these lanes were paused when they were not.
+        if "always on" in str(r.get("detail") or ""):
+            print(f"  always on {r['task']} ({r['detail']})")
+            continue
+        print(f"  {word if r['ok'] else 'FAILED '} {r['task']}"
+              + ("" if r["ok"] else f" - {r['detail']}"))
+    if not enable and all(r["ok"] for r in results):
+        print("\nThe eyes are OFF: nothing fires until --resume (or the tray's Resume).")
+    return 0 if all(r["ok"] for r in results) else 2
+
+
+def _cmd_remove(jobs: dict[str, dict]) -> int:
+    results = remove_jobs(jobs)
+    for r in results:
+        print(f"  {'removed' if r['ok'] else 'FAILED '} {r['task']} - {r['detail']}")
+    return 0 if all(r["ok"] for r in results) else 2
+
+
+def _cmd_apply(jobs: dict[str, dict]) -> int:
+    results = apply_jobs(jobs)
+    for r in results:
+        print(f"  {'registered' if r['ok'] else 'FAILED    '} {r['task']}")
+        if not r["ok"]:
+            print(f"      {r['detail']}")
+    print(f"\nwrappers: {_state() / 'jobs'}   logs: {_state() / 'logs'}")
+    print("Check them with --status; remove them all with --remove.")
+    return 0 if all(r["ok"] for r in results) else 2
+
+
+def _cmd_dry_run(jobs: dict[str, dict]) -> int:
+    """Say exactly what would be created, and show the wrapper body. No flag selects this -
+    it is what runs when none of --status/--pause/--resume/--remove/--apply were given."""
+    print("DRY RUN - nothing registered. Re-run with --apply.\n")
+    for job, spec in jobs.items():
+        for name, sched in zip(task_names(job, spec), [spec["schedule"], spec.get("extra_schedule")]):
+            if sched is None:
+                continue
+            print(f"  {name}\n      {spec['what']}\n      schedule: {' '.join(sched)}")
+    print(f"\n  wrappers would be written to {_state() / 'jobs'}")
+    print(f"  every run appends to {_state() / 'logs'}")
+    print("  jobs that need the daemon SKIP themselves (exit 0) when it is not answering.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     # Import time covers this file run as its own process; main() covers a stream handed to it
     # AFTER import - clilib.capture(), orch.py's dispatch, the in-process test rails. Both, for
@@ -519,87 +615,19 @@ def main(argv: list[str]) -> int:
               file=sys.stderr)
         return 1
     as_json = "--json" in argv
-    only = None
-    if "--only" in argv:
-        i = argv.index("--only")
-        if i + 1 >= len(argv):
-            print(__doc__.strip(), file=sys.stderr)
-            return 3
-        only = argv[i + 1]
-        if only not in JOBS:
-            print(f"unknown job {only!r} - known: {', '.join(JOBS)}", file=sys.stderr)
-            return 3
-    jobs = {only: JOBS[only]} if only else dict(JOBS)
+    jobs, error_code = _select_jobs(argv)
+    if error_code is not None:
+        return error_code
 
     if "--status" in argv:
-        live = registered()
-        rows = []
-        for job, spec in jobs.items():
-            for name in task_names(job, spec):
-                r = live.get(name)
-                rows.append({"task": name, "job": job, "registered": bool(r), **(r or {})})
-        if as_json:
-            print(json.dumps({"tasks": rows, "logs": str(_state() / "logs")}, indent=2))
-        else:
-            for r in rows:
-                if r["registered"]:
-                    paused = "  ⏸ PAUSED (resume with --resume)" if str(r.get("state", "")).lower() == "disabled" else ""
-                    print(f"  [registered] {r['task']}{paused}")
-                    print(f"      last run {r.get('lastRun')} (result {r.get('lastResult')}) · next {r.get('nextRun')}")
-                else:
-                    print(f"  [ missing  ] {r['task']}")
-            for orphan in orphan_wrappers():
-                print(f"  [ ORPHAN   ] {orphan.name} - a wrapper for a lane that no longer exists")
-            print(f"\nlogs: {_state() / 'logs'}")
-        return 0
-
+        return _cmd_status(jobs, as_json)
     if "--pause" in argv or "--resume" in argv:
-        enable = "--resume" in argv
-        results = set_enabled(jobs, enable)
-        word = "resumed" if enable else "paused "
-        for r in results:
-            # An ungated lane (dashboard, doctrine, chat-journal) is never switched off by
-            # --pause/--resume: say so, instead of listing it as "paused" beside the ones that
-            # were (2026-09-01: the report read as though the bypass check had been switched
-            # off). Matched on "always on", the stable half of the detail - keying this on the
-            # word "untouched" broke the moment that string changed to "kept enabled", and the
-            # readout went straight back to claiming these lanes were paused when they were not.
-            if "always on" in str(r.get("detail") or ""):
-                print(f"  always on {r['task']} ({r['detail']})")
-                continue
-            print(f"  {word if r['ok'] else 'FAILED '} {r['task']}"
-                  + ("" if r["ok"] else f" - {r['detail']}"))
-        if not enable and all(r["ok"] for r in results):
-            print("\nThe eyes are OFF: nothing fires until --resume (or the tray's Resume).")
-        return 0 if all(r["ok"] for r in results) else 2
-
+        return _cmd_pause_resume(jobs, argv)
     if "--remove" in argv:
-        results = remove_jobs(jobs)
-        for r in results:
-            print(f"  {'removed' if r['ok'] else 'FAILED '} {r['task']} - {r['detail']}")
-        return 0 if all(r["ok"] for r in results) else 2
-
+        return _cmd_remove(jobs)
     if "--apply" in argv:
-        results = apply_jobs(jobs)
-        for r in results:
-            print(f"  {'registered' if r['ok'] else 'FAILED    '} {r['task']}")
-            if not r["ok"]:
-                print(f"      {r['detail']}")
-        print(f"\nwrappers: {_state() / 'jobs'}   logs: {_state() / 'logs'}")
-        print("Check them with --status; remove them all with --remove.")
-        return 0 if all(r["ok"] for r in results) else 2
-
-    # Dry run: say exactly what would be created, and show the wrapper body.
-    print("DRY RUN - nothing registered. Re-run with --apply.\n")
-    for job, spec in jobs.items():
-        for name, sched in zip(task_names(job, spec), [spec["schedule"], spec.get("extra_schedule")]):
-            if sched is None:
-                continue
-            print(f"  {name}\n      {spec['what']}\n      schedule: {' '.join(sched)}")
-    print(f"\n  wrappers would be written to {_state() / 'jobs'}")
-    print(f"  every run appends to {_state() / 'logs'}")
-    print("  jobs that need the daemon SKIP themselves (exit 0) when it is not answering.")
-    return 0
+        return _cmd_apply(jobs)
+    return _cmd_dry_run(jobs)
 
 
 if __name__ == "__main__":
