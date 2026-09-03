@@ -1,0 +1,19 @@
+/* Orchestrator brand accent: control-room amber (~60°). Overrides the neutral
+   --primary/--ring from base.css (light + dark). Hue sits clearly apart from RepoYeti
+   green (~150), DevWebUI indigo (277), RēDesign violet (303) and AgentHydra magenta (320),
+   so the fleet's remote dashboard is never mistaken for the daemon it watches.
+   Part of the shared kit; do not edit the in-app copy. */
+:root {
+  --primary: oklch(0.6 0.16 60);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.6 0.16 60);
+  --sidebar-primary: oklch(0.6 0.16 60);
+  --sidebar-ring: oklch(0.6 0.16 60);
+}
+.dark {
+  --primary: oklch(0.8 0.15 72);
+  --primary-foreground: oklch(0.2 0.05 60);
+  --ring: oklch(0.8 0.15 72);
+  --sidebar-primary: oklch(0.8 0.15 72);
+  --sidebar-ring: oklch(0.8 0.15 72);
+}

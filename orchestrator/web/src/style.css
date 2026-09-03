@@ -1,0 +1,43 @@
+/* App entry stylesheet — the two kit imports plus genuinely app-specific rules only.
+   Tokens, dark mode and shared utilities all come from the kit (lunarwerx-ui). */
+@import "./styles/kit-base.css";
+@import "./styles/kit-accent.css";
+
+/* A terminal command the page shows but never runs. The dashboard is observe-only by
+   construction; every "do it" cell is something to copy into a shell, so it looks like one. */
+.cmd {
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+/* The logic-tree SVGs are drawn with the OLD dashboard's variable names so the diagram source
+   stays byte-identical to scripts/dashboard.html; map them onto the kit tokens here. */
+.logic-tree {
+  --ink: var(--foreground);
+  --ink-2: var(--muted-foreground);
+  --ink-muted: var(--muted-foreground);
+  --surface: var(--card);
+  --baseline: var(--border);
+  --good: var(--success);
+  --warning: var(--warning);
+  --serious: oklch(0.7 0.17 45);
+  --critical: var(--destructive);
+  --accent: var(--primary);
+}
+.logic-tree svg { min-width: 1080px; width: 100%; height: auto; display: block; }
+.logic-tree svg text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink); }
+.logic-tree svg text.t2 { fill: var(--ink-2); font-size: 11px; }
+.logic-tree svg text.cap { fill: var(--ink-muted); font-size: 11px; }
+.logic-tree svg text.h { font-weight: 650; }
+.logic-tree svg .box { fill: var(--surface); stroke: var(--baseline); rx: 8; }
+.logic-tree svg .edge { stroke: var(--baseline); stroke-width: 1.5; fill: none; }
+.logic-tree svg .lbl { fill: var(--ink-muted); font-size: 11px; font-style: italic; }
+.logic-tree svg .accent-b { stroke: var(--accent); stroke-width: 2; }
+.logic-tree svg .good-b { stroke: var(--good); stroke-width: 2; }
+.logic-tree svg .warn-b { stroke: var(--warning); stroke-width: 2; }
+.logic-tree svg .serious-b { stroke: var(--serious); stroke-width: 2; }
+.logic-tree svg .crit-b { stroke: var(--critical); stroke-width: 2; }

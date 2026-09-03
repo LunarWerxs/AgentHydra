@@ -29,7 +29,8 @@
       "!**/lib/tooltip-config.ts",
       "!**/lib/content-inset.ts",
       "!**/lib/grip-drag.ts",
-      "!**/tests/server-lib"
+      "!**/tests/server-lib",
+      "!orchestrator/state"
     ]
   },
   "css": { "formatter": { "enabled": false }, "linter": { "enabled": false } },

@@ -224,6 +224,12 @@ Agents can also work out **which** of your accounts they are running as (`whoami
 account's remaining quota before fanning out work, which is the difference between pacing a big job
 and hitting a wall halfway through it: [docs/AI_USAGE_SELFCHECK.md](docs/AI_USAGE_SELFCHECK.md).
 
+The **orchestrator** - the part that decides what *should* happen to a chat (the dry loop, the
+sweep, moving chats between accounts, archiving, naming, the tray-icon switch) - lives in this repo
+under [`orchestrator/`](orchestrator/README.md) and is driven through the same MCP server
+(`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch`), so an agent
+never has to be told there is a second program. Nothing there acts unless the tray icon is up.
+
 ## More
 
 [Reference](docs/REFERENCE.md) covers configuration, the MCP tools, auto-update, the stack, the repo

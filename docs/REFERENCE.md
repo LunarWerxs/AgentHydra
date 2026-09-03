@@ -62,7 +62,9 @@ foreign readers), project discovery (`list_projects`), chats a usage limit cut o
 update / run / cancel / events), accounts (secrets always masked), the scheduler (get / set),
 Claude Desktop instances (list / launch / quit), Claude CLI instances, and Codex CLI/Desktop
 instances (list / create / CLI launch / login helper / desktop open / focus / quit), usage-check
-(`check_usage`, `check_my_usage`), and the auto-resume monitor (get / set), plus an update check.
+(`check_usage`, `check_my_usage`), the auto-resume monitor (get / set), an update check, and the
+orchestrator (`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch` -
+see [The orchestrator](#the-orchestrator) below).
 Mutating tools say `MUTATES:` in their description; there is deliberately no shutdown tool.
 
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
@@ -360,13 +362,48 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 ## Layout
 
 ```
-server/    Bun + Hono daemon: sqlite, Claude/Codex/OpenCode session readers, transcript tail,
-           dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances)
-web/       Vue 3 SPA (Sessions / Queue / Instances views)
-tests/     launcher.test.ts (the tray guard, Windows-gated) + server/instance unit tests
-misc/      the Windows launcher toolkit (tray .ps1 / .vbs / .ico / Create-Shortcut / Make-Icon / Rebuild.bat)
-scripts/   repo tooling (screenshots/: regenerate the README images)
+server/        Bun + Hono daemon: sqlite, Claude/Codex/OpenCode session readers, transcript tail,
+               dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances)
+web/           Vue 3 SPA (Sessions / Queue / Instances views)
+orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should happen to a chat
+               (orch.py + scripts/), its own tests (scripts/tests/), and its remote front-end
+               (orchestrator/server + orchestrator/web). Driven by the daemon through
+               server/src/orchestrator.ts; its own manual is orchestrator/README.md
+tests/         launcher.test.ts (the tray guard, Windows-gated) + server/instance unit tests
+misc/          the Windows launcher toolkit (tray .ps1 / .vbs / .ico / Create-Shortcut / Make-Icon / Rebuild.bat)
+scripts/       repo tooling (screenshots/: regenerate the README images)
 ```
+
+## The orchestrator
+
+Since 2026-09-03 the orchestrator is part of this repo again - as a **sibling folder, not a
+rewrite**. `orchestrator/` is the v3 Python toolbox (stdlib only; one script per act, each with
+its own rails and tests) that talks to this daemon over HTTP and decides what *should* happen
+to a chat: the dry loop, the sweep's lanes, moving chats between accounts, archiving, naming,
+the tray-icon switch. It was split out on 2026-08-31 so the daemon could never again act on a
+chat by itself; folding it back in as a folder keeps that boundary (the scripts still only ever
+talk to the daemon's API) while giving agents ONE surface, because the owner was tired of
+explaining "you have to use both".
+
+The daemon exposes it (`server/src/orchestrator.ts`):
+
+| surface | what |
+| --- | --- |
+| `GET /api/orchestrator` | the toolbox's own menu, where it lives, whether python answers |
+| `POST /api/orchestrator/run` `{script, args, timeoutMs}` | run one script by its menu name - exactly `python orch.py <script> <args>` in `orchestrator/`; stdout, stderr, exit code and what the driver's codes mean come back |
+| MCP `orchestrator_menu` | the GET above |
+| MCP `orchestrator_run` | the POST above |
+| MCP `orchestrator_loop` | `loop` (dry by default; `live: true` acts) |
+| MCP `orchestrator_switch` | the tray icon: `armed` (read) · `arm` · `arm_now` · `resume` · `pause` · `disarm` |
+
+The script name is validated against the menu grammar and the arguments travel as an argv
+array - no shell in the path. Every rule stays in the scripts: **nothing acts without the tray
+icon** (`orchestrator_switch {action:"armed"}` first; a disarmed fleet looks exactly like a
+quiet one), a live chat is never moved or archived, every attempt is counted, and `--force` is
+a person's word for one act. `AGENTHYDRA_ORCHESTRATOR_DIR` points the daemon at a toolbox
+somewhere else; `AGENTHYDRA_PYTHON` names the interpreter (default `python` on Windows,
+`python3` elsewhere). Its own tests: `bun run test:orchestrator` (~650 unit tests, stub daemon,
+no fleet needed).
 
 ## Screenshots
 

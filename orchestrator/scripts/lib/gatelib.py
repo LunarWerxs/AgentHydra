@@ -1,0 +1,698 @@
+"""gatelib - THE GATE: before anything acts on a chat, this decides what state it is in.
+
+A faithful Python port of v2's chat-gate.ts (kept under src/ as reference), minus the parts
+that lived inside the daemon: liveness comes from the daemon's dossier instead of the local
+registry, and the orphaned-registry footnote is dropped (it only ever decorated the cause
+line - the verdict never depended on it).
+
+The states, verbatim in spirit from the owner's rule set:
+
+  running  - a process is writing this chat. Leave it alone. Extra evidence may say it looks
+             IDLE (finished its turn, quiet past the window - waiting, not working) or STUCK
+             (newest record is an unanswered shell call, quiet 30min+) - but the state stays
+             'running' because nothing may archive a chat that still has a writer.
+  crashed  - it was working and died without finishing (mid-turn death, usage wall, overload,
+             refusal, API error). Resume candidates.
+  finished - it ended on a completed turn. Lanes:
+             archive-candidate  - recap says done, nothing asked, NOT offering to carry on.
+             needs-input-review - waiting on an answer (or offering to carry on - the rule v2
+                                  lacked, and the reason it archived work waiting on a person).
+             human              - a person pressed stop; deliberately theirs to pick back up.
+
+Everything here is deterministic code over transcript bytes plus the dossier. No AI, no
+guessing: the one judgment call this design allows (can a needs-input answer be determined
+autonomously?) happens OUTSIDE the gate, on the evidence the gate packages.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+from pathlib import Path
+
+# How long a live chat must be quiet AFTER a completed turn before it counts as idle rather
+# than thinking. Three minutes: long enough that a model pausing between tool calls is never
+# mistaken for an idle chat, short enough that the fleet is worked while the owner watches.
+IDLE_AFTER_SECS = 180
+
+# Below this a quiet unanswered shell call is just a command running. Thirty minutes, and the
+# threshold is the ENTIRE discriminator between busy and stuck: measured over 1,504 real
+# transcripts the shape alone matched 11, one of which was the healthy session doing the
+# measuring. (Banked in shared memory: a-stall-detector-is-only-as-good-as-its-quiet-threshold.)
+STALL_QUIET_SECS = 30 * 60
+
+EVIDENCE_CAP = 2000
+RECAP_HEADER = re.compile(r"##\s*Am I 100% done\?", re.IGNORECASE)
+# THE FOURTH SIGNAL (owner, 2026-09-01: "I strongly feel chats are being archived when they are
+# not completely done - I need some sort of guard in there"). A recap that still RECOMMENDS
+# work is not a finished chat: by the owner's own standing doctrine, acting on recap
+# recommendations is "one of my most productive ways to fix things I hadn't thought of fixing",
+# so those chats belong in the WAKE lane, never the archive one.
+RECOMMEND_HEADER = re.compile(r"##\s*Do I recommend anything else\??", re.IGNORECASE)
+# Words a recap uses to say the section is empty. Anything else is an open item.
+NOTHING_LINE = re.compile(r"^(nothing|none|no\b|nope|n/?a|not really|nothing else)\b", re.IGNORECASE)
+INTERRUPTED = re.compile(r"^\[Request interrupted by user[^\]]*\]$")
+
+# ⛔ NARROW TO SHELL TOOLS ON PURPOSE: file edits are auto-approved under acceptEdits, so
+# including them would flag every slow Write, and a detector that cries wolf gets ignored.
+SHELL_TOOLS = re.compile(r"^(bash|powershell|shell|run|terminal|npx|exec)", re.IGNORECASE)
+
+# An explicit OFFER TO CONTINUE, awaiting a word that never came. Every pattern names a word
+# the chat is WAITING FOR. The asymmetry is intentional - a false positive costs one judgment
+# call in the needs-input lane; a false negative archives live work, which is the failure this
+# exists to stop. Widened 2026-08-31 after review: the original v2 list missed the commonest
+# sign-off of all, "Let me know if you'd like me to continue." (period, no question mark).
+OFFER_TO_CONTINUE = re.compile(
+    r"\b(say the word|say go|give (?:me )?the word|given the word|on your word"
+    r"|ready when you are|let me know (?:and|if|when|whether) "
+    r"|want me to|shall I|should I go ahead"
+    r"|if you(?:'d| would)? (?:like|want) me to"
+    r"|just say (?:so|go|the word|yes)|awaiting your|on standby"
+    r"|when you(?:'re| are) ready|happy to (?:proceed|continue|keep going|do that|start))\b",
+    re.IGNORECASE,
+)
+
+# Limit vocabulary, ported from the daemon's rate-limit-signal.ts - no new taxonomy, and no
+# added word boundaries either: the daemon matches '429'/'529' as bare substrings, and a port
+# that quietly requires cleaner surroundings ('HTTP429' would slip past \b429\b) would classify
+# the same crash differently than the daemon does.
+# ⚠ REVIEWED AND KEPT LOOSE (adversarial review, 2026-08-31): yes, an api-error record whose
+# text merely CONTAINS '429' classifies as quota - but classify_limit only ever runs on
+# records already flagged api_error, so the exposure is real error text, and tightening it
+# (e.g. gating on the synthetic isApiErrorMessage tag) would regress the intentional path
+# that catches quota crashes surfacing only as a generic result/is_error record. The
+# misclassification costs one wrong resume-priority label; the regression would MISS real
+# usage walls. Do not "fix" this without re-reading that verdict.
+_QUOTA = re.compile(
+    r"session limit|weekly limit|usage limit|quota|rate[- ]?limit(?:ed|ing)?|too many requests|429",
+    re.IGNORECASE,
+)
+_TRANSIENT = re.compile(
+    r"529|overloaded|temporarily unavailable|try again (?:later|in a moment)", re.IGNORECASE
+)
+
+
+def recap_view(text: str) -> str:
+    """The recap-bearing view of a message: fenced code blocks, INLINE `code` spans and
+    quoted (>) lines removed, so a recap merely QUOTED, mentioned or shown as an example
+    cannot fake a live self-report. Inline spans joined the list on the adversarial review
+    (2026-08-31): a chat DISCUSSING the recap format writes the header in backticks, and
+    parsing a done-claim out of that discussion mislabeled the chat. Deliberately NOT
+    anchored to line starts: 'Done. ## Am I 100% done?' inline in real prose is a live
+    recap and must keep parsing (pinned by test_trailing_question_is_needs_input)."""
+    no_fences = re.sub(r"```[\s\S]*?```", "", text)
+    no_inline = re.sub(r"`[^`\n]*`", "", no_fences)
+    return "\n".join(l for l in no_inline.split("\n") if not re.match(r"^\s*>", l))
+
+
+def done_claim_section(text: str) -> str:
+    """The first substantive line under '## Am I 100% done?' (bullet marker stripped), or ''
+    when the recap carries no such header. THE one definition of where the done-claim lives:
+    parse_done_claim reads it and harvest_todos quotes it, and a second copy of this split
+    lived there until the two could drift (review 2026-09-01)."""
+    m = RECAP_HEADER.search(text)
+    if not m:
+        return ""
+    section = re.split(r"\n##\s", text[m.end():])[0]
+    return next(
+        (l for l in (re.sub(r"^[-*\s]+", "", x).strip() for x in section.split("\n")) if l), ""
+    )
+
+
+def parse_done_claim(text: str) -> str:
+    """The recap's own claim under '## Am I 100% done?': 'yes' | 'no' | 'unknown'."""
+    first_line = done_claim_section(text)
+    if not first_line:
+        return "unknown"
+    if re.match(r"^yes\b", first_line, re.IGNORECASE):
+        return "yes"
+    if re.match(r"^(no\b|not\b|blocked\b|done except)", first_line, re.IGNORECASE):
+        return "no"
+    # "Yes - except X" style: a yes with a tail still counts; anything else is unknown.
+    if re.search(r"\byes\b", first_line, re.IGNORECASE) and not re.search(
+        r"\bno\b", first_line, re.IGNORECASE
+    ):
+        return "yes"
+    return "unknown"
+
+
+def open_recommendations(text: str) -> list[str]:
+    """The still-open items under '## Do I recommend anything else?' - empty when the chat
+    genuinely has nothing left to suggest.
+
+    A chat that ends by recommending three more things has not finished; it has stopped. That
+    distinction is the whole of the owner's 2026-09-01 complaint that chats were being archived
+    early, and it is mechanical, so it belongs in the gate rather than in anybody's judgement.
+    """
+    m = RECOMMEND_HEADER.search(text)
+    if not m:
+        return []
+    section = re.split(r"\n##\s", text[m.end():])[0]
+    items: list[str] = []
+    for raw in section.split("\n"):
+        line = re.sub(r"^[-*\d.)\s]+", "", raw).strip()
+        if not line or NOTHING_LINE.match(line):
+            continue
+        if re.match(r"^(signed|—\s*signed|-\s*signed)\b", line, re.IGNORECASE):
+            continue  # the employee footer, not a recommendation
+        items.append(line[:300])
+    return items
+
+
+def offers_to_continue(text: str) -> bool:
+    return bool(OFFER_TO_CONTINUE.search(text))
+
+
+def classify_limit(text: str) -> str | None:
+    """'quota' | 'transient' | None - quota checked first, same order as the daemon."""
+    if _QUOTA.search(text):
+        return "quota"
+    if _TRANSIENT.search(text):
+        return "transient"
+    return None
+
+
+def ending_event_text(ev: dict) -> str:
+    """What an event 'said': message.content as string, or its text blocks joined, or a
+    string result field. Ported from the daemon's session-ending.ts."""
+    msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
+    content = msg.get("content") if msg else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            str(b.get("text", ""))
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    if isinstance(ev.get("result"), str):
+        return ev["result"]
+    return ""
+
+
+def is_api_error_event(ev: dict) -> bool:
+    """Ported from rate-limit-signal.ts."""
+    if ev.get("isApiErrorMessage") is True:
+        return True
+    msg = ev.get("message")
+    return isinstance(msg, dict) and msg.get("model") == "<synthetic>"
+
+
+def _epoch_s(value) -> float | None:
+    """A time as epoch seconds from the shapes the daemon uses: ISO-8601 (the dossier's live
+    block), epoch milliseconds (the live registry's startedAt), or seconds. None when absent."""
+    if value in (None, "", 0):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) / 1000.0 if value > 1e11 else float(value)
+    try:
+        from datetime import datetime, timezone
+
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return None
+
+
+def _predates(record: dict, engine_started_s: float | None) -> bool:
+    """Was this record written BEFORE the live engine started? True only with both times
+    known and a full second of slack - unknown never reads as orphaned."""
+    if engine_started_s is None:
+        return False
+    rec_s = _epoch_s(record.get("ts"))
+    return rec_s is not None and rec_s < engine_started_s - 1.0
+
+
+def parse_tail_records(text: str, whole_file: bool) -> list[dict]:
+    """JSONL tail -> the records that can carry a verdict. The first line of a partial read
+    is dropped (it is almost always truncated mid-record)."""
+    lines = text.split("\n")
+    if not whole_file and lines:
+        lines = lines[1:]
+    out: list[dict] = []
+    for line in lines:
+        t = line.strip()
+        if not t:
+            continue
+        try:
+            ev = json.loads(t)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict) or ev.get("type") not in ("user", "assistant", "result"):
+            continue
+        # Sidechain records (compaction side-branches) are not the conversation's own tail.
+        if ev.get("isSidechain") is True:
+            continue
+        txt = ending_event_text(ev)
+        msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
+        content = msg.get("content") if msg else None
+        blocks = content if isinstance(content, list) else []
+        tool_uses = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
+        out.append(
+            {
+                "type": ev["type"],
+                "ts": ev.get("timestamp"),  # when the record was written (ISO), if stamped
+                "interrupted": ev["type"] == "user" and bool(INTERRUPTED.match(txt.strip())),
+                "api_error": is_api_error_event(ev)
+                or (ev["type"] == "result" and ev.get("is_error") is True),
+                "text": txt,
+                "has_text": bool(txt.strip()),
+                # A record ENDING the transcript while carrying a tool_use means the result
+                # never landed - a mid-turn death even with prefacing text.
+                "has_tool_use": bool(tool_uses),
+                "tool_names": [str(b.get("name", "")) for b in tool_uses if b.get("name")],
+                "has_tool_result": any(
+                    isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks
+                ),
+            }
+        )
+    return out
+
+
+def first_user_prompt(path: str, max_bytes: int = 256 * 1024) -> str:
+    """The chat's FIRST real user prompt - its task, as typed - or '' when there is none.
+    Reads the head of the transcript only. A tool result arrives as a user record too and is
+    skipped; so is a meta record."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(max_bytes).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    for line in head.split("\n"):
+        t = line.strip()
+        if not t.startswith("{"):
+            continue
+        try:
+            ev = json.loads(t)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "user" or ev.get("isMeta"):
+            continue
+        msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
+        content = msg.get("content") if msg else None
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+                continue
+            text = " ".join(str(b.get("text", "")) for b in content
+                            if isinstance(b, dict) and b.get("type") == "text")
+        else:
+            continue
+        if text.strip():
+            return text.strip()
+    return ""
+
+
+def pane_words(prompt: str) -> str:
+    """The words of a prompt AS THE PANE RENDERS THEM. A slash command ('/orchestrate
+    standing manager chat ...') is shown by the app as the command's ARGUMENTS - the leading
+    token is rendered as a command chip, not as text - so an aim rail (-VerifyText) that
+    matched on the raw prompt refused the reborn manager chat (live soak, 2026-09-01)."""
+    text = (prompt or "").strip()
+    if text.startswith("/"):
+        _head, _, rest = text.partition(" ")
+        if rest.strip():
+            return rest.strip()
+    return text
+
+
+def normalize_task(text: str) -> str:
+    """One task, one key: whitespace collapsed, case folded, capped - so the same prompt sent
+    twice (with or without a working-directory prefix the launcher prepends) compares equal."""
+    return re.sub(r"\s+", " ", str(text or "")).strip().lower()[:2000]
+
+
+# Prompts the toolbox itself sends to MANY chats on purpose - the standing manager's command,
+# the sweep's session opener, the watchdog's nudge, the wake, the naming probe. Two chats that
+# share one of these share a trigger, not a task; they are never duplicates of each other.
+BOILERPLATE_PREFIXES = ("/", "<command-message>", "the standing sweep opened", "automated watchdog",
+                        "proceed with your recommendations", "naming pass probe", "[agenthydra]")
+
+
+def is_boilerplate_task(text: str) -> bool:
+    n = normalize_task(text)
+    # a leading mode word ("ultracode") is not the task either - look past it
+    n = re.sub(r"^(ultracode|ultrathink|think hard(er)?)\s+", "", n)
+    return (not n or any(n.startswith(p) for p in BOILERPLATE_PREFIXES)
+            or "the standing sweep opened this session" in n[:300])
+
+
+def same_task(a: str, b: str) -> bool:
+    """Two first prompts are the same task when they are equal, or when one is the other with
+    a prefix prepended (a launcher that writes the folder before the prompt). Boilerplate the
+    toolbox sends to many chats never counts, and neither does a one-liner."""
+    if is_boilerplate_task(a) or is_boilerplate_task(b):
+        return False
+    na, nb = normalize_task(a), normalize_task(b)
+    short, long_ = sorted((na, nb), key=len)
+    if len(short) < 40:
+        return False
+    if short == long_:
+        return True
+    # The launcher writes the working folder BEFORE or AFTER the prompt (both shapes were
+    # measured 2026-09-01: 'D:\...\app Review this...' and '...save to a md file. d:\...\x').
+    # So one text wrapping the other counts - when the extra is a path-shaped token, or when
+    # the shared part is almost all of the longer one. "Review X" vs "Review X, then deploy"
+    # stays two tasks: the extra is words, and it is not small.
+    if long_.startswith(short):
+        extra = long_[len(short):].strip()
+    elif long_.endswith(short):
+        extra = long_[:len(long_) - len(short)].strip()
+    else:
+        return False
+    pathish = (("\\" in extra or "/" in extra or ":" in extra) and len(extra.split()) <= 4)
+    return pathish or len(short) >= 0.85 * len(long_)
+
+
+def read_transcript_tail_text(path: str, window: int) -> tuple[str, bool] | None:
+    """Last `window` bytes of the file as text, plus whether that was the whole file."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            start = max(0, size - window)
+            f.seek(start)
+            raw = f.read()
+        return raw.decode("utf-8", errors="replace"), start == 0
+    except OSError:
+        return None
+
+
+def read_records(path: str) -> list[dict]:
+    """Adaptive tail read: a single closing record can exceed the starting window, and a
+    truncated tail must widen rather than let 'no records' masquerade as a mid-turn death."""
+    out: list[dict] = []
+    window = 64 * 1024
+    while True:
+        raw = read_transcript_tail_text(path, window)
+        if raw is None:
+            break
+        out = parse_tail_records(raw[0], raw[1])
+        if out or raw[1] or window >= 4 * 1024 * 1024:
+            break
+        window *= 4
+    return out
+
+
+def last_assistant_text(records: list[dict]) -> str:
+    for r in reversed(records):
+        if r["type"] == "assistant" and r["has_text"]:
+            return r["text"][-EVIDENCE_CAP:] if len(r["text"]) > EVIDENCE_CAP else r["text"]
+    return ""
+
+
+def quiet_secs_of(path: str, now_s: float | None = None) -> int:
+    """Quiet time from file mtime - the same clock the daemon's classifier uses."""
+    now_s = now_s if now_s is not None else time.time()
+    try:
+        return max(0, int(now_s - os.path.getmtime(path)))
+    except OSError:
+        return 0
+
+
+def _finished_evidence(records: list[dict]) -> dict:
+    evidence = last_assistant_text(records)
+    view = recap_view(evidence)
+    return {
+        "recap_present": bool(RECAP_HEADER.search(view)),
+        "done_claim": parse_done_claim(view),
+        "ends_with_question": bool(re.search(r"\?\s*$", evidence.strip())),
+        # Read from the recap view, so an offer merely quoted from another chat cannot fake one.
+        "offers_to_continue": offers_to_continue(view),
+        "open_recommendations": open_recommendations(view),
+        "last_assistant_text": evidence,
+    }
+
+
+def gate_match(match: dict, session_row_lookup) -> dict | None:
+    """Gate a resolved dossier match: transcript from the sessions table, liveness from the
+    match. The one place that join lives - archive_chat, gate_chat and any future act script
+    all need it, and having them import it FROM each other coupled unrelated scripts
+    together (review finding). `session_row_lookup` is hydralib.session_row (passed in so
+    this module keeps no daemon dependency)."""
+    session_id = match.get("cliSessionId") or ""
+    row = session_row_lookup(session_id)
+    transcript = (row or {}).get("transcript_path") or ""
+    if not transcript:
+        transcript = find_transcript_on_disk(session_id)
+    return gate(session_id, transcript, match.get("live"))
+
+
+# Claude Code writes every transcript here, in a per-project folder, named by session id.
+_PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+
+
+def find_transcript_on_disk(session_id: str) -> str:
+    """The transcript the daemon's row forgot to point at.
+
+    ⛔ THE INVISIBLE-CHAT BUG (measured 2026-09-01). Four chats were being skipped by EVERY
+    lane with "cannot be gated (no readable transcript), so its state is unknown" - no
+    delivery, no archive, no judgment, indefinitely. Their transcripts were never missing:
+    all four sat in ~/.claude/projects named by session id, at 2 MB, 11 MB, 295 KB and
+    386 KB. Only the daemon's sessions row lacked the path, and one absent field was enough
+    to make real, sizeable work invisible to the whole toolbox.
+
+    So an empty path is treated as "not looked up yet", not as "no transcript exists" - the
+    file is addressed by session id, which is the same identity the row would have carried.
+    A genuinely absent file still returns "" and the chat is still honestly ungateable; this
+    only removes the case where the answer was on disk the whole time.
+
+    CORRECTION, same day: "the daemon's row lacked the path" was the wrong diagnosis. The
+    daemon's row was fine - hydralib.session_row was scanning GET /api/sessions with no
+    parameters, which defaults to a 24-HOUR window, so a chat quiet since yesterday was not
+    in the answer at all. session_row now asks the per-id route first (not windowed), which
+    is the real fix; this disk lookup stays as belt-and-braces for a row the daemon truly
+    cannot produce, and must not be read as evidence of a daemon bug.
+    """
+    if not session_id or not _PROJECTS_ROOT.exists():
+        return ""
+    try:
+        for path in _PROJECTS_ROOT.glob(f"*/{session_id}.jsonl"):
+            return str(path)
+    except OSError:
+        pass
+    return ""
+
+
+def gateable(transcript_path: str) -> tuple[bool, str]:
+    """Can this transcript carry a verdict? Only Claude Code JSONL can. An opencode session's
+    'transcript_path' is a SQLite .db - parsing that as JSONL finds no records, which used to
+    masquerade as a mid-turn crash (live-fleet misgating, found 2026-08-31). Not gateable is
+    an honest answer; a wrong lane is not."""
+    if not transcript_path:
+        return False, "no transcript on disk"
+    if not str(transcript_path).lower().endswith(".jsonl"):
+        return False, f"unsupported transcript format ({Path(transcript_path).name}) - only Claude Code JSONL can be gated"
+    if not Path(transcript_path).exists():
+        return False, "no transcript on disk"
+    return True, ""
+
+
+def gate(
+    session_id: str,
+    transcript_path: str,
+    live: dict | None,
+    now_s: float | None = None,
+    idle_after_secs: int = IDLE_AFTER_SECS,
+    stall_after_secs: int | None = None,
+) -> dict | None:
+    """The gate. `live` is the dossier's live block ({pid, name, ...}) or None.
+
+    Returns None when the transcript does not exist or is not a format a verdict can be read
+    from (see gateable()) - a thing that cannot be gated cannot be acted on, and the caller
+    must say so rather than guess.
+
+    `stall_after_secs` overrides STALL_QUIET_SECS for the stall verdict only - a caller that
+    KNOWS a chat cannot be running real work (its configured mode is not bypassPermissions,
+    so a shell call with no result is a prompt) may ask for a shorter window. The shape test
+    itself never changes: newest record a shell call, no result, nothing moving.
+    """
+    ok, _why = gateable(transcript_path)
+    if not ok:
+        return None
+    quiet = quiet_secs_of(transcript_path, now_s)
+
+    base = {
+        "session_id": session_id,
+        "transcript_path": transcript_path,
+        "quiet_secs": quiet,
+        "live": None,
+        "crashed": None,
+        "finished": None,
+        "stalled": None,
+        "idle": None,
+    }
+
+    # Explicit not-None, never truthiness: if the daemon ever sends live as {} for a chat it
+    # considers live-but-unpopulated, truthiness would route it to the no-writer branch and an
+    # archive-candidate verdict could come back for a chat that still has a writer (rule 2).
+    if live is not None:
+        pid = live.get("pid")
+        stalled = None
+        idle = None
+        # A TOOL CALL RECORDED BEFORE THIS ENGINE STARTED IS NOT IN FLIGHT (2026-09-01, the
+        # relocated manager): a migrate re-lands a chat and claude://resume boots a fresh
+        # engine, but the transcript still ENDS on the previous engine's pending tool call.
+        # Read as "in flight", the courier refused every wake ("never interrupt a live turn")
+        # and after 30 quiet minutes the groundskeeper would have migrated it again - a loop
+        # with no exit. The engine's own start time settles it: a call older than the process
+        # is an orphan, and a chat parked on an orphan is IDLE - wakeable, never stalled.
+        engine_started = _epoch_s(live.get("startedAt") or live.get("startedAtMs"))
+        stall_after = STALL_QUIET_SECS if stall_after_secs is None else stall_after_secs
+        if quiet >= stall_after:
+            # One fixed window, no growth loop: a short read can only cost a detection we
+            # then do not claim, and a missed stall is a report a human reads themselves,
+            # while a false stall is the actuator lying about a healthy chat.
+            raw = read_transcript_tail_text(transcript_path, 64 * 1024)
+            if raw:
+                records = parse_tail_records(raw[0], raw[1])
+                last = records[-1] if records else None
+                if (last and last["has_tool_use"] and not last["has_tool_result"]
+                        and not _predates(last, engine_started)):
+                    tool = next((n for n in last["tool_names"] if SHELL_TOOLS.match(n)), None)
+                    if tool:
+                        stalled = {
+                            "tool": tool,
+                            "quiet_secs": quiet,
+                            "why": (
+                                f"its newest record is a '{tool}' call with no result after it, and "
+                                f"nothing has moved for {quiet // 60}min - the classic shape of a "
+                                "command waiting on an approval nobody is present to click, or a "
+                                "background task that died. Read the chat before acting: a genuinely "
+                                "long command looks the same from outside."
+                            ),
+                        }
+        if not stalled and quiet >= idle_after_secs:
+            records = read_records(transcript_path)
+            last = records[-1] if records else None
+            completed = (
+                last
+                and last["type"] != "user"
+                and last["has_text"]
+                and not last["has_tool_use"]
+                and not last["api_error"]
+            )
+            orphaned = bool(
+                last and last["has_tool_use"] and not last["has_tool_result"]
+                and _predates(last, engine_started)
+            )
+            if completed or orphaned:
+                fe = _finished_evidence(records)
+                idle = {"quiet_secs": quiet, "orphaned_tool_call": orphaned,
+                        **{k: fe[k] for k in (
+                            "done_claim", "ends_with_question", "recap_present",
+                            "last_assistant_text")}}
+        cause = (
+            f"process {pid} is alive but looks STUCK: {stalled['why']}"
+            if stalled
+            else (
+                (f"process {pid} is alive but IDLE - its pending tool call predates this engine "
+                 f"(a resume), so nothing is in flight; quiet {idle['quiet_secs']}s and waiting "
+                 "for its next instruction"
+                 if idle.get("orphaned_tool_call") else
+                 f"process {pid} is alive but IDLE - it finished its turn and has been quiet "
+                 f"{idle['quiet_secs']}s, so it is waiting for its next instruction, not working")
+                if idle
+                else f"process {pid} is alive (quiet {quiet}s - a long quiet can be background work, not a stall)"
+            )
+        )
+        return {
+            **base,
+            "state": "running",
+            "cause": cause,
+            "live": {"pid": pid, "name": live.get("name")},
+            "stalled": stalled,
+            "idle": idle,
+        }
+
+    records = read_records(transcript_path)
+    last = records[-1] if records else None
+
+    if not last:
+        return {
+            **base,
+            "state": "crashed",
+            "cause": "no completed turn in the transcript tail",
+            "crashed": {"kind": "mid-turn"},
+        }
+
+    if last["api_error"]:
+        limit = classify_limit(last["text"])
+        kind = (
+            "usage-limit"
+            if limit == "quota"
+            else "overload"
+            if limit == "transient"
+            else "refused"
+            if re.search(r"\bsafeguards flagged this message\b", last["text"], re.IGNORECASE)
+            else "error"
+        )
+        return {**base, "state": "crashed", "cause": f"stopped by {kind}", "crashed": {"kind": kind}}
+
+    if last["interrupted"]:
+        return {
+            **base,
+            "state": "finished",
+            "cause": "a person interrupted it - deliberately theirs to pick back up",
+            "finished": {
+                "lane": "human",
+                "recap_present": False,
+                "done_claim": "unknown",
+                "ends_with_question": False,
+                "offers_to_continue": False,
+                "interrupted": True,
+                "last_assistant_text": last_assistant_text(records),
+            },
+        }
+
+    if last["type"] == "user" or not last["has_text"] or last["has_tool_use"]:
+        why = (
+            "an unanswered user message"
+            if last["type"] == "user"
+            else "a tool call whose result never landed"
+            if last["has_tool_use"]
+            else "tool traffic with no closing text"
+        )
+        return {
+            **base,
+            "state": "crashed",
+            "cause": f"died mid-turn (last record: {why})",
+            "crashed": {"kind": "mid-turn"},
+        }
+
+    fe = _finished_evidence(records)
+    # FOUR INDEPENDENT SIGNALS MUST ALL AGREE before a chat counts as finished-and-done: its
+    # recap claims done, it asks nothing, it offers nothing, and it recommends nothing still
+    # open. Any one of them dissenting sends the chat to the WAKE lane instead, which is the
+    # cheap mistake - a chat woken once too often costs a turn, one archived early loses work.
+    lane = (
+        "archive-candidate"
+        if (fe["done_claim"] == "yes" and not fe["ends_with_question"]
+            and not fe["offers_to_continue"] and not fe["open_recommendations"])
+        else "needs-input-review"
+    )
+    cause = (
+        "completed turn, recap says done, nothing asked, nothing recommended"
+        if lane == "archive-candidate"
+        else "completed turn but "
+        + (
+            f"the recap does not claim done ({fe['done_claim']})"
+            if fe["done_claim"] != "yes"
+            else "it OFFERS TO CARRY ON and is waiting to be told to - answer it, do not archive it"
+            if fe["offers_to_continue"]
+            else "it ends on a question"
+            if fe["ends_with_question"]
+            else f"it still RECOMMENDS {len(fe['open_recommendations'])} thing(s) - a chat with "
+                 "open recommendations has stopped, not finished; tell it to proceed"
+        )
+    )
+    return {
+        **base,
+        "state": "finished",
+        "cause": cause,
+        "finished": {"lane": lane, "interrupted": False, **fe},
+    }

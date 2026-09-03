@@ -5,7 +5,9 @@
   "license": "MIT",
   "workspaces": [
     "server",
-    "web"
+    "web",
+    "orchestrator/server",
+    "orchestrator/web"
   ],
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
@@ -24,10 +26,12 @@
     "//check:local": "Checks that CANNOT run on GitHub, so localci runs them on the host instead. check:kit compares this app's kit-managed copies against lunarwerx-ui, a PRIVATE sibling repo a public repo's CI can never check out. Without this its only enforcement is the pre-commit hook, which --no-verify skips and which silently no-ops on any machine without the sibling checkout.",
     "check:local": "bun run check:kit",
     "lint": "biome check .",
-    "typecheck": "bun run --cwd web typecheck && bun run --cwd server typecheck",
+    "typecheck": "bun run --cwd web typecheck && bun run --cwd server typecheck && bun run --cwd orchestrator/web typecheck && bun run --cwd orchestrator/server typecheck",
     "format": "biome format --write .",
     "test": "bun test --parallel=4",
-    "audit": "bun run scripts/audit.ts"
+    "audit": "bun run scripts/audit.ts",
+    "test:orchestrator": "cd orchestrator && python -m unittest discover -s scripts/tests",
+    "orchestrator": "python orchestrator/orch.py"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.5"

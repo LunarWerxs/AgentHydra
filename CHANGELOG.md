@@ -7,6 +7,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
+  2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have
+  to use both"). `orchestrator/` is the v3 Python toolbox exactly as it stood in its own repo
+  (`Lunarwerx/orchestrator`, now an archive): `orch.py`, `scripts/`, its 647 unit tests, and its
+  remote front-end (`orchestrator/server` + `orchestrator/web`, now root workspaces). The
+  2026-08-31 boundary survives - the scripts still only ever talk to the daemon over HTTP - but
+  there is one surface: the daemon runs them (`server/src/orchestrator.ts`; `GET
+  /api/orchestrator`, `POST /api/orchestrator/run`) and the MCP server exposes
+  `orchestrator_menu`, `orchestrator_run`, `orchestrator_loop` and `orchestrator_switch`. Script
+  names are validated against the menu grammar and arguments travel as an argv array, never a
+  shell. Nothing there acts without the tray icon, as before. The retired v1/v2 reference trees
+  (`old/`) and the duplicate `src/` + `tests/` copies did not come along: they stay reachable in
+  the archived repo, and the README's postmortem paragraphs carry the lessons.
+
 ## [0.37.0] - 2026-09-02
 
 ### Removed

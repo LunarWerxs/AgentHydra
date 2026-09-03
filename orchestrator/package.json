@@ -1,0 +1,32 @@
+{
+  "name": "orchestrator",
+  "version": "3.0.0-rewrite",
+  "private": true,
+  "type": "module",
+  "description": "Standalone fleet orchestrator. Talks to the AgentHydra daemon over HTTP; owns no state of its own.",
+  "workspaces": [
+    "web",
+    "server"
+  ],
+  "scripts": {
+    "start": "python scripts/census.py",
+    "census": "python scripts/census.py",
+    "census:mjs": "bun orchestrate.mjs",
+    "waiting": "python scripts/waiting_scan.py",
+    "dashboard": "python scripts/dashboard.py --open",
+    "balance": "python scripts/balance.py",
+    "sweep": "python scripts/sweep.py",
+    "orch": "python orch.py",
+    "loop": "python orch.py loop",
+    "smoke": "python scripts/smoke.py",
+    "test": "python -m unittest discover -s scripts/tests",
+    "test:reference-note": "echo the TS under src/ and tests/ is non-running reference material lifted from AgentHydra - see README",
+    "//remote": "THE REMOTE FRONT-END (web/ + server/): a Bun+Hono gateway that serves the Vue dashboard, gates it behind Sign in with Connections, and opens a Cloudflare tunnel - RepoYeti's remote-access stack, vendored. The Python toolbox stays stdlib-only; this is the one TypeScript surface, because the auth stack lives there.",
+    "remote": "bun run server/src/main.ts",
+    "remote:dev": "bun run --cwd web dev",
+    "remote:build": "bun run --cwd web build",
+    "remote:typecheck": "bun run --cwd web typecheck && bun run --cwd server typecheck",
+    "remote:test": "bun run --cwd server test",
+    "check:kit": "node ../../../lunarwerx-ui/sync.mjs --check --app orchestrator"
+  }
+}

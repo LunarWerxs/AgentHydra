@@ -173,6 +173,7 @@ import {
   setNotificationSettings,
 } from './notify-settings'
 import { openUi } from './open-ui'
+import { orchestratorStatus, runOrchestrator } from './orchestrator'
 import { samePathKey } from './path-key'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
@@ -1578,6 +1579,22 @@ app.post('/api/instances/:dir/shortcut', async (c) => {
 // above, this opens the chooser and does not launch Claude until the user selects an account.
 app.post('/api/instance-mode/shortcut', async (c) => {
   return c.json(await createInstanceModeShortcut())
+})
+
+// --- the orchestrator ----------------------------------------------------------------
+// The Python toolbox under orchestrator/ (see server/src/orchestrator.ts). GET is the menu and a
+// health read; POST runs one script by its menu name. The scripts keep their own rails - nothing
+// acts without the tray icon, a live chat is never moved - so this is a hand on the same keyboard,
+// not a way around them. Loopback-only like every other route here.
+app.get('/api/orchestrator', async (c) => c.json(await orchestratorStatus()))
+app.post('/api/orchestrator/run', async (c) => {
+  const body = await jsonBody(c)
+  const result = await runOrchestrator({
+    script: body.script,
+    args: body.args,
+    timeoutMs: body.timeoutMs,
+  })
+  return c.json(result, 'error' in result ? 400 : 200)
 })
 app.delete('/api/instances/:dir', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))

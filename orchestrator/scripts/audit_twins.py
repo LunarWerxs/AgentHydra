@@ -1,0 +1,580 @@
+#!/usr/bin/env python3
+"""audit_twins.py - OBSERVE (+`--fix`): is any chat VISIBLE in two places at once?
+
+THE COMPLAINT (owner, 2026-09-01: "it's also duplicating chats"). He was right, and the
+mechanism is specific: firing the app's own `claude://resume?session=` deeplink at a profile
+that ALREADY carries that chat makes the app create a SECOND desktop entry - a new chatId, the
+same conversation. Measured live that day: 4 chats fleet-wide with two visible records, one of
+them twice inside a single instance.
+
+WHY A DUPLICATE IS WORSE THAN CLUTTER: the sidebar actuator identifies a row by its TITLE, and
+correctly refuses to guess between two identical ones. So the moment a twin exists, that chat
+can no longer be archived, renamed or delivered to through the app at all - it becomes
+permanently unmanageable, and every later attempt reports an honest failure that reads like a
+different bug.
+
+THE TWO RULES FOR DECIDING WHICH COPY IS REAL, and it refuses when neither applies:
+  1. SAME INSTANCE, two records -> the canonical one is the record whose file is named for the
+     chat's own cli session id (local_<cliSessionId>.json - the name the app's import gives
+     it). Any other file for the same conversation is a re-import artefact.
+  2. DIFFERENT INSTANCES -> the daemon's sessions table says which instance the chat now
+     belongs to; copies on any other instance are superseded (this is what a migration leaves
+     behind when the source app re-saved the archive flag away).
+
+⛔ IT NEVER DELETES ANYTHING. The stale copy is ARCHIVED, which is reversible, and a copy that
+holds a LIVE engine is never touched at all.
+
+Usage: python audit_twins.py [--json]      # report only
+       python audit_twins.py --fix         # archive the stale copies
+Exit:  0 no twins (or all settled) - 2 twins found and not fixed - 1 daemon failure.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+from lib import armlib, clilib
+from lib import hydralib
+from lib import stamplib
+
+
+def find_twins() -> list[dict]:
+    """Every conversation with more than one VISIBLE (un-archived) desktop record."""
+    fleet = hydralib.fleet()
+    owner = {r.get("session_id"): r.get("instance") for r in hydralib.sessions()}
+    live_ids = set()
+    try:
+        live_ids = {s.get("sessionId")
+                    for s in hydralib.api_get("/api/sessions/live").get("sessions", [])}
+    except hydralib.DaemonError:
+        pass
+
+    by_cli: dict[str, list[dict]] = defaultdict(list)
+    for store in stamplib.store_roots(fleet):
+        for path, meta in stamplib.iter_metas(store["root"]):
+            if meta.get("isArchived"):
+                continue
+            cli = str(meta.get("cliSessionId") or path.stem.replace("local_", ""))
+            by_cli[cli].append({"instance": store["instance"], "path": str(path),
+                                "stem": path.stem, "title": meta.get("title") or "",
+                                "createdAt": int(meta.get("createdAt") or 0)})
+
+    # THE LINEAGE IS THE CONVERSATION, NOT THE ID (2026-09-01): a compaction or a resume rolls
+    # the cli session id, and the daemon keeps the chain in the dossier's lineageIds. Two
+    # visible records with different ids but one lineage are one chat seen twice - grouping
+    # by the raw id alone reported "nothing duplicated" while the owner looked at the pair.
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.setdefault(x, x) != x:
+            x = parent[x]
+        return x
+
+    for cli in list(by_cli):
+        try:
+            for m in hydralib.dossier(cli):
+                for lid in (m.get("lineageIds") or []) + (m.get("priorCliSessionIds") or []):
+                    a, b = find(cli), find(str(lid))
+                    if a != b:
+                        parent[b] = a
+        except hydralib.DaemonError:
+            continue
+    merged: dict[str, list[dict]] = defaultdict(list)
+    for cli, copies in by_cli.items():
+        merged[find(cli)].extend(copies)
+    by_cli = merged
+
+    twins = []
+    for cli, copies in by_cli.items():
+        if len(copies) < 2:
+            continue
+        canonical_name = f"local_{cli}"
+        home = owner.get(cli)
+        keep = None
+        # Rule 2 first: the daemon knows which account the chat belongs to now.
+        if home and any(c["instance"] == home for c in copies):
+            on_home = [c for c in copies if c["instance"] == home]
+            # ...and rule 1 settles a same-instance pair.
+            keep = next((c for c in on_home if c["stem"] == canonical_name), None)
+            if keep is None and len(on_home) == 1:
+                keep = on_home[0]
+        elif len(copies) > 1:
+            keep = next((c for c in copies if c["stem"] == canonical_name), None)
+        twins.append({
+            "cliSessionId": cli, "title": copies[0]["title"],
+            "copies": copies, "keep": keep,
+            "stale": [c for c in copies if keep and c["path"] != keep["path"]],
+            "live": cli in live_ids,
+            "why": ("" if keep else
+                    "cannot tell which copy is real - neither the daemon's instance nor the "
+                    "canonical filename picks one; settle it by hand"),
+        })
+    return twins
+
+
+def find_same_task() -> list[dict]:
+    """A DIFFERENT kind of duplicate (owner, 2026-09-01: two identical 'SageThumbs codebase
+    review' chats, 30 minutes apart, on two accounts, both running - "we can't have this"):
+    two separate conversations that carry the SAME first prompt, i.e. the same task started
+    twice. Not a twin record - each is a real chat - so the remedy is a HOLD on the later
+    one (no lane feeds it, nothing is killed) and a loud line, never an archive of live work.
+    Groups: {task, chats: [{sessionId, title, instance, live, createdAt}], keep, later}."""
+    from lib import gatelib
+
+    try:
+        live_ids = {s.get("sessionId")
+                    for s in hydralib.api_get("/api/sessions/live").get("sessions", [])}
+    except hydralib.DaemonError:
+        live_ids = set()
+    rows = []
+    for row in hydralib.visible_chats():
+        sid = row.get("session_id") or ""
+        tp = row.get("transcript_path") or ""
+        if not sid or row.get("archived") or not tp:
+            continue
+        first = gatelib.first_user_prompt(tp)
+        if len(gatelib.normalize_task(first)) < 40:
+            continue  # a one-liner is not a task signature
+        rows.append({"sessionId": sid, "title": row.get("title"), "instance": row.get("instance"),
+                     "live": sid in live_ids, "first": first,
+                     "createdAt": int(row.get("created_at") or row.get("createdAt") or 0)})
+    groups: list[dict] = []
+    seen: set[str] = set()
+    for i, a in enumerate(rows):
+        if a["sessionId"] in seen:
+            continue
+        same = [a] + [b for b in rows[i + 1:] if b["sessionId"] not in seen
+                      and gatelib.same_task(a["first"], b["first"])]
+        if len(same) < 2:
+            continue
+        for c in same:
+            seen.add(c["sessionId"])
+        # The one to KEEP is the earliest-created; when creation times are unknown, the live
+        # one; when both are live, the first seen. The rest are the duplicates.
+        ordered = sorted(same, key=lambda c: (c["createdAt"] or 2**62, not c["live"]))
+        groups.append({"task": a["first"][:120], "chats": same, "keep": ordered[0],
+                       "later": ordered[1:]})
+    return groups
+
+
+def fix_same_task(groups: list[dict]) -> list[dict]:
+    from lib import holdlib
+
+    done = []
+    for g in groups:
+        for c in g["later"]:
+            if holdlib.why_blocked(c["sessionId"]):
+                done.append({**c, "outcome": "already held"})
+                continue
+            holdlib.hold(c["sessionId"],
+                         f"DUPLICATE TASK of '{g['keep'].get('title')}' ({g['keep'].get('instance')}): "
+                         "the same first prompt was started twice; held so no lane feeds it - close it, "
+                         "or let it finish and archive it", by="audit_twins")
+            done.append({**c, "outcome": f"HELD as a duplicate of '{g['keep'].get('title')}' "
+                                         f"({g['keep'].get('instance')})"})
+    return done
+
+
+def fix(twins: list[dict]) -> list[dict]:
+    done = []
+    for t in twins:
+        # ⛔ A LIVE ENGINE IS NEVER TOUCHED (docstring line 24-25) - checked before anything
+        # else picks a "stale" copy, because the daemon's home-instance report can lag a
+        # fresh migration and the copy it names stale may still be the one in use.
+        if t["live"]:
+            done.append({**t, "outcome": "REFUSED - live chat, never touched"})
+            continue
+        # A HOLD PROTECTS THE CHAT, NOT A STALE DUPLICATE OF IT (owner, 2026-09-01: "there
+        # are a few duplicate chats happening... we need some kind of check"). Only the STALE
+        # copy is archived; the copy the owner is actually using is left exactly as it is. A
+        # held chat that keeps a twin is unactionable by every actuator, which serves nobody.
+        if not t["keep"]:
+            done.append({**t, "outcome": "REFUSED - " + t["why"]})
+            continue
+        for stale in t["stale"]:
+            said = _archive_copy(stale["instance"], stale["path"], t["title"])
+            done.append({**t, "outcome": said, "staleCopy": stale["path"]})
+    return done
+
+
+_ACTUATOR = Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"
+
+
+def _app_running(instance: str) -> tuple[bool, str]:
+    """(is that instance's app running, its --user-data-dir)."""
+    try:
+        for i in hydralib.fleet().get("instances", []):
+            if str(i.get("name", "")).lower() == str(instance).lower():
+                return bool(i.get("isRunning")), str(i.get("dir") or "")
+    except hydralib.DaemonError:
+        pass
+    return False, ""
+
+
+def _drive_archive(inst_dir: str, title: str) -> tuple[int, str]:
+    """The app's OWN archive control on the row titled `title` in that window. Exits: 0 done -
+    1 error/ambiguity - 2 invoked but the row stayed - 3 not rendered."""
+    import subprocess
+
+    from lib import windowlib
+
+    with windowlib.instance_lock(inst_dir, wait_secs=60) as mine:
+        if not mine:
+            return 7, "window busy - another lane is driving it; next pass"
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(_ACTUATOR),
+             "-Instance", inst_dir, "-Action", "Archive", "-Title", str(title)],
+            capture_output=True, text=True, timeout=240)
+    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-1:][0] if (r.stdout or r.stderr) else f"exit {r.returncode}"
+
+
+def _flag_archived(path: str) -> str | None:
+    p = Path(path)
+    try:
+        meta = json.loads(p.read_text(encoding="utf-8"))
+        meta["isArchived"] = True
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(meta), encoding="utf-8")
+        tmp.replace(p)
+        return None
+    except (OSError, ValueError) as err:
+        return str(err)
+
+
+def _archive_copy(instance: str, path: str, title: str) -> str:
+    """Archive one stale copy the way the OWNER will actually see it go (2026-09-01, owner:
+    "there's still duplicate chats"): a RUNNING app holds its chat list in memory and never
+    re-reads the file, so flipping isArchived on disk - all this did until tonight - left the
+    row on his screen until a restart he never does. Through the app's own control the row
+    disappears now and the app writes the flag itself. A closed app gets the flag (it reads
+    it on start). A row the app has not rendered cannot be reached by any control: the flag
+    is set and the ghost sweep (find_ghosts) catches it the moment it renders."""
+    running, inst_dir = _app_running(instance)
+    if running and inst_dir:
+        code, said = _drive_archive(inst_dir, title)
+        if code == 0:
+            return f"archived the stale copy in {instance} through the app's own control"
+        if code == 3:
+            err = _flag_archived(path)
+            return (f"archived the stale copy in {instance} on disk (its row is not rendered right "
+                    "now; the ghost sweep clears it through the app the moment it shows)"
+                    if not err else f"could NOT flag the copy in {instance}: {err}")
+        return f"the app's control REFUSED the stale copy in {instance}: {said[:160]}"
+    err = _flag_archived(path)
+    return (f"archived the stale copy in {instance} (app closed: disk flag)" if not err
+            else f"could NOT archive the copy in {instance}: {err}")
+
+
+def find_ghosts() -> list[dict]:
+    """ROWS THE OWNER SEES THAT THE DISK SAYS ARE GONE. For every running app: the rendered
+    sidebar rows (the actuator's -List) against that instance's metas - a title whose records
+    in that instance are ALL archived is a ghost the app is still showing. A title that has
+    both an archived and a live record there is ambiguous and is named, never acted on."""
+    import subprocess
+
+    fleet = hydralib.fleet()
+    ghosts = []
+    for inst in fleet.get("instances", []):
+        if not inst.get("isRunning") or not inst.get("dir"):
+            continue
+        name = str(inst.get("name"))
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(_ACTUATOR),
+                 "-Instance", str(inst["dir"]), "-List"],
+                capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        rendered = []
+        for line in (r.stdout or "").splitlines():
+            s = line.strip()
+            low = s.lower()
+            for phrase in ("more options for ", "weitere optionen für ", "weitere optionen fur "):
+                if low.startswith(phrase):
+                    rendered.append(s[len(phrase):].strip())
+                    break
+        if not rendered:
+            continue
+        by_title: dict[str, list[bool]] = defaultdict(list)
+        for store in stamplib.store_roots(fleet):
+            if str(store["instance"]).lower() != name.lower():
+                continue
+            for path, meta in stamplib.iter_metas(store["root"]):
+                by_title[str(meta.get("title") or "")].append(bool(meta.get("isArchived")))
+        for title in rendered:
+            flags = by_title.get(title)
+            if not flags:
+                continue  # no record at all: not ours to judge
+            if all(flags):
+                ghosts.append({"instance": name, "dir": str(inst["dir"]), "title": title,
+                               "records": len(flags), "ambiguous": rendered.count(title) > 1})
+    return ghosts
+
+
+RENAMES_PER_PASS = 3
+
+
+def find_title_collisions() -> list[dict]:
+    """ONE TITLE, SEVERAL CHATS (2026-09-01: four 'Codebase review and prioritization' rows -
+    the same prompt template over three repos, one generic auto-title). Not duplicates - the
+    same-task rule tells them apart by their prompt bodies - but they look like duplicates to
+    the owner, and the app's own controls refuse a title two rows share. Groups of visible,
+    un-archived chats with different session ids wearing one exact title; each chat carries
+    the repo (its cwd's last folder) that will make its name unique."""
+    from lib import holdlib
+
+    from lib import gatelib
+
+    by_title: dict[str, list[dict]] = defaultdict(list)
+    for r in hydralib.visible_chats():
+        if r.get("archived") or not r.get("session_id"):
+            continue
+        title = str(r.get("title") or "").strip()
+        if not title:
+            continue
+        cwd = str(r.get("cwd") or "").rstrip("\\/")
+        by_title[title].append({"sessionId": r["session_id"], "instance": r.get("instance"),
+                                "repo": cwd.replace("\\", "/").rsplit("/", 1)[-1] if cwd else "",
+                                "transcript": str(r.get("transcript_path") or ""),
+                                "held": bool(holdlib.why_blocked(r["session_id"]))})
+    out = []
+    for title, chats in by_title.items():
+        if len({c["sessionId"] for c in chats}) < 2:
+            continue
+        # THE HINT that makes each name unique: the chat's folder, unless the colliding
+        # chats share it (four 'Codebase review' chats all launched from D:\NEWProjects) -
+        # then the repo named INSIDE the first prompt (the last path-shaped word), which is
+        # how those four actually differ. No hint, no rename.
+        repos = [c["repo"] for c in chats]
+        for c in chats:
+            hint = c["repo"] if c["repo"] and repos.count(c["repo"]) == 1 else ""
+            if not hint and c["transcript"]:
+                words = [w.strip("'\".,;:()[]") for w in gatelib.first_user_prompt(c["transcript"]).split()]
+                paths = [w for w in words if ("\\" in w or "/" in w) and len(w) > 3]
+                if paths:
+                    hint = paths[-1].rstrip("\\/").replace("\\", "/").rsplit("/", 1)[-1]
+            c["hint"] = hint
+        hints = [c["hint"] for c in chats]
+        for c in chats:
+            if c["hint"] and hints.count(c["hint"]) > 1:
+                c["hint"] = ""
+        out.append({"title": title, "chats": chats})
+    return out
+
+
+def fix_title_collisions(collisions: list[dict]) -> list[dict]:
+    """Rename colliding chats '<title> [<repo>]' through rename_chat (the app's own control,
+    verified). Only when the repo makes the name unique; a chat whose repo is unknown, or
+    two chats in one repo, are named and left. Capped per pass - a rename selects nothing
+    but does drive the window."""
+    import overlord
+    import rename_chat
+    from lib import clilib
+
+    protected = overlord.protected_session_ids()
+    done = []
+    renamed = 0
+    for c in collisions:
+        per_instance: dict[str, list[dict]] = defaultdict(list)
+        for x in c["chats"]:
+            per_instance[str(x.get("instance") or "")].append(x)
+        for x in c["chats"]:
+            if renamed >= RENAMES_PER_PASS:
+                return done
+            if x["sessionId"] in protected or not x.get("instance"):
+                continue  # the manager, or a console chat no window can rename
+            if not x.get("hint"):
+                done.append({**x, "title": c["title"],
+                             "outcome": f"'{c['title'][:50]}' in {x['instance']}: nothing unique to name it by - left"})
+                continue
+            new_title = f"{c['title']} [{x['hint']}]"
+            if len(per_instance[str(x["instance"])]) > 1:
+                # TWO ROWS, ONE WINDOW, ONE TITLE (owner, 2026-09-01: "why does the darog account
+                # have two chats both named..."): the app's own control cannot tell them apart by
+                # name, so the top row is renamed first (a rename is harmless if it lands on the
+                # other twin), the dossier says which chat took the name, and the naming is
+                # corrected from there. After the first rename the other row is unique again.
+                code, said = _rename_ordinal(x["instance"], c["title"], new_title, 1)
+                renamed += 1
+                if code != 0:
+                    done.append({**x, "title": c["title"],
+                                 "outcome": f"rename of a same-titled row in {x['instance']} did not land (exit {code}): {said[:120]}"})
+                    continue
+                took = _who_has_title(x["instance"], new_title)
+                if took and took != x["sessionId"]:
+                    other = next((y for y in per_instance[str(x["instance"])] if y["sessionId"] == took), None)
+                    if other and other.get("hint") and other["hint"] != x["hint"]:
+                        fixed = f"{c['title']} [{other['hint']}]"
+                        _rename_ordinal(x["instance"], new_title, fixed, 1)
+                        done.append({**other, "title": c["title"],
+                                     "outcome": f"renamed to '{fixed}' in {x['instance']} (took the first name, corrected)"})
+                        continue
+                done.append({**x, "title": c["title"],
+                             "outcome": f"renamed the top same-titled row in {x['instance']} to '{new_title}'"})
+                continue
+            code, said = clilib.capture(rename_chat.main, [x["sessionId"], "--to", new_title]
+                                        + (["--force"] if x["held"] else []))
+            renamed += 1
+            done.append({**x, "title": c["title"],
+                         "outcome": (f"renamed to '{new_title}' in {x['instance']}" if code == 0
+                                     else f"rename of '{c['title'][:40]}' in {x['instance']} did not land (exit {code}): "
+                                          f"{(said.splitlines()[-1] if said else '')[:120]}")})
+    return done
+
+
+def _rename_ordinal(instance: str, title: str, new_title: str, ordinal: int) -> tuple[int, str]:
+    """Rename the Nth rendered row (top first) wearing `title`, through the app's control."""
+    import subprocess
+
+    from lib import windowlib
+
+    running, inst_dir = _app_running(instance)
+    if not running or not inst_dir:
+        return 3, f"{instance} is not running"
+    with windowlib.instance_lock(inst_dir, wait_secs=60) as mine:
+        if not mine:
+            return 7, "window busy"
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(_ACTUATOR),
+             "-Instance", inst_dir, "-Action", "Rename", "-Title", title, "-NewTitle", new_title,
+             "-Ordinal", str(ordinal)],
+            capture_output=True, text=True, timeout=240)
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    return r.returncode, (out.splitlines()[-1] if out else f"exit {r.returncode}")
+
+
+def _who_has_title(instance: str, title: str) -> str | None:
+    """The session id of the visible chat in `instance` now wearing `title` (the app re-saves
+    the record after its own rename), polled briefly."""
+    import time as _t
+
+    for _ in range(6):
+        _t.sleep(2)
+        try:
+            for r in hydralib.visible_chats():
+                if (str(r.get("instance")) == instance and not r.get("archived")
+                        and str(r.get("title") or "").strip() == title):
+                    return str(r.get("session_id") or "") or None
+        except hydralib.DaemonError:
+            return None
+    return None
+
+
+def fix_ghosts(ghosts: list[dict]) -> list[dict]:
+    done = []
+    for g in ghosts:
+        if g.get("ambiguous"):
+            done.append({**g, "outcome": "REFUSED - two rendered rows share this title; a person picks"})
+            continue
+        code, said = _drive_archive(g["dir"], g["title"])
+        done.append({**g, "outcome": (f"ghost row archived through the app in {g['instance']}" if code == 0
+                                      else f"could NOT clear the ghost in {g['instance']}: {said[:160]}")})
+    return done
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    try:
+        twins = find_twins()
+    except hydralib.DaemonError as err:
+        print(f"audit_twins FAILED: {err}", file=sys.stderr)
+        return 1
+    fix_it = "--fix" in argv
+    disarmed = False
+    # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
+    # window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so -
+    # nothing acted is not a failure, so the exit code says so too.
+    if fix_it:
+        refusal = armlib.refuse_unless_armed(argv, "settling duplicate chat rows")
+        if refusal:
+            print(refusal)
+            fix_it = False
+            disarmed = True
+    results = fix(twins) if fix_it else []
+    try:
+        same_task = find_same_task()
+    except hydralib.DaemonError as err:
+        print(f"audit_twins: same-task scan FAILED: {err}", file=sys.stderr)
+        same_task = []
+    task_results = fix_same_task(same_task) if fix_it else []
+    # WHAT THE OWNER SEES (2026-09-01: "there's still duplicate chats"): ghost rows a running
+    # app still shows after the disk said archived, and different chats wearing one title.
+    try:
+        ghosts = find_ghosts()
+    except (hydralib.DaemonError, OSError) as err:
+        print(f"audit_twins: ghost scan FAILED: {err}", file=sys.stderr)
+        ghosts = []
+    ghost_results = fix_ghosts(ghosts) if fix_it else []
+    try:
+        collisions = find_title_collisions()
+    except hydralib.DaemonError as err:
+        print(f"audit_twins: title scan FAILED: {err}", file=sys.stderr)
+        collisions = []
+    collision_results = fix_title_collisions(collisions) if fix_it else []
+    for g in ghost_results:
+        print(f"  ghost: [{g['instance']}] {g['title'][:60]} -> {g['outcome']}")
+    if ghosts and not ghost_results:
+        print(f"{len(ghosts)} ghost row(s) still on screen after the disk said archived:")
+        for g in ghosts:
+            print(f"  [{g['instance']}] {g['title'][:60]}" + (" (two rows - a person picks)" if g.get("ambiguous") else ""))
+    for c in collision_results:
+        print(f"  title: {c['outcome']}")
+    if collisions and not collision_results:
+        print(f"{len(collisions)} title(s) worn by more than one DIFFERENT chat (a collision, not a duplicate):")
+        for c in collisions:
+            print(f"  '{c['title'][:60]}' x{len(c['chats'])}: " + ", ".join(
+                f"{x['instance'] or 'console'} ({x['repo'] or '?'})" for x in c["chats"]))
+
+    if "--json" in argv:
+        print(json.dumps({"twins": twins, "results": results,
+                          "sameTask": same_task, "sameTaskResults": task_results,
+                          "ghosts": ghosts, "ghostResults": ghost_results,
+                          "collisions": collisions, "collisionResults": collision_results}, indent=2))
+        return 0 if (disarmed or (not twins and not same_task and not ghosts) or results or task_results or ghost_results) else 2
+    if same_task:
+        print(f"{len(same_task)} task(s) started MORE THAN ONCE (same first prompt, separate chats):")
+        for g in same_task:
+            print(f"  {g['task'][:90]}")
+            for c in g["chats"]:
+                tag = "KEEP " if c is g["keep"] else "DUP  "
+                # A console-only copy has no desktop instance: say so instead of leaking
+                # a Python None into an owner-facing line (live smoke, 2026-09-01).
+                print(f"      [{tag}] {c['instance'] or '(console, no instance)'}: "
+                      f"{str(c['title'])[:50]}"
+                      f"{' (running)' if c['live'] else ''}")
+        for r in task_results:
+            print(f"  {r['outcome']}")
+        if not task_results:
+            print("  -> with --fix the later copy is HELD (never archived while it may be working)")
+    if not twins:
+        if not same_task:
+            print("no chat is visible in two places - nothing duplicated.")
+        return 0 if (disarmed or not same_task or task_results) else 2
+    print(f"{len(twins)} chat(s) VISIBLE more than once:")
+    for t in twins:
+        mark = "LIVE " if t["live"] else ""
+        print(f"  {mark}{t['title'][:60]}")
+        for c in t["copies"]:
+            tag = ("KEEP " if t["keep"] and c["path"] == t["keep"]["path"]
+                   else "stale" if t["keep"] else "?????")
+            print(f"      [{tag}] {c['instance']}: {c['stem'][:30]}")
+        if not t["keep"]:
+            print(f"      -> {t['why']}")
+    for r in results:
+        print(f"  {r['outcome']}")
+    if not results:
+        print("\nREPORT ONLY - add --fix to archive the stale copies (reversible).")
+    print("\nNOTE: a stale copy under a RUNNING app is archived through the app's own control, so it "
+          "leaves the screen now; a copy the app has not rendered gets the disk flag and the ghost "
+          "sweep archives it through the app the moment it shows.")
+    return 0 if (disarmed or results) else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,19 @@
+# runtime state: ledgers, locks, logs, job wrappers - never source
+state/
+answers.json
+*.log
+
+# machine-local
+__pycache__/
+.pytest_cache/
+.claude/
+node_modules/
+*.tmp
+
+# the remote front-end's build output (bun run remote:build) - the gateway serves it, git never carries it
+web/dist/
+web/dist-next/
+
+# harvest_todos.py output - the owner's own work backlog, lifted from his archived chats.
+# Runtime output, not source, and private by nature: it never enters this (public) repo.
+docs/todo/from-archived-chats*.md

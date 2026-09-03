@@ -1428,6 +1428,104 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(),
     run: () => api('/api/update'),
   },
+
+  // --- the orchestrator ------------------------------------------------------------
+  // The Python toolbox under orchestrator/ decides what SHOULD happen to a chat; the daemon runs
+  // it on request (server/src/orchestrator.ts). One MCP surface for the whole fleet - an agent
+  // no longer has to be told "you have to use both" (owner, 2026-09-03).
+  {
+    name: 'orchestrator_menu',
+    description:
+      "READ-ONLY: the orchestrator's own menu - every script it has, grouped OBSERVE (reads only) / ACT (behind the rails) / the loop / the tray switch - plus where the toolbox lives and whether python answers. Read this once before orchestrator_run; the script names here are the only ones it accepts.",
+    inputSchema: S(),
+    run: () => api('/api/orchestrator'),
+  },
+  {
+    name: 'orchestrator_run',
+    description:
+      "Run ONE orchestrator script by its menu name (`chats`, `migrate_chat`, `dossier`, `audit_twins`, `archive_chat`, `census`, ...) with its own arguments, exactly as `python orch.py <script> ...` would. OBSERVE scripts are read-only; ACT scripts MUTATE, and they keep every rail they have on the command line: NOTHING ACTS WITHOUT THE TRAY ICON (orchestrator_switch {action:'armed'} tells you), a live chat is never moved or archived, every attempt is counted, and `--force` is a PERSON'S word for one act - pass it only when the human asked for that act. Returns stdout, stderr, the exit code and what the driver's codes mean (0 ok · 2 something failed · 3 refused/unknown/not armed · 1 daemon failure); a script's own codes are in its `--help`, which you can run here too (args: ['--help']). Long scripts get `timeout_secs` (default 600, max 3600).",
+    inputSchema: S(
+      {
+        script: {
+          type: 'string',
+          description: 'A menu name from orchestrator_menu, e.g. "chats" or "migrate_chat".',
+        },
+        args: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Arguments for that script, one per element, no shell quoting.',
+        },
+        timeout_secs: { type: 'number' },
+      },
+      ['script'],
+    ),
+    run: async (a) =>
+      api('/api/orchestrator/run', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          script: a.script,
+          args: Array.isArray(a.args) ? a.args : [],
+          timeoutMs: a.timeout_secs != null ? Number(a.timeout_secs) * 1000 : undefined,
+        }),
+      }),
+  },
+  {
+    name: 'orchestrator_loop',
+    description:
+      "THE LOOP. Default is DRY: walk the whole orchestration - census, waiting scan, accounts and usage bands, the sweep's four lanes, naming, reconcile, the judgment queue - and print what it WOULD do, touching nothing. This is where stalled chats, holds, collisions, hand-offs and pending deliveries are reported. STOP AND INVESTIGATE if its census sanity rail fails or the plan says INCOMPLETE: a read failed, so every lane is a lower bound. `live: true` MUTATES - the same walk with the acting lanes armed (identical to `sweep --all --yes`), which still does nothing unless the tray icon is up.",
+    inputSchema: S({
+      live: { type: 'boolean', description: 'Act instead of plan. Default false (dry).' },
+      json: { type: 'boolean', description: 'Machine-readable plan (dry only).' },
+    }),
+    run: async (a) => {
+      const args: string[] = []
+      if (a.live === true) args.push('--live')
+      else if (a.json === true) args.push('--json')
+      return api('/api/orchestrator/run', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          script: 'loop',
+          args,
+          timeoutMs: a.live === true ? 30 * 60_000 : undefined,
+        }),
+      })
+    },
+  },
+  {
+    name: 'orchestrator_switch',
+    description:
+      "THE TRAY-ICON SWITCH (owner order, 2026-09-01: nothing acts without the status-bar icon, so the owner can always terminate it). `armed` is READ-ONLY and is the FIRST thing to check before expecting any act to land: a disarmed fleet looks exactly like a healthy quiet one. The rest MUTATE the switch: `arm` puts the icon on screen PAUSED (registered, nothing acts yet), `arm_now` arms and starts the lanes, `resume` throws the switch on, `pause` stops the lanes but keeps the icon and dashboard up, `disarm` closes the icon (everything stops). Arm only when the human's message is their hand on the switch; never to make an unattended act possible on your own initiative.",
+    inputSchema: S(
+      {
+        action: {
+          type: 'string',
+          enum: ['armed', 'arm', 'arm_now', 'resume', 'pause', 'disarm'],
+        },
+      },
+      ['action'],
+    ),
+    run: async (a) => {
+      const action = str(a.action)
+      const argv: Record<string, string[]> = {
+        armed: ['armed'],
+        arm: ['arm'],
+        arm_now: ['arm', '--now'],
+        resume: ['resume'],
+        pause: ['pause'],
+        disarm: ['disarm'],
+      }
+      const words = argv[action]
+      if (!words) throw new Error(`action must be one of ${Object.keys(argv).join(', ')}`)
+      const [script, ...args] = words
+      return api('/api/orchestrator/run', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ script, args, timeoutMs: 120_000 }),
+      })
+    },
+  },
 ]
 
 export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
@@ -1471,7 +1569,13 @@ A human who tells you your instance number OVERRULES the detection: do not argue
 using a config file, because the config files on this machine are exactly what lie about it.
 
 list_usage {} surveys every account at once. Route heavy work to one with headroom, by its number.
-Mutating tools say MUTATES: in their description; never run /login for a human.`
+Mutating tools say MUTATES: in their description; never run /login for a human.
+
+THE ORCHESTRATOR IS INSIDE THIS SERVER. Deciding what should happen to a chat - the dry loop, the
+sweep, moving chats between accounts, archiving, naming - is orchestrator_menu / orchestrator_run /
+orchestrator_loop / orchestrator_switch. There is no second program to find. Nothing there acts
+unless the tray icon is up (orchestrator_switch {action:"armed"} first); a disarmed fleet looks
+exactly like a quiet one.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {

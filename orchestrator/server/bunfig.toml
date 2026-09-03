@@ -1,0 +1,4 @@
+[test]
+# Every test runs against a throwaway state dir and a dead daemon port, set BEFORE any module
+# computes its paths (config.ts reads the env at import time).
+preload = ["./tests/setup.ts"]

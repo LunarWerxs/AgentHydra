@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orchestrator — decision dashboard</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface:     #fcfcfb;
+    --ink:         #0b0b0b;
+    --ink-2:       #52514e;
+    --ink-muted:   #898781;
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --ring:        rgba(11,11,11,0.10);
+    --good:        #0ca30c;
+    --warning:     #fab219;
+    --serious:     #ec835a;
+    --critical:    #d03b3b;
+    --accent:      #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:      #0d0d0d;
+      --surface:   #1a1a19;
+      --ink:       #ffffff;
+      --ink-2:     #c3c2b7;
+      --ink-muted: #898781;
+      --grid:      #2c2c2a;
+      --baseline:  #383835;
+      --ring:      rgba(255,255,255,0.10);
+      --accent:    #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
+    --ink-muted: #898781; --grid: #2c2c2a; --baseline: #383835;
+    --ring: rgba(255,255,255,0.10); --accent: #3987e5;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 20px 24px 60px; }
+
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+  h1 { font-size: 20px; margin: 0; }
+  .readonly {
+    font-size: 12px; color: var(--ink-2); border: 1px solid var(--ring);
+    border-radius: 999px; padding: 2px 10px; background: var(--surface);
+  }
+  #daemon { font-size: 12px; color: var(--ink-muted); }
+  .sub { color: var(--ink-2); margin: 2px 0 18px; font-size: 13px; }
+
+  /* stat tiles */
+  .tiles { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 22px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
+    padding: 10px 14px; min-width: 130px; cursor: pointer; text-align: left;
+    color: var(--ink); font: inherit;
+  }
+  .tile:hover { border-color: var(--baseline); }
+  .tile .n { font-size: 24px; font-weight: 650; }
+  .tile .l { font-size: 12px; color: var(--ink-2); display: flex; gap: 6px; align-items: center; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  /* diagram */
+  details.diagram { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; margin-bottom: 22px; }
+  details.diagram > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 14px; list-style: none; }
+  details.diagram > summary::before { content: "▸ "; color: var(--ink-muted); }
+  details.diagram[open] > summary::before { content: "▾ "; }
+  .diagram-body { padding: 0 16px 16px; overflow-x: auto; }
+  .diagram-body h3 { font-size: 13px; color: var(--ink-2); margin: 10px 0 6px; font-weight: 600; }
+  .diagram-body svg { min-width: 1080px; width: 100%; height: auto; display: block; }
+  .diagram-note { font-size: 12px; color: var(--ink-muted); margin: 8px 0 0; }
+
+  svg text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink); }
+  svg text.t2 { fill: var(--ink-2); font-size: 11px; }
+  svg text.cap { fill: var(--ink-muted); font-size: 11px; }
+  svg text.h { font-weight: 650; }
+  svg .box { fill: var(--surface); stroke: var(--baseline); rx: 8; }
+  svg .edge { stroke: var(--baseline); stroke-width: 1.5; fill: none; }
+  svg .lbl { fill: var(--ink-muted); font-size: 11px; font-style: italic; }
+  svg .accent-b { stroke: var(--accent); stroke-width: 2; }
+  svg .good-b { stroke: var(--good); stroke-width: 2; }
+  svg .warn-b { stroke: var(--warning); stroke-width: 2; }
+  svg .serious-b { stroke: var(--serious); stroke-width: 2; }
+  svg .crit-b { stroke: var(--critical); stroke-width: 2; }
+
+  /* view buttons */
+  .views { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; }
+  .views button {
+    font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 999px;
+    border: 1px solid var(--ring); background: var(--surface); color: var(--ink); cursor: pointer;
+  }
+  .views button:hover { border-color: var(--baseline); }
+  .views button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+  #status { font-size: 12px; color: var(--ink-muted); margin-bottom: 10px; min-height: 1.2em; }
+  #error {
+    display: none; background: var(--surface); border: 1px solid var(--critical);
+    border-left-width: 4px; border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
+  }
+
+  table { width: 100%; border-collapse: collapse; background: var(--surface);
+          border: 1px solid var(--ring); border-radius: 10px; overflow: hidden; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+       color: var(--ink-muted); font-weight: 600; padding: 9px 12px; border-bottom: 1px solid var(--grid); }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--grid); vertical-align: top; font-size: 13px; }
+  tr:last-child td { border-bottom: none; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .table-scroll { overflow-x: auto; }
+
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .muted { color: var(--ink-muted); }
+  .small { font-size: 12px; color: var(--ink-2); }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .cmd { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--ink-2);
+         background: color-mix(in srgb, var(--ink) 5%, transparent); padding: 1px 6px; border-radius: 5px; }
+  .evidence { display: none; }
+  tr.open + tr.evidence { display: table-row; }
+  .evidence td { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+  .evidence pre { margin: 0; white-space: pre-wrap; font: 12px/1.5 ui-monospace, Consolas, monospace; color: var(--ink-2); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* accounts strip */
+  .acct-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0 6px; }
+  .chip {
+    border: 1px solid var(--ring); border-radius: 10px; padding: 8px 12px; min-width: 210px;
+    background: color-mix(in srgb, var(--ink) 2%, transparent);
+  }
+  .chip .who { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .chip .pcts { font-size: 12px; color: var(--ink-2); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .chip .meta { font-size: 11px; color: var(--ink-muted); margin-top: 2px; }
+  .chip.next { border-color: var(--accent); }
+  .nextlbl { color: var(--accent); font-size: 11px; font-weight: 700; }
+  .verdict { margin: 10px 0 4px; font-size: 13px; }
+  .movecard { border-left: 3px solid var(--warning); padding: 6px 10px; margin: 6px 0; font-size: 13px;
+              background: color-mix(in srgb, var(--ink) 3%, transparent); border-radius: 0 8px 8px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Orchestrator — decision dashboard</h1>
+    <span class="readonly">👁 read-only — this page can look, it cannot act</span>
+    <span id="daemon">daemon: …</span>
+  </header>
+  <p class="sub">Every number and verdict below is a <b>dry run</b>: the same gate the act scripts use,
+  run over the live fleet, changing nothing. The “do it” column shows the exact command a person
+  (or an agent) would run in a terminal — on purpose, there is no button that acts.</p>
+
+  <div id="error"></div>
+
+  <details class="diagram" open id="accountsBox">
+    <summary>Accounts — 5-hour &amp; weekly usage, who I'd use next, and the load-balancing plan</summary>
+    <div class="diagram-body" id="accounts">
+      <p class="small muted">checking every account's usage — the daemon may re-check each one, so this can take up to a minute…</p>
+    </div>
+  </details>
+
+  <div class="tiles" id="tiles"></div>
+
+  <details class="diagram" open id="treeBox">
+    <summary>The logic tree — how every chat is judged, and what guards every act</summary>
+    <div class="diagram-body">
+      <h3>1 · THE GATE — “what state is this chat in?” (deterministic code over transcript bytes + the daemon’s dossier)</h3>
+      <svg viewBox="0 0 1120 460" role="img" aria-label="Gate decision tree">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--baseline)"/>
+          </marker>
+        </defs>
+        <!-- start -->
+        <rect class="box" x="10" y="205" width="140" height="50" rx="8"/>
+        <text x="80" y="226" text-anchor="middle" class="h">Every visible chat</text>
+        <text x="80" y="242" text-anchor="middle" class="t2">(archived ones excluded)</text>
+
+        <path class="edge" d="M150,230 H190" marker-end="url(#arr)"/>
+
+        <!-- resolve -->
+        <rect class="box" x="192" y="196" width="168" height="68" rx="8"/>
+        <text x="276" y="218" text-anchor="middle" class="h">Resolve identity</text>
+        <text x="276" y="234" text-anchor="middle" class="t2">dossier: instance, lineage,</text>
+        <text x="276" y="248" text-anchor="middle" class="t2">live process, archive flag</text>
+
+        <!-- resolve failure -->
+        <path class="edge" d="M276,264 V330" marker-end="url(#arr)"/>
+        <text x="284" y="296" class="lbl">no match / two rows share a title</text>
+        <rect class="box crit-b" x="192" y="332" width="240" height="52" rx="8"/>
+        <text x="204" y="352" class="h">⛔ STOP — deterministic refusal</text>
+        <text x="204" y="368" class="t2">counted once, never retried (v2 retried these forever)</text>
+
+        <path class="edge" d="M360,230 H400" marker-end="url(#arr)"/>
+
+        <!-- live? -->
+        <rect class="box accent-b" x="402" y="202" width="128" height="56" rx="8"/>
+        <text x="466" y="226" text-anchor="middle" class="h">Live writer</text>
+        <text x="466" y="242" text-anchor="middle" class="h">attached?</text>
+
+        <!-- yes: running -->
+        <path class="edge" d="M466,202 V96 H560" marker-end="url(#arr)"/>
+        <text x="474" y="120" class="lbl">yes → RUNNING</text>
+        <text x="474" y="134" class="lbl">(never archive)</text>
+        <rect class="box" x="562" y="20" width="250" height="44" rx="8"/>
+        <text x="574" y="38" class="h">WORKING — leave it alone</text>
+        <text x="574" y="54" class="t2">quiet &lt;3 min, or a turn is genuinely in flight</text>
+
+        <rect class="box warn-b" x="562" y="74" width="250" height="52" rx="8"/>
+        <text x="574" y="92" class="h">⚠ IDLE — waiting, not working</text>
+        <text x="574" y="106" class="t2">finished its turn, quiet ≥3 min →</text>
+        <text x="574" y="119" class="t2">judgment: answer / nudge / hand off</text>
+
+        <rect class="box serious-b" x="562" y="136" width="250" height="52" rx="8"/>
+        <text x="574" y="154" class="h">⚠ STUCK? — flag for a human</text>
+        <text x="574" y="168" class="t2">ends on an unanswered shell call, quiet ≥30 min</text>
+        <text x="574" y="181" class="t2">(a long build looks the same — read it, never act)</text>
+
+        <!-- no: tail -->
+        <path class="edge" d="M530,230 H580" marker-end="url(#arr)"/>
+        <text x="536" y="222" class="lbl">no</text>
+        <rect class="box" x="582" y="204" width="150" height="52" rx="8"/>
+        <text x="657" y="224" text-anchor="middle" class="h">Read the transcript</text>
+        <text x="657" y="240" text-anchor="middle" class="t2">tail (the real last turn)</text>
+
+        <!-- crashed -->
+        <path class="edge" d="M732,218 H830 V150 H848" marker-end="url(#arr)"/>
+        <text x="754" y="205" class="lbl">turn never completed / API error</text>
+        <rect class="box serious-b" x="850" y="122" width="258" height="56" rx="8"/>
+        <text x="862" y="141" class="h">⟳ CRASHED — resume candidate</text>
+        <text x="862" y="156" class="t2">mid-turn death · usage limit · overload ·</text>
+        <text x="862" y="170" class="t2">refusal · API error (kind is named)</text>
+
+        <!-- human -->
+        <path class="edge" d="M732,230 H848" marker-end="url(#arr)"/>
+        <text x="843" y="248" text-anchor="end" class="lbl">a person pressed stop</text>
+        <rect class="box" x="850" y="208" width="258" height="44" rx="8"/>
+        <text x="862" y="226" class="h">🧍 FINISHED · human — theirs</text>
+        <text x="862" y="242" class="t2">deliberately interrupted; their move, not automation’s</text>
+
+        <!-- finished split -->
+        <path class="edge" d="M732,242 H800 V320 H848" marker-end="url(#arr)"/>
+        <text x="843" y="274" text-anchor="end" class="lbl">completed assistant turn —</text>
+        <text x="843" y="288" text-anchor="end" class="lbl">read the recap:</text>
+        <rect class="box warn-b" x="850" y="282" width="258" height="70" rx="8"/>
+        <text x="862" y="301" class="h">✋ WAITING ON A PERSON</text>
+        <text x="862" y="316" class="t2">offers to carry on (“say the word…”, “let me</text>
+        <text x="862" y="329" class="t2">know if…”) · or ends on a “?” · or recap ≠ done</text>
+        <text x="862" y="344" class="t2">→ ANSWER it. Never archive.</text>
+
+        <path class="edge" d="M800,320 V400 H848" marker-end="url(#arr)"/>
+        <rect class="box good-b" x="850" y="376" width="258" height="56" rx="8"/>
+        <text x="862" y="395" class="h">✓ ARCHIVE CANDIDATE</text>
+        <text x="862" y="410" class="t2">recap says done · asks nothing · offers nothing</text>
+        <text x="862" y="424" class="t2">→ the ONLY state allowed into the act rails ↓</text>
+      </svg>
+
+      <h3>2 · THE ACT RAILS — what stands between “archive candidate” and an actual archive</h3>
+      <svg viewBox="0 0 1120 250" role="img" aria-label="Act rails pipeline">
+        <rect class="box good-b" x="10" y="30" width="150" height="46" rx="8"/>
+        <text x="85" y="49" text-anchor="middle" class="h">✓ archive candidate</text>
+        <text x="85" y="65" text-anchor="middle" class="t2">(from the gate above)</text>
+
+        <path class="edge" d="M160,53 H196" marker-end="url(#arr)"/>
+
+        <rect class="box" x="198" y="18" width="182" height="70" rx="8"/>
+        <text x="289" y="38" text-anchor="middle" class="h">Breaker check</text>
+        <text x="289" y="54" text-anchor="middle" class="t2">≥4 attempts in 6 h, or one</text>
+        <text x="289" y="68" text-anchor="middle" class="t2">deterministic failure before?</text>
+        <path class="edge" d="M289,88 V138" marker-end="url(#arr)"/>
+        <text x="296" y="116" class="lbl">yes</text>
+        <rect class="box crit-b" x="198" y="140" width="182" height="52" rx="8"/>
+        <text x="210" y="159" class="h">⏸ HELD BACK — loudly</text>
+        <text x="210" y="174" class="t2">says why + when it frees up; a</text>
+        <text x="210" y="187" class="t2">person’s direct word still overrides</text>
+
+        <path class="edge" d="M380,53 H416" marker-end="url(#arr)"/>
+        <text x="384" y="45" class="lbl">no</text>
+
+        <rect class="box" x="418" y="18" width="182" height="70" rx="8"/>
+        <text x="509" y="38" text-anchor="middle" class="h">Re-check at T−0</text>
+        <text x="509" y="54" text-anchor="middle" class="t2">fresh dossier read: any movement</text>
+        <text x="509" y="68" text-anchor="middle" class="t2">or a new live writer since deciding?</text>
+        <path class="edge" d="M509,88 V138" marker-end="url(#arr)"/>
+        <text x="516" y="116" class="lbl">moved</text>
+        <rect class="box warn-b" x="418" y="140" width="182" height="52" rx="8"/>
+        <text x="430" y="159" class="h">✋ ABORT</text>
+        <text x="430" y="174" class="t2">a person’s word beats any verdict —</text>
+        <text x="430" y="187" class="t2">re-decide against the new state</text>
+
+        <path class="edge" d="M600,53 H636" marker-end="url(#arr)"/>
+        <text x="604" y="45" class="lbl">clean</text>
+
+        <rect class="box" x="638" y="18" width="160" height="70" rx="8"/>
+        <text x="718" y="38" text-anchor="middle" class="h">Act</text>
+        <text x="718" y="54" text-anchor="middle" class="t2">attempt counted FIRST,</text>
+        <text x="718" y="68" text-anchor="middle" class="t2">then POST desktop-archive</text>
+        <path class="edge" d="M718,88 V138" marker-end="url(#arr)"/>
+        <text x="725" y="116" class="lbl">app running?</text>
+        <rect class="box serious-b" x="638" y="140" width="220" height="66" rx="8"/>
+        <text x="650" y="159" class="h">⚠ flag written — NOT success</text>
+        <text x="650" y="174" class="t2">a running app keeps its chat list in</text>
+        <text x="650" y="187" class="t2">memory: on screen until restart, and</text>
+        <text x="650" y="200" class="t2">it can re-save the flag away (exit 7)</text>
+
+        <path class="edge" d="M798,53 H834" marker-end="url(#arr)"/>
+
+        <rect class="box" x="836" y="18" width="130" height="70" rx="8"/>
+        <text x="901" y="38" text-anchor="middle" class="h">Verify</text>
+        <text x="901" y="54" text-anchor="middle" class="t2">read the dossier</text>
+        <text x="901" y="68" text-anchor="middle" class="t2">again — did it land?</text>
+
+        <path class="edge" d="M966,42 H1002" marker-end="url(#arr)"/>
+        <rect class="box good-b" x="1004" y="18" width="106" height="48" rx="8"/>
+        <text x="1016" y="37" class="h">✓ VERIFIED</text>
+        <text x="1016" y="53" class="t2">success clears</text>
+
+        <path class="edge" d="M901,88 V138" marker-end="url(#arr)"/>
+        <text x="908" y="116" class="lbl">no</text>
+        <rect class="box crit-b" x="880" y="140" width="200" height="52" rx="8"/>
+        <text x="892" y="159" class="h">✗ NOT landed — say so</text>
+        <text x="892" y="174" class="t2">attempt stays on the ledger, so a</text>
+        <text x="892" y="187" class="t2">futile loop trips the breaker above</text>
+      </svg>
+      <p class="diagram-note">Migrate and rename run the same shape (resolve → refuse live → breaker → act → verify);
+      migrate additionally treats “superseded” and any daemon 400 as deterministic stops, and rename drives the app’s
+      real UI-Automation click, so it needs the app open and the chat visible.</p>
+    </div>
+  </details>
+
+  <details class="diagram" id="scriptsBox">
+    <summary>The scripts — what each one does, straight from its own docstring</summary>
+    <div class="diagram-body" id="scripts"><p class="small muted">loading…</p></div>
+  </details>
+
+  <details class="diagram" id="rulesBox">
+    <summary>The configured rules — every if-this-then-that, with the LIVE value it runs on</summary>
+    <div class="diagram-body" id="rules"><p class="small muted">loading…</p></div>
+  </details>
+
+  <div class="views" id="views" role="tablist">
+    <button type="button" data-view="plan" aria-pressed="true">📋 Plan — what I’d do, per chat</button>
+    <button type="button" data-view="waiting" aria-pressed="false">✋ Waiting on you</button>
+    <button type="button" data-view="chats" aria-pressed="false">🗂 All chats</button>
+    <button type="button" data-view="instances" aria-pressed="false">🖥 Instances &amp; accounts</button>
+    <button type="button" data-view="suppressed" aria-pressed="false">🔒 Holds &amp; held back</button>
+    <button type="button" id="refresh" title="Re-run the scan">↻ Refresh</button>
+  </div>
+  <div id="status"></div>
+  <div id="content" class="table-scroll"></div>
+</div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+const KINDS = {
+  "wait-on-person": { icon: "✋", label: "waiting on you",  color: "var(--warning)"  },
+  "judgment":       { icon: "🤔", label: "needs a decision",color: "var(--warning)"  },
+  "archive":        { icon: "🗄", label: "would archive",   color: "var(--good)"     },
+  "held-back":      { icon: "⏸", label: "held back",       color: "var(--critical)" },
+  "resume":         { icon: "⟳", label: "resume candidate",color: "var(--serious)"  },
+  "human":          { icon: "🧍", label: "a person's",      color: "var(--ink-muted)"},
+  "on-hold":        { icon: "🔒", label: "on hold",         color: "var(--ink-muted)"},
+  "cannot":         { icon: "🚫", label: "cannot gate",     color: "var(--critical)" },
+  "leave-alone":    { icon: "🛠", label: "working",         color: "var(--accent)"   },
+};
+const STATE_ICON = { running: "🟢", finished: "🏁", crashed: "💥", ungated: "❓" };
+
+let planCache = null;
+let currentView = "plan";
+let planFilter = null;
+
+function rel(ms) {
+  if (!ms) return "—";
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return `${Math.round(s)}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}min ago`;
+  if (s < 129600) return `${(s / 3600).toFixed(1)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+async function getJSON(path) {
+  const res = await fetch(path);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || (`${path} -> HTTP ${res.status}`));
+  return body;
+}
+
+function showError(msg) {
+  const e = $("#error");
+  e.style.display = msg ? "block" : "none";
+  e.innerHTML = msg ? `⛔ <b>Read failed — this is NOT an empty fleet:</b> ${esc(msg)}` : "";
+}
+
+function badge(kind) {
+  const k = KINDS[kind] || { icon: "•", label: kind, color: "var(--ink-muted)" };
+  return `<span class="badge"><span class="dot" style="background:${k.color}"></span>${k.icon} ${esc(k.label)}</span>`;
+}
+
+function accountCell(a, instance) {
+  if (!a) return `<div>${esc(instance ?? "—")}</div><div class="small muted">account unknown</div>`;
+  return `<div>${esc(instance)} ${a.appRunning ? "🟢" : ""}</div>` +
+         `<div class="small muted">${esc(a.email ?? "?")} · ${esc(a.plan ?? "plan?")}</div>`;
+}
+
+function renderTiles(plan) {
+  const c = plan.counts || {};
+  const tiles = [
+    ["wait-on-person"], ["judgment"], ["archive"], ["held-back"], ["resume"], ["cannot"],
+  ].map(([kind]) => {
+    const k = KINDS[kind];
+    return `<button class="tile" data-kind="${kind}">
+      <div class="n">${c[kind] || 0}</div>
+      <div class="l"><span class="dot" style="background:${k.color}"></span>${k.icon} ${esc(k.label)}</div>
+    </button>`;
+  }).join("");
+  $("#tiles").innerHTML = tiles +
+    `<button class="tile" data-kind="">
+       <div class="n">${plan.scanned}</div>
+       <div class="l">🗂 visible chats scanned</div>
+     </button>`;
+  for (const t of document.querySelectorAll(".tile")) {
+    t.addEventListener("click", () => {
+      planFilter = t.dataset.kind || null;
+      setView("plan");
+    });
+  }
+}
+
+function originCell(ch) {
+  return ch.origin === "desktop"
+    ? `<span class="badge">🖥 desktop</span><div class="small muted">stays in the desktop</div>`
+    : `<span class="badge">⌨ console</span><div class="small muted">${esc(ch.sourceTool ?? "")} — never landed in the app</div>`;
+}
+
+function planTable(plan) {
+  const rows = plan.chats.filter((ch) => !planFilter || ch.decision.kind === planFilter);
+  const head = `<tr><th>Chat</th><th>Origin</th><th>Instance · account</th><th>State</th><th>What I’d do</th><th>Why</th><th>Do it (terminal)</th></tr>`;
+  const body = rows.map((ch, i) => {
+    const hasEv = !!(ch.evidence?.trim());
+    return `<tr class="clickable" data-row="${i}">
+      <td><b>${esc(ch.title ?? "(untitled)")}</b><div class="small muted">${rel(ch.lastActivityAt)}${hasEv ? " · click for its last words" : ""}</div></td>
+      <td>${originCell(ch)}</td>
+      <td>${accountCell(ch.account, ch.instance)}</td>
+      <td><span class="badge">${STATE_ICON[ch.state] ?? "•"} ${esc(ch.state)}</span></td>
+      <td>${badge(ch.decision.kind)}<div class="small">${esc(ch.decision.action)}</div></td>
+      <td class="small">${esc(ch.decision.detail || ch.cause || "")}</td>
+      <td>${ch.decision.command ? `<span class="cmd">${esc(ch.decision.command)}</span>` : `<span class="muted">—</span>`}</td>
+    </tr>
+    <tr class="evidence"><td colspan="7"><pre>${esc(ch.evidence || "")}</pre></td></tr>`;
+  }).join("");
+  const note = plan.complete ? "" :
+    `<p class="small" style="color:var(--critical)">⚠ INCOMPLETE: ${esc(plan.incompleteWhy)} — the zeros above are lower bounds.</p>`;
+  const filterNote = planFilter ?
+    `<p class="small">Filtered to <b>${esc(KINDS[planFilter]?.label || planFilter)}</b> — <a href="#" id="clearFilter">show all ${plan.chats.length}</a></p>` : "";
+  const doctrine = `<p class="small muted">Residence rule: a chat with a desktop home stays in the desktop; console-only sessions may stay console, but the ones waiting on you are listed as land-in-desktop suggestions under Accounts above.</p>`;
+  return `${note + filterNote + doctrine}<table>${head}${body || `<tr><td colspan="7" class="muted">nothing in this lane</td></tr>`}</table>`;
+}
+
+function waitingTable(plan) {
+  const rows = plan.chats.filter((ch) => ch.decision.kind === "wait-on-person" || ch.decision.kind === "judgment");
+  if (!rows.length) return `<p>No chat is waiting on you${plan.complete ? " — full transcript tails were read, so that is an answer, not a guess." : ", but the scan was incomplete."}</p>`;
+  const head = `<tr><th>Chat</th><th>Instance · account</th><th>Why it waits</th><th>Its last words (tail)</th></tr>`;
+  const body = rows.map((ch) => `<tr>
+      <td><b>${esc(ch.title ?? "(untitled)")}</b><div class="small muted">${rel(ch.lastActivityAt)}</div></td>
+      <td>${accountCell(ch.account, ch.instance)}</td>
+      <td>${badge(ch.decision.kind)}<div class="small">${esc(ch.decision.action)}</div></td>
+      <td class="small"><pre style="white-space:pre-wrap;margin:0;font:12px/1.5 ui-monospace,Consolas,monospace">${esc((ch.evidence || "").split("\n").slice(-6).join("\n"))}</pre></td>
+    </tr>`).join("");
+  return `<table>${head}${body}</table>`;
+}
+
+function chatsTable(data) {
+  const head = `<tr><th>Chat</th><th>Origin</th><th>Instance · account</th><th>Archived</th><th>Last activity</th><th>Preview (truncated by the daemon)</th></tr>`;
+  const body = data.chats.map((ch) => `<tr>
+      <td><b>${esc(ch.title ?? "(untitled)")}</b></td>
+      <td>${originCell(ch)}</td>
+      <td>${accountCell(ch.account, ch.instance)}</td>
+      <td>${ch.archived ? "🗄 yes" : "👁 visible"}</td>
+      <td class="small">${rel(ch.lastActivityAt)}</td>
+      <td class="small muted">${esc(ch.preview)}</td>
+    </tr>`).join("");
+  return `<p class="small">${data.total} chats total. The preview column is the daemon’s ~140-char cut —
+    the Plan and Waiting views read the REAL transcript tails instead.</p><table>${head}${body}</table>`;
+}
+
+function instancesTable(data) {
+  const head = `<tr><th>#</th><th>Instance</th><th>Open</th><th>Account</th><th>Plan</th><th class="num">Weekly %</th><th class="num">Visible chats</th><th>Signed in</th></tr>`;
+  const body = data.instances.map((i) => `<tr>
+      <td class="mono">${esc(i.num ?? "?")}</td>
+      <td><b>${esc(i.name || "(unnamed)")}</b><div class="small muted">${esc(i.dir ?? "")}</div></td>
+      <td>${i.isRunning ? "🟢 open" : "◦ closed"}</td>
+      <td class="small">${esc(i.email ?? "?")}</td>
+      <td class="small">${esc(i.plan ?? "?")}</td>
+      <td class="num">${i.weeklyPct ?? "—"}</td>
+      <td class="num">${i.visibleChats}</td>
+      <td>${i.signedIn ? "yes" : "⚠ SIGNED OUT"}</td>
+    </tr>`).join("");
+  return `<table>${head}${body}</table>`;
+}
+
+function suppressedTable(data) {
+  const holds = data.holds || [];
+  const holdBlock = holds.length
+    ? `<h3>🔒 On hold — the owner's hands-off switch (outranks every verdict; --force still works)</h3>
+       <table><tr><th>Chat</th><th>Why</th></tr>
+       ${holds.map((h) => `<tr><td class="mono">${esc(h.session)}</td><td class="small">${esc(h.why || h.reason)}</td></tr>`).join("")}
+       </table>`
+    : `<p class="small muted">No chat is on hold. Put one out of automation's reach with:
+       <span class="cmd">python scripts/hold_chat.py &lt;chat&gt; --reason "why"</span></p>`;
+  const brk = !data.suppressed.length
+    ? "<p>Nothing is suppressed — the breaker has no futile loop to stop right now.</p>"
+    : `<h3>⏸ Held back by the breaker (futile repetition)</h3>
+       <table><tr><th>Act</th><th>Chat / target id</th><th class="num">Attempts</th><th>Why</th></tr>
+       ${data.suppressed.map((s) => `<tr>
+         <td>${esc(s.kind)}</td><td class="mono">${esc(s.session)}</td>
+         <td class="num">${s.attempts ?? "?"}</td><td class="small">${esc(s.why)}</td>
+       </tr>`).join("")}</table>`;
+  return holdBlock + brk;
+}
+
+async function setView(view) {
+  currentView = view;
+  if (view !== "plan") planFilter = null;
+  for (const b of document.querySelectorAll("#views button[data-view]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.view === view));
+  }
+  const content = $("#content");
+  $("#status").textContent = "running the read-only scan…";
+  showError(null);
+  try {
+    let html = "";
+    if (view === "plan" || view === "waiting") {
+      if (!planCache) planCache = await getJSON("/data/plan");
+      renderTiles(planCache);
+      html = view === "plan" ? planTable(planCache) : waitingTable(planCache);
+      $("#status").textContent = `scanned ${planCache.scanned} visible chats over full transcript tails · ${new Date(planCache.generatedAt).toLocaleTimeString()}`;
+    } else if (view === "chats") {
+      const d = await getJSON("/data/chats");
+      html = chatsTable(d);
+      $("#status").textContent = `${d.total} chats · ${new Date(d.generatedAt).toLocaleTimeString()}`;
+    } else if (view === "instances") {
+      const d = await getJSON("/data/instances");
+      html = instancesTable(d);
+      $("#status").textContent = `${d.instances.length} instances · ${new Date(d.generatedAt).toLocaleTimeString()}`;
+    } else if (view === "suppressed") {
+      const d = await getJSON("/data/suppressed");
+      html = suppressedTable(d);
+      $("#status").textContent = new Date(d.generatedAt).toLocaleTimeString();
+    }
+    content.innerHTML = html;
+    const cf = $("#clearFilter");
+    if (cf) cf.addEventListener("click", (e) => { e.preventDefault(); planFilter = null; setView("plan"); });
+    for (const tr of content.querySelectorAll("tr.clickable")) {
+      tr.addEventListener("click", () => tr.classList.toggle("open"));
+    }
+  } catch (err) {
+    $("#status").textContent = "";
+    showError(err.message);
+    content.innerHTML = "";
+  }
+}
+
+function pctDot(pct, fresh) {
+  if (pct == null || !fresh) return `<span class="dot" style="background:var(--ink-muted)"></span>`;
+  const c = pct >= 80 ? "var(--critical)" : pct >= 50 ? "var(--warning)" : "var(--good)";
+  return `<span class="dot" style="background:${c}"></span>`;
+}
+
+function renderAccounts(d) {
+  const nextEmails = new Set((d.useNext || []).map((a) => a.email));
+  const chips = d.accounts.map((a) => {
+    const isNext = a.email && a.email === d.useNext[0]?.email;
+    const p = (v) => (v == null ? "—" : `${v}%`);
+    const insts = a.instances.map((i) => i.name + (i.isRunning ? " 🟢" : "")).join(", ") || a.kind;
+    const flags = [
+      // open-account pressure is actionable; closed-account pressure is the orchestrator's
+      // own do-not-open note (owner: "never notify me about those")
+      a.underPressure ? (a.open
+        ? `<span style="color:var(--critical)">⛔ under pressure</span>`
+        : `<span class="muted">🤖 self-note: do NOT open this one</span>`) : "",
+      !a.readingOk ? `<span style="color:var(--serious)">⚠ no reading — NOT “plenty left”</span>` :
+        (!a.fresh ? `<span style="color:var(--serious)">⚠ stale reading (${Math.round(a.ageHours)}h old)</span>` : ""),
+      isNext ? `<span class="nextlbl">▶ HAND OFF HERE${a.mustOpen ? " (needs opening)" : ""}</span>`
+             : (nextEmails.has(a.email) ? `<span class="nextlbl">runner-up${a.mustOpen ? " (needs opening)" : ""}</span>` : ""),
+    ].filter(Boolean).join(" · ");
+    return `<div class="chip${isNext ? " next" : ""}">
+      <div class="who">${pctDot(a.bindingPct, a.fresh && a.readingOk)}${esc(a.email ?? a.identity)}</div>
+      <div class="pcts">5-hour ${p(a.fiveHourPct)} · weekly ${p(a.weeklyAllPct)} · Fable ${p(a.weeklyModelPct)}</div>
+      <div class="meta">${esc(a.plan ?? "plan?")} · ${esc(insts)}${a.weeklyResets ? ` · wk resets ${esc(a.weeklyResets)}` : ""}</div>
+      ${flags ? `<div class="meta">${flags}</div>` : ""}
+    </div>`;
+  }).join("");
+  const lv = d.likelihood || {};
+  const lvColor = lv.level === "likely" ? "var(--warning)" : lv.level === "blocked" ? "var(--critical)" : "var(--good)";
+  const moves = (d.moves || []).map((m) => `<div class="movecard">
+      <b>MOVE</b> “${esc(m.title)}” — ${esc(m.from.instance)} (${esc(m.from.email ?? "?")}, ${m.from.bindingPct ?? "?"}%)
+      → <b>${esc(m.to.instance)}</b> (${esc(m.to.email)}, ${m.to.bindingPct}%)
+      <div class="small">${esc(m.why)}</div>
+      <span class="cmd">${esc(m.command)}</span>
+    </div>`).join("");
+  const lands = (d.consoleStrays || []).map((c) => `<div class="movecard" style="border-left-color: var(--accent)">
+      <b>LAND IN DESKTOP (required)</b> “${esc(c.title)}” — ${esc(c.why)}
+      ${c.command ? `<div><span class="cmd">${esc(c.command)}</span></div>` : ""}
+    </div>`).join("");
+  const degraded = d.usageSource === "cache-fallback"
+    ? `<p class="small" style="color:var(--serious)">⚠ the live usage survey did not answer — showing the daemon's CACHED snapshots (ages flagged per account). Refresh to retry the live survey.</p>`
+    : "";
+  $("#accounts").innerHTML = `${degraded}
+    <p class="small"><b>${d.activeAccounts}</b> usable desktop account(s) of ${d.totalLogins} logins
+      (${d.measuredAccounts} with a real reading). A “—” means never measured, which is never “plenty left”.</p>
+    <div class="acct-row">${chips}</div>
+    <div class="verdict"><b style="color:${lvColor}">Load balancing: ${esc((lv.level || "?").toUpperCase())}</b> — ${esc(lv.why || "")}</div>
+    ${moves}${lands}
+    <p class="small muted">Moves obey the residence rule (everything lands IN the desktop, nothing leaves it),
+    never touch a live chat, and run through migrate_chat.py’s own rails — nothing moves from this page.</p>`;
+}
+
+async function loadAccounts() {
+  try {
+    renderAccounts(await getJSON("/data/accounts"));
+  } catch (err) {
+    $("#accounts").innerHTML = `<p class="small" style="color:var(--critical)">⛔ usage read failed: ${esc(err.message)} — not showing guesses in its place.</p>`;
+  }
+}
+
+const SCRIPT_KIND = {
+  observe: { icon: "👁", label: "observe — reads only, touches nothing", color: "var(--accent)" },
+  act:     { icon: "✋", label: "act — changes something, behind the rails", color: "var(--warning)" },
+  lib:     { icon: "🧩", label: "shared library — imported, not run", color: "var(--ink-muted)" },
+};
+
+function renderScripts(d) {
+  const groups = ["observe", "act", "lib"];
+  $("#scripts").innerHTML = groups.map((g) => {
+    const rows = d.scripts.filter((s) => s.kind === g);
+    if (!rows.length) return "";
+    const k = SCRIPT_KIND[g];
+    return `<h3><span class="dot" style="background:${k.color}"></span> ${k.icon} ${esc(k.label)}</h3>
+      <div class="table-scroll"><table>
+        <tr><th style="width:16%">Script</th><th style="width:34%">What it does</th><th>Detail · how to run it</th></tr>
+        ${rows.map((s) => `<tr class="clickable">
+          <td class="mono"><b>${esc(s.name)}</b></td>
+          <td class="small">${esc(s.summary)}</td>
+          <td class="small">
+            ${s.detail ? `<div style="white-space:pre-wrap">${esc(s.detail)}</div>` : ""}
+            ${s.usage ? `<div style="margin-top:4px"><span class="cmd">${esc(s.usage.replace(/^Usage:\s*/, ""))}</span></div>` : ""}
+            ${s.exits ? `<div class="muted" style="margin-top:4px">${esc(s.exits)}</div>` : ""}
+          </td></tr>`).join("")}
+      </table></div>`;
+  }).join("");
+}
+
+async function loadScripts() {
+  try {
+    renderScripts(await getJSON("/data/scripts"));
+  } catch (err) {
+    $("#scripts").innerHTML = `<p class="small" style="color:var(--critical)">scripts read failed: ${esc(err.message)}</p>`;
+  }
+}
+
+function renderRules(d) {
+  $("#rules").innerHTML = d.sections.map((s) => `
+    <h3>${esc(s.title)}</h3>
+    <div class="table-scroll"><table>
+      <tr><th style="width:32%">If</th><th style="width:36%">Then</th><th>Configured value (live, from the code)</th></tr>
+      ${s.rules.map((r) => `<tr><td class="small">${esc(r.if)}</td><td class="small">${esc(r.then)}</td><td class="small mono">${esc(r.value)}</td></tr>`).join("")}
+    </table></div>`).join("");
+}
+
+async function loadRules() {
+  try {
+    renderRules(await getJSON("/data/rules"));
+  } catch (err) {
+    $("#rules").innerHTML = `<p class="small" style="color:var(--critical)">rules read failed: ${esc(err.message)}</p>`;
+  }
+}
+
+for (const b of document.querySelectorAll("#views button[data-view]")) {
+  b.addEventListener("click", () => setView(b.dataset.view));
+}
+$("#refresh").addEventListener("click", async () => {
+  planCache = null;
+  $("#accounts").innerHTML = `<p class="small muted">re-checking every account's usage…</p>`;
+  loadAccounts();
+  await setView(currentView);
+});
+
+(async function init() {
+  try {
+    const h = await getJSON("/data/health");
+    $("#daemon").textContent = `daemon ${h.daemon.version} at ${h.daemonUrl}`;
+  } catch (err) {
+    $("#daemon").textContent = "daemon: UNREACHABLE";
+    showError(`${err.message} — is the AgentHydra daemon running?`);
+  }
+  loadScripts();
+  loadRules();
+  loadAccounts();   // deliberately not awaited: the usage survey can take a minute
+  await setView("plan");
+})();
+</script>
+</body>
+</html>
