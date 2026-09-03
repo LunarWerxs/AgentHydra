@@ -545,140 +545,178 @@ def gateable(transcript_path: str) -> tuple[bool, str]:
     return True, ""
 
 
-def gate(
-    session_id: str,
-    transcript_path: str,
-    live: dict | None,
-    now_s: float | None = None,
-    idle_after_secs: int = IDLE_AFTER_SECS,
-    stall_after_secs: int | None = None,
+def _stall_verdict(
+    transcript_path: str, quiet: int, stall_after: int, engine_started: float | None
 ) -> dict | None:
-    """The gate. `live` is the dossier's live block ({pid, name, ...}) or None.
-
-    Returns None when the transcript does not exist or is not a format a verdict can be read
-    from (see gateable()) - a thing that cannot be gated cannot be acted on, and the caller
-    must say so rather than guess.
-
-    `stall_after_secs` overrides STALL_QUIET_SECS for the stall verdict only - a caller that
-    KNOWS a chat cannot be running real work (its configured mode is not bypassPermissions,
-    so a shell call with no result is a prompt) may ask for a shorter window. The shape test
-    itself never changes: newest record a shell call, no result, nothing moving.
-    """
-    ok, _why = gateable(transcript_path)
-    if not ok:
+    """Is the newest record a shell call left with no result, quiet past `stall_after`?
+    Split out of gate() so the live-process branch reads as a sequence of verdicts instead
+    of one long nested block - behaviour is unchanged, this is extraction only."""
+    if quiet < stall_after:
         return None
-    quiet = quiet_secs_of(transcript_path, now_s)
-
-    base = {
-        "session_id": session_id,
-        "transcript_path": transcript_path,
+    # One fixed window, no growth loop: a short read can only cost a detection we
+    # then do not claim, and a missed stall is a report a human reads themselves,
+    # while a false stall is the actuator lying about a healthy chat.
+    raw = read_transcript_tail_text(transcript_path, 64 * 1024)
+    if not raw:
+        return None
+    records = parse_tail_records(raw[0], raw[1])
+    last = records[-1] if records else None
+    if not (last and last["has_tool_use"] and not last["has_tool_result"]
+            and not _predates(last, engine_started)):
+        return None
+    tool = next((n for n in last["tool_names"] if SHELL_TOOLS.match(n)), None)
+    if not tool:
+        return None
+    return {
+        "tool": tool,
         "quiet_secs": quiet,
-        "live": None,
-        "crashed": None,
-        "finished": None,
-        "stalled": None,
-        "idle": None,
+        "why": (
+            f"its newest record is a '{tool}' call with no result after it, and "
+            f"nothing has moved for {quiet // 60}min - the classic shape of a "
+            "command waiting on an approval nobody is present to click, or a "
+            "background task that died. Read the chat before acting: a genuinely "
+            "long command looks the same from outside."
+        ),
     }
 
-    # Explicit not-None, never truthiness: if the daemon ever sends live as {} for a chat it
-    # considers live-but-unpopulated, truthiness would route it to the no-writer branch and an
-    # archive-candidate verdict could come back for a chat that still has a writer (rule 2).
-    if live is not None:
-        pid = live.get("pid")
-        stalled = None
-        idle = None
-        # A TOOL CALL RECORDED BEFORE THIS ENGINE STARTED IS NOT IN FLIGHT (2026-09-01, the
-        # relocated manager): a migrate re-lands a chat and claude://resume boots a fresh
-        # engine, but the transcript still ENDS on the previous engine's pending tool call.
-        # Read as "in flight", the courier refused every wake ("never interrupt a live turn")
-        # and after 30 quiet minutes the groundskeeper would have migrated it again - a loop
-        # with no exit. The engine's own start time settles it: a call older than the process
-        # is an orphan, and a chat parked on an orphan is IDLE - wakeable, never stalled.
-        engine_started = _epoch_s(live.get("startedAt") or live.get("startedAtMs"))
-        stall_after = STALL_QUIET_SECS if stall_after_secs is None else stall_after_secs
-        if quiet >= stall_after:
-            # One fixed window, no growth loop: a short read can only cost a detection we
-            # then do not claim, and a missed stall is a report a human reads themselves,
-            # while a false stall is the actuator lying about a healthy chat.
-            raw = read_transcript_tail_text(transcript_path, 64 * 1024)
-            if raw:
-                records = parse_tail_records(raw[0], raw[1])
-                last = records[-1] if records else None
-                if (last and last["has_tool_use"] and not last["has_tool_result"]
-                        and not _predates(last, engine_started)):
-                    tool = next((n for n in last["tool_names"] if SHELL_TOOLS.match(n)), None)
-                    if tool:
-                        stalled = {
-                            "tool": tool,
-                            "quiet_secs": quiet,
-                            "why": (
-                                f"its newest record is a '{tool}' call with no result after it, and "
-                                f"nothing has moved for {quiet // 60}min - the classic shape of a "
-                                "command waiting on an approval nobody is present to click, or a "
-                                "background task that died. Read the chat before acting: a genuinely "
-                                "long command looks the same from outside."
-                            ),
-                        }
-        if not stalled and quiet >= idle_after_secs:
-            records = read_records(transcript_path)
-            last = records[-1] if records else None
-            completed = (
-                last
-                and last["type"] != "user"
-                and last["has_text"]
-                and not last["has_tool_use"]
-                and not last["api_error"]
-            )
-            orphaned = bool(
-                last and last["has_tool_use"] and not last["has_tool_result"]
-                and _predates(last, engine_started)
-            )
-            # A QUOTA WALL IS THE PLAINEST "STOPPED, WAITING, CHILLING" THERE IS (2026-09-03).
-            # The account is out of budget until its reset, so the engine is parked: it is not
-            # writing and cannot write. But the wall arrives as an api_error record, which
-            # `completed` excludes, so such a chat read as "may be working" for as long as its
-            # engine lived and could never be moved off the exhausted account - the one move
-            # that would actually help it. Found on a chat sitting at "You've hit your session
-            # limit", which is exactly the chat you most want to relocate.
-            #
-            # QUOTA ONLY, never 'transient': an overload (529) is a wall the engine may retry
-            # on its own, and moving a chat that is about to resume rewrites a live transcript.
-            walled = bool(last and last["api_error"]
-                          and classify_limit(last["text"]) == "quota")
-            if completed or orphaned or walled:
-                fe = _finished_evidence(records)
-                idle = {"quiet_secs": quiet, "orphaned_tool_call": orphaned,
-                        "usage_wall": walled,
-                        **{k: fe[k] for k in (
-                            "done_claim", "ends_with_question", "recap_present",
-                            "last_assistant_text")}}
-        cause = (
-            f"process {pid} is alive but looks STUCK: {stalled['why']}"
-            if stalled
-            else (
-                (f"process {pid} is alive but IDLE - its pending tool call predates this engine "
-                 f"(a resume), so nothing is in flight; quiet {idle['quiet_secs']}s and waiting "
-                 "for its next instruction"
-                 if idle.get("orphaned_tool_call") else
-                 f"process {pid} is alive but IDLE - it is parked at a USAGE WALL, so it cannot "
-                 f"write until the account resets; quiet {idle['quiet_secs']}s"
-                 if idle.get("usage_wall") else
-                 f"process {pid} is alive but IDLE - it finished its turn and has been quiet "
-                 f"{idle['quiet_secs']}s, so it is waiting for its next instruction, not working")
-                if idle
-                else f"process {pid} is alive (quiet {quiet}s - a long quiet can be background work, not a stall)"
-            )
-        )
-        return {
-            **base,
-            "state": "running",
-            "cause": cause,
-            "live": {"pid": pid, "name": live.get("name")},
-            "stalled": stalled,
-            "idle": idle,
-        }
 
+def _idle_verdict(
+    transcript_path: str, quiet: int, idle_after_secs: int, engine_started: float | None
+) -> dict | None:
+    """Has the process finished a turn (or parked itself) and gone quiet? Split out of
+    gate() alongside _stall_verdict; the caller only calls this when not already stalled."""
+    if quiet < idle_after_secs:
+        return None
     records = read_records(transcript_path)
+    last = records[-1] if records else None
+    completed = (
+        last
+        and last["type"] != "user"
+        and last["has_text"]
+        and not last["has_tool_use"]
+        and not last["api_error"]
+    )
+    orphaned = bool(
+        last and last["has_tool_use"] and not last["has_tool_result"]
+        and _predates(last, engine_started)
+    )
+    # A QUOTA WALL IS THE PLAINEST "STOPPED, WAITING, CHILLING" THERE IS (2026-09-03).
+    # The account is out of budget until its reset, so the engine is parked: it is not
+    # writing and cannot write. But the wall arrives as an api_error record, which
+    # `completed` excludes, so such a chat read as "may be working" for as long as its
+    # engine lived and could never be moved off the exhausted account - the one move
+    # that would actually help it. Found on a chat sitting at "You've hit your session
+    # limit", which is exactly the chat you most want to relocate.
+    #
+    # QUOTA ONLY, never 'transient': an overload (529) is a wall the engine may retry
+    # on its own, and moving a chat that is about to resume rewrites a live transcript.
+    walled = bool(last and last["api_error"]
+                  and classify_limit(last["text"]) == "quota")
+    if not (completed or orphaned or walled):
+        return None
+    fe = _finished_evidence(records)
+    return {"quiet_secs": quiet, "orphaned_tool_call": orphaned, "usage_wall": walled,
+            **{k: fe[k] for k in (
+                "done_claim", "ends_with_question", "recap_present",
+                "last_assistant_text")}}
+
+
+def _running_cause(pid, quiet: int, stalled: dict | None, idle: dict | None) -> str:
+    """The human-readable explanation for a 'running' verdict. Linear ifs rather than the
+    nested ternary gate() used to build this inline - same four strings, easier to scan."""
+    if stalled:
+        return f"process {pid} is alive but looks STUCK: {stalled['why']}"
+    if not idle:
+        return f"process {pid} is alive (quiet {quiet}s - a long quiet can be background work, not a stall)"
+    if idle.get("orphaned_tool_call"):
+        return (f"process {pid} is alive but IDLE - its pending tool call predates this engine "
+                f"(a resume), so nothing is in flight; quiet {idle['quiet_secs']}s and waiting "
+                "for its next instruction")
+    if idle.get("usage_wall"):
+        return (f"process {pid} is alive but IDLE - it is parked at a USAGE WALL, so it cannot "
+                f"write until the account resets; quiet {idle['quiet_secs']}s")
+    return (f"process {pid} is alive but IDLE - it finished its turn and has been quiet "
+            f"{idle['quiet_secs']}s, so it is waiting for its next instruction, not working")
+
+
+def _gate_running(
+    base: dict, live: dict, transcript_path: str, quiet: int,
+    idle_after_secs: int, stall_after_secs: int | None,
+) -> dict:
+    """The 'running' verdict: a live pid, possibly stalled or idle. Extracted from gate()
+    so the top-level function reads as dispatch rather than one long body."""
+    pid = live.get("pid")
+    # A TOOL CALL RECORDED BEFORE THIS ENGINE STARTED IS NOT IN FLIGHT (2026-09-01, the
+    # relocated manager): a migrate re-lands a chat and claude://resume boots a fresh
+    # engine, but the transcript still ENDS on the previous engine's pending tool call.
+    # Read as "in flight", the courier refused every wake ("never interrupt a live turn")
+    # and after 30 quiet minutes the groundskeeper would have migrated it again - a loop
+    # with no exit. The engine's own start time settles it: a call older than the process
+    # is an orphan, and a chat parked on an orphan is IDLE - wakeable, never stalled.
+    engine_started = _epoch_s(live.get("startedAt") or live.get("startedAtMs"))
+    stall_after = STALL_QUIET_SECS if stall_after_secs is None else stall_after_secs
+    stalled = _stall_verdict(transcript_path, quiet, stall_after, engine_started)
+    idle = None if stalled else _idle_verdict(transcript_path, quiet, idle_after_secs, engine_started)
+    return {
+        **base,
+        "state": "running",
+        "cause": _running_cause(pid, quiet, stalled, idle),
+        "live": {"pid": pid, "name": live.get("name")},
+        "stalled": stalled,
+        "idle": idle,
+    }
+
+
+def _finished_turn_lane(fe: dict) -> str:
+    """archive-candidate when all four independent signals agree the chat is done and
+    dormant; needs-input-review otherwise. See gate()'s docstring for why all four must
+    agree."""
+    return (
+        "archive-candidate"
+        if (fe["done_claim"] == "yes" and not fe["ends_with_question"]
+            and not fe["offers_to_continue"] and not fe["open_recommendations"])
+        else "needs-input-review"
+    )
+
+
+def _finished_turn_cause(lane: str, fe: dict) -> str:
+    """The human-readable explanation for a completed-turn verdict. Linear ifs rather than
+    the nested ternary gate() used to build this inline - same strings, easier to scan."""
+    if lane == "archive-candidate":
+        return "completed turn, recap says done, nothing asked, nothing recommended"
+    if fe["done_claim"] != "yes":
+        detail = f"the recap does not claim done ({fe['done_claim']})"
+    elif fe["offers_to_continue"]:
+        detail = "it OFFERS TO CARRY ON and is waiting to be told to - answer it, do not archive it"
+    elif fe["ends_with_question"]:
+        detail = "it ends on a question"
+    else:
+        detail = (f"it still RECOMMENDS {len(fe['open_recommendations'])} thing(s) - a chat with "
+                  "open recommendations has stopped, not finished; tell it to proceed")
+    return "completed turn but " + detail
+
+
+def _gate_finished_turn(base: dict, records: list[dict]) -> dict:
+    """The verdict for a transcript that ended on a completed assistant turn (not
+    interrupted, not an error, not mid-turn). Extracted from gate()."""
+    fe = _finished_evidence(records)
+    # FOUR INDEPENDENT SIGNALS MUST ALL AGREE before a chat counts as finished-and-done: its
+    # recap claims done, it asks nothing, it offers nothing, and it recommends nothing still
+    # open. Any one of them dissenting sends the chat to the WAKE lane instead, which is the
+    # cheap mistake - a chat woken once too often costs a turn, one archived early loses work.
+    lane = _finished_turn_lane(fe)
+    return {
+        **base,
+        "state": "finished",
+        "cause": _finished_turn_cause(lane, fe),
+        "finished": {"lane": lane, "interrupted": False, **fe},
+    }
+
+
+def _gate_ended(base: dict, records: list[dict]) -> dict:
+    """The verdict when there is no live writer: crashed, interrupted, mid-turn-dead, or a
+    genuinely completed turn. Extracted from gate() so the not-live branch is its own
+    readable sequence of checks instead of interleaved with the live-process branch."""
     last = records[-1] if records else None
 
     if not last:
@@ -733,35 +771,48 @@ def gate(
             "crashed": {"kind": "mid-turn"},
         }
 
-    fe = _finished_evidence(records)
-    # FOUR INDEPENDENT SIGNALS MUST ALL AGREE before a chat counts as finished-and-done: its
-    # recap claims done, it asks nothing, it offers nothing, and it recommends nothing still
-    # open. Any one of them dissenting sends the chat to the WAKE lane instead, which is the
-    # cheap mistake - a chat woken once too often costs a turn, one archived early loses work.
-    lane = (
-        "archive-candidate"
-        if (fe["done_claim"] == "yes" and not fe["ends_with_question"]
-            and not fe["offers_to_continue"] and not fe["open_recommendations"])
-        else "needs-input-review"
-    )
-    cause = (
-        "completed turn, recap says done, nothing asked, nothing recommended"
-        if lane == "archive-candidate"
-        else "completed turn but "
-        + (
-            f"the recap does not claim done ({fe['done_claim']})"
-            if fe["done_claim"] != "yes"
-            else "it OFFERS TO CARRY ON and is waiting to be told to - answer it, do not archive it"
-            if fe["offers_to_continue"]
-            else "it ends on a question"
-            if fe["ends_with_question"]
-            else f"it still RECOMMENDS {len(fe['open_recommendations'])} thing(s) - a chat with "
-                 "open recommendations has stopped, not finished; tell it to proceed"
-        )
-    )
-    return {
-        **base,
-        "state": "finished",
-        "cause": cause,
-        "finished": {"lane": lane, "interrupted": False, **fe},
+    return _gate_finished_turn(base, records)
+
+
+def gate(
+    session_id: str,
+    transcript_path: str,
+    live: dict | None,
+    now_s: float | None = None,
+    idle_after_secs: int = IDLE_AFTER_SECS,
+    stall_after_secs: int | None = None,
+) -> dict | None:
+    """The gate. `live` is the dossier's live block ({pid, name, ...}) or None.
+
+    Returns None when the transcript does not exist or is not a format a verdict can be read
+    from (see gateable()) - a thing that cannot be gated cannot be acted on, and the caller
+    must say so rather than guess.
+
+    `stall_after_secs` overrides STALL_QUIET_SECS for the stall verdict only - a caller that
+    KNOWS a chat cannot be running real work (its configured mode is not bypassPermissions,
+    so a shell call with no result is a prompt) may ask for a shorter window. The shape test
+    itself never changes: newest record a shell call, no result, nothing moving.
+    """
+    ok, _why = gateable(transcript_path)
+    if not ok:
+        return None
+    quiet = quiet_secs_of(transcript_path, now_s)
+
+    base = {
+        "session_id": session_id,
+        "transcript_path": transcript_path,
+        "quiet_secs": quiet,
+        "live": None,
+        "crashed": None,
+        "finished": None,
+        "stalled": None,
+        "idle": None,
     }
+
+    # Explicit not-None, never truthiness: if the daemon ever sends live as {} for a chat it
+    # considers live-but-unpopulated, truthiness would route it to the no-writer branch and an
+    # archive-candidate verdict could come back for a chat that still has a writer (rule 2).
+    if live is not None:
+        return _gate_running(base, live, transcript_path, quiet, idle_after_secs, stall_after_secs)
+
+    return _gate_ended(base, read_records(transcript_path))
