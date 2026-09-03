@@ -7,6 +7,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.38.3] - 2026-09-03
+
+### Added
+
+- **A moved chat keeps what it was set to.** Model, effort, the ultracode toggle, the Chrome
+  permission mode and the chat's own permission grants travel with it. Measured before the change
+  on 16 moved chats: effort reset on 13, ultracode reset on 13, Chrome mode reset on 14, every one
+  arriving as "manual / extra / ultracode off" for the owner to fix by hand. Not carried, on purpose:
+  the permission mode (every migrated chat is bypass, the standing rule) and the enabled MCP tools
+  (those ids belong to the source account's connectors).
+- **Move chats to a CLOSED account without starting it.** The chat's record is written straight
+  into that instance's store, a near-copy of the original, and the app finds it there, settings
+  intact, when it next starts. This is the landing that needs no restart afterwards, and the flyouts
+  say so: a closed target reads "Move to X" under "Not running - lands in its store, ready when it
+  starts". The old "Start X and move there" step is gone with the refusal it worked around.
+- For a **running** target the app still creates the record, the carried settings are merged onto it
+  with the title and the bypass stamp, and the minute-by-minute sweep puts them back whenever the
+  running app re-saves over them, until that app's next start makes them permanent (the same shape
+  as the bypass stamp). The migrate response says which landing happened (`landing: hot | cold`)
+  and which settings were carried.
+
 ## [0.38.2] - 2026-09-03
 
 ### Added
