@@ -41,17 +41,16 @@ from lib import hydralib
 from lib import stamplib
 
 
-def find_twins() -> list[dict]:
-    """Every conversation with more than one VISIBLE (un-archived) desktop record."""
-    fleet = hydralib.fleet()
-    owner = {r.get("session_id"): r.get("instance") for r in hydralib.sessions()}
-    live_ids = set()
+def _live_session_ids() -> set[str]:
     try:
-        live_ids = {s.get("sessionId")
-                    for s in hydralib.api_get("/api/sessions/live").get("sessions", [])}
+        return {s.get("sessionId")
+                for s in hydralib.api_get("/api/sessions/live").get("sessions", [])}
     except hydralib.DaemonError:
-        pass
+        return set()
 
+
+def _visible_records_by_cli(fleet: dict) -> dict[str, list[dict]]:
+    """Every un-archived desktop record, grouped by its raw cli session id."""
     by_cli: dict[str, list[dict]] = defaultdict(list)
     for store in stamplib.store_roots(fleet):
         for path, meta in stamplib.iter_metas(store["root"]):
@@ -61,57 +60,81 @@ def find_twins() -> list[dict]:
             by_cli[cli].append({"instance": store["instance"], "path": str(path),
                                 "stem": path.stem, "title": meta.get("title") or "",
                                 "createdAt": int(meta.get("createdAt") or 0)})
+    return by_cli
 
-    # THE LINEAGE IS THE CONVERSATION, NOT THE ID (2026-09-01): a compaction or a resume rolls
-    # the cli session id, and the daemon keeps the chain in the dossier's lineageIds. Two
-    # visible records with different ids but one lineage are one chat seen twice - grouping
-    # by the raw id alone reported "nothing duplicated" while the owner looked at the pair.
+
+def _uf_find(parent: dict[str, str], x: str) -> str:
+    while parent.setdefault(x, x) != x:
+        x = parent[x]
+    return x
+
+
+def _uf_union(parent: dict[str, str], a: str, b: str) -> None:
+    ra, rb = _uf_find(parent, a), _uf_find(parent, b)
+    if ra != rb:
+        parent[rb] = ra
+
+
+def _merge_by_lineage(by_cli: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """THE LINEAGE IS THE CONVERSATION, NOT THE ID (2026-09-01): a compaction or a resume rolls
+    the cli session id, and the daemon keeps the chain in the dossier's lineageIds. Two
+    visible records with different ids but one lineage are one chat seen twice - grouping
+    by the raw id alone reported "nothing duplicated" while the owner looked at the pair."""
     parent: dict[str, str] = {}
-
-    def find(x: str) -> str:
-        while parent.setdefault(x, x) != x:
-            x = parent[x]
-        return x
-
     for cli in list(by_cli):
         try:
             for m in hydralib.dossier(cli):
                 for lid in (m.get("lineageIds") or []) + (m.get("priorCliSessionIds") or []):
-                    a, b = find(cli), find(str(lid))
-                    if a != b:
-                        parent[b] = a
+                    _uf_union(parent, cli, str(lid))
         except hydralib.DaemonError:
             continue
     merged: dict[str, list[dict]] = defaultdict(list)
     for cli, copies in by_cli.items():
-        merged[find(cli)].extend(copies)
-    by_cli = merged
+        merged[_uf_find(parent, cli)].extend(copies)
+    return merged
+
+
+def _pick_keeper(cli: str, copies: list[dict], home: str | None) -> dict | None:
+    """THE TWO RULES FOR DECIDING WHICH COPY IS REAL: same-instance settles on the file named
+    for the chat's own cli session id; otherwise the daemon's home instance wins (rule 2 first,
+    since it is checked below before falling back to the canonical filename alone)."""
+    canonical_name = f"local_{cli}"
+    # Rule 2 first: the daemon knows which account the chat belongs to now.
+    if home and any(c["instance"] == home for c in copies):
+        on_home = [c for c in copies if c["instance"] == home]
+        # ...and rule 1 settles a same-instance pair.
+        keep = next((c for c in on_home if c["stem"] == canonical_name), None)
+        if keep is None and len(on_home) == 1:
+            keep = on_home[0]
+        return keep
+    return next((c for c in copies if c["stem"] == canonical_name), None)
+
+
+def _build_twin(cli: str, copies: list[dict], keep: dict | None, live_ids: set[str]) -> dict:
+    return {
+        "cliSessionId": cli, "title": copies[0]["title"],
+        "copies": copies, "keep": keep,
+        "stale": [c for c in copies if keep and c["path"] != keep["path"]],
+        "live": cli in live_ids,
+        "why": ("" if keep else
+                "cannot tell which copy is real - neither the daemon's instance nor the "
+                "canonical filename picks one; settle it by hand"),
+    }
+
+
+def find_twins() -> list[dict]:
+    """Every conversation with more than one VISIBLE (un-archived) desktop record."""
+    fleet = hydralib.fleet()
+    owner = {r.get("session_id"): r.get("instance") for r in hydralib.sessions()}
+    live_ids = _live_session_ids()
+    by_cli = _merge_by_lineage(_visible_records_by_cli(fleet))
 
     twins = []
     for cli, copies in by_cli.items():
         if len(copies) < 2:
             continue
-        canonical_name = f"local_{cli}"
-        home = owner.get(cli)
-        keep = None
-        # Rule 2 first: the daemon knows which account the chat belongs to now.
-        if home and any(c["instance"] == home for c in copies):
-            on_home = [c for c in copies if c["instance"] == home]
-            # ...and rule 1 settles a same-instance pair.
-            keep = next((c for c in on_home if c["stem"] == canonical_name), None)
-            if keep is None and len(on_home) == 1:
-                keep = on_home[0]
-        elif len(copies) > 1:
-            keep = next((c for c in copies if c["stem"] == canonical_name), None)
-        twins.append({
-            "cliSessionId": cli, "title": copies[0]["title"],
-            "copies": copies, "keep": keep,
-            "stale": [c for c in copies if keep and c["path"] != keep["path"]],
-            "live": cli in live_ids,
-            "why": ("" if keep else
-                    "cannot tell which copy is real - neither the daemon's instance nor the "
-                    "canonical filename picks one; settle it by hand"),
-        })
+        keep = _pick_keeper(cli, copies, owner.get(cli))
+        twins.append(_build_twin(cli, copies, keep, live_ids))
     return twins
 
 
@@ -475,54 +498,39 @@ def fix_ghosts(ghosts: list[dict]) -> list[dict]:
     return done
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
+def _safe_scan(fn, label: str, err_types: tuple = (hydralib.DaemonError,)) -> list[dict]:
+    """Run one non-fatal scan step; on its own error types, report and carry on empty."""
     try:
-        twins = find_twins()
-    except hydralib.DaemonError as err:
-        print(f"audit_twins FAILED: {err}", file=sys.stderr)
-        return 1
-    fix_it = "--fix" in argv
-    disarmed = False
-    # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
-    # window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so -
-    # nothing acted is not a failure, so the exit code says so too.
-    if fix_it:
-        refusal = armlib.refuse_unless_armed(argv, "settling duplicate chat rows")
-        if refusal:
-            print(refusal)
-            fix_it = False
-            disarmed = True
-    results = fix(twins) if fix_it else []
-    try:
-        same_task = find_same_task()
-    except hydralib.DaemonError as err:
-        print(f"audit_twins: same-task scan FAILED: {err}", file=sys.stderr)
-        same_task = []
-    task_results = fix_same_task(same_task) if fix_it else []
-    # WHAT THE OWNER SEES (2026-09-01: "there's still duplicate chats"): ghost rows a running
-    # app still shows after the disk said archived, and different chats wearing one title.
-    try:
-        ghosts = find_ghosts()
-    except (hydralib.DaemonError, OSError) as err:
-        print(f"audit_twins: ghost scan FAILED: {err}", file=sys.stderr)
-        ghosts = []
-    ghost_results = fix_ghosts(ghosts) if fix_it else []
-    try:
-        collisions = find_title_collisions()
-    except hydralib.DaemonError as err:
-        print(f"audit_twins: title scan FAILED: {err}", file=sys.stderr)
-        collisions = []
-    collision_results = fix_title_collisions(collisions) if fix_it else []
+        return fn()
+    except err_types as err:
+        print(f"audit_twins: {label} scan FAILED: {err}", file=sys.stderr)
+        return []
+
+
+def _resolve_fix_mode(argv: list[str]) -> tuple[bool, bool]:
+    """(fix_it, disarmed). THE ARMED WINDOW (owner order, 2026-09-01): unattended acting
+    needs a person's open window (`python orch.py arm`) or --force. Disarmed: fall back to
+    plan-only and say so - nothing acted is not a failure, so the exit code says so too."""
+    if "--fix" not in argv:
+        return False, False
+    refusal = armlib.refuse_unless_armed(argv, "settling duplicate chat rows")
+    if refusal:
+        print(refusal)
+        return False, True
+    return True, False
+
+
+def _print_ghost_report(ghosts: list[dict], ghost_results: list[dict]) -> None:
     for g in ghost_results:
         print(f"  ghost: [{g['instance']}] {g['title'][:60]} -> {g['outcome']}")
     if ghosts and not ghost_results:
         print(f"{len(ghosts)} ghost row(s) still on screen after the disk said archived:")
         for g in ghosts:
-            print(f"  [{g['instance']}] {g['title'][:60]}" + (" (two rows - a person picks)" if g.get("ambiguous") else ""))
+            print(f"  [{g['instance']}] {g['title'][:60]}" +
+                  (" (two rows - a person picks)" if g.get("ambiguous") else ""))
+
+
+def _print_collision_report(collisions: list[dict], collision_results: list[dict]) -> None:
     for c in collision_results:
         print(f"  title: {c['outcome']}")
     if collisions and not collision_results:
@@ -531,31 +539,40 @@ def main(argv: list[str]) -> int:
             print(f"  '{c['title'][:60]}' x{len(c['chats'])}: " + ", ".join(
                 f"{x['instance'] or 'console'} ({x['repo'] or '?'})" for x in c["chats"]))
 
-    if "--json" in argv:
-        print(json.dumps({"twins": twins, "results": results,
-                          "sameTask": same_task, "sameTaskResults": task_results,
-                          "ghosts": ghosts, "ghostResults": ghost_results,
-                          "collisions": collisions, "collisionResults": collision_results}, indent=2))
-        return 0 if (disarmed or (not twins and not same_task and not ghosts) or results or task_results or ghost_results) else 2
-    if same_task:
-        print(f"{len(same_task)} task(s) started MORE THAN ONCE (same first prompt, separate chats):")
-        for g in same_task:
-            print(f"  {g['task'][:90]}")
-            for c in g["chats"]:
-                tag = "KEEP " if c is g["keep"] else "DUP  "
-                # A console-only copy has no desktop instance: say so instead of leaking
-                # a Python None into an owner-facing line (live smoke, 2026-09-01).
-                print(f"      [{tag}] {c['instance'] or '(console, no instance)'}: "
-                      f"{str(c['title'])[:50]}"
-                      f"{' (running)' if c['live'] else ''}")
-        for r in task_results:
-            print(f"  {r['outcome']}")
-        if not task_results:
-            print("  -> with --fix the later copy is HELD (never archived while it may be working)")
-    if not twins:
-        if not same_task:
-            print("no chat is visible in two places - nothing duplicated.")
-        return 0 if (disarmed or not same_task or task_results) else 2
+
+def _print_json_report(twins: list[dict], results: list[dict], same_task: list[dict],
+                        task_results: list[dict], ghosts: list[dict], ghost_results: list[dict],
+                        collisions: list[dict], collision_results: list[dict]) -> None:
+    print(json.dumps({"twins": twins, "results": results,
+                      "sameTask": same_task, "sameTaskResults": task_results,
+                      "ghosts": ghosts, "ghostResults": ghost_results,
+                      "collisions": collisions, "collisionResults": collision_results}, indent=2))
+
+
+def _json_exit_code(disarmed: bool, twins: list[dict], same_task: list[dict], results: list[dict],
+                     task_results: list[dict], ghost_results: list[dict]) -> int:
+    ok = (disarmed or (not twins and not same_task) or results or task_results or ghost_results)
+    return 0 if ok else 2
+
+
+def _print_same_task_report(same_task: list[dict], task_results: list[dict]) -> None:
+    print(f"{len(same_task)} task(s) started MORE THAN ONCE (same first prompt, separate chats):")
+    for g in same_task:
+        print(f"  {g['task'][:90]}")
+        for c in g["chats"]:
+            tag = "KEEP " if c is g["keep"] else "DUP  "
+            # A console-only copy has no desktop instance: say so instead of leaking
+            # a Python None into an owner-facing line (live smoke, 2026-09-01).
+            print(f"      [{tag}] {c['instance'] or '(console, no instance)'}: "
+                  f"{str(c['title'])[:50]}"
+                  f"{' (running)' if c['live'] else ''}")
+    for r in task_results:
+        print(f"  {r['outcome']}")
+    if not task_results:
+        print("  -> with --fix the later copy is HELD (never archived while it may be working)")
+
+
+def _print_twins_report(twins: list[dict], results: list[dict]) -> None:
     print(f"{len(twins)} chat(s) VISIBLE more than once:")
     for t in twins:
         mark = "LIVE " if t["live"] else ""
@@ -573,6 +590,48 @@ def main(argv: list[str]) -> int:
     print("\nNOTE: a stale copy under a RUNNING app is archived through the app's own control, so it "
           "leaves the screen now; a copy the app has not rendered gets the disk flag and the ghost "
           "sweep archives it through the app the moment it shows.")
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    try:
+        twins = find_twins()
+    except hydralib.DaemonError as err:
+        print(f"audit_twins FAILED: {err}", file=sys.stderr)
+        return 1
+    fix_it, disarmed = _resolve_fix_mode(argv)
+    results = fix(twins) if fix_it else []
+
+    same_task = _safe_scan(find_same_task, "same-task")
+    task_results = fix_same_task(same_task) if fix_it else []
+
+    # WHAT THE OWNER SEES (2026-09-01: "there's still duplicate chats"): ghost rows a running
+    # app still shows after the disk said archived, and different chats wearing one title.
+    ghosts = _safe_scan(find_ghosts, "ghost", (hydralib.DaemonError, OSError))
+    ghost_results = fix_ghosts(ghosts) if fix_it else []
+
+    collisions = _safe_scan(find_title_collisions, "title")
+    collision_results = fix_title_collisions(collisions) if fix_it else []
+
+    _print_ghost_report(ghosts, ghost_results)
+    _print_collision_report(collisions, collision_results)
+
+    if "--json" in argv:
+        _print_json_report(twins, results, same_task, task_results, ghosts, ghost_results,
+                            collisions, collision_results)
+        return _json_exit_code(disarmed, twins, same_task, results, task_results, ghost_results)
+
+    if same_task:
+        _print_same_task_report(same_task, task_results)
+    if not twins:
+        if not same_task:
+            print("no chat is visible in two places - nothing duplicated.")
+        return 0 if (disarmed or not same_task or task_results) else 2
+
+    _print_twins_report(twins, results)
     return 0 if (disarmed or results) else 2
 
 
