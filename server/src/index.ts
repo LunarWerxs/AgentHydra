@@ -31,6 +31,7 @@ import {
   startAutoUpdate,
   stopAutoUpdate,
 } from './auto-update'
+import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { chatDossier } from './chat-dossier'
 import { resolveRequiredTitle } from './chat-title'
@@ -167,7 +168,7 @@ import {
   setMonitorSettings,
   startMonitor,
 } from './monitor'
-import { applyNewChatDefaults } from './new-chat-defaults'
+import { applyNewChatDefaults, newChatUltracodeEnabled, withUltracode } from './new-chat-defaults'
 import { sendOsNotification } from './notify-os'
 import {
   getNotificationSettings,
@@ -213,6 +214,7 @@ import {
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
 import { findTranscriptAsync, listTranscriptFiles, tailTranscript } from './transcript'
 import { buildTranscriptOpenArgv, resolveEditor } from './transcript-open'
+import { startTrayHostIfMissing } from './tray-host'
 import {
   type Account,
   AMBIENT_RUN_AS,
@@ -2386,7 +2388,14 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     surface: 'desktop',
     stoppedLive: !!live,
     ranHeadless: false,
-    prompt,
+    // Owner ask 2026-09-03: a migrated chat should come up armed the way a new one does. The
+    // bypass half is the metadata stamp above (durable now via automation-stamp-sweep.ts); the
+    // ultracode half is a KEYWORD in the first prompt, so it can only ride on a prompt something
+    // actually delivers. This route delivers none itself - the caller does, through the app - so
+    // the prompt it hands back carries the keyword when the new-chat default is on. A person who
+    // opens the chat and types their own first message is typing the keyword themselves, or not;
+    // nothing here can reach into the desktop composer.
+    prompt: newChatUltracodeEnabled() ? withUltracode(prompt) : prompt,
     promptDelivery: 'deliver-natively-via-the-app-message-channel (boots the chat; no click)',
   })
 })
@@ -2941,6 +2950,22 @@ if (IS_COMPILED && !isRelaunchSuccessor() && !existsSync(join(APP_ROOT, 'misc'))
     })
   }
 }
+// The other half of the same story: this build HAS the tray toolkit and nothing started it. The
+// release ZIP says "double-click AgentHydra.exe", install.ps1's shortcut used to point at the exe,
+// and neither launches misc\lunarwerx-tray.exe - so the daemon ran, the UI opened, and the tray
+// icon never appeared on a machine that did everything it was told (owner's PC, 2026-09-03). The
+// host is built to be started second: it finds this daemon and attaches (onStrayDaemon: attach).
+// Fire-and-forget after the port is published, because the host's first act is to look for us
+// there; see tray-host.ts for the decision and why a probe failure can only ever mean "skip".
+void startTrayHostIfMissing({
+  appRoot: APP_ROOT,
+  compiled: IS_COMPILED,
+  hideTray: hideTrayIconEnabled,
+})
+  .then((r) => {
+    if (r.start) console.log(`[agenthydra] started the tray host (${r.exe}) - nothing else had`)
+  })
+  .catch((err) => console.error('[agenthydra] tray host start failed:', err))
 // Clear any stale full-shutdown sentinel left by a previous (possibly hard-killed) run, so a
 // leftover file can't make the tray quit the instant it next polls. The tray clears it at its own
 // startup too; this covers a daemon started without the tray (dev).
@@ -3088,6 +3113,10 @@ startImportSweep()
 // sweep above, not here), gates each on the weekly cap via checkUsage, and schedules a
 // `claude --resume` for just after the 5-hour reset.
 startMonitor()
+// Keeps every imported chat's bypassPermissions stamp true on disk across the running app's
+// re-saves, so the app's next boot makes it permanent - the durable half of the migrate fix.
+// See automation-stamp-sweep.ts for why the per-import watcher alone could not do this.
+startAutomationStampSweep()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading
