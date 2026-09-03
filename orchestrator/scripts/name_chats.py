@@ -34,6 +34,7 @@ import re
 import sys
 import time
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from lib import clilib, hydralib
@@ -186,6 +187,91 @@ def _daemon_rename(sid: str, title: str) -> tuple[int, str]:
     return clilib.capture(rename_chat.main, [sid, "--to", title])
 
 
+def _empty_pass_result(why: str) -> dict:
+    return {"named": [], "needsJudgment": [], "flakes": [], "remaining": None, "why": why}
+
+
+def _rename_quarantined_chats(store: Path, meta_cache: dict, titles: dict[str, str],
+                               daemon_rename) -> list[dict]:
+    """Quarantined chats first: their sid is already known, so when a better-informed map
+    now carries a real name, rename directly - no probe needed. (Without this, a quarantine
+    name was forever: nothing ever revisited it. Review finding.)"""
+    named = []
+    for meta in scan_metas(store, meta_cache):
+        title = str(meta.get("title") or "")
+        sid = str(meta.get("cliSessionId") or "")
+        if (not meta.get("isArchived") and sid and titles.get(sid)
+                and re.match(r"^recovered chat ", title, re.IGNORECASE)):
+            code, _out = daemon_rename(sid, titles[sid])
+            if code == 0:
+                named.append({"sid": sid, "title": titles[sid]})
+    return named
+
+
+@dataclass
+class _PassState:
+    """Mutable tally threaded through one probe loop (name_pass docstring). Kept as one
+    object, not five loose locals, so the per-round helper below can update it without a
+    fistful of return values."""
+
+    named: list[dict] = field(default_factory=list)
+    needs_judgment: list[dict] = field(default_factory=list)
+    flakes: list[str] = field(default_factory=list)
+    consecutive_flakes: int = 0
+
+    def flake(self, msg: str) -> bool:
+        """Record a flake and report whether the pass should give up (3 in a row)."""
+        self.flakes.append(msg)
+        self.consecutive_flakes += 1
+        return self.consecutive_flakes >= 3
+
+
+def _await_probe_sid(store: Path, probe: str, meta_cache: dict, poll_secs: float) -> str | None:
+    """Poll the store until the meta holding the probe's title shows up, or poll_secs elapses."""
+    deadline = time.time() + poll_secs
+    sid = None
+    while time.time() < deadline:
+        sid = sid_holding_title(store, probe, meta_cache)
+        if sid:
+            break
+        time.sleep(1)
+    return sid
+
+
+def _run_probe_round(instance: str, probe: str, store: Path, meta_cache: dict,
+                      titles: dict[str, str], poll_secs: float, probe_runner, daemon_rename,
+                      state: _PassState) -> bool:
+    """Drive one probe/reveal/rename cycle, updating `state` in place. Returns True when the
+    caller's probe loop should stop (nothing reachable, or 3 flakes in a row)."""
+    code, out = probe_runner(instance, probe)
+    if code == 3:
+        return True  # nothing reachable (collapsed/virtualized rows are reported as remaining)
+    if code != 0:
+        give_up = state.flake(out.splitlines()[-1] if out else f"probe exit {code}")
+        if not give_up:
+            time.sleep(2)
+        return give_up
+    state.consecutive_flakes = 0
+
+    sid = _await_probe_sid(store, probe, meta_cache, poll_secs)
+    if not sid:
+        # One raced row (e.g. the app auto-titled it mid-probe) must not starve the rest of
+        # the batch - record it and keep going (review finding).
+        return state.flake(f"probe '{probe}' landed on screen but no meta picked it up in {poll_secs:.0f}s")
+
+    want = titles.get(sid)
+    if not want:
+        # Naming from content is the AI's job - quarantine, report, never invent.
+        want = f"Recovered chat {sid[:8]} (needs a name)"
+        state.needs_judgment.append({"sid": sid, "quarantineTitle": want,
+                                     "why": "no non-generic title known for it - an AI should read it and name it"})
+    code, out = daemon_rename(sid, want)
+    if code == 0:
+        state.named.append({"sid": sid, "title": want})
+        return False
+    return state.flake(f"{sid[:8]}: stuck at probe '{probe}' ({out.splitlines()[0][:100] if out else code})")
+
+
 def name_pass(
     instance: str,
     extra_titles: dict[str, str] | None = None,
@@ -199,34 +285,21 @@ def name_pass(
     daemon_rename = daemon_rename or _daemon_rename
     store = store or store_dir_for(instance)
     if store is None or not store.exists():
-        return {"named": [], "needsJudgment": [], "flakes": [],
-                "remaining": None, "why": f"no chat store found for instance '{instance}'"}
+        return _empty_pass_result(f"no chat store found for instance '{instance}'")
 
     titles = intended_titles(extra_titles)
-    named, needs_judgment, flakes = [], [], []
     # One mtime-keyed parse cache for the WHOLE pass (scan_metas docstring) - in memory,
     # never persisted: the win is the poll loop's per-second rescans, not cross-run reuse.
     meta_cache: dict = {}
 
     with _instance_lock(instance) as got_lock:
         if not got_lock:
-            return {"named": [], "needsJudgment": [], "flakes": [],
-                    "remaining": None,
-                    "why": f"another naming pass is already driving '{instance}' - refusing to race it"}
+            return _empty_pass_result(
+                f"another naming pass is already driving '{instance}' - refusing to race it")
 
-        # Quarantined chats first: their sid is already known, so when a better-informed map
-        # now carries a real name, rename directly - no probe needed. (Without this, a
-        # quarantine name was forever: nothing ever revisited it. Review finding.)
-        for meta in scan_metas(store, meta_cache):
-            title = str(meta.get("title") or "")
-            sid = str(meta.get("cliSessionId") or "")
-            if (not meta.get("isArchived") and sid and titles.get(sid)
-                    and re.match(r"^recovered chat ", title, re.IGNORECASE)):
-                code, _out = daemon_rename(sid, titles[sid])
-                if code == 0:
-                    named.append({"sid": sid, "title": titles[sid]})
+        state = _PassState()
+        state.named.extend(_rename_quarantined_chats(store, meta_cache, titles, daemon_rename))
 
-        consecutive_flakes = 0
         # Probe names must be unique ACROSS processes and passes - a 1-second stamp collided
         # between overlapping runs (review finding).
         stamp = f"{os.getpid()}-{uuid.uuid4().hex[:6]}"
@@ -235,56 +308,17 @@ def name_pass(
             if not nameless_rows(store, meta_cache):
                 break
             probe = f"{PROBE_PREFIX} {stamp}-{n}"
-            code, out = probe_runner(instance, probe)
-            if code == 3:
-                break  # nothing reachable (collapsed/virtualized rows are reported as remaining)
-            if code != 0:
-                consecutive_flakes += 1
-                flakes.append(out.splitlines()[-1] if out else f"probe exit {code}")
-                if consecutive_flakes >= 3:
-                    break
-                time.sleep(2)
-                continue
-            consecutive_flakes = 0
-
-            sid = None
-            deadline = time.time() + poll_secs
-            while time.time() < deadline:
-                sid = sid_holding_title(store, probe, meta_cache)
-                if sid:
-                    break
-                time.sleep(1)
-            if not sid:
-                # One raced row (e.g. the app auto-titled it mid-probe) must not starve the
-                # rest of the batch - record it and keep going (review finding).
-                flakes.append(f"probe '{probe}' landed on screen but no meta picked it up in {poll_secs:.0f}s")
-                consecutive_flakes += 1
-                if consecutive_flakes >= 3:
-                    break
-                continue
-
-            want = titles.get(sid)
-            if not want:
-                # Naming from content is the AI's job - quarantine, report, never invent.
-                want = f"Recovered chat {sid[:8]} (needs a name)"
-                needs_judgment.append({"sid": sid, "quarantineTitle": want,
-                                       "why": "no non-generic title known for it - an AI should read it and name it"})
-            code, out = daemon_rename(sid, want)
-            if code == 0:
-                named.append({"sid": sid, "title": want})
-            else:
-                flakes.append(f"{sid[:8]}: stuck at probe '{probe}' ({out.splitlines()[0][:100] if out else code})")
-                consecutive_flakes += 1
-                if consecutive_flakes >= 3:
-                    break
+            if _run_probe_round(instance, probe, store, meta_cache, titles, poll_secs,
+                                 probe_runner, daemon_rename, state):
+                break
 
         remaining = nameless_rows(store, meta_cache)
     return {
-        "named": named,
-        "needsJudgment": needs_judgment,
-        "flakes": flakes,
+        "named": state.named,
+        "needsJudgment": state.needs_judgment,
+        "flakes": state.flakes,
         "remaining": remaining,
-        "why": ("clean" if not remaining and not flakes else
+        "why": ("clean" if not remaining and not state.flakes else
                 "some rows remain - collapsed/virtualized rows are out of UIA reach, or passes flaked; rerun, or scroll them into view"),
     }
 
