@@ -39,6 +39,7 @@ Exit:  0 everything attempted was delivered and confirmed (or nothing to do) - 2
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import subprocess
 import sys
@@ -271,16 +272,26 @@ def _ensure_doctrine(sid: str, match: dict) -> str:
     return ("; " + ", ".join(said)) if said else ""
 
 
-def deliver_one(entry: dict, match: dict) -> dict:
-    """Send it, then prove the chat moved. Every outcome is recorded on the ledger."""
-    sid = entry["session"]
-    title = match.get("title") or entry.get("title") or ""
-    instance = match.get("instance") or entry.get("instance") or ""
-    # THE ROW IS RE-READ AT SEND TIME (review 2026-09-01). run() plans from one snapshot of
-    # the queue and then sends serially, each send taking minutes; a person who cancels a
-    # queued reply in that window - the moment one typically notices a wrong reply - was told
-    # "cancelled" while this run still sent it from the stale in-memory dict and then wrote
-    # "delivered" over the cancel. Nothing is typed unless the row is STILL staged now.
+@dataclasses.dataclass
+class _BeforeState:
+    """The chat's movement signals at T-0, before anything is sent. Rail 7 (deliver_one's
+    docstring) proves delivery by watching these change, never by trusting the send itself."""
+
+    tpath: str | None
+    activity: str | None
+    size: int
+    live: dict | None
+
+
+def _reject_if_unstaged(entry: dict) -> dict | None:
+    """None when this row is still staged and safe to send; the skip result otherwise.
+
+    THE ROW IS RE-READ AT SEND TIME (review 2026-09-01). run() plans from one snapshot of
+    the queue and then sends serially, each send taking minutes; a person who cancels a
+    queued reply in that window - the moment one typically notices a wrong reply - was told
+    "cancelled" while this run still sent it from the stale in-memory dict and then wrote
+    "delivered" over the cancel. Nothing is typed unless the row is STILL staged now.
+    """
     fresh = deliverylib.get(entry["id"])
     if not fresh or fresh.get("state") != "staged":
         state = (fresh or {}).get("state") or "gone"
@@ -288,31 +299,39 @@ def deliver_one(entry: dict, match: dict) -> dict:
                 "outcome": f"skipped - no longer staged ({state})",
                 "detail": "it was cancelled or settled by another run between planning and "
                           "sending; nothing was typed"}
-    # Resolve the transcript path ONCE, fresh at send time; the confirm loop reuses it
-    # (it cannot change inside the 25s window, and re-deriving it cost a full sessions
-    # fetch per 2s poll tick).
+    return None
+
+
+def _capture_before_state(sid: str) -> _BeforeState:
+    """Snapshot the chat's movement signals once, fresh at send time; the confirm loop reuses
+    the transcript path (it cannot change inside the confirm window, and re-deriving it cost
+    a full sessions fetch per 2s poll tick)."""
     tpath = (hydralib.session_row(sid) or {}).get("transcript_path")
-    before_activity, before_size = _activity_of(sid, tpath)
+    activity, size = _activity_of(sid, tpath)
     try:
-        before_live = hydralib.live_for(sid)
+        live = hydralib.live_for(sid)
     except hydralib.DaemonError:
-        before_live = None
+        live = None
+    return _BeforeState(tpath=tpath, activity=activity, size=size, live=live)
 
-    ledgerlib.note("deliver", sid, note=f"deliver {entry['id']} to '{title}'")
-    deliverylib.note_attempt(entry["id"])
-    # THE LAST DURABLE MOMENT (_ensure_doctrine): stamp the chat before the send boots it.
-    doctrine_note = _ensure_doctrine(sid, match)
 
-    # THE ROUTE: the daemon's message endpoint (POST /api/sessions/:id/message), which picks
-    # the right channel by itself - and prefers THE OFFICIAL PEER CHANNEL (owner, 2026-09-01:
-    # "why don't we use the old method"). For a LIVE session it injects into the chat's own
-    # peer-messaging pipe exactly as one session's SendMessage reaches another: native input
-    # queue, NO UI, no composer click. Only a dormant/crashed chat (no pipe) falls to the
-    # composer, which can BOOT it and self-heals an unrendered row via claude://resume. An
-    # older daemon (404) falls back to driving the local composer actuator here.
-    # ⛔ NEVER /migrate for delivery: it delivers no prompt - it kills and reimports the chat
-    # dormant (2026-09-01: message lost, zombie twin, "Claude has crashed").
-    route = "daemon"
+def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
+                     doctrine_note: str) -> dict | None:
+    """THE ROUTE: the daemon's message endpoint (POST /api/sessions/:id/message), which picks
+    the right channel by itself - and prefers THE OFFICIAL PEER CHANNEL (owner, 2026-09-01:
+    "why don't we use the old method"). For a LIVE session it injects into the chat's own
+    peer-messaging pipe exactly as one session's SendMessage reaches another: native input
+    queue, NO UI, no composer click. Only a dormant/crashed chat (no pipe) falls to the
+    composer, which can BOOT it and self-heals an unrendered row via claude://resume. An
+    older daemon (404) falls back to driving the local composer actuator (deliver_one's
+    caller does this: this function returns None to say so).
+    ⛔ NEVER /migrate for delivery: it delivers no prompt - it kills and reimports the chat
+    dormant (2026-09-01: message lost, zombie twin, "Claude has crashed").
+
+    Returns the final result dict when this attempt settles the delivery (success or an
+    honest failure); None when an older daemon (404) leaves the composer as the only path.
+    """
+    title = match.get("title") or entry.get("title") or ""
     try:
         # THE CLIENT MUST OUTWAIT THE SERVER (2026-09-01). This endpoint is not a read: it
         # selects the row, re-renders it if the sidebar virtualized it away (two 8s waits),
@@ -352,14 +371,14 @@ def deliver_one(entry: dict, match: dict) -> dict:
         # every live chat became undeliverable: the owner's "chats sitting idle" in one line.
         #
         # The guard against duplicates is kept, not discarded - it is just made evidential.
-        # We already recorded before_size at T-0, so we can PROVE nothing landed before
+        # We already recorded before.size at T-0, so we can PROVE nothing landed before
         # typing: if the transcript grew at all, the peer message may have taken and we
         # refuse exactly as the daemon intended. Falling back on proof is not the same as
         # ignoring the warning.
         peer_dead = (err.status == 422 and "wrote-but-no-transcript-growth" in (err.detail or ""))
         if peer_dead:
-            _, size_now = _activity_of(sid, tpath)
-            if size_now > before_size:
+            _, size_now = _activity_of(sid, before.tpath)
+            if size_now > before.size:
                 deliverylib.mark_failed(
                     entry["id"],
                     f"daemon message endpoint: {err} | {err.detail} - and the transcript DID "
@@ -369,8 +388,9 @@ def deliver_one(entry: dict, match: dict) -> dict:
                         "detail": (err.detail or str(err))[:200]}
             ledgerlib.note("deliver", sid,
                            note=f"peer route dead-lettered {entry['id']}; transcript unchanged "
-                                f"at {before_size} bytes - falling back to the composer")
-        elif err.status not in (404,):
+                                f"at {before.size} bytes - falling back to the composer")
+            return None
+        if err.status not in (404,):
             # RECORD THE REASON, NOT JUST THE NUMBER (2026-09-01). DaemonError.__str__ is
             # "<path> -> HTTP 422" and nothing more, while the composer's actual refusal -
             # "not rendered in any searched running instance", the actuator tail, the verify
@@ -384,45 +404,69 @@ def deliver_one(entry: dict, match: dict) -> dict:
                 + (f" | {err.detail}" if err.detail else ""))
             return {"id": entry["id"], "ok": False, "outcome": "the daemon endpoint refused",
                     "detail": (err.detail or str(err))[:200]}
-        # 404 = older daemon without the endpoint: drive the actuator locally.
+        return None  # 404 = older daemon without the endpoint: drive the actuator locally.
+
+
+def _wait_for_movement(sid: str, before: _BeforeState) -> bool:
+    """CONFIRM: the keystroke is not the delivery. Watch for the chat to actually move - a
+    growing transcript, a fresh lastActivityAt, or (a boot from dormant) a changed live-
+    registry entry, which shows there before the first transcript write."""
+    deadline = time.time() + CONFIRM_SECS
+    while time.time() < deadline:
+        after_activity, after_size = _activity_of(sid, before.tpath)
+        if (after_activity and after_activity != before.activity) or after_size > before.size:
+            return True
+        try:
+            after_live = hydralib.live_for(sid)
+        except hydralib.DaemonError:
+            after_live = None
+        if after_live and after_live != before.live:
+            return True
+        time.sleep(2)
+    return False
+
+
+def _deliver_via_actuator(entry: dict, match: dict, sid: str, before: _BeforeState,
+                          doctrine_note: str) -> dict:
+    """The composer fallback (an older daemon, 404, with no /message endpoint): drive the
+    local actuator directly, then rail 7 - refuse to call it delivered until the chat moves."""
+    title = match.get("title") or entry.get("title") or ""
+    instance = match.get("instance") or entry.get("instance") or ""
     code, out = _run_actuator(title, instance, entry["text"], entry["verifyText"])
     if code != 0:
         deliverylib.mark_failed(entry["id"], f"composer: {out or f'exit {code}'}")
         return {"id": entry["id"], "ok": False, "outcome": "the composer refused",
                 "detail": (out.splitlines()[-1] if out else f"exit {code}")[:160]}
-
-    # CONFIRM: the keystroke is not the delivery. Watch for the chat to actually move.
-    confirm_secs = CONFIRM_SECS
-    deadline = time.time() + confirm_secs
-    moved = False
-    while time.time() < deadline:
-        after_activity, after_size = _activity_of(sid, tpath)
-        if (after_activity and after_activity != before_activity) or after_size > before_size:
-            moved = True
-            break
-        # A boot-from-dormant shows in the LIVE REGISTRY before the first transcript write:
-        # a new/changed live entry is movement too.
-        try:
-            after_live = hydralib.live_for(sid)
-        except hydralib.DaemonError:
-            after_live = None
-        if after_live and after_live != before_live:
-            moved = True
-            break
-        time.sleep(2)
-    if not moved:
+    if not _wait_for_movement(sid, before):
         deliverylib.mark_failed(
             entry["id"],
             "the actuator reported it typed and sent, but the chat did not move within "
-            f"{confirm_secs}s - NOT claiming delivery")
+            f"{CONFIRM_SECS}s - NOT claiming delivery")
         return {"id": entry["id"], "ok": False, "outcome": "sent but NOT confirmed",
                 "detail": "the chat did not move; re-check it by hand before re-staging"}
-
     deliverylib.mark_delivered(entry["id"])
     ledgerlib.clear("deliver", sid)  # success clears - the brake is for futility
     # doctrine_note rides on EVERY success path (its docstring: reported, never swallowed).
-    return {"id": entry["id"], "ok": True, "outcome": f"delivered ({route}) and confirmed",
+    return {"id": entry["id"], "ok": True, "outcome": "delivered (daemon) and confirmed",
             "detail": (f"'{title}' took the message and started moving" + doctrine_note)[:250]}
+
+
+def deliver_one(entry: dict, match: dict) -> dict:
+    """Send it, then prove the chat moved. Every outcome is recorded on the ledger."""
+    sid = entry["session"]
+    title = match.get("title") or entry.get("title") or ""
+    rejected = _reject_if_unstaged(entry)
+    if rejected is not None:
+        return rejected
+    before = _capture_before_state(sid)
+    ledgerlib.note("deliver", sid, note=f"deliver {entry['id']} to '{title}'")
+    deliverylib.note_attempt(entry["id"])
+    # THE LAST DURABLE MOMENT (_ensure_doctrine): stamp the chat before the send boots it.
+    doctrine_note = _ensure_doctrine(sid, match)
+    settled = _send_via_daemon(entry, match, sid, before, doctrine_note)
+    if settled is not None:
+        return settled
+    return _deliver_via_actuator(entry, match, sid, before, doctrine_note)
 
 
 def _verify_of(report: dict, delivery_id: str) -> str:
@@ -575,11 +619,18 @@ def run(max_deliveries: int, only: str | None, act: bool, running_now: int | Non
     }
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
+@dataclasses.dataclass
+class _Args:
+    as_json: bool
+    act: bool
+    only: str | None
+    cap: int
+    cap_exempt: bool
+
+
+def _parse_args(argv: list[str]) -> "_Args | int":
+    """The CLI flags, parsed once. Returns an _Args, or an int exit code when parsing itself
+    must end the run (a malformed --only)."""
     as_json = "--json" in argv
     act = "--yes" in argv
     # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
@@ -599,56 +650,77 @@ def main(argv: list[str]) -> int:
     cap = DEFAULT_MAX
     if "--max" in argv:
         cap = int(argv[argv.index("--max") + 1])
+    return _Args(as_json=as_json, act=act, only=only, cap=cap, cap_exempt="--cap-exempt" in argv)
+
+
+def _print_placeholder_warning(report: dict) -> None:
+    """A PLACEHOLDER IDENTITY CHECK IS NOT AN IDENTITY CHECK, and it must not pass in
+    silence (found live 2026-09-01: three staged replies carried the verify text "x",
+    one character, staged by the saturate job). Rail 6 exists so the actuator refuses
+    to type until it SEES this chat's own words in the pane it picked - a single "x"
+    matches essentially any pane, so for those rows the rail was off while still
+    appearing to be on, and one of them reported "typed, but the transcript did not
+    grow". Left unblocked deliberately: a brand-new chat has no prior words to match,
+    which is presumably why the placeholder exists. But it is now SAID, every time."""
+    weak = [p for p in report["planned"]
+            if len(str(_verify_of(report, p["id"]))) < deliverylib.MIN_VERIFY_LEN]
+    if weak:
+        print(f"  ⚠ {len(weak)} of these carry a PLACEHOLDER identity check shorter than "
+              f"{deliverylib.MIN_VERIFY_LEN} chars - the wrong-chat guard cannot really "
+              "bite on them. Fine for a chat with no words yet; wrong for any other.")
+
+
+def _print_report(report: dict, act: bool) -> None:
+    """The human-readable rendering of a run() report. Kept apart from main() so the CLI
+    plumbing (arg parsing, exit codes) is not tangled with what gets printed."""
+    if not report["staged"]:
+        print("nothing staged - the courier has nothing to deliver.")
+    # ⛔ COUNT WHAT LANDED, NOT WHAT WAS ATTEMPTED (2026-09-01). This printed
+    # len(planned) under the word "delivered" - but `planned` is the INTENT, formed
+    # before a single send. A run where the composer refused one of two replies still
+    # announced "2 reply(ies) delivered" and listed the refused chat among them, with the
+    # actual "✗ the composer refused" three lines below, contradicting the headline. The
+    # whole design of this script is that a send is not a delivery (rail 7); its own
+    # summary was the one place that forgot, which is the worst place for it - the
+    # headline is what gets read and pasted into a report.
+    ok_ids = {r["id"] for r in report["results"] if r["ok"]} if act else None
+    landed = len(ok_ids) if act else len(report["planned"])
+    print(f"{landed} reply(ies) {'delivered' if act else 'would be delivered'}"
+          + (f" (+{report['overCap']} over the per-run cap)" if report["overCap"] else ""))
+    _print_placeholder_warning(report)
+    for p in report["planned"]:
+        mark = "" if ok_ids is None else ("  -> " if p["id"] in ok_ids else "  !! NOT DELIVERED ")
+        print(f"{mark or '  -> '}[{p['instance']}] {p['title']}")
+        print(f"     {p['text']}")
+    for s in report["skipped"]:
+        print(f"  SKIPPED {s['title'] or s['id']}: {s['why']}")
+    for r in report["results"]:
+        mark = "✓" if r["ok"] else "✗"
+        print(f"  {mark} {r['outcome']} - {r['detail']}")
+    if not act and report["planned"]:
+        print("\nPLAN ONLY - nothing sent. Add --yes to deliver.")
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    parsed = _parse_args(argv)
+    if isinstance(parsed, int):
+        return parsed
 
     try:
-        report = run(cap, only, act, cap_exempt="--cap-exempt" in argv)
+        report = run(parsed.cap, parsed.only, parsed.act, cap_exempt=parsed.cap_exempt)
     except hydralib.DaemonError as err:
         print(f"courier FAILED before acting: {err}", file=sys.stderr)
         return 1
 
-    if as_json:
+    if parsed.as_json:
         print(json.dumps(report, indent=2))
     else:
-        if not report["staged"]:
-            print("nothing staged - the courier has nothing to deliver.")
-        # ⛔ COUNT WHAT LANDED, NOT WHAT WAS ATTEMPTED (2026-09-01). This printed
-        # len(planned) under the word "delivered" - but `planned` is the INTENT, formed
-        # before a single send. A run where the composer refused one of two replies still
-        # announced "2 reply(ies) delivered" and listed the refused chat among them, with the
-        # actual "✗ the composer refused" three lines below, contradicting the headline. The
-        # whole design of this script is that a send is not a delivery (rail 7); its own
-        # summary was the one place that forgot, which is the worst place for it - the
-        # headline is what gets read and pasted into a report.
-        ok_ids = {r["id"] for r in report["results"] if r["ok"]} if act else None
-        landed = len(ok_ids) if act else len(report["planned"])
-        print(f"{landed} reply(ies) {'delivered' if act else 'would be delivered'}"
-              + (f" (+{report['overCap']} over the per-run cap)" if report["overCap"] else ""))
-        # A PLACEHOLDER IDENTITY CHECK IS NOT AN IDENTITY CHECK, and it must not pass in
-        # silence (found live 2026-09-01: three staged replies carried the verify text "x",
-        # one character, staged by the saturate job). Rail 6 exists so the actuator refuses
-        # to type until it SEES this chat's own words in the pane it picked - a single "x"
-        # matches essentially any pane, so for those rows the rail was off while still
-        # appearing to be on, and one of them reported "typed, but the transcript did not
-        # grow". Left unblocked deliberately: a brand-new chat has no prior words to match,
-        # which is presumably why the placeholder exists. But it is now SAID, every time.
-        weak = [p for p in report["planned"]
-                if len(str(_verify_of(report, p["id"]))) < deliverylib.MIN_VERIFY_LEN]
-        if weak:
-            print(f"  ⚠ {len(weak)} of these carry a PLACEHOLDER identity check shorter than "
-                  f"{deliverylib.MIN_VERIFY_LEN} chars - the wrong-chat guard cannot really "
-                  "bite on them. Fine for a chat with no words yet; wrong for any other.")
-        for p in report["planned"]:
-            mark = "" if ok_ids is None else ("  -> " if p["id"] in ok_ids else "  !! NOT DELIVERED ")
-            print(f"{mark or '  -> '}[{p['instance']}] {p['title']}")
-            print(f"     {p['text']}")
-        for s in report["skipped"]:
-            print(f"  SKIPPED {s['title'] or s['id']}: {s['why']}")
-        for r in report["results"]:
-            mark = "✓" if r["ok"] else "✗"
-            print(f"  {mark} {r['outcome']} - {r['detail']}")
-        if not act and report["planned"]:
-            print("\nPLAN ONLY - nothing sent. Add --yes to deliver.")
-    if not act:
+        _print_report(report, parsed.act)
+    if not parsed.act:
         return 0
     failed = [r for r in report["results"] if not r["ok"]]
     return 2 if (failed or report["skipped"]) else 0
