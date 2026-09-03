@@ -96,6 +96,8 @@ import {
   resolveColorKey,
   resolveIconKey,
 } from '@/lib/instance-appearance'
+import { groupByProject } from '@/lib/session-groups'
+import { requestSessionJump } from '@/lib/session-jump'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import { bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
@@ -626,6 +628,10 @@ async function waitForRunning(dir: string, ms = 60_000): Promise<boolean> {
   return false
 }
 async function prepareMoveAll(from: CMInstance, to: CMInstance) {
+  // One count at a time. The submenu item is disabled while busy, but a second click can still
+  // arrive through a reopened menu, and two overlapping counts share one toast id - the first's
+  // dismiss then races the second's loading toast and one of them is left on screen (seen live).
+  if (moveAllBusy.value) return
   rowMenuOpen.value = null
   moveAllBusy.value = true
   const id = `move-all-${from.dir}`
@@ -693,6 +699,13 @@ async function runMoveAll() {
       id,
     })
   else toast.success(summary, { id })
+}
+
+/** A chat in the move list, clicked: close the dialog and land on that chat in Sessions, filtered
+ *  to it and selected. The tab switch happens in App.vue; the select happens in SessionsView. */
+function openChatFromMoveDialog(s: SessionSummary) {
+  moveAll.value = null
+  requestSessionJump(s)
 }
 
 function openDeleteDialog(inst: CMInstance) {
@@ -1425,13 +1438,26 @@ onUnmounted(() => {
             {{ $t('instances.moveChatsConfirmBody', { from: moveAll ? instLabel(moveAll.from) : '', to: moveAll ? instLabel(moveAll.to) : '' }) }}
           </DialogDescription>
         </DialogHeader>
-        <ul class="scroll-slim max-h-56 space-y-1 overflow-y-auto text-xs">
-          <li
-            v-for="s in moveAll?.sessions ?? []"
-            :key="s.session_id"
-            class="truncate rounded border border-border px-2 py-1"
-          >
-            {{ s.title }}
+        <p class="text-xs text-muted-foreground">{{ $t('instances.moveChatsRowHint') }}</p>
+        <!-- Grouped by project, largest group first, so the SHAPE of the move is visible before the
+             click. Each row opens that chat in Sessions (filtered to it, selected). -->
+        <ul class="scroll-slim max-h-56 space-y-2 overflow-y-auto text-xs">
+          <li v-for="g in groupByProject(moveAll?.sessions ?? [])" :key="g.project">
+            <div class="mb-1 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
+              <span class="truncate">{{ g.project }}</span>
+              <span class="shrink-0">{{ $t('instances.moveChatsGroupCount', { n: g.sessions.length }) }}</span>
+            </div>
+            <ul class="space-y-1">
+              <li v-for="s in g.sessions" :key="s.session_id">
+                <button
+                  type="button"
+                  class="w-full truncate rounded border border-border px-2 py-1 text-left hover:bg-accent"
+                  @click="openChatFromMoveDialog(s)"
+                >
+                  {{ s.title }}
+                </button>
+              </li>
+            </ul>
           </li>
         </ul>
         <DialogFooter>

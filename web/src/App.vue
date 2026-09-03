@@ -10,7 +10,7 @@ import {
   Settings2,
   Sun,
 } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AnalyticsView from '@/components/AnalyticsView.vue'
@@ -39,6 +39,7 @@ import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
+import { pendingSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
@@ -63,6 +64,12 @@ const { startPolling: startNotificationPolling } = useNotifications()
 // port, which is a different browser origin and therefore a different localStorage. Owned by
 // composables/useUiPrefs.ts, which is where every mirrored layout preference lives.
 const { view } = useUiPrefs()
+// "Open this chat" asked from another view (the Instances move dialog lists chats; clicking one
+// should land on its transcript). Switch the tab here; SessionsView takes the request when it
+// mounts, or at once if it is already the view showing. See lib/session-jump.ts.
+watch(pendingSessionJump, (j) => {
+  if (j) view.value = 'sessions'
+})
 
 // The shell's own bindings — global, so they are on every view and lead the `?` sheet. Registered
 // here rather than in each view because that is what makes them true everywhere.

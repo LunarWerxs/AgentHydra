@@ -131,6 +131,8 @@ import {
 import { displayName } from '@/lib/instance-appearance'
 import { escapeHtml, looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
 import { composeSessionPathClipboard } from '@/lib/session-clipboard'
+import { groupByProject } from '@/lib/session-groups'
+import { pendingSessionJump, takeSessionJump } from '@/lib/session-jump'
 import { rangeBetween } from '@/lib/session-multiselect'
 import { type SessionShape, type ShapeScope, sessionShape } from '@/lib/session-shape'
 import { cn } from '@/lib/utils'
@@ -1134,6 +1136,44 @@ function rowClick(s: SessionSummary, ev?: MouseEvent) {
 }
 const checkedSessions = computed(() => filtered.value.filter((s) => isChecked(s)))
 const bulkCount = computed(() => checkedIds.value.size)
+
+// --- jump to ONE session, asked from a dialog here or from another view ---------------------------
+// "Filter to exactly that chat and open it" (owner ask, 2026-09-03): the search box takes the
+// session id, which the list filter matches on, so the list shows that one row; select mode is
+// left, because in select mode the pane shows the composer rather than the transcript. A chat not
+// in the fetched window (the move dialogs list everything, the list defaults to 24 hours) widens
+// the period to everything and selects the row the moment the refetch carries it.
+function jumpToSession(s: Pick<SessionSummary, 'session_id' | 'source'>) {
+  if (selectMode.value) toggleSelectMode()
+  search.value = s.session_id
+  const hit = sessions.value.find((x) => x.session_id === s.session_id && x.source === s.source)
+  if (hit) {
+    select(hit)
+    return
+  }
+  if (sessionPeriod.value !== 'all') sessionPeriod.value = 'all'
+  const stop = watch(sessions, (list) => {
+    const found = list.find((x) => x.session_id === s.session_id && x.source === s.source)
+    if (!found) return
+    select(found)
+    stop()
+  })
+  // A chat that never arrives (deleted since, or filtered by a scope the search cannot override)
+  // must not leave a watcher running for the life of the view.
+  window.setTimeout(stop, 20_000)
+}
+function consumeSessionJump() {
+  const j = takeSessionJump()
+  if (j) jumpToSession(j)
+}
+onMounted(consumeSessionJump)
+watch(pendingSessionJump, (j) => {
+  if (j) consumeSessionJump()
+})
+function openFromBulkDialog(s: SessionSummary) {
+  bulkConfirm.value = null
+  jumpToSession(s)
+}
 
 // --- bulk actions on the checked rows ----------------------------------------------------------
 function copyCheckedIds() {
@@ -2454,13 +2494,26 @@ function copy(text: string) {
             {{ $t('sessions.migrateConfirmBody', { name: bulkConfirm?.target.name ?? '' }) }}
           </DialogDescription>
         </DialogHeader>
-        <ul class="scroll-slim max-h-56 space-y-1 overflow-y-auto text-xs">
-          <li
-            v-for="s in bulkConfirm?.sessions ?? []"
-            :key="s.session_id"
-            class="truncate rounded border border-border px-2 py-1"
-          >
-            {{ s.title }}
+        <p class="text-xs text-muted-foreground">{{ $t('sessions.dialogRowHint') }}</p>
+        <!-- Grouped by project, largest group first, so the SHAPE of the move is visible before the
+             click: three Connections chats and ten AgentHydra ones read differently from "13". -->
+        <ul class="scroll-slim max-h-56 space-y-2 overflow-y-auto text-xs">
+          <li v-for="g in groupByProject(bulkConfirm?.sessions ?? [])" :key="g.project">
+            <div class="mb-1 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
+              <span class="truncate">{{ g.project }}</span>
+              <span class="shrink-0">{{ $t('sessions.groupCount', { n: g.sessions.length }) }}</span>
+            </div>
+            <ul class="space-y-1">
+              <li v-for="s in g.sessions" :key="s.session_id">
+                <button
+                  type="button"
+                  class="w-full truncate rounded border border-border px-2 py-1 text-left hover:bg-accent"
+                  @click="openFromBulkDialog(s)"
+                >
+                  {{ s.title }}
+                </button>
+              </li>
+            </ul>
           </li>
         </ul>
         <DialogFooter>

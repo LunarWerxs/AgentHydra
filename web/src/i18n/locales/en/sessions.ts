@@ -229,4 +229,7 @@ export default {
   migrateBulkProgress: 'Moving chat {done} of {n}…',
   migrateBulkDone: 'Moved {ok} of {n} chats to {name}.',
   migrateBulkSomeFailed: '{failed} could not be moved; details are in the browser console.',
+  // The chat list inside the bulk-move dialog: grouped by project, each row opens that chat.
+  groupCount: '{n} chat(s)',
+  dialogRowHint: 'Grouped by project. Click a chat to open it.',
 }

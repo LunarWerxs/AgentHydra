@@ -216,4 +216,7 @@ export default {
   moveChatsProgress: 'Moving chat {done} of {n}…',
   moveChatsDone: 'Moved {ok} of {n} chats to {to}.',
   moveChatsSomeFailed: '{failed} could not be moved; details are in the browser console.',
+  // The chat list inside the move dialog: grouped by project, each row opens that chat in Sessions.
+  moveChatsGroupCount: '{n} chat(s)',
+  moveChatsRowHint: 'Grouped by project. Click a chat to open it in Sessions.',
 }
