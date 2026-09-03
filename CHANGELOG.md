@@ -7,6 +7,63 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-09-03
+
+### Added
+
+- **Move chats in bulk.** In Sessions, Ctrl/Cmd-click or Shift-click rows to pick several (this
+  turns select mode on by itself), then right-click one of them: the menu leads with *Copy N
+  session ids* and *Migrate N chats to another account*, behind a confirmation that names the count
+  and the destination and lists the chats. In Instances, every row's menu has *Move all chats to
+  another account*: every active chat on that account (not archived, not marked done), one hop to
+  another, again behind a confirmation. Both move chats one at a time on purpose, because each
+  migrate may stop a live run and the desktop app takes imports serially anyway; a summary toast
+  says how many landed, and anything that did not is named in the browser console.
+- **Migrate from the right-click menu.** A session row's context menu now carries the same *Migrate
+  to another account* flyout the open chat's ⋯ menu had, so moving one chat no longer means opening
+  its transcript first.
+- **Right-click an instance row** to get its ⋮ menu, same items, same position.
+- **Closed accounts appear in the migrate flyout.** Targets are in two groups, *Running* and *Not
+  running*. A running one takes the chat as it stands; a closed one reads *Start X and move there*:
+  the click opens that instance the ordinary way, waits for it to come up, then migrates. The server
+  still refuses to import into a closed app on its own (the import spawn would boot it, and nothing
+  opens an account without being asked); the click is the asking.
+- **The daemon starts the tray host.** A release ZIP has the whole tray toolkit in `misc\`, and
+  nothing started it unless you knew to run `misc\Create-Shortcut.ps1` first: double-clicking
+  `AgentHydra.exe` ran the daemon, opened the UI, and never showed a tray icon, on a machine that
+  did exactly what the release notes said. Now a compiled daemon that finds `misc\lunarwerx-tray.exe`
+  beside itself, with the tray not hidden by setting and no host already running, starts the host,
+  which attaches to the daemon (its shipped `onStrayDaemon: attach` behaviour) and shows the icon.
+  The decision is a pure function with its own tests; a source checkout never gets a tray it did not
+  ask for. `install.ps1`'s Start Menu shortcut now launches through the tray host too, using the kit's
+  own shortcut recipe instead of a second copy that had drifted to point at the bare exe.
+
+### Fixed
+
+- **Migrated chats stay on `bypassPermissions`.** The stamp was always written on import, and the
+  running app always re-saved `acceptEdits` over it on the chat's first wake; a bounded watcher
+  fought that for ten minutes and eight restores, and a chat opened eleven minutes after migrating
+  reverted for life. `reassertAutomationStamps`, which re-stamps every import-shaped chat in a
+  profile and was called from nowhere but its own test, now runs every minute over every RUNNING
+  instance for as long as the daemon does. Only imported chats (`local_<cliSessionId>.json`) are
+  touched, never one a person created in the app. The migrate route also hands back its notice
+  prompt with the `ultracode` keyword when the new-chat default is on; a first message you type
+  yourself in the desktop app is yours to arm, nothing here can reach into that composer.
+- **A manual *Check for updates* always asks GitHub.** The result was cached for five minutes and
+  the background tick kept that cache warm, so the one click that exists to ask "right now" was the
+  click most likely to be told a stale "up to date". HTTP 429 (GitHub's secondary rate limit) now
+  reads as the rate limit it is rather than "couldn't reach the Releases API".
+- **The single-file `.exe` says once that it has no tray icon**, by OS toast (the build hides its
+  console, so nothing else lands). The flag is never synced: it is a fact about that copy's packaging.
+- **Quick Instances' success notice can be dismissed**, like the error banner beside it always could.
+- **A run's live output says *Reconnecting…*** when its stream drops, instead of freezing in a way
+  indistinguishable from a quiet run. Not shown for a finished run, whose stream the server closes.
+
+### Changed
+
+- The root-level `AgentHydra.exe` and `FINDINGS-*.md` write-ups are gitignored: on a public repo an
+  untracked 100 MB binary is one careless add away from being published for good.
+
 ## [0.37.0] - 2026-09-02
 
 ### Removed
