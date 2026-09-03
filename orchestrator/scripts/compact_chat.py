@@ -238,13 +238,22 @@ def main(argv: list[str], runner=None) -> int:
             f"REFUSED: {running} chat(s) already running - the machine-wide cap is "
             f"{hydralib.MAX_RUNNING_CHATS}. Transient; retry on a later cycle.")}, as_json, 4)
 
+    # THE EXECUTABLE IS THE REAL RUNNER'S DEPENDENCY, NOT THIS FUNCTION'S (2026-09-03). An
+    # INJECTED runner does not shell out to claude at all, so resolving the CLI before choosing
+    # the runner made the `runner=` seam only look injectable: on any machine without Claude
+    # Code installed, main() exited 1 here and the injected runner was never reached. That is
+    # every CI runner, and it turned three unit tests into a machine-state check - they passed
+    # on a developer box and could not pass on GitHub's, which is the kind of red that teaches
+    # people to ignore the build.
+    run = runner or run_turn
     exe = resolve_claude()
     if exe is None:
-        return out({"ok": False, "report": (
-            "compact FAILED: no claude CLI found (set ORCHESTRATOR_CLAUDE_EXE)")}, as_json, 1)
+        if run is run_turn:
+            return out({"ok": False, "report": (
+                "compact FAILED: no claude CLI found (set ORCHESTRATOR_CLAUDE_EXE)")}, as_json, 1)
+        exe = ""  # an injected runner supplies its own; it is handed the empty string honestly
 
     ledgerlib.note("compact", sid, note=f"'{title}' ~{before // 1000}k -> window {window // 1000}k")
-    run = runner or run_turn
     try:
         code, said = run(exe, sid, window, cwd)
     except subprocess.TimeoutExpired:

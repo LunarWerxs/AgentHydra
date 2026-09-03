@@ -132,6 +132,10 @@ class SpawnTest(unittest.TestCase):
         self.assertIn("--effort", line)
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], "C:/cfg")
 
+    @unittest.skipIf(cli_spawn.claude_exe() == "claude",
+                     "Claude Code is not installed here, so claude_exe() has nothing absolute to "
+                     "return - the property under test cannot hold. Skipped LOUDLY rather than "
+                     "failed: on a CI runner this is a fact about the machine, not the code.")
     def test_the_executable_is_absolute_never_a_bare_name(self):
         # A bare "claude" handed to a freshly opened terminal could not be resolved there; the
         # tab opened and vanished, and the spawn reported success.
@@ -139,6 +143,15 @@ class SpawnTest(unittest.TestCase):
         line = " ".join(cmd)
         self.assertNotIn('"claude"', line)
         self.assertIn(cli_spawn.claude_exe(), line)
+
+    def test_a_bare_name_is_what_the_fallback_returns_when_nothing_is_installed(self):
+        # The other half, and the one that RUNS everywhere: the test above is skipped on a
+        # machine with no Claude, so without this the fallback's behaviour would be pinned
+        # nowhere at all. `claude_exe` promises a usable path or the bare name - never None,
+        # never a .ps1 - so a caller always has something to hand a terminal.
+        with mock.patch.object(cli_spawn.shutil, "which", return_value=None), \
+             mock.patch.object(cli_spawn.Path, "home", return_value=Path("Q:/nonexistent")):
+            self.assertEqual(cli_spawn.claude_exe(), "claude")
 
     def test_it_refuses_when_no_account_is_signed_in(self):
         with mock.patch.object(cli_accounts, "accounts",

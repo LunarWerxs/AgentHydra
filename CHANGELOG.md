@@ -45,6 +45,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   lookups keep working. A claim made only by an ARCHIVED tombstone counts too, because after a
   migration the tombstone left behind is the only record that still remembers the lineage. On this
   machine: 28 of 2,118 chats had rolled, 37 phantom rows.
+- **The orchestrator's own tests stop depending on Claude Code being installed.** Their first run
+  on GitHub went red on four tests, and all four had one cause: the runner has no `claude` binary.
+  `compact_chat.main` resolved the CLI *before* choosing its runner, so an injected test runner was
+  never reached and the `runner=` seam only looked injectable - the executable is the real runner's
+  dependency, and it is now resolved as one. The one test that genuinely asserts an installed
+  binary skips loudly, naming the machine fact, and a new test pins the fallback so the
+  bare-name branch is covered everywhere. These never surfaced before because the CI step that
+  runs them arrived with the orchestrator and had never been pushed.
 - **The release notes stop promising the two Windows downloads are otherwise identical.** The
   orchestrator ships as a FOLDER beside the executable, so like the tray toolkit it can only ride
   in the zip - an `.exe` install answers `GET /api/orchestrator` with `present:false` and its four
