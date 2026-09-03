@@ -20,7 +20,13 @@ import {
   saveConfig,
   tunnelStartProblem,
 } from './config.ts'
-import { announce, createRelayIdentity, OAUTH_CALLBACK_CAPABILITY, publicKeyFor } from './relay.ts'
+import {
+  type AnnounceResult,
+  announce,
+  createRelayIdentity,
+  OAUTH_CALLBACK_CAPABILITY,
+  publicKeyFor,
+} from './relay.ts'
 import { startNamedTunnel, startTunnel, type TunnelHandle } from './tunnel.ts'
 
 export type OAuthCallbackStatus = 'ready' | 'pending' | 'retrying' | 'failed' | 'incompatible'
@@ -90,6 +96,62 @@ export function ensureRelayIdentity(cfg: RemoteConfig): RelayIdentity {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+function computeCallbackStatus(
+  res: AnnounceResult,
+  attempt: number,
+  retryDelays: readonly number[],
+): OAuthCallbackRoute['status'] {
+  if (!res.ok) return attempt < retryDelays.length ? 'retrying' : 'failed'
+  const compatible = res.capabilities?.includes(OAUTH_CALLBACK_CAPABILITY) ?? false
+  return compatible ? 'ready' : 'incompatible'
+}
+
+function callbackRouteError(
+  res: AnnounceResult,
+  status: OAuthCallbackRoute['status'],
+): string | undefined {
+  if (res.ok)
+    return status === 'incompatible'
+      ? `relay does not support ${OAUTH_CALLBACK_CAPABILITY}`
+      : undefined
+  return res.error ?? 'announce failed'
+}
+
+/**
+ * Records one announce attempt's outcome into the module state (oauthCallbackRoute + state) and
+ * returns the resulting status, so the caller knows whether to retry.
+ */
+function recordAnnounceAttempt(
+  cfg: RemoteConfig,
+  origin: string,
+  redirectUri: string,
+  identity: RelayIdentity,
+  callbackBase: string,
+  res: AnnounceResult,
+  attempt: number,
+  retryDelays: readonly number[],
+): OAuthCallbackRoute['status'] {
+  const status = computeCallbackStatus(res, attempt, retryDelays)
+  const error = callbackRouteError(res, status)
+  oauthCallbackRoute = {
+    origin,
+    redirectUri,
+    relayId: identity.id,
+    status,
+    ...(error ? { error } : {}),
+  }
+  state.oauthCallback = status
+  state.relayError = error ?? null
+  // The relay that answers the OAuth callback is the same one that serves /r/<id>, unless the
+  // owner pointed `relay.url` elsewhere; the stable address is only claimed when it answered.
+  state.stableUrl =
+    res.ok && callbackBase === relayBase(cfg)
+      ? (res.url ?? `${callbackBase}/r/${identity.id}`)
+      : null
+  writeStatusFile()
+  return status
+}
+
 /**
  * Announce one freshly-created tunnel origin. Quick Tunnel: register the OAuth return route (and
  * with it the stable /r/<id> address). Named tunnel: the hostname IS the stable address, nothing
@@ -122,35 +184,17 @@ export async function publishRemoteRoutes(
   for (let attempt = 0; ; attempt++) {
     const res = await announce(callbackBase, identity, origin, fetchImpl)
     if (gen !== generation) return
-    const compatible = res.capabilities?.includes(OAUTH_CALLBACK_CAPABILITY) ?? false
-    const status: OAuthCallbackRoute['status'] = res.ok
-      ? compatible
-        ? 'ready'
-        : 'incompatible'
-      : attempt < retryDelays.length
-        ? 'retrying'
-        : 'failed'
-    oauthCallbackRoute = {
+    const status = recordAnnounceAttempt(
+      cfg,
       origin,
       redirectUri,
-      relayId: identity.id,
-      status,
-      ...(res.ok
-        ? compatible
-          ? {}
-          : { error: `relay does not support ${OAUTH_CALLBACK_CAPABILITY}` }
-        : { error: res.error ?? 'announce failed' }),
-    }
-    state.oauthCallback = status
-    state.relayError = oauthCallbackRoute.error ?? null
-    // The relay that answers the OAuth callback is the same one that serves /r/<id>, unless the
-    // owner pointed `relay.url` elsewhere; the stable address is only claimed when it answered.
-    state.stableUrl =
-      res.ok && callbackBase === relayBase(cfg)
-        ? (res.url ?? `${callbackBase}/r/${identity.id}`)
-        : null
-    writeStatusFile()
-    if (res.ok || attempt >= retryDelays.length) {
+      identity,
+      callbackBase,
+      res,
+      attempt,
+      retryDelays,
+    )
+    if (status !== 'retrying') {
       if (!res.ok) console.warn(`[orchestrator-remote] relay announce failed: ${res.error}`)
       return
     }

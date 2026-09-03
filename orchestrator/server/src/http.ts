@@ -103,23 +103,8 @@ async function daemonHealth(): Promise<{ ok: boolean; version: string | null; ur
   }
 }
 
-export function buildApp(cfg: RemoteConfig, deps: AppDeps): Hono {
-  const app = new Hono()
-
-  app.use('/api/*', async (c, next) => {
-    if (!isRemoteRequest(c)) {
-      const refused = loopbackGuard(c)
-      if (refused) return refused
-    }
-    await next()
-  })
-  app.use('/api/*', authMiddleware(cfg))
-
-  app.get('/api/health', (c) =>
-    c.json({ ok: true, service: 'orchestrator-remote', version: deps.version }),
-  )
-
-  // ── auth ──────────────────────────────────────────────────────────────────
+// ── auth ────────────────────────────────────────────────────────────────────
+function registerAuthRoutes(app: Hono, cfg: RemoteConfig): void {
   app.get('/api/auth/status', (c) => {
     const enforced = authEnforced(cfg)
     const remote = isRemoteRequest(c)
@@ -176,8 +161,10 @@ export function buildApp(cfg: RemoteConfig, deps: AppDeps): Hono {
     '/oauth/callback',
     oauthGuard((c) => handleComplete(c, cfg.oauth!, authOpts)),
   )
+}
 
-  // ── status + data ─────────────────────────────────────────────────────────
+// ── status + data ───────────────────────────────────────────────────────────
+function registerStatusRoutes(app: Hono, cfg: RemoteConfig, deps: AppDeps): void {
   app.get('/api/status', async (c) => {
     const [daemon, dashboard] = await Promise.all([daemonHealth(), dashboardUp()])
     return c.json({
@@ -193,8 +180,10 @@ export function buildApp(cfg: RemoteConfig, deps: AppDeps): Hono {
     const { status, body } = await dashboardData(c.req.param('name'))
     return c.json(body as Record<string, unknown>, status as 200)
   })
+}
 
-  // ── the switch ────────────────────────────────────────────────────────────
+// ── the switch ──────────────────────────────────────────────────────────────
+function registerSwitchRoutes(app: Hono): void {
   app.get('/api/switch', (c) => c.json(trayStatus()))
   app.post('/api/switch/arm', async (c) => {
     const result = await arm()
@@ -207,8 +196,10 @@ export function buildApp(cfg: RemoteConfig, deps: AppDeps): Hono {
 
   // The relay's forwarding page appends /s/<token> for share links; this gateway has none.
   app.get('/s/*', (c) => c.redirect('/'))
+}
 
-  // ── the SPA ───────────────────────────────────────────────────────────────
+// ── the SPA ─────────────────────────────────────────────────────────────────
+function registerSpaRoutes(app: Hono, deps: AppDeps): void {
   if (deps.webDist && existsSync(deps.webDist)) {
     const root = relative(process.cwd(), deps.webDist).replaceAll('\\', '/') || '.'
     app.use('/assets/*', serveStatic({ root }))
@@ -224,6 +215,29 @@ export function buildApp(cfg: RemoteConfig, deps: AppDeps): Hono {
       ),
     )
   }
+}
+
+export function buildApp(cfg: RemoteConfig, deps: AppDeps): Hono {
+  const app = new Hono()
+
+  app.use('/api/*', async (c, next) => {
+    if (!isRemoteRequest(c)) {
+      const refused = loopbackGuard(c)
+      if (refused) return refused
+    }
+    await next()
+  })
+  app.use('/api/*', authMiddleware(cfg))
+
+  app.get('/api/health', (c) =>
+    c.json({ ok: true, service: 'orchestrator-remote', version: deps.version }),
+  )
+
+  registerAuthRoutes(app, cfg)
+  registerStatusRoutes(app, cfg, deps)
+  registerSwitchRoutes(app)
+  registerSpaRoutes(app, deps)
+
   return app
 }
 

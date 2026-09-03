@@ -19,6 +19,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { Context } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { authEnforced, type OAuthConfig, type RemoteConfig } from './config.ts'
 import { rotateKey, sign, unsign } from './signing.ts'
@@ -287,6 +288,130 @@ async function fetchDisplayProfile(
   return { name, displayEmail, picture }
 }
 
+/** Parses the signed `state` payload's JSON body into the nonce + redirect URI it carries. */
+function parseStatePayload(sp: string): { nonce: string; stateRedirectUri: string } | null {
+  try {
+    const parsed = JSON.parse(sp) as { n?: string; o?: string; d?: string }
+    return {
+      nonce: String(parsed.n ?? ''),
+      stateRedirectUri: String(parsed.d || `${String(parsed.o ?? '')}/oauth/callback`),
+    }
+  } catch {
+    return null
+  }
+}
+
+type TokenExchangeResult =
+  | { ok: true; token: TokenSet }
+  | { ok: false; status: ContentfulStatusCode; message: string }
+
+/** Exchanges the authorization code for tokens, reporting the OAuth failure shape on the way out. */
+async function exchangeAuthorizationCode(
+  oauth: OAuthConfig,
+  doc: { token_endpoint?: string },
+  code: string,
+  redirectUri: string,
+  verifier: string,
+  doFetch: FetchLike,
+): Promise<TokenExchangeResult> {
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri,
+    client_id: oauth.clientId,
+    code_verifier: verifier,
+  })
+  if (oauth.clientSecret) body.set('client_secret', oauth.clientSecret)
+  const tr = await doFetch(doc.token_endpoint!, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body,
+  })
+  if (!tr.ok) {
+    // The status + OAuth error code ARE the diagnosis (invalid_client / invalid_grant /
+    // redirect_uri_mismatch). Log the PARSED error fields, not the raw body: this log is a
+    // file the operator is told to read and would plausibly paste to an agent, and "an OAuth
+    // error body never contains a credential" is an assumption about someone else's server,
+    // not something we enforce. Falling back to the status alone is a fine diagnosis.
+    const raw = await tr.text().catch(() => '')
+    let detail = ''
+    try {
+      const parsed = JSON.parse(raw) as { error?: unknown; error_description?: unknown }
+      detail = [parsed.error, parsed.error_description]
+        .filter((x) => typeof x === 'string')
+        .join(': ')
+        .slice(0, 200)
+    } catch {
+      detail = ''
+    }
+    console.error(
+      `[orchestrator-remote] token exchange failed: HTTP ${tr.status}${detail ? ` ${detail}` : ' (no parseable error field)'}`,
+    )
+    return { ok: false, status: 502, message: 'Token exchange with Connections failed.' }
+  }
+  const token = (await tr.json()) as TokenSet
+  if (!token.id_token) {
+    return { ok: false, status: 502, message: 'Connections returned no identity token.' }
+  }
+  return { ok: true, token }
+}
+
+type OwnershipResult =
+  | { ok: true }
+  | {
+      ok: false
+      status: ContentfulStatusCode
+      message: string
+      action?: { href: string; label: string }
+    }
+
+// ⛔ FIRST-USE OWNERSHIP IS CLAIMABLE FROM THE MACHINE ONLY, NEVER OVER THE TUNNEL.
+//
+// Plain TOFU is a takeover waiting to happen here: until someone claims the install, ANY
+// verified Connections account that reaches the public hostname becomes the permanent owner
+// - and the owner can arm this machine's fleet automation from a phone. /oauth/login sits
+// outside the auth gate by necessity (a sign-in cannot require a session), so "nobody knows
+// the URL yet" was the only thing standing between a stranger and the switch. A URL is not
+// a secret: it is in DNS, in certificate-transparency logs, in browser history, in any link
+// ever pasted. Found by audit, 2026-09-03, on this very install while it sat unclaimed.
+//
+// Claiming from loopback means being at the keyboard, which is the same standard the rest
+// of this system uses for "a person's word". After the claim, remote sign-in works normally
+// for that identity.
+function resolveOwnership(
+  c: Context,
+  oauth: OAuthConfig,
+  sub: string,
+  email: string,
+  opts?: HandleCompleteOptions,
+): OwnershipResult {
+  if (!oauth.ownerSub && !oauth.ownerEmail && sub) {
+    if (refusesRemoteClaim(oauth, isRemoteRequest(c))) {
+      console.warn(
+        `[orchestrator-remote] REFUSED a remote ownership claim by ${email || sub}: this install is unclaimed and may only be claimed from the machine itself`,
+      )
+      return {
+        ok: false,
+        status: 403,
+        message:
+          'This orchestrator has no owner yet, and ownership can only be claimed at the machine itself — not over the tunnel. Sign in once on that computer (http://127.0.0.1:7790), then come back here.',
+        action: { href: '/', label: 'Back' },
+      }
+    }
+    oauth.ownerSub = sub
+    opts?.onOwnerClaimed?.(oauth)
+    console.log(`[orchestrator-remote] ownership claimed by ${email || sub} (local sign-in)`)
+  }
+  if (!ownerMatches(oauth, sub, email)) {
+    return {
+      ok: false,
+      status: 403,
+      message: "This Connections account isn't the owner of this orchestrator.",
+    }
+  }
+  return { ok: true }
+}
+
 /** Shared by /oauth/finish (relay return) and /oauth/callback (direct completion). */
 export async function handleComplete(
   c: Context,
@@ -299,15 +424,9 @@ export async function handleComplete(
 
   const sp = unsign(state, opts?.secret)
   if (!sp) return c.html(errPage('Invalid or tampered sign-in state.'), 400)
-  let nonce = ''
-  let stateRedirectUri = ''
-  try {
-    const parsed = JSON.parse(sp) as { n?: string; o?: string; d?: string }
-    nonce = String(parsed.n ?? '')
-    stateRedirectUri = String(parsed.d || `${String(parsed.o ?? '')}/oauth/callback`)
-  } catch {
-    return c.html(errPage('Invalid sign-in state.'), 400)
-  }
+  const parsedState = parseStatePayload(sp)
+  if (!parsedState) return c.html(errPage('Invalid sign-in state.'), 400)
+  const { nonce, stateRedirectUri } = parsedState
   const tx = txs.get(nonce)
   if (!tx) return c.html(errPage('This sign-in link expired. Start again.'), 400)
   txs.delete(nonce)
@@ -315,85 +434,28 @@ export async function handleComplete(
   const doFetch: FetchLike = opts?.fetchImpl ?? authFetch
   try {
     const doc = await discover(oauth.issuer, doFetch)
-    const body = new URLSearchParams({
-      grant_type: 'authorization_code',
+    const exchange = await exchangeAuthorizationCode(
+      oauth,
+      doc,
       code,
-      redirect_uri: stateRedirectUri,
-      client_id: oauth.clientId,
-      code_verifier: tx.verifier,
-    })
-    if (oauth.clientSecret) body.set('client_secret', oauth.clientSecret)
-    const tr = await doFetch(doc.token_endpoint!, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body,
-    })
-    if (!tr.ok) {
-      // The status + OAuth error code ARE the diagnosis (invalid_client / invalid_grant /
-      // redirect_uri_mismatch). Log the PARSED error fields, not the raw body: this log is a
-      // file the operator is told to read and would plausibly paste to an agent, and "an OAuth
-      // error body never contains a credential" is an assumption about someone else's server,
-      // not something we enforce. Falling back to the status alone is a fine diagnosis.
-      const raw = await tr.text().catch(() => '')
-      let detail = ''
-      try {
-        const parsed = JSON.parse(raw) as { error?: unknown; error_description?: unknown }
-        detail = [parsed.error, parsed.error_description]
-          .filter((x) => typeof x === 'string')
-          .join(': ')
-          .slice(0, 200)
-      } catch {
-        detail = ''
-      }
-      console.error(
-        `[orchestrator-remote] token exchange failed: HTTP ${tr.status}${detail ? ` ${detail}` : ' (no parseable error field)'}`,
-      )
-      return c.html(errPage('Token exchange with Connections failed.'), 502)
-    }
-    const tok = (await tr.json()) as TokenSet
-    if (!tok.id_token) return c.html(errPage('Connections returned no identity token.'), 502)
+      stateRedirectUri,
+      tx.verifier,
+      doFetch,
+    )
+    if (!exchange.ok) return c.html(errPage(exchange.message), exchange.status)
+    const tok = exchange.token
 
     const keySet = opts?.jwksSet ?? jwks(doc.jwks_uri!)
-    const { payload } = await jwtVerify(tok.id_token, keySet, {
+    const { payload } = await jwtVerify(tok.id_token!, keySet, {
       issuer: oauth.issuer.replace(/\/$/, ''),
       audience: oauth.clientId,
     })
     const sub = String(payload.sub ?? '')
     const email = String((payload as { email?: string }).email ?? '')
 
-    // ⛔ FIRST-USE OWNERSHIP IS CLAIMABLE FROM THE MACHINE ONLY, NEVER OVER THE TUNNEL.
-    //
-    // Plain TOFU is a takeover waiting to happen here: until someone claims the install, ANY
-    // verified Connections account that reaches the public hostname becomes the permanent owner
-    // - and the owner can arm this machine's fleet automation from a phone. /oauth/login sits
-    // outside the auth gate by necessity (a sign-in cannot require a session), so "nobody knows
-    // the URL yet" was the only thing standing between a stranger and the switch. A URL is not
-    // a secret: it is in DNS, in certificate-transparency logs, in browser history, in any link
-    // ever pasted. Found by audit, 2026-09-03, on this very install while it sat unclaimed.
-    //
-    // Claiming from loopback means being at the keyboard, which is the same standard the rest
-    // of this system uses for "a person's word". After the claim, remote sign-in works normally
-    // for that identity.
-    if (!oauth.ownerSub && !oauth.ownerEmail && sub) {
-      if (refusesRemoteClaim(oauth, isRemoteRequest(c))) {
-        console.warn(
-          `[orchestrator-remote] REFUSED a remote ownership claim by ${email || sub}: this install is unclaimed and may only be claimed from the machine itself`,
-        )
-        return c.html(
-          errPage(
-            'This orchestrator has no owner yet, and ownership can only be claimed at the machine itself — not over the tunnel. Sign in once on that computer (http://127.0.0.1:7790), then come back here.',
-            { href: '/', label: 'Back' },
-          ),
-          403,
-        )
-      }
-      oauth.ownerSub = sub
-      opts?.onOwnerClaimed?.(oauth)
-      console.log(`[orchestrator-remote] ownership claimed by ${email || sub} (local sign-in)`)
-    }
-    if (!ownerMatches(oauth, sub, email)) {
-      return c.html(errPage("This Connections account isn't the owner of this orchestrator."), 403)
-    }
+    const ownership = resolveOwnership(c, oauth, sub, email, opts)
+    if (!ownership.ok) return c.html(errPage(ownership.message, ownership.action), ownership.status)
+
     const { name, displayEmail, picture } = await fetchDisplayProfile(doc, tok, email, doFetch)
     setSession(
       c,
