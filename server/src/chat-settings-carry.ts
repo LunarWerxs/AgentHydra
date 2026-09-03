@@ -174,32 +174,40 @@ export function chooseStoreLeaf(instanceDir: string): string | null {
   return best?.dir ?? null
 }
 
-/** The latest lastActivityAt across a leaf's records, falling back to file mtimes, then to the
- *  leaf's own mtime so an empty leaf still ranks (a freshly signed-in profile has exactly that). */
+/**
+ * The latest lastActivityAt across a leaf's records (a record without one ranks by its file
+ * mtime). ONLY an empty leaf falls back to the directory's own mtime, so a freshly signed-in
+ * profile still ranks. The directory time must not compete with record activity: every leaf's
+ * directory is touched whenever the app adds or removes a file, and on Linux two directories
+ * created in the same tick share an mtime, so the first one enumerated would win a tie against
+ * a leaf whose records are plainly newer (the ubuntu CI leg caught exactly that, 2026-09-03).
+ */
 function newestActivity(dir: string): number {
-  let best = 0
-  try {
-    best = statSync(dir).mtimeMs
-  } catch {
-    return 0
-  }
   let files: string[]
   try {
     files = readdirSync(dir).filter((f) => f.startsWith('local_') && f.endsWith('.json'))
   } catch {
-    return best
+    return 0
   }
+  let best = 0
+  let sawRecord = false
   for (const f of files) {
     const p = join(dir, f)
     try {
       const meta = JSON.parse(readFileSync(p, 'utf8')) as { lastActivityAt?: unknown }
       const t = typeof meta.lastActivityAt === 'number' ? meta.lastActivityAt : statSync(p).mtimeMs
+      sawRecord = true
       if (t > best) best = t
     } catch {
       // one unreadable record says nothing about the leaf
     }
   }
-  return best
+  if (sawRecord) return best
+  try {
+    return statSync(dir).mtimeMs
+  } catch {
+    return 0
+  }
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
