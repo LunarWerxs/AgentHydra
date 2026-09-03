@@ -196,4 +196,24 @@ export default {
   toastSaveFailed: 'Failed to save changes.',
   toastShortcutCreated: 'Desktop shortcut created.',
   toastShortcutFailed: 'Failed to create desktop shortcut.',
+
+  // "Move all chats" on a row's menu (the kebab, or right-click on the row): every active chat on
+  // this instance, one hop to another. A closed target is opened first, since the import has to
+  // land in a running app.
+  moveChats: 'Move all chats to another account',
+  moveChatsNoTargets: 'No other instances',
+  moveChatsWillStart: 'Not running - will be started first',
+  moveChatsStarting: 'Starting {to}…',
+  moveChatsStartFailed: "Couldn't start {to}.",
+  moveChatsCounting: 'Counting active chats…',
+  moveChatsNone: 'No active chats to move from {from}.',
+  moveChatsFailed: "Couldn't list the chats on {from}.",
+  moveChatsConfirmTitle: 'Move {n} chats from {from} to {to}?',
+  moveChatsConfirmBody:
+    'Every active chat on {from} (not archived, not marked done) is stopped if it is running, archived there, and imported into {to}. They move one at a time; this cannot be undone in one step.',
+  moveChatsCancel: 'Cancel',
+  moveChatsConfirmSubmit: 'Move {n} chats',
+  moveChatsProgress: 'Moving chat {done} of {n}…',
+  moveChatsDone: 'Moved {ok} of {n} chats to {to}.',
+  moveChatsSomeFailed: '{failed} could not be moved; details are in the browser console.',
 }

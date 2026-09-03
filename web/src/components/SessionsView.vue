@@ -63,13 +63,18 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -126,6 +131,7 @@ import {
 import { displayName } from '@/lib/instance-appearance'
 import { escapeHtml, looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
 import { composeSessionPathClipboard } from '@/lib/session-clipboard'
+import { rangeBetween } from '@/lib/session-multiselect'
 import { type SessionShape, type ShapeScope, sessionShape } from '@/lib/session-shape'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
@@ -154,7 +160,7 @@ const { t } = useI18n()
 // resolves accounts. A private fetch would show the folder name here while the Instances tab
 // showed the account name for the very same instance. `computed`, so the chips fill in on their
 // own as each account resolves. A failed load just leaves the named entries out.
-const { instances: desktopInstances, refreshInstances } = useInstances()
+const { instances: desktopInstances, refreshInstances, open: openDesktopInstance } = useInstances()
 const namedInstances = computed(() =>
   desktopInstances.value.map((i) => ({ name: i.name, label: displayName(i) })),
 )
@@ -893,40 +899,77 @@ const usageDetail = computed(() => {
 })
 
 // --- migrate to another account ----------------------------------------------
-// The flyout lists RUNNING desktop instances (the only legal landing spots — the server refuses
-// imports at closed instances so it can never boot one). Loaded lazily when the chat menu opens;
-// the session's own instance is disabled in the list rather than hidden, so "why isn't mine
-// here" never needs asking.
+// The flyout lists EVERY desktop instance, in two groups. A running one is a legal landing spot as
+// it stands. A closed one is shown too - hiding them made "why isn't mine here" a daily question -
+// but the server refuses to import into a closed instance, because the import spawn would BOOT it
+// and the rule is that nothing opens an account on its own. So a closed target reads "start it and
+// move there": a deliberate click opens the instance the ordinary way, we wait for it to come up,
+// and only then migrate. Loaded lazily when a menu opens; the session's own instance is disabled
+// rather than hidden.
 interface MigrateTarget {
   ref: string
+  dir: string
   name: string
   account: string | null
   isCurrent: boolean
+  isRunning: boolean
 }
 const migrateTargets = ref<MigrateTarget[]>([])
+const runningTargets = computed(() => migrateTargets.value.filter((x) => x.isRunning))
+const closedTargets = computed(() => migrateTargets.value.filter((x) => !x.isRunning))
 const migrating = ref(false)
 
-async function loadMigrateTargets(s: SessionSummary) {
+/** `s` is the session the menu is FOR, so its own instance can be marked; null for a bulk menu,
+ *  where the checked sessions may span several instances and none is "current". */
+async function loadMigrateTargets(s: SessionSummary | null) {
   try {
     const [instances, cache] = await Promise.all([api.listInstances(), api.getUsageCache()])
-    migrateTargets.value = instances
-      .filter((i) => i.isRunning)
-      .map((i) => {
-        const ref = `desktop:${i.dir}`
-        const snap = cache.cache[ref.toLowerCase()] ?? cache.cache[ref]
-        return {
-          ref,
-          name: i.label ?? i.name,
-          account: snap?.account ?? null,
-          isCurrent: s.instance != null && s.instance === i.name,
-        }
-      })
+    migrateTargets.value = instances.map((i) => {
+      const ref = `desktop:${i.dir}`
+      const snap = cache.cache[ref.toLowerCase()] ?? cache.cache[ref]
+      return {
+        ref,
+        dir: i.dir,
+        name: i.label ?? i.name,
+        account: snap?.account ?? null,
+        isCurrent: s?.instance != null && s.instance === i.name,
+        isRunning: i.isRunning,
+      }
+    })
   } catch {
     migrateTargets.value = []
   }
 }
 
+/** A closed target is opened first and waited for. The wait polls the instance list rather than
+ *  trusting the open call's ok: that only says the spawn happened. The extra beat after the
+ *  process appears is for Electron to take its single-instance lock, which is what the import
+ *  spawn aims at; too early and the import boots a SECOND copy instead of landing in this one. */
+async function ensureRunning(target: MigrateTarget): Promise<boolean> {
+  if (target.isRunning) return true
+  const id = `start-${target.ref}`
+  toast.loading(t('sessions.migrateStarting', { name: target.name }), { id })
+  const opened = await openDesktopInstance(target.dir)
+  if (!opened?.ok) {
+    toast.error(t('sessions.migrateStartFailed', { name: target.name }), { id })
+    return false
+  }
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500))
+    const list = await api.listInstances().catch(() => [] as api.CMInstance[])
+    if (list.find((i) => i.dir === target.dir)?.isRunning) {
+      await new Promise((r) => setTimeout(r, 3000))
+      toast.dismiss(id)
+      return true
+    }
+  }
+  toast.error(t('sessions.migrateStartFailed', { name: target.name }), { id })
+  return false
+}
+
 async function migrateTo(s: SessionSummary, target: MigrateTarget) {
+  if (!(await ensureRunning(target))) return
   migrating.value = true
   try {
     const r = await api.migrateSession(s.session_id, target.ref)
@@ -1035,15 +1078,24 @@ watch(runningRunId, (id, oldId) => {
 })
 onBeforeUnmount(() => window.clearInterval(tailPollTimer))
 
-// --- multi-select: pick several sessions, message them all at once ------------
+// --- multi-select: pick several sessions, message them all at once - or move them ---------------
+// Two ways in: the Select switch in the toolbar, or a Ctrl/Cmd-click or Shift-click straight on a
+// row, which flips select mode on by itself so the modifier means what it means everywhere else.
+// Right-click one of the checked rows and the menu leads with the bulk actions.
 const selectMode = ref(false)
 const checkedIds = ref<Set<string>>(new Set())
 const sessionKey = (s: Pick<SessionSummary, 'source' | 'session_id'>) =>
   `${s.source}:${s.session_id}`
 const isChecked = (s: SessionSummary) => checkedIds.value.has(sessionKey(s))
+// The row a Shift-range extends FROM: the last row deliberately clicked, or the open transcript's
+// row when the very first modifier click is a Shift-click, which is what a keyboard user expects.
+let rangeAnchor: string | null = null
 function toggleSelectMode() {
   selectMode.value = !selectMode.value
-  if (!selectMode.value) checkedIds.value = new Set()
+  if (!selectMode.value) {
+    checkedIds.value = new Set()
+    rangeAnchor = null
+  }
 }
 function toggleChecked(s: SessionSummary) {
   if (s.source !== 'claude') return
@@ -1052,13 +1104,88 @@ function toggleChecked(s: SessionSummary) {
   if (next.has(key)) next.delete(key)
   else next.add(key)
   checkedIds.value = next
+  rangeAnchor = key
 }
 function checkAllFiltered() {
   checkedIds.value = new Set(filtered.value.filter((s) => s.source === 'claude').map(sessionKey))
 }
-function rowClick(s: SessionSummary) {
+function rowClick(s: SessionSummary, ev?: MouseEvent) {
+  const modifier = !!ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey)
+  if (modifier && s.source === 'claude') {
+    if (!selectMode.value) {
+      selectMode.value = true
+      if (ev.shiftKey && selectedId.value && selectedSource.value)
+        rangeAnchor = `${selectedSource.value}:${selectedId.value}`
+    }
+    if (ev.shiftKey && rangeAnchor) {
+      const keys = filtered.value.filter((x) => x.source === 'claude').map(sessionKey)
+      const next = new Set(checkedIds.value)
+      for (const k of rangeBetween(keys, rangeAnchor, sessionKey(s))) next.add(k)
+      checkedIds.value = next
+      return // the anchor stays put, so a second Shift-click re-ranges from the same row
+    }
+    toggleChecked(s)
+    return
+  }
   if (selectMode.value) toggleChecked(s)
   else select(s)
+}
+const checkedSessions = computed(() => filtered.value.filter((s) => isChecked(s)))
+const bulkCount = computed(() => checkedIds.value.size)
+
+// --- bulk actions on the checked rows ----------------------------------------------------------
+function copyCheckedIds() {
+  copy(checkedSessions.value.map((s) => s.session_id).join('\n'))
+}
+// Confirm before a bulk move: it stops live runs and archives rows across several accounts, and
+// "I right-clicked the wrong one" is not a mistake this should let through in one click.
+const bulkConfirm = ref<{ target: MigrateTarget; sessions: SessionSummary[] } | null>(null)
+function askBulkMigrate(target: MigrateTarget) {
+  // Done-marked rows are already handed off or migrated; the server refuses them as superseded,
+  // so leaving them in would only turn one confirmation into a column of error toasts.
+  const sessions = checkedSessions.value.filter((s) => s.source === 'claude' && !s.done)
+  bulkConfirm.value = { target, sessions }
+}
+async function runBulkMigrate() {
+  const job = bulkConfirm.value
+  if (!job) return
+  bulkConfirm.value = null
+  if (!(await ensureRunning(job.target))) return
+  migrating.value = true
+  const id = `bulk-migrate-${job.target.ref}`
+  let ok = 0
+  const failed: string[] = []
+  try {
+    // One at a time on purpose: each migrate may stop a live process and wait for it, and the
+    // desktop app takes imports serially anyway. Parallel calls would only race its import lock.
+    for (const [i, s] of job.sessions.entries()) {
+      toast.loading(t('sessions.migrateBulkProgress', { done: i + 1, n: job.sessions.length }), {
+        id,
+      })
+      try {
+        const r = await api.migrateSession(s.session_id, job.target.ref)
+        if (r.ok) ok++
+        else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
+      } catch (e) {
+        failed.push(`${s.title}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+  } finally {
+    migrating.value = false
+  }
+  if (failed.length)
+    console.warn('[agenthydra] bulk migrate: some chats could not be moved', failed)
+  const summary = t('sessions.migrateBulkDone', {
+    ok,
+    n: job.sessions.length,
+    name: job.target.name,
+  })
+  if (failed.length)
+    toast.warning(`${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })}`, {
+      id,
+    })
+  else toast.success(summary, { id })
+  checkedIds.value = new Set()
 }
 
 const composerTargets = computed<ComposerTarget[]>(() => {
@@ -1534,7 +1661,7 @@ function copy(text: string) {
                     // done rows stay in place and stay readable; they just stop competing for the eye
                     s.done && s.session_id !== selectedId ? 'opacity-55' : '',
                   ]"
-                  @click="rowClick(s)"
+                  @click="rowClick(s, $event)"
                 >
                   <div class="flex items-start justify-between gap-2">
                     <span
@@ -1652,7 +1779,69 @@ function copy(text: string) {
                   </div>
                 </button>
               </ContextMenuTrigger>
-              <ContextMenuContent class="max-w-52">
+              <ContextMenuContent class="max-w-60">
+                <!-- Bulk section: only when THIS row is one of several checked rows, so a
+                     right-click on an unchecked row still acts on that row alone. -->
+                <template v-if="selectMode && bulkCount > 1 && isChecked(s)">
+                  <ContextMenuLabel class="text-xs text-muted-foreground">
+                    {{ $t('sessions.selectedCount', { n: bulkCount }) }}
+                  </ContextMenuLabel>
+                  <ContextMenuItem @select="copyCheckedIds">
+                    <Copy />
+                    {{ $t('sessions.copyNIds', { n: bulkCount }) }}
+                  </ContextMenuItem>
+                  <ContextMenuSub>
+                    <ContextMenuSubTrigger @pointerenter="loadMigrateTargets(null)">
+                      <ArrowRightLeft class="size-3.5" />
+                      {{ $t('sessions.migrateBulkLabel', { n: bulkCount }) }}
+                    </ContextMenuSubTrigger>
+                    <ContextMenuSubContent>
+                      <ContextMenuItem v-if="migrateTargets.length === 0" disabled>
+                        {{ $t('sessions.migrateNoTargets') }}
+                      </ContextMenuItem>
+                      <template v-if="runningTargets.length">
+                        <ContextMenuLabel class="text-xs text-muted-foreground">
+                          {{ $t('sessions.migrateRunningGroup') }}
+                        </ContextMenuLabel>
+                        <ContextMenuItem
+                          v-for="target in runningTargets"
+                          :key="target.ref"
+                          :disabled="migrating"
+                          @select="askBulkMigrate(target)"
+                        >
+                          <ArrowRightLeft class="size-3.5" />
+                          <span class="flex flex-col">
+                            <span>{{ target.name }}</span>
+                            <span v-if="target.account" class="text-xs text-muted-foreground">
+                              {{ target.account }}
+                            </span>
+                          </span>
+                        </ContextMenuItem>
+                      </template>
+                      <template v-if="closedTargets.length">
+                        <ContextMenuSeparator v-if="runningTargets.length" />
+                        <ContextMenuLabel class="text-xs text-muted-foreground">
+                          {{ $t('sessions.migrateClosedGroup') }}
+                        </ContextMenuLabel>
+                        <ContextMenuItem
+                          v-for="target in closedTargets"
+                          :key="target.ref"
+                          :disabled="migrating"
+                          @select="askBulkMigrate(target)"
+                        >
+                          <ArrowRightLeft class="size-3.5" />
+                          <span class="flex flex-col">
+                            <span>{{ $t('sessions.migrateStartAndMove', { name: target.name }) }}</span>
+                            <span v-if="target.account" class="text-xs text-muted-foreground">
+                              {{ target.account }}
+                            </span>
+                          </span>
+                        </ContextMenuItem>
+                      </template>
+                    </ContextMenuSubContent>
+                  </ContextMenuSub>
+                  <ContextMenuSeparator />
+                </template>
                 <ContextMenuItem @select="toggleDone(s)">
                   <CircleCheck v-if="!s.done" />
                   <CircleSlash v-else />
@@ -1676,6 +1865,61 @@ function copy(text: string) {
                     <Copy />
                     {{ $t('sessions.copyFileLocation') }}
                   </ContextMenuItem>
+                </template>
+                <!-- Same migrate flyout the open chat's ⋯ menu has, reachable without first opening
+                     the transcript. Claude only: it is the one provider with desktop instances. -->
+                <template v-if="s.source === 'claude'">
+                  <ContextMenuSeparator />
+                  <ContextMenuSub>
+                    <ContextMenuSubTrigger @pointerenter="loadMigrateTargets(s)">
+                      <ArrowRightLeft class="size-3.5" />
+                      {{ $t('sessions.migrateAccount') }}
+                    </ContextMenuSubTrigger>
+                    <ContextMenuSubContent>
+                      <ContextMenuItem v-if="migrateTargets.length === 0" disabled>
+                        {{ $t('sessions.migrateNoTargets') }}
+                      </ContextMenuItem>
+                      <template v-if="runningTargets.length">
+                        <ContextMenuLabel class="text-xs text-muted-foreground">
+                          {{ $t('sessions.migrateRunningGroup') }}
+                        </ContextMenuLabel>
+                        <ContextMenuItem
+                          v-for="target in runningTargets"
+                          :key="target.ref"
+                          :disabled="migrating || target.isCurrent"
+                          @select="migrateTo(s, target)"
+                        >
+                          <ArrowRightLeft class="size-3.5" />
+                          <span class="flex flex-col">
+                            <span>{{ target.name }}</span>
+                            <span v-if="target.account" class="text-xs text-muted-foreground">
+                              {{ target.account }}
+                            </span>
+                          </span>
+                        </ContextMenuItem>
+                      </template>
+                      <template v-if="closedTargets.length">
+                        <ContextMenuSeparator v-if="runningTargets.length" />
+                        <ContextMenuLabel class="text-xs text-muted-foreground">
+                          {{ $t('sessions.migrateClosedGroup') }}
+                        </ContextMenuLabel>
+                        <ContextMenuItem
+                          v-for="target in closedTargets"
+                          :key="target.ref"
+                          :disabled="migrating || target.isCurrent"
+                          @select="migrateTo(s, target)"
+                        >
+                          <ArrowRightLeft class="size-3.5" />
+                          <span class="flex flex-col">
+                            <span>{{ $t('sessions.migrateStartAndMove', { name: target.name }) }}</span>
+                            <span v-if="target.account" class="text-xs text-muted-foreground">
+                              {{ target.account }}
+                            </span>
+                          </span>
+                        </ContextMenuItem>
+                      </template>
+                    </ContextMenuSubContent>
+                  </ContextMenuSub>
                 </template>
                 <ContextMenuSeparator />
                 <ContextMenuItem @select="copy(s.title)">
@@ -1926,20 +2170,48 @@ function copy(text: string) {
                             <DropdownMenuItem v-if="migrateTargets.length === 0" disabled>
                               {{ $t('sessions.migrateNoTargets') }}
                             </DropdownMenuItem>
-                            <DropdownMenuItem
-                              v-for="target in migrateTargets"
-                              :key="target.ref"
-                              :disabled="migrating || target.isCurrent"
-                              @select="migrateTo(selected, target)"
-                            >
-                              <ArrowRightLeft class="size-3.5" />
-                              <span class="flex flex-col">
-                                <span>{{ target.name }}</span>
-                                <span v-if="target.account" class="text-xs text-muted-foreground">
-                                  {{ target.account }}
+                            <!-- Two groups. Running instances take the chat as they stand; a closed
+                                 one is started first (a deliberate click, so the "nothing opens an
+                                 account on its own" rule holds), then the chat moves. -->
+                            <template v-if="runningTargets.length">
+                              <DropdownMenuItem disabled class="text-xs text-muted-foreground">
+                                {{ $t('sessions.migrateRunningGroup') }}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                v-for="target in runningTargets"
+                                :key="target.ref"
+                                :disabled="migrating || target.isCurrent"
+                                @select="migrateTo(selected, target)"
+                              >
+                                <ArrowRightLeft class="size-3.5" />
+                                <span class="flex flex-col">
+                                  <span>{{ target.name }}</span>
+                                  <span v-if="target.account" class="text-xs text-muted-foreground">
+                                    {{ target.account }}
+                                  </span>
                                 </span>
-                              </span>
-                            </DropdownMenuItem>
+                              </DropdownMenuItem>
+                            </template>
+                            <template v-if="closedTargets.length">
+                              <DropdownMenuSeparator v-if="runningTargets.length" />
+                              <DropdownMenuItem disabled class="text-xs text-muted-foreground">
+                                {{ $t('sessions.migrateClosedGroup') }}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                v-for="target in closedTargets"
+                                :key="target.ref"
+                                :disabled="migrating || target.isCurrent"
+                                @select="migrateTo(selected, target)"
+                              >
+                                <ArrowRightLeft class="size-3.5" />
+                                <span class="flex flex-col">
+                                  <span>{{ $t('sessions.migrateStartAndMove', { name: target.name }) }}</span>
+                                  <span v-if="target.account" class="text-xs text-muted-foreground">
+                                    {{ target.account }}
+                                  </span>
+                                </span>
+                              </DropdownMenuItem>
+                            </template>
                           </DropdownMenuSubContent>
                         </DropdownMenuSub>
                       </template>
@@ -2168,6 +2440,35 @@ function copy(text: string) {
     <!-- the findings, redacted. There is no reveal control, and the daemon has no endpoint that
          could serve one: the transcript is already open one panel away, so revealing here would only
          add a second place credentials live. -->
+    <!-- Bulk migrate confirmation: names the count and the destination, lists the chats, and makes
+         the move a second deliberate click. -->
+    <Dialog :open="bulkConfirm !== null" @update:open="(v) => { if (!v) bulkConfirm = null }">
+      <DialogContent class="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {{ $t('sessions.migrateConfirmTitle', { n: bulkConfirm?.sessions.length ?? 0, name: bulkConfirm?.target.name ?? '' }) }}
+          </DialogTitle>
+          <DialogDescription>
+            {{ $t('sessions.migrateConfirmBody', { name: bulkConfirm?.target.name ?? '' }) }}
+          </DialogDescription>
+        </DialogHeader>
+        <ul class="scroll-slim max-h-56 space-y-1 overflow-y-auto text-xs">
+          <li
+            v-for="s in bulkConfirm?.sessions ?? []"
+            :key="s.session_id"
+            class="truncate rounded border border-border px-2 py-1"
+          >
+            {{ s.title }}
+          </li>
+        </ul>
+        <DialogFooter>
+          <Button variant="ghost" @click="bulkConfirm = null">{{ $t('sessions.migrateConfirmCancel') }}</Button>
+          <Button :disabled="migrating || !bulkConfirm?.sessions.length" @click="runBulkMigrate">
+            {{ $t('sessions.migrateConfirmSubmit', { n: bulkConfirm?.sessions.length ?? 0 }) }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <Dialog v-model:open="secretsOpen">
       <DialogContent class="max-w-xl">
         <DialogHeader>

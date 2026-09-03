@@ -2,6 +2,7 @@
 import {
   AppWindow,
   ArrowDown,
+  ArrowRightLeft,
   ArrowUp,
   Boxes,
   ChevronDown,
@@ -42,11 +43,22 @@ import UsageFilterMenu from '@/components/UsageFilterMenu.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -67,11 +79,13 @@ import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageFilter } from '@/composables/useUsageFilter'
 import { useUsageMode } from '@/composables/useUsageMode'
-import type { CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
+import type { CliInstance, CMDesktopInstall, CMInstance, SessionSummary } from '@/lib/api'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
   DESKTOP_DOWNLOAD_PAGE_URL,
   getDesktopInstall,
+  getSessions,
+  migrateSession,
 } from '@/lib/api'
 import { formatBytes, formatUptime } from '@/lib/format'
 import {
@@ -569,6 +583,116 @@ function onEditClosed(isOpen: boolean) {
   editError.value = null
 }
 
+// --- right-click is the kebab -------------------------------------------------------------------
+// One menu per row, opened by the ⋮ button OR by right-clicking anywhere on the row (owner ask,
+// 2026-09-03: "right click on the instance ... or click the three little dots to trigger the exact
+// same effect"). Controlled `open` on the row's DropdownMenu keyed by dir: the kebab's own click
+// reports through update:open, and a right-click on another row moves the key, closing this one.
+const rowMenuOpen = ref<string | null>(null)
+
+// --- move every active chat on one instance to another -----------------------------------------
+// The instance-level version of the session list's migrate: every chat on this account that is
+// not archived and not marked done, moved to one other account in one confirmed action. Done rows
+// are skipped because the server refuses them as superseded, so leaving them in would trade one
+// confirmation for a column of error toasts. A closed destination is opened first: the import has
+// to land in a running app, and the rule that nothing opens an account on its own is satisfied by
+// the click that chose it.
+const moveAll = ref<{ from: CMInstance; to: CMInstance; sessions: SessionSummary[] } | null>(null)
+const moveAllBusy = ref(false)
+const instLabel = (i: CMInstance) => i.label ?? i.name
+function moveTargets(from: CMInstance): CMInstance[] {
+  return instances.value
+    .filter((i) => i.dir !== from.dir)
+    .sort(
+      (a, b) =>
+        Number(b.isRunning) - Number(a.isRunning) || instLabel(a).localeCompare(instLabel(b)),
+    )
+}
+/** Poll the instance list (the same 4s cache every tab reads) until `dir` is running, then give
+ *  Electron a beat to take its single-instance lock - the import spawn aims at that lock, and too
+ *  early it boots a SECOND copy instead of landing in this one. */
+async function waitForRunning(dir: string, ms = 60_000): Promise<boolean> {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500))
+    await refreshInstances({ silent: true })
+    if (instances.value.find((i) => i.dir === dir)?.isRunning) {
+      await new Promise((r) => setTimeout(r, 3000))
+      return true
+    }
+  }
+  return false
+}
+async function prepareMoveAll(from: CMInstance, to: CMInstance) {
+  rowMenuOpen.value = null
+  moveAllBusy.value = true
+  const id = `move-all-${from.dir}`
+  try {
+    if (!to.isRunning) {
+      toast.loading(t('instances.moveChatsStarting', { to: instLabel(to) }), { id })
+      const r = await open(to.dir)
+      if (!r?.ok || !(await waitForRunning(to.dir))) {
+        toast.error(t('instances.moveChatsStartFailed', { to: instLabel(to) }), { id })
+        return
+      }
+    }
+    toast.loading(t('instances.moveChatsCounting'), { id })
+    // `instance` is matched server-side against the instance NAME a session's desktop entry records
+    // (the same field the session list's isCurrent compares), over all time, live rows only.
+    const rows = await getSessions(1000, from.name, 'hide', 'all', 'claude')
+    const sessions = rows.filter((s) => !s.done && !s.archived)
+    toast.dismiss(id)
+    if (sessions.length === 0) {
+      toast.info(t('instances.moveChatsNone', { from: instLabel(from) }))
+      return
+    }
+    moveAll.value = { from, to, sessions }
+  } catch {
+    toast.error(t('instances.moveChatsFailed', { from: instLabel(from) }), { id })
+  } finally {
+    moveAllBusy.value = false
+  }
+}
+async function runMoveAll() {
+  const job = moveAll.value
+  if (!job) return
+  moveAll.value = null
+  moveAllBusy.value = true
+  const id = `move-all-${job.from.dir}`
+  const ref = `desktop:${job.to.dir}`
+  let ok = 0
+  const failed: string[] = []
+  try {
+    // Serial on purpose: each migrate may stop a live run and wait for it, and the desktop app
+    // takes imports one at a time anyway.
+    for (const [i, s] of job.sessions.entries()) {
+      toast.loading(t('instances.moveChatsProgress', { done: i + 1, n: job.sessions.length }), {
+        id,
+      })
+      try {
+        const r = await migrateSession(s.session_id, ref)
+        if (r.ok) ok++
+        else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
+      } catch (e) {
+        failed.push(`${s.title}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+  } finally {
+    moveAllBusy.value = false
+  }
+  if (failed.length) console.warn('[agenthydra] move all chats: some could not be moved', failed)
+  const summary = t('instances.moveChatsDone', {
+    ok,
+    n: job.sessions.length,
+    to: instLabel(job.to),
+  })
+  if (failed.length)
+    toast.warning(`${summary} ${t('instances.moveChatsSomeFailed', { failed: failed.length })}`, {
+      id,
+    })
+  else toast.success(summary, { id })
+}
+
 function openDeleteDialog(inst: CMInstance) {
   deleteTarget.value = inst
   deleteError.value = null
@@ -965,6 +1089,7 @@ onUnmounted(() => {
             :key="inst.dir"
             class="transition-opacity"
             :class="filterDimmed(usageFor(inst)) ? 'opacity-25 hover:bg-transparent' : ''"
+            @contextmenu.prevent="rowMenuOpen = inst.dir"
           >
             <TableCell>
               <!-- per-instance icon (replaces the old status dot); the chosen glyph + color are
@@ -1141,7 +1266,10 @@ onUnmounted(() => {
                   <AppWindow /> {{ $t('instances.focusShort') }}
                 </Button>
 
-                <DropdownMenu>
+                <DropdownMenu
+                  :open="rowMenuOpen === inst.dir"
+                  @update:open="(v) => (rowMenuOpen = v ? inst.dir : null)"
+                >
                   <!-- No tooltip wrapper here: the kebab is self-explanatory, and nesting a
                        TooltipTrigger around the DropdownMenuTrigger swallowed the click so the
                        menu never opened (and the zero-delay tooltip was intrusive). aria-label
@@ -1196,6 +1324,32 @@ onUnmounted(() => {
                     >
                       <Gauge /> {{ $t('instances.checkUsage') }}
                     </DropdownMenuItem>
+                    <!-- Every active chat on this account, moved to one other account. Running
+                         destinations first; a closed one says it will be started. -->
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger :disabled="moveAllBusy">
+                        <ArrowRightLeft /> {{ $t('instances.moveChats') }}
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent class="max-w-64">
+                        <DropdownMenuItem v-if="moveTargets(inst).length === 0" disabled>
+                          {{ $t('instances.moveChatsNoTargets') }}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          v-for="to in moveTargets(inst)"
+                          :key="to.dir"
+                          :disabled="moveAllBusy"
+                          @click="prepareMoveAll(inst, to)"
+                        >
+                          <ArrowRightLeft />
+                          <span class="flex flex-col">
+                            <span>{{ instLabel(to) }}</span>
+                            <span class="text-xs text-muted-foreground">
+                              {{ to.isRunning ? $t('instances.running') : $t('instances.moveChatsWillStart') }}
+                            </span>
+                          </span>
+                        </DropdownMenuItem>
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
                     <!-- CLI section, on EVERY row: a desktop instance and its CLI login are the
                          same Anthropic account signed in twice. With a linked CLI instance the
                          items act on it (Launch / Sign in + Unlink); without one, "Add a CLI
@@ -1258,6 +1412,34 @@ onUnmounted(() => {
       />
     </div>
 
+    <!-- "Move all chats" confirmation: the count, both accounts, the list, and a second click. -->
+    <Dialog :open="moveAll !== null" @update:open="(v) => { if (!v) moveAll = null }">
+      <DialogContent class="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {{ $t('instances.moveChatsConfirmTitle', { n: moveAll?.sessions.length ?? 0, from: moveAll ? instLabel(moveAll.from) : '', to: moveAll ? instLabel(moveAll.to) : '' }) }}
+          </DialogTitle>
+          <DialogDescription>
+            {{ $t('instances.moveChatsConfirmBody', { from: moveAll ? instLabel(moveAll.from) : '', to: moveAll ? instLabel(moveAll.to) : '' }) }}
+          </DialogDescription>
+        </DialogHeader>
+        <ul class="scroll-slim max-h-56 space-y-1 overflow-y-auto text-xs">
+          <li
+            v-for="s in moveAll?.sessions ?? []"
+            :key="s.session_id"
+            class="truncate rounded border border-border px-2 py-1"
+          >
+            {{ s.title }}
+          </li>
+        </ul>
+        <DialogFooter>
+          <Button variant="ghost" @click="moveAll = null">{{ $t('instances.moveChatsCancel') }}</Button>
+          <Button :disabled="moveAllBusy || !moveAll?.sessions.length" @click="runMoveAll">
+            {{ $t('instances.moveChatsConfirmSubmit', { n: moveAll?.sessions.length ?? 0 }) }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <CreateInstanceDialog
       v-model:open="createOpen"
       :submitting="creating"

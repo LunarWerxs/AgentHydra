@@ -211,4 +211,22 @@ export default {
   noBodyMatches: 'No sessions matched.',
   matchCount: '{n} match(es)',
   truncatedMatches: 'more not shown',
+
+  // Migrate flyout groups + the "start it first" path for a closed target, and the multi-select
+  // bulk actions (Ctrl/Cmd-click or Shift-click rows, then right-click one of them).
+  migrateRunningGroup: 'Running',
+  migrateClosedGroup: 'Not running',
+  migrateStartAndMove: 'Start {name} and move there',
+  migrateStarting: 'Starting {name}…',
+  migrateStartFailed: "Couldn't start {name}.",
+  copyNIds: 'Copy {n} session ids',
+  migrateBulkLabel: 'Migrate {n} chats to another account',
+  migrateConfirmTitle: 'Move {n} chats to {name}?',
+  migrateConfirmBody:
+    'Each chat is stopped if it is running, archived on its current account, and imported into {name}. They move one at a time; this cannot be undone in one step.',
+  migrateConfirmCancel: 'Cancel',
+  migrateConfirmSubmit: 'Move {n} chats',
+  migrateBulkProgress: 'Moving chat {done} of {n}…',
+  migrateBulkDone: 'Moved {ok} of {n} chats to {name}.',
+  migrateBulkSomeFailed: '{failed} could not be moved; details are in the browser console.',
 }
