@@ -95,6 +95,17 @@ def _catalog() -> list[dict]:
     return out
 
 
+def _script_doc(name: str) -> str | None:
+    """A runnable script's docstring, read from its source without importing or running it.
+    None for anything that is not a script on the menu (the switch words, a typo)."""
+    if name not in {r["name"] for r in _catalog()}:
+        return None
+    try:
+        return ast.get_docstring(ast.parse((SCRIPTS / f"{name}.py").read_text(encoding="utf-8")))
+    except (OSError, SyntaxError):
+        return None
+
+
 def show_menu() -> int:
     rows = _catalog()
     print("orchestrator - one entry point. `orch.py <script> --help` for any of them.\n")
@@ -295,7 +306,15 @@ def main(argv: list[str]) -> int:
         # (The local `reconfigure(errors="replace")` that used to sit here was a half fix for
         # one branch: it kept cp1252 and degraded the manual's symbols to "?", while the bare
         # `--help` branch above still crashed outright. use_utf8_console() covers both.)
-        print(__doc__.strip())
+        #
+        # THE SCRIPT'S OWN MANUAL, not the driver's (2026-09-03). This branch printed THIS file's
+        # docstring for every subcommand, so `orch.py chats --help` explained the driver and never
+        # chats - the one promise the menu makes ("`orch.py <script> --help` for any of them") was
+        # false for all of them, and the only way to learn a script's flags was to open its source.
+        # The manual is read with ast, never by importing or running the script, so this branch
+        # stays incapable of acting. The switch words (arm, disarm, ...) have no script file and
+        # keep the driver's manual, which is where they are documented.
+        print((_script_doc(name) or __doc__).strip())
         return 0
 
     if name in ("arm", "disarm", "armed", "resume", "pause"):

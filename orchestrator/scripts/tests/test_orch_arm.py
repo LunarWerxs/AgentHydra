@@ -22,6 +22,25 @@ from lib import armlib  # noqa: E402
 from util import run_cli  # noqa: E402
 
 
+class OrchHelpTest(unittest.TestCase):
+    """`orch.py <script> --help` is THAT SCRIPT'S manual. Found 2026-09-03: it printed the
+    driver's own docstring for every subcommand, so the one way the menu offers to learn a
+    script's flags never worked and a person had to open the source instead."""
+
+    def test_a_scripts_help_is_its_own_manual_not_the_drivers(self):
+        code, out, _ = run_cli(orch.main, ["chats", "--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("chats.py - OBSERVE", out)
+        self.assertNotIn("THE DRIVER", out)
+
+    def test_the_switch_words_keep_the_drivers_manual_and_never_act(self):
+        with mock.patch.object(orch.subprocess, "Popen") as launched:
+            code, out, _ = run_cli(orch.main, ["arm", "--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("THE DRIVER", out)
+        launched.assert_not_called()
+
+
 class OrchArmTest(unittest.TestCase):
     def setUp(self):
         self._state = tempfile.TemporaryDirectory()

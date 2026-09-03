@@ -29,6 +29,36 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   removed is back (canonical copy in `.claude/commands/`, beside `/hydra-status`), rewritten onto
   the four MCP tools instead of a path to a second repo.
 
+### Fixed
+
+- **A compacted desktop chat no longer shows up as two or three chats** (owner, Michael,
+  2026-09-03: "I have a feeling compacted chats or something, become multiple entries"). He was
+  right, and the mechanism is specific. The desktop app rolls a chat onto a new transcript id when
+  it compacts, and it does so by REPLAYING the retained history into the new file before writing
+  the compaction marker - so the marker the continuation detector looks for among a transcript's
+  first records sits hundreds of records deep and was never found. Measured on one chat: three
+  transcripts, the marker at record 1,501 of the newest, three rows under two titles. The app
+  records every retired id in its own metadata (`priorCliSessionIds`); the session list now lays
+  those links over the index (`withDesktopContinuations` in `server/src/sessions.ts`, fed by
+  `retiredSessionIds()` in `server/src/instance-sessions.ts`) and folds them exactly as it folds a
+  detected continuation, crediting the retired ids to the survivor so instance, archive and queue
+  lookups keep working. A claim made only by an ARCHIVED tombstone counts too, because after a
+  migration the tombstone left behind is the only record that still remembers the lineage. On this
+  machine: 28 of 2,118 chats had rolled, 37 phantom rows.
+- **The orchestrator's gate no longer reads a `/compact`ed chat as "may be working" for ever.** A
+  chat that finished its turn and was then compacted ends on a `<local-command-stdout>Compacted`
+  record - user-role, and no model ever answers it - and the idle test accepted only a completed
+  assistant turn as the newest record, so nothing could move or archive such a chat until a person
+  killed its engine by hand (two chats, 2026-09-03). Local plumbing a transcript ENDS on - a slash
+  command the app answered itself, its printed output, the caveat banner, a compaction summary - is
+  now stripped before the tail is judged (`strip_local_tail` in `orchestrator/scripts/lib/gatelib.py`).
+  A slash command still awaiting the model, and anything in flight under an auto-compaction
+  summary, still read as mid-turn.
+- **`python orch.py <script> --help` prints that script's manual.** It printed the driver's own
+  docstring for every subcommand, so the menu's promise ("`orch.py <script> --help` for any of
+  them") was false for all of them. The manual is read with `ast`, never by running the script, so
+  the branch stays incapable of acting.
+
 ## [0.37.0] - 2026-09-02
 
 ### Removed
