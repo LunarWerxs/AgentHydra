@@ -2964,6 +2964,12 @@ void startTrayHostIfMissing({
 })
   .then((r) => {
     if (r.start) console.log(`[agenthydra] started the tray host (${r.exe}) - nothing else had`)
+    // Say WHY when a compiled build with the toolkit present did not start it. The first live
+    // relaunch under this code (2026-09-03) skipped correctly - the old host had survived and the
+    // probe found it - and the silence still read as "the tray is gone" to the person checking the
+    // log. A skip that names its reason is a skip nobody has to investigate.
+    else if (r.reason === 'already-running' || r.reason === 'hidden-by-setting')
+      console.log(`[agenthydra] tray host not started: ${r.reason}`)
   })
   .catch((err) => console.error('[agenthydra] tray host start failed:', err))
 // Clear any stale full-shutdown sentinel left by a previous (possibly hard-killed) run, so a

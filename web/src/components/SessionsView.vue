@@ -930,7 +930,9 @@ async function loadMigrateTargets(s: SessionSummary | null) {
       return {
         ref,
         dir: i.dir,
-        name: i.label ?? i.name,
+        // The name the Instances table shows (label, else account name, else folder), not the
+        // folder name a row's label happened to fall through to.
+        name: displayName(i),
         account: snap?.account ?? null,
         isCurrent: s?.instance != null && s.instance === i.name,
         isRunning: i.isRunning,

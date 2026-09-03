@@ -599,7 +599,9 @@ const rowMenuOpen = ref<string | null>(null)
 // the click that chose it.
 const moveAll = ref<{ from: CMInstance; to: CMInstance; sessions: SessionSummary[] } | null>(null)
 const moveAllBusy = ref(false)
-const instLabel = (i: CMInstance) => i.label ?? i.name
+// The same name the table shows: label, else the account's name, else the folder. `label ?? name`
+// skipped the middle step and offered "5claude" for the row everyone knows as apebrain.
+const instLabel = (i: CMInstance) => displayName(i)
 function moveTargets(from: CMInstance): CMInstance[] {
   return instances.value
     .filter((i) => i.dir !== from.dir)
