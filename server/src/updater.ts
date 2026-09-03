@@ -27,8 +27,12 @@ const gitUpdater = createUpdater({
   buildCmd: ['bun', 'run', '--cwd', 'web', 'build'],
 })
 
-export function checkForUpdate(): Promise<UpdateStatus> {
-  return IS_COMPILED ? ghCheckForUpdate() : gitUpdater.checkForUpdate()
+/** `fresh` bypasses the compiled path's 5-minute result cache, for a check a PERSON asked for.
+ *  It is only meaningful there: the source path shells out to git on every call and holds no
+ *  cache, so it is already as fresh as it can be and the flag is silently irrelevant rather than
+ *  ignored. The shared kit engine's signature is untouched either way. */
+export function checkForUpdate(opts: { fresh?: boolean } = {}): Promise<UpdateStatus> {
+  return IS_COMPILED ? ghCheckForUpdate(opts) : gitUpdater.checkForUpdate()
 }
 
 export async function applyUpdate(): Promise<UpdateApplyResult> {

@@ -249,7 +249,11 @@ export async function checkForUpdate(opts: { fresh?: boolean } = {}): Promise<Up
       return baseStatus({
         ok: false,
         reason:
-          res.status === 403
+          // 429 is GitHub's SECONDARY rate limit and it is the same situation as the 403 primary
+          // one: transient, self-resolving, nothing the user broke. Reporting it as the generic
+          // "couldn't reach the API" made a wait-and-retry look like a dead endpoint, which is the
+          // kind of message that sends someone hunting for a network fault that isn't there.
+          res.status === 403 || res.status === 429
             ? 'GitHub API rate limit reached — try the check again later.'
             : `couldn't reach the GitHub Releases API (HTTP ${res.status}).`,
       })

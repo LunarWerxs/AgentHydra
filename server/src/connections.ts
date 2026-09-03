@@ -143,6 +143,11 @@ export const NEVER_SYNCED = [
   'monitor_enabled',
   // Whether consoles appear on THIS screen. About this machine's desktop, not about a person.
   'terminal_windows_visible',
+  // Whether this install has already said it has no tray icon. A fact about THIS COPY's packaging
+  // (single-file .exe vs the .zip that carries misc\), not a preference about a person. Syncing it
+  // would let a machine running the .zip silence the notice on a machine running the .exe, which
+  // is the one place it actually needed to be said.
+  'no_tray_build_notified',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

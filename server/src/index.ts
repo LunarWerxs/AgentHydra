@@ -35,6 +35,7 @@ import { markDispatchReady } from './boot-state'
 import { chatDossier } from './chat-dossier'
 import { resolveRequiredTitle } from './chat-title'
 import {
+  APP_ROOT,
   appEnv,
   CLIPBOARD_DIR,
   CONFIG_DIR,
@@ -167,6 +168,7 @@ import {
   startMonitor,
 } from './monitor'
 import { applyNewChatDefaults } from './new-chat-defaults'
+import { sendOsNotification } from './notify-os'
 import {
   getNotificationSettings,
   type NotificationSettingsPatch,
@@ -415,7 +417,14 @@ app.get('/api/health', (c) =>
 
 // --- self-update (source: git engine; compiled: GitHub Releases — see server/src/updater.ts) --
 app.get('/api/update', async (c) => {
-  const status = await checkForUpdate()
+  // fresh: this is the route a PERSON hits by clicking "Check for updates", and the honest answer
+  // to that is a live check. checkForUpdate caches for 5 minutes, and the background tick keeps
+  // that cache warm (it runs at boot and on a timer), so without fresh the click that matters most
+  // is exactly the one most likely to be served a stale "you're up to date" - a release published
+  // in the last five minutes stays invisible to the user who just asked to be told about it, with
+  // nothing on screen admitting the answer is cached. The background loop and /api/update/available
+  // still use the cache, so this costs one extra API call per deliberate human action, not a poll.
+  const status = await checkForUpdate({ fresh: true })
   // Feed the passive hint with this REAL check, not just the background tick's. Otherwise opening
   // Settings could tell you an update exists while the dot beside it stayed dark for hours.
   recordUpdateCheck(status)
@@ -2914,6 +2923,24 @@ writeInstanceInfo(boundPort, {
   portableMode: portableModeEnabled(),
   hideTrayIcon: hideTrayIconEnabled(),
 })
+// Say ONCE that this build has no tray icon. The single-file .exe carries no misc\ sidecar, so
+// misc\lunarwerx-tray.exe cannot exist and no tray icon can ever appear whatever the in-app
+// setting says (release.yml's asset table states this, but only on the Releases page - the .exe
+// is the bigger, more obvious download and nothing at the moment of RUNNING it admits the
+// difference). The build is also --windows-hide-console, so a console.log here reaches nobody;
+// an OS toast is the only channel that actually lands. Gated three ways so it stays quiet:
+// IS_COMPILED is false in every dev and test run, so this is a true no-op under `bun test`;
+// isRelaunchSuccessor() skips the auto-update hop, which happens every few days; and the settings
+// flag means a person who knows and doesn't care is told exactly once, never again.
+if (IS_COMPILED && !isRelaunchSuccessor() && !existsSync(join(APP_ROOT, 'misc'))) {
+  if (getSetting('no_tray_build_notified') !== '1') {
+    setSetting('no_tray_build_notified', '1')
+    void sendOsNotification({
+      title: 'AgentHydra has no tray icon in this build',
+      body: 'This is the single-file .exe. For the tray icon and the auto-restart supervisor, download the .zip release instead.',
+    })
+  }
+}
 // Clear any stale full-shutdown sentinel left by a previous (possibly hard-killed) run, so a
 // leftover file can't make the tray quit the instant it next polls. The tray clears it at its own
 // startup too; this covers a daemon started without the tray (dev).
