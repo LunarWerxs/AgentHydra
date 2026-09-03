@@ -43,6 +43,7 @@ import json
 import re
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from lib import armlib, clilib
@@ -69,6 +70,19 @@ _LR_TAIL_BYTES = 400_000
 # the current turn further back than the starting window, and reading "no record" as "nothing
 # to flag" would let a genuinely stuck turn sit past 4 MB of transcript in silence.
 _LR_TAIL_MAX = 4 * 1024 * 1024
+
+
+@dataclass
+class OverlordState:
+    """The overlord's refreshed activity/dossier state for one tick - carried between
+    main() and the nudge cycle so neither has to thread six loose values through calls."""
+    row: dict
+    sid: str
+    quiet: float
+    match: dict | None
+    twins: list[dict]
+    twin_note: str
+    dup_note: str
 
 
 def _ts_of(rec: dict) -> float | None:
@@ -400,86 +414,50 @@ def settle_twins(twins: list[dict]) -> str:
             "is the daemon-side reassert gap, not a new chat).")
 
 
-def maybe_relocate(row: dict) -> tuple[dict, str]:
-    """THE QUOTA-IMMORTAL OVERLORD (owner blessing, 2026-09-01 - the chat that halted
-    itself at 81% weekly "was exactly right; hand off to a fresh account instead of
-    stopping"). When the overlord's own account sits over the soft usage target, the
-    WATCHDOG moves the chat to the open account with the most fill-room - the daemon's
-    atomic migrate, which stops the live writer itself - and the wake then burns the fresh
-    account. Mechanical, never words to a model. Every miss is a note, never a silent skip;
-    an unknown usage reading never blocks the wake (progress beats purity)."""
-    import balance
-
-    try:
-        survey, _src = balance.usage_rows_with_fallback()
-        fleet = hydralib.fleet()
-        accounts = balance.accounts_overview(survey, fleet)
-    except hydralib.DaemonError:
-        return row, ""
-    inst_name = str(row.get("instance") or "").lower()
-    mine = next((a for a in accounts
+def _account_for_instance(accounts: list[dict], inst_name: str) -> dict | None:
+    """The account row (from balance.accounts_overview) that owns this instance name."""
+    return next((a for a in accounts
                  if any(str(i.get("name", "")).lower() == inst_name for i in a["instances"])),
                 None)
-    # THE BANNER IS A SIGNAL TOO (seen live 2026-09-01: the overlord's own pane read "You've
-    # hit your session limit · resets 5:50pm" while the survey still called its account 11%
-    # used - the band said fine, three wakes in a row bounced off the banner, and the fleet
-    # sat unmanaged until the chat was gone). The survey measures the ACCOUNT; the app's
-    # limit notice in the chat's own tail measures THIS chat's ability to take a turn, and
-    # either one means the handoff. gatelib.classify_limit is the same reader the gate uses.
+
+
+def _limit_banner_seen(row: dict) -> str | None:
+    """THE BANNER IS A SIGNAL TOO (seen live 2026-09-01: the overlord's own pane read
+    "You've hit your session limit · resets 5:50pm" while the survey still called its
+    account 11% used - the band said fine, three wakes in a row bounced off the banner,
+    and the fleet sat unmanaged until the chat was gone). The survey measures the ACCOUNT;
+    the app's limit notice in the chat's own tail measures THIS chat's ability to take a
+    turn, and either one means the handoff.
+
+    ⛔ THE BANNER'S OWN SHAPE, ON THE LAST TEXT BLOCK ONLY - never the gate's generic limit
+    classifier over the whole tail (2026-09-01, an hour after this rule went in: the fresh
+    manager's first sentence was "checking my own quota", the classifier matched the word,
+    and the watchdog RELOCATED the chat it was meant to wake). A chat talking about quota
+    is not a chat blocked by one; the app's notice is the last thing rendered and reads
+    "You've hit your session limit · resets 5:50pm"."""
     from lib import deliverylib
 
-    # ⛔ THE BANNER'S OWN SHAPE, ON THE LAST TEXT BLOCK ONLY - never the gate's generic limit
-    # classifier over the whole tail (2026-09-01, an hour after this rule went in: the fresh
-    # manager's first sentence was "checking my own quota", the classifier matched the word,
-    # and the watchdog RELOCATED the chat it was meant to wake). A chat talking about quota is
-    # not a chat blocked by one; the app's notice is the last thing rendered and reads
-    # "You've hit your session limit · resets 5:50pm".
     last_text = deliverylib.transcript_tail_text(row.get("transcript_path"), last_n=1)
-    banner = "limit banner" if LIMIT_BANNER.search(last_text or "") else None
-    if not mine:
-        return row, ""
-    if mine.get("band") not in ("over-soft", "over-hard") and not banner:
-        return row, ""
-    why_move = (f"at {mine.get('peakPct')}% (over the target)" if mine.get("band") in
-                ("over-soft", "over-hard") else f"showing the app's {banner} banner in its pane")
-    targets = [t for t in balance.rank_next(accounts)
-               if not t.get("mustOpen") and t.get("email") != mine.get("email")]
-    if not targets:
-        return row, (f" ⚠ its account is {why_move} but no open account has fill-room - "
-                     "waking in place")
-    ti = balance._target_instance(targets[0])
-    dest = hydralib.resolve_instance(fleet, str((ti or {}).get("name") or ""))
-    if not dest or not dest.get("dir"):
-        return row, " ⚠ over-target account but the fill target's dir did not resolve - waking in place"
-    # TWO ROW SHAPES REACH THIS FUNCTION, and only one of them was handled (2026-09-01).
-    # main() passes a SESSIONS row (`session_id`), which is why the live path works; a
-    # dossier match (`cliSessionId`) has no `session_id` at all, and passing one silently
-    # produced `/api/sessions//migrate` -> 404, reported as "handoff refused - waking in
-    # place". That reads like a handled edge case and is actually a malformed request, so
-    # both shapes are accepted and an id-less row now REFUSES instead of spending a call on
-    # an empty path. (Found by calling it with a dossier row while diagnosing something
-    # else - the live path was never broken, but the next caller would have been.)
-    sid = str(row.get("session_id") or row.get("cliSessionId") or row.get("sessionId") or "")
-    if not sid:
-        return row, (" ⚠ over-target account but this row carries no session id - waking in "
-                     "place (a handoff must never post to an empty session path)")
-    # ⛔ NEVER MOVE AN ACTIVE CHAT (owner, 2026-09-01: "Never... move active chats. Only chats
-    # that are stopped, waiting, chilling."). A live engine - mid-turn or idle - means the
-    # overlord stays put; the handoff happens once it has stopped, and until then the account
-    # problem is NAMED here rather than solved by killing a process.
-    try:
-        live_now = hydralib.live_for(sid)
-    except hydralib.DaemonError:
-        live_now = None
-    if live_now:
-        return row, (f" ⚠ its account is {why_move}, but the chat is ACTIVE (process "
-                     f"{live_now.get('pid')}) - never moved while a process holds it; it "
-                     "moves once it stops")
-    # THE MIGRATE BREAKER APPLIES HERE TOO (review 2026-09-01). Every other mover of chats
-    # notes its attempt on the 'migrate' ledger; this direct call did not, so a handoff whose
-    # target kept refusing was re-posted every 5-minute tick forever, and the groundskeeper -
-    # which reads the same ledger before moving the same chat - could not see it. Same
-    # contract as migrate_chat: check, note before, deterministic on a 400/409, clear on success.
+    return "limit banner" if LIMIT_BANNER.search(last_text or "") else None
+
+
+def _row_session_id(row: dict) -> str:
+    """TWO ROW SHAPES REACH maybe_relocate, and only one of them was handled (2026-09-01).
+    main() passes a SESSIONS row (`session_id`), which is why the live path works; a
+    dossier match (`cliSessionId`) has no `session_id` at all, and passing one silently
+    produced `/api/sessions//migrate` -> 404, reported as "handoff refused - waking in
+    place". Both shapes are accepted here."""
+    return str(row.get("session_id") or row.get("cliSessionId") or row.get("sessionId") or "")
+
+
+def _migrate_overlord(row: dict, sid: str, dest: dict, why_move: str,
+                      target: dict) -> tuple[dict, str]:
+    """Perform the atomic migrate for the quota handoff. THE MIGRATE BREAKER APPLIES HERE
+    TOO (review 2026-09-01). Every other mover of chats notes its attempt on the 'migrate'
+    ledger; this direct call did not, so a handoff whose target kept refusing was re-posted
+    every 5-minute tick forever, and the groundskeeper - which reads the same ledger before
+    moving the same chat - could not see it. Same contract as migrate_chat: check, note
+    before, deterministic on a 400/409, clear on success."""
     brake = ledgerlib.check("migrate", sid)
     if brake["suppressed"]:
         return row, (f" ⚠ quota handoff suppressed by the breaker ({brake['why'][:100]}) - "
@@ -504,8 +482,61 @@ def maybe_relocate(row: dict) -> tuple[dict, str]:
     moved = dict(row)
     moved["instance"] = dest.get("name")
     return moved, (f" QUOTA HANDOFF: its account was {why_move} - relocated to "
-                   f"{dest.get('name')} ({targets[0].get('email')}, "
-                   f"peak {targets[0].get('peakPct')}%) before the wake.")
+                   f"{dest.get('name')} ({target.get('email')}, "
+                   f"peak {target.get('peakPct')}%) before the wake.")
+
+
+def maybe_relocate(row: dict) -> tuple[dict, str]:
+    """THE QUOTA-IMMORTAL OVERLORD (owner blessing, 2026-09-01 - the chat that halted
+    itself at 81% weekly "was exactly right; hand off to a fresh account instead of
+    stopping"). When the overlord's own account sits over the soft usage target, the
+    WATCHDOG moves the chat to the open account with the most fill-room - the daemon's
+    atomic migrate, which stops the live writer itself - and the wake then burns the fresh
+    account. Mechanical, never words to a model. Every miss is a note, never a silent skip;
+    an unknown usage reading never blocks the wake (progress beats purity)."""
+    import balance
+
+    try:
+        survey, _src = balance.usage_rows_with_fallback()
+        fleet = hydralib.fleet()
+        accounts = balance.accounts_overview(survey, fleet)
+    except hydralib.DaemonError:
+        return row, ""
+    inst_name = str(row.get("instance") or "").lower()
+    mine = _account_for_instance(accounts, inst_name)
+    banner = _limit_banner_seen(row)
+    if not mine:
+        return row, ""
+    if mine.get("band") not in ("over-soft", "over-hard") and not banner:
+        return row, ""
+    why_move = (f"at {mine.get('peakPct')}% (over the target)" if mine.get("band") in
+                ("over-soft", "over-hard") else f"showing the app's {banner} banner in its pane")
+    targets = [t for t in balance.rank_next(accounts)
+               if not t.get("mustOpen") and t.get("email") != mine.get("email")]
+    if not targets:
+        return row, (f" ⚠ its account is {why_move} but no open account has fill-room - "
+                     "waking in place")
+    ti = balance._target_instance(targets[0])
+    dest = hydralib.resolve_instance(fleet, str((ti or {}).get("name") or ""))
+    if not dest or not dest.get("dir"):
+        return row, " ⚠ over-target account but the fill target's dir did not resolve - waking in place"
+    sid = _row_session_id(row)
+    if not sid:
+        return row, (" ⚠ over-target account but this row carries no session id - waking in "
+                     "place (a handoff must never post to an empty session path)")
+    # ⛔ NEVER MOVE AN ACTIVE CHAT (owner, 2026-09-01: "Never... move active chats. Only chats
+    # that are stopped, waiting, chilling."). A live engine - mid-turn or idle - means the
+    # overlord stays put; the handoff happens once it has stopped, and until then the account
+    # problem is NAMED here rather than solved by killing a process.
+    try:
+        live_now = hydralib.live_for(sid)
+    except hydralib.DaemonError:
+        live_now = None
+    if live_now:
+        return row, (f" ⚠ its account is {why_move}, but the chat is ACTIVE (process "
+                     f"{live_now.get('pid')}) - never moved while a process holds it; it "
+                     "moves once it stops")
+    return _migrate_overlord(row, sid, dest, why_move, targets[0])
 
 
 def pending_work() -> dict:
@@ -570,54 +601,78 @@ def out(payload: dict, as_json: bool, code: int) -> int:
     return code
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
-    as_json = "--json" in argv
+def _cmd_claim(argv: list[str], as_json: bool) -> int:
+    """Handle `--claim <title fragment | session id>`: pin a chat as the overlord."""
+    i = argv.index("--claim")
+    if i + 1 >= len(argv):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    try:
+        match = hydralib.resolve_one(argv[i + 1])
+    except (hydralib.ChatNotFound, hydralib.AmbiguousChat) as err:
+        return out({"ok": False, "report": f"claim refused: {err}"}, as_json, 2)
+    sid = match.get("cliSessionId") or ""
+    # A DEAD CHAT CANNOT BE THE MANAGER (live soak, 2026-09-01): a fresh manager claimed
+    # "standing manager chat" by fragment and the query resolved to the OLD manager - no
+    # desktop record, no process - so the claim pointed at a corpse and the watchdog went
+    # dark. A claim needs a record by id or a live process; otherwise it is refused.
+    try:
+        by_id = hydralib.dossier(sid) if sid else []
+    except hydralib.DaemonError:
+        by_id = []
+    if not match.get("live") and not by_id:
+        return out({"ok": False, "report": (
+            f"claim refused: '{match.get('title')}' ({sid[:8]}) has no desktop record and no "
+            "live process - it is not a chat anyone can wake. Claim the chat you are in by its "
+            "session id.")}, as_json, 2)
+    p = _claim_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"sessionId": sid, "title": match.get("title")}), encoding="utf-8")
+    return out({"ok": True, "report": f"claimed: '{match.get('title')}' ({sid[:8]}) is the overlord"},
+               as_json, 0)
 
-    if "--claim" in argv:
-        i = argv.index("--claim")
-        if i + 1 >= len(argv):
-            print(__doc__.strip(), file=sys.stderr)
-            return 2
-        try:
-            match = hydralib.resolve_one(argv[i + 1])
-        except (hydralib.ChatNotFound, hydralib.AmbiguousChat) as err:
-            return out({"ok": False, "report": f"claim refused: {err}"}, as_json, 2)
-        sid = match.get("cliSessionId") or ""
-        # A DEAD CHAT CANNOT BE THE MANAGER (live soak, 2026-09-01): a fresh manager claimed
-        # "standing manager chat" by fragment and the query resolved to the OLD manager - no
-        # desktop record, no process - so the claim pointed at a corpse and the watchdog went
-        # dark. A claim needs a record by id or a live process; otherwise it is refused.
-        try:
-            by_id = hydralib.dossier(sid) if sid else []
-        except hydralib.DaemonError:
-            by_id = []
-        if not match.get("live") and not by_id:
-            return out({"ok": False, "report": (
-                f"claim refused: '{match.get('title')}' ({sid[:8]}) has no desktop record and no "
-                "live process - it is not a chat anyone can wake. Claim the chat you are in by its "
-                "session id.")}, as_json, 2)
-        p = _claim_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"sessionId": sid, "title": match.get("title")}), encoding="utf-8")
-        return out({"ok": True, "report": f"claimed: '{match.get('title')}' ({sid[:8]}) is the overlord"},
-                   as_json, 0)
 
+def _locate_or_rebirth(argv: list[str], as_json: bool) -> tuple[dict | None, int | None]:
+    """Find the overlord chat, or handle its absence. Returns (row, None) when the caller
+    should continue with `row`, or (None, exit_code) when the caller must return that code
+    immediately."""
     try:
         row = find_overlord()
     except hydralib.DaemonError as err:
-        return out({"ok": False, "report": f"overlord check FAILED: {err}"}, as_json, 1)
+        return None, out({"ok": False, "report": f"overlord check FAILED: {err}"}, as_json, 1)
     if row is None:
         if "--status" in argv:
-            return out({"ok": False, "report": (
+            return None, out({"ok": False, "report": (
                 "NO overlord chat exists (none claimed, none titled 'Orchestrate'). The judgment "
                 "queue drains only while one runs - the watchdog's next armed tick spawns one.")},
                 as_json, 2)
-        return rebirth(argv, as_json, "none claimed, none titled 'Orchestrate'")
+        return None, rebirth(argv, as_json, "none claimed, none titled 'Orchestrate'")
+    return row, None
 
+
+def _duplicate_overlord_note(sid: str) -> str:
+    """TWO REAL chats titled 'Orchestrate' (owner asked, 2026-09-01): the newest-active one
+    is the overlord, and the spares are named LOUDLY on every tick - never silently
+    ignored, never ping-ponged between."""
+    try:
+        others = [r for r in hydralib.sessions()
+                  if not r.get("archived") and r.get("session_id") != sid
+                  and str(r.get("title") or "").strip().lower() == "orchestrate"]
+    except hydralib.DaemonError:
+        return ""
+    if not others:
+        return ""
+    where = ", ".join(str(r.get("instance") or "console") for r in others)
+    return (f" ⚠ {len(others)} OTHER chat(s) also titled 'Orchestrate' ({where}) - "
+            "the most recently active one is the overlord; rename or archive the "
+            "spare(s), or pin one for good with --claim.")
+
+
+def _refresh_overlord_state(row: dict, argv: list[str],
+                            as_json: bool) -> tuple[OverlordState | None, int | None]:
+    """Refresh activity/dossier state for the located overlord row. Returns (state, None)
+    to continue, or (None, exit_code) when its desktop home turned out to be gone and a
+    rebirth (or status report) already answered for this tick."""
     sid = row.get("session_id") or ""
     quiet = max(0, time.time() - (row.get("last_activity_at") or 0) / 1000)
     # The sessions INDEX lags a revive (the id rolls; the index catches up on its sweep and
@@ -633,8 +688,8 @@ def main(argv: list[str]) -> int:
         except hydralib.DaemonError:
             live = None
         if not live:
-            return rebirth(argv, as_json,
-                           f"the claimed manager ({sid[:8]}) has no desktop record and no live process")
+            return None, rebirth(argv, as_json,
+                                 f"the claimed manager ({sid[:8]}) has no desktop record and no live process")
     if match and match.get("lastActivityAt"):
         try:
             from datetime import datetime, timezone
@@ -645,29 +700,167 @@ def main(argv: list[str]) -> int:
         except ValueError:
             pass
     twin_note = f" ⚠ {len(twins)} zombie twin(s) visible" if twins else ""
-    # TWO REAL chats titled 'Orchestrate' (owner asked, 2026-09-01): the newest-active one
-    # is the overlord, and the spares are named LOUDLY on every tick - never silently
-    # ignored, never ping-ponged between.
-    dup_note = ""
+    dup_note = _duplicate_overlord_note(sid)
+    return OverlordState(row=row, sid=sid, quiet=quiet, match=match, twins=twins,
+                         twin_note=twin_note, dup_note=dup_note), None
+
+
+def _status_payload(state: OverlordState) -> dict:
+    row, sid, quiet = state.row, state.sid, state.quiet
+    return {"ok": True, "sessionId": sid, "title": row.get("title"),
+            "instance": row.get("instance"), "quietSecs": int(quiet),
+            "twins": len(state.twins),
+            "report": f"overlord: '{row.get('title')}' [{row.get('instance')}] "
+                      f"({sid[:8]}), quiet {int(quiet // 60)}m{int(quiet % 60)}s"
+                      f"{state.twin_note}{state.dup_note}"}
+
+
+def _handoff_check_while_active(row: dict, match: dict | None) -> tuple[dict, str]:
+    """⛔ THE HALTED-BUT-ANSWERING OVERLORD (2026-09-01, measured: FOUR passes lost in a
+    row, fleet idle throughout). The quota handoff lived ONLY in the wake path, and the
+    wake only happens when the overlord looks INACTIVE. But an overlord that has hit its
+    usage ceiling does exactly what it is told to do - posts a one-line halt every pass -
+    so it stays "active 1m ago" forever and the early return fires every tick. The one
+    branch built to rescue it could therefore never run in the single situation it exists
+    for: quota-immortality was unreachable by construction, and the honest halt the owner
+    asked for became a silent death.
+
+    So the handoff is checked HERE too, on the live path. Two guards keep it safe: it is
+    skipped mid-turn (migrate stops the live writer, and killing real work to save quota is
+    a worse bug than the one being fixed), and maybe_relocate itself is a no-op unless the
+    account is genuinely over the band.
+
+    ⛔ A SKIPPED HANDOFF MUST SAY SO (2026-09-01, the second half of the same bug). The
+    first version of this branch skipped SILENTLY on both of its guards, so a tick that
+    declined to rescue a cooked overlord printed the same "left alone" as a tick with
+    nothing to do. That is how the original hole hid for hours: the log could not tell "no
+    handoff needed" apart from "handoff not attempted". Every path now names itself."""
+    if match is None:
+        return row, (" ⚠ no dossier record resolves for it, so the quota handoff could not be "
+                     "checked this tick (not a pass - the reading failed)")
     try:
-        others = [r for r in hydralib.sessions()
-                  if not r.get("archived") and r.get("session_id") != sid
-                  and str(r.get("title") or "").strip().lower() == "orchestrate"]
-        if others:
-            where = ", ".join(str(r.get("instance") or "console") for r in others)
-            dup_note = (f" ⚠ {len(others)} OTHER chat(s) also titled 'Orchestrate' ({where}) - "
-                        "the most recently active one is the overlord; rename or archive the "
-                        "spare(s), or pin one for good with --claim.")
-    except hydralib.DaemonError:
-        pass
-    if "--status" in argv:
-        return out({"ok": True, "sessionId": sid, "title": row.get("title"),
-                    "instance": row.get("instance"), "quietSecs": int(quiet),
-                    "twins": len(twins),
-                    "report": f"overlord: '{row.get('title')}' [{row.get('instance')}] "
-                              f"({sid[:8]}), quiet {int(quiet // 60)}m{int(quiet % 60)}s"
-                              f"{twin_note}{dup_note}"},
+        verdict_now = gatelib.gate_match(match, hydralib.session_row)
+    except hydralib.DaemonError as err:
+        return row, f" ⚠ gate read failed ({str(err)[:80]}) - quota handoff not checked"
+    mid_turn = bool(verdict_now and verdict_now["state"] == "running"
+                    and not verdict_now.get("idle"))
+    if mid_turn:
+        return row, (" (mid-turn: quota handoff deliberately not attempted - a migrate "
+                     "stops the live writer, and killing real work to save quota is the "
+                     "worse bug)")
+    return maybe_relocate(row)
+
+
+def _build_nudge_prompt(runners: list[dict]) -> str:
+    prompt = NUDGE_PROMPT
+    if not runners:
+        return prompt
+    lines = "\n".join(
+        # .get, not [], on every optional field: this line builds the WATCHDOG's own
+        # wake-up message, and a KeyError here kills the one thing whose job is to survive
+        # everything else (found by a test whose fixture predated two of these fields).
+        f"- {r.get('name')} ({str(r.get('sessionId'))[:8]}): in flight "
+        f"{r.get('minutes', '?')}m, SILENT {r.get('silentMins', '?')}m - "
+        f"{r.get('state', 'unknown')}" for r in runners[:8])
+    return prompt + ("\n\nALSO REVIEW these LONG-RUNNERS (turn in flight past "
+                     f"{LONG_RUN_SECS // 60} minutes - open each and judge: a healthy long "
+                     "build is left alone, a stuck one gets acted on):\n" + lines)
+
+
+def _run_nudge_cycle(state: OverlordState, as_json: bool) -> int:
+    """The scheduled-task default: nudge the overlord if it is quiet with waiting work,
+    handing off a cooked account along the way. Split out of main() so the crash backstop
+    around it wraps one call instead of a hundred-line body."""
+    row, sid, quiet, match = state.row, state.sid, state.quiet, state.match
+    if quiet < NUDGE_QUIET_SECS:
+        row, reloc = _handoff_check_while_active(row, match)
+        return out({"ok": True, "report": (
+            f"overlord active {int(quiet // 60)}m ago (< {NUDGE_QUIET_SECS // 60}m) - "
+            "left alone" + reloc)}, as_json, 0)
+    hold_why = holdlib.why_blocked(sid)
+    if hold_why:
+        return out({"ok": False, "report": f"overlord is HELD - not nudging: {hold_why}"},
+                   as_json, 6)
+    if match is None:
+        return out({"ok": False, "report": "overlord gate FAILED: no dossier record resolves"},
+                   as_json, 1)
+    try:
+        verdict = gatelib.gate_match(match, hydralib.session_row)
+    except hydralib.DaemonError as err:
+        return out({"ok": False, "report": f"overlord gate FAILED: {err}"}, as_json, 1)
+    if verdict and verdict["state"] == "running" and not verdict.get("idle"):
+        # The handoff is NOT attempted here, and that is deliberate, not an oversight: a
+        # migrate stops the live writer, so rescuing quota would kill the turn in flight.
+        return out({"ok": True, "report": (
+            "overlord is MID-TURN - working, left alone (quota handoff deliberately skipped: "
+            "a migrate would kill the turn in flight)")}, as_json, 0)
+    try:
+        work = pending_work()
+    except hydralib.DaemonError as err:
+        return out({"ok": False, "report": f"work check FAILED: {err}"}, as_json, 1)
+    runners = long_runners()
+    if runners:
+        work = {**work, "any": True,
+                "why": (work["why"] + f"; {len(runners)} long-runner(s) past "
+                        f"{LONG_RUN_SECS // 60}m needing review")}
+    if not work["any"]:
+        # THE THIRD EXIT (2026-09-01). This one used to return before the handoff too, which
+        # made the quiet-and-idle moment - the one moment a relocation is completely free,
+        # with no turn to kill and no reply to strand - the one moment it could not happen.
+        # The mid-turn gate above has already passed, so relocating here is safe by
+        # construction, and moving a cooked manager BEFORE work arrives beats moving it after.
+        row, reloc_idle = maybe_relocate(row)
+        return out({"ok": True, "report": (
+            f"overlord quiet {int(quiet // 60)}m but there is NO waiting work - left alone"
+            + reloc_idle)}, as_json, 0)
+    brake = ledgerlib.check("surface", sid)
+    if brake["suppressed"]:
+        return out({"ok": False, "breaker": brake,
+                    "report": f"nudge SUPPRESSED by the breaker: {brake['why']}"}, as_json, 5)
+
+    ledgerlib.note("surface", sid, note=f"watchdog nudge ({work['why']})")
+    # THE QUOTA HANDOFF (maybe_relocate docstring): never wake the manager on a cooked
+    # account when a fresh one has room.
+    row, reloc_note = maybe_relocate(row)
+    prompt = _build_nudge_prompt(runners)
+    ok, detail = nudge(row, prompt)
+    if ok:
+        ledgerlib.clear("surface", sid)
+        # A revive can leave a fresh zombie twin behind (current_match docstring): re-read
+        # and flag whatever is now superseded, loudly.
+        _, twins_after = current_match(sid)
+        settled = settle_twins(twins_after)
+        return out({"ok": True, "nudged": True,
+                    "report": f"NUDGED '{row.get('title')}' after {int(quiet // 60)}m quiet "
+                              f"({work['why']}) - {detail}.{reloc_note}{settled}{state.dup_note}"},
                    as_json, 0)
+    # A failed wake still reports the quota handoff that DID happen before it.
+    return out({"ok": False, "nudged": False,
+                "report": f"nudge FAILED: {detail}.{reloc_note} Attempt recorded; the breaker "
+                          "bounds retries."},
+               as_json, 1)
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    as_json = "--json" in argv
+
+    if "--claim" in argv:
+        return _cmd_claim(argv, as_json)
+
+    row, early = _locate_or_rebirth(argv, as_json)
+    if early is not None:
+        return early
+
+    state, early = _refresh_overlord_state(row, argv, as_json)
+    if early is not None:
+        return early
+
+    if "--status" in argv:
+        return out(_status_payload(state), as_json, 0)
 
     # -- the nudge path (the scheduled-task default) --
     # THE ARMED WINDOW (owner order, 2026-09-01): unattended nudging/relocation needs a
@@ -680,125 +873,10 @@ def main(argv: list[str]) -> int:
     # unexpected data used to escape as a bare traceback - a scheduled task with no one
     # watching its stderr. One broad catch around the whole nudge/relocate path turns that
     # into a loud, correctly-exited failure instead. hydralib.DaemonError keeps its own
-    # specific handling below, unchanged - this is the backstop for everything else.
+    # specific handling inside _run_nudge_cycle, unchanged - this is the backstop for
+    # everything else.
     try:
-        if quiet < NUDGE_QUIET_SECS:
-            # ⛔ THE HALTED-BUT-ANSWERING OVERLORD (2026-09-01, measured: FOUR passes lost in a
-            # row, fleet idle throughout). The quota handoff lived ONLY in the wake path below,
-            # and the wake only happens when the overlord looks INACTIVE. But an overlord that
-            # has hit its usage ceiling does exactly what it is told to do - posts a one-line
-            # halt every pass - so it stays "active 1m ago" forever and this early return fires
-            # every tick. The one branch built to rescue it could therefore never run in the
-            # single situation it exists for: quota-immortality was unreachable by construction,
-            # and the honest halt the owner asked for became a silent death.
-            #
-            # So the handoff is checked HERE too, on the live path. Two guards keep it safe: it
-            # is skipped mid-turn (migrate stops the live writer, and killing real work to save
-            # quota is a worse bug than the one being fixed), and maybe_relocate itself is a
-            # no-op unless the account is genuinely over the band. A relocation is reported in
-            # the same line rather than silently, so a tick that moved the manager never reads
-            # like a tick that did nothing.
-            # ⛔ A SKIPPED HANDOFF MUST SAY SO (2026-09-01, the second half of the same bug). The
-            # first version of this branch skipped SILENTLY on both of its guards, so a tick that
-            # declined to rescue a cooked overlord printed the same "left alone" as a tick with
-            # nothing to do. That is how the original hole hid for hours: the log could not tell
-            # "no handoff needed" apart from "handoff not attempted". Every path now names itself.
-            reloc = ""
-            if match is None:
-                reloc = (" ⚠ no dossier record resolves for it, so the quota handoff could not be "
-                         "checked this tick (not a pass - the reading failed)")
-            else:
-                try:
-                    verdict_now = gatelib.gate_match(match, hydralib.session_row)
-                except hydralib.DaemonError as err:
-                    verdict_now = None
-                    reloc = f" ⚠ gate read failed ({str(err)[:80]}) - quota handoff not checked"
-                mid_turn = bool(verdict_now and verdict_now["state"] == "running"
-                                and not verdict_now.get("idle"))
-                if mid_turn:
-                    reloc = (" (mid-turn: quota handoff deliberately not attempted - a migrate "
-                             "stops the live writer, and killing real work to save quota is the "
-                             "worse bug)")
-                elif verdict_now is not None:
-                    row, reloc = maybe_relocate(row)
-            return out({"ok": True, "report": (
-                f"overlord active {int(quiet // 60)}m ago (< {NUDGE_QUIET_SECS // 60}m) - "
-                "left alone" + reloc)}, as_json, 0)
-        hold_why = holdlib.why_blocked(sid)
-        if hold_why:
-            return out({"ok": False, "report": f"overlord is HELD - not nudging: {hold_why}"},
-                       as_json, 6)
-        if match is None:
-            return out({"ok": False, "report": "overlord gate FAILED: no dossier record resolves"},
-                       as_json, 1)
-        try:
-            verdict = gatelib.gate_match(match, hydralib.session_row)
-        except hydralib.DaemonError as err:
-            return out({"ok": False, "report": f"overlord gate FAILED: {err}"}, as_json, 1)
-        if verdict and verdict["state"] == "running" and not verdict.get("idle"):
-            # The handoff is NOT attempted here, and that is deliberate, not an oversight: a
-            # migrate stops the live writer, so rescuing quota would kill the turn in flight.
-            # Said out loud because the silent version of this line ran for 30 minutes straight
-            # while the fleet sat idle and read as healthy.
-            return out({"ok": True, "report": (
-                "overlord is MID-TURN - working, left alone (quota handoff deliberately skipped: "
-                "a migrate would kill the turn in flight)")}, as_json, 0)
-        try:
-            work = pending_work()
-        except hydralib.DaemonError as err:
-            return out({"ok": False, "report": f"work check FAILED: {err}"}, as_json, 1)
-        runners = long_runners()
-        if runners:
-            work = {**work, "any": True,
-                    "why": (work["why"] + f"; {len(runners)} long-runner(s) past "
-                            f"{LONG_RUN_SECS // 60}m needing review")}
-        if not work["any"]:
-            # THE THIRD EXIT (2026-09-01). This one used to return before the handoff too, which
-            # made the quiet-and-idle moment - the one moment a relocation is completely free,
-            # with no turn to kill and no reply to strand - the one moment it could not happen.
-            # The mid-turn gate above has already passed, so relocating here is safe by
-            # construction, and moving a cooked manager BEFORE work arrives beats moving it after.
-            row, reloc_idle = maybe_relocate(row)
-            return out({"ok": True, "report": (
-                f"overlord quiet {int(quiet // 60)}m but there is NO waiting work - left alone"
-                + reloc_idle)}, as_json, 0)
-        brake = ledgerlib.check("surface", sid)
-        if brake["suppressed"]:
-            return out({"ok": False, "breaker": brake,
-                        "report": f"nudge SUPPRESSED by the breaker: {brake['why']}"}, as_json, 5)
-
-        ledgerlib.note("surface", sid, note=f"watchdog nudge ({work['why']})")
-        # THE QUOTA HANDOFF (maybe_relocate docstring): never wake the manager on a cooked
-        # account when a fresh one has room.
-        row, reloc_note = maybe_relocate(row)
-        prompt = NUDGE_PROMPT
-        if runners:
-            lines = "\n".join(
-                # .get, not [], on every optional field: this line builds the WATCHDOG's own
-                # wake-up message, and a KeyError here kills the one thing whose job is to survive
-                # everything else (found by a test whose fixture predated two of these fields).
-                f"- {r.get('name')} ({str(r.get('sessionId'))[:8]}): in flight "
-                f"{r.get('minutes', '?')}m, SILENT {r.get('silentMins', '?')}m - "
-                f"{r.get('state', 'unknown')}" for r in runners[:8])
-            prompt += ("\n\nALSO REVIEW these LONG-RUNNERS (turn in flight past "
-                       f"{LONG_RUN_SECS // 60} minutes - open each and judge: a healthy long "
-                       "build is left alone, a stuck one gets acted on):\n" + lines)
-        ok, detail = nudge(row, prompt)
-        if ok:
-            ledgerlib.clear("surface", sid)
-            # A revive can leave a fresh zombie twin behind (current_match docstring): re-read
-            # and flag whatever is now superseded, loudly.
-            _, twins_after = current_match(sid)
-            settled = settle_twins(twins_after)
-            return out({"ok": True, "nudged": True,
-                        "report": f"NUDGED '{row.get('title')}' after {int(quiet // 60)}m quiet "
-                                  f"({work['why']}) - {detail}.{reloc_note}{settled}{dup_note}"},
-                       as_json, 0)
-        # A failed wake still reports the quota handoff that DID happen before it.
-        return out({"ok": False, "nudged": False,
-                    "report": f"nudge FAILED: {detail}.{reloc_note} Attempt recorded; the breaker "
-                              "bounds retries."},
-                   as_json, 1)
+        return _run_nudge_cycle(state, as_json)
     except Exception as err:  # never a bare traceback - the watchdog must still exit loudly
         import traceback
 
