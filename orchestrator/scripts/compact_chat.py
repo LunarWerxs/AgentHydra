@@ -46,6 +46,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from lib import clilib, holdlib
@@ -125,11 +126,26 @@ def out(payload: dict, as_json: bool, code: int) -> int:
     return code
 
 
-def main(argv: list[str], runner=None) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
+@dataclass
+class Outcome:
+    """One step's verdict: the human-readable report, the process exit code, whether the
+    step counts as success, and any extra fields the JSON payload should carry (breaker
+    details, token counts, the rolled session id, ...). Every early-return branch of the
+    old monolithic main() produced exactly this shape by hand; giving it a name lets each
+    branch live in its own small function instead of one long one."""
+    report: str
+    code: int
+    ok: bool = False
+    extra: dict = field(default_factory=dict)
+
+
+def emit(outcome: Outcome, as_json: bool) -> int:
+    payload = {"ok": outcome.ok, "report": outcome.report, **outcome.extra}
+    return out(payload, as_json, outcome.code)
+
+
+def parse_args(argv: list[str]) -> tuple[bool, int, int, list[str]]:
+    """Pull --json/--window/--min out of argv; everything else is a positional arg."""
     as_json = "--json" in argv
     window, floor = DEFAULT_WINDOW, DEFAULT_MIN
     args: list[str] = []
@@ -143,130 +159,137 @@ def main(argv: list[str], runner=None) -> int:
         if not a.startswith("--"):
             args.append(a)
         i += 1
-    if len(args) != 1:
-        print(__doc__.strip(), file=sys.stderr)
-        return 3
+    return as_json, window, floor, args
 
-    try:
-        rows = hydralib.sessions()
-    except hydralib.DaemonError as err:
-        return out({"ok": False, "report": f"compact FAILED: {err}"}, as_json, 1)
-    hits = [r for r in rows if r.get("session_id") == args[0]]
+
+def resolve_target_row(rows: list[dict], query: str) -> tuple[dict | None, Outcome | None]:
+    """Match a session by exact id, else by a case-insensitive title fragment."""
+    hits = [r for r in rows if r.get("session_id") == query]
     if not hits:
-        q = args[0].lower()
+        q = query.lower()
         hits = [r for r in rows if q in str(r.get("title") or "").lower()]
     if not hits:
-        return out({"ok": False, "report": f"REFUSED (deterministic): no session matches {args[0]!r}"},
-                   as_json, 3)
+        return None, Outcome(f"REFUSED (deterministic): no session matches {query!r}", 3)
     if len(hits) > 1:
         names = ", ".join(f"[{h.get('instance') or 'console'}] {h.get('title')}" for h in hits[:6])
-        return out({"ok": False, "report": f"REFUSED (deterministic): {len(hits)} sessions match: {names}"},
-                   as_json, 3)
-    row = hits[0]
-    sid = row.get("session_id") or ""
-    title = row.get("title")
+        return None, Outcome(f"REFUSED (deterministic): {len(hits)} sessions match: {names}", 3)
+    return hits[0], None
 
+
+def check_session_eligible(row: dict, sid: str, title: str) -> Outcome | None:
+    """Refusals that need only the daemon's row: desktop scope, and the owner's hold."""
     if row.get("instance"):
-        return out(
-            {"ok": False, "report": (
-                f"REFUSED (deterministic): '{title}' lives in the DESKTOP ({row['instance']}). "
-                "Resuming it outside its app would fork the conversation behind the app's back. "
-                "Desktop chats compact through their app's own autocompact.")},
-            as_json, 3)
-
+        return Outcome(
+            f"REFUSED (deterministic): '{title}' lives in the DESKTOP ({row['instance']}). "
+            "Resuming it outside its app would fork the conversation behind the app's back. "
+            "Desktop chats compact through their app's own autocompact.", 3)
     hold_why = holdlib.why_blocked(sid)
     if hold_why:
-        return out({"ok": False, "held": True, "report": f"REFUSED: {hold_why}"}, as_json, 6)
+        return Outcome(f"REFUSED: {hold_why}", 6, extra={"held": True})
+    return None
 
+
+def locate_transcript_and_cwd(row: dict, title: str) -> tuple[Path | None, str | None, Outcome | None]:
+    """The two filesystem facts a resume needs: a readable transcript and a cwd that
+    still exists."""
     transcript = row.get("transcript_path") or ""
     tp = Path(transcript)
     if not transcript or not tp.exists():
-        return out({"ok": False, "report": (
-            f"REFUSED (deterministic): '{title}' has no readable transcript at {transcript!r}")},
-            as_json, 3)
+        return None, None, Outcome(
+            f"REFUSED (deterministic): '{title}' has no readable transcript at {transcript!r}", 3)
     cwd = row.get("cwd") or ""
     if not cwd or not Path(cwd).is_dir():
-        return out({"ok": False, "report": (
+        return None, None, Outcome(
             f"REFUSED (deterministic): '{title}' worked in {cwd!r}, which no longer exists - "
-            "a resume there cannot run")}, as_json, 3)
+            "a resume there cannot run", 3)
+    return tp, cwd, None
 
+
+def check_liveness(sid: str, title: str, tp: Path) -> Outcome | None:
+    """Refuse a resume while the chat might still be working: a transcript touched too
+    recently, or (review 2026-09-01) one whose engine is provably still alive even though
+    it has been quiet - a session parked at its prompt, or inside a long tool call, writes
+    nothing for minutes while its process lives, and a second `--resume` against a live
+    session forks the transcript both then append to, the very thing imports refuse. The
+    fleet has the pid-checked signal (migrate_chat refuses on it); ask it. Unknown never
+    reads as "not live"."""
     quiet = time.time() - tp.stat().st_mtime
     if quiet < QUIET_SECS:
-        return out({"ok": False, "report": (
+        return Outcome(
             f"REFUSED: '{title}' wrote to its transcript {int(quiet)}s ago - possibly mid-work. "
-            f"Retry once it has been quiet {QUIET_SECS}s.")}, as_json, 4)
-    # A QUIET TRANSCRIPT IS NOT A DEAD ENGINE (review 2026-09-01). A session parked at its
-    # prompt, or inside a long tool call, writes nothing for minutes while its process is
-    # alive - and a second `--resume` against a live session forks the transcript both then
-    # append to, the very thing imports refuse. The fleet has the pid-checked signal
-    # (migrate_chat refuses on it); ask it. Unknown never reads as "not live".
+            f"Retry once it has been quiet {QUIET_SECS}s.", 4)
     try:
         live = hydralib.live_for(sid)
     except hydralib.DaemonError as err:
-        return out({"ok": False, "report": (
+        return Outcome(
             f"compact FAILED: cannot tell whether '{title}' holds a live engine ({err}) - "
-            "unknown never reads as 'not live'")}, as_json, 1)
+            "unknown never reads as 'not live'", 1)
     if live:
-        return out({"ok": False, "report": (
+        return Outcome(
             f"REFUSED: '{title}' still holds a LIVE engine (pid {live.get('pid')}) even though "
             f"its transcript has been quiet {int(quiet)}s - a second --resume would fork it. "
-            "Retry once the session has exited.")}, as_json, 4)
+            "Retry once the session has exited.", 4)
+    return None
 
-    before = context_tokens(tp)
-    if before is None:
-        return out({"ok": False, "report": (
-            f"REFUSED (deterministic): '{title}' has no readable usage stamp - context size "
-            "unknown, and unknown never reads as small")}, as_json, 3)
-    if before < floor:
-        return out({"ok": True, "compacted": False, "contextTokens": before, "report": (
-            f"nothing to do: '{title}' is at ~{before // 1000}k tokens, under the --min floor "
-            f"of {floor // 1000}k - a fresh chat is cheaper than a lossy compact")}, as_json, 0)
 
+def check_capacity(sid: str) -> Outcome | None:
+    """The two reasons a compact turn must wait rather than run: the breaker tripped for
+    this session, or the machine-wide concurrency cap is full (a compact turn IS a running
+    chat for its duration)."""
     brake = ledgerlib.check("compact", sid)
     if brake["suppressed"]:
-        return out({"ok": False, "breaker": brake,
-                    "report": f"SUPPRESSED by the breaker: {brake['why']}"}, as_json, 5)
-
-    # The machine-wide concurrency cap: a compact turn IS a running chat for its duration.
+        return Outcome(f"SUPPRESSED by the breaker: {brake['why']}", 5, extra={"breaker": brake})
     try:
         running = hydralib.running_count()
     except hydralib.DaemonError as err:
-        return out({"ok": False, "report": f"compact FAILED: cannot count running chats ({err}) "
-                    "- an unknown count never reads as room under the cap"}, as_json, 1)
+        return Outcome(
+            f"compact FAILED: cannot count running chats ({err}) "
+            "- an unknown count never reads as room under the cap", 1)
     if running >= hydralib.MAX_RUNNING_CHATS:
-        return out({"ok": False, "report": (
+        return Outcome(
             f"REFUSED: {running} chat(s) already running - the machine-wide cap is "
-            f"{hydralib.MAX_RUNNING_CHATS}. Transient; retry on a later cycle.")}, as_json, 4)
+            f"{hydralib.MAX_RUNNING_CHATS}. Transient; retry on a later cycle.", 4)
+    return None
 
-    # THE EXECUTABLE IS THE REAL RUNNER'S DEPENDENCY, NOT THIS FUNCTION'S (2026-09-03). An
-    # INJECTED runner does not shell out to claude at all, so resolving the CLI before choosing
-    # the runner made the `runner=` seam only look injectable: on any machine without Claude
-    # Code installed, main() exited 1 here and the injected runner was never reached. That is
-    # every CI runner, and it turned three unit tests into a machine-state check - they passed
-    # on a developer box and could not pass on GitHub's, which is the kind of red that teaches
-    # people to ignore the build.
+
+def resolve_runner_and_exe(runner) -> tuple[object, str, Outcome | None]:
+    """THE EXECUTABLE IS THE REAL RUNNER'S DEPENDENCY, NOT THIS FUNCTION'S (2026-09-03). An
+    INJECTED runner does not shell out to claude at all, so resolving the CLI before choosing
+    the runner made the `runner=` seam only look injectable: on any machine without Claude
+    Code installed, main() would exit 1 here and the injected runner would never be reached.
+    That is every CI runner, and it turned three unit tests into a machine-state check - they
+    passed on a developer box and could not pass on GitHub's, which is the kind of red that
+    teaches people to ignore the build."""
     run = runner or run_turn
     exe = resolve_claude()
     if exe is None:
         if run is run_turn:
-            return out({"ok": False, "report": (
-                "compact FAILED: no claude CLI found (set ORCHESTRATOR_CLAUDE_EXE)")}, as_json, 1)
+            return run, "", Outcome(
+                "compact FAILED: no claude CLI found (set ORCHESTRATOR_CLAUDE_EXE)", 1)
         exe = ""  # an injected runner supplies its own; it is handed the empty string honestly
+    return run, exe, None
 
+
+def execute_turn(run, exe: str, sid: str, window: int, cwd: str, title: str,
+                  before: int) -> tuple[str, Outcome | None]:
+    """Record the attempt, then run the forced-autocompact turn. Returns the runner's raw
+    stdout on success, or an Outcome describing why it did not get that far."""
     ledgerlib.note("compact", sid, note=f"'{title}' ~{before // 1000}k -> window {window // 1000}k")
     try:
         code, said = run(exe, sid, window, cwd)
     except subprocess.TimeoutExpired:
-        return out({"ok": False, "report": (
+        return "", Outcome(
             f"compact turn TIMED OUT after {TURN_TIMEOUT_SECS}s - attempt recorded; the "
-            "session may still be finishing, check it before retrying")}, as_json, 1)
+            "session may still be finishing, check it before retrying", 1)
     if code != 0:
-        return out({"ok": False, "report": (
-            f"compact turn FAILED (claude exit {code}): {said.strip()[:300]} - attempt recorded")},
-            as_json, 1)
+        return "", Outcome(
+            f"compact turn FAILED (claude exit {code}): {said.strip()[:300]} - attempt recorded", 1)
+    return said, None
 
-    # Verify from the artifacts, not the exit code: the continued transcript must show a
-    # compact marker or a real shrink.
+
+def verify_compaction(said: str, sid: str, tp: Path, before: int, title: str, window: int) -> Outcome:
+    """Verify from the artifacts, not the exit code: the continued transcript must show a
+    compact marker or a real shrink."""
     new_sid = sid
     try:
         payload = json.loads(said)
@@ -294,16 +317,78 @@ def main(argv: list[str], runner=None) -> int:
     if marker or shrunk:
         ledgerlib.clear("compact", sid)
         rolled = "" if new_sid == sid else f" (session id rolled to {new_sid})"
-        return out({"ok": True, "compacted": True, "contextBefore": before, "contextAfter": after,
-                    "sessionId": new_sid, "report": (
-                        f"COMPACTED and verified: '{title}' ~{before // 1000}k -> "
-                        f"{after_txt} tokens{rolled}.")}, as_json, 0)
-    return out({"ok": False, "compacted": False, "contextBefore": before, "contextAfter": after,
-                "sessionId": new_sid, "report": (
-                    f"the turn ran but NO compaction was observed: '{title}' measured "
-                    f"~{before // 1000}k before, {after_txt} after, window "
-                    f"{window // 1000}k, no compact marker. Attempt recorded - check the "
-                    "window against the context before retrying.")}, as_json, 2)
+        return Outcome(
+            f"COMPACTED and verified: '{title}' ~{before // 1000}k -> {after_txt} tokens{rolled}.",
+            0, ok=True,
+            extra={"compacted": True, "contextBefore": before, "contextAfter": after,
+                   "sessionId": new_sid})
+    return Outcome(
+        f"the turn ran but NO compaction was observed: '{title}' measured "
+        f"~{before // 1000}k before, {after_txt} after, window "
+        f"{window // 1000}k, no compact marker. Attempt recorded - check the "
+        "window against the context before retrying.",
+        2, ok=False,
+        extra={"compacted": False, "contextBefore": before, "contextAfter": after,
+               "sessionId": new_sid})
+
+
+def main(argv: list[str], runner=None) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    as_json, window, floor, args = parse_args(argv)
+    if len(args) != 1:
+        print(__doc__.strip(), file=sys.stderr)
+        return 3
+
+    try:
+        rows = hydralib.sessions()
+    except hydralib.DaemonError as err:
+        return emit(Outcome(f"compact FAILED: {err}", 1), as_json)
+
+    row, outcome = resolve_target_row(rows, args[0])
+    if outcome:
+        return emit(outcome, as_json)
+    sid = row.get("session_id") or ""
+    title = row.get("title")
+
+    outcome = check_session_eligible(row, sid, title)
+    if outcome:
+        return emit(outcome, as_json)
+
+    tp, cwd, outcome = locate_transcript_and_cwd(row, title)
+    if outcome:
+        return emit(outcome, as_json)
+
+    outcome = check_liveness(sid, title, tp)
+    if outcome:
+        return emit(outcome, as_json)
+
+    before = context_tokens(tp)
+    if before is None:
+        return emit(Outcome(
+            f"REFUSED (deterministic): '{title}' has no readable usage stamp - context size "
+            "unknown, and unknown never reads as small", 3), as_json)
+    if before < floor:
+        return emit(Outcome(
+            f"nothing to do: '{title}' is at ~{before // 1000}k tokens, under the --min floor "
+            f"of {floor // 1000}k - a fresh chat is cheaper than a lossy compact",
+            0, ok=True, extra={"compacted": False, "contextTokens": before}), as_json)
+
+    outcome = check_capacity(sid)
+    if outcome:
+        return emit(outcome, as_json)
+
+    run, exe, outcome = resolve_runner_and_exe(runner)
+    if outcome:
+        return emit(outcome, as_json)
+
+    said, outcome = execute_turn(run, exe, sid, window, cwd, title, before)
+    if outcome:
+        return emit(outcome, as_json)
+
+    return emit(verify_compaction(said, sid, tp, before, title, window), as_json)
 
 
 if __name__ == "__main__":
