@@ -46,3 +46,15 @@ docs/HANDOFF_MICHAEL.md
 
 # bun test --parallel writes a per-file timing cache here to schedule the next run.
 /timings.json
+
+# A built or downloaded binary dropped at the repo root. `bun run dist` writes the real one to
+# dist/ (ignored above); this is the copy people leave beside the checkout after downloading a
+# release asset or hand-copying one out of dist/. It is ~100 MB, so an accidental `git add` here
+# is expensive and irreversible on a public repo. Named exactly, NOT as a blanket *.exe, because
+# misc/lunarwerx-tray.exe is a tracked, committed part of the tray toolkit.
+/AgentHydra.exe
+
+# Local investigation write-ups: internal working notes, same convention as
+# docs/HANDOFF_MICHAEL.md and /docs/todo/* above. Findings get upstreamed as a fix plus its
+# comment, not as a file of field notes about one machine's logs.
+/FINDINGS-*.md
