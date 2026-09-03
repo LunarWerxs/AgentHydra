@@ -61,6 +61,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from lib import armlib, clilib
@@ -567,70 +568,120 @@ def reap_idle_engines() -> list[dict]:
     return results
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
-    as_json = "--json" in argv
-    act = "--yes" in argv
-    # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
-    # window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so.
-    if act:
-        refusal = armlib.refuse_unless_armed(argv, "the groundskeeper's duties")
-        if refusal:
-            print(refusal)
-            act = False
-    do_evac = "--only-archive" not in argv
-    do_arch = "--only-evacuate" not in argv
+@dataclass
+class _GroundskeeperArgs:
+    """Parsed command-line options for a single main() invocation."""
+    as_json: bool
+    act: bool
+    do_evac: bool
+    do_arch: bool
+    ev_max: int | None
+    ar_max: int | None
+
+
+def _parse_groundskeeper_args(argv: list[str]) -> _GroundskeeperArgs:
     ev_max = int(argv[argv.index("--evacuate-max") + 1]) if "--evacuate-max" in argv else EVACUATE_PER_RUN
     ar_max = int(argv[argv.index("--archive-max") + 1]) if "--archive-max" in argv else ARCHIVE_PER_RUN
+    return _GroundskeeperArgs(
+        as_json="--json" in argv,
+        act="--yes" in argv,
+        do_evac="--only-archive" not in argv,
+        do_arch="--only-evacuate" not in argv,
+        ev_max=ev_max,
+        ar_max=ar_max,
+    )
 
+
+def _enforce_armed_window(argv: list[str], act: bool) -> bool:
+    """THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
+    window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so."""
+    if not act:
+        return False
+    refusal = armlib.refuse_unless_armed(argv, "the groundskeeper's duties")
+    if refusal:
+        print(refusal)
+        return False
+    return True
+
+
+def _plan_and_execute(args: _GroundskeeperArgs, act: bool) -> tuple[dict | None, list[dict], int | None]:
+    """Runs build_plan/execute, catching the two ways a tick must not die silently. Returns
+    (plan, results, exit_code); exit_code is only set when the run failed outright."""
     try:
-        plan = build_plan(ev_max if do_evac else 0, ar_max if do_arch else 0)
-        results = execute(plan, do_evac, do_arch) if act else []
+        plan = build_plan(args.ev_max if args.do_evac else 0, args.ar_max if args.do_arch else 0)
+        results = execute(plan, args.do_evac, args.do_arch) if act else []
+        return plan, results, None
     except hydralib.DaemonError as err:
         print(f"groundskeeper FAILED: {err}", file=sys.stderr)
-        return 1
+        return None, [], 1
     except Exception as err:  # one crash must never look like a silent, clean no-op tick
         import traceback
 
         print(f"groundskeeper CRASHED: {err}", file=sys.stderr)
         traceback.print_exc()
-        return 1
+        return None, [], 1
 
+
+def _report_planning_errors(plan: dict) -> None:
     if plan.get("errored"):
         print(f"{len(plan['errored'])} chat(s) errored in planning: " + "; ".join(
             f"{e.get('title') or e['sessionId']}: {e['error']}" for e in plan["errored"]),
             file=sys.stderr)
-    if as_json:
+
+
+def _format_result_row(r: dict, have_results: bool) -> str:
+    duty = r.get("duty") or ("evacuate" if "to" in r else "archive")
+    mark = ("OK " if r.get("ok") else "XX ") if have_results else "-  "
+    where = f"{r['from']} -> {r['to']}" if duty == "evacuate" else str(r.get("instance"))
+    # Every duty's rows print through here; a row missing a field must never take the
+    # whole report down (2026-09-01: the first reap rows lacked 'why' and the tick
+    # died AFTER acting, with a traceback for a report that had already happened).
+    return (f"  {mark}[{duty}] {r.get('title')} ({where}): {r.get('why', '')}"
+            + (f" -> {r.get('outcome')}" if have_results else ""))
+
+
+def _print_text_report(plan: dict, results: list[dict], act: bool) -> None:
+    print(f"{plan['running']} running, share {plan['perAccountShare']} per account - "
+          f"{plan['runningPerInstance']}")
+    if not plan["evacuate"] and not plan["archive"]:
+        print("nothing dormant needs moving or putting away.")
+    for r in plan.get("stale", []):
+        print(f"  ?? [stale {r['hours']:.0f}h] {r['title']} ({r['instance']}): {r['why']}")
+    # Live chats are NAMED here and never moved (owner, 2026-09-01) - a person reads these.
+    for r in plan.get("stuck", []):
+        print(f"  !! [STUCK - not moved] {r['title']} ({r['instance']}): {r['why']}")
+    for r in plan.get("activeOnBurnt", []):
+        print(f"  !! [active on a burnt account - not moved] {r['title']} ({r['instance']}): {r['why']}")
+    if plan.get("strandedLeftBehind"):
+        print(f"  ⚠ {plan['strandedLeftBehind']} chat(s) STAY on a burnt account this pass "
+              "(per-run cap, or every other open account is cooked too) - next pass takes them.")
+    for r in (results or plan["evacuate"] + plan["archive"]):
+        print(_format_result_row(r, bool(results)))
+    if not act and (plan["evacuate"] or plan["archive"]):
+        print("\nPLAN ONLY - nothing touched. Add --yes to act.")
+
+
+def _print_groundskeeper_report(plan: dict, results: list[dict], args: _GroundskeeperArgs, act: bool) -> None:
+    _report_planning_errors(plan)
+    if args.as_json:
         print(json.dumps({**plan, "results": results}, indent=2))
     else:
-        print(f"{plan['running']} running, share {plan['perAccountShare']} per account - "
-              f"{plan['runningPerInstance']}")
-        if not plan["evacuate"] and not plan["archive"]:
-            print("nothing dormant needs moving or putting away.")
-        for r in plan.get("stale", []):
-            print(f"  ?? [stale {r['hours']:.0f}h] {r['title']} ({r['instance']}): {r['why']}")
-        # Live chats are NAMED here and never moved (owner, 2026-09-01) - a person reads these.
-        for r in plan.get("stuck", []):
-            print(f"  !! [STUCK - not moved] {r['title']} ({r['instance']}): {r['why']}")
-        for r in plan.get("activeOnBurnt", []):
-            print(f"  !! [active on a burnt account - not moved] {r['title']} ({r['instance']}): {r['why']}")
-        if plan.get("strandedLeftBehind"):
-            print(f"  ⚠ {plan['strandedLeftBehind']} chat(s) STAY on a burnt account this pass "
-                  "(per-run cap, or every other open account is cooked too) - next pass takes them.")
-        for r in (results or plan["evacuate"] + plan["archive"]):
-            duty = r.get("duty") or ("evacuate" if "to" in r else "archive")
-            mark = ("OK " if r.get("ok") else "XX ") if results else "-  "
-            where = f"{r['from']} -> {r['to']}" if duty == "evacuate" else str(r.get("instance"))
-            # Every duty's rows print through here; a row missing a field must never take the
-            # whole report down (2026-09-01: the first reap rows lacked 'why' and the tick
-            # died AFTER acting, with a traceback for a report that had already happened).
-            print(f"  {mark}[{duty}] {r.get('title')} ({where}): {r.get('why', '')}"
-                  + (f" -> {r.get('outcome')}" if results else ""))
-        if not act and (plan["evacuate"] or plan["archive"]):
-            print("\nPLAN ONLY - nothing touched. Add --yes to act.")
+        _print_text_report(plan, results, act)
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    args = _parse_groundskeeper_args(argv)
+    act = _enforce_armed_window(argv, args.act)
+
+    plan, results, exit_code = _plan_and_execute(args, act)
+    if exit_code is not None:
+        return exit_code
+
+    _print_groundskeeper_report(plan, results, args, act)
     return 2 if [r for r in results if not r["ok"]] else 0
 
 
