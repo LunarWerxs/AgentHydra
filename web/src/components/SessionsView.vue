@@ -44,17 +44,7 @@ import {
   X,
 } from '@lucide/vue'
 import { useMediaQuery } from '@vueuse/core'
-import {
-  type ComponentPublicInstance,
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  ref,
-  watch,
-} from 'vue'
-import { useI18n } from 'vue-i18n'
-import { toast } from 'vue-sonner'
+import { type ComponentPublicInstance, computed, ref, watch } from 'vue'
 import SessionComposer, { type ComposerTarget } from '@/components/SessionComposer.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { Badge } from '@/components/ui/badge'
@@ -96,45 +86,26 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { useBodySearch } from '@/composables/useBodySearch'
 import { useData } from '@/composables/useData'
-import { useInstances } from '@/composables/useInstances'
-import { useShellWidth } from '@/composables/useShellWidth'
+import { useDoneMarks } from '@/composables/useDoneMarks'
+import { useMultiSelect } from '@/composables/useMultiSelect'
+import { useOpenSession } from '@/composables/useOpenSession'
+import { useResumeInTerminal } from '@/composables/useResumeInTerminal'
+import { useSessionFileActions } from '@/composables/useSessionFileActions'
+import { useSessionFilters } from '@/composables/useSessionFilters'
+import { useSessionJump } from '@/composables/useSessionJump'
+import { useSessionMigration } from '@/composables/useSessionMigration'
+import { useSessionRowDisplay } from '@/composables/useSessionRowDisplay'
+import { useSessionSecrets } from '@/composables/useSessionSecrets'
+import { useSessionUsage } from '@/composables/useSessionUsage'
 import { useShortcuts } from '@/composables/useShortcuts'
+import { useTranscriptDisplay } from '@/composables/useTranscriptDisplay'
 import { clampWidth, SIDEBAR_DEFAULT, useUiPrefs } from '@/composables/useUiPrefs'
-import type {
-  ArchivedScope,
-  DispatchedScope,
-  RateLimitScope,
-  SessionEnding,
-  SessionPeriod,
-  SessionSearchResponse,
-  SessionSearchResult,
-  SessionSecretScan,
-  SessionSource,
-  SessionSourceScope,
-  SessionSummary,
-  SessionUsage,
-  TailResult,
-  TitleSource,
-} from '@/lib/api'
 import * as api from '@/lib/api'
-import { highlightHtml } from '@/lib/find'
-import {
-  baseName,
-  formatCompact,
-  formatUsd,
-  type SessionActivity,
-  sessionActivity,
-  shortId,
-  timeAgo,
-} from '@/lib/format'
-import { displayName } from '@/lib/instance-appearance'
-import { escapeHtml, looksLikeMarkdown, renderMarkdown } from '@/lib/markdown'
-import { composeSessionPathClipboard } from '@/lib/session-clipboard'
+import { baseName, shortId, timeAgo } from '@/lib/format'
 import { groupByProject } from '@/lib/session-groups'
-import { pendingSessionJump, takeSessionJump } from '@/lib/session-jump'
-import { rangeBetween } from '@/lib/session-multiselect'
-import { type SessionShape, type ShapeScope, sessionShape } from '@/lib/session-shape'
+import { sessionShape } from '@/lib/session-shape'
 import { cn } from '@/lib/utils'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
@@ -151,301 +122,7 @@ const {
   sessionRateLimitScope,
   sessionShapeScope,
 } = useData()
-const { t } = useI18n()
 
-// Named instances for the filter dropdown; "default"/"other" are fixed options. The folder
-// name stays the stable filter key (sessions are tagged by it); displayName() is what we SHOW —
-// in the dropdown and in each row's instance chip.
-//
-// Reads the shared useInstances singleton rather than fetching the list itself, because
-// displayName() now prefers the ACCOUNT an instance is signed into, and only that composable
-// resolves accounts. A private fetch would show the folder name here while the Instances tab
-// showed the account name for the very same instance. `computed`, so the chips fill in on their
-// own as each account resolves. A failed load just leaves the named entries out.
-const { instances: desktopInstances, refreshInstances } = useInstances()
-const namedInstances = computed(() =>
-  desktopInstances.value.map((i) => ({ name: i.name, label: displayName(i) })),
-)
-const instanceLabelFor = (folder: string) =>
-  namedInstances.value.find((i) => i.name === folder)?.label ?? folder
-// silent: this view has no instance-list spinner to drive, and the toolbar Refresh icon it would
-// toggle belongs to a different view entirely.
-onMounted(() => void refreshInstances({ silent: true }))
-// Every scope is applied server-side, so any of them changing needs a refetch, not a re-filter.
-watch(
-  [
-    sessionInstanceFilter,
-    sessionArchivedScope,
-    sessionPeriod,
-    sessionDispatchedScope,
-    sessionRateLimitScope,
-  ],
-  () => refreshSessions(),
-)
-watch(sessionSourceFilter, (source) => {
-  // Desktop-instance metadata belongs to Claude sessions only. Clear a stale instance scope when
-  // switching providers so "Codex" or "OpenCode" cannot appear empty for an invisible old filter.
-  if (source !== 'all' && source !== 'claude' && sessionInstanceFilter.value) {
-    sessionInstanceFilter.value = ''
-    return
-  }
-  refreshSessions()
-})
-
-/** The ⋯ trigger reports "something is narrowing this list". Otherwise a filter set once and
- *  forgotten reads as an empty/short list with no visible cause, now that the controls are a
- *  menu rather than a row of lit-up buttons. */
-const filtersActive = computed(
-  () =>
-    !!sessionInstanceFilter.value ||
-    sessionArchivedScope.value !== 'include' ||
-    sessionSourceFilter.value !== 'all' ||
-    sessionDispatchedScope.value !== 'all' ||
-    sessionRateLimitScope.value !== 'all' ||
-    sessionShapeScope.value !== 'all' ||
-    // Only a WIDENED window counts. 24h is the default, so flagging it would light the trigger up
-    // permanently and the signal would stop meaning anything.
-    sessionPeriod.value !== '24h',
-)
-const SOURCE_LABEL: Record<SessionSourceScope, string> = {
-  all: 'sessions.sourceAll',
-  claude: 'sessions.sourceClaude',
-  codex: 'sessions.sourceCodex',
-  opencode: 'sessions.sourceOpenCode',
-  foreign: 'sessions.sourceOther',
-}
-const sourceFilterLabel = computed(() => t(SOURCE_LABEL[sessionSourceFilter.value]))
-const RATE_LIMIT_LABEL: Record<RateLimitScope, string> = {
-  all: 'sessions.rateLimitedAll',
-  only: 'sessions.rateLimitedOnly',
-  pending: 'sessions.rateLimitedPending',
-}
-const rateLimitScopeLabel = computed(() => t(RATE_LIMIT_LABEL[sessionRateLimitScope.value]))
-
-/**
- * Why this row is called what it is called.
- *
- * A title has four possible origins and only one of them is a name a person chose, so a title
- * nobody recognises is otherwise a dead end — which is exactly what happened when threads started
- * showing up named "Watcher" and no account, instance or project was called that. The awkward case
- * is 'envelope': the first message arrived wrapped in a pseudo-tag carrying a name attribute, and
- * that name became the title, so the string was chosen by whatever wrote the wrapper (a scheduler,
- * a hook, a harness) and may match nothing the user has ever named.
- */
-const TITLE_SOURCE_LABEL: Record<TitleSource, string> = {
-  custom: 'sessions.titleFromCustom',
-  ai: 'sessions.titleFromAi',
-  store: 'sessions.titleFromStore',
-  envelope: 'sessions.titleFromEnvelope',
-  message: 'sessions.titleFromMessage',
-  id: 'sessions.titleFromId',
-}
-const titleOriginOf = (s: SessionSummary) =>
-  `${t('sessions.titleFrom')}: ${t(TITLE_SOURCE_LABEL[s.title_source], { tag: s.title_tag ?? '?' })}`
-/** Only the surprising origin earns a marker on the row. Everything else is explicable on sight and
- *  a badge on every row would be noise that hides the one case worth noticing. */
-const titleIsUnattributed = (s: SessionSummary) => s.title_source === 'envelope'
-/** Only ever rendered on a still-stopped session, so there is one wording rather than two. */
-const limitTooltipOf = (s: SessionSummary) =>
-  s.limit_stop ? t('sessions.rateLimitedHint', { notice: s.limit_stop.notice }) : ''
-const sourceLabel = (source: SessionSource) => t(SOURCE_LABEL[source])
-
-/**
- * The badge text for one row.
- *
- * `source` names the READER, and the fourth one covers five different products, so a row from Grok
- * and a row from Zed would both read "Other". The tool name is what the user recognises, so it wins
- * wherever the session carries one.
- */
-const TOOL_NAME: Record<string, string> = {
-  'claude-code': 'Claude',
-  openclaude: 'OpenClaude',
-  cowork: 'Cowork',
-  codex: 'Codex',
-  traex: 'TraeX',
-  opencode: 'OpenCode',
-  kilo: 'Kilo',
-  mimocode: 'MiMo',
-  icodemate: 'IcodeMate',
-  grok: 'Grok',
-  kimi: 'Kimi',
-  zed: 'Zed',
-  copilot: 'Copilot CLI',
-  'vscode-copilot': 'VS Code Copilot',
-}
-const rowSourceLabel = (s: { source: SessionSource; tool?: string }) =>
-  (s.tool && TOOL_NAME[s.tool]) || sourceLabel(s.source)
-const SOURCE_BADGE_CLASS: Record<SessionSource, string> = {
-  claude: 'border-[#D97757]/40 bg-[#D97757]/10 text-[#B85D3D] dark:text-[#E9A287]',
-  codex: 'border-[#10A37F]/40 bg-[#10A37F]/10 text-[#087D62] dark:text-[#65D4B3]',
-  opencode: 'border-[#5B6EF5]/40 bg-[#5B6EF5]/10 text-[#4053D6] dark:text-[#9AA6FF]',
-  // Neutral on purpose: five products share this reader, so a single hue would imply one identity.
-  foreign: 'border-border bg-muted text-muted-foreground',
-}
-const sourceBadgeClass = (source: SessionSource) => SOURCE_BADGE_CLASS[source]
-const instanceFilterLabel = computed(() => {
-  const v = sessionInstanceFilter.value
-  if (!v) return t('sessions.instanceAll')
-  if (v === 'default') return t('sessions.instanceDefault')
-  if (v === 'other') return t('sessions.instanceOther')
-  return instanceLabelFor(v)
-})
-const ARCHIVED_LABEL: Record<ArchivedScope, string> = {
-  hide: 'sessions.archivedHide',
-  include: 'sessions.archivedInclude',
-  only: 'sessions.archivedOnly',
-}
-const archivedScopeLabel = computed(() => t(ARCHIVED_LABEL[sessionArchivedScope.value]))
-const PERIOD_LABEL: Record<SessionPeriod, string> = {
-  '24h': 'sessions.period24h',
-  '7d': 'sessions.period7d',
-  '30d': 'sessions.period30d',
-  all: 'sessions.periodAll',
-}
-const periodLabel = computed(() => t(PERIOD_LABEL[sessionPeriod.value]))
-const DISPATCHED_LABEL: Record<DispatchedScope, string> = {
-  all: 'sessions.dispatchedAll',
-  queued: 'sessions.dispatchedQueued',
-  manual: 'sessions.dispatchedManual',
-}
-const dispatchedScopeLabel = computed(() => t(DISPATCHED_LABEL[sessionDispatchedScope.value]))
-const SHAPE_LABEL: Record<ShapeScope, string> = {
-  all: 'sessions.shapeAll',
-  quick: 'sessions.shapeQuick',
-  standard: 'sessions.shapeStandard',
-  deep: 'sessions.shapeDeep',
-  marathon: 'sessions.shapeMarathon',
-  automation: 'sessions.shapeAutomation',
-}
-const shapeScopeLabel = computed(() => t(SHAPE_LABEL[sessionShapeScope.value]))
-const shapeLabel = (shape: SessionShape) => t(SHAPE_LABEL[shape])
-/** "Marathon" is a size, and nothing on the row said so. Spell it out on hover. */
-/**
- * The "part 1 of 2" chip, carrying WHY there is more than one.
- *
- * The reason is on the row rather than only in the tooltip because the question this answers —
- * "why is this conversation here twice?" — is asked by looking, not by hovering. A part that was
- * superseded names what ended it; the newest part has nothing to explain, so it stays short.
- */
-const ENDING_LABEL: Record<SessionEnding, string> = {
-  interrupted: 'sessions.endedInterrupted',
-  'usage-limit': 'sessions.endedUsageLimit',
-  overload: 'sessions.endedOverload',
-  refused: 'sessions.endedRefused',
-  error: 'sessions.endedError',
-  complete: 'sessions.endedComplete',
-}
-const isLatestCopy = (s: SessionSummary) => s.copy_index >= s.copy_count
-const copyChipOf = (s: SessionSummary) => {
-  const label = t('sessions.copyOf', { i: s.copy_index, n: s.copy_count })
-  if (isLatestCopy(s) || !s.ended_because) return label
-  return `${label} · ${t(ENDING_LABEL[s.ended_because])}`
-}
-const copyWhyOf = (s: SessionSummary) =>
-  isLatestCopy(s) || !s.ended_because
-    ? t('sessions.copyLatest', { i: s.copy_index, n: s.copy_count })
-    : t('sessions.copyWhy', {
-        i: s.copy_index,
-        n: s.copy_count,
-        why: t(ENDING_LABEL[s.ended_because]),
-      })
-
-const shapeTitleOf = (s: SessionSummary) =>
-  `${t('sessions.shape')}: ${shapeLabel(sessionShape(s))} — ${t('sessions.shapeHint')}`
-
-/** Working / idle / stale, from the same timestamp the list is already sorted by. A session we are
- *  actively running is 'working' regardless of the clock: the queue knows, so it does not have to
- *  be inferred from a file write that may be seconds away. */
-// Reads the clock at render time, exactly as timeAgo() beside it does: the list refetches every 12
-// seconds, so the dot and the "3m ago" it sits next to always move together.
-const activityOf = (s: SessionSummary): SessionActivity =>
-  s.queue_status === 'running' ? 'working' : sessionActivity(s.last_activity_at)
-const ACTIVITY_CLASS: Record<SessionActivity, string> = {
-  working: 'bg-success',
-  idle: 'bg-warning',
-  stale: 'bg-muted-foreground/40',
-}
-const ACTIVITY_LABEL: Record<SessionActivity, string> = {
-  working: 'sessions.activityWorking',
-  idle: 'sessions.activityIdle',
-  stale: 'sessions.activityStale',
-}
-
-// --- "done" marks: seen it / handled it, without hiding it ---------------------
-// Persisted server-side (sqlite) rather than in localStorage: these are the user's own judgements
-// about real work, so they outlive a cleared browser store or a different webview profile.
-// Deliberately NOT a filter: a done row stays exactly where it was, just quieter.
-const doneCount = computed(() => sessions.value.filter((s) => s.done).length)
-
-async function setDone(s: SessionSummary, done: boolean) {
-  const prev = s.done
-  s.done = done // optimistic: the row marks instantly, the write is a formality
-  try {
-    await api.setSessionDone(s.session_id, s.source, done)
-  } catch {
-    s.done = prev
-    toast.error(t('sessions.markDoneFailed'))
-  }
-}
-const toggleDone = (s: SessionSummary) => setDone(s, !s.done)
-
-async function clearDoneMarks() {
-  await Promise.all(sessions.value.filter((s) => s.done).map((s) => setDone(s, false)))
-}
-
-async function openFile(session: SessionSummary) {
-  try {
-    const r = await api.openSessionFile(session.session_id, session.source)
-    if (!r.ok) toast.error(t('sessions.openFileFailed'))
-  } catch {
-    toast.error(t('sessions.openFileFailed'))
-  }
-}
-
-// Puts the FILE on the clipboard, not its text — which only the daemon can do (see api.copySessionFile).
-// It reports the name it staged, because that name (the session title, not the uuid) is the whole
-// point and is worth confirming before the user pastes somewhere.
-const copyingFile = ref(false)
-async function copyFile(session: SessionSummary) {
-  copyingFile.value = true
-  try {
-    const r = await api.copySessionFile(session.session_id, session.source)
-    if (r.ok) toast.success(t('sessions.copyFileDone', { name: r.filename ?? '' }))
-    else if (r.reason === 'unsupported') toast.error(t('sessions.copyFileUnsupported'))
-    else toast.error(t('sessions.copyFileFailed'))
-  } catch {
-    toast.error(t('sessions.copyFileFailed'))
-  } finally {
-    copyingFile.value = false
-  }
-}
-
-async function copyFileLocation(session: SessionSummary) {
-  try {
-    const { path } = await api.getSessionFileLocation(session.session_id, session.source)
-    const text = composeSessionPathClipboard({
-      path,
-      title: session.title,
-      includeName: copyPathIncludeName.value,
-      includePrompt: copyPathIncludePrompt.value,
-      prompt: copyPathPrompt.value,
-    })
-    await navigator.clipboard.writeText(text)
-    // Says WHAT was copied rather than that something was: the clipboard can now hold three lines
-    // where it used to hold one, and a paste into a terminal is a surprise worth pre-empting.
-    toast.success(
-      text === path ? t('sessions.copyFileLocationDone') : t('sessions.copyFileLocationDoneRich'),
-    )
-  } catch {
-    toast.error(t('sessions.copyFileLocationFailed'))
-  }
-}
-
-const search = ref('')
-const selectedId = ref<string | null>(null)
-const selectedSource = ref<SessionSource | null>(null)
-const tail = ref<TailResult | null>(null)
-const tailLoading = ref(false)
 // Verbose mode, the sidebar width and the body-search case flag are persisted AND mirrored through
 // the daemon, so they live in composables/useUiPrefs.ts: this view unmounts whenever you switch
 // tabs, and a mirrored ref owned by a component that unmounts stops being the mirrored one.
@@ -461,275 +138,64 @@ const {
   copyPathPrompt,
 } = useUiPrefs()
 
-// --- sidebar: persisted drag-resize + animated collapse, auto-collapsing when narrow ---
-const RAIL_WIDTH = 44
-
-const isWide = useMediaQuery('(min-width: 1024px)')
-const collapsed = ref(!isWide.value)
-watch(isWide, (wide) => {
-  collapsed.value = !wide
-})
-
-const resizing = ref(false)
-function startResize(e: PointerEvent) {
-  const startX = e.clientX
-  const startWidth = sidebarWidth.value
-  resizing.value = true
-  const onMove = (ev: PointerEvent) => {
-    sidebarWidth.value = clampWidth(startWidth + ev.clientX - startX)
-  }
-  const onUp = () => {
-    resizing.value = false
-    window.removeEventListener('pointermove', onMove)
-    window.removeEventListener('pointerup', onUp)
-  }
-  window.addEventListener('pointermove', onMove)
-  window.addEventListener('pointerup', onUp)
+function copy(text: string) {
+  navigator.clipboard?.writeText(text).catch(() => {})
 }
 
-// Never wider than the viewport allows (a 340px sidebar on a 390px phone would
-// crush the transcript); the width transition animates the collapse toggle but is
-// suspended during a drag so resizing tracks the pointer 1:1.
-const asideStyle = computed(() => ({
-  width: collapsed.value ? `${RAIL_WIDTH}px` : `min(${sidebarWidth.value}px, calc(100vw - 56px))`,
-}))
+// --- the open session: which one, its live tail, and the layout that follows having one open -----
+const {
+  selectedId,
+  selectedSource,
+  tail,
+  tailLoading,
+  chatEl,
+  selected,
+  loadTail,
+  select,
+  runningRunId,
+  isExpanded,
+  toggleExpand,
+} = useOpenSession({ sessions, queue, showTools, showThinking, humanOnly })
 
-const filtered = computed(() => {
-  const q = search.value.trim().toLowerCase()
-  const shape = sessionShapeScope.value
-  let rows = sessions.value
-  // Applied in the browser, unlike the scopes the daemon owns, so it narrows the window that was
-  // fetched rather than reaching further back. Said plainly in the menu, because "no marathons in
-  // the last 24 hours" and "no marathons" are different answers.
-  if (shape !== 'all') rows = rows.filter((s) => sessionShape(s) === shape)
-  if (!q) return rows
-  return rows.filter(
-    (s) =>
-      s.title.toLowerCase().includes(q) ||
-      s.cwd.toLowerCase().includes(q) ||
-      s.session_id.includes(q),
-  )
+const { loadUsage, usageSummary, usageDetail } = useSessionUsage({ selectedId, selectedSource })
+// Cost moves only when the CLI writes turns, so refresh on the run's edges rather than on the
+// 4-second tail poll (useOpenSession's own concern) — re-streaming a large transcript every tick to
+// watch a number tick up is not worth it.
+watch(runningRunId, (id, oldId) => {
+  if (!!id !== !!oldId && selectedId.value) loadUsage()
 })
 
-/** An empty list under a bounded window is ambiguous: "nothing here" or "nothing here LATELY"?
- *  Say which, so a quiet day doesn't read as a broken list. */
-const emptyBecauseOfPeriod = computed(
-  () => sessionPeriod.value !== 'all' && !search.value.trim() && sessions.value.length === 0,
+const { secrets, secretsOpen, secretsDetail } = useSessionSecrets({ selectedId, selectedSource })
+
+const {
+  events,
+  findTotal,
+  findOpen,
+  findQuery,
+  findIndex,
+  findInput,
+  goToMatch,
+  openFind,
+  closeFind,
+  copiedIdx,
+  copyMessage,
+} = useTranscriptDisplay({ tail, chatEl })
+
+/** Whether the transcript is showing anything other than its default. Drives the pressed state on
+ *  the controls button, so "why am I not seeing tool calls" is answerable at a glance. */
+const displayFiltered = computed(
+  () => showTools.value || showThinking.value || humanOnly.value || compactTranscript.value,
 )
 
-// --- advanced (body) search: server-side, streams every transcript's raw content ---------
-// Deliberately independent of `filtered` above (client-side, metadata-only, always fast);
-// this is a slower opt-in path that only runs when the user explicitly submits it.
-const advancedOpen = ref(false)
-const advancedQuery = ref('')
-const advancedRegex = ref(false)
-const bodySearching = ref(false)
-const bodySearchActive = ref(false)
-const bodySearchQueryUsed = ref('')
-const bodyResults = ref<SessionSearchResult[]>([])
-// Kept beside the results, because "nothing matched" and "the server gave up after 7 seconds" look
-// identical in a list of zero rows, and only one of them means the text isn't there.
-const bodySearchResponse = ref<SessionSearchResponse | null>(null)
-
-async function runBodySearch(opts: { everything?: boolean } = {}) {
-  const q = advancedQuery.value.trim() || bodySearchQueryUsed.value
-  if (!q) return
-  bodySearching.value = true
-  try {
-    const r = await api.searchSessionBodies(q, {
-      regex: advancedRegex.value,
-      caseSensitive: advancedCaseSensitive.value,
-      instance: sessionInstanceFilter.value || undefined,
-      source: sessionSourceFilter.value === 'all' ? undefined : sessionSourceFilter.value,
-      everything: opts.everything,
-    })
-    bodyResults.value = r.results
-    bodySearchResponse.value = r
-    bodySearchQueryUsed.value = q
-    bodySearchActive.value = true
-    advancedOpen.value = false
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : ''
-    toast.error(msg || t('sessions.searchFailed'))
-  } finally {
-    bodySearching.value = false
-  }
-}
-
-/**
- * The one line that says what was actually searched.
- *
- * There are three honest answers and they are not interchangeable: the index answered completely
- * but only over conversation; the scan ran out of time; or the hit list was capped. Saying nothing
- * would let any of the three read as "that text is nowhere on this machine".
- */
-const bodySearchNotice = computed(() => {
-  const r = bodySearchResponse.value
-  if (!r) return null
-  if (r.searched === 'index') return t('sessions.searchedConversation')
-  if (r.budgetExhausted)
-    return t('sessions.searchBudgetExhausted', {
-      seconds: Math.round(r.budgetMs / 1000),
-      searched: r.filesSearched,
-      total: r.filesTotal,
-    })
-  if (r.limitReached) return t('sessions.searchLimitReached', { n: r.results.length })
-  return null
-})
-
-/** Offer the exhaustive path exactly when the answer we gave did not cover everything. */
-const canSearchEverything = computed(() => {
-  const r = bodySearchResponse.value
-  return !!r && (r.conversationOnly || r.budgetExhausted)
-})
-
-function exitBodySearch() {
-  bodySearchActive.value = false
-  bodyResults.value = []
-  bodySearchResponse.value = null
-}
-
-/** Jump from a body-search hit to the full transcript, same as clicking it in the plain list. */
-async function selectFromBodyResult(r: SessionSearchResult) {
-  const s = sessions.value.find((x) => x.session_id === r.session_id && x.source === r.source)
-  if (s) {
-    exitBodySearch()
-    select(s)
-    return
-  }
-  // Not in the currently-loaded metadata window (e.g. older than the 200-session cap); still
-  // open the transcript directly by id so the hit isn't a dead end.
-  exitBodySearch()
-  selectedId.value = r.session_id
-  selectedSource.value = r.source
-  selected.value = null
-  void loadTail()
-  try {
-    const summary = await api.getSession(r.session_id, r.source)
-    if (selectedId.value === r.session_id && selectedSource.value === r.source)
-      selected.value = summary
-  } catch {
-    toast.error(t('sessions.searchFailed'))
-  }
-}
-
-// Last-known summary, not a bare find(): an actively-written session can drop out of
-// one 12s scan cycle (partial JSONL mid-write), and a null flash would blank the
-// transcript and yank the shell width. Keep showing what we knew until it reappears.
-const selected = ref<SessionSummary | null>(null)
-watch(
-  [sessions, selectedId, selectedSource],
-  () => {
-    if (!selectedId.value) {
-      selected.value = null
-      return
-    }
-    const s = sessions.value.find(
-      (x) =>
-        x.session_id === selectedId.value &&
-        (!selectedSource.value || x.source === selectedSource.value),
-    )
-    if (s) selected.value = s
-  },
-  { immediate: true },
-)
-
-// an open transcript benefits from room; widen the whole shell while one is selected
-const { wide: shellWide } = useShellWidth()
-watch(
-  () => !!selected.value,
-  (hasSelection) => {
-    shellWide.value = hasSelection
-  },
-  { immediate: true },
-)
-onBeforeUnmount(() => {
-  shellWide.value = false
-})
-
-// --- transcript: long-output capping + per-message copy ---
-const LONG_CHARS = 1000
-const LONG_LINES = 16
-const isLong = (text: string) => text.length > LONG_CHARS || text.split('\n').length > LONG_LINES
-
-/**
- * Every turn as HTML, ONCE per tail load.
- *
- * Both branches escape the text before anything else looks at it, so nothing below can carry a tag
- * the transcript wrote. `pre` records which branch ran, because the two want different whitespace
- * handling: markdown owns its own layout, plain prose must keep its line breaks.
- *
- * Split from the find pass below so that typing in the find bar re-highlights without re-parsing
- * every message's markdown on each keystroke.
- */
-const rendered = computed(() =>
-  (tail.value?.events ?? []).map((ev) => {
-    const md = ev.kind === 'text' && looksLikeMarkdown(ev.text) ? renderMarkdown(ev.text) : null
-    return { ...ev, long: isLong(ev.text), html: md ?? escapeHtml(ev.text), pre: md === null }
-  }),
-)
-
-// --- find within the open session (client-side; the loaded window, no server round-trip) --------
-const findOpen = ref(false)
-const findQuery = ref('')
-const findIndex = ref(0)
-// A template ref on <Input> yields the COMPONENT, not the element — the kit's Input is a
-// single-root wrapper, so the <input> is reached through $el.
-const findInput = ref<ComponentPublicInstance | null>(null)
-/** The sidebar's own filter box, so Ctrl/Cmd+K can put the caret in it. */
-const searchInput = ref<ComponentPublicInstance | null>(null)
-function focusFindInput() {
-  const el = findInput.value?.$el
-  if (el instanceof HTMLInputElement) el.focus()
-}
-
-/** The turns as rendered, with matches wrapped. `hits` is per message; `findTotal` sums them. */
-const events = computed(() => {
-  const q = findOpen.value ? findQuery.value : ''
-  if (!q) return rendered.value.map((ev) => ({ ...ev, hits: 0 }))
-  let seen = 0
-  return rendered.value.map((ev) => {
-    const r = highlightHtml(ev.html, q, seen, findIndex.value)
-    seen += r.count
-    return { ...ev, html: r.html, hits: r.count }
-  })
-})
-
-const findTotal = computed(() => events.value.reduce((n, ev) => n + ev.hits, 0))
-
-/** Clamp into range and scroll the current hit into view. Wraps at both ends, like every find bar. */
-async function goToMatch(next: number) {
-  const total = findTotal.value
-  if (total === 0) return
-  findIndex.value = ((next % total) + total) % total
-  await nextTick()
-  chatEl.value
-    ?.querySelector(`[data-find="${findIndex.value}"]`)
-    ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-}
-
-function openFind() {
-  findOpen.value = true
-  void nextTick(focusFindInput)
-}
-
-function closeFind() {
-  findOpen.value = false
-  findQuery.value = ''
-  findIndex.value = 0
-}
-
-// A new query starts from the first hit rather than wherever the last one left off.
-watch(findQuery, () => {
-  findIndex.value = 0
-  void nextTick(() => void goToMatch(0))
-})
-// Closing the session closes the bar with it; a match count against a transcript you can no longer
-// see is just a wrong number on screen.
+// Closing the session closes the find bar and the secrets dialog with it; a match count or a
+// credential list against a transcript you can no longer see is just a wrong number on screen.
 watch(selectedId, () => {
   closeFind()
   secretsOpen.value = false
 })
+
+/** The sidebar's own filter box, so Ctrl/Cmd+K can put the caret in it. */
+const searchInput = ref<ComponentPublicInstance | null>(null)
 
 // This view's own bindings, registered through the shared layer (composables/useShortcuts.ts) so
 // they appear in the `?` sheet and disappear from it when the view unmounts.
@@ -762,454 +228,182 @@ useShortcuts([
   },
 ])
 
-const expandedMsgs = ref<Set<number>>(new Set())
-const isExpanded = (i: number) => expandedMsgs.value.has(i)
-function toggleExpand(i: number) {
-  const next = new Set(expandedMsgs.value)
-  if (next.has(i)) next.delete(i)
-  else next.add(i)
-  expandedMsgs.value = next
-}
-
-const copiedIdx = ref<number | null>(null)
-let copiedTimer: number | undefined
-function copyMessage(i: number, text: string) {
-  navigator.clipboard?.writeText(text).catch(() => {})
-  copiedIdx.value = i
-  window.clearTimeout(copiedTimer)
-  copiedTimer = window.setTimeout(() => {
-    copiedIdx.value = null
-  }, 1200)
-}
-
-const chatEl = ref<HTMLElement | null>(null)
-
-// How many /tail reads are outstanding. The poll below fires every 4 s whether or not the last one
-// came back, and on a big store a read can take longer than that — so without this the polls stack
-// into a queue of identical requests, each one delaying the next, and the reader watches a spinner
-// that is waiting on answers nobody will look at. A skipped silent tick loses nothing: another is 4 s
-// behind it asking the same question. Only the SILENT path yields; a click is intent and always runs.
-let tailInFlight = 0
-
-async function loadTail(opts: { silent?: boolean } = {}) {
-  const id = selectedId.value
-  const source = selectedSource.value
-  if (!id || !source) return
-  if (opts.silent && tailInFlight > 0) return
-  // measured BEFORE the fetch: whether the reader was already at the conversation's end
-  const el = chatEl.value
-  const nearBottom = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 120
-  if (!opts.silent) tailLoading.value = true
-  tailInFlight++
-  try {
-    const r = await api.getTail(id, source, {
-      limit: 40,
-      textOnly: !showTools.value,
-      thinking: showThinking.value,
-      humanOnly: humanOnly.value,
-    })
-    if (selectedId.value !== id || selectedSource.value !== source) return
-    tail.value = r
-  } catch {
-    // Same staleness test the success path makes. A read that fails AFTER the reader moved on
-    // belongs to a conversation nobody is looking at any more, and blanking on its behalf would
-    // clear the chat they ARE looking at.
-    if (!opts.silent && selectedId.value === id && selectedSource.value === source)
-      tail.value = null
-  } finally {
-    tailInFlight--
-    if (!opts.silent) tailLoading.value = false
-  }
-  if (selectedId.value !== id || selectedSource.value !== source) return
-  if (!opts.silent) expandedMsgs.value = new Set()
-  // chat convention: land at the bottom; silent refreshes only stick if already there
-  await nextTick()
-  if (!opts.silent || nearBottom) chatEl.value?.scrollTo({ top: chatEl.value.scrollHeight })
-}
-
-function select(s: SessionSummary) {
-  selectedId.value = s.session_id
-  selectedSource.value = s.source
-  loadTail()
-}
-
-// --- what this session spent ------------------------------------------------
-// A separate, cheap request rather than a field on the tail: the tail is a bounded byte-window on
-// the END of the transcript, and a session's cost is the whole file. The daemon streams it and
-// caches on (mtime, size), so re-opening a finished session costs nothing.
-const usage = ref<SessionUsage | null>(null)
-
-async function loadUsage() {
-  const id = selectedId.value
-  const source = selectedSource.value
-  if (!id || !source) {
-    usage.value = null
-    return
-  }
-  try {
-    const u = await api.getSessionUsage(id, source)
-    if (selectedId.value !== id || selectedSource.value !== source) return // selection moved on
-    usage.value = u
-  } catch {
-    usage.value = null // a missing figure is silent; a wrong one would not be
-  }
-}
-// Watching the selection rather than calling from select() catches every way a session gets
-// opened — the list, a body-search hit, and the restored selection on mount.
-watch(
-  [selectedId, selectedSource],
-  () => {
-    usage.value = null
-    void loadUsage()
-  },
-  { immediate: true },
-)
-
-/** The header chip: "1.2M tokens · $4.21". A trailing "+" means some model in the session has no
- *  published price, so the figure is a floor. */
-const usageSummary = computed(() => {
-  const u = usage.value
-  if (u?.status !== 'ok' || u.tokens.turns === 0) return null
-  const tokens = t('sessions.usageTokens', { n: formatCompact(u.tokens.total) })
-  if (u.costUsd === null) return tokens
-  const cost = formatUsd(u.costUsd)
-  return `${tokens} · ${u.unpricedModels.length ? `${cost}+` : cost}`
+// --- the sidebar's filter menu: named instances, scope labels, refetch-on-change wiring ----------
+const {
+  namedInstances,
+  instanceLabelFor,
+  filtersActive,
+  sourceFilterLabel,
+  rateLimitScopeLabel,
+  instanceFilterLabel,
+  archivedScopeLabel,
+  periodLabel,
+  dispatchedScopeLabel,
+  shapeScopeLabel,
+} = useSessionFilters({
+  sessionInstanceFilter,
+  sessionArchivedScope,
+  sessionPeriod,
+  sessionSourceFilter,
+  sessionDispatchedScope,
+  sessionRateLimitScope,
+  sessionShapeScope,
+  refreshSessions,
 })
 
-const usageDetail = computed(() => {
-  const u = usage.value
-  if (u?.status !== 'ok') return undefined
-  const parts = [
-    t('sessions.usageBreakdown', {
-      input: formatCompact(u.tokens.input),
-      output: formatCompact(u.tokens.output),
-      cacheRead: formatCompact(u.tokens.cacheRead),
-      cacheWrite: formatCompact(u.tokens.cacheCreation),
-      turns: u.tokens.turns,
-    }),
-  ]
-  if (u.unpricedModels.length) {
-    const models = u.unpricedModels.join(', ')
-    parts.push(
-      u.costUsd === null
-        ? t('sessions.usageNoPrice', { models })
-        : t('sessions.usageLowerBound', { models }),
-    )
-  }
-  parts.push(t('sessions.usageListPrice', { date: u.pricesAsOf }))
-  return parts.join(' ')
+// --- per-row labels, badges and tooltips -----------------------------------------------------
+const {
+  titleOriginOf,
+  titleIsUnattributed,
+  limitTooltipOf,
+  sourceLabel,
+  rowSourceLabel,
+  sourceBadgeClass,
+  shapeLabel,
+  shapeTitleOf,
+  copyChipOf,
+  copyWhyOf,
+  activityOf,
+  ACTIVITY_CLASS,
+  ACTIVITY_LABEL,
+} = useSessionRowDisplay()
+
+const { doneCount, toggleDone, clearDoneMarks } = useDoneMarks({ sessions })
+const { openFile, copyingFile, copyFile, copyFileLocation } = useSessionFileActions({
+  copyPathIncludeName,
+  copyPathIncludePrompt,
+  copyPathPrompt,
+})
+const { resuming, resumeInTerminal } = useResumeInTerminal()
+
+const search = ref('')
+
+const filtered = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  const shape = sessionShapeScope.value
+  let rows = sessions.value
+  // Applied in the browser, unlike the scopes the daemon owns, so it narrows the window that was
+  // fetched rather than reaching further back. Said plainly in the menu, because "no marathons in
+  // the last 24 hours" and "no marathons" are different answers.
+  if (shape !== 'all') rows = rows.filter((s) => sessionShape(s) === shape)
+  if (!q) return rows
+  return rows.filter(
+    (s) =>
+      s.title.toLowerCase().includes(q) ||
+      s.cwd.toLowerCase().includes(q) ||
+      s.session_id.includes(q),
+  )
 })
 
-// --- migrate to another account ----------------------------------------------
-// The flyout lists EVERY desktop instance, in two groups. A running one is a legal landing spot as
-// it stands. A closed one is shown too - hiding them made "why isn't mine here" a daily question -
-// but the server refuses to import into a closed instance, because the import spawn would BOOT it
-// and the rule is that nothing opens an account on its own. So a closed target reads "start it and
-// move there": a deliberate click opens the instance the ordinary way, we wait for it to come up,
-// and only then migrate. Loaded lazily when a menu opens; the session's own instance is disabled
-// rather than hidden.
-interface MigrateTarget {
-  ref: string
-  dir: string
-  name: string
-  account: string | null
-  isCurrent: boolean
-  isRunning: boolean
-}
-const migrateTargets = ref<MigrateTarget[]>([])
-const runningTargets = computed(() => migrateTargets.value.filter((x) => x.isRunning))
-const closedTargets = computed(() => migrateTargets.value.filter((x) => !x.isRunning))
-const migrating = ref(false)
-
-/** `s` is the session the menu is FOR, so its own instance can be marked; null for a bulk menu,
- *  where the checked sessions may span several instances and none is "current". */
-async function loadMigrateTargets(s: SessionSummary | null) {
-  try {
-    const [instances, cache] = await Promise.all([api.listInstances(), api.getUsageCache()])
-    migrateTargets.value = instances.map((i) => {
-      const ref = `desktop:${i.dir}`
-      const snap = cache.cache[ref.toLowerCase()] ?? cache.cache[ref]
-      return {
-        ref,
-        dir: i.dir,
-        // The name the Instances table shows (label, else account name, else folder), not the
-        // folder name a row's label happened to fall through to.
-        name: displayName(i),
-        account: snap?.account ?? null,
-        isCurrent: s?.instance != null && s.instance === i.name,
-        isRunning: i.isRunning,
-      }
-    })
-  } catch {
-    migrateTargets.value = []
-  }
-}
-
-// A closed target is NOT started. The server lands the chat straight in that instance's store,
-// settings intact, and the app finds it there when it next starts - the one landing where "what it
-// was set to" survives without a restart. Starting the app first was the old workaround for the
-// server refusing closed targets, and it is gone with the refusal.
-async function migrateTo(s: SessionSummary, target: MigrateTarget) {
-  migrating.value = true
-  try {
-    // The row's title IS the current title (same listing the server reads), restated as required.
-    const r = await api.migrateSession(s.session_id, target.ref, { confirmTitle: s.title })
-    if (r.ok) toast.success(t('sessions.migrateStarted', { name: target.name }))
-    else toast.error(r.error ?? t('sessions.migrateFailed'))
-  } catch {
-    toast.error(t('sessions.migrateFailed'))
-  } finally {
-    migrating.value = false
-  }
-}
-
-// --- reopen in a terminal ----------------------------------------------------
-// The command comes back whether or not the terminal opened, so a machine we cannot open a window
-// on still gets something usable rather than a failure toast and nothing else.
-const resuming = ref(false)
-
-async function resumeInTerminal(s: SessionSummary) {
-  resuming.value = true
-  try {
-    const r = await api.resumeSessionInTerminal(s.session_id, s.source)
-    if (r.ok) {
-      toast.success(t('sessions.resumeOpened'))
-      return
-    }
-    await navigator.clipboard?.writeText(r.command).catch(() => {})
-    toast.info(
-      r.reason === 'source-unsupported'
-        ? t('sessions.resumeUnsupported')
-        : t('sessions.resumeCopied'),
-      { description: r.command },
-    )
-  } catch {
-    toast.error(t('sessions.resumeFailed'))
-  } finally {
-    resuming.value = false
-  }
-}
-
-// --- credentials this session printed ----------------------------------------
-// Same shape as the cost readout above: one cheap request per opened session, streamed server-side,
-// never stored. The result is ALWAYS redacted — the daemon has no unredacted form of it, on purpose
-// (server/src/session-export.ts).
-const secrets = ref<SessionSecretScan | null>(null)
-const secretsOpen = ref(false)
-
-/** Deliberately the same wording the export and the context pack use: a guardrail, not a
- *  guarantee. Overstating it is how a scan like this does harm. */
-const secretsDetail = computed(() =>
-  secrets.value ? t('sessions.secretsHint', { n: secrets.value.count }) : undefined,
+/** An empty list under a bounded window is ambiguous: "nothing here" or "nothing here LATELY"?
+ *  Say which, so a quiet day doesn't read as a broken list. */
+const emptyBecauseOfPeriod = computed(
+  () => sessionPeriod.value !== 'all' && !search.value.trim() && sessions.value.length === 0,
 )
 
-async function loadSecrets() {
-  const id = selectedId.value
-  const source = selectedSource.value
-  if (!id || !source) {
-    secrets.value = null
-    return
-  }
-  try {
-    const r = await api.getSessionSecrets(id, source)
-    if (selectedId.value !== id || selectedSource.value !== source) return
-    secrets.value = r
-  } catch {
-    secrets.value = null
-  }
-}
-watch(
-  [selectedId, selectedSource],
-  () => {
-    secrets.value = null
-    void loadSecrets()
-  },
-  { immediate: true },
-)
+// --- sidebar: persisted drag-resize + animated collapse, auto-collapsing when narrow -------------
+const RAIL_WIDTH = 44
 
-// The three display controls the daemon applies (compact is purely visual, so it is not here).
-watch([showTools, showThinking, humanOnly], () => loadTail())
-
-/** Whether the transcript is showing anything other than its default. Drives the pressed state on
- *  the controls button, so "why am I not seeing tool calls" is answerable at a glance. */
-const displayFiltered = computed(
-  () => showTools.value || showThinking.value || humanOnly.value || compactTranscript.value,
-)
-
-// --- live transcript: follow the selected session's queue run -----------------
-// A run starting or finishing means the CLI just appended to the transcript on
-// disk; while one is active, poll so the reply streams into view.
-const runningRunId = computed(
-  () =>
-    (selectedSource.value === 'claude'
-      ? queue.value.find((q) => q.session_id === selectedId.value && q.status === 'running')?.id
-      : null) ?? null,
-)
-let tailPollTimer: number | undefined
-watch(runningRunId, (id, oldId) => {
-  window.clearInterval(tailPollTimer)
-  if (id) tailPollTimer = window.setInterval(() => loadTail({ silent: true }), 4000)
-  if (!!id !== !!oldId && selectedId.value) {
-    loadTail({ silent: true })
-    // Cost moves only when the CLI writes turns, so refresh on the run's edges rather than on the
-    // 4-second tail poll — re-streaming a large transcript every tick to watch a number tick up is
-    // not worth it.
-    void loadUsage()
-  }
+const isWide = useMediaQuery('(min-width: 1024px)')
+const collapsed = ref(!isWide.value)
+watch(isWide, (wide) => {
+  collapsed.value = !wide
 })
-onBeforeUnmount(() => window.clearInterval(tailPollTimer))
+
+const resizing = ref(false)
+function startResize(e: PointerEvent) {
+  const startX = e.clientX
+  const startWidth = sidebarWidth.value
+  resizing.value = true
+  const onMove = (ev: PointerEvent) => {
+    sidebarWidth.value = clampWidth(startWidth + ev.clientX - startX)
+  }
+  const onUp = () => {
+    resizing.value = false
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+
+// Never wider than the viewport allows (a 340px sidebar on a 390px phone would
+// crush the transcript); the width transition animates the collapse toggle but is
+// suspended during a drag so resizing tracks the pointer 1:1.
+const asideStyle = computed(() => ({
+  width: collapsed.value ? `${RAIL_WIDTH}px` : `min(${sidebarWidth.value}px, calc(100vw - 56px))`,
+}))
 
 // --- multi-select: pick several sessions, message them all at once - or move them ---------------
-// Two ways in: the Select switch in the toolbar, or a Ctrl/Cmd-click or Shift-click straight on a
-// row, which flips select mode on by itself so the modifier means what it means everywhere else.
-// Right-click one of the checked rows and the menu leads with the bulk actions.
-const selectMode = ref(false)
-const checkedIds = ref<Set<string>>(new Set())
-const sessionKey = (s: Pick<SessionSummary, 'source' | 'session_id'>) =>
-  `${s.source}:${s.session_id}`
-const isChecked = (s: SessionSummary) => checkedIds.value.has(sessionKey(s))
-// The row a Shift-range extends FROM: the last row deliberately clicked, or the open transcript's
-// row when the very first modifier click is a Shift-click, which is what a keyboard user expects.
-let rangeAnchor: string | null = null
-function toggleSelectMode() {
-  selectMode.value = !selectMode.value
-  if (!selectMode.value) {
+const {
+  selectMode,
+  checkedIds,
+  sessionKey,
+  isChecked,
+  toggleSelectMode,
+  checkAllFiltered,
+  rowClick,
+  checkedSessions,
+  bulkCount,
+  copyCheckedIds,
+} = useMultiSelect({ filtered, selectedId, selectedSource, select, copy })
+
+// --- migrate to another account, one session or the checked ones in bulk -------------------------
+const {
+  migrateTargets,
+  runningTargets,
+  closedTargets,
+  migrating,
+  loadMigrateTargets,
+  migrateTo,
+  bulkConfirm,
+  askBulkMigrate,
+  runBulkMigrate,
+} = useSessionMigration({
+  checkedSessions,
+  clearChecked: () => {
     checkedIds.value = new Set()
-    rangeAnchor = null
-  }
-}
-function toggleChecked(s: SessionSummary) {
-  if (s.source !== 'claude') return
-  const next = new Set(checkedIds.value)
-  const key = sessionKey(s)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  checkedIds.value = next
-  rangeAnchor = key
-}
-function checkAllFiltered() {
-  checkedIds.value = new Set(filtered.value.filter((s) => s.source === 'claude').map(sessionKey))
-}
-function rowClick(s: SessionSummary, ev?: MouseEvent) {
-  const modifier = !!ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey)
-  if (modifier && s.source === 'claude') {
-    if (!selectMode.value) {
-      selectMode.value = true
-      if (ev.shiftKey && selectedId.value && selectedSource.value)
-        rangeAnchor = `${selectedSource.value}:${selectedId.value}`
-    }
-    if (ev.shiftKey && rangeAnchor) {
-      const keys = filtered.value.filter((x) => x.source === 'claude').map(sessionKey)
-      const next = new Set(checkedIds.value)
-      for (const k of rangeBetween(keys, rangeAnchor, sessionKey(s))) next.add(k)
-      checkedIds.value = next
-      return // the anchor stays put, so a second Shift-click re-ranges from the same row
-    }
-    toggleChecked(s)
-    return
-  }
-  if (selectMode.value) toggleChecked(s)
-  else select(s)
-}
-const checkedSessions = computed(() => filtered.value.filter((s) => isChecked(s)))
-const bulkCount = computed(() => checkedIds.value.size)
+  },
+})
+
+// --- advanced (body) search: server-side, streams every transcript's raw content ------------------
+const {
+  advancedOpen,
+  advancedQuery,
+  advancedRegex,
+  bodySearching,
+  bodySearchActive,
+  bodySearchQueryUsed,
+  bodyResults,
+  runBodySearch,
+  bodySearchNotice,
+  canSearchEverything,
+  exitBodySearch,
+  selectFromBodyResult,
+} = useBodySearch({
+  sessions,
+  sessionInstanceFilter,
+  sessionSourceFilter,
+  advancedCaseSensitive,
+  selectedId,
+  selectedSource,
+  selected,
+  select,
+  loadTail,
+})
 
 // --- jump to ONE session, asked from a dialog here or from another view ---------------------------
-// "Filter to exactly that chat and open it" (owner ask, 2026-09-03): the search box takes the
-// session id, which the list filter matches on, so the list shows that one row; select mode is
-// left, because in select mode the pane shows the composer rather than the transcript. A chat not
-// in the fetched window (the move dialogs list everything, the list defaults to 24 hours) widens
-// the period to everything and selects the row the moment the refetch carries it.
-function jumpToSession(s: Pick<SessionSummary, 'session_id' | 'source'>) {
-  if (selectMode.value) toggleSelectMode()
-  search.value = s.session_id
-  const hit = sessions.value.find((x) => x.session_id === s.session_id && x.source === s.source)
-  if (hit) {
-    select(hit)
-    return
-  }
-  if (sessionPeriod.value !== 'all') sessionPeriod.value = 'all'
-  const stop = watch(sessions, (list) => {
-    const found = list.find((x) => x.session_id === s.session_id && x.source === s.source)
-    if (!found) return
-    select(found)
-    stop()
-  })
-  // A chat that never arrives (deleted since, or filtered by a scope the search cannot override)
-  // must not leave a watcher running for the life of the view.
-  window.setTimeout(stop, 20_000)
-}
-function consumeSessionJump() {
-  const j = takeSessionJump()
-  if (j) jumpToSession(j)
-}
-onMounted(consumeSessionJump)
-watch(pendingSessionJump, (j) => {
-  if (j) consumeSessionJump()
+const { openFromBulkDialog } = useSessionJump({
+  sessions,
+  sessionPeriod,
+  selectMode,
+  toggleSelectMode,
+  search,
+  select,
+  clearBulkConfirm: () => {
+    bulkConfirm.value = null
+  },
 })
-function openFromBulkDialog(s: SessionSummary) {
-  bulkConfirm.value = null
-  jumpToSession(s)
-}
-
-// --- bulk actions on the checked rows ----------------------------------------------------------
-function copyCheckedIds() {
-  copy(checkedSessions.value.map((s) => s.session_id).join('\n'))
-}
-// Confirm before a bulk move: it stops live runs and archives rows across several accounts, and
-// "I right-clicked the wrong one" is not a mistake this should let through in one click.
-const bulkConfirm = ref<{ target: MigrateTarget; sessions: SessionSummary[] } | null>(null)
-function askBulkMigrate(target: MigrateTarget) {
-  // Done-marked rows are already handed off or migrated; the server refuses them as superseded,
-  // so leaving them in would only turn one confirmation into a column of error toasts.
-  const sessions = checkedSessions.value.filter((s) => s.source === 'claude' && !s.done)
-  bulkConfirm.value = { target, sessions }
-}
-async function runBulkMigrate() {
-  const job = bulkConfirm.value
-  if (!job) return
-  bulkConfirm.value = null
-  migrating.value = true
-  const id = `bulk-migrate-${job.target.ref}`
-  let ok = 0
-  const failed: string[] = []
-  try {
-    // One at a time on purpose: each migrate may stop a live process and wait for it, and the
-    // desktop app takes imports serially anyway. Parallel calls would only race its import lock.
-    for (const [i, s] of job.sessions.entries()) {
-      toast.loading(t('sessions.migrateBulkProgress', { done: i + 1, n: job.sessions.length }), {
-        id,
-      })
-      try {
-        const r = await api.migrateSession(s.session_id, job.target.ref, { confirmTitle: s.title })
-        if (r.ok) ok++
-        else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
-      } catch (e) {
-        failed.push(`${s.title}: ${e instanceof Error ? e.message : String(e)}`)
-      }
-    }
-  } finally {
-    migrating.value = false
-  }
-  if (failed.length)
-    console.warn('[agenthydra] bulk migrate: some chats could not be moved', failed)
-  const summary = t('sessions.migrateBulkDone', {
-    ok,
-    n: job.sessions.length,
-    name: job.target.name,
-  })
-  // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
-  // warning when nothing moved at all (sixteen 400s once read as a warning with a zero in it).
-  if (failed.length)
-    (ok === 0 ? toast.error : toast.warning)(
-      `${summary} ${t('sessions.migrateBulkSomeFailed', { failed: failed.length })} ${failed[0] ?? ''}`,
-      {
-        id,
-      },
-    )
-  else toast.success(summary, { id })
-  checkedIds.value = new Set()
-}
 
 const composerTargets = computed<ComposerTarget[]>(() => {
   if (selectMode.value)
@@ -1241,10 +435,6 @@ const readOnlySource = computed(() => {
 function onComposerSent(mode: 'now' | 'queued') {
   // the queue watcher above catches the status flip; this covers the first tokens
   if (mode === 'now' && selectedId.value) window.setTimeout(() => loadTail({ silent: true }), 1200)
-}
-
-function copy(text: string) {
-  navigator.clipboard?.writeText(text).catch(() => {})
 }
 </script>
 
