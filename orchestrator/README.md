@@ -152,6 +152,18 @@ the desktop never stops one on its own - is "chilling": `migrate_chat --stop-idl
 sweep's move and land lanes pass) stops that engine deliberately through `lib/enginelib`,
 confirms through the daemon that it is gone, and only then moves the chat. Without that, no
 desktop chat could ever move (live smoke, 2026-09-01: every one had a "live writer" forever).
+
+`--idle-wait N` (added 2026-09-03, opt-in, capped at 360s) covers the ONE refusal that time
+actually cures: the turn is finished but the five minutes are not up yet. The refusal already
+computed the exact deficit ("quiet 253s, needs 300s") and used to throw it away, so a caller
+re-ran the command on a guess - moving four chats cost ~20 minutes of wall clock, of which the
+mechanical moves were about a minute. The wait is the same 300 seconds either way; the flag
+just stops paying a round trip to discover it has not elapsed, and because quiet is wall-clock
+age, waiting out one chat ages the rest of a batch on the same clock. ⛔ It sleeps ONLY on
+`enginelib.R_TOO_SOON`: a WORKING engine, a STUCK engine and a live writer each still refuse
+in about a second, verified live. It is deliberately NOT passed by the 5-minute scheduled
+lanes - they hold a lock, and a blocking wait there would starve everything behind a skipped
+tick (a test asserts none of them mention the flag).
 The doctrine lane (bypass-permissions enforcement, every 2 minutes) and the dashboard are the
 two lanes exempt from the icon; they only ever change configuration or look.
 
@@ -406,7 +418,7 @@ so the split is: judgment shared, actions individual.
 | `balance.py` | observe | LOAD BALANCING as a plan, under THE USAGE BANDS (owner, 2026-08-31): keep every account at or under 85% on BOTH windows; 90% is the HARD GATE (evacuation mandatory); under the target, DELIBERATE FILL - accounts with room take migrations and simpler new chats up to a plan-sized ceiling (target minus leeway: Max 20x -2, Max 5x -5, Pro -10) so paid capacity is never wasted. Usage comes only from AgentHydra's own survey |
 | `sweep.py` | act (batch) | ONE command executes the whole predetermined mechanical plan within caps (`--all --yes`), through each act script's own rails - and lists the judgment queue it will never touch |
 | `audit_archived.py` | observe (+`--restore`) | were recently-archived chats really done? Enumerates the DESKTOP CHAT STORES on disk (not /api/sessions - that surface misses them), gates each archived chat's real tail, and names every one where work remained; `--restore` unarchives them. Born restoring v2's mis-archives, 2026-08-31 |
-| `chats.py` | observe (+`--move-to`) | every chat grouped by ACCOUNT (email, plan, app open?), filterable by account/instance/title/console-only, and the easy way to move chats between accounts - each move goes through migrate_chat's own rails, capped, plan-first |
+| `chats.py` | observe (+`--move-to`) | every chat grouped by ACCOUNT (email, plan, app open?), filterable by account/instance/title/console-only, and the easy way to move chats between accounts - each move goes through migrate_chat's own rails, capped, plan-first. Reads each child's JSON payload rather than guessing from its exit code, so "already lives there" (a no-op that also exits 0) is never counted as a landing, and the headline counts what LANDED (it used to print the PLANNED count in the past tense, so a fully-refused run announced "3 chat(s) moved" above three refusals). Forwards `--idle-wait`; deliberately has NO `--force`, because that is a person's word for ONE act and would otherwise be spent on every chat a substring selected |
 | `deliverylib.py` + `stage_reply.py` + `courier.py` | lib + act | THE COURIER, the last manual lane: an AI stages a decided reply (`stage_reply.py`), the courier types it into the chat through the app's own composer and proves the chat MOVED afterwards. Rails in order: held? breaker? resolves to one? never mid-turn? verify-snippet proves the right chat? then send, then confirm. Also `sweep.py --deliver` |
 | `schedule_jobs.py` | act (machine config) | run the recurring jobs on a timer via WINDOWS TASK SCHEDULER, registered from this repo, ALL EVERY 5 MINUTES (owner order) and windowless (VBS shim + pythonw): dashboard keepalive (starts it only if the port is dead), reconcile (observe only), to-do sweep (`odin discover` + `odin loki --file --apply`). Every tick logs to `state/logs/<job>.log` (rotated ~2MB). Dry-run by default; `--status` / `--pause` / `--resume` / `--remove` to inspect, silence or undo. **AgentHydra's own queue cannot host these** - headless runs are hard-refused (`headlessRunsAllowed()` returns literal false; owner law, "there is no setting for this"), and that queue launches chats, not scripts |
 | `holdlib.py` + `hold_chat.py` | lib + act | PER-CHAT AUTOMATION OPT-OUT: "leave this one to me". Demands a reason, outranks every gate verdict and the breaker, keeps the chat visible (held, not hidden), never blocks a deed a person asks for directly (`--force`). The safety valve the postmortems argue for - in place BEFORE anything runs unattended |

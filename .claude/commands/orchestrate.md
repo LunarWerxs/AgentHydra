@@ -18,6 +18,27 @@ callouts it hands back. Never re-implement any of it, never bypass a rails refus
 daemon calls. `orchestrator/README.md` explains anything that surprises you.
 Extra instructions, if any: $ARGUMENTS
 
+⛔ A TARGETED MOVE IS NOT A PASS - DO NOT ARM FOR IT (learned 2026-09-03, moving four chats
+off one account took ~20 minutes that should have been ~1). `migrate_chat` and `chats
+--move-to` are HAND-RUN acts: they do not read the tray icon at all (the icon gates the
+UNATTENDED lanes, which is the whole point of it), so arming buys a move nothing. What arming
+DOES do is resume `saturate`, whose job is to WAKE dormant chats - and a chat with a live
+engine cannot move until it has been quiet 300 seconds. So when the extra instructions say
+"move the chats from X" or anything else that is one deliberate act on named chats:
+  1. `orchestrator_switch {action:"armed"}` - if the icon is DOWN, leave it down.
+  2. `orchestrator_run {script:"chats", args:["--instance","<from>","--move-to","<to>"]}`
+     to PLAN, then the same with `"--yes","--idle-wait","330"` to do it. `--idle-wait`
+     sleeps out the ONE refusal time cures (turn finished, five minutes not yet up) inside the
+     command, instead of you re-running it on a guess; a working or stuck engine still refuses
+     in a second. The headline counts what LANDED - "N of M attempted" is a partial, read it.
+  3. A chat HELD as a duplicate still moves - `migrate_chat <id> --to <to> --force
+     --stop-idle --idle-wait 330`, one chat per command, because --force is a person's word
+     for ONE act and `chats` deliberately has no batch form of it. The hold survives the move.
+  4. Pick a destination WITHOUT a chat of the same title already on it (audit_twins names the
+     collisions) - identical titles on one account are what the sidebar cannot tell apart.
+  5. THEN, if the owner also wants the pass, arm. Never the other way round.
+Verify with `chats --account <from> --all`: the answer you want is "holds NO chats".
+
 THE PASS, in order:
 
 1. **`orchestrator_loop {}`** - DRY: census, gate, accounts and usage bands, the four lanes,
@@ -55,9 +76,11 @@ THE PASS, in order:
 STANDING FACTS - do not re-derive or re-build these:
 - ⛔ NOTHING ACTS WITHOUT THE TRAY ICON (owner, 2026-09-01: "it can't be running without the
   status bar icon, so I can terminate it if I want"). `scripts/tray.ps1` beats into
-  `state/tray.json` while it is up, and every acting script asks `lib/armlib` for that beat
+  `state/tray.json` while it is up, and every UNATTENDED lane asks `lib/armlib` for that beat
   before it moves, wakes, archives, presses or writes - observing is never gated, and the
-  default on any machine is OFF. So CHECK IT FIRST with `orchestrator_switch {action:"armed"}`:
+  default on any machine is OFF. (A hand-run `migrate_chat` or `chats --move-to` is the
+  person's own act and is NOT gated - that is why a targeted move must not arm, see the
+  top of this file.) So CHECK IT FIRST with `orchestrator_switch {action:"armed"}`:
   a disarmed fleet makes step 2 return blanket refusals that look exactly like an all-clear pass.
   ⛔ WHO MAY TURN IT ON (owner, 2026-09-02: "/orchestrate should tell it to spin up the
   orchestrator service, so I don't have to find the script"): a /orchestrate THE OWNER TYPED

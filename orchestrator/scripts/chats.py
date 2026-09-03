@@ -8,7 +8,15 @@ looking up ids by hand.
 
 Moving goes through migrate_chat.py's own rails, one chat at a time: holds, the live-writer
 refusal, the naming door, the breaker, and the verified landing all still apply. A move is
-never silent and never bulk-forced.
+never silent and never bulk-forced - there is deliberately NO --force here, because --force
+is a person's word for ONE act (it also overrides a hold), and a batch flag would spend that
+one word on every chat a substring happened to select. Held chats are moved one at a time
+through migrate_chat.py, on purpose.
+
+--idle-wait N is forwarded to each child: a desktop chat whose engine finished its turn but
+has not been quiet the required 5 minutes is waited out rather than refused. It never waits
+on a working or stuck engine. Default 0 - a wait is a separate word from an act, so --yes
+does not imply it.
 
 Usage:
   python chats.py                                  # every visible chat, grouped by account
@@ -22,6 +30,7 @@ Usage:
   python chats.py --search "rolodexter" --move-to 5claude          # PLAN the move
   python chats.py --search "rolodexter" --move-to 5claude --yes    # do it
   python chats.py --instance temp2 --move-to work --yes --max 3    # move a few at a time
+  python chats.py --instance work --move-to 11 --yes --idle-wait 330   # wait out young engines
 
 Exit:  0 listed, or every attempted move landed - 2 some moves were refused or did not land
        - 3 bad usage / unknown target - 1 daemon failure.
@@ -138,7 +147,7 @@ def render(rows: list[dict]) -> str:
     return "\n".join(L)
 
 
-def move(rows: list[dict], target: str, act: bool, cap: int) -> dict:
+def move(rows: list[dict], target: str, act: bool, cap: int, idle_wait: int = 0) -> dict:
     import migrate_chat
 
     try:
@@ -162,16 +171,32 @@ def move(rows: list[dict], target: str, act: bool, cap: int) -> dict:
             # had to drop down to migrate_chat.py to do the very thing this flag is for. It
             # only ever stops an engine the gate calls SAFELY IDLE; a working or stuck one
             # still refuses, and a live writer is never overridden.)
-            code, out = clilib.capture(migrate_chat.main,
-                                       [r["sessionId"], "--to", str(tgt.get("name")), "--stop-idle"])
+            argv_child = [r["sessionId"], "--to", str(tgt.get("name")), "--stop-idle", "--json"]
+            if idle_wait:
+                argv_child += ["--idle-wait", str(idle_wait)]
+            code, out = clilib.capture(migrate_chat.main, argv_child)
+            # Read the child's PAYLOAD, never infer the outcome from the exit code alone:
+            # migrate_chat also exits 0 for "nothing to do, it already lives there", which is
+            # a no-op, not a landing. `landed` is the only field that means the chat moved.
+            try:
+                pay = json.loads(out) if out else {}
+            except (ValueError, TypeError):
+                pay = {}
+            landed = bool(pay.get("landed"))
             results.append({
-                "sessionId": r["sessionId"], "title": r["title"], "exit": code, "ok": code == 0,
-                "outcome": ("landed and verified" if code == 0 else
+                "sessionId": r["sessionId"], "title": r["title"], "from": r["instance"],
+                "exit": code, "ok": code == 0, "landed": landed,
+                "stopReason": pay.get("stopReason"),
+                "outcome": ("landed and verified" if landed else
+                            "already there (no-op)" if code == 0 else
                             "deterministic refusal" if code == 3 else
                             "live writer - never moved" if code == 4 else
-                            "breaker" if code == 5 else
+                            "breaker - clear it and retry" if code == 5 else
                             "HELD by a person" if code == 6 else f"failed (exit {code})"),
-                "detail": out.splitlines()[0][:160] if out else "",
+                # The report carries the remedy (the breaker prints the exact attempts.py
+                # line to clear it); a 160-char truncation cut it off and left the operator
+                # with the bare word "breaker" and nowhere to go.
+                "detail": (pay.get("report") or out or "").strip()[:600],
             })
     return {
         "target": {"instance": tgt.get("name"), "num": tgt.get("num"),
@@ -196,6 +221,7 @@ def main(argv: list[str]) -> int:
     console_only = "--console" in argv
     account = instance = search = move_to = None
     cap = 10
+    idle_wait = 0
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -216,9 +242,31 @@ def main(argv: list[str]) -> int:
                     move_to = val
                 i += 1
                 break
-        if a == "--max" and i + 1 < len(argv):
-            cap = int(argv[i + 1])
+        # --max and --idle-wait take a NUMBER, and every way of getting that wrong used to be
+        # silent or fatal in the wrong direction: a trailing "--max" was dropped and the run
+        # proceeded on the default cap, "--max -1" sliced [: -1] and moved all but the last
+        # chat, and "--max abc" raised ValueError as a traceback instead of the documented
+        # exit 3. A flag that decides HOW MANY CHATS MOVE must never fail open.
+        for flag in ("--max", "--idle-wait"):
+            if a != flag:
+                continue
+            if i + 1 >= len(argv):
+                print(__doc__.strip(), file=sys.stderr)
+                return 3
+            try:
+                val = int(argv[i + 1])
+            except ValueError:
+                print(f"{flag} needs a whole number, got {argv[i + 1]!r}", file=sys.stderr)
+                return 3
+            if val < 0:
+                print(f"{flag} cannot be negative", file=sys.stderr)
+                return 3
+            if flag == "--max":
+                cap = val
+            else:
+                idle_wait = val
             i += 1
+            break
         i += 1
 
     try:
@@ -257,7 +305,18 @@ def main(argv: list[str]) -> int:
         print(json.dumps({"chats": rows}, indent=2) if as_json else render(rows))
         return 0
 
-    plan = move(rows, move_to, act, cap)
+    # A FILTER THAT MATCHED NOTHING MUST NOT EXIT 0 ON THE MOVE PATH. The guard above covers
+    # --account only, so `--search "typo" --move-to work --yes` moved nothing and reported
+    # success - indistinguishable from "everything was already there".
+    if not rows:
+        picked = ", ".join(f"{k}={v!r}" for k, v in (("--search", search), ("--instance", instance),
+                                                     ("--account", account),
+                                                     ("--console", console_only or None)) if v)
+        print(f"REFUSED: no chat matched {picked or 'the current filters'} - nothing to move.",
+              file=sys.stderr)
+        return 3
+
+    plan = move(rows, move_to, act, cap, idle_wait)
     if plan.get("error"):
         print(f"REFUSED: {plan['error']}", file=sys.stderr)
         return 3
@@ -267,19 +326,42 @@ def main(argv: list[str]) -> int:
         t = plan["target"]
         state = "OPEN" if t["isRunning"] else "CLOSED - it would need opening first"
         print(f"target: {t['instance']} ({t['email']}) - {state}")
-        print(f"{len(plan['planned'])} chat(s) {'moved' if act else 'would move'}"
+        # THE HEADLINE COUNTS WHAT LANDED, NOT WHAT WAS PLANNED. `planned` is fixed before a
+        # single child runs, so printing it in the past tense produced the literal line
+        # "3 chat(s) moved" above three refusals with nothing moved - a false green of exactly
+        # the kind this toolbox exists to refuse.
+        landed_ids = {r["sessionId"] for r in plan["results"] if r.get("landed")} if act else None
+        n = len(landed_ids) if act else len(plan["planned"])
+        print(f"{n} chat(s) {'landed' if act else 'would move'}"
+              + (f" of {len(plan['planned'])} attempted" if act and n != len(plan["planned"]) else "")
               + (f", {plan['alreadyThere']} already there" if plan["alreadyThere"] else "")
               + (f" (+{plan['overCap']} over --max)" if plan["overCap"] else ""))
         for p in plan["planned"]:
-            print(f"  {p['from'] or 'console'} -> {t['instance']}   {str(p['title'])[:60]}")
+            mark = "  -> " if landed_ids is None else (
+                "  -> " if p["sessionId"] in landed_ids else "  !! NOT MOVED  ")
+            print(f"{mark}{p['from'] or 'console'} -> {t['instance']}   {str(p['title'])[:60]}")
         for r in plan["results"]:
-            print(f"  {'✓' if r['ok'] else '✗'} {r['outcome']}: {str(r['title'])[:56]}")
-            if not r["ok"] and r["detail"]:
-                print(f"      {r['detail']}")
+            print(f"  {'✓' if r.get('landed') else '✗'} {r['outcome']}: {str(r['title'])[:56]}")
+            if not r.get("landed") and r["detail"]:
+                for line in r["detail"].splitlines():
+                    print(f"      {line}")
+            if r["exit"] == 5:
+                print(f"      fix: python orch.py attempts --clear migrate {r['sessionId']}")
+        # The one refusal a re-run WOULD cure is the one worth pointing at: a chat whose turn
+        # is finished but whose five quiet minutes are not up. Say so once, with the flag,
+        # rather than leaving the operator to re-run the whole batch on a guess.
+        young = [r for r in plan["results"] if r.get("stopReason") == "too_soon"]
+        if young and not idle_wait:
+            print(f"\n{len(young)} chat(s) refused only because the engine is not quiet enough YET - "
+                  "re-run with --idle-wait 330 and the command waits that out itself.")
         if not act:
             print("\nPLAN ONLY - nothing moved. Add --yes to do it.")
     if not act:
         return 0
+    # all() over an empty list is True, so a run that attempted nothing used to exit 0. A cap
+    # that held every movable chat back is not a clean sweep - say so.
+    if plan["overCap"] and not plan["results"]:
+        return 2
     return 0 if all(r["ok"] for r in plan["results"]) else 2
 
 

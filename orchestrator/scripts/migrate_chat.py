@@ -13,12 +13,24 @@ migration notice so the chat introduces itself in its new home); this script own
     target instance, or this script does not claim it.
 
 Usage: python migrate_chat.py <title fragment | session id> --to <instance num|name|dir>
-       [--title "New title"] [--force] [--stop-idle] [--json]
+       [--title "New title"] [--force] [--stop-idle] [--idle-wait N] [--json]
   --stop-idle   a chat whose engine is alive but IDLE (finished its turn, quiet 5+ min) is
                 stopped deliberately first, and confirmed gone, then moved - the desktop
                 never stops an engine on its own, so without this no desktop chat could ever
                 move (owner: "only chats that are stopped, waiting, chilling"). A working or
                 stuck engine still refuses. The sweep's move and land lanes pass it.
+  --idle-wait N wait up to N seconds (capped at 360) for a chat that is idle but has NOT YET
+                been quiet long enough, then move it. OPT-IN, and only ever satisfies that
+                ONE refusal: a working engine, a stuck engine and a live writer all still
+                refuse instantly. Needs --stop-idle; without it there is nothing to wait for.
+
+                Why it exists: the refusal already knows the exact deficit ("quiet 253s,
+                needs 300s"), and before this flag it threw that number away. An operator -
+                or an AI - then re-ran the command on a guess, so a 47-second wait cost
+                several minutes of round trips and four near-identical refusals. Waiting is
+                the same 300 seconds either way; this just stops paying a round trip to
+                discover it has not elapsed. Because quiet is wall-clock age, waiting out
+                one chat ages the rest of a batch on the same clock.
 Exit:  0 landed and verified - 3 deterministic refusal (chat/instance not resolvable,
        superseded, or a 400 the daemon will repeat) - 4 live writer (import rewrites the
        transcript; never overridden) - 5 breaker - 6 the chat is HELD (--force overrides) -
@@ -52,6 +64,14 @@ from lib import stamplib
 
 
 ELIDED = ("…", "...")
+
+# --idle-wait is bounded no matter what a caller passes. Six minutes covers the one thing it
+# is for (a 300s quiet window that has partly elapsed) with headroom; anything longer is a
+# caller wanting a scheduler, not a flag, and a script that can block indefinitely is a
+# script that will one day wedge a lane behind it.
+IDLE_WAIT_CAP = 360
+# How often to re-ask while waiting, when the deficit is not itself the answer.
+IDLE_WAIT_POLL_SECS = 15
 
 
 def _untruncated_title(session_id: str, shown: str | None) -> str | None:
@@ -197,6 +217,7 @@ def main(argv: list[str]) -> int:
     force = "--force" in argv
     stop_idle = "--stop-idle" in argv
     to = title = None
+    idle_wait = 0
     args: list[str] = []
     i = 0
     while i < len(argv):
@@ -207,6 +228,22 @@ def main(argv: list[str]) -> int:
             continue
         if a == "--title" and i + 1 < len(argv):
             title = argv[i + 1]
+            i += 2
+            continue
+        if a == "--idle-wait":
+            if i + 1 >= len(argv):
+                print(__doc__.strip(), file=sys.stderr)
+                return 3
+            try:
+                idle_wait = int(argv[i + 1])
+            except ValueError:
+                print(f"--idle-wait needs a whole number of seconds, got {argv[i + 1]!r}",
+                      file=sys.stderr)
+                return 3
+            if idle_wait < 0:
+                print("--idle-wait cannot be negative", file=sys.stderr)
+                return 3
+            idle_wait = min(idle_wait, IDLE_WAIT_CAP)  # bounded, always - never a hang
             i += 2
             continue
         if not a.startswith("--"):
@@ -266,19 +303,65 @@ def main(argv: list[str]) -> int:
         from lib import enginelib
 
         stopped = enginelib.stop_idle_engine(match)
+        # --idle-wait: the ONE refusal that more time actually cures is R_TOO_SOON - the
+        # engine finished its turn and simply has not been quiet long enough yet. Every
+        # other code (STUCK, WORKING, ungateable, unreadable) falls straight through to the
+        # refusal below at today's speed, because no amount of sleeping makes those safe.
+        deadline = time.time() + idle_wait
+        waited_for = 0
+        # The budget is bounded TWO ways on purpose - by the wall clock and by the seconds we
+        # have actually slept. Either alone is a way to hang: a clock that does not advance
+        # (a suspended host, a frozen mock) defeats the deadline, and a sleep that returns
+        # early defeats the counter. Whichever runs out first ends the wait.
+        while (idle_wait
+               and stopped.get("reason") == enginelib.R_TOO_SOON
+               and waited_for < idle_wait
+               and time.time() < deadline):
+            # Sleep the actual deficit when we know it, never a fixed poll: that is the whole
+            # point of carrying needs_secs, and it turns four guessed retries into one wait.
+            deficit = int(stopped.get("needs_secs") or 0) - int(stopped.get("quiet_secs") or 0)
+            left = min(idle_wait - waited_for, max(0, int(deadline - time.time())))
+            nap = max(1, min(deficit if deficit > 0 else IDLE_WAIT_POLL_SECS, left))
+            time.sleep(nap)
+            waited_for += nap
+            # ⛔ RE-RESOLVE, never re-use the pre-sleep match: stop_idle_engine taskkills
+            # match["live"]["pid"], and a pid captured minutes ago can have been recycled by
+            # the OS onto an unrelated process by the time we would act on it.
+            try:
+                match = resolve_for_migrate(args[0])
+            except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
+                return out({"landed": False,
+                            "report": f"migrate FAILED while waiting out the idle window: {err}"},
+                           as_json, 1)
+            if not match.get("live"):
+                stopped = {"stopped": True, "pid": None, "reason": enginelib.R_IDLE,
+                           "why": f"the engine exited on its own while waiting {int(waited_for)}s"}
+                break
+            # ⛔ A HOLD PLACED DURING THE WAIT MUST STILL LAND. The check above ran minutes
+            # ago; a person who said "leave this one alone" in the meantime outranks a move
+            # that was already in flight.
+            hold_now = holdlib.why_blocked(session_id)
+            if hold_now and not force:
+                return out({"landed": False, "held": True,
+                            "report": f"REFUSED: {hold_now}"}, as_json, 6)
+            stopped = enginelib.stop_idle_engine(match)
         if stopped.get("stopped"):
+            waited = f" after waiting {int(waited_for)}s" if waited_for else ""
             ledgerlib.annotate("migrate", session_id,
-                               f"stopped idle engine pid {stopped.get('pid')} ({stopped.get('why')})")
+                               f"stopped idle engine pid {stopped.get('pid')}{waited} ({stopped.get('why')})")
             try:
                 match = resolve_for_migrate(args[0])
             except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
                 return out({"landed": False, "report": f"migrate FAILED after stopping the idle engine: {err}"},
                            as_json, 1)
         else:
+            waited = f" (waited {int(waited_for)}s)" if waited_for else ""
             return out(
                 {"landed": False,
+                 "stopReason": stopped.get("reason"),
+                 "waitedSecs": int(waited_for),
                  "report": f"REFUSED: '{chat_title}' has a live engine and it is not safely idle - "
-                           f"{stopped.get('why')}. Not moving."},
+                           f"{stopped.get('why')}{waited}. Not moving."},
                 as_json, 4,
             )
     if match.get("live"):
@@ -291,6 +374,8 @@ def main(argv: list[str]) -> int:
                     "rewrites the transcript. Not even --force. Let it finish or stop it "
                     "deliberately first."
                 ),
+                # No stopReason: this refusal is reached WITHOUT --stop-idle, so nothing
+                # gated it. A caller must not read its absence as "waiting might help".
             },
             as_json,
             4,

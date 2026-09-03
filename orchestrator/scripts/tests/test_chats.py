@@ -85,12 +85,34 @@ class ChatsTest(unittest.TestCase):
         with mock.patch("migrate_chat.main", return_value=0) as m:
             plan = chats.move(rows, "beta", act=True, cap=10)
         # --stop-idle matches the sweep's move and land lanes (it only ever stops an engine the
-        # gate calls SAFELY IDLE; a working or stuck one still refuses). What must stay absent
-        # is --force: holds, the naming door, the breaker and the live-writer refusal all still
-        # apply to a move made from here.
-        m.assert_called_once_with(["s1", "--to", "beta", "--stop-idle"])
+        # gate calls SAFELY IDLE; a working or stuck one still refuses). --json is how the
+        # outcome is read from the child's PAYLOAD rather than guessed from its exit code.
+        # What must stay absent is --force: holds, the naming door, the breaker and the
+        # live-writer refusal all still apply to a move made from here, and --force is a
+        # person's word for ONE act - never a batch flag.
+        m.assert_called_once_with(["s1", "--to", "beta", "--stop-idle", "--json"])
         self.assertNotIn("--force", m.call_args.args[0])
+        self.assertNotIn("--idle-wait", m.call_args.args[0])  # opt-in; --yes never implies it
         self.assertTrue(plan["results"][0]["ok"])
+
+    def test_idle_wait_is_forwarded_only_when_asked_for(self):
+        rows = chats.collect(False, None, None, "rolodexter", False)
+        with mock.patch("migrate_chat.main", return_value=0) as m:
+            chats.move(rows, "beta", act=True, cap=10, idle_wait=330)
+        argv = m.call_args.args[0]
+        self.assertIn("--idle-wait", argv)
+        self.assertEqual(argv[argv.index("--idle-wait") + 1], "330")
+
+    def test_exit_zero_without_a_landing_is_a_no_op_not_a_move(self):
+        """migrate_chat exits 0 for 'it already lives there'. That is not a landing, and
+        counting it as one is how a headline claims chats moved that never did."""
+        rows = chats.collect(False, None, None, "rolodexter", False)
+        with mock.patch("migrate_chat.main", return_value=0):
+            plan = chats.move(rows, "beta", act=True, cap=10)
+        row = plan["results"][0]
+        self.assertTrue(row["ok"])          # the child did not fail...
+        self.assertFalse(row["landed"])     # ...but nothing moved, and the count reads this
+        self.assertIn("no-op", row["outcome"])
 
     def test_a_refusal_is_named_not_swallowed(self):
         rows = chats.collect(False, None, None, "rolodexter", False)

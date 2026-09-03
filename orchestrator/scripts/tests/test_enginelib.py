@@ -105,5 +105,57 @@ class StopIdleEngineTest(unittest.TestCase):
         self.assertIn("still lists the chat as live", got["why"])
 
 
+class IdleReportReasonTest(unittest.TestCase):
+    """The reason CODE is the half a caller may branch on; the prose is for humans.
+
+    --idle-wait sleeps on exactly one code (R_TOO_SOON) and must fall straight through on
+    every other. If a refusal that time cannot cure ever came back wearing R_TOO_SOON, a
+    waiting caller would sit on a STUCK engine for its whole budget and then refuse anyway -
+    so these pin the mapping, and pin that ONLY the waitable code carries a deadline."""
+
+    def test_too_soon_is_the_only_code_that_carries_a_deficit(self):
+        with mock.patch.object(gatelib, "gate_match", return_value=_verdict(idle={"quiet_secs": 120})):
+            rep = enginelib.idle_report(MATCH)
+        self.assertEqual(rep["reason"], enginelib.R_TOO_SOON)
+        self.assertEqual(rep["quiet_secs"], 120)
+        self.assertEqual(rep["needs_secs"], enginelib.IDLE_STOP_SECS)
+        self.assertFalse(rep["idle"])
+
+    def test_a_stuck_engine_is_never_waitable(self):
+        with mock.patch.object(gatelib, "gate_match",
+                               return_value=_verdict(idle={"quiet_secs": 9999},
+                                                     stalled={"why": "shell call unanswered"})):
+            rep = enginelib.idle_report(MATCH)
+        self.assertEqual(rep["reason"], enginelib.R_STUCK)
+        self.assertIsNone(rep["needs_secs"])
+
+    def test_a_working_engine_is_never_waitable(self):
+        with mock.patch.object(gatelib, "gate_match", return_value=_verdict(cause="alive (quiet 12s)")):
+            rep = enginelib.idle_report(MATCH)
+        self.assertEqual(rep["reason"], enginelib.R_WORKING)
+        self.assertIsNone(rep["needs_secs"])
+
+    def test_unreadable_and_ungateable_are_their_own_codes(self):
+        with mock.patch.object(gatelib, "gate_match", return_value=None):
+            self.assertEqual(enginelib.idle_report(MATCH)["reason"], enginelib.R_UNGATEABLE)
+        with mock.patch.object(gatelib, "gate_match", side_effect=hydralib.DaemonError("/x", None, "down")):
+            self.assertEqual(enginelib.idle_report(MATCH)["reason"], enginelib.R_UNREADABLE)
+        self.assertEqual(enginelib.idle_report({**MATCH, "live": None})["reason"], enginelib.R_NO_ENGINE)
+
+    def test_idle_verdict_still_answers_the_old_two_tuple(self):
+        """Every existing caller (groundskeeper, the lanes) unpacks two values."""
+        with mock.patch.object(gatelib, "gate_match", return_value=_verdict(idle={"quiet_secs": 900})):
+            idle, why = enginelib.idle_verdict(MATCH)
+        self.assertTrue(idle)
+        self.assertIn("quiet 900s", why)
+
+    def test_a_refusal_from_stop_idle_engine_carries_the_code(self):
+        with mock.patch.object(gatelib, "gate_match", return_value=_verdict(idle={"quiet_secs": 40})):
+            got = enginelib.stop_idle_engine(MATCH)
+        self.assertFalse(got["stopped"])
+        self.assertEqual(got["reason"], enginelib.R_TOO_SOON)
+        self.assertEqual(got["needs_secs"] - got["quiet_secs"], enginelib.IDLE_STOP_SECS - 40)
+
+
 if __name__ == "__main__":
     unittest.main()
