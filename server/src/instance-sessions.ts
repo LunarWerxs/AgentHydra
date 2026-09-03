@@ -49,10 +49,30 @@ export interface SessionMeta {
    *  some tools, which under the zero-click law is a silent deadlock rather than a safeguard.
    *  Free to collect: this scan already parses every metadata file. */
   permissionMode: string | null
+  /** Every transcript id this chat has RETIRED. The desktop app rolls a chat onto a new
+   *  cliSessionId when it compacts, and records the old one here - the app's own word that those
+   *  transcripts are this conversation's past, not other chats. Empty for a chat that never rolled
+   *  and for an imported chat (the import writes a fresh record; the lineage then survives only in
+   *  the archived tombstone the migration left behind, which is why retired claims are collected
+   *  from EVERY file, not only the winner of setPreferred). */
+  priorCliSessionIds: string[]
+}
+
+/** One retired-id claim: the transcript it rolled onto, and whether the row that said so is a
+ *  tombstone. Archived-ness only decides a CONFLICT (two rows naming different successors for one
+ *  id); a tombstone's claim stands on its own, see SessionMeta.priorCliSessionIds. */
+interface RetiredClaim {
+  to: string
+  archived: boolean
 }
 
 const TTL_MS = 15_000
-let cache: { at: number; map: Map<string, SessionMeta>; origins: OriginRow[] } | null = null
+let cache: {
+  at: number
+  map: Map<string, SessionMeta>
+  origins: OriginRow[]
+  retired: Map<string, RetiredClaim>
+} | null = null
 
 /**
  * One metadata file reduced to WHERE and WHEN its conversation started.
@@ -116,6 +136,7 @@ function scanStore(
   label: string,
   map: Map<string, SessionMeta>,
   origins: OriginRow[],
+  retired: Map<string, RetiredClaim>,
 ): void {
   const dir = join(userDataDir, 'claude-code-sessions')
   if (!existsSync(dir)) return
@@ -132,6 +153,11 @@ function scanStore(
       // second lookup key and then discarded; keeping it is what lets a caller address this
       // chat at all.
       const chatId = rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null
+      const prior = Array.isArray(meta?.priorCliSessionIds)
+        ? (meta.priorCliSessionIds as unknown[]).filter(
+            (p): p is string => typeof p === 'string' && !!p && p !== id,
+          )
+        : []
       const entry: SessionMeta = {
         instance: label,
         archived,
@@ -140,7 +166,17 @@ function scanStore(
         title,
         chatId,
         cliSessionId: typeof id === 'string' && id ? id : null,
+        priorCliSessionIds: prior,
       }
+      // THE RETIRED IDS, from every file including tombstones. A live row's claim beats an
+      // archived row's when they disagree about one id; otherwise first seen stands, so the answer
+      // cannot flip between two scans over nothing having changed (the same reason setPreferred
+      // breaks its ties deterministically).
+      if (typeof id === 'string' && id)
+        for (const p of prior) {
+          const have = retired.get(p)
+          if (!have || (have.archived && !archived)) retired.set(p, { to: id, archived })
+        }
       // TWO KEYS, one scan. A chat IMPORTED into the app is filed as `local_<cliSessionId>.json`,
       // so its filename IS the session id; a chat CREATED in the app is filed under the app's own
       // id and names the session only INSIDE, as cliSessionId. Indexing both means every lookup
@@ -235,6 +271,7 @@ export function resolveInstanceByOrigin(cwd: string, createdAt: number | null): 
       title: null,
       chatId: null,
       cliSessionId: null,
+      priorCliSessionIds: [],
     }
   }
   return found
@@ -244,6 +281,24 @@ export function resolveInstanceByOrigin(cwd: string, createdAt: number | null): 
  *  instanceSessionMap() below and the archived lookup in sessions.ts derive from this. */
 export function sessionMetaMap(): Map<string, SessionMeta> {
   return scanAll().map
+}
+
+/**
+ * Retired transcript id -> the id its chat rolled onto, by the desktop's own record.
+ *
+ * WHY THE SESSION LIST NEEDS THIS AS WELL AS THE CONTINUATION DETECTOR. The detector
+ * (session-continuations.ts) knows a continuation by the compaction marker among a transcript's
+ * first records. The desktop app rolls a chat another way: it opens the new transcript by REPLAYING
+ * the retained history into it and only then writes the marker, so the marker sits hundreds of
+ * records deep (1,501 on the chat this was measured on, 2026-09-03) and the detector never meets
+ * it. One chat, "RusTor", was three rows under two titles - the owner's "compacted chats become
+ * multiple entries". The app's metadata already states the lineage; this is that statement, keyed
+ * the way sessions.ts applies it. Same single scan as everything else here.
+ */
+export function retiredSessionIds(): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const [id, claim] of scanAll().retired) out.set(id, claim.to)
+  return out
 }
 
 /** The same single scan, seen from the other side: every metadata row's (cwd, createdAt). */
@@ -270,24 +325,30 @@ export function findDesktopChat(sessionId: string): SessionMeta | null {
   return sessionMetaMap().get(sessionId) ?? null
 }
 
-function scanAll(): { map: Map<string, SessionMeta>; origins: OriginRow[] } {
+function scanAll(): {
+  map: Map<string, SessionMeta>
+  origins: OriginRow[]
+  retired: Map<string, RetiredClaim>
+} {
   const now = performance.now()
   if (cache && now - cache.at < TTL_MS) return cache
 
   const map = new Map<string, SessionMeta>()
   const origins: OriginRow[] = []
-  scanStore(defaultClaudeUserDataDir(), 'default', map, origins)
+  const retired = new Map<string, RetiredClaim>()
+  scanStore(defaultClaudeUserDataDir(), 'default', map, origins, retired)
   const root = instancesRoot()
   try {
     if (existsSync(root)) {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory()) scanStore(join(root, entry.name), entry.name, map, origins)
+        if (entry.isDirectory())
+          scanStore(join(root, entry.name), entry.name, map, origins, retired)
       }
     }
   } catch {
     /* best-effort: an unreadable instances root just means no labels */
   }
-  cache = { at: now, map, origins }
+  cache = { at: now, map, origins, retired }
   return cache
 }
 

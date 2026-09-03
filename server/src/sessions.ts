@@ -1,6 +1,11 @@
 import { db } from './db'
 import { readForeignSession } from './foreign-sessions'
-import { resolveInstanceByOrigin, type SessionMeta, sessionMetaMap } from './instance-sessions'
+import {
+  resolveInstanceByOrigin,
+  retiredSessionIds,
+  type SessionMeta,
+  sessionMetaMap,
+} from './instance-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
 import { createLimitStopTracker, type LimitStop } from './rate-limit-signal'
 import { classifyEnding, endingEventText, type SessionEnding } from './session-ending'
@@ -636,6 +641,39 @@ function doneMarkMap(): Map<string, boolean> {
  * superseded transcripts stay in the index, exactly as subagents do, so nothing that counts spend
  * loses sight of them.
  */
+/**
+ * The desktop's OWN word on which transcripts are one conversation, laid over the index as
+ * `supersededBy` links for collapseContinuations to fold.
+ *
+ * The detector behind `supersededBy` (session-continuations.ts) reads a transcript's first records
+ * for the compaction marker. The desktop app rolls a chat differently: it opens the new transcript
+ * by REPLAYING the retained history into it and writes the marker only after that, so the marker
+ * sits hundreds of records deep and the detector never sees it. Measured 2026-09-03 on one chat
+ * ("RusTor"): three transcripts, the marker at record 1,501 of the newest, three rows on screen
+ * under two titles - the owner's "compacted chats become multiple entries".
+ *
+ * The app does record every id it retired (`priorCliSessionIds`, see retiredSessionIds), and that
+ * record is the authority - it is what the sidebar reads to show ONE chat. Only gaps are filled: a
+ * link the detector already proved from the transcript itself stands, a link to a transcript's own
+ * id is ignored, and a store without a single rolled chat gets its array back untouched, so the
+ * common case pays nothing.
+ */
+export function withDesktopContinuations(
+  files: TranscriptFile[],
+  retired: Map<string, string>,
+): TranscriptFile[] {
+  if (retired.size === 0) return files
+  let changed = false
+  const out = files.map((f) => {
+    if (f.source !== 'claude' || f.supersededBy) return f
+    const by = retired.get(f.session_id)
+    if (!by || by === f.session_id) return f
+    changed = true
+    return { ...f, supersededBy: by }
+  })
+  return changed ? out : files
+}
+
 export function collapseContinuations(files: TranscriptFile[]): {
   rows: TranscriptFile[]
   /**
@@ -800,7 +838,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   // whether a conversation was continued is a fact about the store, and deciding it against an
   // already-filtered list would put a superseded transcript back on screen merely because the
   // current scope hid the session that replaced it.
-  const continued = collapseContinuations(files)
+  const continued = collapseContinuations(withDesktopContinuations(files, retiredSessionIds()))
   files = continued.rows
   /**
    * Every session id this row speaks for: its own, plus any transcript it absorbed by continuing it.
