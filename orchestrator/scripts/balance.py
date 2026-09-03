@@ -118,6 +118,109 @@ def _age_hours(captured_at: str | None) -> float | None:
         return None
 
 
+def _resolve_account_identity(row: dict, snap: dict,
+                               fleet_by_dir: dict) -> tuple[str | None, str | None, str, dict | None]:
+    """Email/plan/identity for one survey row, fleet-joined when it is a desktop row whose
+    directory matches a running instance. Returns (email, plan, identity, fleet instance-or-None)."""
+    email, plan = _parse_account_string(str(snap.get("account") or ""))
+    finst = fleet_by_dir.get(str(row.get("id") or "").lower()) if row.get("kind") == "desktop" else None
+    if finst:
+        acct = finst.get("account") or {}
+        email = acct.get("email") or email
+        plan = acct.get("planLabel") or plan
+    email = email.strip().lower() if email else email
+    identity = email or f"{row.get('kind')}:{row.get('label') or row.get('id')}"
+    return email, plan, identity, finst
+
+
+def _account_entry_from_row(row: dict, snap: dict, email: str | None, plan: str | None,
+                             identity: str) -> dict:
+    """Build one fresh account entry (before any dedup merge) from a survey row."""
+    reason = (row.get("result") or {}).get("reason")
+    advice = row.get("advice") or {}
+    age = _age_hours(snap.get("capturedAt"))
+    return {
+        "email": email,
+        "identity": identity,
+        "plan": plan,
+        "kind": row.get("kind"),
+        "instances": [],
+        "fiveHourPct": (snap.get("session") or {}).get("pct"),
+        "fiveHourResets": (snap.get("session") or {}).get("resets"),
+        "weeklyAllPct": (snap.get("weekAll") or {}).get("pct"),
+        "weeklyModelPct": (snap.get("weekModel") or {}).get("pct"),
+        "weeklyModelLabel": (snap.get("weekModel") or {}).get("label"),
+        "weeklyResets": (snap.get("weekAll") or {}).get("resets"),
+        "capturedAt": snap.get("capturedAt"),
+        "ageHours": age,
+        "severity": advice.get("severity"),
+        "bindingPct": advice.get("bindingPct"),
+        "shouldOffload": bool(advice.get("shouldOffload")),
+        "adviceText": advice.get("advice"),
+        "readingOk": reason == "ok" and (snap.get("weekAll") or {}).get("pct") is not None,
+        "fresh": age is not None and age <= FRESH_HOURS,
+    }
+
+
+def _fleet_instance_entry(finst: dict | None) -> dict | None:
+    if not finst:
+        return None
+    return {
+        "num": finst.get("num"),
+        "name": finst.get("name"),
+        "isRunning": bool(finst.get("isRunning")),
+        "signedIn": bool(finst.get("signedIn")),
+    }
+
+
+_FRESHEST_READING_FIELDS = (
+    "fiveHourPct", "fiveHourResets", "weeklyAllPct", "weeklyModelPct",
+    "weeklyModelLabel", "weeklyResets", "capturedAt", "ageHours",
+    "severity", "bindingPct", "shouldOffload", "adviceText",
+    "readingOk", "fresh",
+)
+
+
+def _merge_account_entry(out: dict[str, dict], identity: str, entry: dict,
+                          inst_entry: dict | None) -> None:
+    """Fold one row's entry into `out`, deduped by identity: the freshest reading wins the
+    numbers, and every distinct fleet instance seen for that identity is kept."""
+    prev = out.get(identity)
+    if prev is None:
+        if inst_entry:
+            entry["instances"].append(inst_entry)
+        out[identity] = entry
+        return
+    if inst_entry and inst_entry not in prev["instances"]:
+        prev["instances"].append(inst_entry)
+    age = entry["ageHours"]
+    if age is not None and (prev["ageHours"] is None or age < prev["ageHours"]):
+        for k in _FRESHEST_READING_FIELDS:
+            prev[k] = entry[k]
+
+
+def _finalize_account_row(r: dict) -> None:
+    """usable for planning: a fresh, successful reading, on a desktop account with a
+    signed-in instance. THE BANDS (constants above): peak across 5-hour/weekly/binding, the
+    band verdict, and how much deliberate-fill room remains under this plan's ceiling."""
+    r["usable"] = bool(
+        r["readingOk"] and r["fresh"] and r["kind"] == "desktop"
+        and any(i["signedIn"] for i in r["instances"])
+    )
+    r["open"] = any(i["isRunning"] for i in r["instances"])
+    r["peakPct"] = peak_pct(r) if r["readingOk"] else None
+    r["band"] = band_of(r["peakPct"]) if r["readingOk"] else "unknown"
+    r["fillCeiling"] = fill_ceiling(r["plan"])
+    r["roomPct"] = (max(0, r["fillCeiling"] - r["peakPct"])
+                    if r["peakPct"] is not None else None)
+    # Pressure on a CLOSED account is a SELF-NOTE for the orchestrator (do not OPEN that
+    # one), never a notification for the owner - a closed app burns nothing. Pressure on
+    # an OPEN account is the actionable kind (owner directive, 2026-08-31).
+    r["underPressure"] = bool(
+        r["readingOk"] and (r["shouldOffload"] or r["band"] in ("over-soft", "over-hard"))
+    )
+
+
 def accounts_overview(survey: dict, fleet: dict) -> list[dict]:
     """One row per ACCOUNT (deduped by email; freshest reading wins), fleet-joined so desktop
     rows carry real instance names, running state and sign-in."""
@@ -125,82 +228,13 @@ def accounts_overview(survey: dict, fleet: dict) -> list[dict]:
     out: dict[str, dict] = {}
     for row in survey.get("rows", []):
         snap = (row.get("result") or {}).get("snapshot") or {}
-        reason = (row.get("result") or {}).get("reason")
-        advice = row.get("advice") or {}
-        email, plan = _parse_account_string(str(snap.get("account") or ""))
-        finst = fleet_by_dir.get(str(row.get("id") or "").lower()) if row.get("kind") == "desktop" else None
-        if finst:
-            acct = finst.get("account") or {}
-            email = acct.get("email") or email
-            plan = acct.get("planLabel") or plan
-        email = email.strip().lower() if email else email
-        identity = email or f"{row.get('kind')}:{row.get('label') or row.get('id')}"
-        age = _age_hours(snap.get("capturedAt"))
-        entry = {
-            "email": email,
-            "identity": identity,
-            "plan": plan,
-            "kind": row.get("kind"),
-            "instances": [],
-            "fiveHourPct": (snap.get("session") or {}).get("pct"),
-            "fiveHourResets": (snap.get("session") or {}).get("resets"),
-            "weeklyAllPct": (snap.get("weekAll") or {}).get("pct"),
-            "weeklyModelPct": (snap.get("weekModel") or {}).get("pct"),
-            "weeklyModelLabel": (snap.get("weekModel") or {}).get("label"),
-            "weeklyResets": (snap.get("weekAll") or {}).get("resets"),
-            "capturedAt": snap.get("capturedAt"),
-            "ageHours": age,
-            "severity": advice.get("severity"),
-            "bindingPct": advice.get("bindingPct"),
-            "shouldOffload": bool(advice.get("shouldOffload")),
-            "adviceText": advice.get("advice"),
-            "readingOk": reason == "ok" and (snap.get("weekAll") or {}).get("pct") is not None,
-            "fresh": age is not None and age <= FRESH_HOURS,
-        }
-        inst_entry = None
-        if finst:
-            inst_entry = {
-                "num": finst.get("num"),
-                "name": finst.get("name"),
-                "isRunning": bool(finst.get("isRunning")),
-                "signedIn": bool(finst.get("signedIn")),
-            }
-        prev = out.get(identity)
-        if prev is None:
-            if inst_entry:
-                entry["instances"].append(inst_entry)
-            out[identity] = entry
-        else:
-            if inst_entry and inst_entry not in prev["instances"]:
-                prev["instances"].append(inst_entry)
-            # freshest reading wins the numbers
-            if (age is not None) and (prev["ageHours"] is None or age < prev["ageHours"]):
-                for k in ("fiveHourPct", "fiveHourResets", "weeklyAllPct", "weeklyModelPct",
-                          "weeklyModelLabel", "weeklyResets", "capturedAt", "ageHours",
-                          "severity", "bindingPct", "shouldOffload", "adviceText",
-                          "readingOk", "fresh"):
-                    prev[k] = entry[k]
+        email, plan, identity, finst = _resolve_account_identity(row, snap, fleet_by_dir)
+        entry = _account_entry_from_row(row, snap, email, plan, identity)
+        inst_entry = _fleet_instance_entry(finst)
+        _merge_account_entry(out, identity, entry, inst_entry)
     rows = list(out.values())
-    # usable for planning: a fresh, successful reading, on a desktop account with a signed-in instance
     for r in rows:
-        r["usable"] = bool(
-            r["readingOk"] and r["fresh"] and r["kind"] == "desktop"
-            and any(i["signedIn"] for i in r["instances"])
-        )
-        r["open"] = any(i["isRunning"] for i in r["instances"])
-        # THE BANDS (constants above): peak across 5-hour/weekly/binding, the band verdict,
-        # and how much deliberate-fill room remains under this plan's ceiling.
-        r["peakPct"] = peak_pct(r) if r["readingOk"] else None
-        r["band"] = band_of(r["peakPct"]) if r["readingOk"] else "unknown"
-        r["fillCeiling"] = fill_ceiling(r["plan"])
-        r["roomPct"] = (max(0, r["fillCeiling"] - r["peakPct"])
-                        if r["peakPct"] is not None else None)
-        # Pressure on a CLOSED account is a SELF-NOTE for the orchestrator (do not OPEN that
-        # one), never a notification for the owner - a closed app burns nothing. Pressure on
-        # an OPEN account is the actionable kind (owner directive, 2026-08-31).
-        r["underPressure"] = bool(
-            r["readingOk"] and (r["shouldOffload"] or r["band"] in ("over-soft", "over-hard"))
-        )
+        _finalize_account_row(r)
     rows.sort(key=lambda r: (r["peakPct"] if r["peakPct"] is not None else 999,
                              -_plan_weight(r["plan"])))
     return rows
@@ -504,6 +538,74 @@ def build(plan: dict | None = None) -> dict:
     }
 
 
+def _fmt_pct(v) -> str:
+    return "-" if v is None else f"{v}%"
+
+
+def _render_account_line(a: dict) -> str:
+    stale = "" if a["fresh"] else ("  ⚠ STALE reading" if a["readingOk"] else "  ⚠ no reading")
+    # Pressure on an OPEN account is actionable; on a closed one it is only the
+    # orchestrator's own reminder not to open it (owner: "never notify me about those").
+    press = ""
+    if a["underPressure"]:
+        what = ("HARD GATE (>=90%) - EVACUATE" if a.get("band") == "over-hard"
+                else f"over the {SOFT_TARGET_PCT}% target")
+        press = (f"  ⛔ {what}" if a["open"]
+                 else "  🤖 self-note: do NOT open this one")
+    insts = ",".join(i["name"] + ("*" if i["isRunning"] else "") for i in a["instances"]) or a["kind"]
+    return (f"  {a['identity']:<34} {a['plan'] or '?':<8} 5h {_fmt_pct(a['fiveHourPct']):>4}  "
+            f"weekly {_fmt_pct(a['weeklyAllPct']):>4}  model {_fmt_pct(a['weeklyModelPct']):>4}  "
+            f"[{insts}]{press}{stale}")
+
+
+def _render_use_next_lines(b: dict) -> list[str]:
+    if b["useNext"]:
+        lines = ["HAND OFF TO NEXT (open accounts first, most fill-room wins - open a fresh one only when you must):"]
+        for i, a in enumerate(b["useNext"]):
+            tag = "OPEN" if a["open"] else "closed - would need OPENING"
+            lines.append(f"  {i + 1}. {a['email']} ({a['plan']}, {tag}) - peak {a['peakPct']}%, "
+                         f"~{a['roomPct']}% room under its ceiling, 5h {a['fiveHourPct']}%, "
+                         f"weekly {a['weeklyAllPct']}% -> instance {a['instance']}")
+        return lines
+    usable = [a for a in b["accounts"] if a.get("usable")]
+    if usable:
+        return [f"HAND OFF: {len(usable)} account(s) are usable but ALL sit past their "
+                f"fill ceilings (target {SOFT_TARGET_PCT}% minus plan leeway) - everyone is "
+                "busy; wait for a reset rather than hunting a data problem."]
+    return ["HAND OFF: no usable account with a fresh reading - fix that before planning anything."]
+
+
+def _render_load_balancing_lines(b: dict) -> list[str]:
+    lines = [f"LOAD BALANCING: {b['likelihood']['level'].upper()} - {b['likelihood']['why']}"]
+    for m in b["moves"]:
+        lines.append(f"  MOVE '{m['title']}'  {m['from']['instance']} ({m['from']['email']}, "
+                     f"{m['from']['bindingPct']}%) -> {m['to']['instance']} ({m['to']['email']}, "
+                     f"{m['to']['bindingPct']}%)")
+        lines.append(f"    why: {m['why']}")
+        lines.append(f"    run: {m['command']}")
+    return lines
+
+
+def _render_fill_lines(b: dict) -> list[str]:
+    if not b.get("fill"):
+        return []
+    lines = ["", f"DELIBERATE FILL (owner rule: never waste paid capacity under the {SOFT_TARGET_PCT}% target):"]
+    for f in b["fill"]:
+        lines.append(f"  {f['email']} ({f['plan']}, {f['instance']}): peak {f['peakPct']}% - {f['note']}")
+    return lines
+
+
+def _render_console_stray_lines(b: dict) -> list[str]:
+    if not b["consoleStrays"]:
+        return []
+    lines = ["", "CONSOLE STRAYS - invisible to the owner, MUST be landed in the desktop (owner mandate):"]
+    for c in b["consoleStrays"]:
+        lines.append(f"  - {c['title']} ({c['kind']})" + (f"  -> {c['to']['instance']}" if c.get("to") else ""))
+        if c.get("command"):
+            lines.append(f"    run: {c['command']}")
+    return lines
+
+
 def render(b: dict) -> str:
     L = [
         f"{b['activeAccounts']} usable desktop account(s) of {b['totalLogins']} logins "
@@ -512,56 +614,13 @@ def render(b: dict) -> str:
         "ACCOUNTS (freshest reading; '-' = never measured, which is NOT 'plenty left'):",
     ]
     for a in b["accounts"]:
-        pct = lambda v: "-" if v is None else f"{v}%"
-        stale = "" if a["fresh"] else ("  ⚠ STALE reading" if a["readingOk"] else "  ⚠ no reading")
-        # Pressure on an OPEN account is actionable; on a closed one it is only the
-        # orchestrator's own reminder not to open it (owner: "never notify me about those").
-        press = ""
-        if a["underPressure"]:
-            what = ("HARD GATE (>=90%) - EVACUATE" if a.get("band") == "over-hard"
-                    else f"over the {SOFT_TARGET_PCT}% target")
-            press = (f"  ⛔ {what}" if a["open"]
-                     else "  🤖 self-note: do NOT open this one")
-        insts = ",".join(i["name"] + ("*" if i["isRunning"] else "") for i in a["instances"]) or a["kind"]
-        L.append(f"  {a['identity']:<34} {a['plan'] or '?':<8} 5h {pct(a['fiveHourPct']):>4}  "
-                 f"weekly {pct(a['weeklyAllPct']):>4}  model {pct(a['weeklyModelPct']):>4}  "
-                 f"[{insts}]{press}{stale}")
+        L.append(_render_account_line(a))
     L.append("")
-    if b["useNext"]:
-        L.append("HAND OFF TO NEXT (open accounts first, most fill-room wins - open a fresh one only when you must):")
-        for i, a in enumerate(b["useNext"]):
-            tag = "OPEN" if a["open"] else "closed - would need OPENING"
-            L.append(f"  {i + 1}. {a['email']} ({a['plan']}, {tag}) - peak {a['peakPct']}%, "
-                     f"~{a['roomPct']}% room under its ceiling, 5h {a['fiveHourPct']}%, "
-                     f"weekly {a['weeklyAllPct']}% -> instance {a['instance']}")
-    else:
-        usable = [a for a in b["accounts"] if a.get("usable")]
-        if usable:
-            L.append(f"HAND OFF: {len(usable)} account(s) are usable but ALL sit past their "
-                     f"fill ceilings (target {SOFT_TARGET_PCT}% minus plan leeway) - everyone is "
-                     "busy; wait for a reset rather than hunting a data problem.")
-        else:
-            L.append("HAND OFF: no usable account with a fresh reading - fix that before planning anything.")
+    L.extend(_render_use_next_lines(b))
     L.append("")
-    L.append(f"LOAD BALANCING: {b['likelihood']['level'].upper()} - {b['likelihood']['why']}")
-    for m in b["moves"]:
-        L.append(f"  MOVE '{m['title']}'  {m['from']['instance']} ({m['from']['email']}, "
-                 f"{m['from']['bindingPct']}%) -> {m['to']['instance']} ({m['to']['email']}, "
-                 f"{m['to']['bindingPct']}%)")
-        L.append(f"    why: {m['why']}")
-        L.append(f"    run: {m['command']}")
-    if b.get("fill"):
-        L.append("")
-        L.append(f"DELIBERATE FILL (owner rule: never waste paid capacity under the {SOFT_TARGET_PCT}% target):")
-        for f in b["fill"]:
-            L.append(f"  {f['email']} ({f['plan']}, {f['instance']}): peak {f['peakPct']}% - {f['note']}")
-    if b["consoleStrays"]:
-        L.append("")
-        L.append("CONSOLE STRAYS - invisible to the owner, MUST be landed in the desktop (owner mandate):")
-        for c in b["consoleStrays"]:
-            L.append(f"  - {c['title']} ({c['kind']})" + (f"  -> {c['to']['instance']}" if c.get("to") else ""))
-            if c.get("command"):
-                L.append(f"    run: {c['command']}")
+    L.extend(_render_load_balancing_lines(b))
+    L.extend(_render_fill_lines(b))
+    L.extend(_render_console_stray_lines(b))
     if b.get("planIncomplete"):
         L.append("")
         L.append("⚠ the chat plan under this was INCOMPLETE (a liveness read failed) - treat the")
