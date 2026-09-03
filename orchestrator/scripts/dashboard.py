@@ -19,6 +19,7 @@ import json
 import sys
 import time
 import webbrowser
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -143,6 +144,86 @@ def decide(verdict: dict | None, breaker: dict | None, app_running: bool, why_un
     }
 
 
+@dataclass
+class _RowEvaluation:
+    """One row of the plan, already gated and decided. incomplete marks a failed liveness
+    read (the row still gets a best-effort chat entry, but the plan as a whole is not
+    'complete')."""
+    chat: dict
+    decision_kind: str
+    incomplete: bool
+
+
+def _gate_row(sid: str, row: dict) -> tuple[dict | None, str, bool]:
+    """Resolve one row's gate verdict. Returns (verdict, why_ungated, incomplete)."""
+    try:
+        live = hydralib.live_for(sid)
+        verdict = gatelib.gate(sid, row.get("transcript_path") or "", live)
+        why_ungated = ""
+        if verdict is None:
+            _, why_ungated = gatelib.gateable(row.get("transcript_path") or "")
+        return verdict, why_ungated, False
+    except hydralib.DaemonError as err:
+        return None, f"liveness read failed ({err}) - no verdict without it", True
+
+
+def _breaker_for(verdict: dict | None, sid: str) -> dict | None:
+    """The archive circuit-breaker only ever applies to an archive-candidate verdict."""
+    if verdict and verdict["state"] == "finished" and verdict["finished"]["lane"] == "archive-candidate":
+        return ledgerlib.check("archive", sid)
+    return None
+
+
+def _evidence_for(verdict: dict | None) -> str:
+    if not verdict:
+        return ""
+    src = verdict.get("finished") or verdict.get("idle") or {}
+    return (src.get("last_assistant_text") or "")[-400:]
+
+
+def _plan_chat_entry(row: dict, sid: str, inst: dict | None, verdict: dict | None,
+                     why_ungated: str, decision: dict) -> dict:
+    return {
+        "sessionId": sid,
+        "title": row.get("title"),
+        "instance": row.get("instance"),
+        # RESIDENCE (owner doctrine): a chat with a desktop record lives in the desktop
+        # and stays there; instance null = console-only, never landed in the app.
+        "origin": "desktop" if row.get("instance") else "console",
+        "sourceTool": row.get("tool") or row.get("source"),
+        "account": {"email": inst and inst["email"], "plan": inst and inst["plan"],
+                    "appRunning": bool(inst and inst["isRunning"])} if inst else None,
+        "state": verdict["state"] if verdict else "ungated",
+        "cause": verdict["cause"] if verdict else why_ungated,
+        "lastActivityAt": row.get("last_activity_at"),
+        "decision": decision,
+        "evidence": _evidence_for(verdict),
+    }
+
+
+def _evaluate_plan_row(row: dict, instances: dict, holds: dict) -> _RowEvaluation:
+    """Gate one row, decide what the orchestrator would do about it, and shape the chat
+    entry the page renders - the whole per-row pipeline build_plan loops over."""
+    sid = row.get("session_id") or ""
+    inst = instances.get(str(row.get("instance") or "").lower())
+    verdict, why_ungated, incomplete = _gate_row(sid, row)
+    breaker = _breaker_for(verdict, sid)
+    decision = decide(verdict, breaker, bool(inst and inst["isRunning"]), why_ungated,
+                      holdlib.why_blocked(sid, _holds=holds))
+    chat = _plan_chat_entry(row, sid, inst, verdict, why_ungated, decision)
+    return _RowEvaluation(chat=chat, decision_kind=decision["kind"], incomplete=incomplete)
+
+
+_PLAN_ORDER = ["wait-on-person", "judgment", "archive", "held-back", "resume", "human",
+               "cannot", "on-hold", "leave-alone"]
+
+
+def _plan_sort_key(chat: dict):
+    kind = chat["decision"]["kind"]
+    return (_PLAN_ORDER.index(kind) if kind in _PLAN_ORDER else 99,
+            str(chat["instance"] or ""), str(chat["title"] or ""))
+
+
 def build_plan() -> dict:
     """The dry run: every visible chat, gated, decided, account-attributed. Touches nothing."""
     instances = hydralib.instances_by_name()
@@ -155,48 +236,12 @@ def build_plan() -> dict:
     counts: dict[str, int] = {}
     incomplete = 0
     for row in rows:
-        sid = row.get("session_id") or ""
-        inst = instances.get(str(row.get("instance") or "").lower())
-        verdict = None
-        why_ungated = ""
-        breaker = None
-        try:
-            live = hydralib.live_for(sid)
-            verdict = gatelib.gate(sid, row.get("transcript_path") or "", live)
-            if verdict is None:
-                _, why_ungated = gatelib.gateable(row.get("transcript_path") or "")
-        except hydralib.DaemonError as err:
-            why_ungated = f"liveness read failed ({err}) - no verdict without it"
+        result = _evaluate_plan_row(row, instances, holds)
+        if result.incomplete:
             incomplete += 1
-        if verdict and verdict["state"] == "finished" and verdict["finished"]["lane"] == "archive-candidate":
-            breaker = ledgerlib.check("archive", sid)
-        decision = decide(verdict, breaker, bool(inst and inst["isRunning"]), why_ungated,
-                          holdlib.why_blocked(sid, _holds=holds))
-        counts[decision["kind"]] = counts.get(decision["kind"], 0) + 1
-        evidence = ""
-        if verdict:
-            src = verdict.get("finished") or verdict.get("idle") or {}
-            evidence = (src.get("last_assistant_text") or "")[-400:]
-        chats.append({
-            "sessionId": sid,
-            "title": row.get("title"),
-            "instance": row.get("instance"),
-            # RESIDENCE (owner doctrine): a chat with a desktop record lives in the desktop
-            # and stays there; instance null = console-only, never landed in the app.
-            "origin": "desktop" if row.get("instance") else "console",
-            "sourceTool": row.get("tool") or row.get("source"),
-            "account": {"email": inst and inst["email"], "plan": inst and inst["plan"],
-                        "appRunning": bool(inst and inst["isRunning"])} if inst else None,
-            "state": verdict["state"] if verdict else "ungated",
-            "cause": verdict["cause"] if verdict else why_ungated,
-            "lastActivityAt": row.get("last_activity_at"),
-            "decision": decision,
-            "evidence": evidence,
-        })
-    order = ["wait-on-person", "judgment", "archive", "held-back", "resume", "human",
-             "cannot", "on-hold", "leave-alone"]
-    chats.sort(key=lambda c: (order.index(c["decision"]["kind"]) if c["decision"]["kind"] in order else 99,
-                              str(c["instance"] or ""), str(c["title"] or "")))
+        counts[result.decision_kind] = counts.get(result.decision_kind, 0) + 1
+        chats.append(result.chat)
+    chats.sort(key=_plan_sort_key)
     return {
         "generatedAt": int(time.time() * 1000),
         "scanned": len(rows),
