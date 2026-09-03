@@ -7,6 +7,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-09-03
+
+### Fixed
+
+- **Migrate destinations carry the name the Instances table shows.** The Move-all submenu, the
+  migrate flyouts and their confirmation dialogs offered folder names (`5claude`, `arama`) where the
+  table shows apebrain and Martin; they used `label ?? name` and skipped the account-name step the
+  table's own helper takes. Found by exercising 0.38.0 in the browser.
+- **The daemon says why it did not start the tray host.** A skip for "already running" or "hidden
+  by setting" is logged by reason now. On the first live relaunch under 0.38.0 the skip was correct
+  and its silence still read as a missing tray to the person checking the log.
+
 ## [0.38.0] - 2026-09-03
 
 ### Added
