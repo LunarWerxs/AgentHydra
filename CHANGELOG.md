@@ -7,6 +7,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.38.2] - 2026-09-03
+
+### Added
+
+- **The move dialogs group chats by project.** Both "Move all chats to another account" (Instances)
+  and the bulk "Migrate N chats" (Sessions) list what is about to move under a header per project
+  folder (the same name the sessions list shows), largest group first, with a count - so eighteen
+  titles read as "eleven Connections, five Agent Hydra, two TavernBag" before the click, not after.
+- **Click a chat in either list to open it.** The Sessions view switches in (from Instances), the
+  search box takes that session's id so the list shows exactly that one row, and it is selected.
+  A chat outside the current time window widens the window to everything and selects it the
+  moment the list carries it.
+
 ## [0.38.1] - 2026-09-03
 
 ### Fixed
