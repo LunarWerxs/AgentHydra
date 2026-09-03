@@ -1,8 +1,9 @@
 """clilib - HOW A SCRIPT RUNS: the entry-point rituals every runnable script shares.
 
-Two of them, and only two:
+Three of them:
 
   use_utf8_console()  what a script does to its OWN stdout before it prints anything
+  run_text()          how a script reads ANOTHER PROGRAM's output without losing it
   capture()           what a script does to run ANOTHER script's main() as a step
 
 Every act script is a CLI first (the --help/Usage/Exit contract), so when a lane script
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import subprocess
 import sys
 import traceback
 
@@ -56,6 +58,71 @@ def use_utf8_console() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError, OSError):
             pass  # already wrapped, or not reconfigurable - never fatal
+
+
+def _oem_encoding() -> str:
+    """The codec a Windows CONSOLE child writes its output in - the OEM code page.
+
+    Asked of the OS rather than of this process's locale, because the two disagree exactly
+    where it matters: `locale.getpreferredencoding()` here is cp1252 (ANSI) or, under UTF-8
+    mode, utf-8, while a console child writes cp437 (OEM). Falls back to the locale answer
+    off Windows or if the call is unavailable."""
+    try:
+        import ctypes
+
+        cp = int(ctypes.windll.kernel32.GetOEMCP())  # type: ignore[attr-defined]
+        if cp:
+            return f"cp{cp}"
+    except Exception:  # noqa: BLE001 - not Windows, or no ctypes: the locale answer will do
+        pass
+    import locale
+
+    return locale.getpreferredencoding(False) or "utf-8"
+
+
+def decode_console(raw: bytes | None) -> str:
+    """A console child's bytes as text, by a route that CANNOT raise and CANNOT mangle.
+
+    UTF-8 first and strict, because pwsh 7 and every program we write emit UTF-8 and getting
+    that right matters more than being lenient; on failure, the OEM code page with
+    errors='replace', which is what Windows PowerShell 5.1 and the built-in console tools
+    (schtasks, tasklist, taskkill) actually write. Either way a byte we cannot name becomes a
+    marker, never an exception."""
+    if not raw:
+        return ""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode(_oem_encoding(), errors="replace")
+
+
+def run_text(args, **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run(capture_output=True) whose output can never be lost to a codec.
+
+    ⛔ USE THIS, NEVER `text=True`, FOR ANY WINDOWS PROGRAM (2026-09-03). `text=True` decodes
+    with `locale.getpreferredencoding(False)`, and this toolbox runs under two different
+    answers to that question:
+
+      - from a terminal it is cp1252, which maps nearly every byte, so a PowerShell actuator's
+        cp437 output silently becomes MOJIBAKE rather than failing;
+      - under the DAEMON - which is how every scheduled lane and every MCP call runs these
+        scripts - server/src/orchestrator.ts spawns python with PYTHONUTF8=1, so it is utf-8,
+        and the first non-ASCII byte raises UnicodeDecodeError *inside subprocess's reader
+        thread*. Python prints that traceback and hands the caller EMPTY OUTPUT.
+
+    The second is the dangerous one and it was live: audit_twins lost three actuator replies
+    that way, and this repo's own rule 4 is "never claim an act landed without checking" -
+    every one of those checks reads `r.stdout`, so a blanked read is a verdict computed from
+    nothing. Bytes are captured and decoded here instead, by decode_console.
+    """
+    kwargs.pop("text", None)
+    kwargs.pop("encoding", None)
+    kwargs.pop("errors", None)
+    kwargs["capture_output"] = True
+    r = subprocess.run(args, **kwargs)  # noqa: S603 - callers pass an argv list, never a shell
+    return subprocess.CompletedProcess(
+        r.args, r.returncode, decode_console(r.stdout), decode_console(r.stderr)
+    )
 
 
 def capture(fn, argv: list[str]) -> tuple[int, str]:

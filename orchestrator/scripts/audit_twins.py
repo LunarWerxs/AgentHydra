@@ -224,10 +224,10 @@ def _drive_archive(inst_dir: str, title: str) -> tuple[int, str]:
     with windowlib.instance_lock(inst_dir, wait_secs=60) as mine:
         if not mine:
             return 7, "window busy - another lane is driving it; next pass"
-        r = subprocess.run(
+        r = clilib.run_text(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(_ACTUATOR),
              "-Instance", inst_dir, "-Action", "Archive", "-Title", str(title)],
-            capture_output=True, text=True, timeout=240)
+            timeout=240)
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-1:][0] if (r.stdout or r.stderr) else f"exit {r.returncode}"
 
 
@@ -282,10 +282,10 @@ def find_ghosts() -> list[dict]:
             continue
         name = str(inst.get("name"))
         try:
-            r = subprocess.run(
+            r = clilib.run_text(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(_ACTUATOR),
                  "-Instance", str(inst["dir"]), "-List"],
-                capture_output=True, text=True, timeout=120)
+                timeout=120)
         except (OSError, subprocess.TimeoutExpired):
             continue
         rendered = []
@@ -437,11 +437,11 @@ def _rename_ordinal(instance: str, title: str, new_title: str, ordinal: int) -> 
     with windowlib.instance_lock(inst_dir, wait_secs=60) as mine:
         if not mine:
             return 7, "window busy"
-        r = subprocess.run(
+        r = clilib.run_text(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(_ACTUATOR),
              "-Instance", inst_dir, "-Action", "Rename", "-Title", title, "-NewTitle", new_title,
              "-Ordinal", str(ordinal)],
-            capture_output=True, text=True, timeout=240)
+            timeout=240)
     out = ((r.stdout or "") + (r.stderr or "")).strip()
     return r.returncode, (out.splitlines()[-1] if out else f"exit {r.returncode}")
 

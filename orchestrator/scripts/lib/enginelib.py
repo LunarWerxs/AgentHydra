@@ -34,6 +34,7 @@ from __future__ import annotations
 import subprocess
 import time
 
+from lib import clilib
 from lib import gatelib
 from lib import hydralib
 
@@ -80,8 +81,8 @@ def stop_idle_engine(match: dict, min_quiet_secs: int = IDLE_STOP_SECS) -> dict:
     if not idle:
         return {"stopped": False, "pid": pid, "why": why}
     try:
-        subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"],
-                       capture_output=True, text=True, timeout=30)
+        clilib.run_text(["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                       timeout=30)
     except (OSError, ValueError, subprocess.TimeoutExpired) as err:
         return {"stopped": False, "pid": pid, "why": f"taskkill failed: {err}"}
     sid = match.get("cliSessionId") or match.get("sessionId") or ""

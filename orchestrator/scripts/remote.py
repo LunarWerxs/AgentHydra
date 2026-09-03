@@ -129,8 +129,8 @@ def _pid_alive(pid) -> bool:
         return False
     if os.name == "nt":
         try:
-            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                                 capture_output=True, text=True, timeout=20)
+            out = clilib.run_text(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                                 timeout=20)
             return str(pid) in (out.stdout or "")
         except Exception:
             return False
@@ -252,7 +252,7 @@ def stop() -> int:
         return 3
     if os.name == "nt":
         # /T takes the cloudflared child with it.
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True, timeout=30)
+        clilib.run_text(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=30)
     else:
         try:
             os.killpg(int(pid), 15)

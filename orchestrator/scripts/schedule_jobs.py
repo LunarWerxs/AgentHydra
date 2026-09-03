@@ -74,7 +74,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -393,7 +392,7 @@ def write_wrapper(job: str, spec: dict) -> Path:
 
 
 def _schtasks(args: list[str]) -> tuple[int, str]:
-    r = subprocess.run(["schtasks", *args], capture_output=True, text=True)
+    r = clilib.run_text(["schtasks", *args], )
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 

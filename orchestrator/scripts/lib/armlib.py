@@ -28,10 +28,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import time
 from pathlib import Path
 
+from lib import clilib
 from lib import ledgerlib
 
 ARM_CMD = "python orch.py arm"
@@ -70,8 +70,8 @@ def _pid_alive(pid) -> bool:
         return False
     if os.name == "nt":
         try:
-            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                                 capture_output=True, text=True, timeout=20)
+            out = clilib.run_text(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                                 timeout=20)
             return str(pid) in (out.stdout or "")
         except Exception:
             return False

@@ -31,7 +31,6 @@ import contextlib
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import uuid
@@ -171,10 +170,10 @@ def _run_probe(instance: str, probe: str) -> tuple[int, str]:
     # pass had its own lock and no placement courtesy - owner, 2026-09-01: "something full
     # screened one of the accounts again").
     with windowlib.keep_placement(instance):
-        r = subprocess.run(
+        r = clilib.run_text(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(PS1),
              "-Instance", instance, "-NewTitle", probe],
-            capture_output=True, text=True, timeout=240,
+            timeout=240,
         )
     return r.returncode, (r.stdout or "").strip()
 

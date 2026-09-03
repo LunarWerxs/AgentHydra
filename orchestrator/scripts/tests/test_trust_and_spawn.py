@@ -122,7 +122,7 @@ class SpawnChatTest(unittest.TestCase):
     def test_spawn_sends_the_apps_own_new_chat_deeplink_with_folder_and_prompt(self):
         with mock.patch.object(spawn_chat, "_binary", return_value="claude.exe"), \
              mock.patch.object(spawn_chat.subprocess, "Popen") as popen, \
-             mock.patch.object(spawn_chat.subprocess, "run",
+             mock.patch.object(spawn_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=0, stdout="", stderr="")), \
              mock.patch("trust_workspace.apply_trust", return_value={"trusted": []}) as trust:
             res = spawn_chat.spawn(str(self.folder), "do the thing", "open1")
@@ -153,7 +153,7 @@ class SpawnChatTest(unittest.TestCase):
              mock.patch.object(spawn_chat, "TRUST_ACTUATOR", Path(__file__)), \
              mock.patch.object(spawn_chat, "SUBMIT_ACTUATOR", Path("nope-not-here")), \
              mock.patch("trust_workspace.apply_trust", return_value={"trusted": []}), \
-             mock.patch.object(spawn_chat.subprocess, "run",
+             mock.patch.object(spawn_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=0, stdout="", stderr="")) as run:
             res = spawn_chat.spawn(str(self.folder), "x", "open1")
         self.assertEqual(res["trustDialog"], "answered")
@@ -164,7 +164,7 @@ class SpawnChatTest(unittest.TestCase):
              mock.patch.object(spawn_chat, "TRUST_ACTUATOR", Path(__file__)), \
              mock.patch.object(spawn_chat, "SUBMIT_ACTUATOR", Path("nope-not-here")), \
              mock.patch("trust_workspace.apply_trust", return_value={"trusted": []}), \
-             mock.patch.object(spawn_chat.subprocess, "run",
+             mock.patch.object(spawn_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=4, stdout="", stderr="")):
             res2 = spawn_chat.spawn(str(self.folder), "x", "open1")
         self.assertEqual(res2["trustDialog"], "refused-other-folder")
@@ -202,7 +202,7 @@ class SpawnChatTest(unittest.TestCase):
              mock.patch.object(spawn_chat, "START_WAIT_SECS", 6), \
              mock.patch("trust_workspace.apply_trust", return_value={"trusted": []}), \
              mock.patch.object(hydralib, "dossier", return_value=[{"title": "New chat"}]), \
-             mock.patch.object(spawn_chat.subprocess, "run",
+             mock.patch.object(spawn_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=0, stdout="", stderr="")):
             res = spawn_chat.spawn(str(self.folder), "do the thing", "open1")
         self.assertEqual(res["submitted"], "sent")
@@ -219,7 +219,7 @@ class SpawnChatTest(unittest.TestCase):
              mock.patch.object(spawn_chat, "START_WAIT_SECS", 6), \
              mock.patch("trust_workspace.apply_trust", return_value={"trusted": []}), \
              mock.patch.object(hydralib, "dossier", return_value=[{"title": "New chat"}]), \
-             mock.patch.object(spawn_chat.subprocess, "run",
+             mock.patch.object(spawn_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=0, stdout="", stderr="")):
             res = spawn_chat.spawn(str(self.folder), "do the thing", "open1")
         self.assertNotEqual(res["submitted"], "sent")
@@ -252,7 +252,7 @@ class SpawnChatTest(unittest.TestCase):
              mock.patch("trust_workspace.apply_trust", return_value={"trusted": []}), \
              mock.patch.object(hydralib, "dossier", return_value=[{"title": "New chat"}]), \
              mock.patch.dict(os.environ, {"ORCHESTRATOR_STATE_DIR": state.name}), \
-             mock.patch.object(spawn_chat.subprocess, "run",
+             mock.patch.object(spawn_chat.clilib, "run_text",
                                return_value=mock.Mock(
                                    returncode=0,
                                    stdout="permission mode set: 'Default permissions' -> "
@@ -300,7 +300,7 @@ class SpawnChatTest(unittest.TestCase):
              mock.patch.object(spawn_chat.time, "time", side_effect=clock.time), \
              mock.patch.object(spawn_chat.time, "sleep"), \
              mock.patch.dict(os.environ, {"ORCHESTRATOR_STATE_DIR": state.name}), \
-             mock.patch.object(spawn_chat.subprocess, "run") as run_mock:
+             mock.patch.object(spawn_chat.clilib, "run_text") as run_mock:
             res = spawn_chat.spawn(str(self.folder), "do the thing", "open1")
         self.assertIn("no title yet", res["modeSet"])
         self.assertFalse(any("-SetMode" in c.args[0] for c in run_mock.call_args_list))
@@ -360,7 +360,7 @@ class SpawnDuplicateTaskTest(unittest.TestCase):
              mock.patch.object(spawn_chat, "_binary", return_value="claude.exe"), \
              mock.patch.object(spawn_chat.subprocess, "Popen"), \
              mock.patch("trust_workspace.apply_trust", return_value={"trusted": []}), \
-             mock.patch.object(spawn_chat.subprocess, "run",
+             mock.patch.object(spawn_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=0, stdout="", stderr="")):
             res = spawn_chat.spawn(str(self.folder), "do the thing", "open1", force=True)
         same.assert_not_called()

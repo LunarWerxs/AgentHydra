@@ -133,7 +133,7 @@ class CompactChatTest(unittest.TestCase):
         # demote it back to advice.
         import unittest.mock as mock
 
-        with mock.patch("compact_chat.subprocess.run") as m:
+        with mock.patch("compact_chat.clilib.run_text") as m:
             m.return_value = mock.Mock(returncode=0, stdout="{}", stderr="")
             compact_chat.run_turn("claude.exe", SID, 100_000, self._tmp.name)
         argv = m.call_args[0][0]

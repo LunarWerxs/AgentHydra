@@ -76,7 +76,7 @@ def _set_mode_live(session_id: str, inst: dict, prompt: str) -> str:
         with windowlib.instance_lock(inst.get("dir"), wait_secs=60) as mine:
             if not mine:
                 return "window busy - the doctrine lane sets the mode on its next pass"
-            r = subprocess.run(args, capture_output=True, text=True, timeout=180)
+            r = clilib.run_text(args, timeout=180)
     except Exception as err:  # a mode step must never unwind a spawn that already happened
         return f"actuator error: {str(err)[:120]}"
     said = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
@@ -188,10 +188,10 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
                 deadline = time.time() + 20
                 while time.time() < deadline:
                     time.sleep(3)
-                    r = subprocess.run(
+                    r = clilib.run_text(
                         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                          "-File", str(TRUST_ACTUATOR), "-Folder", folder],
-                        capture_output=True, text=True, timeout=120,
+                        timeout=120,
                     )
                     if r.returncode == 0:
                         dialog = "answered"
@@ -215,12 +215,12 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
                     # shell call. The actuator sets the app's own permission picker to bypass
                     # BEFORE pressing Send, and refuses (exit 6) rather than start a chat that
                     # will only stall - a refused spawn is a report; a stuck chat is a mess.
-                    r = subprocess.run(
+                    r = clilib.run_text(
                         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                          "-File", str(SUBMIT_ACTUATOR), "-Contains", prompt[:60],
                          "-Instance", str(inst.get("dir") or ""),
                          "-RequireMode", REQUIRED_MODE],
-                        capture_output=True, text=True, timeout=180,
+                        timeout=180,
                     )
                     # The actuator's own last lines ride along in the report: "permission mode
                     # set: 'Default permissions' -> 'Bypass permissions'" is the proof the chat

@@ -155,7 +155,7 @@ def _run_actuator(title: str, instance: str, message: str, verify: str) -> tuple
     if instance:
         args += ["-Instance", instance]
     try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=ACTUATOR_TIMEOUT_SECS)
+        r = clilib.run_text(args, timeout=ACTUATOR_TIMEOUT_SECS)
     except subprocess.TimeoutExpired:
         # A hung actuator is a delivery failure like any other (rows above return (1, why))
         # - never an exception that escapes deliver_one and skips mark_failed/the results row.

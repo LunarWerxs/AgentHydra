@@ -93,8 +93,8 @@ def forget(instance: str, chat_title: str) -> None:
 
 def _run(args: list[str], timeout: int = 90) -> tuple[int, str]:
     try:
-        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR)] + args,
-                           capture_output=True, text=True, timeout=timeout)
+        r = clilib.run_text(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR)] + args,
+                           timeout=timeout)
         return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
     except (OSError, subprocess.TimeoutExpired) as err:
         return 1, f"actuator error: {str(err)[:160]}"

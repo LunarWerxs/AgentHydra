@@ -32,6 +32,8 @@ import os
 import time
 from pathlib import Path
 
+from lib import clilib
+
 
 def registry_dir(config_dir: str | Path) -> Path:
     return Path(config_dir) / "sessions"
@@ -44,8 +46,8 @@ def _pid_alive(pid: int) -> bool:
         import subprocess
 
         try:
-            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                                 capture_output=True, text=True, timeout=20)
+            out = clilib.run_text(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                                 timeout=20)
             return str(pid) in (out.stdout or "")
         except Exception:
             return False

@@ -33,7 +33,6 @@ Exit:  0 nothing stuck, or everything pressed - 2 something did not clear (each 
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -149,7 +148,7 @@ def press(row: dict) -> dict:
             args += ["-VerifyText", str(row["verify"])]  # rail 2b: its own words, or no press
         if select:
             args.append("-Select")
-        return subprocess.run(args, capture_output=True, text=True, timeout=180)
+        return clilib.run_text(args, timeout=180)
 
     try:
         # ONE DRIVER PER WINDOW (windowlib.instance_lock): a sidebar click here while the

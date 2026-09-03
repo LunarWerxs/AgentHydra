@@ -303,7 +303,7 @@ class ViaAppTest(unittest.TestCase):
         self.stub.routes["/api/fleet"] = {"instances": [
             {"num": 1, "name": "hot", "dir": str(inst_dir), "isRunning": True, "signedIn": True}]}
         self.stub.routes["/api/sessions/live"] = {"sessions": [{"sessionId": sid}]}
-        with mock.patch.object(automation_chat.subprocess, "run",
+        with mock.patch.object(automation_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=0,
                                                        stdout="Bypass permissions set\n",
                                                        stderr="")) as run_mock:
@@ -338,7 +338,7 @@ class ViaAppTest(unittest.TestCase):
             {"num": 2, "name": "cold2", "dir": str(inst_cold), "isRunning": False, "signedIn": True},
         ]}
         self.stub.routes["/api/sessions/live"] = {"sessions": [{"sessionId": sid_cold}]}
-        with mock.patch.object(automation_chat.subprocess, "run",
+        with mock.patch.object(automation_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=0, stdout="already Bypass permissions\n",
                                                        stderr="")) as run_mock:
             code, out, _ = run_cli(automation_chat.main, ["--all", "--yes", "--json"])
@@ -362,7 +362,7 @@ class ViaAppTest(unittest.TestCase):
         # the app re-saved its real mode over the stamp
         meta.write_text(json.dumps({"cliSessionId": sid, "title": "Flipped back",
                                     "permissionMode": "acceptEdits"}), encoding="utf-8")
-        with mock.patch.object(automation_chat.subprocess, "run",
+        with mock.patch.object(automation_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=3, stdout="no picker\n", stderr="")):
             code, out, _ = run_cli(automation_chat.main, ["--all", "--yes", "--json"])
         payload = json.loads(out)
@@ -381,7 +381,7 @@ class ViaAppTest(unittest.TestCase):
         self.stub.routes["/api/fleet"] = {"instances": [
             {"num": 1, "name": "hot6", "dir": str(inst_dir), "isRunning": True, "signedIn": True}]}
         self.stub.routes["/api/sessions/live"] = {"sessions": [{"sessionId": sid}]}
-        with mock.patch.object(automation_chat.subprocess, "run") as run_mock:
+        with mock.patch.object(automation_chat.clilib, "run_text") as run_mock:
             code, out, _ = run_cli(automation_chat.main, ["--all", "--yes", "--json"])
         self.assertEqual(code, 0)
         pickers = [c.args[0] for c in run_mock.call_args_list if "approve_prompt.ps1" in c.args[0][5]]
@@ -402,7 +402,7 @@ class ViaAppTest(unittest.TestCase):
         self.stub.routes["/api/fleet"] = {"instances": [
             {"num": 1, "name": "hot3", "dir": str(inst_dir), "isRunning": True, "signedIn": True}]}
         self.stub.routes["/api/sessions/live"] = {"sessions": [{"sessionId": sid}]}
-        with mock.patch.object(automation_chat.subprocess, "run") as run_mock:
+        with mock.patch.object(automation_chat.clilib, "run_text") as run_mock:
             code, out, _ = run_cli(automation_chat.main, ["--all", "--yes", "--json"])
         self.assertEqual(code, 0)
         pickers = [c.args[0] for c in run_mock.call_args_list if "approve_prompt.ps1" in c.args[0][5]]
@@ -420,7 +420,7 @@ class ViaAppTest(unittest.TestCase):
         self.stub.routes["/api/fleet"] = {"instances": [
             {"num": 1, "name": "hot5", "dir": str(inst_dir), "isRunning": True, "signedIn": True}]}
         self.stub.routes["/api/sessions/live"] = {"sessions": []}
-        with mock.patch.object(automation_chat.subprocess, "run",
+        with mock.patch.object(automation_chat.clilib, "run_text",
                                return_value=mock.Mock(returncode=0, stdout="set\n", stderr="")) as run_mock:
             code, out, _ = run_cli(automation_chat.main, ["--all", "--yes", "--json"])
         pickers = [c.args[0] for c in run_mock.call_args_list if "approve_prompt.ps1" in c.args[0][5]]

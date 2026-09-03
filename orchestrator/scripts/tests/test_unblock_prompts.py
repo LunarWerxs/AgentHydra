@@ -190,7 +190,7 @@ class PressTest(unittest.TestCase):
     def test_press_passes_instance_and_verify_to_the_actuator(self):
         row = {"title": "chat one", "instance": "inst1", "instanceDir": "C:/x/inst1",
               "verify": "Deploying the artifact now, hold on.", "quietMins": 5.0}
-        with mock.patch.object(unblock_prompts.subprocess, "run",
+        with mock.patch.object(unblock_prompts.clilib, "run_text",
                                return_value=self._run_result()) as run_mock:
             got = unblock_prompts.press(row)
         args = run_mock.call_args.args[0]
@@ -203,7 +203,7 @@ class PressTest(unittest.TestCase):
     def test_press_omits_verifytext_when_verify_is_empty(self):
         row = {"title": "chat two", "instance": "inst2", "instanceDir": "C:/x/inst2",
               "verify": "", "quietMins": 5.0}
-        with mock.patch.object(unblock_prompts.subprocess, "run",
+        with mock.patch.object(unblock_prompts.clilib, "run_text",
                                return_value=self._run_result()) as run_mock:
             unblock_prompts.press(row)
         args = run_mock.call_args.args[0]

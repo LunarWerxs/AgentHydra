@@ -110,12 +110,12 @@ def resolve_claude() -> str | None:
 
 def run_turn(exe: str, session_id: str, window: int, cwd: str) -> tuple[int, str]:
     """The forced-autocompact resume turn. Returns (exit code, stdout)."""
-    r = subprocess.run(
+    r = clilib.run_text(
         [exe, "-p", "--resume", session_id, "--autocompact", str(window),
          # MECHANICAL no-work guarantee (docstring): every tool disabled for this turn.
          "--tools", "",
          "--output-format", "json", MAINTENANCE_PROMPT],
-        capture_output=True, text=True, timeout=TURN_TIMEOUT_SECS, cwd=cwd,
+        timeout=TURN_TIMEOUT_SECS, cwd=cwd,
     )
     return r.returncode, (r.stdout or "") + (("\n" + r.stderr) if r.returncode != 0 else "")
 

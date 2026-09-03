@@ -146,11 +146,11 @@ def _ui_archive(instance: str, title: str, unarchive: bool) -> tuple[int, str]:
             return 7, ("REFUSED: that instance's window is busy - another lane is driving it "
                        "right now; retry next pass")
         with windowlib.keep_placement(instance):
-            r = subprocess.run(
+            r = clilib.run_text(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR),
                  "-Title", str(title), "-Instance", str(instance),
                  "-Action", "Unarchive" if unarchive else "Archive"],
-                capture_output=True, text=True, timeout=240,
+                timeout=240,
             )
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 

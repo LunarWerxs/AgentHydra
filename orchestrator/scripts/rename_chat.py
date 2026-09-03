@@ -24,7 +24,6 @@ Exit:  0 renamed and verified - 3 not resolvable / not held by any instance (det
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -57,11 +56,11 @@ def _drive_rename(instance: str, old_title: str, new_title: str) -> tuple[int, s
             return 7, ("REFUSED: that instance's window is busy - another lane is driving it "
                        "right now; retry next pass")
         with windowlib.keep_placement(instance):
-            r = subprocess.run(
+            r = clilib.run_text(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR),
                  "-Title", str(old_title), "-Instance", str(instance),
                  "-Action", "Rename", "-NewTitle", str(new_title)],
-                capture_output=True, text=True, timeout=240,
+                timeout=240,
             )
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 

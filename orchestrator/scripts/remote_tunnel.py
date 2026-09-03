@@ -197,9 +197,9 @@ def _restrict(path: Path) -> bool:
     import subprocess
 
     try:
-        r = subprocess.run(
+        r = clilib.run_text(
             ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F", "/grant:r", "*S-1-5-18:F"],
-            capture_output=True, text=True, timeout=15,
+            timeout=15,
         )
     except Exception as err:
         print(f"  ⚠ could not restrict {path}: {err} - it keeps inherited permissions", file=sys.stderr)
@@ -377,7 +377,7 @@ def _refuse_committable(path: Path) -> str | None:
     import subprocess
 
     try:
-        r = subprocess.run(["git", "-C", str(REPO), "check-ignore", "-q", str(resolved)],
+        r = clilib.run_text(["git", "-C", str(REPO), "check-ignore", "-q", str(resolved)],
                            capture_output=True, timeout=20)
     except Exception:
         # Cannot ask git => cannot prove it is safe. Refuse: the safe direction.

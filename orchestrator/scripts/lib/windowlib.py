@@ -24,9 +24,10 @@ from __future__ import annotations
 
 import contextlib
 import re
-import subprocess
 import time
 from pathlib import Path
+
+from lib import clilib
 
 ACTUATOR = Path(__file__).resolve().parents[1] / "actuator" / "window_placement.ps1"
 # A UI lock older than this belongs to a dead lane (send pipeline worst case: a daemon message
@@ -107,9 +108,9 @@ def instance_lock(instance: str | None, wait_secs: float = 90.0):
 
 def _run(args: list[str]) -> tuple[int, str]:
     try:
-        r = subprocess.run(
+        r = clilib.run_text(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR)]
-            + args, capture_output=True, text=True, timeout=60)
+            + args, timeout=60)
         return r.returncode, (r.stdout or "").strip()
     except Exception as err:  # a courtesy must never break the delivery it wraps
         return 1, str(err)[:160]

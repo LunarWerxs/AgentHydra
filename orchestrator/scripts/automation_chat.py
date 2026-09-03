@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -208,7 +207,7 @@ def set_mode_via_app(row: dict, fleet: dict) -> str:
         with windowlib.instance_lock(inst_dir, wait_secs=60) as mine:
             if not mine:
                 return "window busy - next pass"
-            r = subprocess.run(args, capture_output=True, text=True, timeout=180)
+            r = clilib.run_text(args, timeout=180)
     except Exception as err:  # configuration is never worth crashing the lane over
         return f"actuator error: {str(err)[:120]}"
     said = (str(r.stdout or "") + str(r.stderr or "")).strip().splitlines()

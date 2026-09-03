@@ -41,7 +41,6 @@ chat, but it is reported, never hidden.
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 import sys
 from pathlib import Path as _Path
@@ -129,10 +128,10 @@ def _settle_source(instance: str, title: str) -> tuple[int, str]:
     twins made every later resolve of that chat ambiguous. Settling through the app's own
     archive control is immediate and durable (the app makes the write itself). Exit 3 (row
     not rendered) means the screen already agrees - settled."""
-    r = subprocess.run(
+    r = clilib.run_text(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(_ACTUATOR),
          "-Instance", instance, "-Action", "Archive", "-Title", title],
-        capture_output=True, text=True, timeout=240,
+        timeout=240,
     )
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
