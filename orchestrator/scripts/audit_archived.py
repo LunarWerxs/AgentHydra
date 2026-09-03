@@ -111,16 +111,15 @@ def _toolbox_archived(cli_session_id: str) -> bool:
         return False
 
 
-def audit(hours: int) -> dict:
+def _collect_archived_entries(hours: int) -> dict[str, dict]:
+    """One record per cliSessionId; a chat copied across profiles is one chat. Gates on
+    last_activity_at OR the meta file's mtime - see the module docstring for why both."""
     floor_ms = int((time.time() - hours * 3600) * 1000)
     floor_s = floor_ms / 1000
 
-    # One record per cliSessionId; a chat copied across profiles is one chat.
     seen: dict[str, dict] = {}
-    metas_total = 0
     for inst_name, store, cli_home in _store_sources():
         for meta_path in store.glob("claude-code-sessions/*/*/local_*.json"):
-            metas_total += 1
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -138,95 +137,128 @@ def audit(hours: int) -> dict:
             if not cli:
                 continue
             prev = seen.get(cli)
-            entry = {
-                "cliSessionId": cli,
-                "title": meta.get("title"),
-                "instances": [inst_name],
-                "lastActivityAt": meta.get("lastActivityAt"),
-                "cliHome": str(cli_home),
-            }
             if prev:
                 if inst_name not in prev["instances"]:
                     prev["instances"].append(inst_name)
             else:
-                seen[cli] = entry
+                seen[cli] = {
+                    "cliSessionId": cli,
+                    "title": meta.get("title"),
+                    "instances": [inst_name],
+                    "lastActivityAt": meta.get("lastActivityAt"),
+                    "cliHome": str(cli_home),
+                }
+    return seen
 
-    out = []
+
+def _lineage_status(cli: str) -> tuple[dict | None, str, dict | None]:
+    """(live, note, superseded_by) for one chat: is a process writing it right now, and is it
+    a prior hop of a lineage whose newer hop carries the work?"""
+    live = None
+    note = ""
+    superseded_by = None
+    try:
+        matches = hydralib.dossier(cli)
+        live = hydralib.live_for(cli, matches)
+        # A prior HOP of a lineage whose newer hop carries the work is CORRECTLY
+        # archived - restoring it would revive a retired lineage. The dossier resolves
+        # the lineage head; a head with a different cliSessionId marks this one a hop.
+        for m in matches:
+            if m.get("cliSessionId") != cli and (
+                cli in (m.get("priorCliSessionIds") or []) or cli in (m.get("lineageIds") or [])
+            ):
+                superseded_by = m.get("title")
+                break
+    except hydralib.DaemonError as err:
+        note = f"liveness read failed ({err})"
+    return live, note, superseded_by
+
+
+def _apply_verdict_overrides(cli: str, status: str, why: str, evidence: str,
+                              superseded_by: str | None, live: dict | None) -> tuple[str, str]:
+    """The three overrides that outrank the raw gate verdict: a person's own archive is their
+    word, an old hop of a superseded lineage was rightly archived, and a tiny sign-off with no
+    recap deserves an eyeball rather than either a restore or silence."""
+    # A PERSON'S ARCHIVE IS THEIR WORD (owner, 2026-09-02: "I'm archiving them - they are
+    # done"). Only an archive the TOOLBOX filed (a ledger row of kind 'archive') can be
+    # wrong by this audit's standard; one with no such row was filed by hand, and the
+    # audit's opinion of the chat's last words is not the owner's.
+    if status.startswith("wrong-") and not _toolbox_archived(cli):
+        return "owner-archived", "archived by hand (no toolbox archive on record) - the owner's word, not audited"
+    if superseded_by and status.startswith("wrong-") and not live:
+        return "superseded-hop", (
+            f"an older hop of a lineage whose newer hop ('{superseded_by}') carries the "
+            "work - archiving the old hop was right"
+        )
+    if status == "wrong-not-done" and len(evidence.strip()) < 60:
+        # Recap absent AND a tiny closing line ("Ready.", "... ACK"): the fleet's own
+        # drill/smoke targets look exactly like this. Not restored, but LISTED - a real
+        # chat that merely signed off tersely deserves an eyeball, not silence.
+        return "tiny-no-recap", (
+            "no recap and a tiny closing line - drill/smoke chats look like this; "
+            "eyeball it before restoring by hand"
+        )
+    return status, why
+
+
+def _assess_entry(entry: dict) -> dict:
+    """Gate one archived chat's real transcript tail and classify it, applying the
+    owner-archived / superseded-hop / tiny-no-recap overrides on top of the raw verdict."""
+    from pathlib import Path
+
+    cli = entry["cliSessionId"]
+    live, note, superseded_by = _lineage_status(cli)
+    verdict = None
+    if not note:
+        transcript = _find_transcript(cli, Path(entry["cliHome"]))
+        verdict = gatelib.gate(cli, transcript, live)
+        if verdict is None:
+            _, note = gatelib.gateable(transcript)
+    status, why = classify(verdict, live, note)
+    evidence = ""
+    if verdict and verdict.get("finished"):
+        evidence = verdict["finished"]["last_assistant_text"][-350:]
+    status, why = _apply_verdict_overrides(cli, status, why, evidence, superseded_by, live)
+    return {
+        "sessionId": cli,
+        "title": entry["title"],
+        "instance": "+".join(entry["instances"]),
+        "lastActivityAt": entry["lastActivityAt"],
+        "status": status,
+        "why": why,
+        "evidence": evidence,
+    }
+
+
+def _assess_all_entries(seen: dict[str, dict]) -> list[dict]:
     total = len(seen)
+    out = []
     for n, entry in enumerate(seen.values(), 1):
         # Each entry costs a daemon dossier round trip (~0.9 s measured 2026-09-01), so a
         # 24 h window is a silent minute-plus; say where it is, on stderr, never in the report.
         if total >= 20 and n % 10 == 0:
             print(f"  ... audited {n}/{total}", file=sys.stderr, flush=True)
-        cli = entry["cliSessionId"]
-        live = None
-        note = ""
-        verdict = None
-        superseded_by = None
-        try:
-            matches = hydralib.dossier(cli)
-            live = hydralib.live_for(cli, matches)
-            # A prior HOP of a lineage whose newer hop carries the work is CORRECTLY
-            # archived - restoring it would revive a retired lineage. The dossier resolves
-            # the lineage head; a head with a different cliSessionId marks this one a hop.
-            for m in matches:
-                if m.get("cliSessionId") != cli and (
-                    cli in (m.get("priorCliSessionIds") or []) or cli in (m.get("lineageIds") or [])
-                ):
-                    superseded_by = m.get("title")
-                    break
-        except hydralib.DaemonError as err:
-            note = f"liveness read failed ({err})"
-        if not note:
-            from pathlib import Path
+        out.append(_assess_entry(entry))
+    return out
 
-            transcript = _find_transcript(cli, Path(entry["cliHome"]))
-            verdict = gatelib.gate(cli, transcript, live)
-            if verdict is None:
-                _, note = gatelib.gateable(transcript)
-        status, why = classify(verdict, live, note)
-        # A PERSON'S ARCHIVE IS THEIR WORD (owner, 2026-09-02: "I'm archiving them - they are
-        # done"). Only an archive the TOOLBOX filed (a ledger row of kind 'archive') can be
-        # wrong by this audit's standard; one with no such row was filed by hand, and the
-        # audit's opinion of the chat's last words is not the owner's.
-        if status.startswith("wrong-") and not _toolbox_archived(cli):
-            status, why = "owner-archived", "archived by hand (no toolbox archive on record) - the owner's word, not audited"
-        evidence = ""
-        if verdict and verdict.get("finished"):
-            evidence = verdict["finished"]["last_assistant_text"][-350:]
-        if superseded_by and status.startswith("wrong-") and not live:
-            status, why = "superseded-hop", (
-                f"an older hop of a lineage whose newer hop ('{superseded_by}') carries the "
-                "work - archiving the old hop was right"
-            )
-        elif status == "wrong-not-done" and len(evidence.strip()) < 60:
-            # Recap absent AND a tiny closing line ("Ready.", "... ACK"): the fleet's own
-            # drill/smoke targets look exactly like this. Not restored, but LISTED - a real
-            # chat that merely signed off tersely deserves an eyeball, not silence.
-            status, why = "tiny-no-recap", (
-                "no recap and a tiny closing line - drill/smoke chats look like this; "
-                "eyeball it before restoring by hand"
-            )
-        out.append({
-            "sessionId": cli,
-            "title": entry["title"],
-            "instance": "+".join(entry["instances"]),
-            "lastActivityAt": entry["lastActivityAt"],
-            "status": status,
-            "why": why,
-            "evidence": evidence,
-        })
-    rows = out
+
+def _build_report(hours: int, rows: list[dict]) -> dict:
     order = ["live-contradiction", "wrong-waiting", "wrong-not-done", "wrong-interrupted",
              "wrong-crashed", "tiny-no-recap", "superseded-hop", "ungateable", "correct"]
-    out.sort(key=lambda c: order.index(c["status"]) if c["status"] in order else len(order))
+    rows = sorted(rows, key=lambda c: order.index(c["status"]) if c["status"] in order else len(order))
     return {
         "windowHours": hours,
         "archivedInWindow": len(rows),
-        "wrong": [c for c in out if c["status"].startswith("wrong-")],
-        "correct": [c for c in out if c["status"] == "correct"],
-        "other": [c for c in out if not c["status"].startswith("wrong-") and c["status"] != "correct"],
+        "wrong": [c for c in rows if c["status"].startswith("wrong-")],
+        "correct": [c for c in rows if c["status"] == "correct"],
+        "other": [c for c in rows if not c["status"].startswith("wrong-") and c["status"] != "correct"],
     }
+
+
+def audit(hours: int) -> dict:
+    seen = _collect_archived_entries(hours)
+    rows = _assess_all_entries(seen)
+    return _build_report(hours, rows)
 
 
 def restore(wrong: list[dict]) -> list[dict]:
