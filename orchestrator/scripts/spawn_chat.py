@@ -120,47 +120,123 @@ def pick_instance() -> dict | None:
     return None
 
 
-def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -> dict:
-    # ⛔ NEVER START THE SAME TASK TWICE (owner, 2026-09-01: two identical 'SageThumbs codebase
-    # review' chats, 30 minutes apart, both running - "it can't do it blind; it must always
-    # double check, confirm"). A chat already carrying this exact first prompt anywhere in
-    # the fleet, live or dormant, means this spawn is a duplicate - refused, with the existing
-    # chat named, unless a person says --force.
-    if not force:
-        dups = hydralib.same_task_chats(prompt)
-        if dups:
-            d = dups[0]
-            return {"ok": False, "duplicateOf": dups,
-                    "why": (f"a chat for this exact task already exists: '{d.get('title')}' in "
-                            f"{d.get('instance')} ({'running' if d.get('live') else 'dormant'})"
-                            f"{' +%d more' % (len(dups) - 1) if len(dups) > 1 else ''} - not "
-                            "starting a second one (--force is a person's word to insist)")}
+def _refuse_if_duplicate(prompt: str, force: bool) -> dict | None:
+    """⛔ NEVER START THE SAME TASK TWICE (owner, 2026-09-01: two identical 'SageThumbs codebase
+    review' chats, 30 minutes apart, both running - "it can't do it blind; it must always
+    double check, confirm"). A chat already carrying this exact first prompt anywhere in the
+    fleet, live or dormant, means this spawn is a duplicate. Returns a refusal dict, or None to
+    let the spawn proceed."""
+    if force:
+        return None
+    dups = hydralib.same_task_chats(prompt)
+    if not dups:
+        return None
+    d = dups[0]
+    return {"ok": False, "duplicateOf": dups,
+            "why": (f"a chat for this exact task already exists: '{d.get('title')}' in "
+                    f"{d.get('instance')} ({'running' if d.get('live') else 'dormant'})"
+                    f"{' +%d more' % (len(dups) - 1) if len(dups) > 1 else ''} - not "
+                    "starting a second one (--force is a person's word to insist)")}
+
+
+def _resolve_target(instance: str | None) -> tuple[dict | None, dict | None]:
+    """Resolve the instance to spawn into. Returns (inst, error) - exactly one of the two is
+    None: an inst to proceed with, or an error dict ready to return from spawn()."""
     fleet = hydralib.fleet()
     inst = hydralib.resolve_instance(fleet, instance) if instance else pick_instance()
     if not inst:
-        return {"ok": False, "why": f"no resolvable open instance"
-                                    f"{f' matching {instance!r}' if instance else ''}"}
+        return None, {"ok": False, "why": f"no resolvable open instance"
+                                          f"{f' matching {instance!r}' if instance else ''}"}
     if not inst.get("isRunning"):
-        return {"ok": False, "why": f"instance '{inst.get('name')}' is not open - the deeplink "
-                                    "is forwarded to a RUNNING app; open it first"}
-    binary = _binary()
-    if not binary:
-        return {"ok": False, "why": "no desktop binary found to send the deeplink to"}
+        return None, {"ok": False, "why": f"instance '{inst.get('name')}' is not open - the "
+                                          "deeplink is forwarded to a RUNNING app; open it first"}
+    return inst, None
 
-    # TRUST FIRST (docstring): a chat in an untrusted folder stalls on a human dialog.
-    import trust_workspace
 
-    trust = trust_workspace.apply_trust([folder], act=True)
-
+def _live_session_ids() -> set:
+    """The session ids visible right now, best-effort - used as the 'before' snapshot so a
+    freshly-registered session can be told apart from one that already existed."""
     try:
-        before_ids = {s.get("sessionId")
-                      for s in hydralib.api_get("/api/sessions/live").get("sessions", [])}
+        return {s.get("sessionId")
+                for s in hydralib.api_get("/api/sessions/live").get("sessions", [])}
     except hydralib.DaemonError:
-        before_ids = set()
+        return set()
 
-    # ONE DRIVER PER WINDOW (windowlib.instance_lock): the deeplink, the trust dialog and the
-    # composer submit all poke this instance's window, and another lane driving it in the same
-    # moment (a courier send, an unblock press) is how text lands in the wrong pane.
+
+def _poll_trust_dialog(folder: str) -> str:
+    """...and answer the desktop app's own trust modal for `folder`, if one appears. The file
+    write the caller already did is the CLI's list; the DESKTOP app keeps its own and asks
+    anyway (measured 2026-09-01), so the honest mechanical answer is the app's own control -
+    scoped to THIS folder, never a blind click (see actuator/trust_dialog.ps1's aim rail).
+    Returns 'not-seen' (no actuator, or the modal never appeared), 'answered', or
+    'refused-other-folder' (someone else's dialog - never touched)."""
+    if not TRUST_ACTUATOR.exists():
+        return "not-seen"
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        time.sleep(3)
+        r = clilib.run_text(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", str(TRUST_ACTUATOR), "-Folder", folder],
+            timeout=120,
+        )
+        if r.returncode == 0:
+            return "answered"
+        if r.returncode == 4:
+            return "refused-other-folder"
+    return "not-seen"
+
+
+def _submit_composer(inst: dict, prompt: str) -> tuple[str, str]:
+    """SUBMIT THE PRE-FILLED COMPOSER (owner, 2026-09-01: "have it automatically handle spawned
+    chats/chips"). The deeplink types the prompt and stops there, so a spawned chat would sit
+    forever with its work written and never started (measured 2026-09-01: no engine ever
+    registered). The submit actuator presses Send on the composer whose text IS our prompt -
+    the strongest aim proof available, since a brand-new chat has no title or conversation to
+    verify against. Returns (submitted, submit_note)."""
+    if not SUBMIT_ACTUATOR.exists():
+        return "not-attempted", ""
+    time.sleep(6)  # let the deeplink paint the composer
+    submitted = "not-attempted"
+    submit_note = ""
+    for _ in range(6):
+        # BORN IN BYPASS (2026-09-01): a deeplink chat starts in the app's default mode and no
+        # disk stamp sticks while it lives, so it stalled on its first shell call. The actuator
+        # sets the app's own permission picker to bypass BEFORE pressing Send, and refuses
+        # (exit 6) rather than start a chat that will only stall - a refused spawn is a report;
+        # a stuck chat is a mess.
+        r = clilib.run_text(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", str(SUBMIT_ACTUATOR), "-Contains", prompt[:60],
+             "-Instance", str(inst.get("dir") or ""),
+             "-RequireMode", REQUIRED_MODE],
+            timeout=180,
+        )
+        # The actuator's own last lines ride along in the report: "permission mode set:
+        # 'Default permissions' -> 'Bypass permissions'" is the proof the chat was born right,
+        # and its absence is the first thing to read when it was not.
+        said = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+        submit_note = " | ".join(s[:120] for s in said[-3:])
+        if r.returncode == 0:
+            return "sent", submit_note
+        submitted = f"exit {r.returncode}"
+        if r.returncode == 6:
+            # the mode could not be set: say exactly what the actuator saw
+            tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+            submitted = f"exit 6 - {tail[-1][:160] if tail else 'permission mode not set'}"
+            return submitted, submit_note
+        time.sleep(5)
+    return submitted, submit_note
+
+
+def _drive_spawn_window(inst: dict, folder: str, prompt: str, binary: str) -> dict:
+    """Everything that pokes the instance's window for one spawn: send the deeplink, answer the
+    trust modal, submit the composer - ONE DRIVER PER WINDOW (windowlib.instance_lock), since
+    the deeplink, the trust dialog and the composer submit all poke this instance's window, and
+    another lane driving it in the same moment (a courier send, an unblock press) is how text
+    lands in the wrong pane. The window placement is restored afterward regardless of outcome.
+    Returns {'ok': False, 'why': ...} if the window was busy, else {'ok': True, 'url',
+    'dialog', 'submitted', 'submit_note', 'window_note'}."""
     with windowlib.instance_lock(inst.get("dir"), wait_secs=120) as mine:
         if not mine:
             return {"ok": False, "why": (f"{inst.get('name')}'s window is busy - another lane "
@@ -177,74 +253,25 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
                    f"&folder={urllib.parse.quote(folder)}")
             subprocess.Popen([binary, f"--user-data-dir={inst.get('dir')}", url],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-            # ...and answer the trust modal if it appears. The file write above is the CLI's
-            # list; the DESKTOP app keeps its own and asks anyway (measured 2026-09-01), so the
-            # honest mechanical answer is the app's own control - scoped to THIS folder, never
-            # a blind click (see actuator/trust_dialog.ps1's aim rail). Polls briefly: the
-            # modal paints a moment after the deeplink is forwarded.
-            dialog = "not-seen"
-            if TRUST_ACTUATOR.exists():
-                deadline = time.time() + 20
-                while time.time() < deadline:
-                    time.sleep(3)
-                    r = clilib.run_text(
-                        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                         "-File", str(TRUST_ACTUATOR), "-Folder", folder],
-                        timeout=120,
-                    )
-                    if r.returncode == 0:
-                        dialog = "answered"
-                        break
-                    if r.returncode == 4:
-                        dialog = "refused-other-folder"  # someone else's dialog: never touched
-                        break
-            # SUBMIT THE PRE-FILLED COMPOSER (owner, 2026-09-01: "have it automatically handle
-            # spawned chats/chips"). The deeplink types the prompt and stops there, so a
-            # spawned chat would sit forever with its work written and never started (measured
-            # 2026-09-01: no engine ever registered). The submit actuator presses Send on the
-            # composer whose text IS our prompt - the strongest aim proof available, since a
-            # brand-new chat has no title or conversation to verify against.
-            submitted = "not-attempted"
-            submit_note = ""
-            if SUBMIT_ACTUATOR.exists():
-                time.sleep(6)  # let the deeplink paint the composer
-                for _ in range(6):
-                    # BORN IN BYPASS (2026-09-01): a deeplink chat starts in the app's default
-                    # mode and no disk stamp sticks while it lives, so it stalled on its first
-                    # shell call. The actuator sets the app's own permission picker to bypass
-                    # BEFORE pressing Send, and refuses (exit 6) rather than start a chat that
-                    # will only stall - a refused spawn is a report; a stuck chat is a mess.
-                    r = clilib.run_text(
-                        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                         "-File", str(SUBMIT_ACTUATOR), "-Contains", prompt[:60],
-                         "-Instance", str(inst.get("dir") or ""),
-                         "-RequireMode", REQUIRED_MODE],
-                        timeout=180,
-                    )
-                    # The actuator's own last lines ride along in the report: "permission mode
-                    # set: 'Default permissions' -> 'Bypass permissions'" is the proof the chat
-                    # was born right, and its absence is the first thing to read when it was not.
-                    said = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
-                    submit_note = " | ".join(s[:120] for s in said[-3:])
-                    if r.returncode == 0:
-                        submitted = "sent"
-                        break
-                    submitted = f"exit {r.returncode}"
-                    if r.returncode == 6:
-                        # the mode could not be set: say exactly what the actuator saw
-                        tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
-                        submitted = f"exit 6 - {tail[-1][:160] if tail else 'permission mode not set'}"
-                        break
-                    time.sleep(5)
+            dialog = _poll_trust_dialog(folder)
+            submitted, submit_note = _submit_composer(inst, prompt)
         finally:
             window_note = windowlib.restore(inst.get("dir"), placement) or "unchanged"
+    return {"ok": True, "url": url, "dialog": dialog, "submitted": submitted,
+            "submit_note": submit_note, "window_note": window_note}
 
-    # Then wait for the new session to REGISTER (it appears in the live registry with our
-    # folder as its cwd). A spawn that never registers is reported honestly, never claimed.
-    started = "not-confirmed"
-    session_id = None
-    landed_in = None
+
+def _await_new_session(folder: str, before_ids: set, inst: dict) -> tuple[str | None, str | None]:
+    """Wait for the new session to REGISTER (it appears in the live registry with our folder as
+    its cwd). A spawn that never registers is reported honestly, never claimed.
+
+    THE APP DOES NOT ALWAYS HONOUR THE FOLDER (measured 2026-09-01, three spawns in a row): the
+    deeplink chat opened and ran, but in the instance's own scratch workspace
+    (...\\<instance>\\scratch-workspaces\\...), so a cwd==folder test reported "not-confirmed"
+    for a chat that was live and answering. A brand-new session in a scratch workspace of the
+    app we just poked IS our chat - taken, and REPORTED as landed in scratch so nobody reads the
+    folder as trusted-and-used when it was not. Returns (session_id, landed_in), both None if
+    nothing registered inside START_WAIT_SECS."""
     deadline = time.time() + START_WAIT_SECS
     want = str(Path(folder).resolve()).replace(chr(92), "/").lower()
     while time.time() < deadline:
@@ -256,12 +283,6 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
         new = [s for s in live if s.get("sessionId") not in before_ids]
         fresh = [s for s in new
                  if str(s.get("cwd") or "").replace(chr(92), "/").lower() == want]
-        # THE APP DOES NOT ALWAYS HONOUR THE FOLDER (measured 2026-09-01, three spawns in a
-        # row): the deeplink chat opened and ran, but in the instance's own scratch workspace
-        # (…\<instance>\scratch-workspaces\…), so a cwd==folder test reported "not-confirmed"
-        # for a chat that was live and answering. A brand-new session in a scratch workspace
-        # of the app we just poked IS our chat - taken, and REPORTED as landed in scratch so
-        # nobody reads the folder as trusted-and-used when it was not.
         scratch = [s for s in new
                    if "scratch-workspaces" in str(s.get("cwd") or "").replace(chr(92), "/").lower()
                    and str(inst.get("dir") or "").replace(chr(92), "/").lower()
@@ -269,37 +290,77 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
         if fresh or scratch:
             session_id = (fresh or scratch)[0].get("sessionId")
             landed_in = "folder" if fresh else "scratch-workspace (the app ignored --folder)"
-            break
+            return session_id, landed_in
+    return None, None
+
+
+def _start_first_turn(session_id: str, inst: dict, prompt: str, submitted: str,
+                       folder: str) -> tuple[str, str]:
+    """Get the new session's first turn actually running, then BORN RIGHT, THEN KEPT RIGHT
+    (2026-09-01): set its permission mode through the app's own control - the new-chat view
+    shows no permission picker until the chat exists, so a deeplink chat starts in the app's
+    default mode and no disk stamp sticks while it lives; now that it exists, this is the one
+    write the running app does not re-save away. Also records the spawn in the ledger as THE
+    PROVENANCE RECORD: this chat was born by the toolbox with bypass PROMISED, so if it still
+    stalls on a prompt in default mode, unblock_prompts may answer it on the strength of this
+    record - a person never chose that mode, the spawner did. Returns (started, mode_set)."""
+    if submitted == "sent":
+        # The composer submit already started the first turn - registering IS the proof.
+        # POSTing the prompt to the session as well queued the identical prompt a second time
+        # (review 2026-09-01: two starters stacked, where one was meant as a fallback), so the
+        # chat ran its whole task twice.
+        started = "running (composer submitted; engine registered)"
+    else:
+        # FALLBACK STARTER: no actuator pressed Send, so deliver the prompt through the
+        # daemon's message endpoint - the peer channel for a live session, no UI.
+        try:
+            got = hydralib.api_post(f"/api/sessions/{session_id}/message",
+                                    {"text": prompt, "confirm_secs": 90}, timeout=180)
+            started = ("running" if (isinstance(got, dict) and got.get("delivered"))
+                       else "typed-not-confirmed")
+        except hydralib.DaemonError as err:
+            started = f"first-turn delivery failed ({(err.detail or str(err))[:100]})"
+    mode_set = _set_mode_live(session_id, inst, prompt)
+    from lib import ledgerlib
+    ledgerlib.note("spawned", session_id, note=f"spawn_chat: {folder}; mode: {mode_set[:80]}")
+    return started, mode_set
+
+
+def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -> dict:
+    refusal = _refuse_if_duplicate(prompt, force)
+    if refusal is not None:
+        return refusal
+
+    inst, error = _resolve_target(instance)
+    if error is not None:
+        return error
+
+    binary = _binary()
+    if not binary:
+        return {"ok": False, "why": "no desktop binary found to send the deeplink to"}
+
+    # TRUST FIRST (docstring): a chat in an untrusted folder stalls on a human dialog.
+    import trust_workspace
+
+    trust = trust_workspace.apply_trust([folder], act=True)
+
+    before_ids = _live_session_ids()
+
+    drive = _drive_spawn_window(inst, folder, prompt, binary)
+    if not drive["ok"]:
+        return drive
+    url = drive["url"]
+    dialog = drive["dialog"]
+    submitted = drive["submitted"]
+    submit_note = drive["submit_note"]
+    window_note = drive["window_note"]
+
+    session_id, landed_in = _await_new_session(folder, before_ids, inst)
+    started = "not-confirmed"
     mode_set = "not-attempted"
     if session_id:
-        if submitted == "sent":
-            # The composer submit already started the first turn - registering IS the proof.
-            # POSTing the prompt to the session as well queued the identical prompt a second
-            # time (review 2026-09-01: two starters stacked, where one was meant as a
-            # fallback), so the chat ran its whole task twice.
-            started = "running (composer submitted; engine registered)"
-        else:
-            # FALLBACK STARTER: no actuator pressed Send, so deliver the prompt through the
-            # daemon's message endpoint - the peer channel for a live session, no UI.
-            try:
-                got = hydralib.api_post(f"/api/sessions/{session_id}/message",
-                                        {"text": prompt, "confirm_secs": 90}, timeout=180)
-                started = ("running" if (isinstance(got, dict) and got.get("delivered"))
-                           else "typed-not-confirmed")
-            except hydralib.DaemonError as err:
-                started = f"first-turn delivery failed ({(err.detail or str(err))[:100]})"
-        # BORN RIGHT, THEN KEPT RIGHT (2026-09-01): the new-chat view shows no permission
-        # picker until the chat exists, so a deeplink chat starts in the app's default mode
-        # and no disk stamp sticks while it lives. Now that it exists, set the picker through
-        # the app's own control - the one write the running app does not re-save away. The
-        # doctrine lane repeats this for any live chat it finds off-doctrine.
-        mode_set = _set_mode_live(session_id, inst, prompt)
-        # THE PROVENANCE RECORD: this chat was born by the toolbox with bypass PROMISED. If
-        # it still stalls on a prompt in default mode (the picker is hidden while a prompt is
-        # pending), unblock_prompts may answer it on the strength of this record - a person
-        # never chose that mode, the spawner did, and the promise is the doctrine's.
-        from lib import ledgerlib
-        ledgerlib.note("spawned", session_id, note=f"spawn_chat: {folder}; mode: {mode_set[:80]}")
+        started, mode_set = _start_first_turn(session_id, inst, prompt, submitted, folder)
+
     return {"ok": True, "instance": inst.get("name"), "folder": folder,
             "landedIn": landed_in,
             "trusted": trust["trusted"], "trustDialog": dialog,
