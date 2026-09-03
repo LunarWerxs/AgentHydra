@@ -301,18 +301,31 @@ jobs:
           # NOT the fix: the updater matches its archive by name (`-<target>.zip`), so a rename
           # silently breaks self-update for every install already out there. Saying it here is free
           # and lands exactly where the choice is made.
+          #
+          # ⛔ AND THE SAME IS NOW TRUE OF THE ORCHESTRATOR, one row down (2026-09-03). The python
+          # toolbox is staged as a FOLDER beside the executable, so like misc/ it can only ride in
+          # the zip — and this table used to end "Everything else is identical", which turned a
+          # second silent omission into a written promise. An .exe install answers
+          # GET /api/orchestrator with present:false and its four MCP tools do nothing. Whenever a
+          # payload is staged into "${stage}/${name}/" rather than compiled INTO the binary, it is
+          # absent from the single-file download by construction: say so here, in the same breath,
+          # or this row grows a third quiet exception.
           cat >> RELEASE_NOTES.md <<'NOTE'
 
           ---
 
           ### Which Windows download?
 
-          | file | tray icon | notes |
-          | --- | --- | --- |
-          | `...-windows-x64.zip` | **yes** | The executable plus the `misc\` tray toolkit. Double-click `AgentHydra.exe` and the daemon starts the tray launcher for you; or run `misc\Create-Shortcut.ps1` once for a shortcut that launches through it directly. |
-          | `...-windows-x64.exe` | no | One portable file, nothing to unpack. There is no `misc\` folder in a single file, so no tray icon can appear whatever the in-app setting says; it tells you so once on first start. |
+          | file | tray icon | orchestrator | notes |
+          | --- | --- | --- | --- |
+          | `...-windows-x64.zip` | **yes** | **yes** | The executable plus the `misc\` tray toolkit and the `orchestrator\` toolbox. Double-click `AgentHydra.exe` and the daemon starts the tray launcher for you; or run `misc\Create-Shortcut.ps1` once for a shortcut that launches through it directly. |
+          | `...-windows-x64.exe` | no | no | One portable file, nothing to unpack. A single file carries no `misc\` or `orchestrator\` folder, so no tray icon can appear whatever the in-app setting says, and the orchestrator tools report themselves as not installed. |
 
-          Both self-update. Everything else is identical.
+          Both self-update, and both are the same daemon. The zip is the complete install; the
+          single file is the daemon alone, without the two folders that sit beside it — the tray
+          toolkit and the orchestrator. Each says so plainly rather than looking broken: the .exe
+          tells you about the tray icon once on first start, and `GET /api/orchestrator` answers
+          `present:false` and names the folder it looked for.
           NOTE
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

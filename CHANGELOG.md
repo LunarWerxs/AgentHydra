@@ -45,6 +45,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   lookups keep working. A claim made only by an ARCHIVED tombstone counts too, because after a
   migration the tombstone left behind is the only record that still remembers the lineage. On this
   machine: 28 of 2,118 chats had rolled, 37 phantom rows.
+- **The release notes stop promising the two Windows downloads are otherwise identical.** The
+  orchestrator ships as a FOLDER beside the executable, so like the tray toolkit it can only ride
+  in the zip - an `.exe` install answers `GET /api/orchestrator` with `present:false` and its four
+  MCP tools do nothing. The asset table said "Everything else is identical", which turned a silent
+  omission into a written promise; it now has an orchestrator column and says what the single file
+  is. The table's own comment already made this rule for the tray icon ("costs real users, who
+  reasonably read a missing icon as a bug"); it now states the general form, so the next payload
+  staged beside the binary cannot become a third quiet exception.
 - **The orchestrator's gate no longer reads a `/compact`ed chat as "may be working" for ever.** A
   chat that finished its turn and was then compacted ends on a `<local-command-stdout>Compacted`
   record - user-role, and no model ever answers it - and the idle test accepted only a completed
