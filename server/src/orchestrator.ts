@@ -304,6 +304,46 @@ export async function runOrchestrator(
   }
 }
 
+/** `python --version` (or the equivalent probe spawn), reduced to a version string plus, on
+ *  failure, the message that belongs in OrchestratorStatus.error. Split out of
+ *  orchestratorStatus so its try/catch and its menu-probe sibling below don't nest. */
+async function probePythonVersion(
+  spawn: NonNullable<SpawnDeps['spawn']>,
+  python: string,
+  cwd: string,
+): Promise<{ version: string | null; error: string | null }> {
+  try {
+    const v = await spawn([python, '--version'], cwd, 15_000)
+    if (v.code !== 0)
+      return {
+        version: null,
+        error: `${python} --version exited ${v.code}: ${`${v.stderr}${v.stdout}`.trim()}`,
+      }
+    return { version: `${v.stdout}${v.stderr}`.trim() || null, error: null }
+  } catch (e) {
+    return {
+      version: null,
+      error: `${python} is not runnable: ${e instanceof Error ? e.message : String(e)}`,
+    }
+  }
+}
+
+/** `python orch.py` with no arguments, i.e. the driver's own menu, reduced the same way. */
+async function probeMenu(
+  spawn: NonNullable<SpawnDeps['spawn']>,
+  python: string,
+  dir: string,
+): Promise<{ menu: string | null; error: string | null }> {
+  try {
+    const m = await spawn([python, 'orch.py'], dir, 60_000)
+    if (m.code !== 0)
+      return { menu: null, error: `orch.py menu exited ${m.code}: ${m.stderr.trim()}` }
+    return { menu: m.stdout.trim(), error: null }
+  } catch (e) {
+    return { menu: null, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
 /** Is the toolbox there and does python answer - and if so, the menu. Read-only. */
 export async function orchestratorStatus(
   deps: SpawnDeps & { dir?: string; python?: string } = {},
@@ -312,25 +352,18 @@ export async function orchestratorStatus(
   const python = deps.python ?? pythonBinary()
   const present = existsSync(join(dir, 'orch.py'))
   const spawn = deps.spawn ?? realSpawn
-  let pythonVersion: string | null = null
   let error: string | null = present ? null : `no orch.py under ${dir}`
-  try {
-    const v = await spawn([python, '--version'], present ? dir : APP_ROOT, 15_000)
-    pythonVersion = v.code === 0 ? `${v.stdout}${v.stderr}`.trim() || null : null
-    if (v.code !== 0)
-      error = error ?? `${python} --version exited ${v.code}: ${`${v.stderr}${v.stdout}`.trim()}`
-  } catch (e) {
-    error = error ?? `${python} is not runnable: ${e instanceof Error ? e.message : String(e)}`
-  }
+  const { version: pythonVersion, error: versionError } = await probePythonVersion(
+    spawn,
+    python,
+    present ? dir : APP_ROOT,
+  )
+  error = error ?? versionError
   let menu: string | null = null
   if (present && pythonVersion) {
-    try {
-      const m = await spawn([python, 'orch.py'], dir, 60_000)
-      menu = m.code === 0 ? m.stdout.trim() : null
-      if (m.code !== 0) error = error ?? `orch.py menu exited ${m.code}: ${m.stderr.trim()}`
-    } catch (e) {
-      error = error ?? (e instanceof Error ? e.message : String(e))
-    }
+    const { menu: m, error: menuError } = await probeMenu(spawn, python, dir)
+    menu = m
+    error = error ?? menuError
   }
   return { dir, present, python, pythonVersion, menu, error }
 }

@@ -131,6 +131,83 @@ function setPreferred(map: Map<string, SessionMeta>, key: string, entry: Session
   if (a > b || (a === b && entry.path.localeCompare(existing.path) < 0)) map.set(key, entry)
 }
 
+/** One metadata file reduced to its SessionMeta entry plus the two facts scanStore needs to file
+ *  it under (the cliSessionId, when it has one, and the retired-id claims it makes). Pure parsing;
+ *  scanStore still owns where these land in the shared map/origins/retired accumulators. */
+function parseSessionMetaFile(
+  path: string,
+  rel: string,
+  label: string,
+): { id: string | null; entry: SessionMeta; prior: string[]; origin: OriginRow | null } {
+  const meta = JSON.parse(readFileSync(path, 'utf8'))
+  const id = meta?.cliSessionId
+  const archived = !!meta.isArchived
+  const permissionMode = typeof meta.permissionMode === 'string' ? meta.permissionMode : null
+  const title = typeof meta?.title === 'string' && meta.title.trim() ? meta.title.trim() : null
+  // The filename IS the app's chat id. It was already being computed below purely as a
+  // second lookup key and then discarded; keeping it is what lets a caller address this
+  // chat at all.
+  const chatId = rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null
+  const prior = Array.isArray(meta?.priorCliSessionIds)
+    ? (meta.priorCliSessionIds as unknown[]).filter(
+        (p): p is string => typeof p === 'string' && !!p && p !== id,
+      )
+    : []
+  const entry: SessionMeta = {
+    instance: label,
+    archived,
+    permissionMode,
+    path,
+    title,
+    chatId,
+    cliSessionId: typeof id === 'string' && id ? id : null,
+    priorCliSessionIds: prior,
+  }
+  const origin =
+    typeof meta?.cwd === 'string' && meta.cwd && typeof meta?.createdAt === 'number'
+      ? { instance: label, archived, cwd: meta.cwd, createdAt: meta.createdAt }
+      : null
+  return { id: typeof id === 'string' && id ? id : null, entry, prior, origin }
+}
+
+/** Record every retired-id claim this file makes. A live row's claim beats an archived row's
+ *  when they disagree about one id; otherwise first seen stands, so the answer cannot flip
+ *  between two scans over nothing having changed (the same reason setPreferred breaks its ties
+ *  deterministically). */
+function recordRetiredClaims(
+  retired: Map<string, RetiredClaim>,
+  id: string,
+  prior: string[],
+  archived: boolean,
+): void {
+  for (const p of prior) {
+    const have = retired.get(p)
+    if (!have || (have.archived && !archived)) retired.set(p, { to: id, archived })
+  }
+}
+
+/** File one parsed entry under BOTH of its lookup keys. A chat IMPORTED into the app is filed as
+ *  `local_<cliSessionId>.json`, so its filename IS the session id; a chat CREATED in the app is
+ *  filed under the app's own id and names the session only INSIDE, as cliSessionId. Indexing both
+ *  means every lookup resolves from cache whichever shape it meets - and a chat that has rolled
+ *  onto a new cliSessionId is still findable by the original id its filename kept. */
+function indexSessionEntry(
+  map: Map<string, SessionMeta>,
+  rel: string,
+  id: string | null,
+  entry: SessionMeta,
+): void {
+  if (id) setPreferred(map, id, entry)
+  const fileId = rel.slice(rel.lastIndexOf('local_') + 'local_'.length, -'.json'.length)
+  // The FILENAME key deliberately keeps its original first-wins rule rather than adopting
+  // setPreferred. It exists so a chat that has rolled onto a new cliSessionId is still
+  // reachable by the id its filename kept, which means it can legitimately point at a
+  // DIFFERENT chat's key - and letting it overwrite there would mix two conversations up.
+  // The duplicate-profile collision this commit fixes happens on the cliSessionId key above,
+  // so nothing is lost by leaving this one alone.
+  if (fileId && !map.has(fileId)) map.set(fileId, entry)
+}
+
 function scanStore(
   userDataDir: string,
   label: string,
@@ -144,55 +221,10 @@ function scanStore(
   for (const rel of glob.scanSync({ cwd: dir, onlyFiles: true })) {
     try {
       const path = join(dir, rel)
-      const meta = JSON.parse(readFileSync(path, 'utf8'))
-      const id = meta?.cliSessionId
-      const archived = !!meta.isArchived
-      const permissionMode = typeof meta.permissionMode === 'string' ? meta.permissionMode : null
-      const title = typeof meta?.title === 'string' && meta.title.trim() ? meta.title.trim() : null
-      // The filename IS the app's chat id. It was already being computed below purely as a
-      // second lookup key and then discarded; keeping it is what lets a caller address this
-      // chat at all.
-      const chatId = rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null
-      const prior = Array.isArray(meta?.priorCliSessionIds)
-        ? (meta.priorCliSessionIds as unknown[]).filter(
-            (p): p is string => typeof p === 'string' && !!p && p !== id,
-          )
-        : []
-      const entry: SessionMeta = {
-        instance: label,
-        archived,
-        permissionMode,
-        path,
-        title,
-        chatId,
-        cliSessionId: typeof id === 'string' && id ? id : null,
-        priorCliSessionIds: prior,
-      }
-      // THE RETIRED IDS, from every file including tombstones. A live row's claim beats an
-      // archived row's when they disagree about one id; otherwise first seen stands, so the answer
-      // cannot flip between two scans over nothing having changed (the same reason setPreferred
-      // breaks its ties deterministically).
-      if (typeof id === 'string' && id)
-        for (const p of prior) {
-          const have = retired.get(p)
-          if (!have || (have.archived && !archived)) retired.set(p, { to: id, archived })
-        }
-      // TWO KEYS, one scan. A chat IMPORTED into the app is filed as `local_<cliSessionId>.json`,
-      // so its filename IS the session id; a chat CREATED in the app is filed under the app's own
-      // id and names the session only INSIDE, as cliSessionId. Indexing both means every lookup
-      // resolves from cache whichever shape it meets - and a chat that has rolled onto a new
-      // cliSessionId is still findable by the original id its filename kept.
-      if (typeof id === 'string' && id) setPreferred(map, id, entry)
-      const fileId = rel.slice(rel.lastIndexOf('local_') + 'local_'.length, -'.json'.length)
-      // The FILENAME key deliberately keeps its original first-wins rule rather than adopting
-      // setPreferred. It exists so a chat that has rolled onto a new cliSessionId is still
-      // reachable by the id its filename kept, which means it can legitimately point at a
-      // DIFFERENT chat's key - and letting it overwrite there would mix two conversations up.
-      // The duplicate-profile collision this commit fixes happens on the cliSessionId key above,
-      // so nothing is lost by leaving this one alone.
-      if (fileId && !map.has(fileId)) map.set(fileId, entry)
-      if (typeof meta?.cwd === 'string' && meta.cwd && typeof meta?.createdAt === 'number')
-        origins.push({ instance: label, archived, cwd: meta.cwd, createdAt: meta.createdAt })
+      const { id, entry, prior, origin } = parseSessionMetaFile(path, rel, label)
+      if (id) recordRetiredClaims(retired, id, prior, entry.archived)
+      indexSessionEntry(map, rel, id, entry)
+      if (origin) origins.push(origin)
     } catch {
       /* unreadable metadata file: skip it */
     }

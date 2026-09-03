@@ -26,6 +26,38 @@ export interface PeerTarget {
   token: string | null
 }
 
+/** Parse one registry/key JSON file, or null when it is missing or unreadable. Shared by the
+ *  session-registry scan and the key-file lookup below, so both fail the same way. */
+function readRegistryEntry(dir: string, file: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(readFileSync(join(dir, file), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/** Is `pid` still around? A kill(pid, 0) that throws EPERM still proves the process exists (we
+ *  just cannot signal it); any other error (ESRCH, ...) means it is gone. */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** The peer token published beside `pid`'s registry entry, as `<pid>.<hash>.key`, or null when
+ *  there is no such file or it does not parse. */
+function tokenForPid(dir: string, files: string[], pid: number): string | null {
+  for (const kf of files) {
+    if (!kf.startsWith(`${pid}.`) || !kf.endsWith('.key')) continue
+    const reg = readRegistryEntry(dir, kf)
+    return typeof reg?.peerToken === 'string' ? reg.peerToken : null
+  }
+  return null
+}
+
 /** The live registry entry for a session id, with its pipe path and published peer token.
  *  null when the session is not live (no pipe to inject into). */
 export function peerTargetFor(
@@ -41,34 +73,13 @@ export function peerTargetFor(
   }
   for (const f of files) {
     if (!f.endsWith('.json')) continue
-    let reg: Record<string, unknown>
-    try {
-      reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
-    } catch {
-      continue
-    }
-    if (reg?.sessionId !== sessionId) continue
+    const reg = readRegistryEntry(dir, f)
+    if (!reg || reg.sessionId !== sessionId) continue
     const socketPath = typeof reg.messagingSocketPath === 'string' ? reg.messagingSocketPath : ''
     const pid = typeof reg.pid === 'number' ? reg.pid : 0
     if (!socketPath || !pid) continue
-    // pid must be alive to bother
-    try {
-      process.kill(pid, 0)
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EPERM') continue
-    }
-    // its key file is `<pid>.<hash>.key` beside the registry json
-    let token: string | null = null
-    for (const kf of files) {
-      if (!kf.startsWith(`${pid}.`) || !kf.endsWith('.key')) continue
-      try {
-        token = JSON.parse(readFileSync(join(dir, kf), 'utf8'))?.peerToken ?? null
-      } catch {
-        token = null
-      }
-      break
-    }
-    return { pid, socketPath, token }
+    if (!isPidAlive(pid)) continue
+    return { pid, socketPath, token: tokenForPid(dir, files, pid) }
   }
   return null
 }
