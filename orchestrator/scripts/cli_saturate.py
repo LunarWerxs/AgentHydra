@@ -135,34 +135,31 @@ def execute(plan: dict) -> list[dict]:
     return out
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
+def _parse_argv(argv: list[str]) -> tuple[bool, int | None, int | None]:
+    """Pull the flags main() cares about out of argv: (--json, --floor N, --max N)."""
     as_json = "--json" in argv
     floor = int(argv[argv.index("--floor") + 1]) if "--floor" in argv else None
     cap = int(argv[argv.index("--max") + 1]) if "--max" in argv else None
+    return as_json, floor, cap
 
-    try:
-        plan = build_plan(floor, cap)
-    except Exception as err:
-        print(f"cli_saturate FAILED: {err}", file=sys.stderr)
-        return 1
+
+def _run_if_armed(argv: list[str], plan: dict) -> list[dict]:
+    """Act on the plan only when --yes is present AND the armed window allows it.
+
+    THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
+    window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so.
+    """
     act = "--yes" in argv
-    # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
-    # window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so.
     if act:
         refusal = armlib.refuse_unless_armed(argv, "starting console chats")
         if refusal:
             print(refusal)
             act = False
-    results = execute(plan) if (act and plan["planned"]) else []
+    return execute(plan) if (act and plan["planned"]) else []
 
-    if as_json:
-        print(json.dumps({**plan, "results": results}, indent=2))
-        return 2 if [r for r in results if not r["ok"]] else 0
 
+def _print_text_report(plan: dict, results: list[dict]) -> None:
+    """Human-readable rendering of a plan (dry) or a plan plus its execution results."""
     print(f"{plan['running']} running of a floor of {plan['floor']} "
           f"(deficit {plan['deficit']}) across {len(plan['usableAccounts'])} usable "
           f"account(s) - {plan['perAccount']}")
@@ -180,6 +177,27 @@ def main(argv: list[str]) -> int:
             print(f"  ?? {(r.get('name') or r['sessionId'][:8])}: {r['why']}")
     if not results and plan["planned"]:
         print("\nPLAN ONLY - add --yes to start them.")
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    as_json, floor, cap = _parse_argv(argv)
+
+    try:
+        plan = build_plan(floor, cap)
+    except Exception as err:
+        print(f"cli_saturate FAILED: {err}", file=sys.stderr)
+        return 1
+
+    results = _run_if_armed(argv, plan)
+
+    if as_json:
+        print(json.dumps({**plan, "results": results}, indent=2))
+    else:
+        _print_text_report(plan, results)
     return 2 if [r for r in results if not r["ok"]] else 0
 
 
