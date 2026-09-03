@@ -145,18 +145,34 @@ try {
   Write-Note "installed version $reported"
 
   if (-not $NoShortcut) {
-    Write-Step 'Creating a Start Menu shortcut'
+    Write-Step 'Creating the tray shortcut'
+    # The shortcut launches misc\lunarwerx-tray.exe, NOT AgentHydra.exe. The exe on its own runs
+    # the daemon and opens the UI; the tray icon, the auto-restart supervisor and Quit all live in
+    # the tray HOST. A shortcut aimed at the bare exe (which is what this block used to make)
+    # produced a working app with no tray on every machine that never also ran
+    # misc\Create-Shortcut.ps1 by hand - a separate step the docs asked for and nobody took
+    # (owner's PC, 2026-09-03). One recipe, the kit's own, so this cannot drift from what
+    # Create-Shortcut.ps1 makes: it drops AgentHydra.lnk beside the exe, and the Start Menu gets a
+    # copy of that same file.
+    $misc = Join-Path $InstallDir 'misc'
+    . (Join-Path $misc 'New-TrayShortcut.ps1')
+    New-TrayShortcut -Root $InstallDir -ScriptDir $misc `
+      -LnkName 'AgentHydra' `
+      -IconFile 'AgentHydra.ico' `
+      -Description 'Launch AgentHydra (system tray)' `
+      -ExeFile 'lunarwerx-tray.exe' `
+      -ExeArguments 'AgentHydra-Tray.json'
+    $lnk = Join-Path $InstallDir 'AgentHydra.lnk'
     $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startMenu 'AgentHydra.lnk'))
-    $shortcut.TargetPath = $exe
-    $shortcut.WorkingDirectory = $InstallDir
-    $shortcut.Description = 'Local AI coding-session manager'
-    $shortcut.Save()
+    Copy-Item -LiteralPath $lnk -Destination (Join-Path $startMenu 'AgentHydra.lnk') -Force
   }
 
   Write-Host ''
   Write-Host "AgentHydra $reported is installed." -ForegroundColor Green
   Write-Host "  $exe"
+  if (-not $NoShortcut) {
+    Write-Host "  Launch it from the Start Menu entry 'AgentHydra' (or $InstallDir\AgentHydra.lnk) to get the tray icon."
+  }
 } finally {
   Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }

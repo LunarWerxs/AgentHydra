@@ -297,8 +297,8 @@ jobs:
 
           | file | tray icon | notes |
           | --- | --- | --- |
-          | `...-windows-x64.zip` | **yes** | The executable plus the `misc\` tray toolkit. Run `misc\Create-Shortcut.ps1` once, then launch from the shortcut it creates. |
-          | `...-windows-x64.exe` | no | One portable file, nothing to unpack. There is no `misc\` folder in a single file, so no tray icon can appear whatever the in-app setting says. |
+          | `...-windows-x64.zip` | **yes** | The executable plus the `misc\` tray toolkit. Double-click `AgentHydra.exe` and the daemon starts the tray launcher for you; or run `misc\Create-Shortcut.ps1` once for a shortcut that launches through it directly. |
+          | `...-windows-x64.exe` | no | One portable file, nothing to unpack. There is no `misc\` folder in a single file, so no tray icon can appear whatever the in-app setting says; it tells you so once on first start. |
 
           Both self-update. Everything else is identical.
           NOTE
