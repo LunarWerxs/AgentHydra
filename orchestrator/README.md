@@ -87,6 +87,29 @@ From an agent, the same three are `orchestrator_menu`, `orchestrator_loop` and
 `orchestrator_run { script, args: ["--help"] }` on the AgentHydra MCP server; `bun run
 orchestrator <script>` from the repo root is the shell equivalent.
 
+## Moving a machine off the standalone checkout (once, per machine)
+
+A machine that ran the orchestrator from its own repo (`D:\PublicProjects\orchestrator` or
+wherever it was cloned) still has three things pointing THERE, none of which a `git pull` of
+AgentHydra touches: the Windows scheduled tasks (`Orchestrator-*`, registered by absolute path to
+that folder's wrappers), the Desktop shortcut for the tray icon, and `state/` (the ledgers, the
+tray heartbeat, the usage-survey cache, `mode-confirmed.json`, `chips.json`, the chat journal).
+The cut-over, from THIS folder:
+
+```sh
+python orch.py disarm                                   # the old icon down (if it was up)
+robocopy ..\..\..\orchestrator\state state /E /XO       # bring the ledgers + journal across
+python scripts/schedule_jobs.py --status                # what the OLD folder registered
+python scripts/schedule_jobs.py --apply                 # re-register by name -> this folder's wrappers
+python scripts/schedule_jobs.py --pause                 # keep the lanes paused if they were
+powershell -File scripts\tray.ps1 -InstallShortcut      # the Desktop shortcut -> this folder
+python orch.py arm                                      # the icon, PAUSED, from here
+```
+
+`--apply` registers every task with `/F`, so the same-named tasks simply point at the new
+wrappers - nothing to unregister in the old folder. Adjust the `robocopy` source to where the old
+checkout really is. The old folder can then be deleted; its repo stays as the archive of v1/v2.
+
 `orch.py` is the one entry point. The dry loop walks all seven stages (census, gate, accounts
 and balancing, the sweep's four lanes, the naming pass, reconcile, the judgment queue) and
 touches nothing, so you can see exactly what a real pass would do before arming it.

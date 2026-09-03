@@ -135,7 +135,10 @@ export interface OrchestratorStatus {
   error: string | null
 }
 
-function tail(text: string): string {
+/** Bounded and newline-normalised: python on Windows emits CRLF into a pipe, and an agent reading
+ *  the verdict lines should not have to strip carriage returns first. */
+function tail(raw: string): string {
+  const text = raw.replace(/\r\n?/g, '\n')
   return text.length > MAX_OUTPUT_CHARS
     ? `…[truncated ${text.length - MAX_OUTPUT_CHARS} chars]\n${text.slice(-MAX_OUTPUT_CHARS)}`
     : text
@@ -158,6 +161,11 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number) {
     stderr: 'pipe',
     stdin: 'ignore',
     windowsHide: true,
+    // Python writing to a PIPE on Windows encodes with the locale code page (cp1252) unless told
+    // otherwise, and the toolbox prints '×', '🟢' and account names - decoded as UTF-8 here that
+    // would be mojibake on a machine without UTF-8 mode. Stated at the spawn so it does not
+    // depend on how the second machine happens to be configured.
+    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
   })
   let timedOut = false
   const killer = setTimeout(() => {

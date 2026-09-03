@@ -21,7 +21,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   names are validated against the menu grammar and arguments travel as an argv array, never a
   shell. Nothing there acts without the tray icon, as before. The retired v1/v2 reference trees
   (`old/`) and the duplicate `src/` + `tests/` copies did not come along: they stay reachable in
-  the archived repo, and the README's postmortem paragraphs carry the lessons.
+  the archived repo, and the README's postmortem paragraphs carry the lessons. Release bundles
+  stage the python half beside the executable (`orchestrator/`), where the compiled daemon looks
+  for it; the spawn forces UTF-8 and normalises CRLF so the second machine reads the same bytes.
+  A machine that ran the standalone checkout has a written one-time cut-over (scheduled tasks,
+  tray shortcut, `state/`) in orchestrator/README.md.
 
 ## [0.37.0] - 2026-09-02
 

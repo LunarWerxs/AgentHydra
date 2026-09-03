@@ -402,8 +402,15 @@ icon** (`orchestrator_switch {action:"armed"}` first; a disarmed fleet looks exa
 quiet one), a live chat is never moved or archived, every attempt is counted, and `--force` is
 a person's word for one act. `AGENTHYDRA_ORCHESTRATOR_DIR` points the daemon at a toolbox
 somewhere else; `AGENTHYDRA_PYTHON` names the interpreter (default `python` on Windows,
-`python3` elsewhere). Its own tests: `bun run test:orchestrator` (~650 unit tests, stub daemon,
-no fleet needed).
+`python3` elsewhere; the spawn forces UTF-8 output and normalises CRLF). Its own tests: `bun run
+test:orchestrator` (~650 unit tests, stub daemon, no fleet needed).
+
+In a compiled release the python half (`orch.py`, `scripts/`, `docs/`) is staged beside the
+executable as `orchestrator/`, which is exactly where `APP_ROOT/orchestrator` resolves; the
+remote front-end (`orchestrator/server` + `web`) needs bun and is source-checkout only. Python
+is not bundled - `GET /api/orchestrator` reports whether it answers. A machine that ran the
+standalone checkout has a one-time cut-over (scheduled tasks, tray shortcut, `state/`):
+orchestrator/README.md, "Moving a machine off the standalone checkout".
 
 ## Screenshots
 

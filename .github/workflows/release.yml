@@ -91,6 +91,18 @@ jobs:
           stage="tmp/release-stage"
           rm -rf "$stage"
           mkdir -p "$stage/$name" out
+          # THE ORCHESTRATOR (2026-09-03). The Python toolbox ships beside the executable so a
+          # compiled daemon finds it at APP_ROOT/orchestrator (server/src/orchestrator.ts resolves
+          # it there; GET /api/orchestrator says `present:false` otherwise). The python half only:
+          # orch.py + scripts/ + docs. Never state/ (runtime, gitignored anyway), never the tests,
+          # never the remote front-end (orchestrator/server + web need bun, which a compiled
+          # bundle does not have). Python itself is the user's; the daemon reports its absence.
+          mkdir -p "${stage}/${name}/orchestrator"
+          cp orchestrator/orch.py orchestrator/orch_cli.py orchestrator/README.md \
+             "${stage}/${name}/orchestrator/"
+          cp -r orchestrator/scripts orchestrator/docs "${stage}/${name}/orchestrator/"
+          rm -rf "${stage}/${name}/orchestrator/scripts/tests"
+          find "${stage}/${name}/orchestrator" -name __pycache__ -type d -prune -exec rm -rf {} +
           if [ "$target" = "windows-x64" ]; then
             # NO --minify: on a WINDOWS compile host --minify alone panics Bun 1.3.14 outright
             # ("Crashed while printing main.ts" — isolated locally 2026-07-16 to --minify specifically;
