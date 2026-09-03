@@ -173,7 +173,7 @@ import {
   setNotificationSettings,
 } from './notify-settings'
 import { openUi } from './open-ui'
-import { orchestratorStatus, runOrchestrator } from './orchestrator'
+import { orchestratorStatus, runOrchestrator, runOriginAllowed } from './orchestrator'
 import { samePathKey } from './path-key'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
@@ -1588,13 +1588,21 @@ app.post('/api/instance-mode/shortcut', async (c) => {
 // not a way around them. Loopback-only like every other route here.
 app.get('/api/orchestrator', async (c) => c.json(await orchestratorStatus()))
 app.post('/api/orchestrator/run', async (c) => {
+  // Exact-origin only (or no Origin at all): the shared guard above lets a page on another
+  // LOOPBACK PORT through as "same-site", and this route runs any script with any argv.
+  if (!runOriginAllowed(c.req.header('origin'), c.req.url))
+    return c.json(
+      { ok: false, error: 'orchestrator/run accepts only same-origin or non-browser requests' },
+      403,
+    )
   const body = await jsonBody(c)
   const result = await runOrchestrator({
     script: body.script,
     args: body.args,
     timeoutMs: body.timeoutMs,
   })
-  return c.json(result, 'error' in result ? 400 : 200)
+  // 409 = that script is already running through this route; 400 = the request itself is wrong.
+  return c.json(result, 'error' in result ? (result.busy ? 409 : 400) : 200)
 })
 app.delete('/api/instances/:dir', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))

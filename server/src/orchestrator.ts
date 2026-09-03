@@ -46,7 +46,26 @@ const SCRIPT_NAME = /^[a-z][a-z0-9_]{0,63}$/
 const MAX_ARGS = 64
 const MAX_ARG_LENGTH = 4000
 export const DEFAULT_TIMEOUT_MS = 10 * 60_000
+/** A fleet-wide ACTING pass (the live loop, the sweep) legitimately runs past ten minutes, and
+ *  killing it there would orphan actuators mid-act - so it gets the long deadline whichever tool
+ *  asked for it, not only the one that happens to know. */
+export const LONG_TIMEOUT_MS = 30 * 60_000
 export const MAX_TIMEOUT_MS = 60 * 60_000
+
+export function defaultDeadline(script: string, args: string[]): number {
+  if (script === 'sweep' || (script === 'loop' && args.includes('--live'))) return LONG_TIMEOUT_MS
+  return DEFAULT_TIMEOUT_MS
+}
+
+/** The driver's own words. orch.py's exit codes (DRIVER_EXIT_MEANINGS) describe THESE; a delegated
+ *  script's exit code is its own (`orch.py <script>` returns `mod.main()` verbatim), so a 3 from
+ *  migrate_chat means what migrate_chat's --help says, never "not armed". */
+const DRIVER_WORDS = new Set(['loop', 'arm', 'resume', 'pause', 'disarm', 'armed'])
+
+/** One run per script name at a time. The scripts carry their own locks for what must never
+ *  overlap (a window, a lane's lockfile); this is the daemon-side backstop so two callers cannot
+ *  start the same acting pass twice through this route. Different scripts may overlap. */
+const inFlight = new Map<string, number>()
 /** Output kept per stream. The dry loop over a full fleet is a few thousand lines; a runaway is
  *  truncated from the FRONT so the verdict lines at the end survive. */
 const MAX_OUTPUT_CHARS = 200_000
@@ -90,7 +109,7 @@ export function validateInvocation(input: {
     if (a.includes('\0')) return { ok: false, error: 'an arg contains a NUL byte' }
     args.push(a)
   }
-  let timeoutMs = DEFAULT_TIMEOUT_MS
+  let timeoutMs = defaultDeadline(script, args)
   if (input.timeoutMs != null) {
     const n = Number(input.timeoutMs)
     if (!Number.isFinite(n) || n <= 0)
@@ -98,6 +117,30 @@ export function validateInvocation(input: {
     timeoutMs = Math.min(Math.floor(n), MAX_TIMEOUT_MS)
   }
   return { ok: true, invocation: { script, args, timeoutMs } }
+}
+
+/**
+ * May a request carrying this Origin run an orchestrator script? Pure.
+ *
+ * The daemon's shared loopback guard (loopback-guard.mjs) rejects CROSS-site browser requests, but
+ * a page served from ANOTHER loopback port is "same-site" to the Fetch spec (a site ignores the
+ * port), and the guard strips ports before comparing - so a dev server, a preview, or any local
+ * daemon's page could POST here. The orchestrator's own gateway closed exactly this hole on
+ * 2026-09-03 (its commit 8c636b9: "Origins must now match exactly"); this route, which can run any
+ * script with a person's `--force`, gets the same rule: no Origin (curl, the tray, an MCP client -
+ * same-machine tools the owner ran) or the daemon's OWN origin, byte for byte. Nothing else.
+ */
+export function runOriginAllowed(
+  originHeader: string | null | undefined,
+  requestUrl: string,
+): boolean {
+  const origin = (originHeader ?? '').trim()
+  if (!origin || origin === 'null') return !origin
+  try {
+    return new URL(origin).origin === new URL(requestUrl).origin
+  } catch {
+    return false
+  }
 }
 
 /** What orch.py's exit codes mean, verbatim from its docstring, so a caller reads a verdict and not
@@ -109,6 +152,13 @@ export const DRIVER_EXIT_MEANINGS: Readonly<Record<number, string>> = Object.fre
   2: 'the loop found something that failed',
   3: 'unknown script, deterministic refusal, or not armed (nothing acts without the tray icon)',
 })
+
+/** Pure. 0 is ok for everyone; the other meanings apply only to the driver's own words. */
+export function exitMeaning(script: string, code: number | null): string | null {
+  if (code == null) return null
+  if (code === 0) return DRIVER_EXIT_MEANINGS[0] ?? 'ok'
+  return DRIVER_WORDS.has(script) ? (DRIVER_EXIT_MEANINGS[code] ?? null) : null
+}
 
 export interface OrchestratorRun {
   ok: boolean
@@ -154,6 +204,26 @@ export interface SpawnDeps {
   ) => Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>
 }
 
+/** Kill the WHOLE tree, not just python. An acting script blocks on its actuator (a powershell
+ *  driving a window, `subprocess.run` in migrate_chat / chips / courier); killing only the
+ *  interpreter would leave that actuator running unsupervised while the caller reads "timed
+ *  out". The toolbox itself uses `taskkill /T /F` for the same reason (lib/enginelib.py). */
+function killTree(proc: ReturnType<typeof Bun.spawn>): void {
+  try {
+    if (process.platform === 'win32' && proc.pid) {
+      Bun.spawnSync(['taskkill', '/PID', String(proc.pid), '/T', '/F'], {
+        stdout: 'ignore',
+        stderr: 'ignore',
+        windowsHide: true,
+      })
+    } else {
+      proc.kill()
+    }
+  } catch {
+    // already gone
+  }
+}
+
 async function realSpawn(command: string[], cwd: string, timeoutMs: number) {
   const proc = Bun.spawn(command, {
     cwd,
@@ -170,11 +240,7 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number) {
   let timedOut = false
   const killer = setTimeout(() => {
     timedOut = true
-    try {
-      proc.kill()
-    } catch {
-      // already gone
-    }
+    killTree(proc)
   }, timeoutMs)
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -191,7 +257,7 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number) {
 export async function runOrchestrator(
   input: { script?: unknown; args?: unknown; timeoutMs?: unknown },
   deps: SpawnDeps & { dir?: string; python?: string } = {},
-): Promise<OrchestratorRun | { ok: false; error: string }> {
+): Promise<OrchestratorRun | { ok: false; error: string; busy?: boolean }> {
   const check = validateInvocation(input)
   if (!check.ok) return { ok: false, error: check.error }
   const { script, args, timeoutMs } = check.invocation
@@ -204,7 +270,15 @@ export async function runOrchestrator(
     }
   const command = [deps.python ?? pythonBinary(), 'orch.py', script, ...args]
   const spawn = deps.spawn ?? realSpawn
+  const since = inFlight.get(script)
+  if (since != null)
+    return {
+      ok: false,
+      busy: true,
+      error: `${script} is already running through this route (started ${Math.round((Date.now() - since) / 1000)}s ago) - wait for it rather than starting a second one`,
+    }
   const started = Date.now()
+  inFlight.set(script, started)
   try {
     const r = await spawn(command, dir, timeoutMs)
     return {
@@ -214,7 +288,7 @@ export async function runOrchestrator(
       command,
       cwd: dir,
       exitCode: r.code,
-      exitMeaning: r.code == null ? null : (DRIVER_EXIT_MEANINGS[r.code] ?? null),
+      exitMeaning: exitMeaning(script, r.code),
       timedOut: r.timedOut,
       durationMs: Date.now() - started,
       stdout: tail(r.stdout),
@@ -225,6 +299,8 @@ export async function runOrchestrator(
       ok: false,
       error: `could not start ${command[0]}: ${e instanceof Error ? e.message : String(e)}`,
     }
+  } finally {
+    inFlight.delete(script)
   }
 }
 

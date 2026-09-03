@@ -113,3 +113,15 @@ publishes the GitHub Release automatically from the matching changelog section. 
 direct icon-bearing GUI executable for people plus a one-executable ZIP for the updater; Unix
 targets expose one-executable archives. `SHA256SUMS.txt` covers every asset. `workflow_dispatch`
 runs the same build and smoke matrix without publishing a release.
+
+## The orchestrator rides in the bundle (since 2026-09-03)
+
+`orchestrator/` is the Python toolbox that decides what should happen to a chat (see
+REFERENCE.md, "The orchestrator"). The release job stages its python half - `orch.py`,
+`scripts/`, `docs/` - beside the executable as `orchestrator/`, which is where a compiled daemon
+looks for it (`APP_ROOT/orchestrator`). Not staged: `state/` (runtime), `scripts/tests/`, and the
+remote front-end (`orchestrator/server` + `orchestrator/web`), which need bun and are a source
+checkout's business. Python 3 is the user's own; the daemon does not bundle it, and
+`GET /api/orchestrator` reports whether it answers. `misc/Rebuild.bat` is unaffected: it rebuilds
+the daemon's own SPA, and the orchestrator's web dashboard is built separately with
+`bun run --cwd orchestrator remote:build`.

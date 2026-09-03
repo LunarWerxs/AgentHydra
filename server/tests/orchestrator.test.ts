@@ -13,11 +13,15 @@ import { join } from 'node:path'
 import {
   DEFAULT_TIMEOUT_MS,
   DRIVER_EXIT_MEANINGS,
+  defaultDeadline,
+  exitMeaning,
+  LONG_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
   orchestratorDir,
   orchestratorStatus,
   pythonBinary,
   runOrchestrator,
+  runOriginAllowed,
   validateInvocation,
 } from '../src/orchestrator'
 
@@ -63,6 +67,27 @@ describe('validateInvocation - the only grammar that reaches orch.py', () => {
     expect(big.ok && big.invocation.timeoutMs).toBe(MAX_TIMEOUT_MS)
     expect(validateInvocation({ script: 'loop', timeoutMs: 0 }).ok).toBe(false)
     expect(validateInvocation({ script: 'loop', timeoutMs: 'soon' }).ok).toBe(false)
+  })
+})
+
+describe('runOriginAllowed - the run route takes no Origin or exactly its own', () => {
+  const self = 'http://127.0.0.1:7789/api/orchestrator/run'
+  test('no Origin (curl, tray, an MCP client) is allowed', () => {
+    expect(runOriginAllowed(undefined, self)).toBe(true)
+    expect(runOriginAllowed('', self)).toBe(true)
+  })
+  test('the daemon’s own origin is allowed, byte for byte', () => {
+    expect(runOriginAllowed('http://127.0.0.1:7789', self)).toBe(true)
+  })
+  test.each([
+    'http://127.0.0.1:5173', // another loopback PORT - same-site to Fetch, not same-origin
+    'http://localhost:7789', // same port, different host spelling
+    'https://127.0.0.1:7789', // scheme
+    'http://evil.example', // cross-site
+    'null', // opaque origin (sandboxed iframe, file://)
+    'not a url',
+  ])('%s is refused', (origin) => {
+    expect(runOriginAllowed(origin, self)).toBe(false)
   })
 })
 
@@ -136,10 +161,58 @@ describe('runOrchestrator - argv in, verdict out', () => {
     expect('ok' in r && r.ok).toBe(false)
     if ('exitCode' in r) {
       expect(r.exitCode).toBe(3)
-      expect(r.exitMeaning).toContain('not armed')
+      // A delegated script's 3 is ITS OWN code (migrate_chat: bad usage) - never the driver's
+      // "not armed". Only the driver's words carry the driver's meanings.
+      expect(r.exitMeaning).toBeNull()
       expect(r.stdout).toBe('REFUSED')
       expect(r.timedOut).toBe(false)
     }
+  })
+
+  test("the driver's own words carry the driver's exit meanings; everyone shares 0 = ok", () => {
+    expect(exitMeaning('armed', 3)).toContain('not armed')
+    expect(exitMeaning('loop', 2)).toContain('failed')
+    expect(exitMeaning('migrate_chat', 3)).toBeNull()
+    expect(exitMeaning('chats', 0)).toBe('ok')
+    expect(exitMeaning('chats', null)).toBeNull()
+  })
+
+  test('an acting fleet pass gets the long deadline whichever tool asked for it', () => {
+    expect(defaultDeadline('loop', ['--live'])).toBe(LONG_TIMEOUT_MS)
+    expect(defaultDeadline('sweep', ['--all', '--yes'])).toBe(LONG_TIMEOUT_MS)
+    expect(defaultDeadline('loop', [])).toBe(DEFAULT_TIMEOUT_MS)
+    expect(defaultDeadline('chats', [])).toBe(DEFAULT_TIMEOUT_MS)
+    const v = validateInvocation({ script: 'loop', args: ['--live'] })
+    expect(v.ok && v.invocation.timeoutMs).toBe(LONG_TIMEOUT_MS)
+  })
+
+  test('the same script cannot be started twice at once; a different one can', async () => {
+    const dir = fakeToolbox()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const slow = async () => {
+      await gate
+      return { code: 0, stdout: 'done', stderr: '', timedOut: false }
+    }
+    const first = runOrchestrator({ script: 'sweep' }, { dir, spawn: slow })
+    const second = await runOrchestrator({ script: 'sweep' }, { dir, spawn: slow })
+    expect('busy' in second && second.busy).toBe(true)
+    expect('error' in second && second.error).toContain('already running')
+    const other = await runOrchestrator(
+      { script: 'chats' },
+      { dir, spawn: async () => ({ code: 0, stdout: '', stderr: '', timedOut: false }) },
+    )
+    expect('ok' in other && other.ok).toBe(true)
+    release()
+    const done = await first
+    expect('ok' in done && done.ok).toBe(true)
+    const third = await runOrchestrator(
+      { script: 'sweep' },
+      { dir, spawn: async () => ({ code: 0, stdout: '', stderr: '', timedOut: false }) },
+    )
+    expect('ok' in third && third.ok).toBe(true)
   })
 
   test('a timed-out run is never ok, whatever the code says', async () => {

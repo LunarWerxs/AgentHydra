@@ -25,7 +25,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   stage the python half beside the executable (`orchestrator/`), where the compiled daemon looks
   for it; the spawn forces UTF-8 and normalises CRLF so the second machine reads the same bytes.
   A machine that ran the standalone checkout has a written one-time cut-over (scheduled tasks,
-  tray shortcut, `state/`) in orchestrator/README.md.
+  tray shortcut, `state/`) in orchestrator/README.md. The `/orchestrate` command that 0.37.0
+  removed is back (canonical copy in `.claude/commands/`, beside `/hydra-status`), rewritten onto
+  the four MCP tools instead of a path to a second repo.
 
 ## [0.37.0] - 2026-09-02
 

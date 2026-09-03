@@ -64,3 +64,12 @@ mkdirSync(process.env.AGENTHYDRA_DATA_DIR, { recursive: true })
 // explicitly in that child's env; inheriting this value there would silently outrank their HOME.
 process.env.AGENTHYDRA_INSTANCES_ROOT = path.join(scratch, '.claude-instances')
 mkdirSync(process.env.AGENTHYDRA_INSTANCES_ROOT, { recursive: true })
+// THE ORCHESTRATOR'S REMOTE GATEWAY (orchestrator/server, a root workspace since 2026-09-03) has
+// its own bunfig preload doing exactly this - but a whole-repo `bun test` from THIS root loads
+// only THIS preload, so its suite ran against the real orchestrator/state/ and left a signing key
+// and a config.json there (found by the merge review the same day). Mirrored here so the two
+// entry points isolate the same way. AGENTHYDRA_URL is deliberately NOT overridden: this suite's
+// own daemonBase tests read it.
+process.env.ORCHESTRATOR_STATE_DIR = path.join(scratch, 'orchestrator-state')
+mkdirSync(process.env.ORCHESTRATOR_STATE_DIR, { recursive: true })
+process.env.ORCH_NO_TUNNEL = '1'

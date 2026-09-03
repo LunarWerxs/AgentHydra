@@ -98,17 +98,20 @@ The cut-over, from THIS folder:
 
 ```sh
 python orch.py disarm                                   # the old icon down (if it was up)
-robocopy ..\..\..\orchestrator\state state /E /XO       # bring the ledgers + journal across
+robocopy ..\..\..\orchestrator\state state /E           # the ledgers + journal across, OLD wins
 python scripts/schedule_jobs.py --status                # what the OLD folder registered
 python scripts/schedule_jobs.py --apply                 # re-register by name -> this folder's wrappers
 python scripts/schedule_jobs.py --pause                 # keep the lanes paused if they were
-powershell -File scripts\tray.ps1 -InstallShortcut      # the Desktop shortcut -> this folder
+powershell -File scripts\tray.ps1 -InstallShortcut -Startup   # Desktop + login shortcuts -> here
 python orch.py arm                                      # the icon, PAUSED, from here
 ```
 
 `--apply` registers every task with `/F`, so the same-named tasks simply point at the new
-wrappers - nothing to unregister in the old folder. Adjust the `robocopy` source to where the old
-checkout really is. The old folder can then be deleted; its repo stays as the archive of v1/v2.
+wrappers - nothing to unregister in the old folder. The `robocopy` has no `/XO` on purpose: the
+old tree's ledgers are the history, and the few files the new tree wrote before the cut-over
+(a unit-test run's fixtures, a first attempt or two) are exactly what should lose. Adjust the
+source to where the old checkout really is. The old folder can then be deleted; its repo stays as
+the archive of v1/v2.
 
 `orch.py` is the one entry point. The dry loop walks all seven stages (census, gate, accounts
 and balancing, the sweep's four lanes, the naming pass, reconcile, the judgment queue) and
@@ -265,11 +268,16 @@ exist, and both callbacks are already registered on the OAuth app, so nothing he
 Cloudflare's configuration - the machine only needs its own connector credential.
 
 ```sh
-git clone https://github.com/Lunarwerx/orchestrator.git && cd orchestrator
-bun install && bun run remote:build
+git clone https://github.com/LunarWerxs/AgentHydra.git && cd AgentHydra/app
+bun install && bun run --cwd orchestrator remote:build
+cd orchestrator
 python scripts/remote_tunnel.py --install-token --name orch-jacob   # needs CLOUDFLARE_API_TOKEN
 powershell -File scripts\tray.ps1 -InstallShortcut -Startup         # the icon, and at every login
 ```
+
+(The orchestrator is a folder of the AgentHydra repo since 2026-09-03; a machine that still has
+the old standalone checkout follows "Moving a machine off the standalone checkout" above instead
+of cloning anything.)
 
 `--install-token` needs a Cloudflare API token in the environment (Account:Cloudflare Tunnel:Edit).
 Through the Connections MCP it can be leased without anyone seeing it:
