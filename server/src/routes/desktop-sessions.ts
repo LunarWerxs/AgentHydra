@@ -271,6 +271,15 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // A live chat's process must stop before anything appends to its transcript. User-initiated:
   // clicking "migrate" means "move this thread", current turn included.
   const live = liveSessionEntry(sessionId)
+  // ...unless the caller declined the kill (`stop_live: false`), which the MCP move tool passes.
+  // A person clicking migrate has the chat in front of them; an agent calling the tool has not
+  // watched it, so it gets the import door's refusal instead of silently ending someone's turn.
+  // Same shape and wording as importSessionToDesktop's, so the caller-facing error is unchanged.
+  if (live && body.stop_live === false)
+    return c.json(
+      { ok: false, reason: 'session-live: refusing to import under an active writer' },
+      422,
+    )
   if (live) {
     try {
       process.kill(live.pid)

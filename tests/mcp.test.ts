@@ -82,7 +82,6 @@ describe('tools/list', () => {
       'run_queue_item',
       'cancel_queue_item',
       'get_run_events',
-      'list_accounts',
       'get_scheduler',
       'set_scheduler',
       'list_instances',
@@ -97,6 +96,10 @@ describe('tools/list', () => {
     }
     // no shutdown tool per the task spec
     expect(names).not.toContain('shutdown')
+    // ...and no list_accounts: it read the legacy pasted-credentials table and its own text sent
+    // the caller to list_instances instead, so it was a duplicate that still occupied a slot
+    // (removed 2026-09-04). The route it called stays; only the agent-facing tool is gone.
+    expect(names).not.toContain('list_accounts')
     for (const t of res.result.tools) {
       expect(typeof t.description).toBe('string')
       expect((t.inputSchema as { type: string }).type).toBe('object')
