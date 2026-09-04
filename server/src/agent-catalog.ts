@@ -475,8 +475,14 @@ export const AGENT_TOOLS: AgentTool[] = [
     id: 'hermes',
     name: 'Hermes Agent',
     vendor: 'Nous Research',
-    envVar: 'HERMES_SESSIONS_DIR',
-    dirs: ['.hermes/sessions'],
+    // Verified against hermes_constants.py (2026-09-04), not the agentsview registry: there is no
+    // `sessions` directory anywhere in Hermes. State is ONE SQLite file, `state.db`, at the root of
+    // HERMES_HOME — `~/.hermes` on POSIX and `%LOCALAPPDATA%\hermes` on native Windows, which is
+    // home-relative here and so reachable by the second entry. `_HERMES_HOME_MARKERS` in that file
+    // is ("config.yaml", ".env", "state.db"); we key on the store, not the config.
+    envVar: 'HERMES_HOME',
+    dirs: ['.hermes', 'AppData/Local/hermes'],
+    dbName: 'state.db',
     format: null,
   },
   {
@@ -515,8 +521,12 @@ export const AGENT_TOOLS: AgentTool[] = [
     id: 'openclaw',
     name: 'OpenClaw',
     vendor: 'OpenClaw',
-    envVar: 'OPENCLAW_DIR',
-    dirs: ['.openclaw/agents', '.kimi_openclaw/agents'],
+    // Verified against src/config/paths.ts (2026-09-04), not the agentsview registry: `resolveStateDir`
+    // returns `~/.openclaw` itself and the config is `<stateDir>/openclaw.json`. There is no `agents`
+    // directory in that file, so the path this row used to carry could never exist and OpenClaw was
+    // reported as absent on every machine that had it. The relocation env var is OPENCLAW_STATE_DIR.
+    envVar: 'OPENCLAW_STATE_DIR',
+    dirs: ['.openclaw', '.kimi_openclaw'],
     format: null,
   },
   {
