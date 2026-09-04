@@ -203,13 +203,8 @@ def fix_same_task(groups: list[dict]) -> list[dict]:
 
 def fix(twins: list[dict]) -> list[dict]:
     done = []
+    hosts = _engine_host_dirs({t["cliSessionId"] for t in twins if t["live"]})
     for t in twins:
-        # ⛔ A LIVE ENGINE IS NEVER TOUCHED (docstring line 24-25) - checked before anything
-        # else picks a "stale" copy, because the daemon's home-instance report can lag a
-        # fresh migration and the copy it names stale may still be the one in use.
-        if t["live"]:
-            done.append({**t, "outcome": "REFUSED - live chat, never touched"})
-            continue
         # A HOLD PROTECTS THE CHAT, NOT A STALE DUPLICATE OF IT (owner, 2026-09-01: "there
         # are a few duplicate chats happening... we need some kind of check"). Only the STALE
         # copy is archived; the copy the owner is actually using is left exactly as it is. A
@@ -217,10 +212,111 @@ def fix(twins: list[dict]) -> list[dict]:
         if not t["keep"]:
             done.append({**t, "outcome": "REFUSED - " + t["why"]})
             continue
+        host = hosts.get(t["cliSessionId"]) if t["live"] else None
         for stale in t["stale"]:
+            # ⛔ A LIVE ENGINE IS NEVER TOUCHED (docstring line 24-25) - but the question is
+            # WHICH COPY holds it, not whether the conversation has one. That distinction is
+            # the whole fix: a landing boots a fresh engine in the TARGET app straight away
+            # (enginelib's own note), so a conversation-scoped guard refuses the SOURCE copy
+            # forever and every account migration leaves a permanent twin - precisely the
+            # state this script exists to clear. An engine traced to another instance's app
+            # cannot be the one this copy is holding. An untraceable engine stays refused.
+            refusal = _live_copy_refusal(t["live"], host, stale["instance"])
+            if refusal:
+                done.append({**t, "outcome": "REFUSED - " + refusal, "staleCopy": stale["path"]})
+                continue
             said = _archive_copy(stale["instance"], stale["path"], t["title"])
             done.append({**t, "outcome": said, "staleCopy": stale["path"]})
     return done
+
+
+def _live_copy_refusal(live: bool, host_dir: str | None, instance: str) -> str:
+    """Why this STALE copy may not be archived, or '' when it may."""
+    if not live:
+        return ""
+    if not host_dir:
+        return "live chat whose engine could not be traced to an app, never touched"
+    _, inst_dir = _app_running(instance)
+    if inst_dir and Path(inst_dir).resolve() == Path(host_dir).resolve():
+        return f"live chat - its engine runs under {instance}, never touched"
+    return ""
+
+
+def _engine_host_dirs(cli_ids: set[str]) -> dict[str, str]:
+    """{cli session id: the --user-data-dir of the app whose engine it is}.
+
+    The daemon says a conversation is live; it does not say which of its duplicate records
+    is the live one, and after a migration the obvious guess is the wrong one. The engine's
+    own process ancestry settles it without guessing: a chat's claude.exe is a child of its
+    instance's Electron host, and that host carries the instance's --user-data-dir on its
+    command line. A chain that cannot be walked yields nothing, and nothing means refuse.
+    """
+    if not cli_ids:
+        return {}
+    try:
+        live = hydralib.api_get("/api/sessions/live").get("sessions", [])
+    except hydralib.DaemonError:
+        return {}
+    pids = {str(s.get("sessionId")): int(s.get("pid") or 0)
+            for s in live if str(s.get("sessionId")) in cli_ids and s.get("pid")}
+    if not pids:
+        return {}
+    tree = _claude_process_tree()
+    out = {}
+    for cli, pid in pids.items():
+        seen: set[int] = set()
+        while pid in tree and pid not in seen:
+            seen.add(pid)
+            parent, cmdline = tree[pid]
+            udd = _user_data_dir(cmdline)
+            if udd:
+                out[cli] = udd
+                break
+            pid = parent
+    return out
+
+
+def _claude_process_tree() -> dict[int, tuple[int, str]]:
+    """{pid: (parent pid, command line)} for every claude.exe - engine AND Electron host."""
+    import subprocess
+
+    cmd = ("Get-CimInstance Win32_Process -Filter \"Name='claude.exe'\" | "
+           "Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress")
+    try:
+        r = clilib.run_text(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+            timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    try:
+        # strict=False: a real command line can carry a raw control character, and one of
+        # them made the whole tree unreadable (so every engine was "untraceable" and every
+        # stale copy was refused - a silent, total failure that looked like a policy).
+        rows = json.loads(r.stdout or "", strict=False)
+    except ValueError:
+        return {}
+    if isinstance(rows, dict):
+        rows = [rows]
+    tree = {}
+    for row in rows:
+        try:
+            tree[int(row["ProcessId"])] = (int(row["ParentProcessId"] or 0),
+                                           str(row.get("CommandLine") or ""))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return tree
+
+
+def _user_data_dir(cmdline: str) -> str:
+    """The --user-data-dir an Electron host was started with ('' when it carries none)."""
+    key = "--user-data-dir"
+    if key not in cmdline:
+        return ""
+    rest = cmdline.split(key, 1)[1].lstrip("= ")
+    if rest.startswith('"'):
+        return rest[1:].split('"', 1)[0].strip()
+    cut = rest.find(" --")
+    return (rest[:cut] if cut >= 0 else rest).strip()
 
 
 _ACTUATOR = Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"

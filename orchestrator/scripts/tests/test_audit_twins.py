@@ -214,5 +214,135 @@ class FindTwinsLineageTest(unittest.TestCase):
         self.assertEqual(t["stale"][0]["instance"], self.other_inst)
 
 
+class LiveCopyGuardTest(unittest.TestCase):
+    """WHICH COPY holds the live engine - the guard that used to answer per CONVERSATION.
+
+    THE BUG (live, 2026-09-04): nine chats were migrated between accounts. Landing a chat boots
+    a fresh engine in the TARGET app straight away (enginelib's own note), so every one of them
+    read as "live", the conversation-scoped guard refused every SOURCE copy, and the move left
+    nine permanent twins - the exact state this script exists to clear, produced by the script
+    that clears it. The engine's process ancestry answers the real question: whose app is it a
+    child of.
+    """
+
+    CLI = "cli-moved"
+    ENGINE_PID = 4242
+    HOST_PID = 37360
+
+    def setUp(self):
+        self._state = tempfile.TemporaryDirectory()
+        os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+        armlib.arm(3600)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.target_dir = str(self.root / "target")
+        self.source_dir = str(self.root / "source")
+        self.stub = StubDaemon()
+        hydralib.BASE = self.stub.url
+        self.stub.routes["/api/fleet"] = {"instances": [
+            {"num": 1, "name": "target", "dir": self.target_dir,
+             "isRunning": True, "signedIn": True},
+            {"num": 2, "name": "source", "dir": self.source_dir,
+             "isRunning": True, "signedIn": True},
+        ]}
+        self.stub.routes["/api/sessions/live"] = {"count": 1, "sessions": [
+            {"sessionId": self.CLI, "pid": self.ENGINE_PID}]}
+        self.stub.routes["/api/sessions"] = []
+        self._home = mock.patch("pathlib.Path.home", return_value=self.root / "nohome")
+        self._home.start()
+        self.archived = []
+        self._arch = mock.patch.object(
+            audit_twins, "_archive_copy",
+            side_effect=lambda instance, path, title: self.archived.append(instance) or "archived")
+        self._arch.start()
+
+    def tearDown(self):
+        self._arch.stop()
+        self._home.stop()
+        self.stub.close()
+        os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
+        self._tmp.cleanup()
+        self._state.cleanup()
+
+    def _twin(self):
+        return {"cliSessionId": self.CLI, "title": "Moved chat", "live": True, "why": "",
+                "keep": {"instance": "target", "path": self.target_dir + "/a.json",
+                         "stem": "local_" + self.CLI},
+                "stale": [{"instance": "source", "path": self.source_dir + "/a.json",
+                           "stem": "local_" + self.CLI}]}
+
+    def _tree_hosted_by(self, user_data_dir):
+        """An engine whose parent is the Electron host started with that --user-data-dir."""
+        return {self.ENGINE_PID: (self.HOST_PID, "claude.exe --type=renderer"),
+                self.HOST_PID: (0, "claude.exe --user-data-dir=" + user_data_dir)}
+
+    def test_engine_under_the_KEEPER_frees_the_stale_copy(self):
+        with mock.patch.object(audit_twins, "_claude_process_tree",
+                               return_value=self._tree_hosted_by(self.target_dir)):
+            done = audit_twins.fix([self._twin()])
+        self.assertEqual(self.archived, ["source"])
+        self.assertEqual(done[0]["outcome"], "archived")
+
+    def test_engine_under_the_STALE_copy_is_never_touched(self):
+        with mock.patch.object(audit_twins, "_claude_process_tree",
+                               return_value=self._tree_hosted_by(self.source_dir)):
+            done = audit_twins.fix([self._twin()])
+        self.assertEqual(self.archived, [])
+        self.assertIn("its engine runs under source", done[0]["outcome"])
+
+    def test_an_untraceable_engine_stays_refused(self):
+        with mock.patch.object(audit_twins, "_claude_process_tree", return_value={}):
+            done = audit_twins.fix([self._twin()])
+        self.assertEqual(self.archived, [])
+        self.assertIn("could not be traced", done[0]["outcome"])
+
+    def test_a_dead_conversation_is_archived_without_asking_about_engines(self):
+        twin = {**self._twin(), "live": False}
+        with mock.patch.object(audit_twins, "_claude_process_tree", return_value={}):
+            done = audit_twins.fix([twin])
+        self.assertEqual(self.archived, ["source"])
+        self.assertEqual(done[0]["outcome"], "archived")
+
+
+class ProcessTreeReadingTest(unittest.TestCase):
+    """_claude_process_tree / _user_data_dir - the two places a wrong answer is SILENT."""
+
+    def _tree_from(self, stdout):
+        import types
+
+        with mock.patch.object(
+                audit_twins.clilib, "run_text",
+                return_value=types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")):
+            return audit_twins._claude_process_tree()
+
+    def test_a_control_character_in_a_command_line_does_not_blank_the_whole_tree(self):
+        """The real failure: one raw control byte in one command line made json.loads throw,
+        every engine became untraceable, and the total refusal looked like a policy decision
+        rather than a parse error."""
+        rows = ('[{"ProcessId":1,"ParentProcessId":0,"CommandLine":"claude.exe --user-data-dir=D:/x"},'
+                '{"ProcessId":2,"ParentProcessId":1,"CommandLine":"claude.exe ' + chr(1) + ' --type=x"}]')
+        tree = self._tree_from(rows)
+        self.assertEqual(len(tree), 2)
+        self.assertEqual(tree[2][0], 1)
+
+    def test_a_single_process_comes_back_as_an_object_not_an_array(self):
+        tree = self._tree_from('{"ProcessId":9,"ParentProcessId":0,"CommandLine":"claude.exe"}')
+        self.assertEqual(list(tree), [9])
+
+    def test_unreadable_output_is_an_empty_tree_never_a_crash(self):
+        self.assertEqual(self._tree_from("not json at all"), {})
+
+    def test_user_data_dir_is_read_in_every_form_the_host_writes_it(self):
+        cases = {
+            "claude.exe --user-data-dir=c:/i/6claude": "c:/i/6claude",
+            "claude.exe --user-data-dir c:/i/6claude": "c:/i/6claude",
+            'claude.exe --user-data-dir "c:/my instances/6" --type=gpu': "c:/my instances/6",
+            "claude.exe --user-data-dir=c:/i/6claude --type=gpu": "c:/i/6claude",
+            "claude.exe --type=renderer": "",
+        }
+        for cmdline, expected in cases.items():
+            self.assertEqual(audit_twins._user_data_dir(cmdline), expected, cmdline)
+
+
 if __name__ == "__main__":
     unittest.main()
