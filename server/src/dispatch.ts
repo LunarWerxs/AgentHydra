@@ -643,7 +643,7 @@ function failureText(id: string, exitCode: number): string {
 
 /**
  * Record (and, unless it's a suppressed repeat, notify) a failure incident for one queue item.
- * Fire-and-forget by design — incident bookkeeping is diagnostic, never load-bearing for the run
+ * Fire-and-forget by design - incident bookkeeping is diagnostic, never load-bearing for the run
  * itself, so a slow or failing notification channel must not delay finalize()/failPreLaunch().
  * Keyed by the item's project (cwd): the recurring unit that fails the same way overnight is the
  * project being run, not any one queue item's uuid (which never repeats).
@@ -1078,13 +1078,26 @@ async function tailRun(id: string, entry: ActiveEntry): Promise<void> {
  *  so the terminal state has to be written directly here — same fields finalize() sets). Used for
  *  every pre-launch instance-pinning failure: a pinned run must NEVER silently fall back to Ambient
  *  credentials, so an instance_ref that doesn't resolve to a real, live instance fails loudly here
- *  instead of reaching the runner with desktopDir/cliConfigDir both null. */
-function failPreLaunch(item: QueueItem, message: string): void {
+ *  instead of reaching the runner with desktopDir/cliConfigDir both null.
+ *
+ *  `skipIncident` exists for exactly one caller: the headless-policy refusal below. That refusal is
+ *  a permanent, hardcoded "no" (headlessRunsAllowed() is a constant false), not a failure a human can
+ *  act on, so every queue item's every dispatch attempt would otherwise open (and, on the first
+ *  attempt or any later resolve, page for) an incident that can never actually be fixed - the exact
+ *  alert noise this module exists to prevent. The other three call sites (a stale instance_ref) stay
+ *  incident-tracked: those ARE fixable, by repointing or clearing the pin. */
+function failPreLaunch(
+  item: QueueItem,
+  message: string,
+  opts: { skipIncident?: boolean } = {},
+): void {
   recordEvent(item.id, 'system', 'meta', message, null)
   db.query(
     'update queue_items set status = ?, finished_at = ?, exit_code = ?, pid = null where id = ?',
   ).run('failed', new Date().toISOString(), -1, item.id)
-  recordFailureIncident({ id: item.id, cwd: item.cwd, title: item.title }, message)
+  if (!opts.skipIncident) {
+    recordFailureIncident({ id: item.id, cwd: item.cwd, title: item.title }, message)
+  }
   publish(item.id, {
     type: 'status',
     data: { id: item.id, status: 'failed', exit_code: -1, pid: null },
@@ -1135,7 +1148,9 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // kept only until the queue subsystem it belongs to is demolished deliberately rather than
   // half-removed in passing.
   if (!headlessRunsAllowed()) {
-    failPreLaunch(item, NO_HEADLESS_REASON)
+    // skipIncident: this refusal is permanent and identical on every attempt (see failPreLaunch's
+    // doc comment) - it is not an incident, it is the policy working as designed.
+    failPreLaunch(item, NO_HEADLESS_REASON, { skipIncident: true })
     return
   }
 

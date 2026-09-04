@@ -160,7 +160,7 @@ function startPolling() {
     refreshQueue()
     refreshScheduler()
   }, 2000)
-  // sessions require disk scans — refresh more lazily. Incidents change only on a new failure or an
+  // sessions require disk scans - refresh more lazily. Incidents change only on a new failure or an
   // ack/resolve click (both already re-fetch on their own), so the slow cadence is plenty.
   slowTimer = window.setInterval(() => {
     refreshSessions()

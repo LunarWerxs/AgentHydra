@@ -863,7 +863,7 @@ export const TOOLS: McpEngineTool[] = [
 
   // --- incidents (server/src/incidents.ts) ---------------------------------------
   // A failed queue run is grouped with prior failures of the SAME project + error signature
-  // instead of each occurrence reading as a fresh, unrelated alert — see incidents.ts's header.
+  // instead of each occurrence reading as a fresh, unrelated alert - see incidents.ts's header.
   {
     name: 'list_incidents',
     description:

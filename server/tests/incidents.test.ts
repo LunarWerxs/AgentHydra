@@ -1,8 +1,8 @@
-// server/src/incidents.ts — failure incidents: signature dedup, ack/resolve lifecycle, and the
+// server/src/incidents.ts - failure incidents: signature dedup, ack/resolve lifecycle, and the
 // notify-on-first-occurrence-or-reopen suppression that is the whole point of the module.
 import { afterAll, beforeEach, expect, test } from 'bun:test'
 
-// Point the db at a scratch dir BEFORE importing anything that touches it — db.ts opens the file on
+// Point the db at a scratch dir BEFORE importing anything that touches it - db.ts opens the file on
 // import, so the env has to be in place first (same pattern as notify-settings.test.ts).
 const scratch = `${process.env.TEMP ?? '/tmp'}/agenthydra-incidents-test-${crypto.randomUUID()}`
 process.env.AGENTHYDRA_HOME = scratch

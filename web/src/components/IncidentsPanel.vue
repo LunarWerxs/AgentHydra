@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // A repeated queue-run failure, grouped and deduped (server/src/incidents.ts). Collapsed by
-// default behind an open-count badge — a quiet fleet should look quiet — and expands to a short
+// default behind an open-count badge - a quiet fleet should look quiet - and expands to a short
 // list with ack/resolve, mirroring QueueView's "Show finished" disclosure.
 import { ChevronDown, TriangleAlert } from '@lucide/vue'
 import { computed, ref } from 'vue'

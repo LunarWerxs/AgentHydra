@@ -1,4 +1,4 @@
-// Failure incidents (server/src/incidents.ts) — list/ack/resolve over HTTP, for the web UI's
+// Failure incidents (server/src/incidents.ts) - list/ack/resolve over HTTP, for the web UI's
 // Incidents panel. Same shape as routes/queue.ts's other small resource routes.
 import { app } from '../http-app'
 import {

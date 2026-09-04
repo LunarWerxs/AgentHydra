@@ -1,4 +1,4 @@
-// server/src/incidents.ts — durable failure incidents with signature dedup, ack and resolve.
+// server/src/incidents.ts - durable failure incidents with signature dedup, ack and resolve.
 //
 // Ported from NousResearch/hermes-agent cron/incidents.py (MIT, Copyright (c) Nous Research).
 // Adapted for AgentHydra.
@@ -6,7 +6,7 @@
 // WHY THIS EXISTS. Queue runs already have a status ('failed') and dispatch.ts already records the
 // failure as a run event, but nothing groups repeats together. Twenty overnight runs that all die on
 // the same misconfigured MCP server today produce twenty identical "run failed" moments and zero
-// memory that it is ONE problem — every failed status looks equally urgent, so a genuinely new
+// memory that it is ONE problem - every failed status looks equally urgent, so a genuinely new
 // failure is buried in the noise of a familiar one that already got investigated. This module groups
 // failures into incidents keyed by (scope, key, error signature): the same scope + key failing with
 // the same normalized error bumps a counter instead of minting a fresh alert. Lifecycle:
@@ -16,9 +16,9 @@
 // is a different problem even on the same run target.
 //
 // DEPARTURE FROM THE PYTHON SOURCE, and why: hermes's cron incidents are keyed by a stable job_id
-// (a recurring cron job), so its error signature only needs whitespace+case normalization — the same
+// (a recurring cron job), so its error signature only needs whitespace+case normalization - the same
 // job re-fails with near-identical text. AgentHydra's queue items are one-shot: the "job" that
-// repeats is the (scope, key) pair — usually a project directory — but the STDERR TAIL attached to
+// repeats is the (scope, key) pair - usually a project directory - but the STDERR TAIL attached to
 // each failure carries volatile noise a cron job's error rarely does (timestamps, pids, temp paths,
 // request ids). Without stripping that noise, "the same problem" would mint a new incident every
 // single time just because the clock ticked, defeating the whole point of dedup. So signature
@@ -30,7 +30,7 @@ import { sendOsNotification } from './notify-os'
 import { getNotificationSettings, smtpPassword } from './notify-settings'
 import { sendMail } from './notify-smtp'
 import { redactSecrets } from './secrets'
-// Incident/IncidentState are DEFINED in types.ts (Bun-free), not here — see that file's comment on
+// Incident/IncidentState are DEFINED in types.ts (Bun-free), not here - see that file's comment on
 // why, right above them. Re-exported so every existing caller of this module keeps working.
 import { INCIDENT_STATES, type Incident, type IncidentState } from './types'
 
@@ -39,7 +39,7 @@ export { INCIDENT_STATES }
 
 /** A stored error is bounded so one giant stack trace can't bloat the incidents table forever. */
 const MAX_ERROR_CHARS = 500
-/** Only the head of the (already normalized) error feeds the signature — a long shared prefix with a
+/** Only the head of the (already normalized) error feeds the signature - a long shared prefix with a
  *  divergent tail (e.g. a stack trace whose top frame is the same but whose tail varies by call site)
  *  should still dedup. */
 const MAX_SIGNATURE_ERROR_CHARS = 200
@@ -58,7 +58,7 @@ function normalize(error: string): string {
 
 /** normalize() plus placeholder substitution for the volatile substrings a queue run's stderr tail
  *  carries that a stable cron job_id's error text does not (see the module header). Applied ONLY to
- *  the text that feeds the signature hash — never to the text classification reads, or "429" would
+ *  the text that feeds the signature hash - never to the text classification reads, or "429" would
  *  vanish before _classify_failure_type's own \b429\b pattern ever saw it. */
 function signatureText(error: string): string {
   let t = normalize(error)
@@ -147,7 +147,7 @@ async function incidentId(scope: string, key: string, sig: string): Promise<stri
 
 // The `create table if not exists incidents` schema itself lives in db.ts, next to every other
 // table (see its "additive migrations" block) rather than here, so importing this module never
-// creates a second, later place a fresh install's schema gets assembled from — db.ts already owns
+// creates a second, later place a fresh install's schema gets assembled from - db.ts already owns
 // that and incidents.ts already imports db.ts for the connection, so the reverse import would cycle.
 
 // --- CRUD (ported from upsert_incident / ack_incident / list_incidents / get_incident /
@@ -163,7 +163,7 @@ export interface RecordIncidentOptions {
 
 export interface RecordIncidentResult {
   id: string
-  /** No existing (scope, key, signature) row — a brand-new incident. */
+  /** No existing (scope, key, signature) row - a brand-new incident. */
   isNew: boolean
   /** An existing row for this signature was 'resolved' and this occurrence reopened it. */
   reopened: boolean
@@ -178,7 +178,7 @@ export interface RecordIncidentResult {
  * An existing row for the signature refreshes last_seen_at/error/output_file and increments count.
  * A 'resolved' row whose signature recurs REOPENS: state back to 'open', acked_at/resolved_at
  * cleared, so it shows up in the open list again exactly like a fresh failure. A CHANGED error text
- * (different normalized signature) mints a new incident id rather than reusing this one — see the
+ * (different normalized signature) mints a new incident id rather than reusing this one - see the
  * module header.
  */
 export async function recordIncident(opts: RecordIncidentOptions): Promise<RecordIncidentResult> {
@@ -225,7 +225,7 @@ export async function recordIncident(opts: RecordIncidentOptions): Promise<Recor
 }
 
 /** Acknowledge an incident (open -> acked): "seen, still working on it". No-op (false) on a missing
- *  incident, one already acked, or one already resolved — ack never reopens or un-resolves. */
+ *  incident, one already acked, or one already resolved - ack never reopens or un-resolves. */
 export function ackIncident(id: string): boolean {
   const now = new Date().toISOString()
   const r = db
@@ -294,8 +294,8 @@ function incidentMessage(
 
 /**
  * Whether this recordIncident() outcome is worth paging a human about: the first occurrence, or a
- * reopen (the incident was believed fixed and is not). Every occurrence in between — a repeat of an
- * already-open-or-acked incident — is a deliberate no-op here even though recordIncident still
+ * reopen (the incident was believed fixed and is not). Every occurrence in between - a repeat of an
+ * already-open-or-acked incident - is a deliberate no-op here even though recordIncident still
  * bumped its count. This is the exact dedup/suppression the codebase gap names: without it, twenty
  * overnight runs failing identically would page the same way twenty times. Pure and side-effect
  * free, so the decision is testable without touching a real notification channel.
@@ -306,9 +306,9 @@ export function shouldNotifyIncident(result: RecordIncidentResult): boolean {
 
 /**
  * Deliver a notification for one recordIncident() call, over the same OS + email channels reset
- * notifications already use — gated by shouldNotifyIncident, above.
+ * notifications already use - gated by shouldNotifyIncident, above.
  *
- * Never throws — same best-effort contract as sendOsNotification/sendMail; a failed channel is
+ * Never throws - same best-effort contract as sendOsNotification/sendMail; a failed channel is
  * reported in the result rather than raised.
  */
 export async function deliverIncidentNotification(
@@ -348,7 +348,7 @@ export async function deliverIncidentNotification(
         from: settings.notifyEmailFrom || settings.notifySmtpUser || settings.notifyEmailTo,
         to: settings.notifyEmailTo,
         subject: title,
-        text: `${body}\n\nIncident ${result.id} (${opts.scope}), occurrence #${result.count}.\n\n— AgentHydra`,
+        text: `${body}\n\nIncident ${result.id} (${opts.scope}), occurrence #${result.count}.\n\n- AgentHydra`,
       },
     )
     out.email.ok = r.ok

@@ -18,7 +18,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   incident whose error recurs reopens rather than staying silently closed, and a genuinely
   different error on the same project opens a new one. Desktop/email notifications (reusing the
   existing reset-notification channels) fire on the first occurrence and on a reopen, and are
-  suppressed for every repeat in between - the count still increments. New: `server/src/incidents.ts`
+  suppressed for every repeat in between - the count still increments. The one pre-launch refusal
+  that is permanent by policy (headless dispatch is currently disabled outright) is excluded from
+  incident tracking entirely, so it cannot page on every dispatch attempt. New: `server/src/incidents.ts`
   (the model), an `incidents` table (`server/src/db.ts`), `GET /api/incidents`, `POST
   /api/incidents/:id/ack`, `POST /api/incidents/:id/resolve` (`server/src/routes/incidents.ts`),
   MCP tools `list_incidents` / `ack_incident` / `resolve_incident`, and a collapsed "Incidents"
