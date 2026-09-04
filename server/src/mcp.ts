@@ -861,6 +861,31 @@ export const TOOLS: McpEngineTool[] = [
     run: (a) => api(`/api/queue/${encodeURIComponent(str(a.id))}/events`),
   },
 
+  // --- incidents (server/src/incidents.ts) ---------------------------------------
+  // A failed queue run is grouped with prior failures of the SAME project + error signature
+  // instead of each occurrence reading as a fresh, unrelated alert - see incidents.ts's header.
+  {
+    name: 'list_incidents',
+    description:
+      "List failure incidents (grouped, deduped repeats of the same project + error), newest activity first. state filters to 'open' | 'acked' | 'resolved'; omit for every incident.",
+    inputSchema: S({ state: { type: 'string', enum: ['open', 'acked', 'resolved'] } }),
+    run: (a) => api(`/api/incidents${qs({ state: a.state })}`),
+  },
+  {
+    name: 'ack_incident',
+    description:
+      "MUTATES: acknowledge an open incident ('seen, working on it'). No-op on a missing, already-acked, or already-resolved incident.",
+    inputSchema: S({ id: { type: 'string' } }, ['id']),
+    run: (a) => api(`/api/incidents/${encodeURIComponent(str(a.id))}/ack`, { method: 'POST' }),
+  },
+  {
+    name: 'resolve_incident',
+    description:
+      'MUTATES: resolve an incident. Terminal until the same project fails with the same error again, which reopens it.',
+    inputSchema: S({ id: { type: 'string' } }, ['id']),
+    run: (a) => api(`/api/incidents/${encodeURIComponent(str(a.id))}/resolve`, { method: 'POST' }),
+  },
+
   // --- accounts -----------------------------------------------------------------
   {
     name: 'list_accounts',

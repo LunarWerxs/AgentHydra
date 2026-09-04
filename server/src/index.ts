@@ -470,6 +470,7 @@ app.post('/api/settings/sync/logout', async (c) => {
 await import('./routes/sessions')
 await import('./routes/analytics')
 await import('./routes/queue')
+await import('./routes/incidents')
 await import('./routes/instances')
 await import('./routes/usage')
 await import('./routes/monitor-fleet')

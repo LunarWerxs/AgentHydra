@@ -73,6 +73,23 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   catalog has no price for costs $0 and is flagged unpriced instead of silently taken on faith. Purely
   a reader: the queue, composer and resume-in-terminal stay Claude-only, and nothing here writes to a
   Hermes store. New: `server/src/hermes-sessions.ts`.
+- **Failed queue runs are now grouped into incidents, so twenty overnight runs failing the same
+  way read as one problem instead of twenty.** Ported from NousResearch/hermes-agent's cron
+  incident tracker (MIT). A `failed` run (via `finalize()` or a pre-launch refusal in
+  `dispatch.ts`) is recorded against `(scope, key, error signature)` - the signature survives
+  timestamps, pids, and paths changing between runs of the same project, so a repeat only bumps a
+  counter rather than minting a new alert. Lifecycle is `open -> acked -> resolved`; a resolved
+  incident whose error recurs reopens rather than staying silently closed, and a genuinely
+  different error on the same project opens a new one. Desktop/email notifications (reusing the
+  existing reset-notification channels) fire on the first occurrence and on a reopen, and are
+  suppressed for every repeat in between - the count still increments. The one pre-launch refusal
+  that is permanent by policy (headless dispatch is currently disabled outright) is excluded from
+  incident tracking entirely, so it cannot page on every dispatch attempt. New: `server/src/incidents.ts`
+  (the model), an `incidents` table (`server/src/db.ts`), `GET /api/incidents`, `POST
+  /api/incidents/:id/ack`, `POST /api/incidents/:id/resolve` (`server/src/routes/incidents.ts`),
+  MCP tools `list_incidents` / `ack_incident` / `resolve_incident`, and a collapsed "Incidents"
+  panel above the run queue with an open-count badge and ack/resolve buttons
+  (`web/src/components/IncidentsPanel.vue`).
 
 - **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
   2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have

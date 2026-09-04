@@ -665,6 +665,31 @@ export interface RunEvent {
   tool_name: string | null
 }
 
+// --- failure incidents (server/src/incidents.ts) ------------------------------------------------
+// Defined HERE rather than in incidents.ts, same reasoning as QueueItem above: incidents.ts imports
+// db.ts (Bun-only runtime), which must never reach the web app's vue-tsc pass, so the DTO lives in
+// this Bun-free module and incidents.ts imports it back.
+export type IncidentState = 'open' | 'acked' | 'resolved'
+export const INCIDENT_STATES: readonly IncidentState[] = ['open', 'acked', 'resolved']
+
+export interface Incident {
+  id: string
+  scope: string
+  key: string
+  error_sig: string
+  state: IncidentState
+  failure_type: string
+  first_seen_at: string
+  last_seen_at: string
+  acked_at: string | null
+  resolved_at: string | null
+  /** Occurrences folded into this incident, including the one that created it. */
+  count: number
+  /** Redacted, length-bounded error text. */
+  error: string
+  output_file: string | null
+}
+
 export interface SchedulerState {
   enabled: boolean
   running_count: number

@@ -18,6 +18,8 @@ import type {
   DispatchedScope,
   EditEntry,
   EffortLevel,
+  Incident,
+  IncidentState,
   InstanceColorKey,
   InstanceIconKey,
   MonitorSettings,
@@ -78,6 +80,8 @@ export type {
   DispatchedScope,
   EditEntry,
   EffortLevel,
+  Incident,
+  IncidentState,
   InstanceColorKey,
   InstanceIconKey,
   MonitorSettings,
@@ -362,6 +366,16 @@ export const cancelQueueItem = (id: string) =>
   j<{ ok: boolean }>(`/api/queue/${id}/cancel`, { method: 'POST' })
 export const getRunEvents = (id: string) => j<RunEvent[]>(`/api/queue/${id}/events`)
 export const streamUrl = (id: string) => `${API_BASE}/api/queue/${id}/stream`
+
+// --- incidents (server/src/incidents.ts) -------------------------------------
+// Repeated queue-run failures, grouped and deduped so a night of the same error doesn't read as a
+// night of unrelated ones. See incidents.ts's header for the full model.
+export const getIncidents = (state?: IncidentState) =>
+  j<Incident[]>(`/api/incidents${state ? `?state=${state}` : ''}`)
+export const ackIncident = (id: string) =>
+  j<{ ok: boolean; incident: Incident }>(`/api/incidents/${id}/ack`, { method: 'POST' })
+export const resolveIncident = (id: string) =>
+  j<{ ok: boolean; incident: Incident }>(`/api/incidents/${id}/resolve`, { method: 'POST' })
 
 // --- scheduler --------------------------------------------------------------
 export const getScheduler = () => j<SchedulerState>('/api/scheduler')
