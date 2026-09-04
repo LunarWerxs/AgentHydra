@@ -540,12 +540,19 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
                               src_instance: str = "") -> list[dict]:
     """Verify the landing: the dossier must now place the chat in the target instance.
 
+    Records the read-back verdict onto the SAME ledger row `main()`'s ledgerlib.note() opened
+    (never-claim-landed doctrine): True once the dossier actually shows it, False when the
+    dossier came back but disagrees, and UNKNOWN (never False) when the read-back itself could
+    not be performed - the daemon posted the import fine, but we genuinely do not know whether
+    it landed. unknown must never be silently retried, only surfaced for a person to look at.
+
     MUTATION LEDGER: the daemon POST already ran by the time this is called - something MAY
     have moved even when this function cannot confirm it - so both refusal branches record an
     unconfirmed (`after=None`, `undoable=False`) mutation rather than staying silent."""
     try:
         after = hydralib.dossier(session_id)
     except hydralib.DaemonError as err:
+        ledgerlib.verify("migrate", session_id, None, note=f"verify read-back failed: {err}")
         mutationlib.record(
             "migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
             before={"instance": src_instance}, after=None, undoable=False,
@@ -564,6 +571,10 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
         str(m.get("instance", "")).lower() == str(target.get("name", "")).lower() for m in after
     )
     if not landed:
+        ledgerlib.verify(
+            "migrate", session_id, False,
+            note=f"dossier does not show '{chat_title}' in {target.get('name')} after import",
+        )
         mutationlib.record(
             "migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
             before={"instance": src_instance}, after=None, undoable=False,
@@ -581,6 +592,7 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
             },
             1,
         )
+    ledgerlib.verify("migrate", session_id, True)
     return after
 
 

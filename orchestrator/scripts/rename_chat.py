@@ -160,10 +160,39 @@ def _verify_and_report(match: dict, chat_id: str, old_title: str, new_title: str
     before = {"title": old_title}
     try:
         after = hydralib.dossier(session_id)
-    except hydralib.DaemonError:
-        after = []
+    except hydralib.DaemonError as err:
+        # UNKNOWN, not False: the read-back itself failed, so a title that silently disagrees
+        # (verified=False, same as a genuinely stale dossier) would be the wrong verdict - we
+        # have no evidence either way. This used to fall through to the "not verified" branch
+        # below wearing an empty list, which is exactly the conflation the doctrine forbids.
+        ledgerlib.verify("rename", chat_id, None, note=f"verify read-back failed: {err}")
+        mutationlib.record(
+            "rename", session_id, instance=instance, title=new_title, before=before, after=None,
+            undoable=False, why_not=f"the daemon reports the rename landed but the verify "
+                                     f"read-back itself failed ({err}) - outcome unknown, so no "
+                                     "inverse can be trusted",
+        )
+        return out(
+            {
+                "renamed": True,
+                "verified": None,
+                "daemon": result,
+                "report": (
+                    f"the daemon reports the rename landed ('{old_title}' -> '{new_title}') but "
+                    f"the verify read-back itself failed ({err}) - outcome is UNKNOWN, not "
+                    "claiming success or failure. Attempt kept on the ledger; do not re-run "
+                    "blindly."
+                ),
+            },
+            as_json,
+            1,
+        )
     verified = any(m.get("chatId") == chat_id and m.get("title") == new_title for m in after)
     if not verified:
+        ledgerlib.verify(
+            "rename", chat_id, False,
+            note=f"dossier does not show the title as '{new_title}' yet",
+        )
         mutationlib.record(
             "rename", session_id, instance=instance, title=new_title, before=before, after=None,
             undoable=False, why_not="the daemon reports the rename landed but the dossier has "
@@ -185,6 +214,7 @@ def _verify_and_report(match: dict, chat_id: str, old_title: str, new_title: str
             1,
         )
 
+    ledgerlib.verify("rename", chat_id, True)
     mutationlib.record("rename", session_id, instance=instance, title=new_title, before=before,
                        after={"title": new_title}, undoable=True)
     ledgerlib.clear("rename", chat_id)

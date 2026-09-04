@@ -323,6 +323,90 @@ def annotate(kind: str, session_id: str, outcome: str, now_ms: int | None = None
                 return
 
 
+def verify(
+    kind: str,
+    session_id: str,
+    verified: bool | None,
+    note: str = "",
+    now_ms: int | None = None,
+) -> None:
+    """Attach the READ-BACK verdict to the most recent attempt row. Adds no row, same shape as
+    annotate() and for the same reason (a second row per outcome would trip the breaker at half
+    its intended count).
+
+    Ported doctrine, orchestrator rule 4 / the shape of hermes-agent's _confirm_adapter_delivery +
+    delivery_queue.py: "never claim an act landed without checking." Three verdicts, and they
+    are NOT interchangeable:
+      - True  - the target's state was re-read AFTER acting and it shows the change.
+      - False - the target's state was re-read and it does NOT show the change. Counts as a
+                failed attempt like any other (it already has a row from note()); it does not
+                add a second one.
+      - None  - UNKNOWN: the read-back itself could not be performed (the verifying call
+                failed, timed out, or the caller had no way to check at all). ⛔ Never treat
+                this as success, never clear() the breaker on it, and never let it retry
+                silently - a provably-never-attempted row may be re-queued, but one whose
+                outcome is unknown must surface for a person, exactly the delivery_queue.py
+                distinction this ports.
+    """
+    if kind not in VALID_KINDS:
+        raise ValueError(f"unknown breaker kind {kind!r} - new acts must opt in deliberately")
+    if verified is not None and not isinstance(verified, bool):
+        raise TypeError("verified must be True, False, or None (unknown) - not a truthy value")
+    with locked("attempts"):
+        rows = _load()
+        for r in reversed(rows):
+            if r.get("kind") == kind and r.get("session") == session_id:
+                r["verified"] = verified
+                if note:
+                    r["verify_note"] = str(note)[:400]
+                _save(rows)
+                return
+    # No row to attach to: the caller verified something note() never opened a row for. Rather
+    # than silently drop an unknown-outcome verdict (the one this doctrine cares about most),
+    # open one directly so it still surfaces below.
+    with locked("attempts"):
+        rows = _load()
+        rows.append({
+            "kind": kind, "session": session_id, "at": now_ms or int(time.time() * 1000),
+            "deterministic": False, "note": "", "verified": verified,
+            **({"verify_note": str(note)[:400]} if note else {}),
+        })
+        _save(rows)
+
+
+def unverified(now_ms: int | None = None, within_ms: int = ATTEMPT_WINDOW_MS) -> list[dict]:
+    """Every recent act whose verified field is unknown (None) or explicitly False - the
+    judgment queue this doctrine feeds. `verified` absent (an act that never called verify(), or
+    ran before this existed) counts as unknown too: no positive evidence is no positive
+    evidence, whether that is because nobody checked or because nobody could. Never confuses
+    this with `suppressed()` above, which is about the BREAKER tripping, not about whether an
+    act's outcome was ever confirmed - a chat can be unverified without ever having been
+    suppressed, and vice versa."""
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    floor = now_ms - within_ms
+    _MISSING = object()  # tell "never checked" apart from an explicit verified=None (also unknown)
+    out = []
+    for r in _load():
+        at = r.get("at", 0)
+        if at < floor:
+            continue
+        v = r.get("verified", _MISSING)
+        if v is True:
+            continue  # confirmed - not the judgment queue's business
+        out.append({
+            "kind": r.get("kind"),
+            "session": r.get("session"),
+            "at": at,
+            # False is a CONFIRMED disagreement, distinct from "unknown" (never checked, or the
+            # check itself couldn't run) - the doctrine this ports treats them differently: false
+            # already counts as a failed attempt, unknown must never be retried at all.
+            "status": "false" if v is False else "unknown",
+            "note": r.get("note") or "",
+            "verify_note": r.get("verify_note") or "",
+        })
+    return out
+
+
 def clear(kind: str, session_id: str) -> None:
     """The act stuck: forget the history. The brake is for futility, not for work."""
     with locked("attempts"):

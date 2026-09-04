@@ -579,12 +579,15 @@ function queueStatusMap(): Map<string, QueueStatus> {
     )
     .all()
   const rank: Record<QueueStatus, number> = {
-    running: 7,
-    queued: 6,
-    rate_limited: 5,
+    running: 8,
+    queued: 7,
+    rate_limited: 6,
     // Just under rate_limited: both mean "stopped at a wall, not finished", but a spent quota is the
     // more useful thing to surface when a session carries both.
-    overloaded: 4,
+    overloaded: 5,
+    // Ranks with failed, not completed: nobody has confirmed this run actually did anything, so it
+    // needs the same attention a real failure would.
+    unverified: 4,
     failed: 3,
     completed: 2,
     canceled: 1,

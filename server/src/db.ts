@@ -61,7 +61,7 @@ create table if not exists queue_items (
   account_id      text references accounts(id) on delete set null,
   new_chat        integer not null default 0,
   fork            integer not null default 0,
-  status          text not null default 'queued',  -- queued | running | completed | failed | rate_limited | overloaded | canceled
+  status          text not null default 'queued',  -- queued | running | completed | unverified | failed | rate_limited | overloaded | canceled
   pid             integer,
   position        integer not null default 0,
   not_before      text,                 -- ISO timestamp; scheduler won't auto-dispatch before this
@@ -434,6 +434,7 @@ export function coerceQueueItem(row: any): QueueItem {
 /** A run's terminal statuses. `completed` is the only one that means the work got done. */
 const TERMINAL_STATUSES: QueueStatus[] = [
   'completed',
+  'unverified',
   'failed',
   'canceled',
   'rate_limited',

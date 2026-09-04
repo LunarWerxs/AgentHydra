@@ -103,11 +103,39 @@ class MigrateTest(ActTestBase):
         self.assertTrue(ledgerlib.check("migrate", SID)["deterministic"])
 
     def test_unverified_landing_is_not_claimed(self):
+        from lib import ledgerlib
         import migrate_chat
 
         self.dossier_static(after_instance="temp1")  # dossier never shows the move
         self.stub.routes[f"/api/sessions/{SID}/import-desktop"] = {"ok": True}
         self.assertEqual(migrate_chat.main([SID, "--to", "2claude"]), 1)
+        # confirmed disagreement (the dossier came back and does NOT show the move) is False.
+        self.assertEqual(ledgerlib._load()[-1]["verified"], False)
+
+    def test_verify_read_back_failure_is_unknown_not_a_confirmed_disagreement(self):
+        # never claim an act landed without checking: the import POST can succeed while the
+        # verify read-back itself fails (daemon blip, timeout) - that is UNKNOWN, not the same
+        # False a dossier that came back and disagreed would get.
+        from lib import hydralib, ledgerlib
+        import migrate_chat
+
+        self.dossier_static(after_instance="2claude")
+        self.stub.routes[f"/api/sessions/{SID}/import-desktop"] = {"ok": True}
+        real_dossier = hydralib.dossier
+
+        def flaky_dossier(query):
+            if any(p.endswith("/import-desktop") for p, _ in self.stub.posts):
+                raise hydralib.DaemonError("/api/chats/dossier", None, "boom")
+            return real_dossier(query)
+
+        with mock.patch.object(migrate_chat.hydralib, "dossier", side_effect=flaky_dossier):
+            code = migrate_chat.main([SID, "--to", "2claude"])
+        self.assertEqual(code, 1)
+        rows = ledgerlib._load()
+        self.assertIsNone(rows[-1]["verified"])  # unknown - never False
+        uq = ledgerlib.unverified()
+        self.assertEqual(len(uq), 1)
+        self.assertEqual(uq[0]["status"], "unknown")
 
     def test_already_there_changes_nothing(self):
         import migrate_chat
@@ -431,11 +459,43 @@ class RenameTest(ActTestBase):
         self.assertEqual(len(ledgerlib._load()), 1)  # the attempt is on the ledger
 
     def test_unverified_rename_is_not_claimed(self):
+        from lib import ledgerlib
         import rename_chat
 
         self.dossier_static(title="Old", after_title="Old")  # dossier keeps the old name
         self._drive()
         self.assertEqual(rename_chat.main([SID, "--to", "New"]), 1)
+        # a real disagreement (the read-back succeeded and says no) is recorded False, distinct
+        # from the read-back-itself-failed 'unknown' case above.
+        self.assertEqual(ledgerlib._load()[-1]["verified"], False)
+
+    def test_verify_read_back_failure_is_unknown_not_a_confirmed_disagreement(self):
+        # never claim an act landed without checking: when the VERIFY read-back itself fails
+        # (not "the dossier disagrees" - the call could not be made at all), the ledger must
+        # record unknown, never silently collapse to the same False a real disagreement gets.
+        from lib import hydralib, ledgerlib
+        import rename_chat
+
+        self.dossier_static(title="Old", after_title="New")
+        self._drive()
+        real_dossier = hydralib.dossier
+        seen = {"n": 0}
+
+        def flaky_dossier(query):
+            seen["n"] += 1
+            if seen["n"] >= 2:  # the resolve succeeds; only the post-act verify call fails
+                raise hydralib.DaemonError("/api/chats/dossier", None, "boom")
+            return real_dossier(query)
+
+        with mock.patch.object(rename_chat.hydralib, "dossier", side_effect=flaky_dossier):
+            code = rename_chat.main([SID, "--to", "New"])
+        self.assertEqual(code, 1)
+        rows = ledgerlib._load()
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[-1]["verified"])  # unknown - never False
+        uq = ledgerlib.unverified()
+        self.assertEqual(len(uq), 1)
+        self.assertEqual(uq[0]["status"], "unknown")
 
     def test_same_title_changes_nothing(self):
         import rename_chat

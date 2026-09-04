@@ -533,6 +533,10 @@ def _verify_archive(session_id: str, desired: bool, verb: str, title, result, as
     try:
         after = hydralib.resolve_one(session_id)
     except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
+        # UNKNOWN, not failed: the act itself may well have landed, we just could not re-read
+        # it to check. Never let this look like a confirmed disagreement (verified=False) -
+        # that distinction is the whole point of the doctrine this ports.
+        ledgerlib.verify("archive", session_id, None, note=f"verify read-back failed: {err}")
         mutationlib.record(
             verb, session_id, instance=instance, title=str(title), before=before, after=None,
             undoable=False, why_not=f"the act was attempted but verify failed ({err}) - the "
@@ -548,6 +552,10 @@ def _verify_archive(session_id: str, desired: bool, verb: str, title, result, as
             1,
         )
     if bool(after.get("archived")) != desired:
+        ledgerlib.verify(
+            "archive", session_id, False,
+            note=f"dossier still says archived={after.get('archived')}",
+        )
         mutationlib.record(
             verb, session_id, instance=instance, title=str(title), before=before, after=None,
             undoable=False, why_not=f"the act was attempted but the dossier still says "
@@ -567,6 +575,7 @@ def _verify_archive(session_id: str, desired: bool, verb: str, title, result, as
             1,
         )
 
+    ledgerlib.verify("archive", session_id, True)
     mutationlib.record(verb, session_id, instance=instance, title=str(title), before=before,
                        after={"archived": bool(after.get("archived"))}, undoable=True)
     ledgerlib.clear("archive", session_id)  # success clears - the brake is for futility
