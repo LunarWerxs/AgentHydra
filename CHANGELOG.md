@@ -9,6 +9,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **`orchestrator/scripts/lib/incidentlib.py` - THE INCIDENT LEDGER**, ported from
+  NousResearch/hermes-agent's `cron/incidents.py` (MIT) and adapted to this toolbox's
+  JSON-rows-in-state style (no SQLite). Groups repeated failures by a normalized cause
+  signature instead of leaving them as anonymous rows in the attempt ledger: the same chat
+  failing the same way, or several unrelated chats failing for one shared reason, collapses
+  into ONE incident (lifecycle `open` -> `acked` -> `resolved`) with a repeat count and last
+  error. `ledgerlib.note()`/`annotate()` now file an incident for every deterministic or
+  explicitly-flagged failure and stamp the ledger row with the incident id, so the two can be
+  joined. `sweep.py` gained a SHARED-CAUSE BREAKER: 3+ consecutive same-signature failures in
+  one lane halt the rest of that lane for the pass (`--breaker-threshold` to tune) instead of
+  repeating a cause that will not clear chat by chat, and file one incident naming every chat
+  left behind. New `python orch.py incidents` (list open/acked, `--ack`/`--resolve`, `--all`)
+  surfaces it; the dashboard's `/data/incidents` route and `/data/suppressed`'s
+  `incidentsOpen` count expose it there too.
+
 - **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
   2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have
   to use both"). `orchestrator/` is the v3 Python toolbox exactly as it stood in its own repo

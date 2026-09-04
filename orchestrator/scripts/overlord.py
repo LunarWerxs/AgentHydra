@@ -473,10 +473,12 @@ def _migrate_overlord(row: dict, sid: str, dest: dict, why_move: str,
             ledgerlib.note("migrate", sid, deterministic=True,
                            note=f"quota handoff {err.status}: {(err.detail or '')[:150]}")
         else:
-            ledgerlib.annotate("migrate", sid, f"quota handoff failed: {str(err)[:120]}")
+            ledgerlib.annotate("migrate", sid, f"quota handoff failed: {str(err)[:120]}",
+                               failure=True)
         return row, f" ⚠ quota handoff refused ({str(err)[:120]}) - waking in place"
     if not (isinstance(got, dict) and got.get("ok", True)):
-        ledgerlib.annotate("migrate", sid, f"quota handoff said ok=false: {str(got)[:120]}")
+        ledgerlib.annotate("migrate", sid, f"quota handoff said ok=false: {str(got)[:120]}",
+                           failure=True)
         return row, f" ⚠ quota handoff said ok=false - waking in place"
     ledgerlib.clear("migrate", sid)
     moved = dict(row)

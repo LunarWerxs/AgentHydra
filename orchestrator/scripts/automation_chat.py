@@ -236,7 +236,7 @@ def _finalize_mode_attempt(sid: str, returncode: int, last: str) -> None:
         ledgerlib.clear("mode", sid)  # set (or already right): no reason to wait next time
         mark_confirmed(sid, last)     # the app itself said bypass - THIS is the verdict
     else:
-        ledgerlib.annotate("mode", sid, last)
+        ledgerlib.annotate("mode", sid, last, failure=True)
 
 
 def set_mode_via_app(row: dict, fleet: dict) -> str:

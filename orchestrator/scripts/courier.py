@@ -597,7 +597,8 @@ def run(max_deliveries: int, only: str | None, act: bool, running_now: int | Non
                             if not res.get("ok"):
                                 ledgerlib.annotate(
                                     "deliver", entry["session"],
-                                    f"{res.get('outcome') or 'failed'}: {res.get('detail') or ''}")
+                                    f"{res.get('outcome') or 'failed'}: {res.get('detail') or ''}",
+                                    failure=True)
                             results.append(res)
             except Exception as exc:  # noqa: BLE001 - the last resort, see comment above
                 deliverylib.mark_failed(entry["id"], f"unexpected: {exc}")
