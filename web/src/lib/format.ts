@@ -67,7 +67,7 @@ const QUEUE_STATUS: Record<QueueStatus, StatusMeta> = {
   completed: { label: 'Completed', icon: CheckCircle2, variant: 'success' },
   // exit 0, but nothing independently confirmed the run actually produced a turn (see
   // hasCompletionEvidence in dispatch.ts). Neither a success nor a known failure, so its own
-  // variant rather than borrowing 'destructive' — a run that may well be fine should not read as
+  // variant rather than borrowing 'destructive' - a run that may well be fine should not read as
   // red.
   unverified: { label: 'Unverified', icon: CircleQuestionMark, variant: 'warning' },
   failed: { label: 'Failed', icon: XCircle, variant: 'destructive' },

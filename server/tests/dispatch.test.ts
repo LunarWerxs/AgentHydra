@@ -138,7 +138,7 @@ test('reattachRuns: a run that finished while the daemon was down is recovered f
   expect(events.some((e) => e.text.includes('recovered work'))).toBe(true) // events rebuilt from the log
 })
 
-// --- never claim a run landed without checking (ported from hermes-agent's
+// --- never claim a run landed without checking (ports the shape of hermes-agent's
 // _confirm_adapter_delivery + delivery_queue.py's never-retry-on-UNKNOWN doctrine) -------------
 
 test('finalize: exit 0 with no transcript evidence is unverified, not completed - and it says why', async () => {

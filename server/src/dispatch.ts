@@ -627,10 +627,11 @@ const EVIDENCE_TAIL_BYTES = 2 * 1024 * 1024
 /**
  * Positive evidence that a 'completed' run actually produced a turn, not just an exit(0).
  *
- * Ported from NousResearch/hermes-agent's `_confirm_adapter_delivery` (MIT, Copyright (c) Nous
- * Research). Adapted for AgentHydra: hermes required explicit positive evidence before a delivery
- * was ever logged "delivered", after two production incidents where "delivered" was logged and
- * nothing was sent. The exit code here is the same shape of self-report — `claude` prints its own
+ * Ports the shape of NousResearch/hermes-agent's `_confirm_adapter_delivery` (MIT, Copyright (c)
+ * Nous Research; upstream source not carried in this repo, ported from the documented shape).
+ * Adapted for AgentHydra: hermes required explicit positive evidence before a delivery was ever
+ * logged "delivered", after two production incidents where "delivered" was logged and
+ * nothing was sent. The exit code here is the same shape of self-report: `claude` prints its own
  * exit marker, and a crash right after that (disk full, the process killed mid-flush, a transcript
  * write racing the runner's teardown) can produce a 0 with nothing durable to show for it. So
  * completion requires an INDEPENDENT read-back, not the process's own word: the session must
@@ -682,7 +683,7 @@ async function hasCompletionEvidence(
 
 /** Test seam ONLY. Real transcript discovery lives under CLAUDE_PROJECTS_ROOT, which config.ts
  *  resolves from the machine's real `homedir()` at import time (see server/tests/
- *  sessions-scan-cache.test.ts's header for why an in-process test can't sandbox that) — so the
+ *  sessions-scan-cache.test.ts's header for why an in-process test can't sandbox that) - so the
  *  dispatch pipeline tests, which drive real finalize() calls against synthetic session ids,
  *  need a way to say "pretend this run has (or hasn't) landed" without writing into the
  *  developer's actual ~/.claude/projects. Defaults to the real check; only ever swapped by tests. */
@@ -711,17 +712,17 @@ async function finalize(
       return
     }
     // exitCode -1 is our OWN synthetic marker for "the process disappeared without ever
-    // reporting an outcome" (pid vanished mid-run, or the runner never launched at all) — never
+    // reporting an outcome" (pid vanished mid-run, or the runner never launched at all) - never
     // a real code `claude` returned. Doctrine ported from hermes-agent's delivery_queue.py: "a
     // row that was provably never attempted may be re-queued; one whose outcome is UNKNOWN must
     // never be silently retried" (losing a delivery is safer than duplicating a possibly-completed
     // send). shouldRetryTransient already refuses to retry this case (it only fires on a
-    // *confirmed* transient overload), so nothing above will re-queue it — but a refusal that
+    // *confirmed* transient overload), so nothing above will re-queue it - but a refusal that
     // happens silently is indistinguishable from one that never got considered. Say so.
     if (exitCode === -1 && rt?.limitKind == null) {
       const msg =
         'UNKNOWN outcome: the process disappeared without reporting an exit code, so this run is recorded as failed and will not be auto-retried.'
-      console.warn(`[agenthydra] run ${id}: outcome is UNKNOWN — ${msg}`)
+      console.warn(`[agenthydra] run ${id}: outcome is UNKNOWN - ${msg}`)
       recordEvent(id, 'system', 'meta', msg, null)
     }
   }
@@ -741,25 +742,29 @@ async function finalize(
 
   // exit 0 is the process's own self-report, not proof. See hasCompletionEvidence for why an
   // independent read-back is required before this reads 'completed' anywhere in the UI.
+  // `import_to` is fetched in the same round trip since both branches below that need it
+  // (completed and unverified) are only reachable from inside this same 'completed' guard.
   let unverifiedReason: string | null = null
+  let importTo: string | null = null
   if (status === 'completed') {
     const row = db
-      .query<{ session_id: string; started_at: string | null }, [string]>(
-        'select session_id, started_at from queue_items where id = ?',
+      .query<{ session_id: string; started_at: string | null; import_to: string | null }, [string]>(
+        'select session_id, started_at, import_to from queue_items where id = ?',
       )
       .get(id)
+    importTo = row?.import_to ?? null
     const evidence = row
       ? await completionEvidenceCheck(row.session_id, row.started_at)
       : ({ ok: false, reason: 'queue item row is missing' } as const)
     if (!evidence.ok) {
       status = 'unverified'
       unverifiedReason = evidence.reason
-      console.warn(`[agenthydra] run ${id}: exited 0 but is UNVERIFIED — ${evidence.reason}`)
+      console.warn(`[agenthydra] run ${id}: exited 0 but is UNVERIFIED - ${evidence.reason}`)
       recordEvent(
         id,
         'system',
         'meta',
-        `UNVERIFIED: this run exited 0, but ${evidence.reason} — not recorded as completed until that can be confirmed. Open the session to check by hand.`,
+        `UNVERIFIED: this run exited 0, but ${evidence.reason} - not recorded as completed until that can be confirmed. Open the session to check by hand.`,
         null,
       )
     }
@@ -778,12 +783,7 @@ async function finalize(
   // (instance since closed, etc.) must never unsettle a finished run. Arming rather than simply
   // firing is what makes it survivable — see deliverPendingImports below.
   if (status === 'completed') {
-    const row = db
-      .query<{ import_to: string | null }, [string]>(
-        'select import_to from queue_items where id = ?',
-      )
-      .get(id)
-    if (row?.import_to?.startsWith('desktop:')) {
+    if (importTo?.startsWith('desktop:')) {
       // Re-armed on EVERY completion, including a re-run of an already-delivered item: the run
       // appended new turns, so the chat is worth (re)delivering, and the import URL targets an
       // existing chat by session id rather than creating a second one.
@@ -798,14 +798,9 @@ async function finalize(
     // NEVER deliver silently on unverified evidence: a desktop import is a one-shot handoff the
     // owner is meant to trust unread, so importing a chat we could not confirm actually finished
     // would recreate exactly the hermes incident this ports the fix for. Skip with a reason
-    // instead — visible on the row (import_state stays whatever it already was, i.e. not
+    // instead - visible on the row (import_state stays whatever it already was, i.e. not
     // 'pending') and on the run's own event log via the UNVERIFIED record above.
-    const row = db
-      .query<{ import_to: string | null }, [string]>(
-        'select import_to from queue_items where id = ?',
-      )
-      .get(id)
-    if (row?.import_to?.startsWith('desktop:')) {
+    if (importTo?.startsWith('desktop:')) {
       recordEvent(
         id,
         'system',

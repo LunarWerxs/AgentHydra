@@ -300,7 +300,7 @@ def verify(
     annotate() and for the same reason (a second row per outcome would trip the breaker at half
     its intended count).
 
-    Ported doctrine, orchestrator rule 4 / hermes-agent's _confirm_adapter_delivery +
+    Ported doctrine, orchestrator rule 4 / the shape of hermes-agent's _confirm_adapter_delivery +
     delivery_queue.py: "never claim an act landed without checking." Three verdicts, and they
     are NOT interchangeable:
       - True  - the target's state was re-read AFTER acting and it shows the change.
