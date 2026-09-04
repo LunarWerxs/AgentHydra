@@ -24,7 +24,8 @@ This is a SINGLE PASS by design, not a daemon: v2 died as an unattended loop. Ru
 a deliberate act; scheduling it is a decision a person makes.
 
 Usage: python sweep.py [--archive] [--moves] [--land-console] [--all]
-                       [--max N] [--allow-pending] [--json]  --yes to actually act
+                       [--max N] [--breaker-threshold N] [--allow-pending] [--json]
+                       --yes to actually act
   (no act flag, or no --yes) -> plan only: prints the batch that WOULD run, executes nothing
   --archive        archive every ARCHIVE-CANDIDATE chat - a running app is archived through
                    the app's OWN control (immediate + durable), a closed one via disk flags
@@ -36,6 +37,8 @@ Usage: python sweep.py [--archive] [--moves] [--land-console] [--all]
    + ultracode across the whole fleet. Conformance decays on its own - a running app can
    re-save over the stamp - so it is re-applied on the clock, not once at landing.)
   --max N          per-lane cap per run (default 5) - a sweep is a batch, not a purge
+  --breaker-threshold N  consecutive same-cause failures that halt a lane for this pass
+                   (default 3) - see THE SHARED-CAUSE BREAKER below
 Exit:  0 all attempted acts verified (or nothing to do) - 2 some acts refused/failed, each
        named with its exit code - 1 daemon failure before acting.
 """
@@ -142,15 +145,45 @@ def build_batch(allow_pending: bool, max_per_lane: int,
     }
 
 
-def execute(batch: dict, lanes: list[str]) -> dict:
+# THE SHARED-CAUSE BREAKER (README rule 3's sibling for a whole PASS, not one chat): the
+# per-chat ledger has no notion of one cause hitting many chats in the same run - a single
+# daemon blip used to be spent as N separate "deterministic-stop"-looking rows, one per
+# unrelated chat, before anyone noticed they were the same thing. When this many CONSECUTIVE
+# failures in one lane fingerprint to the same normalized cause (incidentlib.error_fingerprint
+# - error text alone, no chat identity in it), the rest of that lane is left untouched for
+# this pass rather than burning through every remaining row on a cause retrying will not
+# clear. A different signature - or an ok row, including deferred/held, which are not
+# failures - resets the streak; the breaker never fires across mixed causes.
+DEFAULT_BREAKER_THRESHOLD = 3
+
+
+def _outcome_word(code: int, deferred: bool, held: bool) -> str:
+    # exit meanings come from each act script's own contract
+    return ("verified" if code == 0 else
+            "preserving-docs-first (or another run holds it) - archives next pass" if deferred else
+            "held-by-owner (left alone by design)" if held else
+            "refused-by-gate-or-moved" if code == 2 else
+            "deterministic-stop" if code == 3 else
+            "live-writer" if code == 4 else
+            "breaker" if code == 5 else
+            "ui-could-not-reach-the-row" if code == 7 else "failed")
+
+
+def execute(batch: dict, lanes: list[str],
+            breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD) -> dict:
     import courier
+    from lib import incidentlib
 
     results = []
+    breaker_halts = []
     for lane in lanes:
-        for row in batch["lanes"][lane]["rows"]:
-            fn = (courier.main if lane == "deliver"
-                  else archive_chat.main if lane == "archive"
-                  else migrate_chat.main)
+        rows = batch["lanes"][lane]["rows"]
+        fn = (courier.main if lane == "deliver"
+              else archive_chat.main if lane == "archive"
+              else migrate_chat.main)
+        streak_sig: str | None = None
+        streak_rows: list[dict] = []
+        for idx, row in enumerate(rows):
             code, out = clilib.capture(fn, row["argv"])
             # Exit 8 is DEFERRED, not failed: archive_chat asked the chat to preserve its docs
             # first and will archive it on a later pass. Counts as OK for the run's verdict.
@@ -159,22 +192,40 @@ def execute(batch: dict, lanes: list[str]) -> dict:
             # placed after the batch was built). Left alone by design, so it is not a failure
             # of the lane - and it must never read as one (the whole point of the hold filter).
             held = code == 6
+            ok = code == 0 or deferred or held
             results.append({
                 "lane": lane, "sessionId": row.get("sessionId") or row.get("id"),
-                "title": row["title"],
-                "exit": code, "ok": code == 0 or deferred or held,
-                # exit meanings come from each act script's own contract
-                "outcome": ("verified" if code == 0 else
-                            "preserving-docs-first (or another run holds it) - archives next pass" if deferred else
-                            "held-by-owner (left alone by design)" if held else
-                            "refused-by-gate-or-moved" if code == 2 else
-                            "deterministic-stop" if code == 3 else
-                            "live-writer" if code == 4 else
-                            "breaker" if code == 5 else
-                            "ui-could-not-reach-the-row" if code == 7 else "failed"),
-                "output": out,
+                "title": row["title"], "exit": code, "ok": ok,
+                "outcome": _outcome_word(code, deferred, held), "output": out,
             })
-    return {"acted": len(results), "verified": sum(1 for r in results if r["ok"]), "results": results}
+
+            if ok:
+                streak_sig, streak_rows = None, []
+                continue
+            sig = incidentlib.error_fingerprint(out or _outcome_word(code, deferred, held))
+            streak_rows = [*streak_rows, row] if sig == streak_sig else [row]
+            streak_sig = sig
+            if len(streak_rows) < breaker_threshold:
+                continue
+            remaining = rows[idx + 1:]
+            affected = [{"sessionId": r.get("sessionId") or r.get("id"), "title": r["title"]}
+                        for r in streak_rows]
+            incident_id = incidentlib.record(
+                "sweep-breaker", lane,
+                f"{len(streak_rows)} consecutive '{lane}' failures shared one cause: {(out or '')[:300]}",
+                meta={"chats": affected, "skipped": len(remaining)},
+            )
+            breaker_halts.append({
+                "lane": lane, "count": len(streak_rows), "incident": incident_id,
+                "chats": affected, "skipped": len(remaining),
+                "why": (f"{len(streak_rows)} consecutive '{lane}' acts failed with the same "
+                        f"cause - halting the rest of this lane ({len(remaining)} chat(s) left "
+                        "untouched) instead of repeating a cause that will not clear chat by "
+                        "chat."),
+            })
+            break  # halt the REST of this lane for this pass; other lanes are unaffected
+    return {"acted": len(results), "verified": sum(1 for r in results if r["ok"]),
+            "results": results, "breakerHalts": breaker_halts}
 
 
 def render(batch: dict, executed: dict | None, acting_lanes: list[str],
@@ -217,6 +268,11 @@ def render(batch: dict, executed: dict | None, acting_lanes: list[str],
             if not r["ok"]:
                 for line in r["output"].splitlines()[:3]:
                     L.append(f"      {line}")
+        for h in executed.get("breakerHalts") or []:
+            L.append("")
+            L.append(f"⛔ SHARED-CAUSE BREAKER (incident {h['incident']}): {h['why']}")
+            for c in h["chats"]:
+                L.append(f"      - {c['title']}")
     return "\n".join(L)
 
 
@@ -289,10 +345,11 @@ def run_doctrine_pass() -> dict:
         return {"exit": None, "output": f"doctrine pass crashed: {e}"}
 
 
-def run_acting_lanes(batch: dict, lanes: list[str]) -> tuple[dict, dict | None, dict]:
+def run_acting_lanes(batch: dict, lanes: list[str],
+                     breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD) -> tuple[dict, dict | None, dict]:
     """Executes the requested lanes, then the naming and doctrine passes that always
     follow an acting sweep (naming only when landConsole actually ran)."""
-    executed = execute(batch, lanes)
+    executed = execute(batch, lanes, breaker_threshold=breaker_threshold)
     naming = run_naming_pass(batch, executed) if "landConsole" in lanes else None
     doctrine = run_doctrine_pass()
     return executed, naming, doctrine
@@ -337,6 +394,9 @@ def main(argv: list[str]) -> int:
     max_per_lane = DEFAULT_MAX_PER_LANE
     if "--max" in argv:
         max_per_lane = int(argv[argv.index("--max") + 1])
+    breaker_threshold = DEFAULT_BREAKER_THRESHOLD
+    if "--breaker-threshold" in argv:
+        breaker_threshold = int(argv[argv.index("--breaker-threshold") + 1])
     lanes = parse_lanes(argv)
 
     try:
@@ -347,7 +407,7 @@ def main(argv: list[str]) -> int:
 
     executed = naming = doctrine = None
     if lanes and yes:
-        executed, naming, doctrine = run_acting_lanes(batch, lanes)
+        executed, naming, doctrine = run_acting_lanes(batch, lanes, breaker_threshold=breaker_threshold)
 
     emit_report(batch, executed, lanes, refused, naming, doctrine, as_json)
 

@@ -287,8 +287,19 @@ def build_instances() -> dict:
 
 
 def build_suppressed() -> dict:
+    from lib import incidentlib
+
     return {"generatedAt": int(time.time() * 1000), "suppressed": ledgerlib.suppressed(),
-            "holds": [{**h, "why": holdlib.why_blocked(h["session"])} for h in holdlib.held()]}
+            "holds": [{**h, "why": holdlib.why_blocked(h["session"])} for h in holdlib.held()],
+            # A count only - the incidents themselves are /data/incidents, same split as
+            # the accounts strip (a headline number here, the detail behind its own route).
+            "incidentsOpen": incidentlib.count_incidents("open") + incidentlib.count_incidents("acked")}
+
+
+def build_incidents() -> dict:
+    from lib import incidentlib
+
+    return {"generatedAt": int(time.time() * 1000), "incidents": incidentlib.list_incidents()}
 
 
 def build_accounts() -> dict:
@@ -491,6 +502,7 @@ ROUTES = {
     "/data/chats": build_chats,
     "/data/instances": build_instances,
     "/data/suppressed": build_suppressed,
+    "/data/incidents": build_incidents,
     "/data/accounts": build_accounts,
     "/data/rules": build_rules,
     "/data/scripts": build_scripts,

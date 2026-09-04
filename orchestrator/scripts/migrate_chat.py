@@ -591,7 +591,8 @@ def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str, 
         if still:
             ledgerlib.annotate("migrate", session_id,
                                f"landed in {target.get('name')} but the source row in "
-                               f"{src_name} is still visible (settle exit {code_s})")
+                               f"{src_name} is still visible (settle exit {code_s})",
+                               failure=True)
             return (f" ⚠ Source row in {src_name} is STILL VISIBLE after the settle "
                     f"(actuator exit {code_s}) - a twin is on screen; the twins lane "
                     "will keep settling it. Not claiming a clean move.")

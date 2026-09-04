@@ -237,13 +237,29 @@ def note(
     deterministic: bool = False,
     note: str = "",
     now_ms: int | None = None,
+    error: str | None = None,
 ) -> None:
     """Record that an act went ahead (or was refused deterministically). One row per attempt,
     always - v2 once keyed on (kind, session, timestamp) and merged same-millisecond attempts,
-    under-counting exactly the tight loop the counter exists to catch."""
+    under-counting exactly the tight loop the counter exists to catch.
+
+    A DETERMINISTIC attempt is always a genuine failure ("same inputs can never succeed"), so
+    it is also filed as an INCIDENT (lib/incidentlib.py), grouped by its normalized cause
+    instead of sitting as one more anonymous row in this ledger - `error` (or `note`'s text,
+    when none is given) is the cause text. The row records which incident it belongs to
+    (`incident`), so the two can be joined. `error` also files an incident for an ORDINARY
+    (non-deterministic) attempt when a caller already knows the cause; without it, an ordinary
+    attempt files nothing here - it may still fail, but that is annotate()'s job
+    (`failure=True`) once the outcome is known."""
     if kind not in VALID_KINDS:
         raise ValueError(f"unknown breaker kind {kind!r} - new acts must opt in deliberately")
     now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    fail_text = error or (note if deterministic else None)
+    incident_id = None
+    if fail_text:
+        from lib import incidentlib  # local: incidentlib imports this module, so import here
+
+        incident_id = incidentlib.record(kind, session_id, fail_text)
     with locked("attempts"):
         # Window-prune ordinary attempts only; deterministic rows persist until clear().
         rows = [
@@ -258,12 +274,14 @@ def note(
                 "at": now_ms,
                 "deterministic": bool(deterministic),
                 "note": note,
+                "incident": incident_id,
             }
         )
         _save(rows)
 
 
-def annotate(kind: str, session_id: str, outcome: str, now_ms: int | None = None) -> None:
+def annotate(kind: str, session_id: str, outcome: str, now_ms: int | None = None, *,
+             failure: bool = False) -> None:
     """Attach the OUTCOME to the most recent attempt row. Adds no row, so the count is safe.
 
     ⛔ NEVER record a failure by calling note() a second time. The counter is "one row per
@@ -277,14 +295,30 @@ def annotate(kind: str, session_id: str, outcome: str, now_ms: int | None = None
     the app was shut, the row was ambiguous, or the text never matched. A brake that stops
     the machine without saying what it hit sends you guessing; every stop should carry its
     reason.
+
+    `failure=True` marks this outcome as a genuine failure (not merely informational): it also
+    files an INCIDENT (lib/incidentlib.py) for (kind, session_id) - grouping this failure with
+    every other one that shares its normalized cause - and stamps the matched row's `incident`
+    field. Most annotate() calls are asides on an attempt that is still succeeding (e.g.
+    migrate_chat noting which idle engine it stopped along the way) and pass nothing; only a
+    caller that KNOWS the outcome is a failure sets this explicitly - guessing from the outcome
+    TEXT would misfire on rows like "landed ... but the source row is still visible", which
+    names a real failure without the word "fail" anywhere in it.
     """
     if kind not in VALID_KINDS:
         raise ValueError(f"unknown breaker kind {kind!r} - new acts must opt in deliberately")
+    incident_id = None
+    if failure:
+        from lib import incidentlib  # local: incidentlib imports this module, so import here
+
+        incident_id = incidentlib.record(kind, session_id, outcome)
     with locked("attempts"):
         rows = _load()
         for r in reversed(rows):
             if r.get("kind") == kind and r.get("session") == session_id:
                 r["outcome"] = str(outcome)[:400]
+                if incident_id:
+                    r["incident"] = incident_id
                 _save(rows)
                 return
 
