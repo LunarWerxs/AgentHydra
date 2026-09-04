@@ -9,6 +9,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **A provenance ratchet on the agent catalog** (`scripts/checks/catalog-row-provenance.mjs`, wired
+  into CI). The 58 rows in `server/src/agent-catalog.ts` say where each coding agent keeps its
+  conversations, and their paths were compiled from a third-party registry rather than read from
+  each tool's own source. A wrong path there is invisible by construction: a row pointing at a
+  directory that does not exist produces exactly what a correct row produces on a machine where
+  that tool is not installed, so it can never be told from "not installed" and lives forever. Three
+  rows were checked against upstream source on 2026-09-04 and all three were wrong - Hermes Agent
+  and OpenClaw both pointed at directories their projects do not have (fixed), and `aider` carried
+  an empty `dirs`, unmatched on any machine without `AIDER_DIR` set (given `~/.aider`, which its
+  own `main.py` writes to). Rows now carry an optional `verified: '<repo> <file> (<date>)'`, and
+  the guardrail ratchets on the count so verification can only grow, fails a marker that names no
+  file or date, fails a row that cannot match at all, and fails if its own parser reads fewer rows
+  than the table declares.
+
 - **`orchestrator/scripts/lib/incidentlib.py` - THE INCIDENT LEDGER**, ported from
   NousResearch/hermes-agent's `cron/incidents.py` (MIT) and adapted to this toolbox's
   JSON-rows-in-state style (no SQLite). Groups repeated failures by a normalized cause

@@ -109,6 +109,14 @@ jobs:
       - name: Guardrail (a repeating timer must not be able to kill the daemon)
         run: bun scripts/checks/timer-callback-can-kill-the-daemon.mjs
 
+      # The agent catalog's paths came from a third-party registry, and a wrong one is INVISIBLE:
+      # a row pointing at a directory that does not exist produces exactly what a correct row
+      # produces on a machine without that tool - nothing. Three rows were checked against upstream
+      # source on 2026-09-04 and all three were wrong. This ratchets the verified count so it can
+      # only grow, and fails on a row that cannot match at all.
+      - name: Guardrail (agent catalog row provenance ratchet)
+        run: bun scripts/checks/catalog-row-provenance.mjs
+
       - name: Build (web SPA)
         run: bun run build
 

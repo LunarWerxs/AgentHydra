@@ -91,6 +91,24 @@ export interface AgentTool {
   sessionFile?: string
   /** Shown beside a detected-but-unreadable tool, so "why not?" has an answer. */
   note?: string
+  /**
+   * Where this row's paths were READ FROM, when they were read from the tool's own source rather
+   * than taken from the agentsview registry. Format: `<upstream file> (<date>)`.
+   *
+   * WHY THIS FIELD EXISTS. The header above says a wrong path is harmless because it costs one
+   * `stat` and finds nothing. That is true and it is also the problem: a row pointing at a
+   * directory that does not exist is INDISTINGUISHABLE, from the outside, from a machine where the
+   * tool simply is not installed. So a wrong row never announces itself, and lives forever. On
+   * 2026-09-04 the rows for the two largest agent projects in the world were checked against
+   * upstream source for the first time and BOTH were wrong - Hermes had no `sessions` directory at
+   * all, OpenClaw no `agents` one - and aider's row carried an empty `dirs`, which cannot match
+   * anything by construction. Three for three on the only rows anyone had ever looked at.
+   *
+   * The field is therefore not decoration: `scripts/checks/catalog-row-provenance.mjs` ratchets on
+   * the count, so the verified set can only grow, and prints the unverified remainder so the gap
+   * is a number somebody can see instead of a silence.
+   */
+  verified?: string
 }
 
 const HOME = homedir()
@@ -415,11 +433,18 @@ export const AGENT_TOOLS: AgentTool[] = [
     name: 'Aider',
     vendor: 'Aider',
     envVar: 'AIDER_DIR',
-    // No canonical root: Aider writes `.aider.chat.history.md` inside each repo. Opt-in only —
-    // scanning $HOME for it is the kind of "helpful" walk that trips macOS privacy prompts.
-    dirs: [],
+    // Aider writes `.aider.chat.history.md` inside each repo, so there is no canonical root for its
+    // TRANSCRIPTS and this row stays detect-only. It used to carry `dirs: []`, whose stated reason
+    // was that scanning $HOME for those per-repo files "is the kind of 'helpful' walk that trips
+    // macOS privacy prompts" - correct about a walk, but `rootsFor` never walks: it does one
+    // `existsSync` per listed path. So the reasoning ruled out a search and the empty list ruled out
+    // detection too, and without AIDER_DIR set the row could not match on any machine. Upstream
+    // (aider/main.py, 2026-09-04) puts installs.json and oauth-keys.env in `Path.home() / ".aider"`,
+    // which is one exact stat, no traversal, and the same evidence of an install.
+    dirs: ['.aider'],
     format: null,
     note: 'opt-in',
+    verified: 'Aider-AI/aider aider/main.py (2026-09-04)',
   },
   {
     id: 'gptme',
@@ -483,6 +508,7 @@ export const AGENT_TOOLS: AgentTool[] = [
     envVar: 'HERMES_HOME',
     dirs: ['.hermes', 'AppData/Local/hermes'],
     dbName: 'state.db',
+    verified: 'NousResearch/hermes-agent hermes_constants.py (2026-09-04)',
     format: 'hermes',
   },
   {
@@ -527,6 +553,7 @@ export const AGENT_TOOLS: AgentTool[] = [
     // reported as absent on every machine that had it. The relocation env var is OPENCLAW_STATE_DIR.
     envVar: 'OPENCLAW_STATE_DIR',
     dirs: ['.openclaw', '.kimi_openclaw'],
+    verified: 'openclaw/openclaw src/config/paths.ts (2026-09-04)',
     format: null,
   },
   {

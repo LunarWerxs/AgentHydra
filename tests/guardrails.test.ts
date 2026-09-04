@@ -335,6 +335,79 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       `,
     ],
   },
+  'catalog-row-provenance.mjs': {
+    broken: [
+      // Rule C, the aider shape as it shipped: an empty `dirs` and no `envVar`, so rootsFor()
+      // returns zero candidates and the row cannot match on any machine, ever.
+      `export const AGENT_TOOLS: AgentTool[] = [
+  {
+    id: 'aider',
+    name: 'Aider',
+    vendor: 'Aider',
+    dirs: [],
+    format: null,
+  },
+]`,
+      // Rule B: a marker that cannot be re-checked is worse than no marker, because it stops the
+      // next reader looking.
+      `export const AGENT_TOOLS: AgentTool[] = [
+  {
+    id: 'hermes',
+    name: 'Hermes Agent',
+    vendor: 'Nous Research',
+    dirs: ['.hermes'],
+    format: null,
+    verified: 'trust me',
+  },
+]`,
+      // Rule 0, aimed at the guardrail itself: a row shape parseRows cannot read must be reported,
+      // never skipped in silence. `id:` here carries two spaces, which the strict row pattern
+      // misses and the looser declared-count pattern still sees.
+      `export const AGENT_TOOLS: AgentTool[] = [
+  {
+    id:  'zed',
+    name: 'Zed',
+    vendor: 'Zed Industries',
+    dirs: ['.local/share/zed'],
+    format: 'foreign',
+  },
+]`,
+    ],
+    fixed: [
+      // What the three repaired rows actually look like: a real path, an opt-in row whose empty
+      // dirs is legal because an envVar can still reach it, and a marker naming file and date.
+      `export const AGENT_TOOLS: AgentTool[] = [
+  {
+    id: 'aider',
+    name: 'Aider',
+    vendor: 'Aider',
+    envVar: 'AIDER_DIR',
+    dirs: ['.aider'],
+    format: null,
+    verified: 'Aider-AI/aider aider/main.py (2026-09-04)',
+  },
+  {
+    id: 'opt-in-only',
+    name: 'Opt In Only',
+    vendor: 'Example',
+    envVar: 'OPT_IN_DIR',
+    dirs: [],
+    format: null,
+  },
+  {
+    // A leading comment between the brace and the id is the shape that broke the first parser.
+    id: 'cowork',
+    name: 'Claude Cowork',
+    vendor: 'Anthropic',
+    dirs: [
+      '.config/Claude/local-agent-mode-sessions',
+      'AppData/Roaming/Claude/local-agent-mode-sessions',
+    ],
+    format: 'claude',
+  },
+]`,
+    ],
+  },
 }
 
 // Checks that deliberately do NOT export findViolations, and why, asserted explicitly below rather
