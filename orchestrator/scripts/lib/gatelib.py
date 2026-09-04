@@ -317,6 +317,13 @@ def parse_tail_records(text: str, whole_file: bool) -> list[dict]:
                 # never landed - a mid-turn death even with prefacing text.
                 "has_tool_use": bool(tool_uses),
                 "tool_names": [str(b.get("name", "")) for b in tool_uses if b.get("name")],
+                # The tool_use blocks' own name+input, kept verbatim (never summarised) so a
+                # caller can classify what a pending call would actually DO - approvallib's
+                # tri-state gate is the reason this exists (2026-09-04): a bare tool NAME
+                # ("Bash") says nothing about whether the command behind it is destructive.
+                "tool_inputs": [{"name": str(b.get("name", "")),
+                                "input": b.get("input") if isinstance(b.get("input"), dict) else {}}
+                               for b in tool_uses],
                 "has_tool_result": any(
                     isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks
                 ),

@@ -23,6 +23,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   left behind. New `python orch.py incidents` (list open/acked, `--ack`/`--resolve`, `--all`)
   surfaces it; the dashboard's `/data/incidents` route and `/data/suppressed`'s
   `incidentsOpen` count expose it there too.
+- **Orchestrator: the unblock lane now classifies a stuck permission prompt before pressing
+  it, tri-state (APPROVE / DENY / ESCALATE)** - idea ported from `hermes-agent`'s
+  `approval.py` (MIT). Previously `unblock_prompts.py` pressed Allow on any chat whose
+  configured mode was `bypassPermissions`, whatever the pending command actually was.
+  It now also classifies the command against `orchestrator/scripts/lib/approvallib.py`'s
+  policy (`state/approval_policy.json`, created with a WHY-comment on first run, hand-edited
+  only - never inferred from a chat's own transcript text): hardline-destructive commands
+  (`rm -rf`, a shared-branch hard reset, a credential path, ...) DENY and are recorded, never
+  pressed; clearly safe ones (read-only inspection, build, typecheck, test, lint, git
+  status/log/diff) APPROVE exactly as before; everything else ESCALATEs into a new judgment
+  queue (`state/approval_escalations.json`) that `interview.py --ask` now also surfaces, so a
+  person or the `/orchestrate` AI decides instead of it being pressed on a guess. The
+  scheduled UNATTENDED run presses only APPROVE; an INTERACTIVE run (`--force`, a person at
+  `orch.py`) may also press an ESCALATE row, after the command has been shown.
 
 - **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
   2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have

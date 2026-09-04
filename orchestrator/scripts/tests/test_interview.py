@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stubdaemon import StubDaemon, dossier_query  # noqa: E402
 
 import interview  # noqa: E402
+from lib import approvallib  # noqa: E402
 from lib import deliverylib  # noqa: E402
 from lib import holdlib  # noqa: E402
 from lib import hydralib  # noqa: E402
@@ -75,6 +76,37 @@ class InterviewTest(unittest.TestCase):
         self.assertIn("reply", x["question"])
         self.assertIn("answers", q["answerFormat"])
 
+    def test_ask_also_surfaces_a_queued_approval_escalation(self):
+        # THE JUDGMENT QUEUE WIRING (item 1): unblock_prompts.py's tri-state gate queues an
+        # ESCALATE row here instead of pressing it - --ask must hand it back out, command and
+        # all, so a person or the AI can decide.
+        approvallib.queue_escalation(
+            "esc-1", title="a stuck chat", instance="inst2", instance_dir="C:/y",
+            verify="hi", command="npm install left-pad", tool_name="Bash",
+            reason="no pattern places it")
+        q = interview.build_questions(cap=10)
+        self.assertEqual(len(q["approvalQuestions"]), 1)
+        a = q["approvalQuestions"][0]
+        self.assertEqual(a["sessionId"], "esc-1")
+        self.assertIn("npm install left-pad", a["command"])
+        self.assertIn("approve", a["question"])
+        self.assertIn("deny", a["question"])
+
+    def test_approvalovercap_counts_against_the_uncapped_queue(self):
+        # Regression (review, 2026-09-04): approvalOverCap used to be computed AFTER the
+        # escalation list was already sliced to `cap`, so `len(escalations) - cap` could
+        # never be positive - a queue with more escalations than `cap` silently reported 0
+        # hidden rows instead of the truth, unlike the sibling "overCap" for judgmentQueue it
+        # was meant to mirror.
+        for i in range(3):
+            approvallib.queue_escalation(
+                f"esc-cap-{i}", title=f"chat {i}", instance="inst2", instance_dir="C:/y",
+                verify="hi", command="npm install left-pad", tool_name="Bash",
+                reason="no pattern places it")
+        q = interview.build_questions(cap=2)
+        self.assertEqual(len(q["approvalQuestions"]), 2)
+        self.assertEqual(q["approvalOverCap"], 1)
+
     def test_reply_answer_stages_for_the_courier(self):
         results = interview.apply_answers(
             {"answers": [{"sessionId": SID, "decision": "reply", "text": "Yes - do part two."}]})
@@ -119,6 +151,56 @@ class InterviewTest(unittest.TestCase):
         p.write_text("{ not json", encoding="utf-8")
         code, _, err = run_cli(interview.main, ["--apply", str(p)])
         self.assertEqual(code, 3)
+
+
+class ApprovalEscalationApplyTest(unittest.TestCase):
+    """apply_answers' 'approve'/'deny' branches - the other half of the judgment queue loop
+    (item 1): a person or the AI answers a queued escalation and the decision actually
+    executes, through the same actuator rails unblock_prompts.py itself uses."""
+
+    def setUp(self):
+        self._state = tempfile.TemporaryDirectory()
+        os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+        approvallib.queue_escalation(
+            "esc-1", title="a stuck chat", instance="inst2", instance_dir="C:/y",
+            verify="hi", command="npm install left-pad", tool_name="Bash",
+            reason="no pattern places it")
+
+    def tearDown(self):
+        os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
+        self._state.cleanup()
+
+    def test_approve_presses_through_the_actuator_and_clears_the_queue(self):
+        with mock.patch("unblock_prompts.press",
+                        return_value={"ok": True, "outcome": "approved - the chat carries on"}) as m:
+            results = interview.apply_answers(
+                {"answers": [{"sessionId": "esc-1", "decision": "approve"}]})
+        m.assert_called_once()
+        self.assertEqual(m.call_args.args[0]["sessionId"], "esc-1")
+        self.assertTrue(results[0]["ok"])
+        self.assertIsNone(approvallib.get_escalation("esc-1"))
+
+    def test_a_failed_press_leaves_the_row_queued(self):
+        with mock.patch("unblock_prompts.press",
+                        return_value={"ok": False, "outcome": "did NOT clear"}):
+            results = interview.apply_answers(
+                {"answers": [{"sessionId": "esc-1", "decision": "approve"}]})
+        self.assertFalse(results[0]["ok"])
+        self.assertIsNotNone(approvallib.get_escalation("esc-1"))
+
+    def test_deny_never_presses_and_clears_the_queue(self):
+        with mock.patch("unblock_prompts.press") as m:
+            results = interview.apply_answers({"answers": [
+                {"sessionId": "esc-1", "decision": "deny", "reason": "looked risky"}]})
+        m.assert_not_called()
+        self.assertTrue(results[0]["ok"])
+        self.assertIn("looked risky", results[0]["outcome"])
+        self.assertIsNone(approvallib.get_escalation("esc-1"))
+
+    def test_approve_or_deny_on_an_unqueued_session_is_rejected(self):
+        results = interview.apply_answers(
+            {"answers": [{"sessionId": "not-queued", "decision": "approve"}]})
+        self.assertFalse(results[0]["ok"])
 
 
 if __name__ == "__main__":
