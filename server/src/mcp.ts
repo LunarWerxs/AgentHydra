@@ -888,13 +888,13 @@ export const TOOLS: McpEngineTool[] = [
   },
 
   // --- accounts -----------------------------------------------------------------
-  {
-    name: 'list_accounts',
-    description:
-      'List only legacy, manually-added credentials (label, auth_type, created_at) from the old pasted-credentials table. Secrets are always masked, never returned in full. This is NOT the primary account list — most signed-in accounts live on instances now; use list_instances / list_cli_instances for those.',
-    inputSchema: S(),
-    run: () => api('/api/accounts'),
-  },
+  // NO list_accounts TOOL, deliberately (owner ask 2026-09-04: keep one of each duplicated pair).
+  // It listed the old pasted-credentials table, and its own description ended "This is NOT the
+  // primary account list ... use list_instances / list_cli_instances for those" — a tool whose
+  // text tells an agent not to use it is a duplicate that still costs a slot and still gets
+  // called. Signed-in accounts live on instances: list_instance_numbers for the whole fleet,
+  // list_instances / list_cli_instances / list_codex_instances per kind. The ROUTE stays
+  // (GET /api/accounts, queue.ts) — Settings still renders the rare leftover credential there.
 
   // --- scheduler ------------------------------------------------------------------
   {
@@ -1434,7 +1434,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'import_session_to_desktop',
     description:
-      "MUTATES: import a FINISHED session into a desktop instance's app as a visible chat (the app's own claude://resume one-way import, targeted at one instance). A TITLE DECISION IS REQUIRED (owner rule): pass `title` (a real, non-generic name) or `confirm_title` (the chat's current title restated exactly, after reviewing it — the dossier answers in one query); without one the import is refused. Refuses a currently-live session (the import rewrites the transcript under an active writer) and a non-running instance (importing would boot it). Finish all headless work FIRST and import LAST; a just-imported chat does not process peer messages until the user first interacts with it.",
+      "MUTATES: MOVE a FINISHED session into a desktop instance's app as a visible chat, and A MOVE IS A MOVE (owner rule, 2026-09-04): the source account no longer shows it. It lands in the target (the app's own claude://resume import, or a direct record write when that app is closed), carries the chat's model/permission settings, and ARCHIVES every other profile's copy — including against a running source app, which re-saves the flag away and used to leave a visible stale twin on the account you moved it off. `instance_ref` ('desktop:<dir>', from list_instance_numbers) is REQUIRED: there is no inferred target for a move. A TITLE DECISION IS REQUIRED (owner rule): pass `title` (a real, non-generic name) or `confirm_title` (the chat's current title restated exactly, after reviewing it — the dossier answers in one query); without one it is refused. Refuses a currently-live session (the move rewrites the transcript under an active writer) — settle or stop that engine first; a person's own targeted move through `orchestrator_run migrate_chat --stop-idle` is the path that may stop an IDLE engine for them. Finish all headless work FIRST and move LAST; a just-landed chat does not process peer messages until the user first interacts with it.",
     inputSchema: S(
       {
         session_id: { type: 'string' },
@@ -1444,14 +1444,20 @@ export const TOOLS: McpEngineTool[] = [
       },
       ['session_id'],
     ),
+    // /migrate, NOT /import-desktop. The import half only LANDS the chat: it leaves the source
+    // account's row untouched, so the thread showed on both accounts and every later resolve of
+    // it was ambiguous (hit live 2026-09-04 — an agent moved a chat with this tool and the owner
+    // still had it). stop_live:false keeps the import door's live refusal; the archive, the
+    // settings carry and the running-app re-assert come free with the endpoint that owns them.
     run: async (a) =>
-      api(`/api/sessions/${encodeURIComponent(str(a.session_id))}/import-desktop`, {
+      api(`/api/sessions/${encodeURIComponent(str(a.session_id))}/migrate`, {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           instance_ref: a.instance_ref,
           title: a.title,
           confirm_title: a.confirm_title,
+          stop_live: false,
         }),
       }),
   },
