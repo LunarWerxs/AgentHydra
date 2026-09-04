@@ -94,7 +94,8 @@ describe('list_sessions', () => {
     const source = schema?.properties.source
     // 'foreign' is the shared reader for Cursor, Windsurf, Zed, Copilot CLI and the rest. Leaving it
     // out of the enum made a whole class of local history unaddressable over MCP.
-    expect(source?.enum).toEqual(['claude', 'codex', 'opencode', 'foreign'])
+    // 'hermes' joined on 2026-09-04: Hermes Agent's own SQLite store, read by hermes-sessions.ts.
+    expect(source?.enum).toEqual(['claude', 'codex', 'opencode', 'hermes', 'foreign'])
   })
 })
 
