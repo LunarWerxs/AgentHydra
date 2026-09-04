@@ -16,6 +16,7 @@ import { captureScreen } from '../screenshot'
 import {
   applyDesktopChatAutomation,
   archiveDesktopChat,
+  archiveRootsForMove,
   coldImportSessionToDesktop,
   desktopHomeFor,
   importSessionToDesktop,
@@ -296,7 +297,22 @@ app.post('/api/sessions/:id/migrate', async (c) => {
 
   // Old desktop entries: flagged archived now, BEFORE the import creates the fresh entry in
   // the target profile.
-  const archived0 = await archiveDesktopChat(sessionId, true).catch(() => null)
+  //
+  // EVERY OTHER PROFILE - NEVER THE TARGET'S OWN (bug, reproduced live 2026-09-04). This used to
+  // call archiveDesktopChat with no roots, which walks the default profile plus every isolated
+  // instance and flips the flag in each store that carries the chat, the TARGET included. When
+  // the target already held a record (a re-migrate, or a move whose target is the account the
+  // chat is already on), the move archived it and then nothing put it back: alreadyRendersIn
+  // reads an archived record as "not rendering" so the import proceeds, and the hot landing
+  // writes title, permission mode and carried settings but NEVER isArchived (the only forced
+  // `false` in the codebase is the cold path's buildColdImportRecord). Net effect: the route
+  // answered ok, the chat was hidden on the account it had just been moved to, and it had to be
+  // un-archived by hand. Excluding the target here fixes it upstream, where no write is made at
+  // all, rather than by racing the running app with a corrective write it re-saves over.
+  const targetDir = ref.slice('desktop:'.length)
+  const archived0 = await archiveDesktopChat(sessionId, true, archiveRootsForMove(targetDir)).catch(
+    () => null,
+  )
   // ...and the meta cache dropped NOW, not only after the import: within the scan cache's
   // 15s TTL, importSessionToDesktop's alreadyRendered check could read the PRE-archive rows
   // and skip the reimport entirely while this handler still answered ok (adversarial review
@@ -307,8 +323,8 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // profile whose app was running, fire a bounded background watcher that keeps the flag true
   // until the app's next boot makes it stick. Fire-and-forget: it must never delay the
   // migrate's own response, and its own caps bound it. The TARGET dir is excluded so the
-  // fresh import is never touched.
-  const targetDir = ref.slice('desktop:'.length)
+  // fresh import is never touched — belt and braces now that the archive above cannot reach it
+  // either, and cheap: a watcher aimed at the target would fight the landing it just made.
   for (const hit of archived0?.hits ?? []) {
     if (!hit.changed || !hit.wasRunning) continue
     if (samePathKey(hit.profile, targetDir)) continue
@@ -360,7 +376,14 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       // The source was archived above and the chat has landed nowhere: put it back where it was
       // rather than leave a thread that shows in no app. The hot path cannot do this (its import
       // is a spawn whose failure is not always knowable); this one can.
-      await archiveDesktopChat(sessionId, false).catch(() => null)
+      //
+      // ONLY the profiles THIS call changed. Un-archiving with no roots reaches every profile
+      // carrying the chat and un-hides copies that were archived long before this migrate ran —
+      // a failed move would then resurrect the twins it was never asked to touch. `changed` is
+      // false for a record already in the requested state, so this restores exactly what was
+      // flipped a moment ago.
+      const flipped = (archived0?.hits ?? []).filter((h) => h.changed).map((h) => h.profile)
+      if (flipped.length) await archiveDesktopChat(sessionId, false, flipped).catch(() => null)
       invalidateSessionMetaCache()
       return c.json({ ok: false, error: cold.reason ?? 'cold import failed' }, 422)
     }

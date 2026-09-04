@@ -434,26 +434,43 @@ export interface DesktopArchiveHit {
   changed: boolean
 }
 
+/** Every desktop profile this machine has: the default install plus each isolated instance.
+ *  Exported so a caller that must archive "every profile EXCEPT one" can filter this list
+ *  instead of keeping a second copy of the enumeration that would drift from this one. */
+export function desktopProfileRoots(): string[] {
+  const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
+  const instances = ((): string[] => {
+    const root = join(homedir(), '.claude-instances')
+    try {
+      return readdirSync(root, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => join(root, d.name))
+    } catch {
+      return []
+    }
+  })()
+  return [join(appData, 'Claude'), ...instances]
+}
+
+/** The profiles a MOVE is allowed to archive: every one EXCEPT the account it is landing in.
+ *  Archiving the target's own record is how a completed move ended with the chat hidden on the
+ *  account it had just arrived at - nothing downstream clears the flag (2026-09-04). The target
+ *  arrives spelled however the caller typed `instance_ref`, so the comparison goes through
+ *  samePathKey rather than string equality. */
+export function archiveRootsForMove(
+  targetDir: string,
+  roots: string[] = desktopProfileRoots(),
+): string[] {
+  return roots.filter((r) => !samePathKey(r, targetDir))
+}
+
 export async function archiveDesktopChat(
   sessionId: string,
   archived: boolean,
   roots?: string[],
   isInstanceRunning: (dir: string) => Promise<boolean> = defaultInstanceRunning,
 ): Promise<{ ok: boolean; hits: DesktopArchiveHit[]; reason?: string }> {
-  const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming')
-  const searchRoots = roots ?? [
-    join(appData, 'Claude'),
-    ...((): string[] => {
-      const root = join(homedir(), '.claude-instances')
-      try {
-        return readdirSync(root, { withFileTypes: true })
-          .filter((d) => d.isDirectory())
-          .map((d) => join(root, d.name))
-      } catch {
-        return []
-      }
-    })(),
-  ]
+  const searchRoots = roots ?? desktopProfileRoots()
   const hits: DesktopArchiveHit[] = []
   for (const profile of searchRoots) {
     const store = join(profile, 'claude-code-sessions')
