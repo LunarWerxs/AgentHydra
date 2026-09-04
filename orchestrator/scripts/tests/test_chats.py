@@ -114,6 +114,39 @@ class ChatsTest(unittest.TestCase):
         self.assertFalse(row["landed"])     # ...but nothing moved, and the count reads this
         self.assertIn("no-op", row["outcome"])
 
+    def _child_payload(self, payload):
+        """A stand-in migrate_chat.main that answers with a --json payload, the way the batch
+        loop actually reads its children."""
+        def child(argv):
+            print(json.dumps(payload))
+            return 0
+        return child
+
+    def test_a_landing_that_leaves_the_source_row_visible_is_NOT_a_clean_move(self):
+        """A MOVE IS A MOVE (live, 2026-09-04): nine chats landed, every one left its source
+        row visible, migrate_chat said so nine times - and this loop printed nine ticks,
+        because it read only `landed`. The operator believed a clean move and found the
+        duplicates later, so a twin has to fail the row AND the exit code."""
+        rows = chats.collect(False, None, None, "rolodexter", False)
+        with mock.patch("migrate_chat.main", side_effect=self._child_payload(
+                {"landed": True, "sourceRow": "visible", "report": "twin on screen"})):
+            plan = chats.move(rows, "beta", act=True, cap=10)
+        row = plan["results"][0]
+        self.assertTrue(row["landed"])
+        self.assertFalse(row["ok"])
+        self.assertIn("still visible", row["outcome"])
+        self.assertEqual(chats._move_exit_code(plan, True), 2)
+
+    def test_a_source_row_retired_by_the_weaker_disk_flag_still_counts_as_moved(self):
+        rows = chats.collect(False, None, None, "rolodexter", False)
+        with mock.patch("migrate_chat.main", side_effect=self._child_payload(
+                {"landed": True, "sourceRow": "flagged", "report": "flag written"})):
+            plan = chats.move(rows, "beta", act=True, cap=10)
+        row = plan["results"][0]
+        self.assertTrue(row["ok"])
+        self.assertIn("landed and verified", row["outcome"])
+        self.assertEqual(chats._move_exit_code(plan, True), 0)
+
     def test_a_refusal_is_named_not_swallowed(self):
         rows = chats.collect(False, None, None, "rolodexter", False)
         with mock.patch("migrate_chat.main", return_value=6):

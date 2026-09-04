@@ -596,18 +596,32 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
     return after
 
 
-def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str, chat_title) -> str:
-    """Settle the superseded SOURCE row (_settle_source docstring): only when the chat came
-    from a desktop instance whose app is RUNNING - a closed app's disk flag is durable on its
-    own. Best-effort and loud: a failed settle leaves a stale twin, and the report says
-    exactly that. Returns the settle_note suffix for the final report ("" when there is
-    nothing to settle)."""
+def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str,
+                       chat_title) -> tuple[str, str]:
+    """Settle the superseded SOURCE row (_settle_source docstring).
+
+    Returns (report suffix, STATE) where state is the machine half - 'none' nothing to
+    settle, 'settled' the app's own control did it, 'flagged' the disk flag did it (weaker;
+    a running app could re-save it, and the twins lane keeps watch), 'visible' the twin is
+    still there. ⛔ CALLERS BRANCH ON THE STATE, NEVER ON THE PROSE: a batch caller sniffing
+    the sentence for "STILL VISIBLE" is how nine warnings turned into nine ticks.
+    """
     src_name = str(match.get("instance") or "")
     if not src_name or src_name.lower() == str(target.get("name", "")).lower():
-        return ""
+        return "", "none"
     src_inst = resolve_instance(fleet, src_name)
+    # A CLOSED APP IS NOT AUTOMATICALLY SETTLED (found live 2026-09-04: two closed-instance
+    # twins from older moves). The import is supposed to flag the source copy on disk; this
+    # verifies that it did, which costs one store scan and is the difference between "a move
+    # is a move" and a claim.
     if not (src_inst and src_inst.get("isRunning")):
-        return ""
+        if not _source_still_visible(session_id, src_name):
+            return "", "none"
+        return ((" Source row flagged archived on disk in the closed instance "
+                 f"{src_name} (the import had not)."), "flagged") \
+            if _archive_source_on_disk(session_id, src_name) else \
+            (f" ⚠ Source row is STILL VISIBLE in {src_name} and its flag could not be "
+             "written. Not claiming a clean move.", "visible")
     code_s, out_s = _settle_source(src_name, str(chat_title))
     # DOUBLE-CHECK, NEVER ASSUME (owner, 2026-09-01: "it can't do it blind; it must always
     # double check, confirm"). Exit 3 used to be read as "already settled"; a row the app
@@ -617,29 +631,37 @@ def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str, 
     # lane keeps settling it every pass.
     if code_s in (0, 3):
         time.sleep(2)
-        still = _source_still_visible(session_id, src_name)
-        if still:
-            ledgerlib.annotate("migrate", session_id,
-                               f"landed in {target.get('name')} but the source row in "
-                               f"{src_name} is still visible (settle exit {code_s})",
-                               failure=True)
-            return (f" ⚠ Source row in {src_name} is STILL VISIBLE after the settle "
-                    f"(actuator exit {code_s}) - a twin is on screen; the twins lane "
-                    "will keep settling it. Not claiming a clean move.")
-        return " Source row settled through its app's own control (verified on disk)."
-    # ⛔ NEVER LEAVE THE SOURCE VISIBLE (owner, 2026-09-01: "there are a few duplicate chats
-    # happening"). The app's own control is the immediate and durable route, but it can fail
-    # - an ambiguous title, a row not rendered - and every one of those failures left a twin
-    # on screen until a later sweep caught it. The disk flag is weaker under a running app,
-    # and weaker beats nothing.
+        if not _source_still_visible(session_id, src_name):
+            return " Source row settled through its app's own control (verified on disk).", "settled"
+        # ⛔ NEVER LEAVE THE SOURCE VISIBLE (owner, 2026-09-01) - and this branch used to do
+        # exactly that: it warned and stopped, so a window that renders no rows (minimized,
+        # collapsed, virtualized) returned exit 3 and every move off it left a twin nobody
+        # cleared. Nine of them, live, 2026-09-04. The flag is weaker under a running app,
+        # and weaker beats a twin: that app never rendered the row, so there is nothing on
+        # screen for it to re-save from, and the ghost sweep finishes it when it does.
+        if _archive_source_on_disk(session_id, src_name) and \
+                not _source_still_visible(session_id, src_name):
+            return ((f" Source row in {src_name} did not answer its app's own control "
+                     f"(exit {code_s}); its archive flag was written on disk instead - the "
+                     "ghost sweep clears the row the moment that app renders it."), "flagged")
+        ledgerlib.annotate("migrate", session_id,
+                           f"landed in {target.get('name')} but the source row in "
+                           f"{src_name} is still visible (settle exit {code_s})",
+                           failure=True)
+        return (f" ⚠ Source row in {src_name} is STILL VISIBLE after the settle "
+                f"(actuator exit {code_s}) - a twin is on screen; the twins lane "
+                "will keep settling it. Not claiming a clean move.", "visible")
+    # The app's own control is the immediate and durable route, but it can fail - an
+    # ambiguous title, a row not rendered - and every one of those failures left a twin on
+    # screen until a later sweep caught it.
     fallback = _archive_source_on_disk(session_id, src_name)
     return (
-        f" Source row could not be settled through the app ({code_s}); its archive "
-        "flag was written on disk instead - it clears at that app's next restart."
-        if fallback else
-        f" Source row NOT settled (actuator said: "
-        f"{(out_s.splitlines()[-1][:100] if out_s else code_s)}) - a stale twin "
-        f"may linger in {src_name}; archive it there."
+        (f" Source row could not be settled through the app ({code_s}); its archive "
+         "flag was written on disk instead - it clears at that app's next restart."), "flagged"
+    ) if fallback else (
+        (f" Source row NOT settled (actuator said: "
+         f"{(out_s.splitlines()[-1][:100] if out_s else code_s)}) - a stale twin "
+         f"may linger in {src_name}; archive it there."), "visible"
     )
 
 
@@ -740,8 +762,8 @@ def main(argv: list[str]) -> int:
 
     # (The 'migrate' attempt is cleared below, AFTER the settle - a landing whose source row
     # is still visible is not a clean move, and its annotation must have a row to land on.)
-    settle_note = _settle_source_row(match, target, fleet, session_id, chat_title)
-    if "STILL VISIBLE" not in settle_note:
+    settle_note, source_row = _settle_source_row(match, target, fleet, session_id, chat_title)
+    if source_row != "visible":
         ledgerlib.clear("migrate", session_id)  # a clean move: the brake is for futility
 
     stamped, stamp_note, uc_ok, uc_note = _stamp_automation_doctrine(session_id, target, after)
@@ -751,7 +773,9 @@ def main(argv: list[str]) -> int:
             "landed": True,
             "bypassStamped": stamped,
             "ultracodeStamped": uc_ok,
-            "sourceSettled": bool(settle_note.startswith(" Source row settled")),
+            # sourceRow is the machine half; sourceSettled stays for older readers.
+            "sourceRow": source_row,
+            "sourceSettled": source_row in ("settled", "flagged", "none"),
             "daemon": result,
             "report": (
                 f"landed and VERIFIED: '{chat_title}' now lives in {target.get('name')}. "
