@@ -48,9 +48,11 @@ async function create(name: string) {
   return result
 }
 
-async function withBusy(
+// Generic over the result shape so it also covers redeemResetCredit's CodexResetRedeemResult,
+// which carries `ok` but not CMActionResult's `action`/`dir`/`data` fields.
+async function withBusy<T extends { ok: boolean }>(
   id: string,
-  operation: () => Promise<api.CMActionResult>,
+  operation: () => Promise<T>,
   refreshAfter = false,
 ) {
   setBusy(id, true)
@@ -72,6 +74,10 @@ const rename = (id: string, name: string) =>
   withBusy(id, () => api.renameCodexInstance(id, name), true)
 const remove = (id: string, confirmName: string) =>
   withBusy(id, () => api.deleteCodexInstance(id, confirmName), true)
+// No refreshAfter: a redeem changes quota, not the instance list — the caller re-checks usage
+// itself (see CodexInstancesSection.vue's onRedeemResetCredit).
+const redeemResetCredit = (id: string, opts: { force?: boolean } = {}) =>
+  withBusy(id, () => api.redeemCodexResetCredit(id, opts))
 
 export function useCodexInstances() {
   return {
@@ -90,5 +96,6 @@ export function useCodexInstances() {
     quitDesktop,
     rename,
     remove,
+    redeemResetCredit,
   }
 }

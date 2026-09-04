@@ -29,6 +29,13 @@ export default {
   launchCli: 'Launch CLI',
   moreActions: 'More actions',
   login: 'Log in',
+  redeemResetCredit: 'Redeem reset credit',
+  /** Disabled-button tooltip: the cached usage already shows no banked credits. */
+  redeemNoCredits: 'No banked reset credits — nothing to redeem.',
+  /** Disabled-button tooltip: a reset would be wasted while a window still has headroom. `pct` is
+   *  the busiest window's used percent, matching the server guard's own wording. */
+  redeemNotExhausted:
+    'Busiest window is only {pct}% used — redeeming now would waste most of the reset.',
   rename: 'Rename',
   delete: 'Delete',
   nameLabel: 'Instance name',
@@ -66,4 +73,6 @@ export default {
   toastDesktopQuitFailed: 'Failed to stop Codex Desktop.',
   toastLoginOpened: 'Codex login opened in a terminal.',
   toastLoginFailed: 'Failed to open Codex login.',
+  toastRedeemed: 'Reset credit redeemed.',
+  toastRedeemFailed: 'Failed to redeem reset credit.',
 }

@@ -61,10 +61,11 @@ foreign readers), project discovery (`list_projects`), chats a usage limit cut o
 (`list_rate_limited_sessions`), the queue (list / add /
 update / run / cancel / events), accounts (secrets always masked), the scheduler (get / set),
 Claude Desktop instances (list / launch / quit), Claude CLI instances, and Codex CLI/Desktop
-instances (list / create / CLI launch / login helper / desktop open / focus / quit), usage-check
-(`check_usage`, `check_my_usage`), the auto-resume monitor (get / set), an update check, and the
-orchestrator (`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch` -
-see [The orchestrator](#the-orchestrator) below).
+instances (list / create / CLI launch / login helper / desktop open / focus / quit / redeem a
+banked `/usage reset` credit via `redeem_codex_reset_credit`), usage-check (`check_usage`,
+`check_my_usage`), the auto-resume monitor (get / set), an update check, and the orchestrator
+(`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch` - see [The
+orchestrator](#the-orchestrator) below).
 Mutating tools say `MUTATES:` in their description; there is deliberately no shutdown tool.
 
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,

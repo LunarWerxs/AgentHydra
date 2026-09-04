@@ -37,7 +37,13 @@ export interface SyncStatus {
 }
 // The Codex/ChatGPT instance-account DTOs, defined next to their resolver for the same reason as
 // the Claude ones below.
-export type { CodexAccount, CodexAccountStatus, CodexAuthMode } from './core/codex-account'
+export type {
+  CodexAccount,
+  CodexAccountStatus,
+  CodexAuthMode,
+  CodexResetRedeemResult,
+  CodexResetRedeemStatus,
+} from './core/codex-account'
 // Instance DTOs ("instance account" = which Anthropic account a Claude Desktop *instance*
 // is logged into) are defined in ./core/shared.ts, re-exported here so the web app only
 // ever imports types from this one module, same as every other DTO below.
@@ -724,6 +730,10 @@ export interface UsageSnapshot {
   capturedAt: string
   /** Optional for back-compat with snapshots cached before the API path existed. */
   source?: UsageSource
+  /** Codex-only: banked `/usage reset` credits available to redeem (`rate_limit_reset_credits.
+   *  available_count` on the usage payload). Undefined for snapshots that predate this field or
+   *  for providers with no such concept; null when the provider answered but reported none. */
+  resetCredits?: number | null
 }
 
 /**
