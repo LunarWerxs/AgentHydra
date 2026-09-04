@@ -13,6 +13,7 @@ import type {
   CMInstance,
   CodexAccount,
   CodexInstance,
+  CodexResetRedeemResult,
   ConcurrencyPoint,
   DispatchedScope,
   EditEntry,
@@ -71,6 +72,8 @@ export type {
   CodexAccountStatus,
   CodexAuthMode,
   CodexInstance,
+  CodexResetRedeemResult,
+  CodexResetRedeemStatus,
   ConcurrencyPoint,
   DispatchedScope,
   EditEntry,
@@ -715,6 +718,14 @@ export const quitCodexDesktopInstance = (id: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/desktop/quit`, {
     method: 'POST',
   })
+/** Redeem one banked Codex `/usage reset` credit. `force` bypasses the "busiest window isn't
+ *  fully used" guard — omit it to let the server refuse a wasteful redemption. A successful
+ *  redeem (`ok: true`) carries the freshly re-checked `usage` snapshot. */
+export const redeemCodexResetCredit = (id: string, opts: { force?: boolean } = {}) =>
+  j<CodexResetRedeemResult & { usage?: UsageSnapshot }>(
+    `/api/codex-instances/${encodeURIComponent(id)}/redeem-reset-credit`,
+    { method: 'POST', body: JSON.stringify({ force: opts.force === true }) },
+  )
 export const renameCodexInstance = (id: string, name: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/rename`, {
     method: 'POST',

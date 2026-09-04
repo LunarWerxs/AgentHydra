@@ -1334,6 +1334,28 @@ export const TOOLS: McpEngineTool[] = [
         { method: 'POST' },
       ),
   },
+  {
+    name: 'redeem_codex_reset_credit',
+    description:
+      "MUTATES: spend one banked Codex `/usage reset` credit, which restores the FULL 5h + weekly rate-limit windows in one shot. Refuses unless the busiest window is already 100% used, since redeeming early wastes most of the credit's value — the result names the busiest window's percent when it refuses. Pass `force: true` to redeem anyway. Identify the instance by number (`instance`) or by `id`.",
+    inputSchema: S({
+      instance: INSTANCE_PARAM,
+      id: { type: 'string' },
+      force: {
+        type: 'boolean',
+        description: 'Bypass the "busiest window is not fully used" guard.',
+      },
+    }),
+    run: async (a) =>
+      api(
+        `/api/codex-instances/${encodeURIComponent(await handleFrom(a.id, a.instance, 'id'))}/redeem-reset-credit`,
+        {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ force: a.force === true }),
+        },
+      ),
+  },
 
   // --- auto-resume monitor (Feature E) ------------------------------------------
   {

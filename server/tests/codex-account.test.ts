@@ -9,12 +9,14 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
 import {
+  CODEX_USAGE_API_URL,
   codexPlanLabel,
   codexUsageSnapshot,
   decodeJwtClaims,
   formatCodexReset,
   localCodexAccount,
   readCodexAuth,
+  redeemCodexResetCredit,
 } from '../src/core/codex-account'
 
 // --- helpers ------------------------------------------------------------------
@@ -255,6 +257,29 @@ describe('codexUsageSnapshot', () => {
     )
     expect(snap.weekAll).toBeNull()
   })
+
+  test('parses the banked reset-credit count off rate_limit_reset_credits', () => {
+    const snap = codexUsageSnapshot(
+      {
+        rate_limit: { primary_window: win(50, 604_800, RESET_AT) },
+        rate_limit_reset_credits: { available_count: 2 },
+      },
+      null,
+    )
+    expect(snap.resetCredits).toBe(2)
+  })
+
+  test('a live body reporting no reset credits is a known zero, not unknown', () => {
+    const snap = codexUsageSnapshot(
+      { rate_limit: { primary_window: win(50, 604_800, RESET_AT) } },
+      null,
+    )
+    expect(snap.resetCredits).toBe(0)
+  })
+
+  test('no body at all leaves resetCredits null rather than a fabricated zero', () => {
+    expect(codexUsageSnapshot(null, 'me').resetCredits).toBeNull()
+  })
 })
 
 describe('formatCodexReset', () => {
@@ -264,5 +289,271 @@ describe('formatCodexReset', () => {
     expect(formatCodexReset(new Date(2026, 7, 13, 15, 0).toISOString())).toBe('Aug 13, 3pm')
     expect(formatCodexReset(null)).toBe('')
     expect(formatCodexReset('garbage')).toBe('')
+  })
+})
+
+// --- redeemCodexResetCredit -----------------------------------------------------
+//
+// Mocks globalThis.fetch (the same pattern instances-crypto.test.ts and github-updater.test.ts
+// use) rather than hitting the real Codex backend, so every scenario runs offline and
+// deterministically. Each test restores the original fetch in a `finally`.
+
+describe('redeemCodexResetCredit', () => {
+  // Rides in the JWT's "signature" segment — decodeJwtClaims never reads past the payload, so
+  // this is a realistic stand-in for the opaque bytes a real token's signature would be.
+  const TOKEN_MARKER = 'SECRET-ACCESS-TOKEN-MUST-NEVER-LEAK'
+
+  function makeToken(exp = 4_102_444_800): string {
+    const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
+    return `${b64({ alg: 'none' })}.${b64({ exp })}.${TOKEN_MARKER}`
+  }
+
+  function homeWithToken(token: string | null, accountId = 'acct-1'): string {
+    return makeCodexHome(
+      token === null
+        ? { auth_mode: 'chatgpt', tokens: null }
+        : {
+            auth_mode: 'chatgpt',
+            tokens: { access_token: token, id_token: null, account_id: accountId },
+          },
+    )
+  }
+
+  function usageBody(
+    opts: { available?: number; primaryPct?: number | null; secondaryPct?: number | null } = {},
+  ) {
+    const rl: Record<string, unknown> = {}
+    if (opts.primaryPct != null) rl.primary_window = { used_percent: opts.primaryPct }
+    if (opts.secondaryPct != null) rl.secondary_window = { used_percent: opts.secondaryPct }
+    return { rate_limit: rl, rate_limit_reset_credits: { available_count: opts.available ?? 0 } }
+  }
+
+  /** Routes a GET to the usage payload and a POST-to-.../consume to the consume payload, by URL —
+   *  the same input/init shape github-updater.test.ts's fetch mocks use (the server tsconfig has
+   *  no DOM lib, so `input`/`init` are typed loosely rather than as RequestInfo/RequestInit). */
+  function mockFetch(
+    usage: unknown,
+    consume: unknown = { code: 'reset', windows_reset: 2 },
+    opts: { usageStatus?: number; consumeStatus?: number; calls?: string[] } = {},
+  ): typeof fetch {
+    return (async (input: unknown, init?: { method?: string }) => {
+      const url =
+        typeof input === 'string' ? input : String((input as { url?: string })?.url ?? input)
+      opts.calls?.push(`${init?.method ?? 'GET'} ${url}`)
+      if (url.includes('/rate-limit-reset-credits/consume'))
+        return new Response(JSON.stringify(consume), { status: opts.consumeStatus ?? 200 })
+      return new Response(JSON.stringify(usage), { status: opts.usageStatus ?? 200 })
+    }) as unknown as typeof fetch
+  }
+
+  test('no credentials -> unavailable, and never touches the network', async () => {
+    const home = homeWithToken(null)
+    const originalFetch = globalThis.fetch
+    let called = false
+    globalThis.fetch = (async () => {
+      called = true
+      return new Response('{}')
+    }) as unknown as typeof fetch
+    try {
+      const result = await redeemCodexResetCredit(home)
+      expect(result.ok).toBe(false)
+      expect(result.status).toBe('unavailable')
+      expect(called).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test('reuses the already-verified fixed CODEX_USAGE_API_URL rather than a re-derived one', async () => {
+    const home = homeWithToken(makeToken())
+    const calls: string[] = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mockFetch(usageBody({ available: 0 }), undefined, { calls })
+    try {
+      await redeemCodexResetCredit(home)
+      expect(calls[0]).toBe(`GET ${CODEX_USAGE_API_URL}`)
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test('no banked credits refuses before any redeem is attempted', async () => {
+    const home = homeWithToken(makeToken())
+    const calls: string[] = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mockFetch(usageBody({ available: 0, primaryPct: 100 }), undefined, { calls })
+    try {
+      const result = await redeemCodexResetCredit(home)
+      expect(result.ok).toBe(false)
+      expect(result.status).toBe('no_credits_banked')
+      expect(calls.some((c) => c.includes('consume'))).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test('busiest window under the exhausted threshold refuses without force, reporting the pct', async () => {
+    const home = homeWithToken(makeToken())
+    const calls: string[] = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mockFetch(
+      usageBody({ available: 3, primaryPct: 40, secondaryPct: 61 }),
+      undefined,
+      { calls },
+    )
+    try {
+      const result = await redeemCodexResetCredit(home)
+      expect(result.ok).toBe(false)
+      expect(result.status).toBe('not_exhausted')
+      expect(result.busiestWindowPct).toBe(61)
+      expect(result.availableCount).toBe(3)
+      expect(calls.some((c) => c.includes('consume'))).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test('force redeems even with headroom left in both windows', async () => {
+    const home = homeWithToken(makeToken())
+    const calls: string[] = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mockFetch(
+      usageBody({ available: 3, primaryPct: 10, secondaryPct: 5 }),
+      { code: 'reset', windows_reset: 2 },
+      { calls },
+    )
+    try {
+      const result = await redeemCodexResetCredit(home, { force: true })
+      expect(result.ok).toBe(true)
+      expect(result.status).toBe('reset')
+      expect(result.availableCount).toBe(2)
+      expect(result.windowsReset).toBe(2)
+      expect(calls.some((c) => c.startsWith('POST') && c.includes('consume'))).toBe(true)
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test('a fully-used window redeems without force', async () => {
+    const home = homeWithToken(makeToken())
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mockFetch(usageBody({ available: 1, primaryPct: 100, secondaryPct: 12 }), {
+      code: 'reset',
+      windows_reset: 2,
+    })
+    try {
+      const result = await redeemCodexResetCredit(home)
+      expect(result.ok).toBe(true)
+      expect(result.status).toBe('reset')
+      expect(result.availableCount).toBe(0)
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test("nothing_to_reset doesn't spend the credit", async () => {
+    const home = homeWithToken(makeToken())
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mockFetch(usageBody({ available: 2, primaryPct: 100 }), {
+      code: 'nothing_to_reset',
+    })
+    try {
+      const result = await redeemCodexResetCredit(home)
+      expect(result.ok).toBe(false)
+      expect(result.status).toBe('nothing_to_reset')
+      expect(result.availableCount).toBe(2)
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test('an HTTP error on the usage read is a structured refusal, not a throw', async () => {
+    const home = homeWithToken(makeToken())
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mockFetch(usageBody(), undefined, { usageStatus: 500 })
+    try {
+      const result = await redeemCodexResetCredit(home)
+      expect(result.ok).toBe(false)
+      expect(result.status).toBe('unavailable')
+      expect(result.message).toContain('500')
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test('an HTTP 401 on consume names the ChatGPT sign-in requirement', async () => {
+    const home = homeWithToken(makeToken())
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mockFetch(usageBody({ available: 1, primaryPct: 100 }), undefined, {
+      consumeStatus: 401,
+    })
+    try {
+      const result = await redeemCodexResetCredit(home)
+      expect(result.ok).toBe(false)
+      expect(result.status).toBe('unavailable')
+      expect(result.message).toContain('ChatGPT-account')
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test('a network failure returns a structured refusal instead of throwing', async () => {
+    const home = homeWithToken(makeToken())
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      throw new Error('getaddrinfo ENOTFOUND chatgpt.com')
+    }) as unknown as typeof fetch
+    try {
+      const result = await redeemCodexResetCredit(home)
+      expect(result.ok).toBe(false)
+      expect(result.status).toBe('unavailable')
+      expect(result.message).toContain('Could not reach')
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
+  })
+
+  test('the access token never appears in any result, across success and every failure path', async () => {
+    const token = makeToken()
+    const home = homeWithToken(token)
+    const originalFetch = globalThis.fetch
+    const scenarios: Array<() => typeof fetch> = [
+      () =>
+        mockFetch(usageBody({ available: 1, primaryPct: 100 }), {
+          code: 'reset',
+          windows_reset: 1,
+        }),
+      () => mockFetch(usageBody({ available: 2, primaryPct: 30 })), // not_exhausted refusal
+      () => mockFetch(usageBody(), undefined, { usageStatus: 403 }), // HTTP error
+      // A genuine network failure's own error text has no reason to contain the token (it never
+      // reaches the request layer that would echo it) — this scenario checks our code doesn't
+      // manufacture one that does, not that we can scrub an adversarial message.
+      () =>
+        (async () => {
+          throw new Error('getaddrinfo ENOTFOUND chatgpt.com')
+        }) as unknown as typeof fetch,
+    ]
+    try {
+      for (const build of scenarios) {
+        globalThis.fetch = build()
+        const result = await redeemCodexResetCredit(home)
+        const serialized = JSON.stringify(result)
+        expect(serialized).not.toContain(TOKEN_MARKER)
+        expect(serialized).not.toContain(token)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+      cleanup()
+    }
   })
 })

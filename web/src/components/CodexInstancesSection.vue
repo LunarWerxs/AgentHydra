@@ -11,6 +11,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Square,
   Terminal,
   Trash2,
@@ -69,6 +70,7 @@ const {
   quitDesktop,
   rename,
   remove,
+  redeemResetCredit,
 } = useCodexInstances()
 const { t } = useI18n()
 // Persisted collapse state, alongside the other two tables' (composables/useUiPrefs.ts).
@@ -77,10 +79,39 @@ const isBusy = (instance: CodexInstance) => busyIds.value.has(instance.id)
 
 // Quota shares the app-wide usage store, keyed `codex:<id>` — so the Codex rows reuse the same
 // chip, the same cache, the same superseded-window rule as every other provider's rows.
-const { snapshotFor, isChecking, checkCodex } = useUsage()
+const { snapshotFor, isChecking, checkCodex, setSnapshot } = useUsage()
 const usageFor = (instance: CodexInstance) => snapshotFor(`codex:${instance.id}`)
 const isCheckingUsage = (instance: CodexInstance) => isChecking(`codex:${instance.id}`)
 const onCheckUsage = (instance: CodexInstance) => checkCodex(instance.id)
+
+// Mirrors the server's own redeem guard (core/codex-account.ts's codexResetGuard) against the
+// already-cached snapshot, so the button can disable itself instead of round-tripping just to
+// learn the redeem would be refused. Only disables on a CONCRETE refusal (a known credit count of
+// zero, or a known busiest-window % under the threshold) — an unchecked/stale snapshot leaves the
+// button enabled and lets the server give the real answer.
+const CODEX_RESET_EXHAUSTED_PERCENT = 100
+function redeemDisabledReason(instance: CodexInstance): string | null {
+  const snap = usageFor(instance)
+  if (!snap) return null
+  const available = snap.resetCredits ?? null
+  if (available !== null && available <= 0) return t('codexInstances.redeemNoCredits')
+  const pcts = [snap.session?.pct, snap.weekAll?.pct].filter(
+    (p): p is number => typeof p === 'number',
+  )
+  const worst = pcts.length > 0 ? Math.max(...pcts) : null
+  if (worst === null || worst >= CODEX_RESET_EXHAUSTED_PERCENT) return null
+  return t('codexInstances.redeemNotExhausted', { pct: Math.round(worst) })
+}
+
+async function onRedeemResetCredit(instance: CodexInstance) {
+  const result = await redeemResetCredit(instance.id)
+  if (result?.ok) {
+    if (result.usage) setSnapshot(`codex:${instance.id}`, result.usage)
+    toast.success(result.message || t('codexInstances.toastRedeemed'))
+  } else {
+    toast.error(result?.message ?? t('codexInstances.toastRedeemFailed'))
+  }
+}
 
 const { sortedRows, toggleSort, indicatorFor } = useSortable(
   () => instances.value,
@@ -468,6 +499,19 @@ onUnmounted(stopPolling)
                     @click="onLogin(instance)"
                   >
                     <LogIn /> {{ $t('codexInstances.login') }}
+                  </DropdownMenuItem>
+                  <!-- Only for a signed-in ChatGPT login: an API-key auth has no ChatGPT
+                       subscription and so no bankable reset credits. Disabled (with a title
+                       explaining why) when the cached usage already shows the redeem would be
+                       refused; the click still round-trips to the server otherwise, which gives
+                       the authoritative answer when the cache is stale or empty. -->
+                  <DropdownMenuItem
+                    v-if="instance.account?.authMode === 'chatgpt'"
+                    :disabled="isBusy(instance) || !!redeemDisabledReason(instance)"
+                    :title="redeemDisabledReason(instance) ?? undefined"
+                    @click="onRedeemResetCredit(instance)"
+                  >
+                    <RotateCcw /> {{ $t('codexInstances.redeemResetCredit') }}
                   </DropdownMenuItem>
                   <DropdownMenuItem :disabled="isBusy(instance)" @click="openRename(instance)">
                     <Pencil /> {{ $t('codexInstances.rename') }}

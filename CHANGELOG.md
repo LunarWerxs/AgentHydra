@@ -28,6 +28,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   tray shortcut, `state/`) in orchestrator/README.md. The `/orchestrate` command that 0.37.0
   removed is back (canonical copy in `.claude/commands/`, beside `/hydra-status`), rewritten onto
   the four MCP tools instead of a path to a second repo.
+- **Redeem a banked Codex reset credit from the Instances view.** A ChatGPT-account Codex login
+  can bank `/usage reset` credits, each restoring the FULL 5h + weekly rate-limit windows in one
+  shot - previously AgentHydra could only read the count (`rate_limit_reset_credits`), never spend
+  one. The Codex row's menu now has "Redeem reset credit" (`server/src/core/codex-account.ts`'s
+  `redeemCodexResetCredit`, `POST /api/codex-instances/:id/redeem-reset-credit`, MCP's
+  `redeem_codex_reset_credit`), guarded the way the Codex CLI's own picker is: it refuses unless
+  the busiest window is already fully used (100%) or the caller passes `force`, since redeeming
+  early wastes most of a credit's value. The button disables itself with the reason when the
+  already-cached quota chip shows the guard would refuse. Ported from
+  `NousResearch/hermes-agent`'s `account_usage.py` (MIT, Copyright (c) Nous Research); the access
+  token is read into a local binding only and never logged or returned.
 
 ### Fixed
 
