@@ -92,6 +92,21 @@ class InterviewTest(unittest.TestCase):
         self.assertIn("approve", a["question"])
         self.assertIn("deny", a["question"])
 
+    def test_approvalovercap_counts_against_the_uncapped_queue(self):
+        # Regression (review, 2026-09-04): approvalOverCap used to be computed AFTER the
+        # escalation list was already sliced to `cap`, so `len(escalations) - cap` could
+        # never be positive - a queue with more escalations than `cap` silently reported 0
+        # hidden rows instead of the truth, unlike the sibling "overCap" for judgmentQueue it
+        # was meant to mirror.
+        for i in range(3):
+            approvallib.queue_escalation(
+                f"esc-cap-{i}", title=f"chat {i}", instance="inst2", instance_dir="C:/y",
+                verify="hi", command="npm install left-pad", tool_name="Bash",
+                reason="no pattern places it")
+        q = interview.build_questions(cap=2)
+        self.assertEqual(len(q["approvalQuestions"]), 2)
+        self.assertEqual(q["approvalOverCap"], 1)
+
     def test_reply_answer_stages_for_the_courier(self):
         results = interview.apply_answers(
             {"answers": [{"sessionId": SID, "decision": "reply", "text": "Yes - do part two."}]})

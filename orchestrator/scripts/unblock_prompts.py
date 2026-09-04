@@ -165,6 +165,24 @@ def find_stuck() -> list[dict]:
 SELECT_AFTER_SECS = 15 * 60
 
 
+def _row_quiet_secs(row: dict) -> float:
+    """How long this row has been waiting, in seconds - find_stuck()'s own `quietMins` for a
+    normal stuck-prompt row (fault found on review, 2026-09-04: press() is also called with
+    an ESCALATION row from interview.py's apply_answers 'approve' branch, shaped by
+    approvallib.queue_escalation/get_escalation, which carries `queuedAt` but no `quietMins`
+    at all - a bare `row["quietMins"]` raised KeyError there, and press()'s own broad
+    `except Exception` turned that into a fabricated-looking "actuator error" that silently
+    skipped the -Select retry for every escalation approval). Falls back to the time since
+    the row was queued, which is the same "has this been sitting a while" question find_stuck
+    answers for its own rows."""
+    if "quietMins" in row:
+        return row["quietMins"] * 60
+    queued_at = row.get("queuedAt")
+    if queued_at:
+        return max(0.0, (time.time() * 1000 - queued_at) / 1000)
+    return 0.0
+
+
 def press(row: dict) -> dict:
     if not ACTUATOR.exists():
         return {**row, "ok": False, "outcome": f"actuator missing at {ACTUATOR}"}
@@ -192,7 +210,7 @@ def press(row: dict) -> dict:
             # selection, because that flips the owner's view of that window (every 5 minutes,
             # for every long-running command, was the first cut's behaviour).
             r = run(select=False)
-            if r.returncode == 4 and row["quietMins"] * 60 >= SELECT_AFTER_SECS:
+            if r.returncode == 4 and _row_quiet_secs(row) >= SELECT_AFTER_SECS:
                 r = run(select=True)
     except Exception as err:  # a stuck chat is not worth crashing the lane over
         return {**row, "ok": False, "outcome": f"actuator error: {str(err)[:120]}"}

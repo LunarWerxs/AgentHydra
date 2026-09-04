@@ -90,7 +90,8 @@ def build_questions(cap: int) -> dict:
     # a stuck permission prompt whose pending command matched neither the DENY nor the
     # APPROVE pattern lists. Uncertainty is not consent, so it was never pressed - it waits
     # here for exactly this callout instead.
-    escalations = approvallib.list_escalations()[:cap]
+    all_escalations = approvallib.list_escalations()
+    escalations = all_escalations[:cap]
     approvals = []
     for e in escalations:
         approvals.append({
@@ -111,7 +112,12 @@ def build_questions(cap: int) -> dict:
         "questions": questions,
         "overCap": max(0, len(batch["judgmentQueue"]) - cap),
         "approvalQuestions": approvals,
-        "approvalOverCap": max(0, len(escalations) - cap),
+        # Measured against the UNCAPPED list, exactly like "overCap" two lines above for the
+        # judgment queue (bug found on review, 2026-09-04: this used to slice `escalations`
+        # to `cap` first and then compare its own already-capped length back against `cap`,
+        # so it could never be positive - a queue with more than `cap` escalations silently
+        # reported 0 hidden rows instead of the truth).
+        "approvalOverCap": max(0, len(all_escalations) - cap),
         "answerFormat": {"answers": [
             {"sessionId": "<id>", "decision": "reply|hold|archive|skip",
              "text": "(reply only)", "reason": "(hold/skip only)"},
