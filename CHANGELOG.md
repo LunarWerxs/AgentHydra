@@ -9,6 +9,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **A mutation ledger with undo, for every act the orchestrator performs on a Desktop chat**
+  (idea from hermes-agent's `tools/checkpoint_manager.py`, MIT, Copyright (c) Nous Research -
+  the before/after discipline, not its shadow-git mechanics, which snapshot repo files this
+  program does not own). Until now `archive_chat.py`, `rename_chat.py`, `migrate_chat.py`,
+  `hold_chat.py` and `compact_chat.py` left no before-image of what they touched, so a wrong
+  archive or rename (the orchestrator's README documents 6 of 29 chats archived wrongly in one
+  day under v2) could not be undone from here - only by hand, on a screen, from memory. Each of
+  those five scripts now writes down what its target looked like immediately before it acted
+  and immediately after (`orchestrator/scripts/lib/mutationlib.py`, same locked-JSON discipline
+  as the attempt ledger and the holds file); `python orch.py mutations` lists every entry newest
+  first with an `undoable` flag, and `python orch.py undo <id>` reverses one through the exact
+  same rail-guarded script that performed it (unarchive, rename back, migrate back to the source
+  instance, or release/re-hold), verified by that script's own fresh mutation row rather than
+  trusted on exit code alone. Compaction is recorded but never undoable - it is lossy by design,
+  so no inverse exists, and the reason is stated rather than guessed.
+
 - **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
   2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have
   to use both"). `orchestrator/` is the v3 Python toolbox exactly as it stood in its own repo

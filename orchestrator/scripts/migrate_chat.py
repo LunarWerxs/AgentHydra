@@ -61,6 +61,7 @@ from pathlib import Path as _Path
 from lib import clilib, holdlib
 from lib import hydralib
 from lib import ledgerlib
+from lib import mutationlib
 from lib import stamplib
 
 
@@ -535,11 +536,22 @@ def _post_import_or_raise(session_id: str, target: dict, body: dict) -> dict:
     return result
 
 
-def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: dict) -> list[dict]:
-    """Verify the landing: the dossier must now place the chat in the target instance."""
+def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: dict,
+                              src_instance: str = "") -> list[dict]:
+    """Verify the landing: the dossier must now place the chat in the target instance.
+
+    MUTATION LEDGER: the daemon POST already ran by the time this is called - something MAY
+    have moved even when this function cannot confirm it - so both refusal branches record an
+    unconfirmed (`after=None`, `undoable=False`) mutation rather than staying silent."""
     try:
         after = hydralib.dossier(session_id)
     except hydralib.DaemonError as err:
+        mutationlib.record(
+            "migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
+            before={"instance": src_instance}, after=None, undoable=False,
+            why_not=f"the import was posted but verify failed ({err}) - the resulting "
+                    "location is unconfirmed, so no inverse can be trusted",
+        )
         raise _MigrateRefusal(
             {
                 "landed": None,
@@ -552,6 +564,12 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
         str(m.get("instance", "")).lower() == str(target.get("name", "")).lower() for m in after
     )
     if not landed:
+        mutationlib.record(
+            "migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
+            before={"instance": src_instance}, after=None, undoable=False,
+            why_not="the import was posted but the dossier does not show the chat in the "
+                    "target instance yet - unconfirmed, so no inverse can be trusted",
+        )
         raise _MigrateRefusal(
             {
                 "landed": False,
@@ -692,9 +710,20 @@ def main(argv: list[str]) -> int:
 
         ledgerlib.note("migrate", session_id, note=f"'{chat_title}' -> {target.get('name')}")
         result = _post_import_or_raise(session_id, target, body)
-        after = _verify_landing_or_raise(session_id, target, chat_title, result)
+        after = _verify_landing_or_raise(session_id, target, chat_title, result,
+                                          src_instance=str(match.get("instance") or ""))
     except _MigrateRefusal as refusal:
         return out(refusal.payload, as_json, refusal.code)
+
+    # MUTATION LEDGER: before = where it lived, after = the verified landing target. Recorded
+    # unconditionally on a VERIFIED landing (we only reach here once _verify_landing_or_raise
+    # has confirmed the dossier places the chat in the target) - the source-settle outcome
+    # below does not change WHERE the chat is, only whether a stale twin lingers, so it is not
+    # part of the before/after pair an undo (migrate back) needs.
+    src_instance = str(match.get("instance") or "")
+    mutationlib.record("migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
+                       before={"instance": src_instance}, after={"instance": target.get("name")},
+                       undoable=True)
 
     # (The 'migrate' attempt is cleared below, AFTER the settle - a landing whose source row
     # is still visible is not a clean move, and its annotation must have a row to land on.)

@@ -52,6 +52,7 @@ from pathlib import Path
 from lib import clilib, holdlib
 from lib import hydralib
 from lib import ledgerlib
+from lib import mutationlib
 
 DEFAULT_WINDOW = 100_000
 DEFAULT_MIN = 150_000
@@ -287,9 +288,16 @@ def execute_turn(run, exe: str, sid: str, window: int, cwd: str, title: str,
     return said, None
 
 
-def verify_compaction(said: str, sid: str, tp: Path, before: int, title: str, window: int) -> Outcome:
+def verify_compaction(said: str, sid: str, tp: Path, before: int, title: str, window: int,
+                       instance: str = "") -> Outcome:
     """Verify from the artifacts, not the exit code: the continued transcript must show a
-    compact marker or a real shrink."""
+    compact marker or a real shrink.
+
+    MUTATION LEDGER: recorded `undoable=False` unconditionally - compaction is lossy BY
+    DESIGN (module docstring), so even a verified compaction has no inverse: the discarded
+    context cannot be reconstructed from the summary that replaced it. Recorded only when the
+    turn actually ran and something (or nothing observable) resulted, never on an earlier
+    refusal - a chat under --min or otherwise never touched leaves no row (see main())."""
     new_sid = sid
     try:
         payload = json.loads(said)
@@ -315,6 +323,12 @@ def verify_compaction(said: str, sid: str, tp: Path, before: int, title: str, wi
     after_txt = f"~{after // 1000}k" if after is not None else "unknown (no usage stamp yet)"
 
     if marker or shrunk:
+        mutationlib.record(
+            "compact", new_sid, instance=instance, title=str(title),
+            before={"contextTokens": before}, after={"contextTokens": after}, undoable=False,
+            why_not="compaction is lossy by design - the discarded context is summarized "
+                    "away and cannot be reconstructed, so no inverse exists",
+        )
         ledgerlib.clear("compact", sid)
         rolled = "" if new_sid == sid else f" (session id rolled to {new_sid})"
         return Outcome(
@@ -388,7 +402,8 @@ def main(argv: list[str], runner=None) -> int:
     if outcome:
         return emit(outcome, as_json)
 
-    return emit(verify_compaction(said, sid, tp, before, title, window), as_json)
+    return emit(verify_compaction(said, sid, tp, before, title, window,
+                                   instance=str(row.get("instance") or "")), as_json)
 
 
 if __name__ == "__main__":

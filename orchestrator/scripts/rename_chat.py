@@ -30,6 +30,7 @@ from pathlib import Path
 from lib import clilib, holdlib
 from lib import hydralib
 from lib import ledgerlib
+from lib import mutationlib
 from lib import windowlib
 
 # THE APP'S OWN RENAME CONTROL, driven from THIS repo (owner, 2026-09-01: "relocate it into
@@ -148,13 +149,27 @@ def _verify_and_report(match: dict, chat_id: str, old_title: str, new_title: str
                         result: dict, as_json: bool) -> int:
     """Re-verify through the dossier - the rename actuator checks its own click, we check the
     record. Match on THIS chat's id, not on any row in the lineage: a lineage can hold more
-    than one copy, and a coincidental title elsewhere must not vouch for the row we renamed."""
+    than one copy, and a coincidental title elsewhere must not vouch for the row we renamed.
+
+    MUTATION LEDGER: the before-image (the old title) was known before the actuator ran; it is
+    recorded here alongside the confirmed new title on success, or with `after=None` when the
+    daemon says it landed but the dossier has not caught up - the inverse (rename back) is not
+    offered against an unconfirmed after-state."""
+    instance = str(match.get("instance") or "")
+    session_id = match.get("cliSessionId") or chat_id
+    before = {"title": old_title}
     try:
-        after = hydralib.dossier(match.get("cliSessionId") or chat_id)
+        after = hydralib.dossier(session_id)
     except hydralib.DaemonError:
         after = []
     verified = any(m.get("chatId") == chat_id and m.get("title") == new_title for m in after)
     if not verified:
+        mutationlib.record(
+            "rename", session_id, instance=instance, title=new_title, before=before, after=None,
+            undoable=False, why_not="the daemon reports the rename landed but the dossier has "
+                                     "not confirmed the new title yet - unconfirmed, so no "
+                                     "inverse can be trusted",
+        )
         return out(
             {
                 "renamed": True,
@@ -170,6 +185,8 @@ def _verify_and_report(match: dict, chat_id: str, old_title: str, new_title: str
             1,
         )
 
+    mutationlib.record("rename", session_id, instance=instance, title=new_title, before=before,
+                       after={"title": new_title}, undoable=True)
     ledgerlib.clear("rename", chat_id)
     return out(
         {
