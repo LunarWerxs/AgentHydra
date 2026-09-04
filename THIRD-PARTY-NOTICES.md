@@ -12,7 +12,27 @@ runtime; AgentHydra is a dashboard over agent runtimes, so nothing of its core w
 was adapted is a handful of small, self-contained mechanisms - each named in the file it landed
 in:
 
-<!-- FILES: filled in at integration; one line per adapted file, "path - what it derives from" -->
+Close derivatives (code follows the original's structure; the notice below applies in full):
+
+- `server/src/incidents.ts` - from `cron/incidents.py`: normalise, redact and hash an error into
+  a signature so repeated failures collapse into one incident with a count, ack and reopen.
+- `orchestrator/scripts/lib/incidentlib.py` - the same, for the orchestrator's JSON ledgers.
+- `orchestrator/scripts/lib/approvallib.py` - from `tools/approval.py`: the APPROVE / DENY /
+  ESCALATE tri-state and the rule that operator policy never shares a channel with untrusted
+  prompt text. None of its shell-string parsing was taken.
+- `server/src/core/codex-account.ts` (the reset-credit section) - from `scripts/account_usage.py`:
+  the Codex backend URL derivation, window parsing, and the refuse-below-full-use guard.
+
+Ports of a shape or an idea only (no code copied; named for honesty):
+
+- `server/src/boot-watchdog.ts` - arm / renew / disarm, after `hermes_startup_watchdog.py`.
+- `server/src/dispatch.ts` and `server/src/types.ts` - "unverified" as a run outcome, after
+  `_confirm_adapter_delivery` in `cron/scheduler.py`.
+- `orchestrator/scripts/lib/ledgerlib.py` - the read-back verdict on an act, same source.
+- `orchestrator/scripts/lib/mutationlib.py` - a before/after ledger with undo, after the idea in
+  `tools/checkpoint_manager.py`.
+- `server/src/hermes-sessions.ts` - reads Hermes' own `state.db`; the column names are Hermes'
+  published schema, the reader is ours.
 
 ```
 MIT License
