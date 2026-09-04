@@ -32,7 +32,9 @@ Usage:
   python chats.py --instance temp2 --move-to work --yes --max 3    # move a few at a time
   python chats.py --instance work --move-to 11 --yes --idle-wait 330   # wait out young engines
 
-Exit:  0 listed, or every attempted move landed - 2 some moves were refused or did not land
+Exit:  0 listed, or every attempted move landed AND left no twin behind on the source
+       account - 2 some moves were refused, did not land, or landed with the source row
+       still visible (a landing is not a move until the old row is gone)
        - 3 bad usage / unknown target - 1 daemon failure.
 """
 
@@ -184,11 +186,19 @@ def move(rows: list[dict], target: str, act: bool, cap: int, idle_wait: int = 0)
             except (ValueError, TypeError):
                 pay = {}
             landed = bool(pay.get("landed"))
+            # ⛔ A MOVE IS A MOVE, AND A BATCH MUST NOT ROUND IT UP (live, 2026-09-04): nine
+            # chats landed, every one left its source row visible, migrate_chat said so nine
+            # times in its report - and this loop printed nine ticks, because it read only
+            # `landed`. The operator believed a clean move and found the duplicates later.
+            # A twin is a FAILED move here, exit code included.
+            twin = landed and str(pay.get("sourceRow") or "") == "visible"
             results.append({
                 "sessionId": r["sessionId"], "title": r["title"], "from": r["instance"],
-                "exit": code, "ok": code == 0, "landed": landed,
+                "exit": code, "ok": code == 0 and not twin, "landed": landed,
+                "sourceRow": pay.get("sourceRow"),
                 "stopReason": pay.get("stopReason"),
-                "outcome": ("landed and verified" if landed else
+                "outcome": ("landed BUT the source row is still visible - a twin" if twin else
+                            "landed and verified" if landed else
                             "already there (no-op)" if code == 0 else
                             "deterministic refusal" if code == 3 else
                             "live writer - never moved" if code == 4 else
@@ -372,8 +382,9 @@ def _print_move_planned_lines(plan: dict, landed_ids: set[str] | None) -> None:
 
 def _print_move_result_lines(plan: dict) -> None:
     for r in plan["results"]:
-        print(f"  {'✓' if r.get('landed') else '✗'} {r['outcome']}: {str(r['title'])[:56]}")
-        if not r.get("landed") and r["detail"]:
+        mark = "✓" if r.get("ok") else ("⚠" if r.get("landed") else "✗")
+        print(f"  {mark} {r['outcome']}: {str(r['title'])[:56]}")
+        if not r.get("ok") and r["detail"]:
             for line in r["detail"].splitlines():
                 print(f"      {line}")
         if r["exit"] == 5:

@@ -340,11 +340,49 @@ class MigrateTest(ActTestBase):
         stub.routes["/api/chats/dossier"] = route
         stub.routes[f"/api/sessions/{SID}/import-desktop"] = {"ok": True}
 
-    def test_settle_exit_3_with_the_source_STILL_VISIBLE_is_reported_and_annotated(self):
-        # THE DOUBLE-CHECK (owner, 2026-09-01): exit 3 used to be read as "already settled" -
-        # a row that is not rendered (scrolled off) is not the same as archived. A source meta
-        # left un-archived on disk means the twin is still there, and that must be named, not
-        # assumed away.
+    def test_settle_exit_3_with_the_source_STILL_VISIBLE_falls_back_to_the_disk_flag(self):
+        # THE DOUBLE-CHECK (owner, 2026-09-01): exit 3 is not "already settled" - a row that
+        # is not rendered is not archived. But naming the twin and stopping there was not
+        # enough either (live, 2026-09-04): a window that renders NO rows returns 3 for every
+        # chat, so nine moves off it left nine twins and only a warning nobody saw. A window
+        # that never rendered the row has nothing on screen to re-save from, so the weaker
+        # disk flag is written and the state is 'flagged', not 'visible'.
+        import migrate_chat
+        from util import run_cli
+
+        with tempfile.TemporaryDirectory() as td:
+            self._settle_verify_fixture(td, archived_on_disk=False)
+            meta = Path(td) / "src" / "claude-code-sessions" / "a" / "b" / "local_y.json"
+            with mock.patch.object(migrate_chat, "_settle_source", return_value=(3, "not rendered")), \
+                 mock.patch.object(migrate_chat.time, "sleep"):
+                code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2claude", "--json"])
+            self.assertEqual(code, 0)
+            payload = json.loads(out)
+            self.assertEqual(payload["sourceRow"], "flagged")
+            self.assertNotIn("STILL VISIBLE", payload["report"])
+            self.assertTrue(json.loads(meta.read_text(encoding="utf-8"))["isArchived"])
+
+    def test_a_CLOSED_source_instance_is_VERIFIED_too_never_assumed_settled(self):
+        """"A closed app's disk flag is durable on its own" was a claim about the daemon's
+        import, not a check of it - and two closed-instance twins from older moves were
+        sitting on this machine when it was finally checked (2026-09-04). One store scan."""
+        import migrate_chat
+        from util import run_cli
+
+        with tempfile.TemporaryDirectory() as td:
+            self._settle_verify_fixture(td, archived_on_disk=False)
+            for inst in self.stub.routes["/api/fleet"]["instances"]:
+                if inst["name"] == "src":
+                    inst["isRunning"] = False
+            meta = Path(td) / "src" / "claude-code-sessions" / "a" / "b" / "local_y.json"
+            with mock.patch.object(migrate_chat, "_settle_source") as settle:
+                code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2claude", "--json"])
+            settle.assert_not_called()  # a closed app has no control to drive
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out)["sourceRow"], "flagged")
+            self.assertTrue(json.loads(meta.read_text(encoding="utf-8"))["isArchived"])
+
+    def test_a_twin_that_survives_even_the_disk_flag_is_named_and_annotated(self):
         import migrate_chat
         from lib import ledgerlib
         from util import run_cli
@@ -352,10 +390,13 @@ class MigrateTest(ActTestBase):
         with tempfile.TemporaryDirectory() as td:
             self._settle_verify_fixture(td, archived_on_disk=False)
             with mock.patch.object(migrate_chat, "_settle_source", return_value=(3, "not rendered")), \
+                 mock.patch.object(migrate_chat, "_archive_source_on_disk", return_value=False), \
                  mock.patch.object(migrate_chat.time, "sleep"):
                 code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2claude", "--json"])
             self.assertEqual(code, 0)  # the landing itself still stands
             payload = json.loads(out)
+            self.assertEqual(payload["sourceRow"], "visible")
+            self.assertFalse(payload["sourceSettled"])
             self.assertIn("STILL VISIBLE", payload["report"])
             rows = ledgerlib._load()
             annotated = [r for r in rows if r.get("kind") == "migrate" and r.get("session") == SID]
