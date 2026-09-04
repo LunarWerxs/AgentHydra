@@ -3,6 +3,7 @@ import { ChevronDown, FastForward, ListPlus, Plus, Power, PowerOff, Trash2 } fro
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import IncidentsPanel from '@/components/IncidentsPanel.vue'
 import QueueItemCard from '@/components/QueueItemCard.vue'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -48,6 +49,7 @@ const schedulerTooltip = computed(
 // (dispatch.ts), so nothing further will happen to it on its own.
 const TERMINAL: QueueItem['status'][] = [
   'completed',
+  'unverified',
   'failed',
   'canceled',
   'rate_limited',
@@ -181,6 +183,7 @@ async function clearFinished() {
   <!-- rendered inside the queue drawer: the Sidebar header carries the title, this
        toolbar carries the count, scheduler state, and the new-run shortcut -->
   <div class="flex h-full min-h-0 flex-col">
+    <IncidentsPanel />
     <div class="flex shrink-0 items-center justify-between gap-2 p-3">
       <!-- count what's still pending, not the all-time total: "7 items" over a queue of 6 finished
            runs and 1 live one described the history, not the work -->

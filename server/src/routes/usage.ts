@@ -11,7 +11,11 @@ import {
   renameCliInstance,
   setCliInstanceUsage,
 } from '../core/cli-instances'
-import { codexUsageSnapshot, resolveCodexAccount } from '../core/codex-account'
+import {
+  codexUsageSnapshot,
+  redeemCodexResetCredit,
+  resolveCodexAccount,
+} from '../core/codex-account'
 import {
   createCodexInstance,
   deleteCodexInstance,
@@ -459,6 +463,22 @@ app.post('/api/codex-instances/:id/desktop/focus', async (c) =>
 app.post('/api/codex-instances/:id/desktop/quit', async (c) =>
   c.json(await quitCodexDesktopInstance(c.req.param('id'))),
 )
+// Redeem one banked `/usage reset` credit — see core/codex-account.ts's redeemCodexResetCredit.
+// `{force: true}` in the body bypasses the "busiest window isn't fully used" guard. On a genuine
+// reset (result.ok), the cached quota is force-refreshed so the row's chip reflects the reset
+// windows immediately rather than waiting for the next poll.
+app.post('/api/codex-instances/:id/redeem-reset-credit', async (c) => {
+  const id = c.req.param('id')
+  const inst = await findCodexInstance(id)
+  if (!inst) return c.json({ error: 'Codex instance not found' }, 404)
+  const body = await jsonBody(c)
+  const result = await redeemCodexResetCredit(inst.codexHome, { force: body.force === true })
+  if (result.ok) {
+    const usage = await codexUsageResult(inst.codexHome, id, true)
+    return c.json({ ...result, usage: usage.snapshot })
+  }
+  return c.json(result)
+})
 app.post('/api/codex-instances/:id/rename', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.name !== 'string') return c.json({ error: 'name is required' }, 400)

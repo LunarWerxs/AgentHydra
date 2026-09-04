@@ -592,12 +592,17 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <DropdownMenuRadioItem value="claude">{{ $t('sessions.sourceClaude') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="codex">{{ $t('sessions.sourceCodex') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="opencode">{{ $t('sessions.sourceOpenCode') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="hermes">{{ $t('sessions.sourceHermes') }}</DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
 
                   <DropdownMenuSub
-                    :disabled="sessionSourceFilter === 'codex' || sessionSourceFilter === 'opencode'"
+                    :disabled="
+                      sessionSourceFilter === 'codex' ||
+                      sessionSourceFilter === 'opencode' ||
+                      sessionSourceFilter === 'hermes'
+                    "
                   >
                     <DropdownMenuSubTrigger>
                       <Boxes />

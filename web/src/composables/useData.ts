@@ -4,6 +4,7 @@ import type {
   Account,
   ArchivedScope,
   DispatchedScope,
+  Incident,
   QueueItem,
   RateLimitScope,
   SchedulerState,
@@ -17,6 +18,7 @@ import { registerSharedPref } from './useSharedPrefs'
 
 const sessions = ref<SessionSummary[]>([])
 const queue = ref<QueueItem[]>([])
+const incidents = ref<Incident[]>([])
 const accounts = ref<Account[]>([])
 const scheduler = ref<SchedulerState | null>(null)
 const sessionsLoading = ref(false)
@@ -59,7 +61,13 @@ const sessionRateLimitScope = useStorage<RateLimitScope>('agenthydra.sessions.ra
 // control that has no such option.
 const ARCHIVED_SCOPES: readonly ArchivedScope[] = ['hide', 'include', 'only']
 const SESSION_PERIODS: readonly SessionPeriod[] = ['24h', '7d', '30d', 'all']
-const SESSION_SOURCES: readonly SessionSourceScope[] = ['all', 'claude', 'codex', 'opencode']
+const SESSION_SOURCES: readonly SessionSourceScope[] = [
+  'all',
+  'claude',
+  'codex',
+  'opencode',
+  'hermes',
+]
 const DISPATCHED_SCOPES: readonly DispatchedScope[] = ['all', 'queued', 'manual']
 const RATE_LIMIT_SCOPES: readonly RateLimitScope[] = ['all', 'only', 'pending']
 registerSharedPref('agenthydra.sessions.archivedScope', sessionArchivedScope, ARCHIVED_SCOPES)
@@ -130,6 +138,10 @@ async function refreshQueue() {
   if (r) queue.value = r
   queueLoaded.value = true
 }
+async function refreshIncidents() {
+  const r = await guard(api.getIncidents())
+  if (r) incidents.value = r
+}
 async function refreshAccounts() {
   const r = await guard(api.getAccounts())
   if (r) accounts.value = r
@@ -146,6 +158,7 @@ function startPolling() {
   if (fastTimer !== null) return
   refreshSessions()
   refreshQueue()
+  refreshIncidents()
   refreshAccounts()
   refreshScheduler()
   // queue + scheduler are cheap and change often while runs are active
@@ -153,8 +166,12 @@ function startPolling() {
     refreshQueue()
     refreshScheduler()
   }, 2000)
-  // sessions require disk scans — refresh more lazily
-  slowTimer = window.setInterval(refreshSessions, 12000)
+  // sessions require disk scans - refresh more lazily. Incidents change only on a new failure or an
+  // ack/resolve click (both already re-fetch on their own), so the slow cadence is plenty.
+  slowTimer = window.setInterval(() => {
+    refreshSessions()
+    refreshIncidents()
+  }, 12000)
 }
 
 function stopPolling() {
@@ -168,6 +185,7 @@ export function useData() {
   return {
     sessions,
     queue,
+    incidents,
     accounts,
     scheduler,
     sessionsLoading,
@@ -182,6 +200,7 @@ export function useData() {
     lastError,
     refreshSessions,
     refreshQueue,
+    refreshIncidents,
     refreshAccounts,
     refreshScheduler,
     startPolling,

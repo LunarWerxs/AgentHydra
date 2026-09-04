@@ -237,13 +237,29 @@ def note(
     deterministic: bool = False,
     note: str = "",
     now_ms: int | None = None,
+    error: str | None = None,
 ) -> None:
     """Record that an act went ahead (or was refused deterministically). One row per attempt,
     always - v2 once keyed on (kind, session, timestamp) and merged same-millisecond attempts,
-    under-counting exactly the tight loop the counter exists to catch."""
+    under-counting exactly the tight loop the counter exists to catch.
+
+    A DETERMINISTIC attempt is always a genuine failure ("same inputs can never succeed"), so
+    it is also filed as an INCIDENT (lib/incidentlib.py), grouped by its normalized cause
+    instead of sitting as one more anonymous row in this ledger - `error` (or `note`'s text,
+    when none is given) is the cause text. The row records which incident it belongs to
+    (`incident`), so the two can be joined. `error` also files an incident for an ORDINARY
+    (non-deterministic) attempt when a caller already knows the cause; without it, an ordinary
+    attempt files nothing here - it may still fail, but that is annotate()'s job
+    (`failure=True`) once the outcome is known."""
     if kind not in VALID_KINDS:
         raise ValueError(f"unknown breaker kind {kind!r} - new acts must opt in deliberately")
     now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    fail_text = error or (note if deterministic else None)
+    incident_id = None
+    if fail_text:
+        from lib import incidentlib  # local: incidentlib imports this module, so import here
+
+        incident_id = incidentlib.record(kind, session_id, fail_text)
     with locked("attempts"):
         # Window-prune ordinary attempts only; deterministic rows persist until clear().
         rows = [
@@ -258,12 +274,14 @@ def note(
                 "at": now_ms,
                 "deterministic": bool(deterministic),
                 "note": note,
+                "incident": incident_id,
             }
         )
         _save(rows)
 
 
-def annotate(kind: str, session_id: str, outcome: str, now_ms: int | None = None) -> None:
+def annotate(kind: str, session_id: str, outcome: str, now_ms: int | None = None, *,
+             failure: bool = False) -> None:
     """Attach the OUTCOME to the most recent attempt row. Adds no row, so the count is safe.
 
     ⛔ NEVER record a failure by calling note() a second time. The counter is "one row per
@@ -277,16 +295,116 @@ def annotate(kind: str, session_id: str, outcome: str, now_ms: int | None = None
     the app was shut, the row was ambiguous, or the text never matched. A brake that stops
     the machine without saying what it hit sends you guessing; every stop should carry its
     reason.
+
+    `failure=True` marks this outcome as a genuine failure (not merely informational): it also
+    files an INCIDENT (lib/incidentlib.py) for (kind, session_id) - grouping this failure with
+    every other one that shares its normalized cause - and stamps the matched row's `incident`
+    field. Most annotate() calls are asides on an attempt that is still succeeding (e.g.
+    migrate_chat noting which idle engine it stopped along the way) and pass nothing; only a
+    caller that KNOWS the outcome is a failure sets this explicitly - guessing from the outcome
+    TEXT would misfire on rows like "landed ... but the source row is still visible", which
+    names a real failure without the word "fail" anywhere in it.
     """
     if kind not in VALID_KINDS:
         raise ValueError(f"unknown breaker kind {kind!r} - new acts must opt in deliberately")
+    incident_id = None
+    if failure:
+        from lib import incidentlib  # local: incidentlib imports this module, so import here
+
+        incident_id = incidentlib.record(kind, session_id, outcome)
     with locked("attempts"):
         rows = _load()
         for r in reversed(rows):
             if r.get("kind") == kind and r.get("session") == session_id:
                 r["outcome"] = str(outcome)[:400]
+                if incident_id:
+                    r["incident"] = incident_id
                 _save(rows)
                 return
+
+
+def verify(
+    kind: str,
+    session_id: str,
+    verified: bool | None,
+    note: str = "",
+    now_ms: int | None = None,
+) -> None:
+    """Attach the READ-BACK verdict to the most recent attempt row. Adds no row, same shape as
+    annotate() and for the same reason (a second row per outcome would trip the breaker at half
+    its intended count).
+
+    Ported doctrine, orchestrator rule 4 / the shape of hermes-agent's _confirm_adapter_delivery +
+    delivery_queue.py: "never claim an act landed without checking." Three verdicts, and they
+    are NOT interchangeable:
+      - True  - the target's state was re-read AFTER acting and it shows the change.
+      - False - the target's state was re-read and it does NOT show the change. Counts as a
+                failed attempt like any other (it already has a row from note()); it does not
+                add a second one.
+      - None  - UNKNOWN: the read-back itself could not be performed (the verifying call
+                failed, timed out, or the caller had no way to check at all). ⛔ Never treat
+                this as success, never clear() the breaker on it, and never let it retry
+                silently - a provably-never-attempted row may be re-queued, but one whose
+                outcome is unknown must surface for a person, exactly the delivery_queue.py
+                distinction this ports.
+    """
+    if kind not in VALID_KINDS:
+        raise ValueError(f"unknown breaker kind {kind!r} - new acts must opt in deliberately")
+    if verified is not None and not isinstance(verified, bool):
+        raise TypeError("verified must be True, False, or None (unknown) - not a truthy value")
+    with locked("attempts"):
+        rows = _load()
+        for r in reversed(rows):
+            if r.get("kind") == kind and r.get("session") == session_id:
+                r["verified"] = verified
+                if note:
+                    r["verify_note"] = str(note)[:400]
+                _save(rows)
+                return
+    # No row to attach to: the caller verified something note() never opened a row for. Rather
+    # than silently drop an unknown-outcome verdict (the one this doctrine cares about most),
+    # open one directly so it still surfaces below.
+    with locked("attempts"):
+        rows = _load()
+        rows.append({
+            "kind": kind, "session": session_id, "at": now_ms or int(time.time() * 1000),
+            "deterministic": False, "note": "", "verified": verified,
+            **({"verify_note": str(note)[:400]} if note else {}),
+        })
+        _save(rows)
+
+
+def unverified(now_ms: int | None = None, within_ms: int = ATTEMPT_WINDOW_MS) -> list[dict]:
+    """Every recent act whose verified field is unknown (None) or explicitly False - the
+    judgment queue this doctrine feeds. `verified` absent (an act that never called verify(), or
+    ran before this existed) counts as unknown too: no positive evidence is no positive
+    evidence, whether that is because nobody checked or because nobody could. Never confuses
+    this with `suppressed()` above, which is about the BREAKER tripping, not about whether an
+    act's outcome was ever confirmed - a chat can be unverified without ever having been
+    suppressed, and vice versa."""
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    floor = now_ms - within_ms
+    _MISSING = object()  # tell "never checked" apart from an explicit verified=None (also unknown)
+    out = []
+    for r in _load():
+        at = r.get("at", 0)
+        if at < floor:
+            continue
+        v = r.get("verified", _MISSING)
+        if v is True:
+            continue  # confirmed - not the judgment queue's business
+        out.append({
+            "kind": r.get("kind"),
+            "session": r.get("session"),
+            "at": at,
+            # False is a CONFIRMED disagreement, distinct from "unknown" (never checked, or the
+            # check itself couldn't run) - the doctrine this ports treats them differently: false
+            # already counts as a failed attempt, unknown must never be retried at all.
+            "status": "false" if v is False else "unknown",
+            "note": r.get("note") or "",
+            "verify_note": r.get("verify_note") or "",
+        })
+    return out
 
 
 def clear(kind: str, session_id: str) -> None:

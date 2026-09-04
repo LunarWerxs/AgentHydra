@@ -9,6 +9,122 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **A provenance ratchet on the agent catalog** (`scripts/checks/catalog-row-provenance.mjs`, wired
+  into CI). The 58 rows in `server/src/agent-catalog.ts` say where each coding agent keeps its
+  conversations, and their paths were compiled from a third-party registry rather than read from
+  each tool's own source. A wrong path there is invisible by construction: a row pointing at a
+  directory that does not exist produces exactly what a correct row produces on a machine where
+  that tool is not installed, so it can never be told from "not installed" and lives forever. Three
+  rows were checked against upstream source on 2026-09-04 and all three were wrong - Hermes Agent
+  and OpenClaw both pointed at directories their projects do not have (fixed), and `aider` carried
+  an empty `dirs`, unmatched on any machine without `AIDER_DIR` set (given `~/.aider`, which its
+  own `main.py` writes to). Rows now carry an optional `verified: '<repo> <file> (<date>)'`, and
+  the guardrail ratchets on the count so verification can only grow, fails a marker that names no
+  file or date, fails a row that cannot match at all, and fails if its own parser reads fewer rows
+  than the table declares.
+
+- **`orchestrator/scripts/lib/incidentlib.py` - THE INCIDENT LEDGER**, ported from
+  NousResearch/hermes-agent's `cron/incidents.py` (MIT) and adapted to this toolbox's
+  JSON-rows-in-state style (no SQLite). Groups repeated failures by a normalized cause
+  signature instead of leaving them as anonymous rows in the attempt ledger: the same chat
+  failing the same way, or several unrelated chats failing for one shared reason, collapses
+  into ONE incident (lifecycle `open` -> `acked` -> `resolved`) with a repeat count and last
+  error. `ledgerlib.note()`/`annotate()` now file an incident for every deterministic or
+  explicitly-flagged failure and stamp the ledger row with the incident id, so the two can be
+  joined. `sweep.py` gained a SHARED-CAUSE BREAKER: 3+ consecutive same-signature failures in
+  one lane halt the rest of that lane for the pass (`--breaker-threshold` to tune) instead of
+  repeating a cause that will not clear chat by chat, and file one incident naming every chat
+  left behind. New `python orch.py incidents` (list open/acked, `--ack`/`--resolve`, `--all`)
+  surfaces it; the dashboard's `/data/incidents` route and `/data/suppressed`'s
+  `incidentsOpen` count expose it there too.
+- **Orchestrator: the unblock lane now classifies a stuck permission prompt before pressing
+  it, tri-state (APPROVE / DENY / ESCALATE)** - idea ported from `hermes-agent`'s
+  `approval.py` (MIT). Previously `unblock_prompts.py` pressed Allow on any chat whose
+  configured mode was `bypassPermissions`, whatever the pending command actually was.
+  It now also classifies the command against `orchestrator/scripts/lib/approvallib.py`'s
+  policy (`state/approval_policy.json`, created with a WHY-comment on first run, hand-edited
+  only - never inferred from a chat's own transcript text): hardline-destructive commands
+  (`rm -rf`, a shared-branch hard reset, a credential path, ...) DENY and are recorded, never
+  pressed; clearly safe ones (read-only inspection, build, typecheck, test, lint, git
+  status/log/diff) APPROVE exactly as before; everything else ESCALATEs into a new judgment
+  queue (`state/approval_escalations.json`) that `interview.py --ask` now also surfaces, so a
+  person or the `/orchestrate` AI decides instead of it being pressed on a guess. The
+  scheduled UNATTENDED run presses only APPROVE; an INTERACTIVE run (`--force`, a person at
+  `orch.py`) may also press an ESCALATE row, after the command has been shown.
+- **A mutation ledger with undo, for every act the orchestrator performs on a Desktop chat**
+  (idea from hermes-agent's `tools/checkpoint_manager.py`, MIT, Copyright (c) Nous Research -
+  the before/after discipline, not its shadow-git mechanics, which snapshot repo files this
+  program does not own). Until now `archive_chat.py`, `rename_chat.py`, `migrate_chat.py`,
+  `hold_chat.py` and `compact_chat.py` left no before-image of what they touched, so a wrong
+  archive or rename (the orchestrator's README documents 6 of 29 chats archived wrongly in one
+  day under v2) could not be undone from here - only by hand, on a screen, from memory. Each of
+  those five scripts now writes down what its target looked like immediately before it acted
+  and immediately after (`orchestrator/scripts/lib/mutationlib.py`, same locked-JSON discipline
+  as the attempt ledger and the holds file); `python orch.py mutations` lists every entry newest
+  first with an `undoable` flag, and `python orch.py undo <id>` reverses one through the exact
+  same rail-guarded script that performed it (unarchive, rename back, migrate back to the source
+  instance, or release/re-hold), verified by that script's own fresh mutation row rather than
+  trusted on exit code alone. Compaction is recorded but never undoable - it is lossy by design,
+  so no inverse exists, and the reason is stated rather than guessed.
+- **Startup-liveness watchdog** so a daemon that hangs during boot (a locked sqlite file, a port
+  probe that never returns, an updater step that stalls) crashes and gets restarted instead of
+  sitting there indistinguishable from a slow one - tray icon idle, nothing logged, until someone
+  restarts it by hand an hour later. Armed at process entry (`server/src/main.ts`, before importing
+  the daemon or `--instances` entrypoint), renewed at each boot phase as it's reached (db open,
+  migrations, scheduler start, queue recovery, listen), and disarmed the moment the port is actually
+  bound. If the deadline elapses with no renewal, it logs the last-known phase and pid to both
+  stderr and `daemon.log`, then exits with a distinct code (`87`) so the tray/service supervisor
+  restarts it rather than a silent hang. Deadline is `AGENTHYDRA_BOOT_DEADLINE_MS`, generous by
+  default (120s full daemon, 30s `--instances`); inert under `bun test`. Idea ported in shape from
+  NousResearch/hermes-agent's startup watchdog (MIT) - see `server/src/boot-watchdog.ts`.
+- **Hermes Agent joins the readable session sources** (PLAN.md's DEFERRED list named it first: 241k
+  GitHub stars, larger than every other deferred source combined). Hermes keeps everything in one
+  SQLite file, `state.db`, at the root of `HERMES_HOME` (`~/.hermes` on POSIX, `%LOCALAPPDATA%\hermes`
+  on native Windows), plus a separate `state.db` per named profile under `profiles/<name>/`. AgentHydra
+  now lists, tails, exports and body-searches Hermes sessions the same way it already does OpenCode's
+  shared SQLite store, with a profile standing in as the "project" grouping. Usage is priced through
+  AgentHydra's own catalog by model name rather than trusting Hermes' own cost columns, so a model the
+  catalog has no price for costs $0 and is flagged unpriced instead of silently taken on faith. Purely
+  a reader: the queue, composer and resume-in-terminal stay Claude-only, and nothing here writes to a
+  Hermes store. New: `server/src/hermes-sessions.ts`.
+- **Failed queue runs are now grouped into incidents, so twenty overnight runs failing the same
+  way read as one problem instead of twenty.** Ported from NousResearch/hermes-agent's cron
+  incident tracker (MIT). A `failed` run (via `finalize()` or a pre-launch refusal in
+  `dispatch.ts`) is recorded against `(scope, key, error signature)` - the signature survives
+  timestamps, pids, and paths changing between runs of the same project, so a repeat only bumps a
+  counter rather than minting a new alert. Lifecycle is `open -> acked -> resolved`; a resolved
+  incident whose error recurs reopens rather than staying silently closed, and a genuinely
+  different error on the same project opens a new one. Desktop/email notifications (reusing the
+  existing reset-notification channels) fire on the first occurrence and on a reopen, and are
+  suppressed for every repeat in between - the count still increments. The one pre-launch refusal
+  that is permanent by policy (headless dispatch is currently disabled outright) is excluded from
+  incident tracking entirely, so it cannot page on every dispatch attempt. New: `server/src/incidents.ts`
+  (the model), an `incidents` table (`server/src/db.ts`), `GET /api/incidents`, `POST
+  /api/incidents/:id/ack`, `POST /api/incidents/:id/resolve` (`server/src/routes/incidents.ts`),
+  MCP tools `list_incidents` / `ack_incident` / `resolve_incident`, and a collapsed "Incidents"
+  panel above the run queue with an open-count badge and ack/resolve buttons
+  (`web/src/components/IncidentsPanel.vue`).
+- **"Never claim an act landed without checking" - now enforced, not just documented.** Ported
+  from hermes-agent's `_confirm_adapter_delivery` (positive evidence required, `delivered=false`
+  is a rejection even when `success` is truthy) and `delivery_queue.py`'s never-retry-on-UNKNOWN
+  doctrine (a provably-never-attempted row may be re-queued; one whose outcome is unknown never
+  is). Two halves:
+  - **The run queue.** A finished run's exit 0 no longer means `completed` by itself: the
+    daemon now re-reads the run's own transcript and requires an assistant turn timestamped
+    after the run started. Missing that, the run reads `unverified` - a new, distinct queue
+    status shown everywhere `completed`/`failed`/etc. already are (`QueueItemCard`, the run
+    viewer, `list_queue`/`get_run_events`), logged at WARN with what was missing, and never
+    silently delivered to a migrated run's desktop target. A run whose failure is genuinely
+    UNKNOWN (the process/pid vanished with no exit code - not a real code `claude` reported) is
+    recorded as such and is never auto-retried without saying so.
+  - **The orchestrator's ledger.** `ledgerlib.verify(kind, session_id, verified)` attaches a
+    `true`/`false`/`None` read-back verdict to an attempt row (`unverified()` surfaces the
+    `false`/unknown ones for the judgment queue). `archive_chat.py`, `rename_chat.py` and
+    `migrate_chat.py` - which already re-read the target's state after acting - now record that
+    verdict on the ledger instead of only reporting it; `rename_chat.py` also had a real bug this
+    closed, where a failed verify READ silently collapsed to the same outcome as a verify that
+    succeeded and disagreed (`unknown` was reading as `false`).
+
 - **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
   2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have
   to use both"). `orchestrator/` is the v3 Python toolbox exactly as it stood in its own repo
@@ -28,6 +144,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   tray shortcut, `state/`) in orchestrator/README.md. The `/orchestrate` command that 0.37.0
   removed is back (canonical copy in `.claude/commands/`, beside `/hydra-status`), rewritten onto
   the four MCP tools instead of a path to a second repo.
+- **Redeem a banked Codex reset credit from the Instances view.** A ChatGPT-account Codex login
+  can bank `/usage reset` credits, each restoring the FULL 5h + weekly rate-limit windows in one
+  shot - previously AgentHydra could only read the count (`rate_limit_reset_credits`), never spend
+  one. The Codex row's menu now has "Redeem reset credit" (`server/src/core/codex-account.ts`'s
+  `redeemCodexResetCredit`, `POST /api/codex-instances/:id/redeem-reset-credit`, MCP's
+  `redeem_codex_reset_credit`), guarded the way the Codex CLI's own picker is: it refuses unless
+  the busiest window is already fully used (100%) or the caller passes `force`, since redeeming
+  early wastes most of a credit's value. The button disables itself with the reason when the
+  already-cached quota chip shows the guard would refuse. Ported from
+  `NousResearch/hermes-agent`'s `account_usage.py` (MIT, Copyright (c) Nous Research); the access
+  token is read into a local binding only and never logged or returned.
 
 ### Fixed
 

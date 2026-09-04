@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { chmodSync, mkdirSync } from 'node:fs'
+import { renewBootWatchdog } from './boot-watchdog'
 import { DATA_DIR, DB_PATH, RUN_LOG_DIR } from './config'
 import { unseal } from './dpapi-seal.mjs'
 import { classifyLimit } from './rate-limit-signal'
@@ -14,6 +15,12 @@ try {
   // Windows ACLs, or a filesystem without POSIX modes; the per-user location/ACL remains in force.
 }
 
+// This whole module runs as an IMPORT-TIME side effect (the daemon entry does `import { getSetting
+// } from './db'` among others), before index.ts's own body executes - see main.ts, which arms the
+// boot watchdog before importing index.ts specifically so this counts. A locked db file (WAL
+// replay against a crash, a concurrent updater holding the handle past its 800ms overlap window)
+// is exactly the kind of stall this exists to catch.
+renewBootWatchdog('db-open')
 export const db = new Database(DB_PATH, { create: true })
 db.exec('pragma journal_mode = WAL')
 db.exec('pragma foreign_keys = ON')
@@ -54,7 +61,7 @@ create table if not exists queue_items (
   account_id      text references accounts(id) on delete set null,
   new_chat        integer not null default 0,
   fork            integer not null default 0,
-  status          text not null default 'queued',  -- queued | running | completed | failed | rate_limited | overloaded | canceled
+  status          text not null default 'queued',  -- queued | running | completed | unverified | failed | rate_limited | overloaded | canceled
   pid             integer,
   position        integer not null default 0,
   not_before      text,                 -- ISO timestamp; scheduler won't auto-dispatch before this
@@ -151,6 +158,30 @@ create table if not exists session_scan_cache (
   scanned_at        integer not null
 );
 create index if not exists idx_session_scan_cache_path on session_scan_cache(path);
+
+-- Failure incidents (server/src/incidents.ts): a queue run that fails is grouped with prior runs
+-- of the SAME scope+key that failed with the SAME normalized error, instead of each occurrence
+-- reading as an unrelated event. id is derived (scope, key, error signature) so the SAME failure
+-- upserts this row (last_seen_at/count bump) rather than inserting a duplicate; a DIFFERENT error
+-- text on the same scope+key mints a different id instead. state: open -> acked -> resolved, and a
+-- resolved incident whose signature recurs reopens (see recordIncident).
+create table if not exists incidents (
+  id            text primary key,
+  scope         text not null,       -- e.g. 'queue'
+  key           text not null,       -- e.g. the run's project (cwd)
+  error_sig     text not null,
+  state         text not null default 'open',   -- open | acked | resolved
+  failure_type  text not null default 'unknown',
+  first_seen_at text not null,
+  last_seen_at  text not null,
+  acked_at      text,
+  resolved_at   text,
+  count         integer not null default 1,
+  error         text not null,
+  output_file   text
+);
+create index if not exists idx_incidents_scope_key on incidents(scope, key);
+create index if not exists idx_incidents_state on incidents(state);
 
 `)
 
@@ -379,6 +410,13 @@ create index if not exists idx_session_edits_ts on session_edits(ts desc);
   }
 }
 
+// Every additive-migration block above has now run (schema creation, alter-table backfills, the
+// DPAPI-blob and rate-limited/overloaded repairs) - the slowest part of "db open" a corrupt or
+// very old sqlite file could stall on. See renewBootWatchdog('db-open') above this file's schema
+// block for why this module gets its own checkpoints rather than relying on whatever index.ts line
+// happens to run next (this all executes at import time, before that).
+renewBootWatchdog('db-migrations')
+
 // --- shared row coercion ------------------------------------------------------
 
 /** sqlite has no booleans — new_chat/fork come back as 0/1. Every reader of queue_items needs this,
@@ -396,6 +434,7 @@ export function coerceQueueItem(row: any): QueueItem {
 /** A run's terminal statuses. `completed` is the only one that means the work got done. */
 const TERMINAL_STATUSES: QueueStatus[] = [
   'completed',
+  'unverified',
   'failed',
   'canceled',
   'rate_limited',

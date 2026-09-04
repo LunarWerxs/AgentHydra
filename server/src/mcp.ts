@@ -437,7 +437,7 @@ export const TOOLS: McpEngineTool[] = [
       },
       source: {
         type: 'string',
-        enum: ['claude', 'codex', 'opencode', 'foreign'],
+        enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'],
         description:
           'Optional provider filter. "foreign" is the shared reader for the other local agents ' +
           '(Cursor, Windsurf, Zed, Copilot CLI and the rest) — omit it to get every store at once.',
@@ -538,7 +538,7 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
       },
       ['id'],
     ),
@@ -562,7 +562,7 @@ export const TOOLS: McpEngineTool[] = [
         caseSensitive: { type: 'boolean', description: 'Match case exactly (default false).' },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode', 'foreign'],
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'],
           description:
             "Optional provider filter. 'foreign' is the shared reader for the other local agents " +
             '(Cursor, Windsurf, Zed, Copilot CLI and the rest); omit it to search every store.',
@@ -654,7 +654,7 @@ export const TOOLS: McpEngineTool[] = [
           type: 'boolean',
           description: 'Only the user turns. Overrides textOnly. Use this to skim a long session.',
         },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
       },
       ['id'],
     ),
@@ -682,7 +682,7 @@ export const TOOLS: McpEngineTool[] = [
         id: { type: 'string' },
         format: { type: 'string', enum: ['markdown', 'html'], description: 'Default markdown.' },
         thinking: { type: 'boolean', description: "Include the model's reasoning blocks." },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
       },
       ['id'],
     ),
@@ -705,7 +705,7 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
       },
       ['id'],
     ),
@@ -768,7 +768,8 @@ export const TOOLS: McpEngineTool[] = [
     description:
       // rate_limited vs overloaded is the distinction an agent reading this most needs: the first is
       // YOUR quota (wait for the reset), the second is Anthropic's servers (already auto-retried).
-      'List every queue item (queued/running/completed/failed/rate_limited/overloaded/canceled), in run order. rate_limited = the account hit its own session/weekly cap; overloaded = a 529 that outlasted the automatic retries.',
+      // unverified vs completed matters just as much: never treat unverified as done.
+      'List every queue item (queued/running/completed/unverified/failed/rate_limited/overloaded/canceled), in run order. rate_limited = the account hit its own session/weekly cap; overloaded = a 529 that outlasted the automatic retries; unverified = the process exited 0 but no transcript evidence confirms it actually produced a turn - never treat this as the same as completed.',
     inputSchema: S(),
     run: () => api('/api/queue'),
   },
@@ -856,9 +857,34 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'get_run_events',
     description:
-      "Get a queue item's recorded run events (assistant/user/system turns for that run) AND how the run ended. Read `outcome` before drawing conclusions from the events: `died` is true whenever the run stopped without completing, `status` says which kind (failed / canceled / rate_limited / overloaded) and `exit_code` is the child process's own code, with -1 meaning the daemon lost the runner and never saw it exit. A log that simply stops is a crash or a kill, not a short answer, and the events alone cannot tell you which.",
+      "Get a queue item's recorded run events (assistant/user/system turns for that run) AND how the run ended. Read `outcome` before drawing conclusions from the events: `died` is true whenever the run stopped without completing, `status` says which kind (unverified / failed / canceled / rate_limited / overloaded) and `exit_code` is the child process's own code, with -1 meaning the daemon lost the runner and never saw it exit. `unverified` means exit 0 but no transcript evidence confirmed a real turn happened - treat it as died, not completed. A log that simply stops is a crash or a kill, not a short answer, and the events alone cannot tell you which.",
     inputSchema: S({ id: { type: 'string' } }, ['id']),
     run: (a) => api(`/api/queue/${encodeURIComponent(str(a.id))}/events`),
+  },
+
+  // --- incidents (server/src/incidents.ts) ---------------------------------------
+  // A failed queue run is grouped with prior failures of the SAME project + error signature
+  // instead of each occurrence reading as a fresh, unrelated alert - see incidents.ts's header.
+  {
+    name: 'list_incidents',
+    description:
+      "List failure incidents (grouped, deduped repeats of the same project + error), newest activity first. state filters to 'open' | 'acked' | 'resolved'; omit for every incident.",
+    inputSchema: S({ state: { type: 'string', enum: ['open', 'acked', 'resolved'] } }),
+    run: (a) => api(`/api/incidents${qs({ state: a.state })}`),
+  },
+  {
+    name: 'ack_incident',
+    description:
+      "MUTATES: acknowledge an open incident ('seen, working on it'). No-op on a missing, already-acked, or already-resolved incident.",
+    inputSchema: S({ id: { type: 'string' } }, ['id']),
+    run: (a) => api(`/api/incidents/${encodeURIComponent(str(a.id))}/ack`, { method: 'POST' }),
+  },
+  {
+    name: 'resolve_incident',
+    description:
+      'MUTATES: resolve an incident. Terminal until the same project fails with the same error again, which reopens it.',
+    inputSchema: S({ id: { type: 'string' } }, ['id']),
+    run: (a) => api(`/api/incidents/${encodeURIComponent(str(a.id))}/resolve`, { method: 'POST' }),
   },
 
   // --- accounts -----------------------------------------------------------------
@@ -1332,6 +1358,28 @@ export const TOOLS: McpEngineTool[] = [
       api(
         `/api/codex-instances/${encodeURIComponent(await handleFrom(a.id, a.instance, 'id'))}/desktop/quit`,
         { method: 'POST' },
+      ),
+  },
+  {
+    name: 'redeem_codex_reset_credit',
+    description:
+      "MUTATES: spend one banked Codex `/usage reset` credit, which restores the FULL 5h + weekly rate-limit windows in one shot. Refuses unless the busiest window is already 100% used, since redeeming early wastes most of the credit's value — the result names the busiest window's percent when it refuses. Pass `force: true` to redeem anyway. Identify the instance by number (`instance`) or by `id`.",
+    inputSchema: S({
+      instance: INSTANCE_PARAM,
+      id: { type: 'string' },
+      force: {
+        type: 'boolean',
+        description: 'Bypass the "busiest window is not fully used" guard.',
+      },
+    }),
+    run: async (a) =>
+      api(
+        `/api/codex-instances/${encodeURIComponent(await handleFrom(a.id, a.instance, 'id'))}/redeem-reset-credit`,
+        {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ force: a.force === true }),
+        },
       ),
   },
 

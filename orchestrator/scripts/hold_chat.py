@@ -19,6 +19,7 @@ import time
 
 from lib import clilib, holdlib
 from lib import hydralib
+from lib import mutationlib
 
 
 def main(argv: list[str]) -> int:
@@ -72,10 +73,19 @@ def main(argv: list[str]) -> int:
         print(f"hold FAILED: {err}", file=sys.stderr)
         return 1
     sid = match.get("cliSessionId") or ""
-    title = match.get("title")
+    instance = str(match.get("instance") or "")
 
     if do_release:
+        # MUTATION LEDGER: the before-image is the hold entry that is about to be lifted,
+        # read immediately before release() acts - captured here rather than trusting the
+        # bool release() returns, because release() itself prunes-and-saves and the entry it
+        # is about to drop is not handed back.
+        title = match.get("title")
+        before_entry = holdlib.check(sid)
         was = holdlib.release(sid)
+        if was and before_entry:
+            mutationlib.record("release", sid, instance=instance, title=str(title),
+                               before=before_entry, after=None, undoable=True)
         msg = (f"released: '{title}' is back under the machinery's care"
                if was else f"nothing to do: '{title}' was not held")
         print(json.dumps({"released": was, "sessionId": sid, "report": msg}, indent=2) if as_json else msg)
@@ -84,8 +94,14 @@ def main(argv: list[str]) -> int:
     if not reason:
         print("a hold DEMANDS a reason: --reason \"why this chat is hands-off\"", file=sys.stderr)
         return 3
+    title = match.get("title")
+    # Before-image: whatever hold (if any) already covered this chat - a fresh hold overwrites
+    # it, so undo (release) restores "unheld", never a prior hold this call did not know about.
+    before_entry = holdlib.check(sid)
     until = int((time.time() + hours * 3600) * 1000) if hours else None
     entry = holdlib.hold(sid, reason, until_ms=until)
+    mutationlib.record("hold", sid, instance=instance, title=str(title),
+                       before=before_entry or {}, after=entry, undoable=True)
     msg = f"HELD: '{title}' - {holdlib.why_blocked(sid)}"
     print(json.dumps({"held": True, "entry": entry, "report": msg}, indent=2) if as_json else msg)
     return 0

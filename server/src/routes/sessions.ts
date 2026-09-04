@@ -205,9 +205,9 @@ app.get('/api/sessions/:id/file', async (c) => {
   const source = isSessionSource(rawSource) ? rawSource : undefined
   const tf = await findTranscriptAsync(id, source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
-  if (tf.source === 'opencode')
+  if (tf.source === 'opencode' || tf.source === 'hermes')
     return c.json(
-      { error: 'OpenCode sessions are stored in a shared database, not a raw file' },
+      { error: 'OpenCode and Hermes sessions are stored in a shared database, not a raw file' },
       409,
     )
   const session = await getSession(id, tf.source)
@@ -278,8 +278,8 @@ app.get('/api/sessions/:id/file-location', async (c) => {
   const source = isSessionSource(rawSource) ? rawSource : undefined
   const tf = await findTranscriptAsync(c.req.param('id'), source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
-  if (tf.source === 'opencode')
-    return c.json({ error: 'OpenCode sessions are stored in a shared database' }, 409)
+  if (tf.source === 'opencode' || tf.source === 'hermes')
+    return c.json({ error: 'OpenCode and Hermes sessions are stored in a shared database' }, 409)
   return c.json({ path: tf.path })
 })
 // Open the transcript in an editor (loopback daemon: same posture as the portable-window spawn;
@@ -291,8 +291,8 @@ app.post('/api/sessions/:id/open-file', async (c) => {
   const source = isSessionSource(rawSource) ? rawSource : undefined
   const tf = await findTranscriptAsync(c.req.param('id'), source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
-  if (tf.source === 'opencode')
-    return c.json({ error: 'OpenCode sessions are stored in a shared database' }, 409)
+  if (tf.source === 'opencode' || tf.source === 'hermes')
+    return c.json({ error: 'OpenCode and Hermes sessions are stored in a shared database' }, 409)
   const cmd = buildTranscriptOpenArgv(
     process.platform,
     tf.path,
@@ -327,8 +327,8 @@ app.post('/api/sessions/:id/copy-file', async (c) => {
   const source = isSessionSource(rawSource) ? rawSource : undefined
   const tf = await findTranscriptAsync(id, source)
   if (!tf) return c.json({ error: 'session not found' }, 404)
-  if (tf.source === 'opencode')
-    return c.json({ error: 'OpenCode sessions are stored in a shared database' }, 409)
+  if (tf.source === 'opencode' || tf.source === 'hermes')
+    return c.json({ error: 'OpenCode and Hermes sessions are stored in a shared database' }, 409)
   if (process.platform !== 'win32' && process.platform !== 'darwin')
     // Linux has no cross-desktop file-clipboard convention (GNOME and KDE disagree on the private
     // MIME type), so there is nothing honest to spawn. Say so rather than silently no-op.

@@ -37,7 +37,13 @@ export interface SyncStatus {
 }
 // The Codex/ChatGPT instance-account DTOs, defined next to their resolver for the same reason as
 // the Claude ones below.
-export type { CodexAccount, CodexAccountStatus, CodexAuthMode } from './core/codex-account'
+export type {
+  CodexAccount,
+  CodexAccountStatus,
+  CodexAuthMode,
+  CodexResetRedeemResult,
+  CodexResetRedeemStatus,
+} from './core/codex-account'
 // Instance DTOs ("instance account" = which Anthropic account a Claude Desktop *instance*
 // is logged into) are defined in ./core/shared.ts, re-exported here so the web app only
 // ever imports types from this one module, same as every other DTO below.
@@ -74,6 +80,13 @@ export type QueueStatus =
   | 'running'
   | 'completed'
   | 'failed'
+  /** Exit 0, but no independent evidence the run actually produced anything (never-claim-landed
+   *  doctrine, ports the shape of hermes-agent's _confirm_adapter_delivery: an exit code is the process's
+   *  own self-report, not proof - see hasCompletionEvidence in dispatch.ts). Distinct from
+   *  'completed' on purpose: a caller that filters on 'completed' must never see one of these by
+   *  accident, and a desktop delivery must never fire on one. Distinct from 'failed' too - the run
+   *  may well have worked; nobody has confirmed it either way. */
+  | 'unverified'
   /** YOUR allowance is spent (session/weekly). Only time fixes it — monitor.ts resumes off this. */
   | 'rate_limited'
   /** ANTHROPIC'S servers were saturated (529). Nothing is wrong with the run; it is retried
@@ -90,16 +103,17 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | '
 /**
  * A supported conversation store, named by the READER that understands it.
  *
- * Claude/Codex are JSONL and OpenCode is its shared SQLite DB. `foreign` is the fourth: one reader
- * with a small adapter per tool (Grok, Kimi, VS Code Copilot, Copilot CLI, Zed), which share no
- * format with each other but do share the one thing that matters here — a list of conversations
- * that can be read, and no per-token usage to account for. See server/src/foreign-sessions.ts.
+ * Claude/Codex are JSONL; OpenCode and Hermes are each their own shared SQLite DB — two different
+ * schemas, so two different readers. `foreign` is the fifth: one reader with a small adapter per
+ * tool (Grok, Kimi, VS Code Copilot, Copilot CLI, Zed), which share no format with each other but do
+ * share the one thing that matters here — a list of conversations that can be read, and no per-token
+ * usage to account for. See server/src/foreign-sessions.ts.
  */
-export type SessionSource = 'claude' | 'codex' | 'opencode' | 'foreign'
+export type SessionSource = 'claude' | 'codex' | 'opencode' | 'hermes' | 'foreign'
 export type SessionSourceScope = 'all' | SessionSource
 
 export function isSessionSource(v: unknown): v is SessionSource {
-  return v === 'claude' || v === 'codex' || v === 'opencode' || v === 'foreign'
+  return v === 'claude' || v === 'codex' || v === 'opencode' || v === 'hermes' || v === 'foreign'
 }
 
 /** A session discovered in one of the supported local conversation stores. */
@@ -574,8 +588,9 @@ export interface SessionSearchResponse {
   budgetExhausted: boolean
   /** The hit list was cut to `limit`. Not a timeout — searching longer would not add rows. */
   limitReached: boolean
-  /** File-backed transcripts opened, out of how many were in scope. OpenCode is excluded from
-   *  both: it is one indexed SQLite store, searched in full and not time-bounded. */
+  /** File-backed transcripts opened, out of how many were in scope. OpenCode and Hermes are
+   *  excluded from both: each is one or more indexed SQLite stores, searched in full and not
+   *  time-bounded. */
   filesSearched: number
   filesTotal: number
   /** The wall-clock budget that applied, so a caller can say "stopped after 7 s". */
@@ -657,6 +672,31 @@ export interface RunEvent {
   tool_name: string | null
 }
 
+// --- failure incidents (server/src/incidents.ts) ------------------------------------------------
+// Defined HERE rather than in incidents.ts, same reasoning as QueueItem above: incidents.ts imports
+// db.ts (Bun-only runtime), which must never reach the web app's vue-tsc pass, so the DTO lives in
+// this Bun-free module and incidents.ts imports it back.
+export type IncidentState = 'open' | 'acked' | 'resolved'
+export const INCIDENT_STATES: readonly IncidentState[] = ['open', 'acked', 'resolved']
+
+export interface Incident {
+  id: string
+  scope: string
+  key: string
+  error_sig: string
+  state: IncidentState
+  failure_type: string
+  first_seen_at: string
+  last_seen_at: string
+  acked_at: string | null
+  resolved_at: string | null
+  /** Occurrences folded into this incident, including the one that created it. */
+  count: number
+  /** Redacted, length-bounded error text. */
+  error: string
+  output_file: string | null
+}
+
 export interface SchedulerState {
   enabled: boolean
   running_count: number
@@ -724,6 +764,10 @@ export interface UsageSnapshot {
   capturedAt: string
   /** Optional for back-compat with snapshots cached before the API path existed. */
   source?: UsageSource
+  /** Codex-only: banked `/usage reset` credits available to redeem (`rate_limit_reset_credits.
+   *  available_count` on the usage payload). Undefined for snapshots that predate this field or
+   *  for providers with no such concept; null when the provider answered but reported none. */
+  resetCredits?: number | null
 }
 
 /**

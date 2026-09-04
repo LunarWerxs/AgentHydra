@@ -56,15 +56,16 @@ over HTTP directly, this registration is missing on that machine.
 Verify with `claude mcp list`. The entry should say `✔ Connected`. A session already open when you
 register it will not see the new tools; its tool list is fixed at startup, so start a new one.
 
-Tools cover sessions (list / get / tail / search / export across Claude, Codex, OpenCode and the
-foreign readers), project discovery (`list_projects`), chats a usage limit cut off
+Tools cover sessions (list / get / tail / search / export across Claude, Codex, OpenCode, Hermes and
+the foreign readers), project discovery (`list_projects`), chats a usage limit cut off
 (`list_rate_limited_sessions`), the queue (list / add /
 update / run / cancel / events), accounts (secrets always masked), the scheduler (get / set),
 Claude Desktop instances (list / launch / quit), Claude CLI instances, and Codex CLI/Desktop
-instances (list / create / CLI launch / login helper / desktop open / focus / quit), usage-check
-(`check_usage`, `check_my_usage`), the auto-resume monitor (get / set), an update check, and the
-orchestrator (`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch` -
-see [The orchestrator](#the-orchestrator) below).
+instances (list / create / CLI launch / login helper / desktop open / focus / quit / redeem a
+banked `/usage reset` credit via `redeem_codex_reset_credit`), usage-check (`check_usage`,
+`check_my_usage`), the auto-resume monitor (get / set), an update check, and the orchestrator
+(`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch` - see [The
+orchestrator](#the-orchestrator) below).
 Mutating tools say `MUTATES:` in their description; there is deliberately no shutdown tool.
 
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
@@ -102,8 +103,8 @@ API error without appending its own bookkeeping, so any resume flips it on its o
 
 Detection trusts only the CLI's own error report (`isApiErrorMessage` / a `<synthetic>` assistant
 turn / an errored terminal `result`), never model prose or tool output, so a session that merely
-*discussed* rate limits is not listed. It is Claude-only: Codex and OpenCode record an error, but not
-in a form worth trusting, and a false claim here would be worse than a missing one. The judgment
+*discussed* rate limits is not listed. It is Claude-only: Codex, OpenCode and Hermes record an error,
+but not in a form worth trusting, and a false claim here would be worse than a missing one. The judgment
 lives in one place (`createLimitStopTracker` in `server/src/rate-limit-signal.ts`) and is shared with
 the auto-resume monitor, so the badge and the resume queue cannot disagree.
 
@@ -202,6 +203,7 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
 | `AGENTHYDRA_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
 | `AGENTHYDRA_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
+| `AGENTHYDRA_BOOT_DEADLINE_MS` | `120000` (full daemon) / `30000` (`--instances`) | startup-liveness watchdog deadline; if boot hasn't reached a bound port by then, the process logs its last-known phase and exits `87` for the supervisor to restart it (see `server/src/boot-watchdog.ts`) |
 
 `/api/health` returns `service: "agenthydra"`, which is load-bearing for the single-instance
 pointer. It also returns `dataDir`, `dbPath` and `dataDirNotice`, which answer "which database is
@@ -354,7 +356,7 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 | Layer | Choice |
 |---|---|
 | Frontend | Vue 3 + Vite, a shared LunarWerx UI kit (shadcn-vue `reka-mira` on Reka UI), Tailwind v4, `@lucide/vue`, TypeScript |
-| Backend | **Bun + Hono**, `bun:sqlite` (queue / dispatch / scheduler / accounts and read-only OpenCode access) + JSON under `CONFIG_DIR`, SSE (`hono/streaming`) for live run output |
+| Backend | **Bun + Hono**, `bun:sqlite` (queue / dispatch / scheduler / accounts and read-only OpenCode/Hermes access) + JSON under `CONFIG_DIR`, SSE (`hono/streaming`) for live run output |
 | Dispatch | `Bun.spawn` of the real `claude` CLI (no Agent SDK) |
 | Multi-instance | per-OS Claude and Codex Desktop discovery / launch / focus / quit plus isolated Claude/Codex CLI homes (`server/src/core/*`); Windows DPAPI / macOS Keychain / Linux libsecret read Claude Desktop credentials |
 | Launcher | Windows browser + system-tray (`misc/`) |
@@ -362,7 +364,7 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 ## Layout
 
 ```
-server/        Bun + Hono daemon: sqlite, Claude/Codex/OpenCode session readers, transcript tail,
+server/        Bun + Hono daemon: sqlite, Claude/Codex/OpenCode/Hermes session readers, transcript tail,
                dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances)
 web/           Vue 3 SPA (Sessions / Queue / Instances views)
 orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should happen to a chat

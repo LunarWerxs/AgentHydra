@@ -19,18 +19,20 @@
   const projKey = (n) => `C--Projects-${n}`
 
   // Where each provider's transcript actually lives, so the raw-file affordances in the UI line
-  // up with the badge on the row. OpenCode has no per-session file: CLI and Desktop share one
-  // SQLite store, which is why its row points at the database.
+  // up with the badge on the row. OpenCode and Hermes have no per-session file: each shares one
+  // SQLite store across sessions, which is why their rows point at the database.
   const transcriptPath = (source, p, i) =>
     source === 'codex'
       ? `C:\\Users\\dev\\.codex\\sessions\\2026\\08\\04\\rollout-2026-08-04T09-14-22-s${i}.jsonl`
       : source === 'opencode'
         ? 'C:\\Users\\dev\\.local\\share\\opencode\\opencode.db'
-        : `C:\\Users\\dev\\.claude\\projects\\${projKey(p)}\\s${i}.jsonl`
+        : source === 'hermes'
+          ? 'C:\\Users\\dev\\AppData\\Local\\hermes\\state.db'
+          : `C:\\Users\\dev\\.claude\\projects\\${projKey(p)}\\s${i}.jsonl`
 
-  // A mixed list is the point of the shot: the app reads all three providers, and the badge
-  // column is the only thing that says so. The fields the server nulls out for non-Claude rows
-  // (instance, queue_status, and git_branch for OpenCode, which parses no repo metadata) are
+  // A mixed list is the point of the shot: the app reads every provider, and the badge column is
+  // the only thing that says so. The fields the server nulls out for non-Claude rows (instance,
+  // queue_status, and git_branch for OpenCode/Hermes, neither of which parses repo metadata) are
   // nulled here too — a fixture that fills them would photograph a UI the daemon cannot produce.
   const sessions = [
     ['Refactor checkout validation', 'acme-storefront', 'main', 128, 2, 'work', 'claude'],
@@ -49,13 +51,14 @@
     ['Dark mode token pass', 'acme-storefront', 'main', 156, 480, 'personal', 'claude'],
     ['Rate limiter backoff', 'atlas-api', 'main', 73, 1500, 'work', 'claude'],
     ['Tidy up CLI help output', 'pico-cli', 'main', 39, 2900, 'work', 'claude'],
+    ['Summarize the incident channel', 'atlas-api', 'main', 27, 4200, null, 'hermes'],
   ].map(([title, p, branch, count, mins, instance, source], i) => ({
     session_id: `s${i}0000000-0000-4000-8000-00000000000${i}`,
     source,
     title,
     cwd: proj(p),
     project: projKey(p),
-    git_branch: source === 'opencode' ? null : branch,
+    git_branch: source === 'opencode' || source === 'hermes' ? null : branch,
     message_count: count,
     // Span varies per row on purpose: every session sharing one duration made every shape chip
     // read "Marathon" in the screenshot, which is a fixture artefact that looked like a bug in the
@@ -380,13 +383,14 @@
           totalCostUsd: total,
           totalWeighted: 1_310_000_000,
           tokens,
-          // Three tools, because the shot's job is to show that the stats are not Claude-only.
+          // Four tools, because the shot's job is to show that the stats are not Claude-only.
           byProvider: [
-            { key: 'claude', tokens: slice(0.72), sessions: 26, costUsd: 232.6 },
-            { key: 'codex', tokens: slice(0.21), sessions: 11, costUsd: null },
+            { key: 'claude', tokens: slice(0.68), sessions: 26, costUsd: 232.6 },
+            { key: 'codex', tokens: slice(0.2), sessions: 11, costUsd: null },
             { key: 'opencode', tokens: slice(0.07), sessions: 4, costUsd: 4.1 },
+            { key: 'hermes', tokens: slice(0.05), sessions: 2, costUsd: 2.3 },
           ],
-          sessions: 41,
+          sessions: 43,
           byModel,
           byProject: [
             {

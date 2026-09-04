@@ -23,6 +23,7 @@ export const SOURCE_LABEL: Record<SessionSourceScope, string> = {
   claude: 'sessions.sourceClaude',
   codex: 'sessions.sourceCodex',
   opencode: 'sessions.sourceOpenCode',
+  hermes: 'sessions.sourceHermes',
   foreign: 'sessions.sourceOther',
 }
 
@@ -68,6 +69,7 @@ export const TOOL_NAME: Record<string, string> = {
   kilo: 'Kilo',
   mimocode: 'MiMo',
   icodemate: 'IcodeMate',
+  hermes: 'Hermes',
   grok: 'Grok',
   kimi: 'Kimi',
   zed: 'Zed',
@@ -79,6 +81,7 @@ export const SOURCE_BADGE_CLASS: Record<SessionSource, string> = {
   claude: 'border-[#D97757]/40 bg-[#D97757]/10 text-[#B85D3D] dark:text-[#E9A287]',
   codex: 'border-[#10A37F]/40 bg-[#10A37F]/10 text-[#087D62] dark:text-[#65D4B3]',
   opencode: 'border-[#5B6EF5]/40 bg-[#5B6EF5]/10 text-[#4053D6] dark:text-[#9AA6FF]',
+  hermes: 'border-[#F5A623]/40 bg-[#F5A623]/10 text-[#B4750E] dark:text-[#F5C067]',
   // Neutral on purpose: five products share this reader, so a single hue would imply one identity.
   foreign: 'border-border bg-muted text-muted-foreground',
 }

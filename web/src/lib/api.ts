@@ -13,10 +13,13 @@ import type {
   CMInstance,
   CodexAccount,
   CodexInstance,
+  CodexResetRedeemResult,
   ConcurrencyPoint,
   DispatchedScope,
   EditEntry,
   EffortLevel,
+  Incident,
+  IncidentState,
   InstanceColorKey,
   InstanceIconKey,
   MonitorSettings,
@@ -71,10 +74,14 @@ export type {
   CodexAccountStatus,
   CodexAuthMode,
   CodexInstance,
+  CodexResetRedeemResult,
+  CodexResetRedeemStatus,
   ConcurrencyPoint,
   DispatchedScope,
   EditEntry,
   EffortLevel,
+  Incident,
+  IncidentState,
   InstanceColorKey,
   InstanceIconKey,
   MonitorSettings,
@@ -359,6 +366,16 @@ export const cancelQueueItem = (id: string) =>
   j<{ ok: boolean }>(`/api/queue/${id}/cancel`, { method: 'POST' })
 export const getRunEvents = (id: string) => j<RunEvent[]>(`/api/queue/${id}/events`)
 export const streamUrl = (id: string) => `${API_BASE}/api/queue/${id}/stream`
+
+// --- incidents (server/src/incidents.ts) -------------------------------------
+// Repeated queue-run failures, grouped and deduped so a night of the same error doesn't read as a
+// night of unrelated ones. See incidents.ts's header for the full model.
+export const getIncidents = (state?: IncidentState) =>
+  j<Incident[]>(`/api/incidents${state ? `?state=${state}` : ''}`)
+export const ackIncident = (id: string) =>
+  j<{ ok: boolean; incident: Incident }>(`/api/incidents/${id}/ack`, { method: 'POST' })
+export const resolveIncident = (id: string) =>
+  j<{ ok: boolean; incident: Incident }>(`/api/incidents/${id}/resolve`, { method: 'POST' })
 
 // --- scheduler --------------------------------------------------------------
 export const getScheduler = () => j<SchedulerState>('/api/scheduler')
@@ -715,6 +732,14 @@ export const quitCodexDesktopInstance = (id: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/desktop/quit`, {
     method: 'POST',
   })
+/** Redeem one banked Codex `/usage reset` credit. `force` bypasses the "busiest window isn't
+ *  fully used" guard — omit it to let the server refuse a wasteful redemption. A successful
+ *  redeem (`ok: true`) carries the freshly re-checked `usage` snapshot. */
+export const redeemCodexResetCredit = (id: string, opts: { force?: boolean } = {}) =>
+  j<CodexResetRedeemResult & { usage?: UsageSnapshot }>(
+    `/api/codex-instances/${encodeURIComponent(id)}/redeem-reset-credit`,
+    { method: 'POST', body: JSON.stringify({ force: opts.force === true }) },
+  )
 export const renameCodexInstance = (id: string, name: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/rename`, {
     method: 'POST',

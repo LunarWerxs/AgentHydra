@@ -1,6 +1,7 @@
 """unblock_prompts: find_stuck()'s new verify/instanceDir/eligible fields, and press()
 passing -Instance/-VerifyText through to the actuator."""
 
+import contextlib
 import json
 import os
 import sys
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import unblock_prompts  # noqa: E402
+from lib import approvallib  # noqa: E402
 from lib import armlib  # noqa: E402
 from lib import hydralib  # noqa: E402
 from lib import ledgerlib  # noqa: E402
@@ -37,6 +39,14 @@ def _assistant_tool(name):
 
 def _write_jsonl(path: Path, events: list) -> None:
     path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+
+
+@contextlib.contextmanager
+def _no_placement_lock(instance, wait_secs=30.0):
+    """A stand-in for windowlib.instance_lock that skips its window-placement courtesy
+    (capture/restore, its own calls to clilib.run_text) - tests that assert on press()'s OWN
+    actuator call count would otherwise be counting windowlib's, not press()'s."""
+    yield True
 
 
 class FindStuckTest(unittest.TestCase):
@@ -210,6 +220,52 @@ class PressTest(unittest.TestCase):
         self.assertIn("-Instance", args)
         self.assertNotIn("-VerifyText", args)
 
+    def test_press_on_an_escalation_shaped_row_does_not_crash_without_quietmins(self):
+        # Regression (review, 2026-09-04): press() is also called with an ESCALATION row -
+        # interview.py's apply_answers 'approve' branch passes it exactly
+        # approvallib.get_escalation()'s own shape, which carries `queuedAt` but no
+        # `quietMins` at all. A bare `row["quietMins"]` used to raise KeyError inside
+        # press()'s own try/except, which swallowed it as a fabricated-looking "actuator
+        # error" - silently skipping the -Select retry for every escalation approval.
+        approvallib.queue_escalation(
+            "esc-1", title="chat one", instance="inst1", instance_dir="C:/x/inst1",
+            verify="hi", command="npm install left-pad", tool_name="Bash",
+            reason="no pattern places it")
+        row = approvallib.get_escalation("esc-1")
+        self.assertNotIn("quietMins", row)
+        # returncode 4 (pane not reachable) is what makes press() EVALUATE the quietMins
+        # expression at all (`and` short-circuits on returncode 0) - the old
+        # `row["quietMins"] * 60 >= ...` raised KeyError right here, caught by press()'s own
+        # broad except and reported back as a fabricated "actuator error: 'quietMins'".
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock), \
+             mock.patch.object(unblock_prompts.clilib, "run_text",
+                               return_value=self._run_result(returncode=4)) as run_mock:
+            got = unblock_prompts.press(row)
+        self.assertNotIn("actuator error", got["outcome"])
+        self.assertFalse(got["ok"])  # returncode 4 -> "could not reach that chat's pane"
+        run_mock.assert_called_once()  # freshly queued: not old enough to earn a -Select retry
+
+    def test_press_on_a_long_queued_escalation_row_retries_with_select(self):
+        # The other half: an escalation that HAS been sitting a while (the common case for
+        # one a person or the AI only gets to later) must still earn the -Select retry that
+        # a find_stuck() row with the same real elapsed time would - _row_quiet_secs() falls
+        # back to `queuedAt` precisely so this keeps working without a `quietMins` field.
+        approvallib.queue_escalation(
+            "esc-2", title="chat two", instance="inst1", instance_dir="C:/x/inst1",
+            verify="hi", command="npm install left-pad", tool_name="Bash",
+            reason="no pattern places it")
+        row = approvallib.get_escalation("esc-2")
+        row["queuedAt"] -= int((unblock_prompts.SELECT_AFTER_SECS + 60) * 1000)
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock), \
+             mock.patch.object(unblock_prompts.clilib, "run_text",
+                               side_effect=[self._run_result(returncode=4),
+                                            self._run_result()]) as run_mock:
+            got = unblock_prompts.press(row)
+        self.assertEqual(run_mock.call_count, 2)
+        second_args = run_mock.call_args_list[1].args[0]
+        self.assertIn("-Select", second_args)
+        self.assertTrue(got["ok"])
+
 
 class ReportWhyTest(unittest.TestCase):
     """The 'why not eligible' line (bug found on review, 2026-09-01): its app IS running and
@@ -251,7 +307,12 @@ class MainGateTest(unittest.TestCase):
     def _stuck_row(self):
         return {"sessionId": "s1", "instance": "inst1", "title": "chat one",
                 "quietMins": 5.0, "eligible": True, "held": False,
-                "mode": stamplib.BYPASS, "verify": "hi", "instanceDir": "C:/x"}
+                "mode": stamplib.BYPASS, "verify": "hi", "instanceDir": "C:/x",
+                # tri-state verdict fields (approvallib.classify) - a plain "git status" so
+                # this fixture keeps testing the ARMED WINDOW gate, not the verdict split
+                # (that has its own tests, see test_approvallib.py / test_unblock_tristate.py).
+                "verdict": "approve", "verdictReason": "read-only git inspection",
+                "toolName": "Bash", "command": "git status"}
 
     def test_yes_without_an_armed_window_refuses_and_presses_nothing(self):
         with mock.patch.object(unblock_prompts, "find_stuck", return_value=[self._stuck_row()]), \

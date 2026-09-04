@@ -1,5 +1,6 @@
 import { db } from './db'
 import { readForeignSession } from './foreign-sessions'
+import { readHermesSession } from './hermes-sessions'
 import {
   resolveInstanceByOrigin,
   retiredSessionIds,
@@ -28,6 +29,7 @@ import type {
   SessionSource,
   SessionSourceScope,
   SessionSummary,
+  TailEvent,
   TitleSource,
 } from './types'
 
@@ -280,19 +282,22 @@ function resolveTitleSource(
   return 'id'
 }
 
-// Both opencode and foreign transcripts carry their own title, cwd and timestamps on the index
-// row, because their stores record them as fields rather than leaving them to be inferred from
-// the conversation. Split out of parseMeta as a self-contained seam: this branch never touches the
-// line-by-line Claude/Codex parse below it.
-function parseForeignOrOpenCodeMeta(tf: TranscriptFile, key: string): ScannedMeta {
-  const events =
-    tf.source === 'foreign'
-      ? readForeignSession(tf.tool ?? '', tf.path)
-      : (readOpenCodeSession(tf.session_id)?.events ?? [])
-  const content =
-    tf.source === 'foreign'
-      ? { events, messageCount: events.length }
-      : (readOpenCodeSession(tf.session_id) ?? { events, messageCount: 0 })
+// OpenCode, Hermes and foreign transcripts all carry their own title, cwd and timestamps on the
+// index row, because their stores record them as fields rather than leaving them to be inferred
+// from the conversation. Split out of parseMeta as a self-contained seam: this branch never touches
+// the line-by-line Claude/Codex parse below it.
+function parseSharedStoreMeta(tf: TranscriptFile, key: string): ScannedMeta {
+  let content: { events: TailEvent[]; messageCount: number }
+  if (tf.source === 'foreign') {
+    const events = readForeignSession(tf.tool ?? '', tf.path)
+    content = { events, messageCount: events.length }
+  } else if (tf.source === 'hermes') {
+    // tf.path, not a default: a Hermes profile is its own database, and this is the field that
+    // says which one this row came from.
+    content = readHermesSession(tf.session_id, tf.path) ?? { events: [], messageCount: 0 }
+  } else {
+    content = readOpenCodeSession(tf.session_id) ?? { events: [], messageCount: 0 }
+  }
   const textEvents = (content?.events ?? []).filter((event) => event.kind === 'text')
   const first = textEvents[0]
   const last = textEvents.at(-1)
@@ -309,15 +314,15 @@ function parseForeignOrOpenCodeMeta(tf: TranscriptFile, key: string): ScannedMet
     last_role: last?.role ?? null,
     last_text_preview: last ? oneLine(last.text) : null,
     substantive_turns: textEvents.length,
-    // Neither store records a usage wall in a form this detector is willing to trust. An absence
-    // is the truth; a false badge here would be worse than a missing one.
+    // None of these stores records a usage wall in a form this detector is willing to trust. An
+    // absence is the truth; a false badge here would be worse than a missing one.
     limit_stop: null,
     title_source: titleSource,
     title_tag: null,
     // These stores keep one row per conversation, so a transcript never has a second copy and
     // its own id is a perfectly good conversation identity.
     thread_key: tf.session_id,
-    // Neither store records how a session stopped in a form worth trusting.
+    // None of these stores records how a session stopped in a form worth trusting.
     ended_because: null,
   }
   return rememberScan(tf, key, meta)
@@ -434,8 +439,8 @@ function applyMetaMessage(acc: MetaAccumulator, tf: TranscriptFile, ev: any): vo
 }
 
 async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta | null> {
-  if (tf.source === 'opencode' || tf.source === 'foreign') {
-    return parseForeignOrOpenCodeMeta(tf, key)
+  if (tf.source === 'opencode' || tf.source === 'foreign' || tf.source === 'hermes') {
+    return parseSharedStoreMeta(tf, key)
   }
 
   // read up to the last 12 MB — covers effectively every real transcript
@@ -574,12 +579,15 @@ function queueStatusMap(): Map<string, QueueStatus> {
     )
     .all()
   const rank: Record<QueueStatus, number> = {
-    running: 7,
-    queued: 6,
-    rate_limited: 5,
+    running: 8,
+    queued: 7,
+    rate_limited: 6,
     // Just under rate_limited: both mean "stopped at a wall, not finished", but a spent quota is the
     // more useful thing to surface when a session carries both.
-    overloaded: 4,
+    overloaded: 5,
+    // Ranks with failed, not completed: nobody has confirmed this run actually did anything, so it
+    // needs the same attention a real failure would.
+    unverified: 4,
     failed: 3,
     completed: 2,
     canceled: 1,
@@ -1113,7 +1121,7 @@ export async function listProjects(): Promise<ProjectSummary[]> {
         cwd,
         project: f.project,
         sessions: 0,
-        by_source: { claude: 0, codex: 0, opencode: 0, foreign: 0 },
+        by_source: { claude: 0, codex: 0, opencode: 0, hermes: 0, foreign: 0 },
         first_activity_at: f.mtime_ms,
         last_activity_at: f.mtime_ms,
       }

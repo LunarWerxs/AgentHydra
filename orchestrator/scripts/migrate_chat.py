@@ -61,6 +61,7 @@ from pathlib import Path as _Path
 from lib import clilib, holdlib
 from lib import hydralib
 from lib import ledgerlib
+from lib import mutationlib
 from lib import stamplib
 
 
@@ -535,11 +536,29 @@ def _post_import_or_raise(session_id: str, target: dict, body: dict) -> dict:
     return result
 
 
-def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: dict) -> list[dict]:
-    """Verify the landing: the dossier must now place the chat in the target instance."""
+def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: dict,
+                              src_instance: str = "") -> list[dict]:
+    """Verify the landing: the dossier must now place the chat in the target instance.
+
+    Records the read-back verdict onto the SAME ledger row `main()`'s ledgerlib.note() opened
+    (never-claim-landed doctrine): True once the dossier actually shows it, False when the
+    dossier came back but disagrees, and UNKNOWN (never False) when the read-back itself could
+    not be performed - the daemon posted the import fine, but we genuinely do not know whether
+    it landed. unknown must never be silently retried, only surfaced for a person to look at.
+
+    MUTATION LEDGER: the daemon POST already ran by the time this is called - something MAY
+    have moved even when this function cannot confirm it - so both refusal branches record an
+    unconfirmed (`after=None`, `undoable=False`) mutation rather than staying silent."""
     try:
         after = hydralib.dossier(session_id)
     except hydralib.DaemonError as err:
+        ledgerlib.verify("migrate", session_id, None, note=f"verify read-back failed: {err}")
+        mutationlib.record(
+            "migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
+            before={"instance": src_instance}, after=None, undoable=False,
+            why_not=f"the import was posted but verify failed ({err}) - the resulting "
+                    "location is unconfirmed, so no inverse can be trusted",
+        )
         raise _MigrateRefusal(
             {
                 "landed": None,
@@ -552,6 +571,16 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
         str(m.get("instance", "")).lower() == str(target.get("name", "")).lower() for m in after
     )
     if not landed:
+        ledgerlib.verify(
+            "migrate", session_id, False,
+            note=f"dossier does not show '{chat_title}' in {target.get('name')} after import",
+        )
+        mutationlib.record(
+            "migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
+            before={"instance": src_instance}, after=None, undoable=False,
+            why_not="the import was posted but the dossier does not show the chat in the "
+                    "target instance yet - unconfirmed, so no inverse can be trusted",
+        )
         raise _MigrateRefusal(
             {
                 "landed": False,
@@ -563,6 +592,7 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
             },
             1,
         )
+    ledgerlib.verify("migrate", session_id, True)
     return after
 
 
@@ -616,7 +646,8 @@ def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str,
                      "ghost sweep clears the row the moment that app renders it."), "flagged")
         ledgerlib.annotate("migrate", session_id,
                            f"landed in {target.get('name')} but the source row in "
-                           f"{src_name} is still visible (settle exit {code_s})")
+                           f"{src_name} is still visible (settle exit {code_s})",
+                           failure=True)
         return (f" ⚠ Source row in {src_name} is STILL VISIBLE after the settle "
                 f"(actuator exit {code_s}) - a twin is on screen; the twins lane "
                 "will keep settling it. Not claiming a clean move.", "visible")
@@ -714,9 +745,20 @@ def main(argv: list[str]) -> int:
 
         ledgerlib.note("migrate", session_id, note=f"'{chat_title}' -> {target.get('name')}")
         result = _post_import_or_raise(session_id, target, body)
-        after = _verify_landing_or_raise(session_id, target, chat_title, result)
+        after = _verify_landing_or_raise(session_id, target, chat_title, result,
+                                          src_instance=str(match.get("instance") or ""))
     except _MigrateRefusal as refusal:
         return out(refusal.payload, as_json, refusal.code)
+
+    # MUTATION LEDGER: before = where it lived, after = the verified landing target. Recorded
+    # unconditionally on a VERIFIED landing (we only reach here once _verify_landing_or_raise
+    # has confirmed the dossier places the chat in the target) - the source-settle outcome
+    # below does not change WHERE the chat is, only whether a stale twin lingers, so it is not
+    # part of the before/after pair an undo (migrate back) needs.
+    src_instance = str(match.get("instance") or "")
+    mutationlib.record("migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
+                       before={"instance": src_instance}, after={"instance": target.get("name")},
+                       undoable=True)
 
     # (The 'migrate' attempt is cleared below, AFTER the settle - a landing whose source row
     # is still visible is not a clean move, and its annotation must have a row to land on.)

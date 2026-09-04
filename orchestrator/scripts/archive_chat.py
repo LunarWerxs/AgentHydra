@@ -54,6 +54,7 @@ from lib import clilib, gatelib
 from lib import holdlib
 from lib import hydralib
 from lib import ledgerlib
+from lib import mutationlib
 from lib import windowlib
 
 
@@ -244,6 +245,14 @@ def _handle_already_settled(match: dict, desired: bool, verb: str, title, as_jso
                            f"{match.get('instance')}'s sidebar - screen and disk agree."},
                 as_json, 0)
         if code == 0:
+            # A REAL mutation happened here too (the row was visibly ON screen and the app
+            # just took it off), even though the disk flag never moved - so it gets a row
+            # like any other landed archive, not just the disk-flag branch below.
+            mutationlib.record(
+                verb, match.get("cliSessionId") or "", instance=str(match.get("instance") or ""),
+                title=str(title), before={"archived": bool(match.get("archived")), "visible": True},
+                after={"archived": desired, "visible": False}, undoable=True,
+            )
             return out(
                 {"changed": True, "durable": True,
                  "report": f"settled via the app's own control: '{title}' was still on "
@@ -510,12 +519,29 @@ def _archive_via_disk_flag(session_id: str, desired: bool, verb: str, as_json: b
     return result, None
 
 
-def _verify_archive(session_id: str, desired: bool, verb: str, title, result, as_json: bool) -> int:
+def _verify_archive(session_id: str, desired: bool, verb: str, title, result, as_json: bool,
+                     *, before: dict | None = None, instance: str = "") -> int:
     """Verify: never claim an act landed without checking, then clear the ledger on success -
-    the brake is for futility, not for a real change."""
+    the brake is for futility, not for a real change.
+
+    MUTATION LEDGER: `before` is the pre-act state the caller captured immediately before
+    driving the actuator; it is written down here alongside whatever the re-read after-state
+    turns out to be, so an undo has a real before/after pair to act on. A verify that cannot
+    confirm the outcome still gets a row - `after=None` - because SOMETHING may have changed
+    on screen even though this process cannot say what; recording nothing there would be the
+    exact "false quiet" this repo's rules exist to forbid."""
     try:
         after = hydralib.resolve_one(session_id)
     except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
+        # UNKNOWN, not failed: the act itself may well have landed, we just could not re-read
+        # it to check. Never let this look like a confirmed disagreement (verified=False) -
+        # that distinction is the whole point of the doctrine this ports.
+        ledgerlib.verify("archive", session_id, None, note=f"verify read-back failed: {err}")
+        mutationlib.record(
+            verb, session_id, instance=instance, title=str(title), before=before, after=None,
+            undoable=False, why_not=f"the act was attempted but verify failed ({err}) - the "
+                                     "resulting state is unconfirmed, so no inverse can be trusted",
+        )
         return out(
             {
                 "changed": True,
@@ -526,6 +552,16 @@ def _verify_archive(session_id: str, desired: bool, verb: str, title, result, as
             1,
         )
     if bool(after.get("archived")) != desired:
+        ledgerlib.verify(
+            "archive", session_id, False,
+            note=f"dossier still says archived={after.get('archived')}",
+        )
+        mutationlib.record(
+            verb, session_id, instance=instance, title=str(title), before=before, after=None,
+            undoable=False, why_not=f"the act was attempted but the dossier still says "
+                                     f"archived={after.get('archived')} - not landed, so there "
+                                     "is no confirmed after-state to build an inverse from",
+        )
         return out(
             {
                 "changed": False,
@@ -539,6 +575,9 @@ def _verify_archive(session_id: str, desired: bool, verb: str, title, result, as
             1,
         )
 
+    ledgerlib.verify("archive", session_id, True)
+    mutationlib.record(verb, session_id, instance=instance, title=str(title), before=before,
+                       after={"archived": bool(after.get("archived"))}, undoable=True)
     ledgerlib.clear("archive", session_id)  # success clears - the brake is for futility
     ledgerlib.clear("preserve", session_id)  # the preservation cycle is complete with it
     return out(
@@ -567,6 +606,12 @@ def _act_and_verify(session_id: str, match: dict, unarchive: bool, desired: bool
                        "recorded; retry."},
             as_json, 1)
 
+    # The before-image, captured now - immediately before the actuator/disk-flag call, the
+    # freshest read this process has (rule 5's re-check already confirmed nothing moved since).
+    instance = str(match.get("instance") or "")
+    before = {"archived": bool(match.get("archived")), "instance": instance,
+              "live": bool(match.get("live"))}
+
     if app_running:
         result, stop = _archive_via_running_app(session_id, match.get("instance"), title, unarchive, verb, as_json)
     else:
@@ -574,7 +619,8 @@ def _act_and_verify(session_id: str, match: dict, unarchive: bool, desired: bool
     if stop is not None:
         return stop
 
-    return _verify_archive(session_id, desired, verb, title, result, as_json)
+    return _verify_archive(session_id, desired, verb, title, result, as_json,
+                           before=before, instance=instance)
 
 
 def _run_locked_archive(session_id: str, match: dict, unarchive: bool, desired: bool, verb: str, title,

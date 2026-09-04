@@ -15,6 +15,12 @@ import {
   listForeignSessionsAsync,
   readForeignSession,
 } from './foreign-sessions'
+import {
+  type HermesStore,
+  listHermesSessions,
+  listHermesStores,
+  readHermesSession,
+} from './hermes-sessions'
 import { listOpenCodeSessions, readOpenCodeSession } from './opencode-sessions'
 import {
   type ContinuationLink,
@@ -676,6 +682,26 @@ function openCodeRecords(dbPath: string = OPENCODE_DB_PATH, tool = 'opencode'): 
   }))
 }
 
+/** One Hermes store's sessions, as index rows. `store.profile` is carried through as `project` and
+ *  as the `tool` catalog id stays `hermes` regardless of profile — a profile is a second database,
+ *  not a second product. */
+function hermesRecords(store: HermesStore, tool = 'hermes'): TranscriptFile[] {
+  return listHermesSessions(store.dbPath, store.profile).map((session) => ({
+    session_id: session.session_id,
+    source: 'hermes' as const,
+    path: store.dbPath,
+    project: session.project,
+    mtime_ms: session.last_activity_at,
+    size_bytes: session.size_bytes,
+    archived: session.archived,
+    title: session.title,
+    cwd: session.cwd,
+    created_at: session.created_at,
+    parentId: session.parent_id,
+    tool,
+  }))
+}
+
 /**
  * The stores from the catalog that are NOT one of the three built-ins.
  *
@@ -743,6 +769,7 @@ function foreignRecords(): TranscriptFile[] {
 function extraStoreRecords(): {
   codex: Array<{ root: string; tool: string; archived: boolean }>
   openCodeFiles: TranscriptFile[]
+  hermesFiles: TranscriptFile[]
 } {
   const codex = extraRootsWithFormat('codex').map((r) => ({
     root: r.root,
@@ -759,7 +786,20 @@ function extraStoreRecords(): {
       // safety story for a speculative entry.
     }
   }
-  return { codex, openCodeFiles }
+  // Hermes' own profiles (a second, third… database under the SAME catalog root) are not
+  // themselves catalog rows, so they are not something extraRootsWithFormat can hand back — they
+  // are found by listHermesStores, one root at a time.
+  const hermesFiles: TranscriptFile[] = []
+  for (const r of extraRootsWithFormat('hermes')) {
+    if (!r.tool.dbName) continue
+    try {
+      for (const store of listHermesStores(r.root, r.tool.dbName))
+        hermesFiles.push(...hermesRecords(store, r.tool.id))
+    } catch {
+      // A store whose schema is not actually Hermes' contributes nothing, same safety story as above.
+    }
+  }
+  return { codex, openCodeFiles, hermesFiles }
 }
 
 /** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
@@ -906,6 +946,7 @@ function buildTranscriptIndex(): TranscriptFile[] {
 
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
+  files.push(...extra.hermesFiles)
   files.push(...foreignRecords())
   return finishIndex(files, claudeChildren)
 }
@@ -1009,6 +1050,7 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
 
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
+  files.push(...extra.hermesFiles)
   // The async listing, which yields while it parses. Everything above this line already yields;
   // this was the last synchronous block in the sweep, and the largest.
   files.push(...(await foreignRecordsAsync()))
@@ -1486,6 +1528,30 @@ export async function tailTranscript(
     const events = readForeignSession(tf.tool ?? '', tf.path)
       .filter(keep)
       .slice(-limit)
+    return {
+      session_id: sessionId,
+      source: tf.source,
+      title: opts.title ?? tf.title ?? sessionId,
+      cwd: opts.cwd ?? tf.cwd ?? '',
+      events,
+    }
+  }
+  if (tf.source === 'hermes') {
+    // Unlike readOpenCodeSession above, tf.path is passed through: a Hermes profile is a SEPARATE
+    // database from the default store, so reading without it would silently answer from the wrong
+    // one whenever more than one store exists.
+    const content = readHermesSession(sessionId, tf.path)
+    if (!content) {
+      return {
+        session_id: sessionId,
+        source: tf.source,
+        title: opts.title ?? tf.title ?? sessionId,
+        cwd: opts.cwd ?? tf.cwd ?? '',
+        events: [],
+        error: 'transcript not found',
+      }
+    }
+    const events = content.events.filter(keep).slice(-limit)
     return {
       session_id: sessionId,
       source: tf.source,
