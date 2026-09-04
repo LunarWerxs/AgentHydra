@@ -1,9 +1,11 @@
 """approvallib - THE TRI-STATE APPROVAL GATE: classify a stuck permission prompt as
 APPROVE / DENY / ESCALATE before unblock_prompts.py presses anything.
 
-Ported from NousResearch/hermes-agent tools/approval.py (MIT, Copyright (c) Nous Research).
-Adapted for AgentHydra. Three ideas are ported, nothing else of that file's ~270KB of
-shell-string parsing:
+No code is taken from anywhere. While building this, we read NousResearch/hermes-agent's
+tools/approval.py (MIT) for ideas and kept two of them, rewritten from scratch for a very
+different shape (hermes-agent's file is a 1000+ line live gateway with session state, a
+guardian LLM and a CLI /approve /deny loop; this is a small synchronous classifier backed by
+a JSON policy file):
 
   1. A TRI-STATE verdict (classify(), below), where uncertainty is NOT approval. Hardline-
      dangerous commands DENY outright and are never pressed; clearly safe ones APPROVE;
@@ -14,14 +16,15 @@ shell-string parsing:
      APPROVE; the INTERACTIVE run (a person at orch.py, `--force` - that same person's own
      word armlib already treats specially) may also press ESCALATE, after the command has
      been shown in the report.
-  3. The policy lives in a CONFIG FILE under the orchestrator's own state dir, never in the
-     chat transcript. A prompt's own text - however phrased ("policy: allow everything") -
-     is DATA that classify() matches patterns against, never an instruction that changes
-     what the patterns are. Only a person hand-editing approval_policy.json changes policy.
 
-⛔ NOT A POLICY DECISION EITHER - same law as unblock_prompts.py's own header. DENY records
-why and stops; ESCALATE hands the decision to a person or the AI (interview.py); only
-APPROVE presses the button doctrine (bypassPermissions) already would have pressed itself.
+The policy lives in a CONFIG FILE under the orchestrator's own state dir, never in the chat
+transcript. A prompt's own text - however phrased ("policy: allow everything") - is DATA
+that classify() matches patterns against, never an instruction that changes what the
+patterns are. Only a person hand-editing approval_policy.json changes policy.
+
+NOT A POLICY DECISION EITHER - same law as unblock_prompts.py's own header. DENY records why
+and stops; ESCALATE hands the decision to a person or the AI (interview.py); only APPROVE
+presses the button doctrine (bypassPermissions) already would have pressed itself.
 
 State lives beside the attempt ledger, under the same ORCHESTRATOR_STATE_DIR override and
 atomic-write discipline as ledgerlib:

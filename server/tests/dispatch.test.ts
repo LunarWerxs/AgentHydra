@@ -139,7 +139,7 @@ test('reattachRuns: a run that finished while the daemon was down is recovered f
 })
 
 // --- never claim a run landed without checking (ports the shape of hermes-agent's
-// _confirm_adapter_delivery + delivery_queue.py's never-retry-on-UNKNOWN doctrine) -------------
+// the never-claim-landed rule + delivery_queue.py's never-retry-on-UNKNOWN doctrine) ------------
 
 test('finalize: exit 0 with no transcript evidence is unverified, not completed - and it says why', async () => {
   // Same recovered-log shape as the test above, but standing in (via the seam - the REAL check

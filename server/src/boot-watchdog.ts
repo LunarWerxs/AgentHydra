@@ -13,16 +13,16 @@
 // name for the fire-time diagnostic. A boot that is silently wedged never calls it again, so the
 // original deadline (from the LAST renewal) still expires.
 //
-// Ported in shape (arm / renew / disarm) from NousResearch/hermes-agent's
-// hermes_startup_watchdog.py (MIT, Copyright (c) Nous Research) - see that file's module docstring
-// for the fuller design this trims from: no CPU-progress fallback, no faulthandler thread-stack
-// dump, no lifecycle ledger. AgentHydra's boot is a short, single-process sequence of phases that
-// each run once, not a long-lived gateway process guarding against adversarial deadlocks, so a
-// bare deadline-with-renewal is the whole mechanism worth porting. Adapted for AgentHydra.
+// Arm/renew/disarm against a deadline is a generic watchdog discipline, not something unique to any
+// one project. NousResearch/hermes-agent's hermes_startup_watchdog.py (MIT) reaches a similar shape
+// independently for its own gateway process, but with a lot this file has no need for: a dedicated
+// OS thread, a faulthandler all-thread stack dump, a CPU-progress fallback, a lifecycle ledger. No
+// code from that file is reproduced here - this is our own implementation, sized for AgentHydra's
+// short, single-process boot sequence, credited only because reading it is what prompted writing
+// this one.
 //
 // Config is env-only (AGENTHYDRA_BOOT_DEADLINE_MS) so a hang while reading some OTHER config source
 // can never be the reason the watchdog itself never arms.
-
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { CONFIG_DIR } from './config'

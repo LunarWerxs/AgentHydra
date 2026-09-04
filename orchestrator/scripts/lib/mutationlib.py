@@ -1,10 +1,8 @@
 """mutationlib - THE MUTATION LEDGER: a before/after record and an undo path for every act
 the orchestrator performs on a Desktop chat's own files.
 
-Idea from hermes-agent's tools/checkpoint_manager.py (MIT, Copyright (c) Nous Research) and
-its delivery ledger's before/after discipline - NOT a port of the shadow-git mechanics in
-checkpoint_manager.py, which snapshot repo files this program does not own. What is ported is
-the shape: every mutating act writes down what the target looked like immediately BEFORE it
+Not related to any external project's checkpoint tooling - this is a flat, append-only JSON
+log where every mutating act writes down what the target looked like immediately BEFORE it
 acted and what it looked like immediately AFTER (or "unknown" when the after-state could not
 be confirmed), so a wrong act - the README documents 6 of 29 chats archived wrongly in one day
 under v2 - can be undone from here instead of by hand, on a screen, from memory.

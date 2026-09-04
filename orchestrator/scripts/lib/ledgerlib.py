@@ -334,9 +334,10 @@ def verify(
     annotate() and for the same reason (a second row per outcome would trip the breaker at half
     its intended count).
 
-    Ported doctrine, orchestrator rule 4 / the shape of hermes-agent's _confirm_adapter_delivery +
-    delivery_queue.py: "never claim an act landed without checking." Three verdicts, and they
-    are NOT interchangeable:
+    This repo's own rule 4 (README.md): "never claim an act landed without checking."
+    NousResearch/hermes-agent's cron/delivery_queue.py (MIT) documents the same discipline for a
+    different problem, and reading it is what prompted writing this; no code is shared. Three
+    verdicts, and they are NOT interchangeable:
       - True  - the target's state was re-read AFTER acting and it shows the change.
       - False - the target's state was re-read and it does NOT show the change. Counts as a
                 failed attempt like any other (it already has a row from note()); it does not

@@ -672,12 +672,13 @@ const EVIDENCE_TAIL_BYTES = 2 * 1024 * 1024
 /**
  * Positive evidence that a 'completed' run actually produced a turn, not just an exit(0).
  *
- * Ports the shape of NousResearch/hermes-agent's `_confirm_adapter_delivery` (MIT, Copyright (c)
- * Nous Research; upstream source not carried in this repo, ported from the documented shape).
- * Adapted for AgentHydra: hermes required explicit positive evidence before a delivery was ever
- * logged "delivered", after two production incidents where "delivered" was logged and
- * nothing was sent. The exit code here is the same shape of self-report: `claude` prints its own
- * exit marker, and a crash right after that (disk full, the process killed mid-flush, a transcript
+ * Prior art, not a port: NousResearch/hermes-agent's cron/delivery_queue.py (MIT) documents the
+ * same discipline for its delivery queue - a row is fenced 'unknown' rather than retried whenever
+ * the outcome can't be confirmed, because losing a delivery is safer than duplicating a possibly-
+ * completed send. No upstream code or function is reused here (there is no `_confirm_adapter_
+ * delivery` in that repo; an earlier header cited one and was wrong - fixed). What's adapted is
+ * the idea: the exit code here is the same shape of self-report - `claude` prints its own exit
+ * marker, and a crash right after that (disk full, the process killed mid-flush, a transcript
  * write racing the runner's teardown) can produce a 0 with nothing durable to show for it. So
  * completion requires an INDEPENDENT read-back, not the process's own word: the session must
  * resolve to a real transcript file, and that file must hold an assistant turn timestamped at or
@@ -758,10 +759,11 @@ async function finalize(
     }
     // exitCode -1 is our OWN synthetic marker for "the process disappeared without ever
     // reporting an outcome" (pid vanished mid-run, or the runner never launched at all) - never
-    // a real code `claude` returned. Doctrine ported from hermes-agent's delivery_queue.py: "a
-    // row that was provably never attempted may be re-queued; one whose outcome is UNKNOWN must
-    // never be silently retried" (losing a delivery is safer than duplicating a possibly-completed
-    // send). shouldRetryTransient already refuses to retry this case (it only fires on a
+    // a real code `claude` returned. Same discipline NousResearch/hermes-agent's delivery_queue.py
+    // (MIT) documents for its own queue, arrived at by reading it rather than by copying any of it:
+    // a row provably never attempted may be re-queued; one whose outcome is UNKNOWN must never be
+    // silently retried, because losing a delivery is safer than duplicating a possibly-completed
+    // send. shouldRetryTransient already refuses to retry this case (it only fires on a
     // *confirmed* transient overload), so nothing above will re-queue it - but a refusal that
     // happens silently is indistinguishable from one that never got considered. Say so.
     if (exitCode === -1 && rt?.limitKind == null) {

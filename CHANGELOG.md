@@ -38,8 +38,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   surfaces it; the dashboard's `/data/incidents` route and `/data/suppressed`'s
   `incidentsOpen` count expose it there too.
 - **Orchestrator: the unblock lane now classifies a stuck permission prompt before pressing
-  it, tri-state (APPROVE / DENY / ESCALATE)** - idea ported from `hermes-agent`'s
-  `approval.py` (MIT). Previously `unblock_prompts.py` pressed Allow on any chat whose
+  it, tri-state (APPROVE / DENY / ESCALATE)** - our own classifier; the tri-state idea came from
+  reading NousResearch/hermes-agent's `approval.py` (MIT), none of its code. Previously `unblock_prompts.py` pressed Allow on any chat whose
   configured mode was `bypassPermissions`, whatever the pending command actually was.
   It now also classifies the command against `orchestrator/scripts/lib/approvallib.py`'s
   policy (`state/approval_policy.json`, created with a WHY-comment on first run, hand-edited
@@ -52,9 +52,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   scheduled UNATTENDED run presses only APPROVE; an INTERACTIVE run (`--force`, a person at
   `orch.py`) may also press an ESCALATE row, after the command has been shown.
 - **A mutation ledger with undo, for every act the orchestrator performs on a Desktop chat**
-  (idea from hermes-agent's `tools/checkpoint_manager.py`, MIT, Copyright (c) Nous Research -
-  the before/after discipline, not its shadow-git mechanics, which snapshot repo files this
-  program does not own). Until now `archive_chat.py`, `rename_chat.py`, `migrate_chat.py`,
+  (a plain before/after ledger; unrelated to any external checkpoint tooling). Until now `archive_chat.py`, `rename_chat.py`, `migrate_chat.py`,
   `hold_chat.py` and `compact_chat.py` left no before-image of what they touched, so a wrong
   archive or rename (the orchestrator's README documents 6 of 29 chats archived wrongly in one
   day under v2) could not be undone from here - only by hand, on a screen, from memory. Each of
@@ -104,11 +102,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   MCP tools `list_incidents` / `ack_incident` / `resolve_incident`, and a collapsed "Incidents"
   panel above the run queue with an open-count badge and ack/resolve buttons
   (`web/src/components/IncidentsPanel.vue`).
-- **"Never claim an act landed without checking" - now enforced, not just documented.** Ported
-  from hermes-agent's `_confirm_adapter_delivery` (positive evidence required, `delivered=false`
-  is a rejection even when `success` is truthy) and `delivery_queue.py`'s never-retry-on-UNKNOWN
-  doctrine (a provably-never-attempted row may be re-queued; one whose outcome is unknown never
-  is). Two halves:
+- **"Never claim an act landed without checking" - now enforced, not just documented.** This
+  repo's own orchestrator rule 4, finally applied to the run queue as well. The never-retry-on-
+  UNKNOWN half (a provably-never-attempted row may be re-queued; one whose outcome is unknown
+  never is) is a discipline NousResearch/hermes-agent's `cron/delivery_queue.py` documents for its
+  own queue; reading it prompted this, no code is shared. Two halves:
   - **The run queue.** A finished run's exit 0 no longer means `completed` by itself: the
     daemon now re-reads the run's own transcript and requires an assistant turn timestamped
     after the run started. Missing that, the run reads `unverified` - a new, distinct queue
