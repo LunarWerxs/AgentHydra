@@ -153,6 +153,14 @@ sweep's move and land lanes pass) stops that engine deliberately through `lib/en
 confirms through the daemon that it is gone, and only then moves the chat. Without that, no
 desktop chat could ever move (live smoke, 2026-09-01: every one had a "live writer" forever).
 
+A chat parked at a USAGE WALL needs no quiet window at all (2026-09-04): the wall is the
+transcript's last record and the engine cannot write until the account resets, so `enginelib`
+reads the daemon's `limit_stop.pending` (set only from the CLI's own error record) and calls it
+idle at once. Before that, moving the one chat you most want off an exhausted account waited
+180s for the gate to read the tail plus 300s for the window - five minutes for a state that was
+already certain. Every migrate report now ends with per-phase seconds, so a slow move names
+its slow phase instead of just being slow.
+
 `--idle-wait N` (added 2026-09-03, opt-in, capped at 360s) covers the ONE refusal that time
 actually cures: the turn is finished but the five minutes are not up yet. The refusal already
 computed the exact deficit ("quiet 253s, needs 300s") and used to throw it away, so a caller

@@ -19,6 +19,18 @@ from lib import hydralib  # noqa: E402
 
 MATCH = {"cliSessionId": "sid-1", "title": "T", "instance": "a", "live": {"pid": 4242}}
 
+# idle_report asks the daemon for the session row (the usage-wall read) before the gate; a
+# unit test has no daemon, so the row is None (no wall) unless a test says otherwise.
+_NO_ROW = mock.patch.object(hydralib, "session_row", return_value=None)
+
+
+def setUpModule():
+    _NO_ROW.start()
+
+
+def tearDownModule():
+    _NO_ROW.stop()
+
 
 def _verdict(state="running", idle=None, stalled=None, cause="alive"):
     return {"state": state, "idle": idle, "stalled": stalled, "cause": cause, "live": {"pid": 4242}}
@@ -103,6 +115,50 @@ class StopIdleEngineTest(unittest.TestCase):
             got = enginelib.stop_idle_engine(MATCH)
         self.assertFalse(got["stopped"])
         self.assertIn("still lists the chat as live", got["why"])
+
+
+class UsageWallTest(unittest.TestCase):
+    """A chat parked at a usage wall is idle NOW - no quiet window, no gate read. The wall is
+    the transcript's last record and the engine cannot write until the account resets, so
+    the 300s minimum (and the gate's own 180s before it even reads the tail) bought five
+    minutes of nothing for the one chat you most want to move (live, 2026-09-04)."""
+
+    WALLED = {"session_id": "sid-1", "limit_stop": {
+        "notice": "You've hit your session limit · resets 8pm", "pending": True, "at": 1}}
+
+    def test_a_pending_wall_is_idle_without_a_quiet_window(self):
+        with mock.patch.object(hydralib, "session_row", return_value=self.WALLED), \
+             mock.patch.object(gatelib, "gate_match") as gate:
+            rep = enginelib.idle_report(MATCH)
+        self.assertTrue(rep["idle"])
+        self.assertEqual(rep["reason"], enginelib.R_IDLE)
+        self.assertTrue(rep["usage_wall"])
+        self.assertIn("usage wall", rep["why"])
+        gate.assert_not_called()
+
+    def test_a_wall_that_was_resumed_past_is_not_a_wall(self):
+        row = {**self.WALLED, "limit_stop": {**self.WALLED["limit_stop"], "pending": False}}
+        with mock.patch.object(hydralib, "session_row", return_value=row), \
+             mock.patch.object(gatelib, "gate_match", return_value=_verdict(idle={"quiet_secs": 120})):
+            rep = enginelib.idle_report(MATCH)
+        self.assertFalse(rep["idle"])
+        self.assertEqual(rep["reason"], enginelib.R_TOO_SOON)
+
+    def test_a_failed_row_read_is_not_a_wall(self):
+        with mock.patch.object(hydralib, "session_row", side_effect=hydralib.DaemonError("/x", None, "down")), \
+             mock.patch.object(gatelib, "gate_match", return_value=_verdict(idle={"quiet_secs": 900})):
+            rep = enginelib.idle_report(MATCH)
+        self.assertTrue(rep["idle"])
+        self.assertFalse(rep.get("usage_wall"))
+
+    def test_stop_idle_engine_stops_a_walled_engine(self):
+        with mock.patch.object(hydralib, "session_row", return_value=self.WALLED), \
+             mock.patch.object(enginelib.subprocess, "run") as run, \
+             mock.patch.object(hydralib, "live_for", return_value=None), \
+             mock.patch.object(enginelib.time, "sleep"):
+            got = enginelib.stop_idle_engine(MATCH)
+        self.assertTrue(got["stopped"])
+        self.assertEqual(run.call_args.args[0][:3], ["taskkill", "/PID", "4242"])
 
 
 class IdleReportReasonTest(unittest.TestCase):

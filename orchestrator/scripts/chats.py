@@ -197,6 +197,8 @@ def move(rows: list[dict], target: str, act: bool, cap: int, idle_wait: int = 0)
                 "exit": code, "ok": code == 0 and not twin, "landed": landed,
                 "sourceRow": pay.get("sourceRow"),
                 "stopReason": pay.get("stopReason"),
+                "secs": pay.get("secs"),
+                "timings": pay.get("timings"),
                 "outcome": ("landed BUT the source row is still visible - a twin" if twin else
                             "landed and verified" if landed else
                             "already there (no-op)" if code == 0 else
@@ -383,7 +385,8 @@ def _print_move_planned_lines(plan: dict, landed_ids: set[str] | None) -> None:
 def _print_move_result_lines(plan: dict) -> None:
     for r in plan["results"]:
         mark = "✓" if r.get("ok") else ("⚠" if r.get("landed") else "✗")
-        print(f"  {mark} {r['outcome']}: {str(r['title'])[:56]}")
+        secs = f"  ({r['secs']:.0f}s)" if isinstance(r.get("secs"), (int, float)) else ""
+        print(f"  {mark} {r['outcome']}: {str(r['title'])[:56]}{secs}")
         if not r.get("ok") and r["detail"]:
             for line in r["detail"].splitlines():
                 print(f"      {line}")

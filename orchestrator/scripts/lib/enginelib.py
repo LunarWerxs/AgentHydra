@@ -61,6 +61,24 @@ R_TOO_SOON = "too_soon"
 R_IDLE = "idle"
 
 
+def usage_wall_notice(match: dict) -> str | None:
+    """The limit notice the chat is parked on, or None. Reads the daemon's session row: its
+    `limit_stop` is set only from the CLI's own error record, and `pending` means nothing
+    followed it - the chat is still sitting at the wall. Any failure to read is None: an
+    unknown is never a wall."""
+    sid = match.get("cliSessionId") or match.get("sessionId") or ""
+    if not sid:
+        return None
+    try:
+        row = hydralib.session_row(sid) or {}
+    except hydralib.DaemonError:
+        return None
+    stop = row.get("limit_stop") or {}
+    if isinstance(stop, dict) and stop.get("pending"):
+        return str(stop.get("notice") or "usage limit")
+    return None
+
+
 def idle_report(match: dict, min_quiet_secs: int = IDLE_STOP_SECS) -> dict:
     """{idle, reason, why, quiet_secs, needs_secs}: may this engine be stopped right now?
 
@@ -76,6 +94,20 @@ def idle_report(match: dict, min_quiet_secs: int = IDLE_STOP_SECS) -> dict:
     live = match.get("live")
     if not live:
         return no(R_NO_ENGINE, "no engine is alive - nothing to stop")
+    # A USAGE WALL NEEDS NO QUIET WINDOW (live, 2026-09-04): a chat that has hit its account's
+    # limit is the one chat you most want to move, and the wall arrives as the transcript's
+    # LAST record, so the engine is parked - it is not writing and cannot write until the
+    # account resets. The quiet minimum exists to tell "waiting" from "background work";
+    # that distinction does not exist behind a wall. Before this, moving such a chat meant
+    # waiting out 180s for the gate to even read the tail and 300s more for this window - five
+    # minutes of nothing for a chat whose state was already certain. The daemon's own
+    # `limit_stop.pending` is the evidence (it trusts only the CLI's own error record, never
+    # prose), so the read is one per-id GET; a failed read falls through to the gate.
+    wall = usage_wall_notice(match)
+    if wall:
+        return {"idle": True, "reason": R_IDLE, "usage_wall": True,
+                "why": f"idle: parked at a usage wall ({wall[:90]}) - it cannot write until the account resets",
+                "quiet_secs": None, "needs_secs": 0}
     try:
         verdict = gatelib.gate_match(match, hydralib.session_row)
     except hydralib.DaemonError as err:

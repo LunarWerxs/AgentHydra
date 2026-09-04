@@ -19,6 +19,10 @@ Usage: python migrate_chat.py <title fragment | session id> --to <instance num|n
                 never stops an engine on its own, so without this no desktop chat could ever
                 move (owner: "only chats that are stopped, waiting, chilling"). A working or
                 stuck engine still refuses. The sweep's move and land lanes pass it.
+                A chat parked at a USAGE WALL (the daemon's limit_stop.pending, read from the
+                CLI's own error record) is idle AT ONCE - no quiet window: its engine cannot
+                write until the account resets, and it is the chat you most want moved.
+                Every report ends with per-phase seconds ([12.3s: resolve 1.1 · import ...]).
   --idle-wait N wait up to N seconds (capped at 360) for a chat that is idle but has NOT YET
                 been quiet long enough, then move it. OPT-IN, and only ever satisfies that
                 ONE refusal: a working engine, a stuck engine and a live writer all still
@@ -74,6 +78,42 @@ ELIDED = ("…", "...")
 IDLE_WAIT_CAP = 360
 # How often to re-ask while waiting, when the deficit is not itself the answer.
 IDLE_WAIT_POLL_SECS = 15
+# How long to give the source app to write its archive flag after its own control settled
+# the row. Polled, not slept: the usual case lands in well under a second.
+SETTLE_CONFIRM_SECS = 3.0
+
+
+def _wait_until(pred, timeout_secs: float, step_secs: float = 0.25) -> bool:
+    """Poll `pred` until it is true or `timeout_secs` elapse. True if it came true."""
+    deadline = time.time() + timeout_secs
+    while True:
+        if pred():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(step_secs)
+
+
+class _Stopwatch:
+    """Per-phase seconds for the report, so 'that took a minute' becomes 'settle took 41s'.
+    Built after a 46s move whose time could not be attributed to anything (2026-09-04)."""
+
+    def __init__(self) -> None:
+        self.t0 = time.time()
+        self.mark = self.t0
+        self.phases: dict[str, float] = {}
+
+    def lap(self, name: str) -> None:
+        now = time.time()
+        self.phases[name] = round(self.phases.get(name, 0.0) + (now - self.mark), 2)
+        self.mark = now
+
+    def total(self) -> float:
+        return round(time.time() - self.t0, 2)
+
+    def text(self) -> str:
+        parts = " · ".join(f"{k} {v:.1f}" for k, v in self.phases.items() if v >= 0.05)
+        return f" [{self.total():.1f}s: {parts}]" if parts else f" [{self.total():.1f}s]"
 
 
 def _untruncated_title(session_id: str, shown: str | None) -> str | None:
@@ -158,15 +198,20 @@ def _settle_source(instance: str, title: str) -> tuple[int, str]:
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 
-def _source_still_visible(session_id: str, src_instance: str) -> bool:
+def _source_still_visible(session_id: str, src_instance: str, fleet_data: dict | None = None) -> bool:
     """Does the SOURCE instance's store still carry an un-archived record of this chat? The
-    confirm step after a settle: the app's own control said one thing, the disk is the check."""
+    confirm step after a settle: the app's own control said one thing, the disk is the check.
+
+    `fleet_data` is the fleet the caller already holds; only its instance DIRS are read here,
+    which do not change mid-move, so re-fetching it per check (measured 2026-09-04: 0.7s warm,
+    4.6s cold, and this ran three times per move) bought nothing."""
     from lib import stamplib
 
-    try:
-        fleet_data = hydralib.fleet()
-    except hydralib.DaemonError:
-        return False  # unknown is not "visible"; the twins lane re-reads on its own clock
+    if fleet_data is None:
+        try:
+            fleet_data = hydralib.fleet()
+        except hydralib.DaemonError:
+            return False  # unknown is not "visible"; the twins lane re-reads on its own clock
     for store in stamplib.store_roots(fleet_data):
         if str(store["instance"]).lower() != str(src_instance).lower():
             continue
@@ -177,17 +222,19 @@ def _source_still_visible(session_id: str, src_instance: str) -> bool:
     return False
 
 
-def _archive_source_on_disk(session_id: str, src_instance: str) -> bool:
+def _archive_source_on_disk(session_id: str, src_instance: str, fleet_data: dict | None = None) -> bool:
     """Last-resort retirement of a superseded source row: flip isArchived on its meta record.
 
     Weaker than the app's own control (a running app can re-save it away) and deliberately
-    scoped to the SOURCE instance only, so the freshly landed copy is never touched."""
+    scoped to the SOURCE instance only, so the freshly landed copy is never touched.
+    `fleet_data`: see _source_still_visible."""
     from lib import stamplib
 
-    try:
-        fleet_data = hydralib.fleet()
-    except hydralib.DaemonError:
-        return False
+    if fleet_data is None:
+        try:
+            fleet_data = hydralib.fleet()
+        except hydralib.DaemonError:
+            return False
     done = False
     for store in stamplib.store_roots(fleet_data):
         if str(store["instance"]).lower() != str(src_instance).lower():
@@ -615,11 +662,11 @@ def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str,
     # verifies that it did, which costs one store scan and is the difference between "a move
     # is a move" and a claim.
     if not (src_inst and src_inst.get("isRunning")):
-        if not _source_still_visible(session_id, src_name):
+        if not _source_still_visible(session_id, src_name, fleet):
             return "", "none"
         return ((" Source row flagged archived on disk in the closed instance "
                  f"{src_name} (the import had not)."), "flagged") \
-            if _archive_source_on_disk(session_id, src_name) else \
+            if _archive_source_on_disk(session_id, src_name, fleet) else \
             (f" ⚠ Source row is STILL VISIBLE in {src_name} and its flag could not be "
              "written. Not claiming a clean move.", "visible")
     code_s, out_s = _settle_source(src_name, str(chat_title))
@@ -630,17 +677,23 @@ def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str,
     # archived counts - otherwise the twin is named, the attempt annotated, and the twins
     # lane keeps settling it every pass.
     if code_s in (0, 3):
-        time.sleep(2)
-        if not _source_still_visible(session_id, src_name):
-            return " Source row settled through its app's own control (verified on disk).", "settled"
+        # The app writes the flag on its own schedule, usually well under a second; poll for
+        # it rather than sleeping a flat 2s (the old shape) and then looking once. Then look
+        # once more after a beat: only a flag that STAYS archived counts (a running app can
+        # re-save it away), which is what the old single look after 2s was really testing.
+        if _wait_until(lambda: not _source_still_visible(session_id, src_name, fleet),
+                       SETTLE_CONFIRM_SECS):
+            time.sleep(0.5)
+            if not _source_still_visible(session_id, src_name, fleet):
+                return " Source row settled through its app's own control (verified on disk).", "settled"
         # ⛔ NEVER LEAVE THE SOURCE VISIBLE (owner, 2026-09-01) - and this branch used to do
         # exactly that: it warned and stopped, so a window that renders no rows (minimized,
         # collapsed, virtualized) returned exit 3 and every move off it left a twin nobody
         # cleared. Nine of them, live, 2026-09-04. The flag is weaker under a running app,
         # and weaker beats a twin: that app never rendered the row, so there is nothing on
         # screen for it to re-save from, and the ghost sweep finishes it when it does.
-        if _archive_source_on_disk(session_id, src_name) and \
-                not _source_still_visible(session_id, src_name):
+        if _archive_source_on_disk(session_id, src_name, fleet) and \
+                not _source_still_visible(session_id, src_name, fleet):
             return ((f" Source row in {src_name} did not answer its app's own control "
                      f"(exit {code_s}); its archive flag was written on disk instead - the "
                      "ghost sweep clears the row the moment that app renders it."), "flagged")
@@ -654,7 +707,7 @@ def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str,
     # The app's own control is the immediate and durable route, but it can fail - an
     # ambiguous title, a row not rendered - and every one of those failures left a twin on
     # screen until a later sweep caught it.
-    fallback = _archive_source_on_disk(session_id, src_name)
+    fallback = _archive_source_on_disk(session_id, src_name, fleet)
     return (
         (f" Source row could not be settled through the app ({code_s}); its archive "
          "flag was written on disk instead - it clears at that app's next restart."), "flagged"
@@ -729,15 +782,18 @@ def main(argv: list[str]) -> int:
     as_json, force, stop_idle = parsed.as_json, parsed.force, parsed.stop_idle
     to, title, idle_wait, query = parsed.to, parsed.title, parsed.idle_wait, parsed.query
 
+    sw = _Stopwatch()
     try:
         match, fleet = _resolve_chat_or_raise(query)
         session_id = match.get("cliSessionId") or ""
         chat_title = match.get("title")
         door_title = _untruncated_title(session_id, chat_title)
+        sw.lap("resolve")
 
         target = _resolve_target_or_raise(fleet, to, match, session_id, chat_title)
         _check_hold_or_raise(session_id, force)
         match = _settle_live_writer_or_raise(match, query, chat_title, session_id, stop_idle, idle_wait, force)
+        sw.lap("stop-idle")
         _check_breaker_or_raise(session_id, force)
 
         body = _build_import_body(target, title, door_title, force)
@@ -745,9 +801,13 @@ def main(argv: list[str]) -> int:
 
         ledgerlib.note("migrate", session_id, note=f"'{chat_title}' -> {target.get('name')}")
         result = _post_import_or_raise(session_id, target, body)
+        sw.lap("import")
         after = _verify_landing_or_raise(session_id, target, chat_title, result,
                                           src_instance=str(match.get("instance") or ""))
+        sw.lap("verify")
     except _MigrateRefusal as refusal:
+        refusal.payload["secs"] = sw.total()
+        refusal.payload["timings"] = sw.phases
         return out(refusal.payload, as_json, refusal.code)
 
     # MUTATION LEDGER: before = where it lived, after = the verified landing target. Recorded
@@ -763,10 +823,12 @@ def main(argv: list[str]) -> int:
     # (The 'migrate' attempt is cleared below, AFTER the settle - a landing whose source row
     # is still visible is not a clean move, and its annotation must have a row to land on.)
     settle_note, source_row = _settle_source_row(match, target, fleet, session_id, chat_title)
+    sw.lap("settle-source")
     if source_row != "visible":
         ledgerlib.clear("migrate", session_id)  # a clean move: the brake is for futility
 
     stamped, stamp_note, uc_ok, uc_note = _stamp_automation_doctrine(session_id, target, after)
+    sw.lap("stamp")
 
     return out(
         {
@@ -777,9 +839,11 @@ def main(argv: list[str]) -> int:
             "sourceRow": source_row,
             "sourceSettled": source_row in ("settled", "flagged", "none"),
             "daemon": result,
+            "secs": sw.total(),
+            "timings": sw.phases,
             "report": (
                 f"landed and VERIFIED: '{chat_title}' now lives in {target.get('name')}. "
-                f"{stamp_note}; {uc_note}.{settle_note}"
+                f"{stamp_note}; {uc_note}.{settle_note}{sw.text()}"
             ),
         },
         as_json,
