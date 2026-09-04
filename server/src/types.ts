@@ -74,6 +74,13 @@ export type QueueStatus =
   | 'running'
   | 'completed'
   | 'failed'
+  /** Exit 0, but no independent evidence the run actually produced anything (never-claim-landed
+   *  doctrine, ported from hermes-agent's _confirm_adapter_delivery: an exit code is the process's
+   *  own self-report, not proof — see hasCompletionEvidence in dispatch.ts). Distinct from
+   *  'completed' on purpose: a caller that filters on 'completed' must never see one of these by
+   *  accident, and a desktop delivery must never fire on one. Distinct from 'failed' too — the run
+   *  may well have worked; nobody has confirmed it either way. */
+  | 'unverified'
   /** YOUR allowance is spent (session/weekly). Only time fixes it — monitor.ts resumes off this. */
   | 'rate_limited'
   /** ANTHROPIC'S servers were saturated (529). Nothing is wrong with the run; it is retried

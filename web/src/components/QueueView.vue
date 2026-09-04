@@ -48,6 +48,7 @@ const schedulerTooltip = computed(
 // (dispatch.ts), so nothing further will happen to it on its own.
 const TERMINAL: QueueItem['status'][] = [
   'completed',
+  'unverified',
   'failed',
   'canceled',
   'rate_limited',

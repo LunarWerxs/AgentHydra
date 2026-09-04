@@ -9,6 +9,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **"Never claim an act landed without checking" - now enforced, not just documented.** Ported
+  from hermes-agent's `_confirm_adapter_delivery` (positive evidence required, `delivered=false`
+  is a rejection even when `success` is truthy) and `delivery_queue.py`'s never-retry-on-UNKNOWN
+  doctrine (a provably-never-attempted row may be re-queued; one whose outcome is unknown never
+  is). Two halves:
+  - **The run queue.** A finished run's exit 0 no longer means `completed` by itself: the
+    daemon now re-reads the run's own transcript and requires an assistant turn timestamped
+    after the run started. Missing that, the run reads `unverified` - a new, distinct queue
+    status shown everywhere `completed`/`failed`/etc. already are (`QueueItemCard`, the run
+    viewer, `list_queue`/`get_run_events`), logged at WARN with what was missing, and never
+    silently delivered to a migrated run's desktop target. A run whose failure is genuinely
+    UNKNOWN (the process/pid vanished with no exit code - not a real code `claude` reported) is
+    recorded as such and is never auto-retried without saying so.
+  - **The orchestrator's ledger.** `ledgerlib.verify(kind, session_id, verified)` attaches a
+    `true`/`false`/`None` read-back verdict to an attempt row (`unverified()` surfaces the
+    `false`/unknown ones for the judgment queue). `archive_chat.py`, `rename_chat.py` and
+    `migrate_chat.py` - which already re-read the target's state after acting - now record that
+    verdict on the ledger instead of only reporting it; `rename_chat.py` also had a real bug this
+    closed, where a failed verify READ silently collapsed to the same outcome as a verify that
+    succeeded and disagreed (`unknown` was reading as `false`).
+
 - **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
   2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have
   to use both"). `orchestrator/` is the v3 Python toolbox exactly as it stood in its own repo

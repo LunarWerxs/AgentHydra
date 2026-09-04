@@ -1,4 +1,13 @@
-import { Ban, CheckCircle2, Clock, CloudOff, Loader2, TriangleAlert, XCircle } from '@lucide/vue'
+import {
+  Ban,
+  CheckCircle2,
+  CircleQuestionMark,
+  Clock,
+  CloudOff,
+  Loader2,
+  TriangleAlert,
+  XCircle,
+} from '@lucide/vue'
 import type { Component } from 'vue'
 import type { QueueStatus } from './api'
 
@@ -56,6 +65,11 @@ const QUEUE_STATUS: Record<QueueStatus, StatusMeta> = {
   queued: { label: 'Queued', icon: Clock, variant: 'secondary' },
   running: { label: 'Running', icon: Loader2, variant: 'info', spin: true },
   completed: { label: 'Completed', icon: CheckCircle2, variant: 'success' },
+  // exit 0, but nothing independently confirmed the run actually produced a turn (see
+  // hasCompletionEvidence in dispatch.ts). Neither a success nor a known failure, so its own
+  // variant rather than borrowing 'destructive' — a run that may well be fine should not read as
+  // red.
+  unverified: { label: 'Unverified', icon: CircleQuestionMark, variant: 'warning' },
   failed: { label: 'Failed', icon: XCircle, variant: 'destructive' },
   rate_limited: { label: 'Rate limited', icon: TriangleAlert, variant: 'warning' },
   // Anthropic's servers were saturated (529) — NOT your usage limit, and not a broken run. It is

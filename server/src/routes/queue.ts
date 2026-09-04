@@ -29,6 +29,7 @@ const VALID_QUEUE_STATUSES = new Set([
   'queued',
   'running',
   'completed',
+  'unverified',
   'failed',
   'rate_limited',
   'overloaded',

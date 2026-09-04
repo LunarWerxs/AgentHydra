@@ -17,7 +17,7 @@ import { coerceQueueItem, db } from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
 import { classifyLimit, isApiErrorEvent, type LimitKind } from './rate-limit-signal'
-import { eventToTailEvents } from './transcript'
+import { eventToTailEvents, findTranscriptAsync } from './transcript'
 import type { ImportState, QueueItem, RunEvent } from './types'
 
 // A dispatched `claude` run must OUTLIVE the daemon: quitting AgentHydra (or an auto-update
@@ -618,9 +618,88 @@ function scheduleTransientRetry(id: string, attempts: number): void {
   cleanupRunFiles(id)
 }
 
+/** How much of a transcript's tail to scan for completion evidence. Mirrors the budget
+ *  sessions.ts's parseMeta uses for the same file: the turn we're looking for is always the
+ *  newest one, so a bounded tail read is enough even against a long-lived resumed session, and
+ *  cheap regardless of how big the transcript has grown. */
+const EVIDENCE_TAIL_BYTES = 2 * 1024 * 1024
+
+/**
+ * Positive evidence that a 'completed' run actually produced a turn, not just an exit(0).
+ *
+ * Ported from NousResearch/hermes-agent's `_confirm_adapter_delivery` (MIT, Copyright (c) Nous
+ * Research). Adapted for AgentHydra: hermes required explicit positive evidence before a delivery
+ * was ever logged "delivered", after two production incidents where "delivered" was logged and
+ * nothing was sent. The exit code here is the same shape of self-report — `claude` prints its own
+ * exit marker, and a crash right after that (disk full, the process killed mid-flush, a transcript
+ * write racing the runner's teardown) can produce a 0 with nothing durable to show for it. So
+ * completion requires an INDEPENDENT read-back, not the process's own word: the session must
+ * resolve to a real transcript file, and that file must hold an assistant turn timestamped at or
+ * after this run started. Anything short of that is 'unverified', never silently 'completed'.
+ */
+async function hasCompletionEvidence(
+  sessionId: string,
+  startedAt: string | null,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!sessionId) return { ok: false, reason: 'no session id was recorded for this run' }
+  const tf = await findTranscriptAsync(sessionId)
+  if (!tf) return { ok: false, reason: `no transcript file was found for session ${sessionId}` }
+  const startedMs = startedAt ? Date.parse(startedAt) : Number.NaN
+  let text: string
+  try {
+    const file = Bun.file(tf.path)
+    const start = Math.max(0, file.size - EVIDENCE_TAIL_BYTES)
+    text = start > 0 ? await file.slice(start).text() : await file.text()
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `the transcript could not be read: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
+  for (let pos = 0; pos < text.length; ) {
+    let nl = text.indexOf('\n', pos)
+    if (nl === -1) nl = text.length
+    const line = text.slice(pos, nl).trim()
+    pos = nl + 1
+    if (!line) continue
+    let ev: any
+    try {
+      ev = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const role = ev?.message?.role ?? ev?.type
+    if (role !== 'assistant') continue
+    if (!Number.isFinite(startedMs)) return { ok: true } // no started_at to compare against
+    const ts = typeof ev?.timestamp === 'string' ? Date.parse(ev.timestamp) : Number.NaN
+    if (Number.isFinite(ts) && ts >= startedMs) return { ok: true }
+  }
+  return {
+    ok: false,
+    reason: 'the transcript exists but has no assistant turn timestamped after this run started',
+  }
+}
+
+/** Test seam ONLY. Real transcript discovery lives under CLAUDE_PROJECTS_ROOT, which config.ts
+ *  resolves from the machine's real `homedir()` at import time (see server/tests/
+ *  sessions-scan-cache.test.ts's header for why an in-process test can't sandbox that) — so the
+ *  dispatch pipeline tests, which drive real finalize() calls against synthetic session ids,
+ *  need a way to say "pretend this run has (or hasn't) landed" without writing into the
+ *  developer's actual ~/.claude/projects. Defaults to the real check; only ever swapped by tests. */
+let completionEvidenceCheck: typeof hasCompletionEvidence = hasCompletionEvidence
+export function __setCompletionEvidenceCheckForTests(
+  fn: typeof hasCompletionEvidence | null,
+): void {
+  completionEvidenceCheck = fn ?? hasCompletionEvidence
+}
+
 /** Persist the terminal status + notify subscribers, exactly once per run. A cancel wins over the
  *  process's own exit code so a killed run reads as 'canceled', not 'failed'. */
-function finalize(id: string, exitCode: number, opts: { canceled?: boolean } = {}): void {
+async function finalize(
+  id: string,
+  exitCode: number,
+  opts: { canceled?: boolean } = {},
+): Promise<void> {
   if (!active.has(id)) return // already finalized (defensive)
   const rt = runtime.get(id)
 
@@ -631,9 +710,23 @@ function finalize(id: string, exitCode: number, opts: { canceled?: boolean } = {
       scheduleTransientRetry(id, attempts)
       return
     }
+    // exitCode -1 is our OWN synthetic marker for "the process disappeared without ever
+    // reporting an outcome" (pid vanished mid-run, or the runner never launched at all) — never
+    // a real code `claude` returned. Doctrine ported from hermes-agent's delivery_queue.py: "a
+    // row that was provably never attempted may be re-queued; one whose outcome is UNKNOWN must
+    // never be silently retried" (losing a delivery is safer than duplicating a possibly-completed
+    // send). shouldRetryTransient already refuses to retry this case (it only fires on a
+    // *confirmed* transient overload), so nothing above will re-queue it — but a refusal that
+    // happens silently is indistinguishable from one that never got considered. Say so.
+    if (exitCode === -1 && rt?.limitKind == null) {
+      const msg =
+        'UNKNOWN outcome: the process disappeared without reporting an exit code, so this run is recorded as failed and will not be auto-retried.'
+      console.warn(`[agenthydra] run ${id}: outcome is UNKNOWN — ${msg}`)
+      recordEvent(id, 'system', 'meta', msg, null)
+    }
   }
 
-  const status: QueueItem['status'] = opts.canceled
+  let status: QueueItem['status'] = opts.canceled
     ? 'canceled'
     : rt?.limitKind === 'quota'
       ? 'rate_limited'
@@ -645,6 +738,33 @@ function finalize(id: string, exitCode: number, opts: { canceled?: boolean } = {
         : exitCode === 0
           ? 'completed'
           : 'failed'
+
+  // exit 0 is the process's own self-report, not proof. See hasCompletionEvidence for why an
+  // independent read-back is required before this reads 'completed' anywhere in the UI.
+  let unverifiedReason: string | null = null
+  if (status === 'completed') {
+    const row = db
+      .query<{ session_id: string; started_at: string | null }, [string]>(
+        'select session_id, started_at from queue_items where id = ?',
+      )
+      .get(id)
+    const evidence = row
+      ? await completionEvidenceCheck(row.session_id, row.started_at)
+      : ({ ok: false, reason: 'queue item row is missing' } as const)
+    if (!evidence.ok) {
+      status = 'unverified'
+      unverifiedReason = evidence.reason
+      console.warn(`[agenthydra] run ${id}: exited 0 but is UNVERIFIED — ${evidence.reason}`)
+      recordEvent(
+        id,
+        'system',
+        'meta',
+        `UNVERIFIED: this run exited 0, but ${evidence.reason} — not recorded as completed until that can be confirmed. Open the session to check by hand.`,
+        null,
+      )
+    }
+  }
+
   db.query(
     'update queue_items set status = ?, finished_at = ?, exit_code = ?, pid = null where id = ?',
   ).run(status, new Date().toISOString(), exitCode, id)
@@ -672,6 +792,26 @@ function finalize(id: string, exitCode: number, opts: { canceled?: boolean } = {
       ).run(id)
       void attemptDesktopImport(id).catch((err) =>
         console.error('[agenthydra] post-run desktop import error:', err),
+      )
+    }
+  } else if (status === 'unverified') {
+    // NEVER deliver silently on unverified evidence: a desktop import is a one-shot handoff the
+    // owner is meant to trust unread, so importing a chat we could not confirm actually finished
+    // would recreate exactly the hermes incident this ports the fix for. Skip with a reason
+    // instead — visible on the row (import_state stays whatever it already was, i.e. not
+    // 'pending') and on the run's own event log via the UNVERIFIED record above.
+    const row = db
+      .query<{ import_to: string | null }, [string]>(
+        'select import_to from queue_items where id = ?',
+      )
+      .get(id)
+    if (row?.import_to?.startsWith('desktop:')) {
+      recordEvent(
+        id,
+        'system',
+        'meta',
+        `desktop delivery skipped: this run's completion is unverified (${unverifiedReason ?? 'no evidence found'}), so nothing was imported. Verify the run, then re-run it or deliver by hand.`,
+        null,
       )
     }
   }
@@ -880,13 +1020,13 @@ function learnChildPid(id: string, entry: ActiveEntry, state: TailState): void {
 /** Step 2: read any new log bytes since `state.offset` and process every complete line. Returns
  *  true once the run's terminal exit marker was seen (and finalize() already called for it),
  *  telling the poll loop to stop. */
-function readAndProcessLog(
+async function readAndProcessLog(
   id: string,
   entry: ActiveEntry,
   logPath: string,
   decoder: TextDecoder,
   state: TailState,
-): boolean {
+): Promise<boolean> {
   let size = 0
   try {
     size = statSync(logPath).size
@@ -918,7 +1058,7 @@ function readAndProcessLog(
     if (line) {
       const marker = parseMarker(line)
       if (marker?.kind === 'exit') {
-        finalize(id, marker.code, { canceled: entry.canceled })
+        await finalize(id, marker.code, { canceled: entry.canceled })
         return true
       }
       if (marker?.kind === 'stderr') {
@@ -955,7 +1095,11 @@ async function maybeKillCanceled(entry: ActiveEntry): Promise<void> {
  *  A fresh run is neither: runnerLive is true and its child pid simply hasn't appeared yet
  *  (step 5's START_GRACE covers a runner that never launches). Returns true once finalize() has
  *  been called for a lost run, telling the poll loop to stop. */
-function checkNothingLeftToWatch(id: string, entry: ActiveEntry, state: TailState): boolean {
+async function checkNothingLeftToWatch(
+  id: string,
+  entry: ActiveEntry,
+  state: TailState,
+): Promise<boolean> {
   const nothingLeftToWatch = entry.childPid !== null ? !isAlive(entry.childPid) : !entry.runnerLive
   if (!nothingLeftToWatch) {
     state.deadFor = 0
@@ -974,21 +1118,21 @@ function checkNothingLeftToWatch(id: string, entry: ActiveEntry, state: TailStat
       'run interrupted: the claude process exited without finishing this turn (killed, or AgentHydra restarted under it). Work it had already completed is on disk — open the session to see how far it got.',
       null,
     )
-  finalize(id, -1, { canceled: entry.canceled })
+  await finalize(id, -1, { canceled: entry.canceled })
   return true
 }
 
 /** Step 5: the runner never launched (no status file, no output) → fail. Returns true once
  *  finalize() has been called, telling the poll loop to stop. */
-function checkNeverLaunched(
+async function checkNeverLaunched(
   id: string,
   entry: ActiveEntry,
   state: TailState,
   startedWaiting: number,
-): boolean {
+): Promise<boolean> {
   if (state.sawStatus || Date.now() - startedWaiting <= TAIL_START_GRACE_MS) return false
   recordEvent(id, 'system', 'meta', 'run did not start (dispatch runner failed to launch)', null)
-  finalize(id, -1, { canceled: entry.canceled })
+  await finalize(id, -1, { canceled: entry.canceled })
   return true
 }
 
@@ -1012,10 +1156,10 @@ async function tailRun(id: string, entry: ActiveEntry): Promise<void> {
 
   for (;;) {
     learnChildPid(id, entry, state)
-    if (readAndProcessLog(id, entry, logPath, decoder, state)) return
+    if (await readAndProcessLog(id, entry, logPath, decoder, state)) return
     await maybeKillCanceled(entry)
-    if (checkNothingLeftToWatch(id, entry, state)) return
-    if (checkNeverLaunched(id, entry, state, startedWaiting)) return
+    if (await checkNothingLeftToWatch(id, entry, state)) return
+    if (await checkNeverLaunched(id, entry, state, startedWaiting)) return
 
     await Bun.sleep(TAIL_POLL_MS)
   }
@@ -1186,7 +1330,7 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
     launchDetachedRunner(specPathFor(item.id))
   } catch (err) {
     recordEvent(item.id, 'system', 'meta', `failed to launch runner: ${String(err)}`, null)
-    finalize(item.id, -1)
+    await finalize(item.id, -1)
     return
   }
 
@@ -1270,7 +1414,7 @@ export async function reattachRuns(): Promise<void> {
         'run lost: AgentHydra restarted and this run left no output to recover from.',
         null,
       )
-      finalize(id, -1)
+      await finalize(id, -1)
       continue
     }
     // SURFACE PURITY, re-checked on adoption. The pre-launch guard is a point-in-time answer, and
@@ -1294,7 +1438,7 @@ export async function reattachRuns(): Promise<void> {
         )
         entry.canceled = true
         if (childPid) void killTree(childPid)
-        finalize(id, -1)
+        await finalize(id, -1)
         continue
       }
     }

@@ -536,10 +536,18 @@ def _post_import_or_raise(session_id: str, target: dict, body: dict) -> dict:
 
 
 def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: dict) -> list[dict]:
-    """Verify the landing: the dossier must now place the chat in the target instance."""
+    """Verify the landing: the dossier must now place the chat in the target instance.
+
+    Records the read-back verdict onto the SAME ledger row `main()`'s ledgerlib.note() opened
+    (never-claim-landed doctrine): True once the dossier actually shows it, False when the
+    dossier came back but disagrees, and UNKNOWN (never False) when the read-back itself could
+    not be performed - the daemon posted the import fine, but we genuinely do not know whether
+    it landed. unknown must never be silently retried, only surfaced for a person to look at.
+    """
     try:
         after = hydralib.dossier(session_id)
     except hydralib.DaemonError as err:
+        ledgerlib.verify("migrate", session_id, None, note=f"verify read-back failed: {err}")
         raise _MigrateRefusal(
             {
                 "landed": None,
@@ -552,6 +560,10 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
         str(m.get("instance", "")).lower() == str(target.get("name", "")).lower() for m in after
     )
     if not landed:
+        ledgerlib.verify(
+            "migrate", session_id, False,
+            note=f"dossier does not show '{chat_title}' in {target.get('name')} after import",
+        )
         raise _MigrateRefusal(
             {
                 "landed": False,
@@ -563,6 +575,7 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
             },
             1,
         )
+    ledgerlib.verify("migrate", session_id, True)
     return after
 
 

@@ -102,6 +102,76 @@ class LedgerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ledgerlib.check("achive", "s1", now_ms=T0)  # the typo'd read must not un-count
 
+    # --- never claim an act landed without checking (orchestrator rule 4) -----------------
+
+    def test_verify_true_marks_the_latest_row_confirmed(self):
+        ledgerlib.note("archive", "s1", now_ms=T0)
+        ledgerlib.verify("archive", "s1", True, now_ms=T0 + 1)
+        rows = ledgerlib._load()
+        self.assertEqual(rows[-1]["verified"], True)
+        self.assertNotIn(("archive", "s1"), {(r["kind"], r["session"]) for r in ledgerlib.unverified(now_ms=T0 + 2)})
+
+    def test_verify_false_is_recorded_and_counts_as_a_failed_attempt(self):
+        # A read-back that DISAGREES: the row note() already opened gets the verdict, not a
+        # second row (that would trip the breaker at half its intended count).
+        ledgerlib.note("rename", "s1", now_ms=T0)
+        ledgerlib.verify("rename", "s1", False, note="dossier still shows the old title", now_ms=T0 + 1)
+        rows = ledgerlib._load()
+        self.assertEqual(len(rows), 1)  # no second row
+        self.assertEqual(rows[-1]["verified"], False)
+        self.assertEqual(rows[-1]["verify_note"], "dossier still shows the old title")
+        uq = ledgerlib.unverified(now_ms=T0 + 2)
+        self.assertEqual(len(uq), 1)
+        self.assertEqual(uq[0]["status"], "false")
+
+    def test_verify_unknown_never_reads_as_success_and_surfaces_in_the_judgment_queue(self):
+        # The read-back itself could not be performed - genuinely unknown, never a confirmed
+        # disagreement and never silently treated as success either.
+        ledgerlib.note("migrate", "s1", now_ms=T0)
+        ledgerlib.verify("migrate", "s1", None, note="verify read-back failed: daemon down", now_ms=T0 + 1)
+        rows = ledgerlib._load()
+        self.assertIsNone(rows[-1]["verified"])
+        uq = ledgerlib.unverified(now_ms=T0 + 2)
+        self.assertEqual(len(uq), 1)
+        self.assertEqual(uq[0]["kind"], "migrate")
+        self.assertEqual(uq[0]["status"], "unknown")
+        self.assertIn("daemon down", uq[0]["verify_note"])
+
+    def test_an_act_that_never_calls_verify_is_also_unknown(self):
+        # No read-back path at all (verify() never called): absence of positive evidence is
+        # not evidence of success. Must show up in the judgment queue exactly like an explicit
+        # verified=None, not silently pass as if nothing needed checking.
+        ledgerlib.note("compact", "s1", now_ms=T0)
+        uq = ledgerlib.unverified(now_ms=T0 + 2)
+        self.assertEqual(len(uq), 1)
+        self.assertEqual(uq[0]["status"], "unknown")
+
+    def test_verify_never_retries_by_itself_and_unknown_outlives_a_confirmed_neighbour(self):
+        # verify(None, ...) must never call clear() or otherwise reset the breaker - that would
+        # be silently re-arming a retry on an outcome nobody confirmed.
+        for i in range(ledgerlib.ATTEMPT_CAP):
+            ledgerlib.note("archive", "s1", now_ms=T0 + i)
+        ledgerlib.verify("archive", "s1", None, now_ms=T0 + ledgerlib.ATTEMPT_CAP)
+        v = ledgerlib.check("archive", "s1", now_ms=T0 + ledgerlib.ATTEMPT_CAP + 1)
+        self.assertTrue(v["suppressed"])  # still suppressed - verify() alone changed nothing here
+
+    def test_verify_on_a_kind_with_no_open_row_still_gets_recorded(self):
+        # A caller that verifies something note() never opened a row for (a legitimate shape:
+        # some acts may only ever call verify()) must not have the unknown verdict silently
+        # dropped - that is exactly the outcome this doctrine cares most about preserving.
+        ledgerlib.verify("archive", "s9", None, note="no prior attempt row", now_ms=T0)
+        uq = ledgerlib.unverified(now_ms=T0 + 1)
+        self.assertEqual(len(uq), 1)
+        self.assertEqual(uq[0]["session"], "s9")
+
+    def test_verify_rejects_unknown_kind(self):
+        with self.assertRaises(ValueError):
+            ledgerlib.verify("frobnicate", "s1", True, now_ms=T0)
+
+    def test_verify_rejects_non_bool_non_none(self):
+        with self.assertRaises(TypeError):
+            ledgerlib.verify("archive", "s1", "yes", now_ms=T0)  # type: ignore[arg-type]
+
     def test_try_locked_default_stale_window_is_unchanged(self):
         # A held lock younger than the default 30s window is a LIVE holder's - a concurrent
         # try_locked() must back off, not steal it.
