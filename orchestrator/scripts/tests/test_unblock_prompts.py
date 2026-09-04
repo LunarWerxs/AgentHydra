@@ -251,7 +251,12 @@ class MainGateTest(unittest.TestCase):
     def _stuck_row(self):
         return {"sessionId": "s1", "instance": "inst1", "title": "chat one",
                 "quietMins": 5.0, "eligible": True, "held": False,
-                "mode": stamplib.BYPASS, "verify": "hi", "instanceDir": "C:/x"}
+                "mode": stamplib.BYPASS, "verify": "hi", "instanceDir": "C:/x",
+                # tri-state verdict fields (approvallib.classify) - a plain "git status" so
+                # this fixture keeps testing the ARMED WINDOW gate, not the verdict split
+                # (that has its own tests, see test_approvallib.py / test_unblock_tristate.py).
+                "verdict": "approve", "verdictReason": "read-only git inspection",
+                "toolName": "Bash", "command": "git status"}
 
     def test_yes_without_an_armed_window_refuses_and_presses_nothing(self):
         with mock.patch.object(unblock_prompts, "find_stuck", return_value=[self._stuck_row()]), \

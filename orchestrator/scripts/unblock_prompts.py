@@ -24,6 +24,16 @@ THE FOUR CONDITIONS, all required:
 The actuator then adds its own aim rails (the right chat open, an enabled Allow button in the
 conversation pane, never a Deny) before a single click.
 
+⛔ EVEN A STRUCTURALLY-ELIGIBLE CHAT IS NOT PRESSED BLIND (2026-09-04, ported idea from
+hermes-agent's approval.py - see lib/approvallib.py). The four conditions above earn a
+chat a HEARING, not a press: what the pending command would actually DO is classified
+APPROVE / DENY / ESCALATE against lib/approval_policy.json first. DENY (hardline-destructive:
+rm -rf, a shared-branch hard reset, a credential path, ...) is never pressed, in either
+context - the bypass MODE was consent to never being asked, not to any specific command.
+ESCALATE (everything the policy does not place) is never pressed UNATTENDED either - it is
+queued for interview.py's judgment queue instead. Only the INTERACTIVE run (`--force`, a
+person at orch.py) may press an ESCALATE row, and only after showing the command.
+
 Usage: python unblock_prompts.py [--json]        # what is stuck, and what would be pressed
        python unblock_prompts.py --yes [--max N] # press them
 Exit:  0 nothing stuck, or everything pressed - 2 something did not clear (each named) -
@@ -37,6 +47,7 @@ import sys
 import time
 from pathlib import Path
 
+from lib import approvallib
 from lib import armlib, clilib
 from lib import deliverylib
 from lib import gatelib
@@ -54,16 +65,18 @@ DEFAULT_MAX = 6
 MIN_WAIT_SECS = 4 * 60
 
 
-def _pending(row_meta: dict, transcript: Path) -> bool:
-    """Is this chat's newest record a tool call with no result? That is the waiting shape."""
+def _pending_record(transcript: Path) -> dict | None:
+    """This chat's newest record, when it is a tool call with no result - that is the
+    waiting shape. None otherwise. Returns the record itself (not just a bool) so the
+    caller can classify what the pending call would actually DO (approvallib.classify)."""
     raw = gatelib.read_transcript_tail_text(str(transcript), 64 * 1024)
     if not raw:
-        return False
+        return None
     records = gatelib.parse_tail_records(raw[0], raw[1])
     if not records:
-        return False
+        return None
     last = records[-1]
-    return bool(last["has_tool_use"] and not last["has_tool_result"])
+    return last if (last["has_tool_use"] and not last["has_tool_result"]) else None
 
 
 def find_stuck() -> list[dict]:
@@ -88,9 +101,18 @@ def find_stuck() -> list[dict]:
                 quiet = now - f.stat().st_mtime
             except OSError:
                 continue
-            if quiet < MIN_WAIT_SECS or not _pending(meta, f):
+            if quiet < MIN_WAIT_SECS:
+                continue
+            pending = _pending_record(f)
+            if pending is None:
                 continue
             seen.add(sid)
+            # THE TRI-STATE VERDICT (ported idea, hermes-agent approval.py - see
+            # lib/approvallib.py): what the pending tool call would actually DO, not just
+            # that its permission mode says never-ask. DENY overrides bypass doctrine
+            # entirely - a chat consented to a MODE, never to a specific destructive command.
+            tool_name, cmd_text = approvallib.pending_command_text(pending)
+            verdict, verdict_reason, verdict_key = approvallib.classify(tool_name, cmd_text)
             held = holdlib.why_blocked(sid)
             # THE IDENTITY PROOF (review 2026-09-01): the actuator identified the chat by TITLE
             # alone, and same-titled chats in two instances are a known fleet shape. The chat's
@@ -119,6 +141,13 @@ def find_stuck() -> list[dict]:
                 "instanceDir": str(store["root"].parent),
                 "mode": meta.get("permissionMode"), "quietMins": round(quiet / 60, 1),
                 "held": held, "verify": verify, "spawnedByToolbox": spawned,
+                # THE TRI-STATE VERDICT fields: `eligible` below stays the STRUCTURAL check
+                # (mode/hold/app/verify) it always was - main()'s selection intersects it with
+                # `verdict` (see _select() below), so nothing here breaks a caller reading
+                # `eligible` for the old meaning. DENY/ESCALATE rows are structurally eligible
+                # but never make it into a press without the verdict's own say-so.
+                "toolName": tool_name, "command": cmd_text[:500],
+                "verdict": verdict, "verdictReason": verdict_reason, "verdictKey": verdict_key,
                 "eligible": ((stamplib.is_bypass(meta) or bypass_by_promise)
                              and store["isRunning"] and not held and bool(verify)),
                 "ineligibleWhy": ("" if verify else
@@ -177,6 +206,43 @@ def press(row: dict) -> dict:
             "detail": detail}
 
 
+def _run_context(argv: list[str]) -> str:
+    """"interactive" when a person ran this by hand - `--force` is that same person's own
+    word armlib.refuse_unless_armed already treats specially (a deed a person asks for
+    directly, bypassing the tray switch). "unattended" otherwise: the tray-armed scheduled
+    run. Reuses armlib's OWN armed/unattended split rather than inventing a second one
+    (item 2, 2026-09-04): UNATTENDED presses only the APPROVE class; INTERACTIVE may also
+    press ESCALATE, after showing the command in the report."""
+    return "interactive" if "--force" in argv else "unattended"
+
+
+def _select(stuck: list[dict], context: str) -> tuple[list[dict], list[dict], list[dict]]:
+    """The structurally-eligible rows (find_stuck's own `eligible`), split by their
+    tri-state verdict into (press_candidates, queued_for_judgment, denied). A structurally
+    INeligible row (mode/hold/app/verify) never appears in any of the three - that bucket is
+    about the CHAT's doctrine, not what the pending command would do.
+
+    DENY is never pressed in either context - a chat's bypassPermissions mode is consent to
+    never being ASKED, not consent to any specific destructive command that happens to be
+    pending. ESCALATE presses only when a person is watching (context == 'interactive');
+    unattended, it goes to the judgment queue instead of being pressed on a guess."""
+    press_candidates: list[dict] = []
+    queued: list[dict] = []
+    denied: list[dict] = []
+    for r in stuck:
+        if not r["eligible"]:
+            continue
+        if r["verdict"] == approvallib.DENY:
+            denied.append(r)
+        elif r["verdict"] == approvallib.APPROVE:
+            press_candidates.append(r)
+        elif context == "interactive":
+            press_candidates.append(r)
+        else:
+            queued.append(r)
+    return press_candidates, queued, denied
+
+
 def _resolve_max_cap(argv: list[str]) -> tuple[int, str | None]:
     """--max N from argv, or DEFAULT_MAX when the flag is absent. `error` is set (and `cap`
     unusable) when the value given is not a positive whole number - the caller prints it to
@@ -207,17 +273,30 @@ def _ineligible_reason(row: dict) -> str:
 
 
 def _print_text_report(stuck: list[dict], results: list[dict], eligible: list[dict],
-                        act: bool) -> None:
+                        act: bool, queued: list[dict] | None = None,
+                        denied: list[dict] | None = None, context: str = "unattended") -> None:
     """The human-readable (non --json) report: what is stuck, what was pressed (if anything),
-    and why every remaining stuck chat was left alone."""
+    what got DENIED or ESCALATED by the tri-state gate, and why every remaining stuck chat
+    was left alone."""
+    queued = queued or []
+    denied = denied or []
     if not stuck:
         print("no chat is waiting on a permission prompt.")
         return
-    print(f"{len(stuck)} chat(s) waiting on a permission prompt:")
+    print(f"{len(stuck)} chat(s) waiting on a permission prompt ({context} run):")
     for r in (results or eligible):
         mark = ("OK " if r.get("ok") else "XX ") if results else "-  "
+        tag = (f"  [ESCALATE, shown then pressed: {r['command'][:100]!r}]"
+               if r.get("verdict") == approvallib.ESCALATE else "")
         print(f"  {mark}[{r['instance']}] {r['title'][:52]} - waiting {r['quietMins']:.0f}m"
-              + (f" -> {r['outcome']}" if results else ""))
+              + (f" -> {r['outcome']}" if results else "") + tag)
+    for r in denied:
+        print(f"  XX [{r['instance']}] {r['title'][:52]} - waiting {r['quietMins']:.0f}m: "
+              f"DENIED - {r['verdictReason']} (command: {r['command'][:120]!r})")
+    for r in queued:
+        print(f"  >> [{r['instance']}] {r['title'][:52]} - waiting {r['quietMins']:.0f}m: "
+              f"ESCALATED to the judgment queue - {r['verdictReason']} "
+              f"(command: {r['command'][:120]!r})")
     for r in stuck:
         if r["eligible"]:
             continue
@@ -246,19 +325,31 @@ def main(argv: list[str]) -> int:
         print(cap_error, file=sys.stderr)
         return 1
 
+    context = _run_context(argv)
     try:
         stuck = find_stuck()
     except hydralib.DaemonError as err:
         print(f"unblock FAILED: {err}", file=sys.stderr)
         return 1
-    eligible = [r for r in stuck if r["eligible"]][:cap]
+    press_candidates, queued, denied = _select(stuck, context)
+    eligible = press_candidates[:cap]
     results = [press(r) for r in eligible] if act else []
+    # Queuing an ESCALATE row for the judgment queue is itself an ACT (it mutates shared
+    # state other lanes read), so it is gated on `act` exactly like a press - a plan-only or
+    # disarmed run must observe without writing (armlib's own "seeing is not doing").
+    if act:
+        for r in queued:
+            approvallib.queue_escalation(
+                r["sessionId"], title=r["title"], instance=r["instance"],
+                instance_dir=r.get("instanceDir") or r["instance"], verify=r["verify"],
+                command=r["command"], tool_name=r["toolName"], reason=r["verdictReason"])
 
     if as_json:
-        print(json.dumps({"stuck": stuck, "results": results}, indent=2))
+        print(json.dumps({"stuck": stuck, "results": results, "context": context,
+                          "queuedForJudgment": queued, "denied": denied}, indent=2))
         return 2 if [r for r in results if not r["ok"]] else 0
 
-    _print_text_report(stuck, results, eligible, act)
+    _print_text_report(stuck, results, eligible, act, queued, denied, context)
     return 2 if [r for r in results if not r["ok"]] else 0
 
 
