@@ -62,7 +62,7 @@ export interface AgentTool {
   archivedDirs?: string[]
   /** How to read it, or null when we can find it but not yet parse it. */
   format: StoreFormat | null
-  /** For `opencode`-format tools: the SQLite file inside the root. */
+  /** For a SQLite-backed tool (`opencode` or `hermes` format): the database file inside the root. */
   dbName?: string
   /**
    * Transcript glob under the root, when the tool does not use its format's usual layout.
@@ -483,7 +483,7 @@ export const AGENT_TOOLS: AgentTool[] = [
     envVar: 'HERMES_HOME',
     dirs: ['.hermes', 'AppData/Local/hermes'],
     dbName: 'state.db',
-    format: null,
+    format: 'hermes',
   },
   {
     id: 'devin',

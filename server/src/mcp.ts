@@ -437,7 +437,7 @@ export const TOOLS: McpEngineTool[] = [
       },
       source: {
         type: 'string',
-        enum: ['claude', 'codex', 'opencode', 'foreign'],
+        enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'],
         description:
           'Optional provider filter. "foreign" is the shared reader for the other local agents ' +
           '(Cursor, Windsurf, Zed, Copilot CLI and the rest) — omit it to get every store at once.',
@@ -538,7 +538,7 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
       },
       ['id'],
     ),
@@ -562,7 +562,7 @@ export const TOOLS: McpEngineTool[] = [
         caseSensitive: { type: 'boolean', description: 'Match case exactly (default false).' },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode', 'foreign'],
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'],
           description:
             "Optional provider filter. 'foreign' is the shared reader for the other local agents " +
             '(Cursor, Windsurf, Zed, Copilot CLI and the rest); omit it to search every store.',
@@ -654,7 +654,7 @@ export const TOOLS: McpEngineTool[] = [
           type: 'boolean',
           description: 'Only the user turns. Overrides textOnly. Use this to skim a long session.',
         },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
       },
       ['id'],
     ),
@@ -682,7 +682,7 @@ export const TOOLS: McpEngineTool[] = [
         id: { type: 'string' },
         format: { type: 'string', enum: ['markdown', 'html'], description: 'Default markdown.' },
         thinking: { type: 'boolean', description: "Include the model's reasoning blocks." },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
       },
       ['id'],
     ),
@@ -705,7 +705,7 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'foreign'] },
+        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
       },
       ['id'],
     ),

@@ -59,7 +59,13 @@ const sessionRateLimitScope = useStorage<RateLimitScope>('agenthydra.sessions.ra
 // control that has no such option.
 const ARCHIVED_SCOPES: readonly ArchivedScope[] = ['hide', 'include', 'only']
 const SESSION_PERIODS: readonly SessionPeriod[] = ['24h', '7d', '30d', 'all']
-const SESSION_SOURCES: readonly SessionSourceScope[] = ['all', 'claude', 'codex', 'opencode']
+const SESSION_SOURCES: readonly SessionSourceScope[] = [
+  'all',
+  'claude',
+  'codex',
+  'opencode',
+  'hermes',
+]
 const DISPATCHED_SCOPES: readonly DispatchedScope[] = ['all', 'queued', 'manual']
 const RATE_LIMIT_SCOPES: readonly RateLimitScope[] = ['all', 'only', 'pending']
 registerSharedPref('agenthydra.sessions.archivedScope', sessionArchivedScope, ARCHIVED_SCOPES)

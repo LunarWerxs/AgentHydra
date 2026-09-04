@@ -90,16 +90,17 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | '
 /**
  * A supported conversation store, named by the READER that understands it.
  *
- * Claude/Codex are JSONL and OpenCode is its shared SQLite DB. `foreign` is the fourth: one reader
- * with a small adapter per tool (Grok, Kimi, VS Code Copilot, Copilot CLI, Zed), which share no
- * format with each other but do share the one thing that matters here — a list of conversations
- * that can be read, and no per-token usage to account for. See server/src/foreign-sessions.ts.
+ * Claude/Codex are JSONL; OpenCode and Hermes are each their own shared SQLite DB — two different
+ * schemas, so two different readers. `foreign` is the fifth: one reader with a small adapter per
+ * tool (Grok, Kimi, VS Code Copilot, Copilot CLI, Zed), which share no format with each other but do
+ * share the one thing that matters here — a list of conversations that can be read, and no per-token
+ * usage to account for. See server/src/foreign-sessions.ts.
  */
-export type SessionSource = 'claude' | 'codex' | 'opencode' | 'foreign'
+export type SessionSource = 'claude' | 'codex' | 'opencode' | 'hermes' | 'foreign'
 export type SessionSourceScope = 'all' | SessionSource
 
 export function isSessionSource(v: unknown): v is SessionSource {
-  return v === 'claude' || v === 'codex' || v === 'opencode' || v === 'foreign'
+  return v === 'claude' || v === 'codex' || v === 'opencode' || v === 'hermes' || v === 'foreign'
 }
 
 /** A session discovered in one of the supported local conversation stores. */
@@ -574,8 +575,9 @@ export interface SessionSearchResponse {
   budgetExhausted: boolean
   /** The hit list was cut to `limit`. Not a timeout — searching longer would not add rows. */
   limitReached: boolean
-  /** File-backed transcripts opened, out of how many were in scope. OpenCode is excluded from
-   *  both: it is one indexed SQLite store, searched in full and not time-bounded. */
+  /** File-backed transcripts opened, out of how many were in scope. OpenCode and Hermes are
+   *  excluded from both: each is one or more indexed SQLite stores, searched in full and not
+   *  time-bounded. */
   filesSearched: number
   filesTotal: number
   /** The wall-clock budget that applied, so a caller can say "stopped after 7 s". */

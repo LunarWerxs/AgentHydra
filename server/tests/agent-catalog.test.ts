@@ -38,13 +38,13 @@ describe('the catalog as data', () => {
   test('a format claim is only ever one we have a reader for', () => {
     for (const t of AGENT_TOOLS) {
       if (t.format === null) continue
-      expect(['claude', 'codex', 'opencode', 'foreign']).toContain(t.format)
+      expect(['claude', 'codex', 'opencode', 'hermes', 'foreign']).toContain(t.format)
     }
   })
 
-  test('every opencode-format tool names its database file', () => {
+  test('every SQLite-backed tool (opencode or hermes format) names its database file', () => {
     // Without it the root is a directory, and the indexer would have nothing to open.
-    for (const t of AGENT_TOOLS.filter((t) => t.format === 'opencode')) {
+    for (const t of AGENT_TOOLS.filter((t) => t.format === 'opencode' || t.format === 'hermes')) {
       expect(t.dbName).toBeTruthy()
     }
   })

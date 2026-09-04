@@ -220,6 +220,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   claude: 'sessions.sourceClaude',
   codex: 'sessions.sourceCodex',
   opencode: 'sessions.sourceOpenCode',
+  hermes: 'sessions.sourceHermes',
 }
 /** Every provider that has usage, so "my stats only show Claude" is answerable at a glance. */
 const providerRows = computed(() =>
