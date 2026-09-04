@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock as mock
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -89,6 +90,20 @@ class DecideTest(unittest.TestCase):
         self.assertIn("app's own control", running["action"])
 
 
+    def test_a_manager_chat_is_left_alone_whatever_its_recap_says(self):
+        # 2026-09-04: the archive lane filed the standing manager on its own "done" recap,
+        # the claim died with it, and the watchdog reborn another on a different account.
+        fin = {"lane": "archive-candidate", "recap_present": True, "done_claim": "yes",
+               "ends_with_question": False, "offers_to_continue": False, "interrupted": False,
+               "last_assistant_text": DONE}
+        v = gate_verdict("finished", finished=fin)
+        d = dashboard.decide(v, {"suppressed": False}, True, manager=True)
+        self.assertEqual(d["kind"], "leave-alone")
+        self.assertIn("manager", d["action"])
+        held = dashboard.decide(v, None, True, hold_why="owner said so", manager=True)
+        self.assertEqual(held["kind"], "on-hold")  # a person's hold still outranks it
+
+
 class PlanAndServerTest(unittest.TestCase):
     def setUp(self):
         self.stub = StubDaemon()
@@ -151,6 +166,16 @@ class PlanAndServerTest(unittest.TestCase):
         self.assertFalse(by_id["s-done"]["account"]["appRunning"])
         self.assertTrue(by_id["s-live"]["account"]["appRunning"])
         self.assertEqual(self.stub.posts, [])  # READ-ONLY: the whole plan sent zero POSTs
+
+    def test_a_standing_manager_chat_never_enters_the_archive_or_judgment_lanes(self):
+        import overlord
+
+        with mock.patch.object(overlord, "protected_session_ids", return_value={"s-done", "s-offer"}):
+            plan = dashboard.build_plan()
+        by_id = {c["sessionId"]: c for c in plan["chats"]}
+        self.assertEqual(by_id["s-done"]["decision"]["kind"], "leave-alone")   # not archive
+        self.assertEqual(by_id["s-offer"]["decision"]["kind"], "leave-alone")  # not judgment
+        self.assertIn("overlord.py", by_id["s-done"]["decision"]["command"])
 
     def test_the_server_cannot_act_by_construction(self):
         self.assertFalse(hasattr(dashboard.Handler, "do_POST"))

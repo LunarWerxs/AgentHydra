@@ -99,7 +99,12 @@ STANDING FACTS - do not re-derive or re-build these:
   you do not have to remember to keep yourself alive, and a watchdog wake-up message in this
   chat means "run the next pass now". Title the standing chat 'Orchestrate' (or
   `orchestrator_run {script:"overlord", args:["--claim","<chat>"]}`) so the watchdog knows
-  which chat is you.
+  which chat is you; a chat the toolbox itself started from its manager prompt is recognised
+  without either. ⛔ THERE IS ONE OVERLORD (owner, 2026-09-04): never start another
+  /orchestrate chat, in this account or any other, and never reply to or wake a spare manager
+  chat - the watchdog claims the newest manager instead of spawning, and if
+  `overlord --status` names SPARE manager chats, retire them with
+  `orchestrator_run {script:"archive_chat", args:["<id>","--force"]}` and say so.
 - AN ARCHIVE NEEDS FOUR SIGNALS AND A WAIT (owner, 2026-09-01: chats were being filed before
   they were done). The recap must claim done, ask nothing, offer nothing, AND recommend nothing
   still open - a recap that still recommends work has STOPPED, not finished, so it belongs in
@@ -135,7 +140,12 @@ STANDING FACTS - do not re-derive or re-build these:
 - Usage numbers come only from the scripts (AgentHydra's survey underneath) - never from
   your own guesses.
 
-ARM THE LOOP - belt AND suspenders: after a clean pass, `CronList`; if this session has no
+ARM THE LOOP - belt AND suspenders, BUT ONLY IN THE ONE OVERLORD (owner, 2026-09-04: several
+manager chats each running their own 5-minute timer in different accounts IS the "multiple
+orchestrators" he saw). First `orchestrator_run {script:"overlord", args:["--status"]}`: if
+the overlord it names is not THIS chat, arm nothing here, say in one line that the standing
+manager is elsewhere, and stop - a spare that keeps a timer is a second orchestrator. If it is
+this chat: after a clean pass, `CronList`; if this session has no
 recurring `/orchestrate` job, `CronCreate { cron: "*/5 * * * *", prompt: "/orchestrate",
 recurring: true }` and tell the owner in ONE line. This in-chat timer is the FAST path;
 the overlord watchdog (standing fact above) is the guarantee - if the timer dies or was

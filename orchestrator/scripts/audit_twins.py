@@ -152,11 +152,17 @@ def find_same_task() -> list[dict]:
                     for s in hydralib.api_get("/api/sessions/live").get("sessions", [])}
     except hydralib.DaemonError:
         live_ids = set()
+    # THE STANDING MANAGERS ARE ONE LANE'S BUSINESS (2026-09-04): they all share one birth
+    # prompt by design, so this lane would group them and HOLD every later one - the newest,
+    # which is the live overlord. overlord.py names the spares; a person retires them.
+    import overlord
+
+    protected = overlord.protected_session_ids()
     rows = []
     for row in hydralib.visible_chats():
         sid = row.get("session_id") or ""
         tp = row.get("transcript_path") or ""
-        if not sid or row.get("archived") or not tp:
+        if not sid or row.get("archived") or not tp or sid in protected:
             continue
         first = gatelib.first_user_prompt(tp)
         if len(gatelib.normalize_task(first)) < 40:

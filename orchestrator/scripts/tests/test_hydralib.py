@@ -214,6 +214,20 @@ class SameTaskChatsTest(unittest.TestCase):
         got = hydralib.same_task_chats("Fix the login bug in the auth module completely")
         self.assertEqual(got, [])
 
+    def test_finds_a_manager_chat_recorded_as_a_slash_command(self):
+        # 2026-09-04, live: four visible managers, same_task_chats(MANAGER_PROMPT) == [] - the
+        # watchdog's claim-never-duplicate branch had never once fired in production.
+        import overlord
+
+        recorded = ("<command-message>orchestrate</command-message>\n<command-name>/orchestrate"
+            "</command-name>\n<command-args>"
+            + overlord.MANAGER_PROMPT.split(" ", 1)[1] + "</command-args>")
+        self.stub.routes["/api/sessions"] = [
+            {"session_id": "m1", "title": "Standing manager chat orchestration", "instance": "one",
+             "archived": False, "transcript_path": self._transcript("m1", recorded)}]
+        got = hydralib.same_task_chats(overlord.MANAGER_PROMPT)
+        self.assertEqual([g["session_id"] for g in got], ["m1"])
+
     def test_an_empty_prompt_never_scans_the_fleet(self):
         self.assertEqual(hydralib.same_task_chats(""), [])
         self.assertEqual(self.stub.gets, [])

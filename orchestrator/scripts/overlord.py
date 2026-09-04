@@ -12,7 +12,17 @@ is waiting, it wakes it through the engine. The machine never forgets.
 
 WHO IS THE OVERLORD: `state/overlord.json` {"sessionId": ...} when claimed explicitly
 (--claim <chat>), else the newest non-archived chat titled exactly "Orchestrate" (the
-title IS the claim - name the chat that and the watchdog owns it).
+title IS the claim - name the chat that and the watchdog owns it), else the newest
+non-archived chat BORN FROM MANAGER_PROMPT - the toolbox's own child, whatever the app has
+since titled it (the app auto-titles a reborn manager "Standing manager chat
+orchestration", which is how title alone lost it, 2026-09-04).
+
+⛔ THERE IS ONE OVERLORD (owner, 2026-09-04: "there should only ever be one orchestrator,
+that has complete knowledge of all active accounts"). A second manager is never spawned
+while any manager exists - rebirth CLAIMS the newest one instead. Spare managers are named
+on every tick with the command that retires them; they are protected from every other lane
+(protected_session_ids: never archived, moved, judged or woken unattended), so a spare can
+never wake up, run /orchestrate and become a second orchestrator on its own account.
 
 WHEN IT NUDGES - every condition must hold, and each miss is reported, never silent:
   - the overlord resolves (a missing overlord is a loud NONE, not a quiet pass)
@@ -203,8 +213,33 @@ def long_runners() -> list[dict]:
 # THE MANAGER'S BIRTH PROMPT - the exact first prompt the toolbox gives a standing manager
 # chat. It is also the duplicate key: hydralib.same_task_chats(MANAGER_PROMPT) finds a
 # manager that already exists, so rebirth can never start a second one (owner order 3).
+# ⛔ The app records it as a `<command-name>` record, not as this string; gatelib's
+# unwrap_command reads that back. Until it did (2026-09-04) this key matched NOTHING, the
+# claim branch below had never once fired live, and every rebirth was a duplicate.
 MANAGER_PROMPT = ("/orchestrate standing manager chat, started by the toolbox with bypass "
                   "permissions from birth; run the standing loop as documented")
+
+
+def manager_chats(exclude: set[str] | None = None) -> list[dict]:
+    """Every un-archived chat born from MANAGER_PROMPT - the toolbox's own managers, whatever
+    the app has since titled them - as session rows: the live one first, then those with a
+    DESKTOP HOME (an instance - the only kind a composer wake can reach; a row the daemon's
+    index still lists after its desktop record went is a corpse), then most recently active.
+    Rows: session_id, title, instance, archived, transcript_path, last_activity_at, live.
+    Raises hydralib.DaemonError like any fleet read."""
+    found = hydralib.same_task_chats(MANAGER_PROMPT, exclude=exclude)
+    if not found:
+        return []
+    by_id = {r.get("session_id"): r for r in hydralib.visible_chats()}
+    rows = []
+    for m in found:
+        base = by_id.get(m["session_id"]) or {
+            "session_id": m["session_id"], "title": m.get("title"),
+            "instance": m.get("instance"), "archived": False, "transcript_path": ""}
+        rows.append({**base, "live": bool(m.get("live"))})
+    rows.sort(key=lambda r: (bool(r.get("live")), bool(r.get("instance")),
+                             r.get("last_activity_at") or 0), reverse=True)
+    return rows
 
 
 # No second rebirth inside this window: the sessions index lags a spawn by minutes.
@@ -228,13 +263,16 @@ def rebirth(argv: list[str], as_json: bool, why: str) -> int:
     import spawn_chat
 
     try:
-        existing = hydralib.same_task_chats(MANAGER_PROMPT)
+        existing = manager_chats()
     except hydralib.DaemonError as err:
         return out({"ok": False, "report": f"rebirth NOT attempted: cannot read the fleet ({err})"},
                    as_json, 1)
     p = _claim_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    if existing:
+    homeless = ""
+    if existing and existing[0].get("instance"):
+        # manager_chats puts a manager with a desktop home first - the only kind a composer
+        # wake can reach. Claim it; never spawn beside it.
         pick = existing[0]
         sid = str(pick.get("sessionId") or pick.get("session_id") or "")
         p.write_text(json.dumps({"sessionId": sid, "title": pick.get("title")}), encoding="utf-8")
@@ -242,6 +280,12 @@ def rebirth(argv: list[str], as_json: bool, why: str) -> int:
             f"NO overlord chat was reachable ({why}) - but a manager already exists: claimed "
             f"'{pick.get('title')}' ({sid[:8]}) on {pick.get('instance') or 'console'}. Nothing spawned.")},
             as_json, 0)
+    if existing:
+        # Every manager on record is a corpse: the daemon's index still lists it, no desktop
+        # record holds it, so no lane can wake it (2026-09-04: two of four were this). Say so,
+        # and let the rebirth below start the one manager that can actually run.
+        homeless = (f" ({len(existing)} manager row(s) exist but none has a desktop home - "
+                    "nothing can wake them; they are named as spares until retired)")
     # ONE REBIRTH PER COOLDOWN (live soak, 2026-09-01): the tick right after a rebirth could
     # not yet see the new chat in the sessions index and spawned a second manager. The
     # ledger's own 'surface' row for the rebirth is the memory that survives the lag.
@@ -266,7 +310,7 @@ def rebirth(argv: list[str], as_json: bool, why: str) -> int:
                      encoding="utf-8")
         ledgerlib.note("surface", sid, note=f"rebirth: manager respawned ({why[:80]})")
     return out({"ok": bool(sid), "spawn": got, "report": (
-        f"NO overlord chat was reachable ({why}) - REBORN: a new manager chat is "
+        f"NO overlord chat was reachable ({why}){homeless} - REBORN: a new manager chat is "
         f"{'running' if str(got.get('started', '')).startswith('running') else 'starting'} in "
         f"{got.get('instance')} ({sid[:8] or 'id pending'}); mode: {got.get('modeSet')}. "
         + ("Claimed." if sid else "Not claimed: no session id registered yet - next tick finds it by its prompt."))},
@@ -302,8 +346,10 @@ LIMIT_BANNER = re.compile(
 
 
 def protected_session_ids() -> set[str]:
-    """The overlord's own chat(s): the claimed session id plus every un-archived chat titled
-    'Orchestrate' (the same two rules find_overlord uses). The groundskeeper leaves these
+    """The overlord's own chat(s): the claimed session id, every un-archived chat titled
+    'Orchestrate', and every chat born from MANAGER_PROMPT (the three rules find_overlord
+    uses - a spare manager is protected too, so no lane can wake it into a second
+    orchestrator). The groundskeeper leaves these
     alone (review 2026-09-01): it archived the standing manager the moment an all-clear pass
     ended with a recap that claimed done - after which find_overlord returns None on every
     tick, exit 2 in a report nobody reads - and it could migrate the same chat the overlord
@@ -320,6 +366,13 @@ def protected_session_ids() -> set[str]:
         for r in hydralib.sessions():
             if (not r.get("archived") and r.get("session_id")
                     and str(r.get("title") or "").strip().lower() == "orchestrate"):
+                ids.add(str(r["session_id"]))
+        # THE TOOLBOX'S OWN CHILDREN (2026-09-04): a reborn manager is titled by the app, not
+        # 'Orchestrate', so title alone left every spare manager unprotected - saturate woke
+        # them, the groundskeeper offered to evacuate them, the interview replied to them, and
+        # each one that ran armed its own /orchestrate loop: one orchestrator per account.
+        for r in manager_chats():
+            if r.get("session_id"):
                 ids.add(str(r["session_id"]))
     except hydralib.DaemonError:
         pass
@@ -368,7 +421,15 @@ def find_overlord() -> dict | None:
     named = [r for r in rows
              if not r.get("archived") and str(r.get("title") or "").strip().lower() == "orchestrate"]
     named.sort(key=lambda r: r.get("last_activity_at") or 0, reverse=True)
-    return named[0] if named else None
+    if named:
+        return named[0]
+    # THE TOOLBOX'S OWN CHILD (2026-09-04): a reborn manager is titled by the app ("Standing
+    # manager chat orchestration"), never 'Orchestrate', so with no claim the watchdog could
+    # not see the manager it had itself started - and spawned another, on whichever account
+    # had the most room. The birth prompt is the durable identity; newest-active wins, and
+    # the caller pins it (`adopted`) so two managers can never ping-pong the role.
+    managers = [m for m in manager_chats() if m.get("instance")]  # a home, or it is a corpse
+    return {**managers[0], "adopted": True} if managers else None
 
 
 def current_match(sid: str) -> tuple[dict | None, list[dict]]:
@@ -643,13 +704,51 @@ def _locate_or_rebirth(argv: list[str], as_json: bool) -> tuple[dict | None, int
     except hydralib.DaemonError as err:
         return None, out({"ok": False, "report": f"overlord check FAILED: {err}"}, as_json, 1)
     if row is None:
+        why = _absence_reason()
         if "--status" in argv:
             return None, out({"ok": False, "report": (
-                "NO overlord chat exists (none claimed, none titled 'Orchestrate'). The judgment "
-                "queue drains only while one runs - the watchdog's next armed tick spawns one.")},
-                as_json, 2)
-        return None, rebirth(argv, as_json, "none claimed, none titled 'Orchestrate'")
+                f"NO overlord chat is reachable ({why}). The judgment queue drains only while "
+                "one runs - the watchdog's next armed tick claims an existing manager, or "
+                "spawns one only when none exists.")}, as_json, 2)
+        return None, rebirth(argv, as_json, why)
+    if row.get("adopted") and "--status" not in argv:
+        # Found by its birth prompt alone: pin it, so the role never ping-pongs between two
+        # managers on activity order (a person can still --claim another).
+        p = _claim_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"sessionId": row.get("session_id"), "title": row.get("title")}),
+                     encoding="utf-8")
     return row, None
+
+
+def _absence_reason() -> str:
+    """WHY no overlord resolved, honestly. The old fixed string said 'none claimed' on every
+    miss - including both live rebirths of 2026-09-03/04, where a claim EXISTED and pointed at
+    a manager that had been archived under it."""
+    try:
+        claimed = json.loads(_claim_path().read_text(encoding="utf-8")).get("sessionId")
+    except (OSError, ValueError, AttributeError):
+        claimed = None
+    head = (f"the claimed manager ({str(claimed)[:8]}) is archived or gone" if claimed
+            else "none claimed")
+    # The manager census, so the line says what the next armed tick WILL do rather than
+    # denying chats that exist (first cut, live: "none born from the manager prompt" over
+    # four such chats - a dead claim returns before the birth-prompt fallback on purpose).
+    try:
+        managers = manager_chats()
+    except hydralib.DaemonError as err:
+        return f"{head}, none titled 'Orchestrate', manager census unreadable ({str(err)[:60]})"
+    if not managers:
+        return f"{head}, none titled 'Orchestrate', none born from the manager prompt"
+    homed = [m for m in managers if m.get("instance")]
+    if homed:
+        m = homed[0]
+        return (f"{head}, none titled 'Orchestrate'; {len(managers)} chat(s) born from the "
+                f"manager prompt exist - the next armed tick claims '{str(m.get('title') or '')[:40]}' "
+                f"({str(m.get('session_id') or '')[:8]}) on {m.get('instance')}, spawning nothing")
+    return (f"{head}, none titled 'Orchestrate'; {len(managers)} chat(s) born from the manager "
+            "prompt exist but none has a desktop home, so nothing can wake them - the next armed "
+            "tick spawns a fresh one")
 
 
 def _duplicate_overlord_note(sid: str) -> str:
@@ -660,14 +759,18 @@ def _duplicate_overlord_note(sid: str) -> str:
         others = [r for r in hydralib.sessions()
                   if not r.get("archived") and r.get("session_id") != sid
                   and str(r.get("title") or "").strip().lower() == "orchestrate"]
+        seen = {r.get("session_id") for r in others}
+        others += [r for r in manager_chats(exclude={sid}) if r.get("session_id") not in seen]
     except hydralib.DaemonError:
         return ""
     if not others:
         return ""
-    where = ", ".join(str(r.get("instance") or "console") for r in others)
-    return (f" ⚠ {len(others)} OTHER chat(s) also titled 'Orchestrate' ({where}) - "
-            "the most recently active one is the overlord; rename or archive the "
-            "spare(s), or pin one for good with --claim.")
+    where = "; ".join(f"'{str(r.get('title') or '')[:40]}' ({str(r.get('session_id') or '')[:8]}) "
+                      f"on {r.get('instance') or 'console'}" for r in others)
+    return (f" ⚠ {len(others)} SPARE manager chat(s) exist - {where}. There is ONE overlord "
+            "(this one, the most recently active); the spares are protected from every other "
+            "lane and never woken, so retire each with `python scripts/archive_chat.py <id> "
+            "--force`, or pin a different one for good with --claim.")
 
 
 def _refresh_overlord_state(row: dict, argv: list[str],

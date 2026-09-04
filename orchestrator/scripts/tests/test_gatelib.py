@@ -408,6 +408,16 @@ class HarvestTodosItemsFromTest(unittest.TestCase):
         self.assertEqual(harvest_todos._items_from(verdict), [])
 
 
+MANAGER_TYPED = ("/orchestrate standing manager chat, started by the toolbox with bypass "
+                 "permissions from birth; run the standing loop as documented")
+# The desktop app's OWN record of that command - measured live 2026-09-04 on four manager
+# chats. Tag order varies (local_command() above uses the other one).
+MANAGER_RECORDED = ("<command-message>orchestrate</command-message>\n<command-name>/orchestrate"
+                    "</command-name>\n<command-args>standing manager chat, started by the toolbox "
+                    "with bypass permissions from birth; run the standing loop as documented"
+                    "</command-args>")
+
+
 class TaskDedupTest(unittest.TestCase):
     """first_user_prompt, normalize_task, is_boilerplate_task, same_task - the double-check
     every spawner runs before starting a chat (owner, 2026-09-01: "it can't do it blind; it
@@ -440,6 +450,38 @@ class TaskDedupTest(unittest.TestCase):
                 {"type": "user", "isMeta": True, "message": {"content": "x"}},
             ])
             self.assertEqual(gatelib.first_user_prompt(p), "")
+
+    def test_first_user_prompt_reads_a_slash_command_back_as_typed(self):
+        # THE SHAPE THAT HID EVERY MANAGER (2026-09-04): the app records a slash command as
+        # tags, so the birth prompt never compared equal to itself, same_task_chats found no
+        # existing manager, and the watchdog reborn one per account.
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._prompt_transcript(tmp, [
+                {"type": "user", "message": {"content": MANAGER_RECORDED}}])
+            self.assertEqual(gatelib.first_user_prompt(p), MANAGER_TYPED)
+
+    def test_unwrap_command_handles_either_tag_order_no_args_and_plain_text(self):
+        self.assertEqual(gatelib.unwrap_command(
+            "<command-name>/wake</command-name>\n<command-message>wake</command-message>\n"
+            "<command-args></command-args>"), "/wake")
+        self.assertEqual(gatelib.unwrap_command("<command-name>wake</command-name>"), "/wake")
+        self.assertEqual(gatelib.unwrap_command("Review this repo"), "Review this repo")
+        self.assertEqual(gatelib.unwrap_command(""), "")
+
+    def test_a_slash_command_carrying_its_task_is_a_task_not_boilerplate(self):
+        self.assertFalse(gatelib.is_boilerplate_task(MANAGER_TYPED))
+        self.assertFalse(gatelib.is_boilerplate_task(MANAGER_RECORDED))
+        self.assertTrue(gatelib.is_boilerplate_task("/orchestrate"))
+        self.assertTrue(gatelib.is_boilerplate_task(
+            "<command-name>/orchestrate</command-name>\n<command-args></command-args>"))
+        # the sweep opener rides a slash command too - its ARGUMENTS are still boilerplate
+        self.assertTrue(gatelib.is_boilerplate_task(
+            "ultracode\n\n/orchestrate The standing sweep opened this session because work waits"))
+
+    def test_same_task_matches_the_manager_prompt_against_its_recorded_shape(self):
+        self.assertTrue(gatelib.same_task(MANAGER_TYPED, MANAGER_RECORDED))
+        self.assertTrue(gatelib.same_task(MANAGER_TYPED, MANAGER_TYPED))
+        self.assertFalse(gatelib.same_task(MANAGER_TYPED, "/orchestrate"))
 
     def test_normalize_task_collapses_whitespace_and_case(self):
         self.assertEqual(gatelib.normalize_task("  Review   THIS\nrepo  "), "review this repo")

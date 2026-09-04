@@ -710,6 +710,28 @@ class SaturateWakeVerifyTextTest(unittest.TestCase):
         self.assertIn(staged[0]["verifyText"], distinct)  # a real substring of its own words
         self.assertNotEqual(staged[0]["verifyText"], "x")
 
+    def test_a_standing_manager_chat_is_never_a_wake_candidate(self):
+        # 2026-09-04: every retired manager "offers to carry on", so this lane woke them
+        # whenever a slot freed, each ran /orchestrate and armed its own loop - an
+        # orchestrator per account. The real protected set is exercised here, not a mock.
+        import overlord
+        import saturate
+
+        recorded = ("<command-message>orchestrate</command-message>\n<command-name>/orchestrate"
+            "</command-name>\n<command-args>"
+            + overlord.MANAGER_PROMPT.split(" ", 1)[1] + "</command-args>")
+        distinct = ("The archived Q3 vendor ledger for Meridian Textiles still needs a "
+                    "countersignature from finance before it can close.")
+        self.stub.routes["/api/sessions"] = [self._chat("mgr", [
+            {"type": "user", "message": {"content": recorded}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": distinct}]}},
+            {"type": "user", "message": {"content": "continue"}},
+        ], "Standing manager chat orchestration")]
+        with mock.patch("pathlib.Path.home", return_value=Path(self._tmp.name) / "nohome"):
+            plan = saturate.build_plan()
+        self.assertEqual(plan["planned"], [])
+        self.assertEqual(plan["managersLeftToTheWatchdog"], 1)
+
     def test_yes_without_an_armed_window_refuses_and_wakes_nothing(self):
         # THE ARMED WINDOW (owner order, 2026-09-01): --yes alone must not act unless a
         # person opened a window (`python orch.py arm`) or passed --force.

@@ -34,7 +34,7 @@ HTML_PATH = Path(__file__).resolve().parent / "dashboard.html"
 
 
 def decide(verdict: dict | None, breaker: dict | None, app_running: bool, why_ungated: str = "",
-           hold_why: str | None = None) -> dict:
+           hold_why: str | None = None, manager: bool = False) -> dict:
     """Map a gate verdict onto WHAT THE ORCHESTRATOR WOULD DO - the one place that mapping
     lives, so the page, the tests, and any future sweep read the same answer.
 
@@ -46,6 +46,19 @@ def decide(verdict: dict | None, breaker: dict | None, app_running: bool, why_un
         # A person's hands-off switch outranks every verdict below it.
         return {"action": "nothing - the owner put this chat on HOLD", "kind": "on-hold",
                 "detail": hold_why, "command": None}
+    if manager:
+        # THE STANDING MANAGER CHAT IS THE WATCHDOG'S OWN (overlord.protected_session_ids;
+        # 2026-09-04). Its recap always offers to carry on, so every other lane read it as
+        # work: the archive lane filed it, the interview replied to spares and woke them,
+        # saturate woke them - and each woken manager armed its own /orchestrate loop. One
+        # owner per responsibility: overlord.py wakes, relocates and names it; nothing else
+        # archives, moves, judges or wakes a manager unattended.
+        return {"action": "leave alone - a standing manager chat (the watchdog's own)",
+                "kind": "leave-alone",
+                "detail": ("Born from the manager prompt or titled 'Orchestrate': overlord.py "
+                           "owns it. A spare is retired by a person (archive_chat --force), "
+                           "never by a lane."),
+                "command": "python scripts/overlord.py --status"}
     if verdict is None:
         return {
             "action": "nothing - cannot be gated",
@@ -201,7 +214,8 @@ def _plan_chat_entry(row: dict, sid: str, inst: dict | None, verdict: dict | Non
     }
 
 
-def _evaluate_plan_row(row: dict, instances: dict, holds: dict) -> _RowEvaluation:
+def _evaluate_plan_row(row: dict, instances: dict, holds: dict,
+                       protected: set | frozenset = frozenset()) -> _RowEvaluation:
     """Gate one row, decide what the orchestrator would do about it, and shape the chat
     entry the page renders - the whole per-row pipeline build_plan loops over."""
     sid = row.get("session_id") or ""
@@ -209,7 +223,7 @@ def _evaluate_plan_row(row: dict, instances: dict, holds: dict) -> _RowEvaluatio
     verdict, why_ungated, incomplete = _gate_row(sid, row)
     breaker = _breaker_for(verdict, sid)
     decision = decide(verdict, breaker, bool(inst and inst["isRunning"]), why_ungated,
-                      holdlib.why_blocked(sid, _holds=holds))
+                      holdlib.why_blocked(sid, _holds=holds), manager=sid in protected)
     chat = _plan_chat_entry(row, sid, inst, verdict, why_ungated, decision)
     return _RowEvaluation(chat=chat, decision_kind=decision["kind"], incomplete=incomplete)
 
@@ -232,11 +246,18 @@ def build_plan() -> dict:
     # re-checks holds fresh at T-0) - per-row reloads also opened the read-clobber window
     # holdlib.check used to have (adversarial review, 2026-08-31).
     holds = holdlib._load()
+    # THE MANAGERS ARE THE WATCHDOG'S (2026-09-04): one snapshot of overlord.protected_session_ids
+    # for the whole plan, so no lane downstream (archive, judgment, wake) ever reads a standing
+    # manager chat as work. It swallows daemon errors itself; a failed read protects nothing
+    # extra, the same posture as a failed holds read.
+    import overlord
+
+    protected = overlord.protected_session_ids()
     chats = []
     counts: dict[str, int] = {}
     incomplete = 0
     for row in rows:
-        result = _evaluate_plan_row(row, instances, holds)
+        result = _evaluate_plan_row(row, instances, holds, protected)
         if result.incomplete:
             incomplete += 1
         counts[result.decision_kind] = counts.get(result.decision_kind, 0) + 1

@@ -23,6 +23,10 @@ from lib import hydralib  # noqa: E402
 from lib import ledgerlib  # noqa: E402
 
 SID = "ffff1111-2222-3333-4444-555566667777"
+# The desktop app's own record of MANAGER_PROMPT (measured live 2026-09-04).
+MANAGER_RECORDED = ("<command-message>orchestrate</command-message>\n<command-name>/orchestrate"
+            "</command-name>\n<command-args>"
+            + overlord.MANAGER_PROMPT.split(" ", 1)[1] + "</command-args>")
 
 
 def ms_ago(secs: float) -> int:
@@ -389,8 +393,95 @@ class OverlordTest(unittest.TestCase):
                           "last_activity_at": ms_ago(9000)})
         code, out, _ = run_cli(overlord.main, ["--status"])
         self.assertEqual(code, 0)
-        self.assertIn("OTHER chat(s) also titled 'Orchestrate'", out)
+        self.assertIn("SPARE manager chat(s)", out)
         self.assertIn("work", out)
+
+    def _manager_row(self, sid, instance, quiet_secs, title="Standing manager chat orchestration"):
+        p = Path(self._tmp.name) / f"{sid}.jsonl"
+        p.write_text("\n".join(json.dumps(r) for r in [
+            {"type": "user", "message": {"content": MANAGER_RECORDED}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "pass done. Shall I continue?"}]}},
+        ]) + "\n", encoding="utf-8")
+        old = time.time() - quiet_secs
+        os.utime(p, (old, old))
+        return {"session_id": sid, "archived": False, "title": title, "instance": instance,
+                "transcript_path": str(p), "last_activity_at": ms_ago(quiet_secs)}
+
+    def test_a_manager_the_app_titled_itself_is_the_overlord_without_a_claim_or_the_title(self):
+        # 2026-09-04, live: no claim, no chat titled 'Orchestrate', FOUR chats born from
+        # MANAGER_PROMPT under the app's own titles - and the tick reborn a fifth, on the
+        # account with the most room. The birth prompt is the identity; the spares are named.
+        self.rows = [r for r in self.rows if r["session_id"] != SID]
+        self.rows.append(self._manager_row("mgr-new", "p2", 1200))
+        self.rows.append(self._manager_row("mgr-old", "work", 90000,
+                                           "Manager chat work (retired)"))
+        import spawn_chat
+        with mock.patch("pathlib.Path.home", return_value=Path(self._tmp.name) / "nohome"):
+            row = overlord.find_overlord()
+            self.assertEqual(row["session_id"], "mgr-new")  # newest-active, not the spare
+            self.assertTrue(row.get("adopted"))
+            with mock.patch.object(spawn_chat, "spawn") as spawn:
+                code, out, _ = run_cli(overlord.main, ["--status"])
+            self.assertEqual(code, 0)
+            spawn.assert_not_called()
+            self.assertIn("SPARE manager chat(s)", out)
+            self.assertIn("mgr-old", out)
+            self.assertIn("archive_chat.py <id> --force", out)
+            self.assertEqual(overlord.protected_session_ids(), {"mgr-new", "mgr-old"})
+            # --status pins nothing; the acting tick does, so the role cannot ping-pong
+            self.assertFalse((Path(self._state.name) / "overlord.json").exists())
+            code, out, _ = run_cli(overlord.main, [])
+            self.assertEqual(code, 0)
+            claim = json.loads((Path(self._state.name) / "overlord.json").read_text(encoding="utf-8"))
+            self.assertEqual(claim["sessionId"], "mgr-new")
+
+    def test_managers_without_a_desktop_home_are_named_but_never_adopted(self):
+        # Two of the four live spares on 2026-09-04 had no desktop record left (the index
+        # still listed them, the dossier had nothing): adopting one would leave the fleet
+        # with a manager nothing can wake. A homed one wins; with none, a fresh one is born.
+        self.rows = [r for r in self.rows if r["session_id"] != SID]
+        self.rows.append({**self._manager_row("mgr-corpse", "p2", 600), "instance": None})
+        self.rows.append(self._manager_row("mgr-homed", "work", 90000))
+        import spawn_chat
+        with mock.patch("pathlib.Path.home", return_value=Path(self._tmp.name) / "nohome"), \
+             mock.patch.object(spawn_chat, "spawn") as spawn:
+            self.assertEqual(overlord.find_overlord()["session_id"], "mgr-homed")
+            self.rows = [r for r in self.rows if r["session_id"] != "mgr-homed"]
+            self.assertIsNone(overlord.find_overlord())
+            spawn.return_value = {"ok": True, "instance": "p2", "sessionId": "reborn-9",
+                                  "started": "running", "modeSet": "set"}
+            code, out, _ = run_cli(overlord.main, [])
+        self.assertEqual(code, 0)
+        spawn.assert_called_once()
+        self.assertIn("REBORN", out)
+        self.assertIn("none has a desktop home", out)
+
+    def test_a_dead_claim_adopts_the_existing_manager_and_spawns_nothing(self):
+        # The exact live failure of 2026-09-04 15:28: the claim pointed at an archived manager,
+        # another manager was visible, and the tick spawned a new one anyway because the
+        # duplicate guard could not read the birth prompt back out of the app's record.
+        (Path(self._state.name) / "overlord.json").write_text(
+            json.dumps({"sessionId": "gone-gone"}), encoding="utf-8")
+        self.rows = [r for r in self.rows if r["session_id"] != SID]
+        self.rows.append(self._manager_row("mgr-live", "p2", 1200))
+        import spawn_chat
+        with mock.patch("pathlib.Path.home", return_value=Path(self._tmp.name) / "nohome"), \
+             mock.patch.object(spawn_chat, "spawn") as spawn:
+            # --status stays loud about the dead claim AND says what the tick will do
+            code, out, _ = run_cli(overlord.main, ["--status"])
+            self.assertEqual(code, 2)
+            self.assertIn("gone-gon", out)
+            self.assertIn("1 chat(s) born from the manager prompt exist", out)
+            self.assertIn("mgr-live", out)
+            self.assertIn("spawning nothing", out)
+            code, out, _ = run_cli(overlord.main, [])
+        self.assertEqual(code, 0)
+        spawn.assert_not_called()
+        self.assertIn("already exists", out)
+        self.assertIn("gone-gon", out)  # the honest reason names the dead claim
+        claim = json.loads((Path(self._state.name) / "overlord.json").read_text(encoding="utf-8"))
+        self.assertEqual(claim["sessionId"], "mgr-live")
 
     def test_a_cooked_account_gets_the_quota_handoff_before_the_wake(self):
         # Owner blessing, 2026-09-01: the overlord that halted itself at 81% "was exactly

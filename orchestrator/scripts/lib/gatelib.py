@@ -364,8 +364,38 @@ def first_user_prompt(path: str, max_bytes: int = 256 * 1024) -> str:
         else:
             continue
         if text.strip():
-            return text.strip()
+            return unwrap_command(text.strip())
     return ""
+
+
+_COMMAND_NAME = re.compile(r"<command-name>\s*(.*?)\s*</command-name>", re.DOTALL)
+_COMMAND_ARGS = re.compile(r"<command-args>\s*(.*?)\s*</command-args>", re.DOTALL)
+
+
+def unwrap_command(text: str) -> str:
+    """A slash command AS IT WAS TYPED, recovered from the desktop app's own record of it.
+
+    The app does not write '/orchestrate standing manager chat ...' into the transcript; it
+    writes a user record made of tags - `<command-message>orchestrate</command-message>`,
+    `<command-name>/orchestrate</command-name>`, `<command-args>standing manager chat
+    ...</command-args>` - and the prompt as typed is the name followed by the args. Measured
+    live 2026-09-04: every one of FOUR standing manager chats born from overlord.MANAGER_PROMPT
+    had this shape as its first prompt, so same_task_chats(MANAGER_PROMPT) found none of them,
+    the watchdog's "claim an existing manager, never spawn a second" branch was dead code in
+    production, and every rebirth started another manager on whichever account had the most
+    room. Text that is not a command record is returned unchanged."""
+    t = (text or "").strip()
+    if "<command-name>" not in t:
+        return t
+    m = _COMMAND_NAME.search(t)
+    if not m:
+        return t
+    name = m.group(1).strip()
+    if not name.startswith("/"):
+        name = "/" + name
+    a = _COMMAND_ARGS.search(t)
+    args = a.group(1).strip() if a else ""
+    return f"{name} {args}".strip()
 
 
 def pane_words(prompt: str) -> str:
@@ -387,17 +417,32 @@ def normalize_task(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()[:2000]
 
 
-# Prompts the toolbox itself sends to MANY chats on purpose - the standing manager's command,
-# the sweep's session opener, the watchdog's nudge, the wake, the naming probe. Two chats that
-# share one of these share a trigger, not a task; they are never duplicates of each other.
-BOILERPLATE_PREFIXES = ("/", "<command-message>", "the standing sweep opened", "automated watchdog",
+# Prompts the toolbox itself sends to MANY chats on purpose - the sweep's session opener, the
+# watchdog's nudge, the wake, the naming probe. Two chats that share one of these share a
+# trigger, not a task; they are never duplicates of each other. A slash command is judged by
+# what it was GIVEN (see is_boilerplate_task): bare, it is a trigger; carrying its task in the
+# arguments, it is that task.
+BOILERPLATE_PREFIXES = ("<command-message>", "the standing sweep opened", "automated watchdog",
                         "proceed with your recommendations", "naming pass probe", "[agenthydra]")
 
 
 def is_boilerplate_task(text: str) -> bool:
-    n = normalize_task(text)
+    n = normalize_task(unwrap_command(text))
     # a leading mode word ("ultracode") is not the task either - look past it
     n = re.sub(r"^(ultracode|ultrathink|think hard(er)?)\s+", "", n)
+    if n.startswith("/"):
+        # A BARE slash command (/wake, /orchestrate, /compact) is a trigger the toolbox and
+        # people send to many chats, never a task. A slash command CARRYING its task in the
+        # arguments IS that task - overlord.MANAGER_PROMPT is exactly this shape, and reading
+        # it as boilerplate is what let the watchdog spawn a manager per account (2026-09-04:
+        # "/" was a boilerplate prefix, so the manager's birth prompt could never equal
+        # itself). The arguments are then judged like any other prompt, so the sweep opener
+        # sent as "/orchestrate The standing sweep opened ..." stays boilerplate.
+        _head, _, args = n.partition(" ")
+        args = args.strip()
+        if not args:
+            return True
+        n = args
     return (not n or any(n.startswith(p) for p in BOILERPLATE_PREFIXES)
             or "the standing sweep opened this session" in n[:300])
 
@@ -408,7 +453,7 @@ def same_task(a: str, b: str) -> bool:
     toolbox sends to many chats never counts, and neither does a one-liner."""
     if is_boilerplate_task(a) or is_boilerplate_task(b):
         return False
-    na, nb = normalize_task(a), normalize_task(b)
+    na, nb = normalize_task(unwrap_command(a)), normalize_task(unwrap_command(b))
     short, long_ = sorted((na, nb), key=len)
     if len(short) < 40:
         return False

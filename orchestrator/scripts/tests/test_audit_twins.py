@@ -97,6 +97,20 @@ class FindSameTaskTest(unittest.TestCase):
         self.assertNotIn("s-d", grouped)  # boilerplate sweep opener
         self.assertNotIn("s-e", grouped)  # ditto, even though identical to s-d
 
+    def test_standing_manager_chats_are_never_a_same_task_group(self):
+        # They share one birth prompt by design; grouping them would HOLD every later one -
+        # i.e. the live overlord. overlord.py names the spares instead (2026-09-04).
+        import overlord
+
+        recorded = ("<command-message>orchestrate</command-message>\n<command-name>/orchestrate"
+            "</command-name>\n<command-args>"
+            + overlord.MANAGER_PROMPT.split(" ", 1)[1] + "</command-args>")
+        self.stub.routes["/api/sessions"] = [
+            self._row("m-1", "hot", recorded, 1_000_000, "Standing manager chat orchestration"),
+            self._row("m-2", "cool", recorded, 1_001_000, "Manager chat cool (retired)"),
+        ]
+        self.assertEqual(audit_twins.find_same_task(), [])
+
     def test_fix_same_task_holds_the_later_chat_and_never_archives(self):
         self.stub.routes["/api/sessions"] = [
             self._row("s-a", "hot", TASK_A, 1_000_000, "Task A"),

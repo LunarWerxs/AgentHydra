@@ -100,6 +100,15 @@ def build_plan(max_wakes: int | None = None) -> dict:
     staged_by_session = {e["session"]: e for e in deliverylib.pending()}
     holds = holdlib._load()
     ledger_rows = ledgerlib._load()
+    # THE MANAGERS ARE THE WATCHDOG'S TO WAKE (2026-09-04): a spare manager's recap always
+    # "offers to carry on", so this lane woke retired managers whenever a slot freed, each ran
+    # /orchestrate and armed its own loop, and the owner saw an orchestrator per account.
+    # overlord.py wakes the ONE overlord (cap-exempt, whenever work waits); no other manager
+    # is ever woken by a lane.
+    import overlord
+
+    protected = overlord.protected_session_ids()
+    managers_skipped = 0
 
     candidates: list[dict] = []
     stranded: dict[str, int] = {}  # dormant chats sitting on an account that may take no work
@@ -107,6 +116,9 @@ def build_plan(max_wakes: int | None = None) -> dict:
         sid = row.get("session_id") or ""
         inst = row.get("instance")
         if not sid or not inst or row.get("archived") or sid in live:
+            continue
+        if sid in protected:
+            managers_skipped += 1
             continue
         if holdlib.why_blocked(sid, _holds=holds):
             continue
@@ -170,6 +182,7 @@ def build_plan(max_wakes: int | None = None) -> dict:
         "candidates": len(candidates),
         "planned": planned,
         "strandedOnHotAccounts": stranded,
+        "managersLeftToTheWatchdog": managers_skipped,
         "heldBackByShare": capped,
         "shortfall": max(0, deficit - len(planned)),
     }
