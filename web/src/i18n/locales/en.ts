@@ -6,6 +6,7 @@ import builder from './en/builder'
 import cliInstances from './en/cliInstances'
 import codexInstances from './en/codexInstances'
 import composer from './en/composer'
+import incidents from './en/incidents'
 import instances from './en/instances'
 import notifications from './en/notifications'
 import queue from './en/queue'
@@ -21,6 +22,7 @@ export default {
   cliInstances,
   codexInstances,
   composer,
+  incidents,
   instances,
   notifications,
   queue,

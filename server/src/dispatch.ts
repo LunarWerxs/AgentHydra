@@ -16,6 +16,7 @@ import { getCliInstance } from './core/cli-instances'
 import { coerceQueueItem, db } from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
+import { deliverIncidentNotification, recordIncident } from './incidents'
 import { classifyLimit, isApiErrorEvent, type LimitKind } from './rate-limit-signal'
 import { eventToTailEvents } from './transcript'
 import type { ImportState, QueueItem, RunEvent } from './types'
@@ -618,6 +619,50 @@ function scheduleTransientRetry(id: string, attempts: number): void {
   cleanupRunFiles(id)
 }
 
+// --- failure incidents (server/src/incidents.ts) ------------------------------
+
+/** Best-effort error text for an incident: the last recorded stderr line, else the last system
+ *  meta event, else a bare exit-code fallback. Read from run_events rather than threaded through
+ *  every caller, since both finalize() (mid-run failures) and failPreLaunch() (pre-launch
+ *  failures, which pass their own message) need one and only the former has a log to read. */
+function failureText(id: string, exitCode: number): string {
+  try {
+    const rows = db
+      .query<{ text: string }, [string]>(
+        "select text from run_events where queue_item_id = ? and kind = 'meta' order by seq desc limit 20",
+      )
+      .all(id)
+    const stderrLine = rows.find((r) => r.text.startsWith('stderr:'))
+    if (stderrLine) return stderrLine.text.slice('stderr:'.length).trim()
+    if (rows[0]) return rows[0].text
+  } catch {
+    // best-effort: incident bookkeeping must never fail the run's own finalize path
+  }
+  return `run failed (exit code ${exitCode})`
+}
+
+/**
+ * Record (and, unless it's a suppressed repeat, notify) a failure incident for one queue item.
+ * Fire-and-forget by design — incident bookkeeping is diagnostic, never load-bearing for the run
+ * itself, so a slow or failing notification channel must not delay finalize()/failPreLaunch().
+ * Keyed by the item's project (cwd): the recurring unit that fails the same way overnight is the
+ * project being run, not any one queue item's uuid (which never repeats).
+ */
+function recordFailureIncident(
+  item: { id: string; cwd: string; title: string },
+  error: string,
+): void {
+  const key = item.cwd || item.title || item.id
+  void (async () => {
+    try {
+      const result = await recordIncident({ scope: 'queue', key, error })
+      await deliverIncidentNotification(result, { scope: 'queue', key, error })
+    } catch (err) {
+      console.error('[agenthydra] incident recording failed:', err)
+    }
+  })()
+}
+
 /** Persist the terminal status + notify subscribers, exactly once per run. A cancel wins over the
  *  process's own exit code so a killed run reads as 'canceled', not 'failed'. */
 function finalize(id: string, exitCode: number, opts: { canceled?: boolean } = {}): void {
@@ -674,6 +719,14 @@ function finalize(id: string, exitCode: number, opts: { canceled?: boolean } = {
         console.error('[agenthydra] post-run desktop import error:', err),
       )
     }
+  } else if (status === 'failed') {
+    const row = db
+      .query<{ cwd: string; title: string }, [string]>(
+        'select cwd, title from queue_items where id = ?',
+      )
+      .get(id)
+    if (row)
+      recordFailureIncident({ id, cwd: row.cwd, title: row.title }, failureText(id, exitCode))
   }
 }
 
@@ -1031,6 +1084,7 @@ function failPreLaunch(item: QueueItem, message: string): void {
   db.query(
     'update queue_items set status = ?, finished_at = ?, exit_code = ?, pid = null where id = ?',
   ).run('failed', new Date().toISOString(), -1, item.id)
+  recordFailureIncident({ id: item.id, cwd: item.cwd, title: item.title }, message)
   publish(item.id, {
     type: 'status',
     data: { id: item.id, status: 'failed', exit_code: -1, pid: null },

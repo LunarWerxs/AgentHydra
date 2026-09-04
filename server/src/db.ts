@@ -152,6 +152,30 @@ create table if not exists session_scan_cache (
 );
 create index if not exists idx_session_scan_cache_path on session_scan_cache(path);
 
+-- Failure incidents (server/src/incidents.ts): a queue run that fails is grouped with prior runs
+-- of the SAME scope+key that failed with the SAME normalized error, instead of each occurrence
+-- reading as an unrelated event. id is derived (scope, key, error signature) so the SAME failure
+-- upserts this row (last_seen_at/count bump) rather than inserting a duplicate; a DIFFERENT error
+-- text on the same scope+key mints a different id instead. state: open -> acked -> resolved, and a
+-- resolved incident whose signature recurs reopens (see recordIncident).
+create table if not exists incidents (
+  id            text primary key,
+  scope         text not null,       -- e.g. 'queue'
+  key           text not null,       -- e.g. the run's project (cwd)
+  error_sig     text not null,
+  state         text not null default 'open',   -- open | acked | resolved
+  failure_type  text not null default 'unknown',
+  first_seen_at text not null,
+  last_seen_at  text not null,
+  acked_at      text,
+  resolved_at   text,
+  count         integer not null default 1,
+  error         text not null,
+  output_file   text
+);
+create index if not exists idx_incidents_scope_key on incidents(scope, key);
+create index if not exists idx_incidents_state on incidents(state);
+
 `)
 
 // A short-lived pre-0.11 hardening change stored manually added account credentials as DPAPI
