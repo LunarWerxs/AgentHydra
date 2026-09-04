@@ -9,6 +9,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Startup-liveness watchdog** so a daemon that hangs during boot (a locked sqlite file, a port
+  probe that never returns, an updater step that stalls) crashes and gets restarted instead of
+  sitting there indistinguishable from a slow one - tray icon idle, nothing logged, until someone
+  restarts it by hand an hour later. Armed at process entry (`server/src/main.ts`, before importing
+  the daemon or `--instances` entrypoint), renewed at each boot phase as it's reached (db open,
+  migrations, scheduler start, queue recovery, listen), and disarmed the moment the port is actually
+  bound. If the deadline elapses with no renewal, it logs the last-known phase and pid to both
+  stderr and `daemon.log`, then exits with a distinct code (`87`) so the tray/service supervisor
+  restarts it rather than a silent hang. Deadline is `AGENTHYDRA_BOOT_DEADLINE_MS`, generous by
+  default (120s full daemon, 30s `--instances`); inert under `bun test`. Idea ported in shape from
+  NousResearch/hermes-agent's startup watchdog (MIT) - see `server/src/boot-watchdog.ts`.
+
 - **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
   2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have
   to use both"). `orchestrator/` is the v3 Python toolbox exactly as it stood in its own repo

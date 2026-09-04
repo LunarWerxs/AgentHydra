@@ -1,4 +1,5 @@
 import { isDispatchReady } from './boot-state'
+import { renewBootWatchdog } from './boot-watchdog'
 import { coerceQueueItem, db, getSetting, setSetting } from './db'
 import { activeCount, dispatchItem, isSessionActive } from './dispatch'
 import type { QueueItem, SchedulerState } from './types'
@@ -151,5 +152,10 @@ export function schedulerState(): SchedulerState {
   }
 }
 
-// Always run the timer loop; the tick itself is a no-op unless enabled.
+// Always run the timer loop; the tick itself is a no-op unless enabled. This module is reached via
+// index.ts's `await import('./routes/queue')` (see the "feature routes" block there), which is a
+// genuine mid-boot statement in index.ts's own body, not an import-time side effect like db.ts's -
+// so the checkpoint belongs at this exact top-level statement rather than at a call site in
+// index.ts that would run either before this module loads or not at all.
+renewBootWatchdog('scheduler')
 startScheduler()
