@@ -20,6 +20,7 @@
 // renderer holds (web/src/lib/markdown.ts): every tag in the output is one this file wrote.
 
 import { readForeignSession } from './foreign-sessions'
+import { readHermesSession } from './hermes-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
 import { redactSecrets, scanSecrets } from './secrets'
 import { streamLines } from './session-search'
@@ -72,6 +73,9 @@ async function readAllEvents(
     return tf ? readForeignSession(tf.tool ?? '', tf.path) : []
   }
   if (source === 'opencode') return readOpenCodeSession(sessionId)?.events ?? []
+  // path here IS the store's db path (see the two call sites below), so — unlike the OpenCode line
+  // above — a Hermes profile's own database is what actually gets read, not always the default one.
+  if (source === 'hermes') return readHermesSession(sessionId, path)?.events ?? []
   const events: TailEvent[] = []
   for await (const line of streamLines(path)) {
     const trimmed = line.trim()

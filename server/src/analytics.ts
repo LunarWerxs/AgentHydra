@@ -23,6 +23,7 @@
 // price-weighted figure per day per model.
 
 import { db } from './db'
+import { readHermesUsage } from './hermes-sessions'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf, priceTokens } from './pricing'
 import { streamLines } from './session-search'
@@ -195,6 +196,48 @@ function scanOpenCodeAnalytics(
   return out
 }
 
+/**
+ * Hermes has already totalled its own session, by model, in `session_model_usage` — nothing to
+ * stream, same as OpenCode above. `providerCostUsd` is deliberately left null: unlike OpenCode's own
+ * passthrough cost, Hermes' totals are priced through THIS repo's catalog (foldSpendRow's generic
+ * `priceTokens` pass, in server/src/pricing.ts) so a model the catalog has no price for is flagged
+ * unpriced rather than taken on Hermes' own estimated/actual cost for a provider we cannot verify.
+ * See the header of server/src/hermes-sessions.ts.
+ */
+function scanHermesAnalytics(
+  sessionId: string | undefined,
+  dbPath: string,
+  out: SessionAnalytics,
+): SessionAnalytics {
+  const rows = sessionId ? readHermesUsage(sessionId, dbPath) : []
+  if (rows.length === 0) return out
+  let latestMs = 0
+  for (const row of rows) {
+    addTurn(out.tokens, row.model, {
+      input: row.input_tokens,
+      cacheRead: row.cache_read_tokens,
+      cacheWrite: row.cache_write_tokens,
+      output: row.output_tokens,
+    })
+    const m = out.tokens[row.model]
+    // addTurn counts one call per invocation; corrected to the real API call count so "N replies"
+    // does not read as 1 for a session that made hundreds — the same fix openCodeSpend applies.
+    if (m) m.turns = Math.max(1, row.api_call_count)
+    if (row.last_seen_ms !== null && row.last_seen_ms > latestMs) latestMs = row.last_seen_ms
+  }
+  // No per-turn timestamps exist below the model-usage aggregate, so — like OpenCode — the
+  // session's own clock places its whole spend on one day rather than spreading it across turns
+  // that were never individually timed.
+  if (latestMs > 0) {
+    out.firstTs = latestMs
+    out.lastTs = latestMs
+    const weighted = Object.values(out.tokens).reduce((n, m) => n + m.weighted, 0)
+    out.days[dayKey(latestMs)] = weighted
+    out.hours[String(hourKey(latestMs))] = 1
+  }
+  return out
+}
+
 type TranscriptEventForAnalytics = {
   type?: string
   isCompactSummary?: boolean
@@ -301,6 +344,7 @@ export async function scanSessionAnalytics(
   // in a log, so there is nothing to stream. See openCodeSpend for why `reasoning` is kept out of
   // `output` rather than added to it.
   if (source === 'opencode') return scanOpenCodeAnalytics(sessionId, out)
+  if (source === 'hermes') return scanHermesAnalytics(sessionId, path, out)
   // Not one of these stores records what a turn cost — Copilot bills credits and never writes a
   // token count, and Grok, Kimi and Zed simply do not persist one. So a foreign session is listed
   // and readable and contributes nothing to the spend charts. A zero would claim it was free.

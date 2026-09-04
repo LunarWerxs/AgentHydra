@@ -5,6 +5,7 @@
 // completely untouched; this is a separate, slower, opt-in code path.
 import safeRegex from 'safe-regex2'
 import { readForeignSession } from './foreign-sessions'
+import { listHermesSearchEvents } from './hermes-sessions'
 import { instanceSessionMap } from './instance-sessions'
 import { listOpenCodeSearchEvents } from './opencode-sessions'
 import {
@@ -285,6 +286,48 @@ function searchOpenCode(
   return [...found.values()]
 }
 
+/**
+ * Hermes, same shape as searchOpenCode above but over every store this machine has, not just one —
+ * a Hermes profile is a wholly separate database, so its sessions turn up nowhere in a single-path
+ * lookup. Reuses the paths and profile groupings the transcript index already resolved rather than
+ * re-walking the filesystem a second time to find the same stores.
+ */
+function searchHermes(
+  matcher: Matcher,
+  perFileLimit: number,
+  limit: number,
+): SessionSearchResult[] {
+  const stores = new Map<string, string>() // dbPath -> profile grouping (TranscriptFile.project)
+  for (const f of listTranscriptFiles()) if (f.source === 'hermes') stores.set(f.path, f.project)
+
+  const found = new Map<string, SessionSearchResult>()
+  for (const [dbPath, project] of stores) {
+    for (const event of listHermesSearchEvents(dbPath, project)) {
+      let result = found.get(event.session_id)
+      const idx = matcher(event.text)
+      if (idx === -1) continue
+      if (!result) {
+        if (found.size >= limit) continue
+        result = {
+          session_id: event.session_id,
+          source: 'hermes',
+          cwd: event.cwd,
+          project: event.project,
+          match_count: 0,
+          truncated: false,
+          snippets: [],
+        }
+        found.set(event.session_id, result)
+      }
+      result.match_count++
+      if (result.snippets.length < perFileLimit)
+        result.snippets.push(snippetAround(event.text, idx, SNIPPET_LEN))
+      result.truncated = result.snippets.length < result.match_count
+    }
+  }
+  return [...found.values()]
+}
+
 /** A tiny fixed-size worker pool: runs `items` through `fn` with at most `concurrency` in
  *  flight at once, so many small files don't serialize needlessly while large ones stream. */
 async function pooledMap<T, R>(
@@ -359,10 +402,13 @@ function sortByActivity(results: SessionSearchResult[]): SessionSearchResult[] {
  * text does not exist anywhere is worse off than one that was never given the search at all, so
  * every caller now gets `budgetExhausted` and the file counts behind it.
  */
-/** Every transcript file in scope for this search, OpenCode excluded (it is searched separately,
- *  see `searchOpenCode`), newest-first. */
+/** Every transcript file in scope for this search, OpenCode and Hermes excluded (each is searched
+ *  separately — see `searchOpenCode`/`searchHermes` — because neither is a file this loop can
+ *  stream), newest-first. */
 function resolveSearchFiles(opts: SearchOptions): TranscriptFile[] {
-  let files = listTranscriptFiles().filter((file) => file.source !== 'opencode')
+  let files = listTranscriptFiles().filter(
+    (file) => file.source !== 'opencode' && file.source !== 'hermes',
+  )
   if (opts.source) files = files.filter((file) => file.source === opts.source)
   if (opts.instance) {
     const imap = instanceSessionMap()
@@ -516,6 +562,8 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
   const found: SessionSearchResult[] = []
   const includeOpenCode = (!opts.source || opts.source === 'opencode') && !opts.instance
   if (includeOpenCode) found.push(...searchOpenCode(matcher, perFileLimit, limit))
+  const includeHermes = (!opts.source || opts.source === 'hermes') && !opts.instance
+  if (includeHermes) found.push(...searchHermes(matcher, perFileLimit, limit))
 
   const indexResult = await searchViaIndex(
     opts,

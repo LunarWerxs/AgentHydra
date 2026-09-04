@@ -63,6 +63,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   restarts it rather than a silent hang. Deadline is `AGENTHYDRA_BOOT_DEADLINE_MS`, generous by
   default (120s full daemon, 30s `--instances`); inert under `bun test`. Idea ported in shape from
   NousResearch/hermes-agent's startup watchdog (MIT) - see `server/src/boot-watchdog.ts`.
+- **Hermes Agent joins the readable session sources** (PLAN.md's DEFERRED list named it first: 241k
+  GitHub stars, larger than every other deferred source combined). Hermes keeps everything in one
+  SQLite file, `state.db`, at the root of `HERMES_HOME` (`~/.hermes` on POSIX, `%LOCALAPPDATA%\hermes`
+  on native Windows), plus a separate `state.db` per named profile under `profiles/<name>/`. AgentHydra
+  now lists, tails, exports and body-searches Hermes sessions the same way it already does OpenCode's
+  shared SQLite store, with a profile standing in as the "project" grouping. Usage is priced through
+  AgentHydra's own catalog by model name rather than trusting Hermes' own cost columns, so a model the
+  catalog has no price for costs $0 and is flagged unpriced instead of silently taken on faith. Purely
+  a reader: the queue, composer and resume-in-terminal stay Claude-only, and nothing here writes to a
+  Hermes store. New: `server/src/hermes-sessions.ts`.
 
 - **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
   2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have
