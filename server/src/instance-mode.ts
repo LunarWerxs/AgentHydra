@@ -11,6 +11,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { serveStatic } from 'hono/bun'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
+import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
 import {
   HOST,
   INSTANCE_MODE_PORT,
@@ -285,8 +286,13 @@ if (embeddedWeb) {
   )
 }
 
+// The port probe itself is a named failure mode this watchdog exists for (findFreePort retries up
+// to 50 loopback binds; a hung one would otherwise wedge here silently) - renew right before it,
+// then stand down the instant this process is actually listening. See ./boot-watchdog.ts.
+renewBootWatchdog('listen')
 const boundPort = await findFreePort(INSTANCE_MODE_PORT, 50, HOST)
 Bun.serve({ hostname: HOST, port: boundPort, fetch: app.fetch })
+disarmBootWatchdog()
 writeInstanceModeInfo(boundPort, { mode: 'instances' })
 startupLock.release()
 startupLock = null

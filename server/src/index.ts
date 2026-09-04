@@ -20,6 +20,7 @@ import {
 } from './auto-update'
 import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
+import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
 import {
   APP_ROOT,
   appEnv,
@@ -837,6 +838,7 @@ if (IS_COMPILED) cleanupStaleUpdateArtifacts()
 // cost of that is a possible double-dispatch of one surviving run, against the certainty of no
 // automation at all.
 const REATTACH_DEADLINE_MS = 120_000
+renewBootWatchdog('queue-recovery')
 void Promise.race([
   reattachRuns(),
   new Promise<void>((r) =>
@@ -909,12 +911,18 @@ startResetWatch({
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon
 // via main.ts's dynamic import (where the default export would be silently inert — verified: the
 // daemon "booted", logged its URL, and listened on nothing).
+renewBootWatchdog('listen')
 const server = Bun.serve({
   port: boundPort,
   hostname: HOST,
   fetch: app.fetch,
   idleTimeout: 255,
 })
+// Boot reached a live, listening port - the failure mode this watchdog exists for (a hang before
+// this line) is no longer possible. Everything after here (price catalog, session-scan warm,
+// analytics) is a deliberate background continuation, not boot proper - see the comments below on
+// why those are placed after serve() rather than before it.
+disarmBootWatchdog()
 
 // --- prices (see server/src/price-catalog.ts) --------------------------------------------------
 // Synchronous cache read, then a deferred download if that cache is stale. Placed BEFORE the
@@ -930,6 +938,11 @@ startPriceCatalog()
 // here takes the daemon down in the worst possible shape — the port reads as claimed, then nothing
 // ever serves it. Warming is purely an optimization (the list still builds on demand), so any
 // failure must degrade to a cold first request, never to a dead process.
+//
+// The watchdog is already disarmed by this point (it stands down once listening, above) - this
+// renew is a documented no-op, kept so 'session-scan' still shows up as a named boot phase rather
+// than silently missing one, and so it stays correct if warming is ever moved ahead of serve().
+renewBootWatchdog('session-scan')
 warmSessionScanCache()
   .catch((error) => {
     console.error('[agenthydra] session-scan warm failed; the list will build on demand:', error)

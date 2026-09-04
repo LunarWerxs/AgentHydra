@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { chmodSync, mkdirSync } from 'node:fs'
+import { renewBootWatchdog } from './boot-watchdog'
 import { DATA_DIR, DB_PATH, RUN_LOG_DIR } from './config'
 import { unseal } from './dpapi-seal.mjs'
 import { classifyLimit } from './rate-limit-signal'
@@ -14,6 +15,12 @@ try {
   // Windows ACLs, or a filesystem without POSIX modes; the per-user location/ACL remains in force.
 }
 
+// This whole module runs as an IMPORT-TIME side effect (the daemon entry does `import { getSetting
+// } from './db'` among others), before index.ts's own body executes - see main.ts, which arms the
+// boot watchdog before importing index.ts specifically so this counts. A locked db file (WAL
+// replay against a crash, a concurrent updater holding the handle past its 800ms overlap window)
+// is exactly the kind of stall this exists to catch.
+renewBootWatchdog('db-open')
 export const db = new Database(DB_PATH, { create: true })
 db.exec('pragma journal_mode = WAL')
 db.exec('pragma foreign_keys = ON')
@@ -378,6 +385,13 @@ create index if not exists idx_session_edits_ts on session_edits(ts desc);
     )
   }
 }
+
+// Every additive-migration block above has now run (schema creation, alter-table backfills, the
+// DPAPI-blob and rate-limited/overloaded repairs) - the slowest part of "db open" a corrupt or
+// very old sqlite file could stall on. See renewBootWatchdog('db-open') above this file's schema
+// block for why this module gets its own checkpoints rather than relying on whatever index.ts line
+// happens to run next (this all executes at import time, before that).
+renewBootWatchdog('db-migrations')
 
 // --- shared row coercion ------------------------------------------------------
 

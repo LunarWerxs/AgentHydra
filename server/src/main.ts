@@ -58,6 +58,11 @@ if (mode === '--version' || mode === '-v') {
   }
   process.exit(0)
 } else if (mode === '--instances' || mode === '--instance-mode') {
+  // Armed BEFORE the import: a hang inside instance-mode.ts's own module graph (import-time code,
+  // same as the daemon's db.ts/scheduler.ts below) is in scope, and arming has to precede it. See
+  // ./boot-watchdog.ts; instance mode gets the short deadline since it's meant to be quick.
+  const { armBootWatchdog, INSTANCE_MODE_BOOT_DEADLINE_MS } = await import('./boot-watchdog')
+  armBootWatchdog(INSTANCE_MODE_BOOT_DEADLINE_MS)
   await import('./instance-mode')
 } else if (mode === '--mcp') {
   const { runMcp } = await import('./mcp')
@@ -70,5 +75,13 @@ if (mode === '--version' || mode === '-v') {
   await runFakeClaude(rest[0])
 } else {
   // Default: the daemon. Unknown args are ignored, matching index.ts's own historical behavior.
+  //
+  // Arm the startup watchdog HERE, before importing index.ts, not inside it: importing index.ts is
+  // what pulls in db.ts (schema open + migrations) and, transitively via http-app.ts, scheduler.ts
+  // (which arms its own poll timer at module load) - both run as import-time side effects, before a
+  // single line of index.ts's own body executes, so arming from inside index.ts would already be
+  // too late to cover them. See ./boot-watchdog.ts's module docstring.
+  const { armBootWatchdog, DEFAULT_BOOT_DEADLINE_MS } = await import('./boot-watchdog')
+  armBootWatchdog(DEFAULT_BOOT_DEADLINE_MS)
   await import('./index')
 }

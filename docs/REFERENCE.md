@@ -202,6 +202,7 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_CODEX_PATH` | auto-detected / `codex` | Codex executable used by managed Codex instances |
 | `AGENTHYDRA_CODEX_DESKTOP_PATH` | auto-detected | Codex Desktop GUI executable; useful for nonstandard installs |
 | `AGENTHYDRA_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
+| `AGENTHYDRA_BOOT_DEADLINE_MS` | `120000` (full daemon) / `30000` (`--instances`) | startup-liveness watchdog deadline; if boot hasn't reached a bound port by then, the process logs its last-known phase and exits `87` for the supervisor to restart it (see `server/src/boot-watchdog.ts`) |
 
 `/api/health` returns `service: "agenthydra"`, which is load-bearing for the single-instance
 pointer. It also returns `dataDir`, `dbPath` and `dataDirNotice`, which answer "which database is
