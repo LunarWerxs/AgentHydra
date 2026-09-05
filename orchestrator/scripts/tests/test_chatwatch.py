@@ -8,20 +8,29 @@ of the tool: an archive this orchestrator can prove is its own must be credited 
 it cannot must say EXTERNAL rather than inventing a culprit.
 
 Run: python scripts/tests/test_chatwatch.py
+
+It is also on the suite's gate: `ChatwatchTest` below runs main() under unittest. Until
+2026-09-05 this file had no TestCase at all, so `python -m unittest discover` collected NOTHING
+from it and every check here was invisible to the gate - a guard that never fired, inside the
+file written to catch guards that never fire.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
 import sys
 import tempfile
 import time
+import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE))
 
 FAILS: list[str] = []
 
@@ -121,6 +130,22 @@ def main() -> int:
         return 1 if FAILS else 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+class ChatwatchTest(unittest.TestCase):
+    """The gate's view of this file: every check() above must pass, with the state dir private
+    (see util.isolate_state_dir) and the PASS/FAIL lines kept out of the runner's output."""
+
+    def test_every_chatwatch_check_passes(self):
+        from util import isolate_state_dir
+
+        isolate_state_dir(self)
+        del FAILS[:]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main()
+        self.assertEqual(code, 0, "chatwatch checks failed: " + ", ".join(FAILS) + "\n" + out.getvalue())
+        self.assertEqual(FAILS, [])
 
 
 if __name__ == "__main__":

@@ -17,11 +17,13 @@ import unittest.mock as mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import migrate_chat  # noqa: E402
 from lib import enginelib  # noqa: E402
 from lib import holdlib  # noqa: E402
 from lib import hydralib  # noqa: E402
+from util import isolate_state_dir  # noqa: E402
 
 TARGET = {"name": "pap3r rotate", "num": 11, "isRunning": True}
 FLEET = {"instances": [TARGET]}
@@ -39,6 +41,11 @@ def _refusal(reason, quiet=None, needs=None):
 
 class WaitOnlyForTooSoonTest(unittest.TestCase):
     """The loop is entered on R_TOO_SOON and on nothing else."""
+
+    def setUp(self):
+        # migrate_chat.main records its attempt in the ledger; without this that ledger was the
+        # checkout's own state/ (2026-09-05, probe_state_dir.py).
+        isolate_state_dir(self)
 
     def _run(self, stop_returns, argv_extra, match=None):
         """Drive migrate_chat.main with stop_idle_engine scripted; return (exit, sleeps)."""

@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from stubdaemon import StubDaemon, dossier_query  # noqa: E402
+from util import isolate_state_dir  # noqa: E402
 
 import groundskeeper  # noqa: E402
 from lib import armlib  # noqa: E402
@@ -114,6 +115,18 @@ class UnblockPromptsTest(unittest.TestCase):
 
 class BandDoorTest(unittest.TestCase):
     SNAP = {"bands": {"hot": "over-hard", "warm": "over-soft", "cool": "ok"}, "accounts": []}
+
+    def setUp(self):
+        # A routeless stub, so no test here can reach a REAL daemon: the broken-survey test below
+        # mocked fleet() only, and snapshot() asks for the usage survey first - on this machine
+        # that was a live /api/usage/survey call (seconds, real accounts) whose answer landed in
+        # the checkout's own state/usage-survey.json for the scheduled lanes to read (2026-09-05).
+        isolate_state_dir(self)
+        self.stub = StubDaemon()
+        self.addCleanup(self.stub.close)
+        self._base = hydralib.BASE
+        hydralib.BASE = self.stub.url
+        self.addCleanup(setattr, hydralib, "BASE", self._base)
 
     def test_a_cooked_account_may_not_take_more_work(self):
         for name in ("hot", "warm"):

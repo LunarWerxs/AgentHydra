@@ -27,6 +27,16 @@ a random test could find the "daemon" unreachable and go red with nothing to say
 that points BASE at a dead port still gets a real connection failure: only a registered stub's
 own URL is answered in-process.
 
+Every test class that runs a script or a state-keeping lib calls `isolate_state_dir(self)`
+(`tests/util.py`) first in `setUp`: it points `ORCHESTRATOR_STATE_DIR` at a private temp dir.
+Without it a test writes the CHECKOUT's own `state/`, which in the live checkout is the real
+orchestrator's ledger, locks and usage-survey cache (measured 2026-09-05: a full run left the
+stub's fake accounts in the cache, and four copies of the suite side by side collided on the
+naming lock). `python scripts/tests/probe_state_dir.py` finds any module that still writes there
+(about fifteen minutes; run it after adding a test that drives a script). A test file with no
+`TestCase` is invisible to `unittest discover` - `test_chatwatch.py` was one until the same day -
+so a script-style check file must carry a wrapper class that runs it.
+
 The suite encodes the six inherited rules as regression tests - the Ghost "say the word" case,
 the pending-restart honesty, the breaker cap, the deterministic one-strike stop, the
 recheck-before-acting race, verify-before-claiming - so a change that re-opens a postmortem bug

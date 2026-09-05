@@ -27,7 +27,8 @@ from lib import holdlib  # noqa: E402
 from lib import hydralib  # noqa: E402
 from lib import peerlib  # noqa: E402
 
-from util import run_cli  # noqa: E402
+from stubdaemon import StubDaemon  # noqa: E402
+from util import isolate_state_dir, run_cli  # noqa: E402
 
 HOUR_MS = 3600 * 1000
 
@@ -122,6 +123,18 @@ class PeerChannelTest(unittest.TestCase):
 
 
 class SpawnTest(unittest.TestCase):
+    def setUp(self):
+        # spawn() reads the usage bands before it spawns; with no stub that was a live
+        # /api/usage/survey call whose answer landed in the checkout's own state/ (2026-09-05).
+        # A routeless stub answers 404 to everything, which the band door reads as "no band
+        # known, not blocked" - exactly the neutral footing these tests assume.
+        isolate_state_dir(self)
+        self.stub = StubDaemon()
+        self.addCleanup(self.stub.close)
+        self._base = hydralib.BASE
+        hydralib.BASE = self.stub.url
+        self.addCleanup(setattr, hydralib, "BASE", self._base)
+
     def test_the_doctrine_is_on_the_command_line_not_in_a_file(self):
         # The whole reason the console side is worth trying: permissions and effort are set
         # when the process starts, so nothing can re-save over them and no chat can stop to ask.
