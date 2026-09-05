@@ -42,6 +42,8 @@
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Unarchive   # (only reaches
 #                                              a currently-rendered archived row)
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Rename -NewTitle "Real name"
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Delete   # row menu Delete +
+#                                              the app's own confirm button, both by label
 #   powershell -File misc/Manage-DesktopChat.ps1 -List -Instance 5claude          # rendered rows
 #
 # RENAME (piece 6 of the rebuild, proven live 2026-08-29): the app's own Rename control is the
@@ -59,7 +61,9 @@
 param(
   [string]$Title,
   [string]$Instance = '',
-  [ValidateSet('Archive', 'Unarchive', 'Rename')][string]$Action = 'Archive',
+  # DELETE (2026-09-04, owner rule: a probe chat must be deleted afterwards, not left in the
+  # account): the row's own Delete item, then the app's own confirm button - both by label.
+  [ValidateSet('Archive', 'Unarchive', 'Rename', 'Delete')][string]$Action = 'Archive',
   [string]$NewTitle = '',
   # RENAME ONLY: when several rendered rows carry the same title, take the Nth from the top
   # (1-based). A rename is reversible and lands on a row that wears this very title, so a
@@ -126,6 +130,7 @@ $ACTION_LABELS = @{
   'Archive'   = @('Archive', 'Archivieren', 'Archiver', 'Archivar', 'Archiviare', 'Archiveren')
   'Unarchive' = @('Unarchive', 'Nicht mehr archivieren', 'Désarchiver', 'Desarchivar', 'Dearchiviare', 'Dearchiveren')
   'Rename'    = @('Rename', 'Umbenennen', 'Renommer', 'Cambiar nombre', 'Rinomina', 'Hernoemen')
+  'Delete'    = @('Delete', 'Löschen', 'Supprimer', 'Eliminar', 'Elimina', 'Verwijderen')
 }
 function MenuItemFor($cond, $action) {
   $wanted = $ACTION_LABELS[$action]
@@ -273,6 +278,19 @@ if ($Action -eq 'Rename') {
   $NewTitle = $canon
 }
 
+# LEAVE THE SIDEBAR AS IT WAS FOUND (owner, 2026-09-04: "something keeps clicking interface
+# buttons on my Claude desktop, like the repo names or whatever"). Hunting for a row expands the
+# collapsed project groups, and nothing ever folded them back - so every archive, rename and
+# delete that had to look left his sidebar rearranged. Every group THIS run opens is remembered
+# and collapsed again on the way out, whatever the outcome (`exit` runs the finally).
+$script:OpenedGroups = @()
+function RestoreGroups {
+  $n = 0
+  foreach ($ecp in $script:OpenedGroups) { try { $ecp.Collapse(); $n++ } catch { } }
+  $script:OpenedGroups = @()
+  if ($n -gt 0) { Write-Output "collapsed $n sidebar group(s) back the way they were" }
+}
+try {
 foreach ($m in $mains) {
   $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$m.ProcId)
   $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
@@ -324,7 +342,7 @@ foreach ($m in $mains) {
         $ec = TryPattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
         if (-not $ec) { continue }
         if ($ec.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Collapsed) { continue }
-        $ec.Expand(); Start-Sleep -Milliseconds 250
+        $ec.Expand(); $script:OpenedGroups += $ec; Start-Sleep -Milliseconds 250
       } catch { continue }
     }
     $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
@@ -350,8 +368,51 @@ foreach ($m in $mains) {
   }
   $inv = TryPattern $item ([System.Windows.Automation.InvokePattern]::Pattern)
   if (-not $inv) { Write-Output "FAIL: '$Action' item does not expose Invoke"; exit 1 }
+  # DELETE: the confirm button is identified by DIFFERENCE, never by name alone (review
+  # 2026-09-05: a Button called 'Delete …' can exist anywhere in a rendered conversation, and
+  # a name match across the whole window could Invoke that one). Snapshot every Delete-labelled
+  # Button BEFORE the menu item fires; afterwards only a button that was NOT there before is the
+  # app's confirm. Zero new buttons = no dialog (the row check decides); more than one = refuse.
+  function DeleteButtons($cond) {
+    $out = @()
+    foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+      foreach ($e in $t.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+        try {
+          if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.Button') { continue }
+          $n = ([string]$e.Current.Name).Trim()
+          if (-not $n) { continue }
+          $hit = $false
+          foreach ($lbl in $ACTION_LABELS['Delete']) { if ($n -eq $lbl -or $n.StartsWith($lbl + ' ')) { $hit = $true; break } }
+          if ($hit -and (TryPattern $e ([System.Windows.Automation.InvokePattern]::Pattern))) { $out += $e }
+        } catch { continue }
+      }
+    }
+    return $out
+  }
+  function RuntimeKey($e) { try { return (($e.GetRuntimeId() | ForEach-Object { [string]$_ }) -join '.') } catch { return '' } }
+  $beforeDelete = @{}
+  if ($Action -eq 'Delete') { foreach ($b in (DeleteButtons $cond)) { $beforeDelete[(RuntimeKey $b)] = $true } }
   $inv.Invoke()
   Start-Sleep -Milliseconds 1200
+
+  if ($Action -eq 'Delete') {
+    $hwndTop = [IntPtr]$win.Current.NativeWindowHandle
+    [Ax]::Wake($hwndTop); Start-Sleep -Milliseconds 700
+    $fresh = @((DeleteButtons $cond) | Where-Object { -not $beforeDelete.ContainsKey((RuntimeKey $_)) })
+    if ($fresh.Count -gt 1) {
+      Write-Output ("FAIL: " + $fresh.Count + " new Delete-labelled buttons appeared after the menu item (" +
+        (($fresh | ForEach-Object { "'" + $_.Current.Name + "'" }) -join ', ') + ") - refusing to guess which is the confirm")
+      exit 1
+    }
+    if ($fresh.Count -eq 1) {
+      $confirm = $fresh[0]
+      (TryPattern $confirm ([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+      Start-Sleep -Milliseconds 1500
+      Write-Output "confirmed the app's own delete dialog ('$($confirm.Current.Name)')"
+    } else {
+      Write-Output 'no confirmation dialog appeared after Delete - reading the row to decide'
+    }
+  }
 
   if ($Action -eq 'Rename') {
     # The inline editor: an Edit named 'Rename' exposing ValuePattern. SetValue is focus-free;
@@ -408,10 +469,11 @@ foreach ($m in $mains) {
 
   $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
   $still = [bool](KebabFor $el $Title)
-  if ($Action -eq 'Archive' -and $still) { Write-Output 'INVOKED but row still present - report this, do not blind-retry'; exit 2 }
+  if (($Action -eq 'Archive' -or $Action -eq 'Delete') -and $still) { Write-Output 'INVOKED but row still present - report this, do not blind-retry'; exit 2 }
   Write-Output "$Action done for '$Title' (focus-free: no SetForegroundWindow, no cursor)"
   exit 0
 }
+} finally { RestoreGroups }
 if ($List) { exit 0 }
 Write-Output "FAIL: '$Title' not rendered in any searched running instance (collapsed group or virtualized out - scroll it into view, then retry)"
 exit 3

@@ -69,6 +69,12 @@ def _dispatch(kind: str, session_id: str, before: dict, force: bool) -> tuple[st
         if not reason:
             raise UndoRefusal("the recorded before-image carries no reason to re-hold with")
         return "hold_chat", [session_id, "--reason", reason]
+    if kind == "delete":
+        # the delete kept its own undo copy (state/trash/<sid>/manifest.json); --undo replays it
+        return "delete_chat", ["--undo", session_id]
+    if kind == "undelete":
+        # a restored chat has no engine, so no --stop-idle; the hold rail still applies
+        return "delete_chat", [session_id, *force_flag]
     raise UndoRefusal(f"no undo route is wired for kind {kind!r}")
 
 

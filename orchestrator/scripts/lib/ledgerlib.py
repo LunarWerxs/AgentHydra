@@ -44,7 +44,9 @@ VALID_KINDS = ("archive", "deliver", "surface", "migrate", "rename", "instance",
                "automation", "compact", "preserve",
                # 2026-09-01: the permission-picker route's breaker, and the provenance row a
                # chat gets when the toolbox spawned it (unblock_prompts reads that one)
-               "mode", "spawned")
+               "mode", "spawned",
+               # 2026-09-04: a probe chat deleted after its drill (delete_chat.py)
+               "delete")
 
 # How long a writer may hold the state-file mutex before a waiter treats it as abandoned
 # (a crashed process must never wedge every future note() on this machine).

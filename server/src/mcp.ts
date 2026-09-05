@@ -24,6 +24,10 @@
 // core/self-identity.ts. `whoami`, `check_my_usage` and a bare `usage_budget` all share it, so an
 // agent can answer "whose quota am I spending?" without being told, including from a Claude
 // Desktop session, which sets no CLAUDE_CONFIG_DIR at all.
+import { randomUUID } from 'node:crypto'
+import { unlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { appEnv, IS_COMPILED, PORT, VERSION } from './config'
 import type { SelfIdentityDetection } from './core/self-identity'
 import { readInstanceInfo } from './instance'
@@ -383,6 +387,54 @@ async function normalizeInstanceRef(value: unknown): Promise<unknown> {
       `instance #${hit.num} is a Codex instance; the queue runs Claude sessions, so it cannot be pinned to one. Pick a Claude Desktop or Claude CLI instance.`,
     )
   return `${hit.kind}:${hit.handle}`
+}
+
+/** The orchestrator's arg limit is 4000 characters; a seven-task spec with real prompts can pass
+ *  it. Under the limit the spec travels inline (visible in the returned `command`); over it, it is
+ *  written to a temp file the script reads (fan_out.py accepts either). */
+const SPEC_INLINE_MAX = 3800
+function specArg(spec: string): string {
+  if (spec.length <= SPEC_INLINE_MAX) return spec
+  const path = join(tmpdir(), `agenthydra-fanout-${randomUUID()}.json`)
+  writeFileSync(path, spec, 'utf8')
+  return path
+}
+
+/** What fan_out.py's own exit codes mean (its docstring is the source). */
+const FAN_OUT_VERDICTS: Readonly<Record<number, string>> = Object.freeze({
+  0: 'ok: every member spawned and confirmed / read / delivered / deleted and verified',
+  4: 'partial: some members not confirmed, refused, unassigned, or not delivered - read each member',
+  2: 'nothing happened: no account with room, every spawn refused, or nothing to deliver to',
+  3: 'refused: bad spec, unknown group, or bad usage',
+  1: 'daemon failure',
+})
+
+/** Run one fan_out.py invocation through the daemon and hand back its JSON report with the exit
+ *  code translated. No JSON on stdout means the script never reached its own report (python
+ *  missing, usage error), so the raw run comes back with ok:false rather than a bare failure. */
+async function runFanOut(args: string[], timeoutMs: number): Promise<Record<string, unknown>> {
+  const run = (await api('/api/orchestrator/run', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ script: 'fan_out', args, timeoutMs }),
+  })) as Record<string, unknown>
+  let payload: Record<string, unknown> | null = null
+  try {
+    const parsed: unknown = JSON.parse(str(run.stdout))
+    if (parsed && typeof parsed === 'object') payload = parsed as Record<string, unknown>
+  } catch {
+    payload = null
+  }
+  const code = typeof run.exitCode === 'number' ? run.exitCode : null
+  const verdict = code == null ? 'no exit code' : (FAN_OUT_VERDICTS[code] ?? `exit ${code}`)
+  if (!payload) return { ...run, ok: false, args, verdict }
+  return {
+    ok: code === 0,
+    ...payload,
+    exitCode: code,
+    verdict,
+    ...(str(run.stderr).trim() ? { stderr: run.stderr } : {}),
+  }
 }
 
 export const TOOLS: McpEngineTool[] = [
@@ -776,7 +828,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'add_queue_item',
     description:
-      'MUTATES: add a new item to the run queue. title, cwd, and prompt are required; session_id is required when resuming an existing session (new_chat=false).',
+      '⛔ REFUSED ON EVERY CALL on this machine (HTTP 409): a queued run is a `claude -p` process nobody can see, and the no-headless law (owner, 2026-08-27, restated 2026-08-31: "there is no setting for this") is a literal `false` in headless-policy.ts. The queue remains as history and UI. To start visible work on other accounts use `fan_out`; to continue a chat, `fan_out_send` or the orchestrator courier. If it ever accepts: title, cwd, and prompt are required; session_id is required when resuming an existing session (new_chat=false).',
     inputSchema: S(
       {
         title: { type: 'string' },
@@ -1407,7 +1459,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'launch_terminal_session',
     description:
-      "MUTATES: start a NEW interactive Claude session in `cwd` with `prompt` as its first message, pinned to `instance_ref`'s account ('desktop:<dir>' or 'cli:<id>'; omitted = ambient login). It joins the live peer registry, so peer messaging can reach it, and it appears in the session list. NO CONSOLE WINDOW OPENS by default (owner rule, after automation stacked six of them on his screen in one night): pass visible:true ONLY when a person has asked to watch this particular session, never for routine or automated work.",
+      '⛔ REFUSED ON EVERY CALL on this machine: terminal launches were removed (owner law, 2026-08-31 - a visible console is a window nobody asked for, a hidden one is a headless chat, and there is no setting). The tool stays so a caller gets the reason instead of a missing name. To START new work on another account use `fan_out` (N visible desktop chats, one per account, tracked as a group) or `orchestrator_run spawn_chat` (one chat). To CONTINUE a chat, deliver into it: `fan_out_send`, or `orchestrator_run cli_send` / `stage_reply` + `courier`.',
     inputSchema: S(
       {
         cwd: { type: 'string' },
@@ -1580,6 +1632,222 @@ export const TOOLS: McpEngineTool[] = [
       }
     },
   },
+  // --- fan-out: one task list -> N visible chats on N accounts -------------------------
+  // The owner's ask (2026-09-04): "if I start a single chat and tell it to do something that
+  // involves checking or linting six or seven planes, can it orchestrate those chats into other
+  // accounts and manage them?" Before this the honest answer was "by hand, in ~20 round trips, and
+  // the two tools that look like the answer are refused". These three wrap orchestrator/fan_out.py
+  // exactly the way move_chat wraps migrate_chat: every rail lives in the script.
+  {
+    name: 'fan_out',
+    description:
+      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). Then fan_out_status reads them and fan_out_send steers them. `dry_run: true` returns the plan and spawns nothing. This is a person's act and does not need the tray icon. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
+    inputSchema: S(
+      {
+        tasks: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description: "The group's label for this member (optional).",
+              },
+              cwd: { type: 'string', description: 'Absolute folder the chat starts in.' },
+              prompt: { type: 'string', description: "The chat's first message." },
+            },
+            required: ['cwd', 'prompt'],
+            additionalProperties: false,
+          },
+          description: 'One entry per chat to start. Same prompt across entries is fine.',
+        },
+        group: {
+          type: 'string',
+          description: 'A name for the group (optional; the id is generated).',
+        },
+        per_account: {
+          type: 'number',
+          description: 'Max chats per account in this fan-out. Default 1.',
+        },
+        only: {
+          type: 'array',
+          items: { type: ['string', 'number'] },
+          description: 'Restrict targets to these instances (number, name, label or email).',
+        },
+        exclude: {
+          type: 'array',
+          items: { type: ['string', 'number'] },
+          description: 'Never target these instances (number, name, label or email).',
+        },
+        exclude_self: {
+          type: 'boolean',
+          description:
+            'Default true: the instance THIS process runs as is left out (when its identity is exact). false = allow it.',
+        },
+        open_closed: {
+          type: 'boolean',
+          description: 'Allow opening closed instances when running ones run out. Default false.',
+        },
+        force: {
+          type: 'boolean',
+          description:
+            "A person's word: start a task even though an identical chat already exists.",
+        },
+        dry_run: { type: 'boolean', description: 'Plan only: rank, assign, spawn nothing.' },
+      },
+      ['tasks'],
+    ),
+    run: async (a) => {
+      const rawTasks = Array.isArray(a.tasks) ? a.tasks : []
+      if (rawTasks.length === 0) throw new Error('tasks is required: at least one {cwd, prompt}')
+      const tasks = rawTasks.map((t, i) => {
+        const task = (t ?? {}) as Record<string, unknown>
+        const cwd = str(task.cwd ?? task.folder).trim()
+        const prompt = str(task.prompt).trim()
+        if (!cwd) throw new Error(`task ${i} has no cwd`)
+        if (!prompt) throw new Error(`task ${i} has no prompt`)
+        const title = str(task.title).trim()
+        return { ...(title ? { title } : {}), folder: cwd, prompt }
+      })
+      const groupName = str(a.group).trim()
+      const spec = JSON.stringify({ ...(groupName ? { group: groupName } : {}), tasks })
+      const args = ['--spec', specArg(spec), '--json']
+      const perAccount = Number(a.per_account)
+      if (Number.isFinite(perAccount) && perAccount > 1)
+        args.push('--per-account', String(Math.floor(perAccount)))
+      for (const ref of Array.isArray(a.only) ? a.only : [])
+        args.push('--only', String((await resolveRef(ref)).num))
+      const excludes: string[] = []
+      for (const ref of Array.isArray(a.exclude) ? a.exclude : [])
+        excludes.push(String((await resolveRef(ref)).num))
+      let selfNote: string
+      if (a.exclude_self === false) {
+        selfNote = 'self not excluded (exclude_self: false)'
+      } else {
+        // The caller's own account is the one it is trying to spare, so it is left out — but
+        // only on a PROVEN identity: excluding a guessed number could remove the wrong account
+        // while the real one takes the load.
+        try {
+          const self = await selfIdentity()
+          if (
+            self.instance &&
+            self.confidence === 'exact' &&
+            !self.warning &&
+            self.instance.kind === 'desktop'
+          ) {
+            excludes.push(String(self.instance.num))
+            selfNote = `excluded self = ${instanceLabel(self.instance)}`
+          } else {
+            // say the REAL reason (review 2026-09-05: this used to say "not exact" for every
+            // branch, including an exact answer that was simply a CLI or Codex instance)
+            const why = !self.instance
+              ? 'no numbered instance matched this process'
+              : self.confidence !== 'exact'
+                ? `identity is only ${self.confidence}`
+                : self.warning
+                  ? `identity carries a warning: ${self.warning}`
+                  : `${instanceLabel(self.instance)} is a ${self.instance.kind} instance, which cannot host desktop chats anyway`
+            selfNote = `self NOT excluded: ${why} (${self.summary}); pass exclude explicitly if that matters`
+          }
+        } catch (e) {
+          selfNote = `self NOT excluded: identity lookup failed (${e instanceof Error ? e.message : String(e)})`
+        }
+      }
+      for (const n of new Set(excludes)) args.push('--exclude', n)
+      if (a.open_closed === true) args.push('--open-closed')
+      if (a.force === true) args.push('--force')
+      if (a.dry_run === true) args.push('--dry-run')
+      // one spawn can take ~4 minutes worst case (trust modal, six submit attempts); a dry run
+      // only ranks and plans
+      const timeoutMs =
+        a.dry_run === true ? 180_000 : Math.min(60 * 60_000, 90_000 + tasks.length * 240_000)
+      try {
+        return { ...(await runFanOut(args, timeoutMs)), selfNote }
+      } finally {
+        // a spec that travelled as a temp file is ours to remove once the script has read it
+        // (review 2026-09-05: nothing else ever deleted it)
+        const specPath = args[1]
+        if (specPath !== spec) {
+          try {
+            unlinkSync(specPath)
+          } catch {
+            /* already gone, or never written */
+          }
+        }
+      }
+    },
+  },
+  {
+    name: 'fan_out_status',
+    description:
+      "READ-ONLY: where every chat of a fan_out group stands — per member: instance, sessionId, the gate's verdict as one word (working / idle / stalled / finished / crashed, or the spawn state for a member that never got a session), how long it has been quiet, its cause, and its LAST WORDS (the last assistant text, capped) so a manager chat can read seven results without seven tail_session calls. `group` is the id or name from fan_out (a unique id prefix works); omitted = the most recent group. Also lists the follow-ups already sent to the group.",
+    inputSchema: S({
+      group: {
+        type: 'string',
+        description: 'Group id, name, or unique id prefix. Default: latest.',
+      },
+    }),
+    run: async (a) => {
+      const args = ['status']
+      const group = str(a.group).trim()
+      if (group) args.push(group)
+      args.push('--json')
+      return runFanOut(args, 180_000)
+    },
+  },
+  {
+    name: 'fan_out_send',
+    description:
+      "MUTATES: deliver ONE follow-up message into every chat of a fan_out group (or just the `only` session ids) — the steering half of managing a fan-out. THE PEER PIPE IS NOT USED: a spawned chat nobody has clicked never drains peer messages (measured 2026-09-04), so each member's IDLE engine is stopped first (a working or stuck one refuses and that member is skipped with the reason) and the daemon's message route then types the text into the app's OWN composer, which boots the chat and is verified from the transcript. A member whose app has not yet written its sidebar record cannot be reached this way and says so. A HELD chat is skipped and named; `force` is a PERSON's word past a hold. Deliveries are sequential and each waits for the chat to move, so budget ~1-3 minutes per member. Returns per-member delivered / route / detail / engine; the group record keeps every send.",
+    inputSchema: S(
+      {
+        group: { type: 'string', description: 'Group id, name, or unique id prefix.' },
+        text: { type: 'string', description: 'The message to deliver into each chat.' },
+        only: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Session ids to deliver to (default: every member with a session).',
+        },
+        force: { type: 'boolean', description: "A person's word: deliver past a hold." },
+      },
+      ['group', 'text'],
+    ),
+    run: async (a) => {
+      const group = str(a.group).trim()
+      const text = str(a.text).trim()
+      if (!group)
+        throw new Error('group is required (fan_out_status with no group shows the latest)')
+      if (!text) throw new Error('text is required')
+      const args = ['send', group, '--text', text]
+      const only = Array.isArray(a.only) ? a.only.map(str).filter((s) => s.trim()) : []
+      for (const sid of only) args.push('--only', sid.trim())
+      if (a.force === true) args.push('--force')
+      args.push('--json')
+      return runFanOut(args, 20 * 60_000)
+    },
+  },
+  {
+    name: 'fan_out_delete',
+    description:
+      "MUTATES: DELETE every chat of a fan_out group from the account it lives in — the cleanup a probe or drill fan-out owes (owner rule, 2026-09-04: \"all ping requests or account identification requests must be deleted after they are created and not left in the account\"). Per member, delete_chat.py: an IDLE engine is stopped first (a working or stuck one refuses and that member is reported), an undo copy of the meta record(s) and transcript is taken into orchestrator/state/trash/<sessionId>/, then the running app's OWN Delete control is driven (row menu Delete + the app's confirm button, both by label), then the record and the transcript are removed everywhere, and the result is VERIFIED (dossier empty, transcript gone) — anything left is named, never claimed. A HELD chat is skipped; `force` is a PERSON's word past a hold. `orchestrator_run delete_chat --undo <sessionId>` restores one from its undo copy.",
+    inputSchema: S(
+      {
+        group: { type: 'string', description: 'Group id, name, or unique id prefix.' },
+        force: { type: 'boolean', description: "A person's word: delete past a hold." },
+      },
+      ['group'],
+    ),
+    run: async (a) => {
+      const group = str(a.group).trim()
+      if (!group)
+        throw new Error('group is required (fan_out_status with no group shows the latest)')
+      const args = ['delete', group]
+      if (a.force === true) args.push('--force')
+      args.push('--json')
+      return runFanOut(args, 15 * 60_000)
+    },
+  },
   {
     name: 'archive_desktop_chat',
     description:
@@ -1719,35 +1987,32 @@ export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
  */
 export const SERVER_INSTRUCTIONS = `AgentHydra manages every Claude/Codex account on this machine and knows what each has left.
 
-CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted. You do not need to be told which account you
-are: check_my_usage {} works it out and reads THAT account (~300ms, costs no quota, works with the
-app closed). Do it before any multi-agent fan-out, long task, or work you would hate to lose.
-
-Then act on what comes back:
-- advice.shouldOffload true -> WRITE YOUR CONTEXT, FINDINGS AND NEXT STEPS TO A FILE NOW, before
-  anything else. An agent that runs out mid-task dies holding everything it had not saved.
-- advice.safeToFanOut false -> shrink or postpone the fan-out. Gate on CURRENT + PROJECTED cost,
-  not current alone: a fan-out cannot be recalled once launched, solo work can be stopped at any
-  tool call.
-- A percentage decides nothing on its own. usage_budget {} turns it into a burn rate and
-  exhaustsBeforeReset, which is the field to branch on.
+CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted: check_my_usage {} works out which account
+you are and reads it (~300ms, no quota, works with the app closed). Then act on the answer:
+- advice.shouldOffload true -> WRITE YOUR CONTEXT, FINDINGS AND NEXT STEPS TO A FILE NOW. An
+  agent that runs out mid-task dies holding everything it had not saved.
+- advice.safeToFanOut false -> shrink or postpone the fan-out. Gate on CURRENT + PROJECTED cost:
+  a fan-out cannot be recalled once launched, solo work can be stopped at any tool call.
+- A percentage decides nothing alone; usage_budget {} gives exhaustsBeforeReset, branch on that.
 - The weekly (all-models) % is the binding cap, except on Pro, where the 5-hour window usually
-  binds first, so a low weekly number there is not the reassurance it looks like. Switching model
-  does not dodge the shared weekly bucket.
+  binds first. Switching model does not dodge the shared weekly bucket.
 - severity 'unknown' or a failed read is NOT "plenty left". Never fan out on an unverified read.
 
-NEVER QUOTE AN UNATTRIBUTED PERCENTAGE. Every usage answer carries identity: name the instance.
-If identity.warning is present, the numbers are real but whose they are is not settled, so say so.
-A human who tells you your instance number OVERRULES the detection: do not argue them out of it
-using a config file, because the config files on this machine are exactly what lie about it.
+NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance. If identity.warning is present, say
+so. A human who tells you your instance number OVERRULES the detection; the config files on this
+machine are exactly what lie about it.
 
-list_usage {} surveys every account at once. Route heavy work to one with headroom, by its number.
-Mutating tools say MUTATES: in their description; never run /login for a human.
+list_usage {} surveys every account; route heavy work by instance number. Mutating tools say
+MUTATES:; never run /login for a human.
 
-THE ORCHESTRATOR IS INSIDE THIS SERVER: what should happen to a chat (dry loop, sweep, moving
-chats between accounts, archiving) is orchestrator_menu/run/loop/switch - no second program.
-Nothing there acts unless the tray icon is up: orchestrator_switch {action:"armed"} first.
-Move a chat between accounts in ONE call: move_chat {chat, from, to}.`
+THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); nothing there acts
+unless the tray icon is up: orchestrator_switch {action:"armed"} first. One-call paths needing
+no icon: move_chat {chat, from, to} moves a chat between accounts; fan_out {tasks:[{cwd, prompt}]}
+spreads a task list over OTHER accounts as VISIBLE desktop chats, one each, then fan_out_status {}
+reads every member's verdict and last words and fan_out_send {group, text} steers them all.
+add_queue_item and launch_terminal_session are REFUSED here (no chat nobody can see).
+ANY PROBE CHAT YOU CREATE (a ping, a which-account check, a drill) MUST BE DELETED AFTERWARDS,
+never left in the account: fan_out_delete {group}, or orchestrator_run delete_chat <chat>.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {

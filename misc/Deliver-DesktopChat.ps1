@@ -104,6 +104,19 @@ if ($Instance) {
 }
 if (-not $mains) { Write-Output "FAIL: no running Claude desktop instance matches '$Instance'"; exit 1 }
 
+# LEAVE THE SIDEBAR AS IT WAS FOUND (owner, 2026-09-04: "something keeps clicking interface
+# buttons on my Claude desktop, like the repo names or whatever"). The expansion below opens the
+# collapsed project groups to reach a row, and nothing ever folded them back - so every delivery
+# left his sidebar rearranged. Every group THIS run opens is remembered and collapsed again on
+# the way out, whatever the outcome (`exit` runs the finally).
+$script:OpenedGroups = @()
+function RestoreGroups {
+  $n = 0
+  foreach ($ecp in $script:OpenedGroups) { try { $ecp.Collapse(); $n++ } catch { } }
+  $script:OpenedGroups = @()
+  if ($n -gt 0) { Write-Output "collapsed $n sidebar group(s) back the way they were" }
+}
+try {
 foreach ($m in $mains) {
   $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$m.ProcId)
   $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
@@ -156,7 +169,7 @@ foreach ($m in $mains) {
         $ecp = TryPattern $g ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
         if (-not $ecp) { continue }
         if ($ecp.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Collapsed) { continue }
-        $ecp.Expand(); $expanded++
+        $ecp.Expand(); $script:OpenedGroups += $ecp; $expanded++
         if ($expanded -ge 40) { break }
       } catch { continue }
     }
@@ -447,8 +460,23 @@ foreach ($m in $mains) {
   # proceeded anyway. Text that is not ours means refuse, distinctly, and touch nothing.
   $existing = ''
   try { $existing = [string]$vp.Current.Value } catch { $existing = '' }
-  if ($existing.Trim().Length -gt 0 -and $existing.Trim() -ne $Message.Trim()) {
-    Write-Output "REFUSED: the composer of '$Title' already holds text ($($existing.Trim().Length) chars; Send enabled: $wasEnabled) - not overwriting a draft that is not ours"
+  # THE PLACEHOLDER IS NOT A DRAFT (measured 2026-09-04: an idle chat's EMPTY composer reads
+  # 'Type / for commands' through ValuePattern - 19 characters, Send disabled - and this rail
+  # refused every send into it as "a draft that is not ours"). The tell the comment above
+  # already names decides it: a real draft ENABLES Send, a placeholder never does. Short text
+  # with Send disabled is the app's own hint and is typed over; anything longer than a hint is
+  # still refused even with Send disabled, so a draft the app has not yet enabled Send for
+  # (mid-paint) cannot be lost to this exception.
+  $held = $existing.Trim()
+  # KNOWN placeholders only (review 2026-09-05: "short + Send disabled" alone would also match a
+  # one-word draft the app has not enabled Send for yet). An unknown short text with Send
+  # disabled is still refused, and its text is printed so a new locale's hint can be added here.
+  $COMPOSER_PLACEHOLDERS = @('Type / for commands', 'How can I help you today?', 'How can I help you?',
+    'Reply to Claude...', 'Reply to Claude…', 'Message Claude...', 'Message Claude…')
+  $isPlaceholder = ($held.Length -gt 0 -and -not $wasEnabled -and ($COMPOSER_PLACEHOLDERS -contains $held))
+  if ($isPlaceholder) { Write-Output "composer shows its placeholder ('$held', Send disabled) - treating it as empty" }
+  if ($held.Length -gt 0 -and $held -ne $Message.Trim() -and -not $isPlaceholder) {
+    Write-Output "REFUSED: the composer of '$Title' already holds text ($($held.Length) chars; Send enabled: $wasEnabled) - not overwriting a draft that is not ours"
     exit 7
   }
   $delivered = $false
@@ -483,5 +511,6 @@ foreach ($m in $mains) {
   Write-Output "DELIVERED to '$Title' in $($m.Dir) (focus-free; row-verified before typing)"
   exit 0
 }
+} finally { RestoreGroups }
 Write-Output "FAIL: '$Title' is not rendered in any searched running instance (collapsed group or virtualized out)"
 exit 3

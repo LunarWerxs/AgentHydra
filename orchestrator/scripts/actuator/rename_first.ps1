@@ -85,12 +85,39 @@ $hwndTop = [IntPtr]$win.Current.NativeWindowHandle
 [Ax]::PostEsc($hwndTop); Start-Sleep -Milliseconds 400
 $el = Wake $hwndTop
 
-# Expand every collapsed group so grouped rows render (clone of the original's expansion pass).
+# LEAVE THE SIDEBAR AS IT WAS FOUND, AND OPEN ONLY SIDEBAR GROUPS (owner, 2026-09-04:
+# "something keeps clicking interface buttons on my Claude desktop, like the repo names").
+# This pass used to expand EVERY collapsed ExpandCollapse control with a short name - the exact
+# shape the owner caught on 2026-09-01 ("it's still clicking random shit... trying to select the
+# model"), fixed in manage_desktop_chat.ps1 that day and never here: the MODEL PICKER and every
+# toolbar dropdown are ExpandCollapse controls with short names. Now: a group is identified
+# POSITIVELY by its "New session in <group>" companion button (the app's own shape, nothing
+# else in the window has one), every group this run opens is remembered, and the finally folds
+# them all back whatever the outcome (`exit` runs the finally).
+$script:OpenedGroups = @()
+function RestoreGroups {
+  $n = 0
+  foreach ($ecp in $script:OpenedGroups) { try { $ecp.Collapse(); $n++ } catch { } }
+  $script:OpenedGroups = @()
+  if ($n -gt 0) { Write-Output "collapsed $n sidebar group(s) back the way they were" }
+}
+try {
+$groupNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+foreach ($b in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+  try {
+    $n = $b.Current.Name
+    if ($n -and $n.Length -gt 15 -and $n.StartsWith('New session in ')) { [void]$groupNames.Add($n.Substring(15).Trim()) }
+  } catch { continue }
+}
 foreach ($e in $el.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
-  $ec = TryPattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-  if ($ec -and $ec.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed -and $e.Current.Name -and $e.Current.Name.Length -lt 40) {
-    try { $ec.Expand(); Start-Sleep -Milliseconds 250 } catch { }
-  }
+  try {
+    $n = $e.Current.Name
+    if (-not $n -or -not $groupNames.Contains($n.Trim())) { continue }
+    $ec = TryPattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    if (-not $ec) { continue }
+    if ($ec.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Collapsed) { continue }
+    $ec.Expand(); $script:OpenedGroups += $ec; Start-Sleep -Milliseconds 250
+  } catch { continue }
 }
 $el = Wake $hwndTop
 
@@ -190,3 +217,4 @@ for ($try = 1; $try -le 3 -and -not $renamed; $try++) {
 if (-not $renamed) { Write-Output 'INVOKED but the row does not render the new name'; exit 2 }
 Write-Output "RENAMED first '$rowName' row -> '$NewTitle'"
 exit 0
+} finally { RestoreGroups }

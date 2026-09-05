@@ -68,7 +68,10 @@ banked `/usage reset` credit via `redeem_codex_reset_credit`), usage-check (`che
 orchestrator](#the-orchestrator) below), plus **`move_chat`** - the one-call account move
 (`{chat, from?, to?}`: fuzzy title, account by name/number/label/email, `to` defaults to `"here"`
 and accepts `"best"`; every landing is stamped `bypassPermissions` and the mode is read back from
-disk - see [Moving chats](MOVING-CHATS-BETWEEN-ACCOUNTS.md#the-fast-path-one-call)).
+disk - see [Moving chats](MOVING-CHATS-BETWEEN-ACCOUNTS.md#the-fast-path-one-call)), and
+**`fan_out`** / **`fan_out_status`** / **`fan_out_send`** - one task list spread over OTHER
+accounts as visible desktop chats, one account each, then read and steered as a group (the
+orchestrator table below has the mechanics).
 Mutating tools say `MUTATES:` in their description; there is deliberately no shutdown tool.
 
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
@@ -401,6 +404,7 @@ The daemon exposes it (`server/src/orchestrator.ts`):
 | MCP `orchestrator_loop` | `loop` (dry by default; `live: true` acts) |
 | MCP `orchestrator_switch` | the tray icon: `armed` (read) · `arm` · `arm_now` · `resume` · `pause` · `disarm` |
 | MCP `move_chat` | `migrate_chat <chat> --to <n> --from <n> --stop-idle --now --idle-wait 330 --json` in one call: resolves `from`/`to` (number, name, label, email, `here`, `best`) before posting; the script does the fuzzy title match, the background-job scan behind `--now`, the verified landing and the bypass read-back |
+| MCP `fan_out` / `fan_out_status` / `fan_out_send` | `fan_out --spec <json> --json` (+ `--per-account`, `--only`, `--exclude`, `--open-closed`, `--force`, `--dry-run`), `fan_out status [<group>] --json`, `fan_out send <group> --text ... --json`: ONE task list -> N visible desktop chats, one account each, tracked as a group (owner ask, 2026-09-04). The MCP tool turns `{cwd, prompt, title?}` tasks into the spec (a temp file when it would exceed the 4000-character arg limit), resolves `only`/`exclude` refs to instance numbers, and excludes the CALLING chat's own account by default (`exclude_self: false` to allow it; only on an exact identity). The script ranks accounts by real room (balance.py's fill ceiling minus peak; unknown is never room), open instances first, spawns each chat through `spawn_chat.py` ONE AT A TIME (two lanes driving two windows at once is how text lands in the wrong pane), refuses a task whose prompt already runs in the fleet while letting one spec share a prompt across its own tasks, reports an unassigned task rather than dropping it, and keeps the group in `orchestrator/state/fanouts.json`. `status` reads each member's gate verdict + last words; `send` stops each member's IDLE engine first (the peer pipe does not steer a chat nobody has clicked - measured on the first drill) and lets the daemon's message route boot it through the app's composer, holds respected; `delete` (MCP `fan_out_delete`) runs `delete_chat.py` on every member - the cleanup a probe fan-out owes (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account). Deleting a chat IN THE APP is not that: the app drops its record and leaves the transcript plus a `<sid>.desktop-released.json` marker, so `orchestrator_run delete_chat --released` lists those leftovers and `--yes` removes them, each with an undo copy. None of them needs the tray icon: a person asked. `add_queue_item` and `launch_terminal_session` are refused on this machine (no-headless law) and now say so in their descriptions |
 
 The script name is validated against the menu grammar and the arguments travel as an argv
 array - no shell in the path. Every rule stays in the scripts: **nothing acts without the tray
