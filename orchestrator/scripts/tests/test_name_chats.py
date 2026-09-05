@@ -2,6 +2,7 @@
 can prove, quarantines what needs an AI-written name, never invents, always terminates."""
 
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -38,6 +39,13 @@ class NamePassTest(unittest.TestCase):
         self.stub = StubDaemon()
         hydralib.BASE = self.stub.url
         self._tmp = tempfile.TemporaryDirectory()
+        # The pass takes state/naming-<instance>.lock under the STATE DIR. Without this line that
+        # is the checkout's own state/, shared with a scheduled pass running from the same checkout
+        # and with any other copy of this suite: the second holder finds the lock taken, names
+        # nothing, and four tests here read "nothing named" as a bug (four suites side by side,
+        # 2026-09-05: three of them red exactly this way).
+        os.environ["ORCHESTRATOR_STATE_DIR"] = str(Path(self._tmp.name) / "state")
+        self.addCleanup(os.environ.pop, "ORCHESTRATOR_STATE_DIR", None)
         self.store = Path(self._tmp.name) / "claude-code-sessions"
         d = self.store / "org" / "user"
         d.mkdir(parents=True)
