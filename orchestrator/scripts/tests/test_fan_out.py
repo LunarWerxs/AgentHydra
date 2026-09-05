@@ -280,8 +280,9 @@ class StatusAndSendTest(FanOutBase):
         ])
 
     def _spawn_two(self):
-        code, out, _ = run_cli(fan_out.main, ["--spec", self.spec(2, group="g1"), "--json"])
-        self.assertEqual(code, 0, out)
+        code, out, err = run_cli(fan_out.main, ["--spec", self.spec(2, group="g1"), "--json"])
+        # a refusal or a daemon failure explains itself on stderr; a bare "1 != 0" explains nothing
+        self.assertEqual(code, 0, err or out)
         return json.loads(out)
 
     def test_status_reads_each_members_verdict_and_last_words(self):
@@ -484,12 +485,55 @@ class StatusAndSendTest(FanOutBase):
 
     def test_list_shows_every_group_newest_last(self):
         self._spawn_two()
-        run_cli(fan_out.main, ["--spec", self.spec(1, group="g3"), "--json"])
-        code, out, _ = run_cli(fan_out.main, ["list", "--json"])
-        self.assertEqual(code, 0)
+        code, out, err = run_cli(fan_out.main, ["--spec", self.spec(1, group="g3"), "--json"])
+        self.assertEqual(code, 0, err or out)
+        code, out, err = run_cli(fan_out.main, ["list", "--json"])
+        self.assertEqual(code, 0, err or out)
         rows = json.loads(out)["groups"]
         self.assertEqual([r["name"] for r in rows], ["g1", "g3"])
         self.assertEqual(rows[0]["spawned"], 2)
+
+
+class OpenAndWaitTest(FanOutBase):
+    """_open_and_wait drives the wait with an injected clock and sleep, so the verdict depends on
+    the instance, never on where the wall clock happened to fall between two looks."""
+
+    def _drive(self, comes_up_at, wait_secs=12):
+        now = [0.0]
+        sleeps = []
+
+        def sleep(secs):
+            sleeps.append(secs)
+            now[0] += secs
+
+        def fleet(method, path, query, body):
+            return {"instances": [fleet_row(5, "erin", "erin@x.com", running=now[0] >= comes_up_at)]}
+
+        self.stub.routes["/api/fleet"] = fleet
+        self.stub.routes["/api/instances/c%3A%5Ci%5Cerin/open"] = {"ok": True}
+        with mock.patch.object(fan_out, "OPEN_WAIT_SECS", wait_secs):
+            why = fan_out._open_and_wait({"dir": "c:\\i\\erin", "num": 5},
+                                         clock=lambda: now[0], sleep=sleep)
+        return why, sleeps
+
+    def test_an_instance_up_by_the_deadline_is_seen_by_the_look_after_the_last_sleep(self):
+        # up at t=12 exactly: looks at 0, 5, 10 say no; the last sleep is the 2s LEFT, not 5;
+        # the look at t=12 says yes. The old loop slept 5, woke at 15 past the deadline, and
+        # reported an instance that was running as never having come up.
+        why, sleeps = self._drive(comes_up_at=12)
+        self.assertIsNone(why)
+        self.assertEqual(sleeps, [5, 5, 2])
+
+    def test_an_instance_that_never_comes_up_is_reported_after_exactly_the_wait(self):
+        why, sleeps = self._drive(comes_up_at=10_000)
+        self.assertEqual(why, "opened, but not running after 12s")
+        self.assertEqual(sum(sleeps), 12)
+        self.assertTrue(all(0 < s <= fan_out.OPEN_POLL_SECS for s in sleeps), sleeps)
+
+    def test_an_instance_already_running_costs_no_sleep(self):
+        why, sleeps = self._drive(comes_up_at=0)
+        self.assertIsNone(why)
+        self.assertEqual(sleeps, [])
 
 
 if __name__ == "__main__":

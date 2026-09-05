@@ -14,12 +14,25 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Callable
 import urllib.error
 import urllib.parse
 import urllib.request
 
 BASE = os.environ.get("AGENTHYDRA_URL", "http://127.0.0.1:7787")
 TIMEOUT_SECS = float(os.environ.get("AGENTHYDRA_TIMEOUT_SECS", "30"))
+
+# THE TEST SEAM, AND WHY THE SUITE NEEDS ONE (measured 2026-09-05). The unit tests' stub daemon
+# answered over a real loopback socket, so every call here opened one TCP connection and left it
+# in TIME_WAIT for about two minutes. Windows hands out 16,384 ephemeral ports; the 908-test
+# orchestrator suite burns thousands of them per run, and beside another socket-heavy suite the
+# pool ran dry: `connect` failed, the daemon read as down, and whichever test was mid-call went
+# red with nothing on stdout to say why (one fan-out listing test in a full run on a busy machine,
+# green in thirty isolated runs). A stub registers an in-process handler under its base URL; a
+# request to that BASE is dispatched in-process and opens no socket, so the suite no longer
+# depends on the machine's free port pool. Any other BASE takes the real transport, so a test that
+# points at a dead port still gets a real connection failure. Production registers nothing here.
+INPROC: dict[str, Callable[[str, str, bytes | None], tuple[int, bytes]]] = {}
 
 
 class DaemonError(RuntimeError):
@@ -54,27 +67,42 @@ class AmbiguousChat(LookupError):
         self.matches = matches
 
 
-def _request(method: str, path: str, body: dict | None = None, timeout: float | None = None) -> dict | list:
-    url = f"{BASE}{path}"
-    data = json.dumps(body).encode() if body is not None else None
+def _send(method: str, path: str, data: bytes | None, timeout: float) -> tuple[int, bytes]:
+    """(HTTP status, raw body) for one request to BASE - over the wire, or from the in-process
+    stub registered for BASE (INPROC above). Only a transport failure raises here; the status is
+    the caller's to judge, so both transports feed the same mapping in _request."""
+    inproc = INPROC.get(BASE)
+    if inproc is not None:
+        try:
+            return inproc(method, path, data)
+        except DaemonError:
+            raise
+        except Exception as e:  # a stub route that blows up is the daemon hanging up mid-answer
+            raise DaemonError(path, None, f"stub route failed: {e!r}") from None
     req = urllib.request.Request(
-        url,
+        f"{BASE}{path}",
         data=data,
         method=method,
         headers={"accept": "application/json", "content-type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout if timeout else TIMEOUT_SECS) as res:
-            raw = res.read()
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            return res.status, res.read()
     except urllib.error.HTTPError as e:
-        detail = ""
         try:
-            detail = e.read().decode(errors="replace")[:500]
+            detail = e.read()
         except Exception:
-            pass
-        raise DaemonError(path, e.code, detail) from None
+            detail = b""
+        return e.code, detail
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise DaemonError(path, None, f"{e} - is the daemon running? try: curl {BASE}/api/health") from None
+
+
+def _request(method: str, path: str, body: dict | None = None, timeout: float | None = None) -> dict | list:
+    data = json.dumps(body).encode() if body is not None else None
+    status, raw = _send(method, path, data, timeout if timeout else TIMEOUT_SECS)
+    if status >= 400:
+        raise DaemonError(path, status, raw.decode(errors="replace")[:500])
     try:
         return json.loads(raw)
     except json.JSONDecodeError:

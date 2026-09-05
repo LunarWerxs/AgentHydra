@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+import unittest.mock as mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -43,6 +44,66 @@ class HydralibTest(unittest.TestCase):
         with self.assertRaises(hydralib.DaemonError) as ctx:
             hydralib.health()
         self.assertIn("non-JSON", ctx.exception.detail)
+
+    def test_a_registered_stub_answers_in_process_and_opens_no_socket(self):
+        # The suite must not spend one ephemeral port per call (2026-09-05: the pool ran dry under
+        # load and a random test read the daemon as down). With the stub registered, the wire
+        # transport is never reached - here it would fail loudly if it were.
+        self.stub.routes["/api/health"] = {"ok": True, "via": "inproc"}
+        with mock.patch.object(hydralib.urllib.request, "urlopen",
+                               side_effect=AssertionError("a socket was opened")):
+            self.assertEqual(hydralib.health(), {"ok": True, "via": "inproc"})
+            self.stub.routes["/api/nothing"] = (404, {"error": "nope"})
+            with self.assertRaises(hydralib.DaemonError) as ctx:
+                hydralib.api_get("/api/nothing?x=1")
+        self.assertEqual(ctx.exception.status, 404)
+        self.assertIn(("/api/health", ""), self.stub.gets)
+        self.assertIn(("/api/nothing", "x=1"), self.stub.gets)
+
+    def test_a_base_with_no_stub_registered_takes_the_wire(self):
+        # A test that points BASE at a dead port must still get a real connection failure, not
+        # some other stub's answer.
+        self.stub.routes["/api/health"] = {"ok": True}
+        hydralib.BASE = "http://127.0.0.1:9"
+        old = hydralib.TIMEOUT_SECS
+        hydralib.TIMEOUT_SECS = 0.3
+        try:
+            with self.assertRaises(hydralib.DaemonError) as ctx:
+                hydralib.health()
+        finally:
+            hydralib.TIMEOUT_SECS = old
+        self.assertIsNone(ctx.exception.status)
+        self.assertEqual(self.stub.gets, [])
+
+    def test_the_stub_still_speaks_http_for_a_caller_that_is_not_hydralib(self):
+        # a subprocess handed AGENTHYDRA_URL, or a test using urllib itself, gets the same answers
+        import urllib.error
+        import urllib.request
+
+        self.stub.routes["/api/health"] = {"ok": True, "via": "http"}
+        with urllib.request.urlopen(f"{self.stub.url}/api/health", timeout=5) as r:
+            self.assertEqual(json.loads(r.read()), {"ok": True, "via": "http"})
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(f"{self.stub.url}/api/missing", timeout=5)
+        self.assertEqual(ctx.exception.code, 404)
+        self.assertEqual(self.stub.gets, [("/api/health", ""), ("/api/missing", "")])
+
+    def test_a_stub_route_that_raises_reads_as_the_daemon_hanging_up(self):
+        def route(method, path, query, body):
+            raise RuntimeError("route bug")
+
+        self.stub.routes["/api/health"] = route
+        with self.assertRaises(hydralib.DaemonError) as ctx:
+            hydralib.health()
+        self.assertIsNone(ctx.exception.status)
+        self.assertIn("route bug", ctx.exception.detail)
+
+    def test_closing_the_stub_unregisters_it(self):
+        url = self.stub.url
+        self.assertIn(url, hydralib.INPROC)
+        self.stub.close()
+        self.assertNotIn(url, hydralib.INPROC)
+        self.stub = StubDaemon()  # tearDown closes this one
 
     def test_running_count_prefers_the_live_endpoint(self):
         self.stub.routes["/api/sessions/live"] = {"count": 7, "sessions": []}

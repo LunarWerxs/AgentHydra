@@ -85,8 +85,10 @@ import spawn_chat
 from lib import clilib, enginelib, gatelib, holdlib, hydralib, ledgerlib
 
 STATE_FILE = "fanouts.json"
-# How long to wait for a closed instance we were told to open to report running.
+# How long to wait for a closed instance we were told to open to report running, and how long
+# between looks.
 OPEN_WAIT_SECS = 90
+OPEN_POLL_SECS = 5
 # How much of a member's last words `status` carries (the whole text stays in its transcript).
 LAST_TEXT_CHARS = 600
 # The message route's own confirm window; the call waits that long for the chat to move. A
@@ -280,24 +282,32 @@ def plan(tasks: list[dict], targets: list[dict], per_account: int = 1) -> list[d
 
 # --- spawning --------------------------------------------------------------------------------
 
-def _open_and_wait(target: dict) -> str | None:
+def _open_and_wait(target: dict, *, clock=time.monotonic, sleep=time.sleep) -> str | None:
     """Open a closed instance and wait for it to report running. Returns None when it is up,
-    else why not."""
+    else why not.
+
+    Look first, sleep after, never past the deadline, and look ONE more time once it has passed.
+    The old loop tested the clock before each look, so an instance that came up during the last
+    sleep was reported as never running - a verdict that depended on where the wall clock fell,
+    not on the instance. `clock` (monotonic: a clock step cannot shorten or stretch the wait) and
+    `sleep` are injectable so a test drives the wait without waiting."""
     try:
         import urllib.parse
         hydralib.api_post(f"/api/instances/{urllib.parse.quote(str(target['dir']), safe='')}/open")
     except hydralib.DaemonError as err:
         return f"open failed: {err.detail or err}"
-    deadline = time.time() + OPEN_WAIT_SECS
-    while time.time() < deadline:
+    deadline = clock() + OPEN_WAIT_SECS
+    while True:
         try:
             inst = hydralib.resolve_instance(hydralib.fleet(), str(target["num"]))
         except hydralib.DaemonError:
             inst = None
         if inst and inst.get("isRunning"):
             return None
-        time.sleep(5)
-    return f"opened, but not running after {OPEN_WAIT_SECS}s"
+        left = deadline - clock()
+        if left <= 0:
+            return f"opened, but not running after {OPEN_WAIT_SECS}s"
+        sleep(min(OPEN_POLL_SECS, left))
 
 
 def _member(assignment: dict) -> dict:

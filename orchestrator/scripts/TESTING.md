@@ -11,10 +11,21 @@ python -m unittest scripts.tests.test_archive_chat  # one script's suite
 ```
 
 Every script has a dedicated test file. The daemon is a stub (`tests/stubdaemon.py`) serving
-declared routes on an ephemeral port and RECORDING every POST, so tests assert not just exit
-codes but exactly what an act script sent - and, just as important, that a refused act sent
-NOTHING. Transcripts are real temp files with controlled mtimes, so the gate is tested over
-actual bytes, not mocks of itself.
+declared routes and RECORDING every POST, so tests assert not just exit codes but exactly what
+an act script sent - and, just as important, that a refused act sent NOTHING. Transcripts are
+real temp files with controlled mtimes, so the gate is tested over actual bytes, not mocks of
+itself.
+
+The stub answers `hydralib` IN-PROCESS: a test sets `hydralib.BASE = stub.url` as before, and
+every hydralib call to that BASE is dispatched to the stub's routes without opening a socket
+(`hydralib.INPROC`). The stub still listens on its ephemeral port for anything that speaks HTTP
+itself (a subprocess handed `AGENTHYDRA_URL`, a test using urllib directly) and answers through
+the same dispatcher. Why (measured 2026-09-05): one loopback connection per request left a
+TIME_WAIT socket behind for about two minutes, so the 908-test suite held over a thousand of
+Windows' 16,384 ephemeral ports at a time, and beside other socket-heavy work on the same machine
+a random test could find the "daemon" unreachable and go red with nothing to say why. A test
+that points BASE at a dead port still gets a real connection failure: only a registered stub's
+own URL is answered in-process.
 
 The suite encodes the six inherited rules as regression tests - the Ghost "say the word" case,
 the pending-restart honesty, the breaker cap, the deterministic one-strike stop, the
