@@ -65,7 +65,10 @@ instances (list / create / CLI launch / login helper / desktop open / focus / qu
 banked `/usage reset` credit via `redeem_codex_reset_credit`), usage-check (`check_usage`,
 `check_my_usage`), the auto-resume monitor (get / set), an update check, and the orchestrator
 (`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch` - see [The
-orchestrator](#the-orchestrator) below).
+orchestrator](#the-orchestrator) below), plus **`move_chat`** - the one-call account move
+(`{chat, from?, to?}`: fuzzy title, account by name/number/label/email, `to` defaults to `"here"`
+and accepts `"best"`; every landing is stamped `bypassPermissions` and the mode is read back from
+disk - see [Moving chats](MOVING-CHATS-BETWEEN-ACCOUNTS.md#the-fast-path-one-call)).
 Mutating tools say `MUTATES:` in their description; there is deliberately no shutdown tool.
 
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
@@ -397,6 +400,7 @@ The daemon exposes it (`server/src/orchestrator.ts`):
 | MCP `orchestrator_run` | the POST above |
 | MCP `orchestrator_loop` | `loop` (dry by default; `live: true` acts) |
 | MCP `orchestrator_switch` | the tray icon: `armed` (read) · `arm` · `arm_now` · `resume` · `pause` · `disarm` |
+| MCP `move_chat` | `migrate_chat <chat> --to <n> --from <n> --stop-idle --now --idle-wait 330 --json` in one call: resolves `from`/`to` (number, name, label, email, `here`, `best`) before posting; the script does the fuzzy title match, the background-job scan behind `--now`, the verified landing and the bypass read-back |
 
 The script name is validated against the menu grammar and the arguments travel as an argv
 array - no shell in the path. Every rule stays in the scripts: **nothing acts without the tray

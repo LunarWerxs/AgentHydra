@@ -1,8 +1,51 @@
 # Moving chats between accounts
 
-Everything in this file was learned the hard way on 2026-08-28, moving 13 chats off an account
+## The fast path: one call
+
+**Use the MCP tool `move_chat`. Do not recon first.** (Owner, 2026-09-04: "slower than I wanted
+... I use this function frequently." The move itself had taken ~70 s; the twelve round trips
+around it - find which instance "Martin" is, list its chats to find the spelling, load tool
+schemas, read `--help`, check quota, run, verify - took minutes.)
+
+```
+move_chat { chat: "arkitecht cleanup", from: "Martin" }            # to "here" (this account)
+move_chat { chat: "arkitecht cleanup", from: "Martin", to: "best" } # to the emptiest account
+move_chat { chat: "...", to: 36, dry_run: true }                    # plan only, moves nothing
+```
+
+- `chat` is a title fragment, matched **fuzzily** (case, punctuation, a misspelling: `arkitecht
+  cleanup` finds `Arkitekt cleanup`), or a session id. Two different chats that both fit are a
+  refusal that names both - never a coin flip.
+- `from` is the account it lives on - instance number, name, label or email. It scopes the search
+  (a title two accounts share is not ambiguous) and a typo can never select a chat on an account
+  you did not name. If only an archived twin is on that account, the tool says where the live copy
+  is instead of moving it.
+- `to` defaults to `"here"` (the instance the calling process runs as, resolved like `whoami` and
+  refused unless that identity is exact - a wrong guess bills the wrong account). `"best"` ranks
+  the running desktop instances by real headroom (tier × remaining weekly %, from the usage
+  survey; never the source, never a walled 5-hour window). Or a number/name/label/email.
+- It is `orchestrator_run migrate_chat ... --stop-idle --now --idle-wait 330` underneath, so every
+  rail is intact: a hold (`force` is a PERSON's word - pass it only when the human asked), the
+  breaker, the live-writer refusal, the verified landing, the source row settled.
+- **`--now` is what makes it fast.** The standing 300 s quiet window existed to tell "waiting" from
+  "background work" by time alone. `enginelib.background_work` reads the work itself: every
+  background job the CLI reported launching (`Command running in background with ID: …`,
+  `moved to the background (ID: …)`, `Workflow launched in background. Task ID: …`) against every
+  `<task-notification>` that reported one back, ignoring jobs of a previous engine (a resume kills
+  them). No job outstanding + a finished turn = idle after 15 s. An outstanding job keeps the
+  300 s window even for a person; a working or stuck engine refuses as before.
+- **Bypass is verified, not hoped.** After the landing stamps `bypassPermissions` + ultracode, the
+  landed record is watched for 8 s through the app's boot re-save; any flip is re-stamped and
+  `permissionMode` in the result is what the disk said *last*.
+
+Read `report`; `landed` is the verdict, `timings` says where the seconds went.
+
+---
+
+Everything below was learned the hard way on 2026-08-28, moving 13 chats off an account
 whose org had disabled Claude Code. Each section is a trap that produced a wrong result which
-*looked* correct at the time. Read this before moving any chat between instances or accounts.
+*looked* correct at the time. Read this before moving any chat between instances or accounts
+by hand - the fast path above already handles every one of them.
 
 ## The account IS the folder. Re-logging an instance orphans its chats.
 

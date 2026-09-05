@@ -147,7 +147,13 @@ def resolve_one(query: str) -> dict:
     postmortem: the UI tool correctly refuses to disambiguate two rows sharing a title, and
     v2 retried that refusal forever.
     """
-    matches = dossier(query)
+    return choose_match(query, dossier(query))
+
+
+def choose_match(query: str, matches: list[dict]) -> dict:
+    """resolve_one's judgment over an ALREADY-FETCHED match list, so a caller that has
+    narrowed the dossier's answer itself (migrate_chat --from scopes it to one instance) gets
+    exactly the same twin/lineage rules rather than a second copy of them."""
     if not matches:
         raise ChatNotFound(query)
     if len(matches) > 1:
@@ -180,7 +186,7 @@ def resolve_instance(fleet_data: dict, wanted: str) -> dict | None:
     on any change (review finding: the one-script-per-functionality property was quietly
     false for those edges). Shared judgment belongs in a lib; actions stay individual.
     """
-    w = str(wanted).strip().lower()
+    w = str(wanted).strip().lower().lstrip("#")
     for i in fleet_data.get("instances", []):
         if str(i.get("num")) == w:
             return i
@@ -188,7 +194,13 @@ def resolve_instance(fleet_data: dict, wanted: str) -> dict | None:
             return i
         if str(i.get("dir", "")).lower() == w:
             return i
-    return None
+    # A person names an account by its LABEL ("Anuthuyr") or its EMAIL far more often than
+    # by its folder; both are on the fleet row, so accept them - exact and unambiguous, like
+    # the daemon's own resolver. Tried after the folder spellings so nothing above changes.
+    hits = [i for i in fleet_data.get("instances", [])
+            if str(i.get("label") or "").lower() == w
+            or str((i.get("account") or {}).get("email") or "").lower() == w]
+    return hits[0] if len(hits) == 1 else None
 
 
 def instances_by_name() -> dict[str, dict]:

@@ -31,6 +31,9 @@ Callers: migrate_chat --stop-idle (the sweep's move and land lanes pass it) and 
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import subprocess
 import time
 
@@ -40,6 +43,14 @@ from lib import hydralib
 
 # A completed turn followed by this much silence is a chat that is waiting, not working.
 IDLE_STOP_SECS = 300
+# THE FAST WINDOW (owner, 2026-09-04: a hand move "should have taken seconds, not minutes").
+# The 300s above exists to tell "waiting" from "background work" by TIME, because that was
+# the only signal. background_work() reads the signal itself - a background task the CLI
+# launched and has not yet reported back - so a person's move (migrate_chat --now) of a
+# chat with a finished turn and NO outstanding task needs only this much quiet: enough for
+# the app to flush its last write, not five minutes of nothing. The unattended lanes never
+# pass --now; an outstanding task keeps the standing window even for a person.
+NOW_QUIET_SECS = 15
 # How long to wait for the daemon to stop listing the chat as live after the kill.
 STOP_CONFIRM_SECS = 20
 
@@ -79,14 +90,21 @@ def usage_wall_notice(match: dict) -> str | None:
     return None
 
 
-def idle_report(match: dict, min_quiet_secs: int = IDLE_STOP_SECS) -> dict:
+def idle_report(match: dict, min_quiet_secs: int = IDLE_STOP_SECS,
+                idle_after_secs: int = gatelib.IDLE_AFTER_SECS) -> dict:
     """{idle, reason, why, quiet_secs, needs_secs}: may this engine be stopped right now?
 
     `match` is a resolved dossier match (hydralib.resolve_one) with its live block. Answers
     idle=False for anything the gate cannot read, anything mid-turn, anything stuck, and
     anything quiet for less than `min_quiet_secs` - `reason` says which, in one word a
     caller can branch on, and `needs_secs` is set ONLY on R_TOO_SOON, where the deficit is
-    a real number of seconds rather than an open question."""
+    a real number of seconds rather than an open question.
+
+    `idle_after_secs` is how long the gate waits before it even reads the tail (gatelib's
+    180s by default). A chat quieter than that used to come back R_WORKING ("may be
+    working"), which no wait could cure - so --idle-wait refused a 100s-quiet chat at once
+    and the caller re-ran on a guess. The gate not having LOOKED yet is exactly the one
+    refusal time cures, so it is R_TOO_SOON now, with the deficit spelled out."""
     def no(reason: str, why: str, **extra) -> dict:
         return {"idle": False, "reason": reason, "why": why,
                 "quiet_secs": None, "needs_secs": None, **extra}
@@ -109,7 +127,7 @@ def idle_report(match: dict, min_quiet_secs: int = IDLE_STOP_SECS) -> dict:
                 "why": f"idle: parked at a usage wall ({wall[:90]}) - it cannot write until the account resets",
                 "quiet_secs": None, "needs_secs": 0}
     try:
-        verdict = gatelib.gate_match(match, hydralib.session_row)
+        verdict = gatelib.gate_match(match, hydralib.session_row, idle_after_secs=idle_after_secs)
     except hydralib.DaemonError as err:
         return no(R_UNREADABLE, f"the gate could not read the chat ({err}) - not stopping blind")
     if verdict is None:
@@ -122,6 +140,14 @@ def idle_report(match: dict, min_quiet_secs: int = IDLE_STOP_SECS) -> dict:
                   f"the engine looks STUCK, not idle ({verdict['stalled'].get('why', '')[:120]}) - a person decides")
     idle = verdict.get("idle")
     if not idle:
+        gate_quiet = verdict.get("quiet_secs")
+        if isinstance(gate_quiet, int) and gate_quiet < idle_after_secs:
+            # The gate has not read the tail yet - nothing is known either way, and the
+            # only thing missing is seconds. Waitable, with the deficit stated.
+            return {"idle": False, "reason": R_TOO_SOON,
+                    "why": f"quiet for only {gate_quiet}s - the gate reads the tail at "
+                           f"{idle_after_secs}s; giving it time",
+                    "quiet_secs": gate_quiet, "needs_secs": int(idle_after_secs)}
         return no(R_WORKING,
                   f"the engine is alive and may be working ({verdict.get('cause', '')[:140]})")
     quiet = int(idle.get("quiet_secs") or 0)
@@ -141,12 +167,13 @@ def idle_verdict(match: dict, min_quiet_secs: int = IDLE_STOP_SECS) -> tuple[boo
     return report["idle"], report["why"]
 
 
-def stop_idle_engine(match: dict, min_quiet_secs: int = IDLE_STOP_SECS) -> dict:
+def stop_idle_engine(match: dict, min_quiet_secs: int = IDLE_STOP_SECS,
+                     idle_after_secs: int = gatelib.IDLE_AFTER_SECS) -> dict:
     """Stop the chat's idle engine and CONFIRM it is gone. Returns
     {stopped: bool, pid, why, reason, quiet_secs, needs_secs, confirmedSecs}. Never touches a
     working or stuck engine. `reason` is idle_report's code, so a caller can tell the one
     refusal that time cures (R_TOO_SOON) from every refusal that it does not."""
-    report = idle_report(match, min_quiet_secs)
+    report = idle_report(match, min_quiet_secs, idle_after_secs)
     idle, why = report["idle"], report["why"]
     pid = (match.get("live") or {}).get("pid")
     # The refusal carries the machine-readable reason and, on R_TOO_SOON, the exact deficit -
@@ -174,3 +201,125 @@ def stop_idle_engine(match: dict, min_quiet_secs: int = IDLE_STOP_SECS) -> dict:
     return {**refusal,
             "why": f"taskkill was issued for pid {pid} but the daemon still lists the chat as live "
                    f"after {STOP_CONFIRM_SECS}s - not proceeding on an unconfirmed stop"}
+
+
+# --- background work: the signal the 300s window was standing in for ---------------------
+#
+# The CLI reports a backgrounded job in the tool_result it hands the model, and reports the
+# job's end as a <task-notification> user record naming the same id. Three launch shapes are
+# known (all measured from real transcripts, 2026-09-04):
+#   "Command running in background with ID: b0439z7jg. Output is being written to ..."
+#   "Command did not complete within its 120s timeout and was moved to the background (ID: bmm552lv7)."
+#   "Workflow launched in background. Task ID: wjc1a4d2l"
+# and the one end shape:
+#   <task-notification>\n<task-id>bmm552lv7</task-id>\n...
+# A launch with no later notification is work the engine is still waiting on - stopping it
+# there loses the result. A launch the engine cannot parse an id out of is treated as
+# outstanding forever (unknown is not "none").
+_BG_LAUNCH_ID = re.compile(r"\bbackground\b.{0,80}?\b(?:Task ID|ID)\s*:\s*([A-Za-z0-9_-]{4,})",
+                           re.IGNORECASE | re.DOTALL)
+_BG_LAUNCH_WORD = re.compile(r"\b(?:running in|launched in|moved to the) background\b", re.IGNORECASE)
+# A SUBAGENT started in the background is the fourth launch shape (measured 2026-09-04): its
+# tool_result carries "agentId: a0178ab05b4bf4940 (internal ID ...)" and says the agent "is
+# working"; its end arrives as the same <task-notification> with that hex id. A FINISHED
+# foreground agent's result can carry an agentId too (for SendMessage), so the id alone is not a
+# launch - only an id beside the still-working phrase is.
+_BG_AGENT_ID = re.compile(r"\bagentId:\s*([A-Za-z0-9_-]{6,})")
+_BG_AGENT_WORKING = re.compile(r"agent is (?:still )?working|will be notified|notified when", re.IGNORECASE)
+_BG_NOTIFIED = re.compile(r"<task-notification>.{0,200}?<task-id>\s*([A-Za-z0-9_-]+)\s*</task-id>",
+                          re.DOTALL)
+# A transcript bigger than this is read from its tail only: a job launched megabytes ago and
+# never reported is possible, but so is a scan that takes longer than the wait it replaces.
+BG_SCAN_MAX_BYTES = 24 * 1024 * 1024
+
+
+def _blocks_text(ev: dict) -> list[tuple[str, str]]:
+    """(kind, text) for every content block that can carry a launch or a notification."""
+    out: list[tuple[str, str]] = []
+    msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
+    content = msg.get("content") if msg else None
+    if isinstance(content, str):
+        out.append(("text", content))
+        return out
+    for b in content if isinstance(content, list) else []:
+        if not isinstance(b, dict):
+            continue
+        kind = str(b.get("type") or "")
+        if kind == "tool_result":
+            c = b.get("content")
+            if isinstance(c, str):
+                out.append(("tool_result", c))
+            elif isinstance(c, list):
+                out.append(("tool_result", " ".join(str(x.get("text") or "") for x in c
+                                                    if isinstance(x, dict))))
+        elif kind == "text":
+            out.append(("text", str(b.get("text") or "")))
+    return out
+
+
+def background_work(match: dict, transcript_path: str | None = None) -> dict:
+    """Is this chat's engine waiting on a background job it launched?
+
+    Returns {scanned, outstanding: [ids], launched, notified, why}. `scanned` False means the
+    transcript could not be read at all - a caller must then keep the standing window, never
+    treat it as "no background work". Launches recorded BEFORE the live engine started are
+    dead (a resume boots a fresh process; the old jobs' notifications will never arrive) and
+    are not counted, the same rule gatelib applies to a pending tool call."""
+    if transcript_path is None:
+        try:
+            transcript_path = gatelib.transcript_for_match(match, hydralib.session_row)
+        except hydralib.DaemonError as err:
+            return {"scanned": False, "outstanding": [], "launched": 0, "notified": 0,
+                    "why": f"could not locate the transcript ({err})"}
+    if not transcript_path or not os.path.exists(transcript_path):
+        return {"scanned": False, "outstanding": [], "launched": 0, "notified": 0,
+                "why": "no transcript on disk to scan"}
+    live = match.get("live") or {}
+    engine_started = gatelib._epoch_s(live.get("startedAt") or live.get("startedAtMs"))
+    launched: dict[str, bool] = {}   # id -> still outstanding
+    unparsed = 0
+    notified: set[str] = set()
+    try:
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as f:
+            if size > BG_SCAN_MAX_BYTES:
+                f.seek(size - BG_SCAN_MAX_BYTES)
+                f.readline()  # drop the partial first line
+            for raw in f:
+                if b"background" not in raw and b"task-notification" not in raw and b"agentId:" not in raw:
+                    continue
+                try:
+                    ev = json.loads(raw.decode("utf-8", errors="replace"))
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(ev, dict) or ev.get("isSidechain") is True:
+                    continue
+                for kind, text in _blocks_text(ev):
+                    for nid in _BG_NOTIFIED.findall(text):
+                        notified.add(nid)
+                    if kind != "tool_result":
+                        continue
+                    is_job = bool(_BG_LAUNCH_WORD.search(text))
+                    is_agent = bool(_BG_AGENT_WORKING.search(text)) and bool(_BG_AGENT_ID.search(text))
+                    if not (is_job or is_agent):
+                        continue
+                    if gatelib._predates({"ts": ev.get("timestamp")}, engine_started):
+                        continue  # a job of a previous engine: dead, not outstanding
+                    ids = (_BG_LAUNCH_ID.findall(text) if is_job else []) + \
+                          (_BG_AGENT_ID.findall(text) if is_agent else [])
+                    if ids:
+                        for lid in ids:
+                            launched[lid] = True
+                    else:
+                        unparsed += 1
+    except OSError as err:
+        return {"scanned": False, "outstanding": [], "launched": 0, "notified": 0,
+                "why": f"transcript unreadable ({err})"}
+    outstanding = sorted(i for i in launched if i not in notified)
+    if unparsed:
+        outstanding.append(f"unparsed x{unparsed}")
+    why = ("no background job outstanding" if not outstanding else
+           f"{len(outstanding)} background job(s) launched and not yet reported back: "
+           + ", ".join(outstanding[:5]))
+    return {"scanned": True, "outstanding": outstanding, "launched": len(launched),
+            "notified": len(notified), "why": why}

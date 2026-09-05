@@ -12,8 +12,27 @@ migration notice so the chat introduces itself in its new home); this script own
   - the landing is VERIFIED: after the daemon says ok, the dossier must show the chat in the
     target instance, or this script does not claim it.
 
-Usage: python migrate_chat.py <title fragment | session id> --to <instance num|name|dir>
-       [--title "New title"] [--force] [--stop-idle] [--idle-wait N] [--json]
+Usage: python migrate_chat.py <title fragment | session id> --to <instance num|name|dir|best>
+       [--from <instance>] [--now] [--title "New title"] [--force] [--stop-idle]
+       [--idle-wait N] [--dry-run] [--json]
+  <title>       matched exactly first, then FUZZILY: case, punctuation and a misspelling
+                ("arkitecht cleanup" finds "Arkitekt cleanup") - every word of the query must
+                closely match a word of the title. Two different chats that both fit stay a
+                deterministic refusal naming both; a title that fits one chat is that chat.
+  --from X      the chat lives on THIS instance (num, name, label or email): scopes the
+                search to it, so the same title on two accounts is not ambiguous, and a typo
+                cannot select a chat on an account you did not name.
+  --to best     pick the target: the RUNNING desktop instance with the most real headroom
+                (tier x remaining weekly %, from the daemon's own usage survey), never the
+                source, never an account with no usage read or a 5-hour window at the wall.
+  --now         A PERSON'S MOVE (the MCP move_chat tool passes it): a chat whose turn is
+                finished and whose transcript shows NO background job outstanding is idle
+                after NOW_QUIET_SECS (15s), not the standing 300s. The 300s window existed to
+                tell "waiting" from "background work" by time alone; this reads the work
+                itself (enginelib.background_work). An outstanding job, a working engine, a
+                stuck engine and a live writer all keep every rail they have.
+  --dry-run     resolve the chat, the target, the hold and the engine's idleness, print the
+                plan, and STOP - nothing is posted, nothing is stopped, nothing is counted.
   --stop-idle   a chat whose engine is alive but IDLE (finished its turn, quiet 5+ min) is
                 stopped deliberately first, and confirmed gone, then moved - the desktop
                 never stops an engine on its own, so without this no desktop chat could ever
@@ -51,12 +70,18 @@ VERIFIED landing also (a) asks the daemon to stamp bypassPermissions (POST
 /api/sessions/:id/automation) and (b) stamps sessionSettings.ultracode=true + effort=xhigh
 into the chat's meta record on disk (stamplib) - a fresh landing has not booted yet, which
 is the one moment the stamp is durable. Best-effort: a failed stamp never un-lands the
-chat, but it is reported, never hidden.
+chat, but it is reported, never hidden. And (c) - owner, 2026-09-04, "when moving, ALWAYS
+change to bypass permissions" - the landed record is WATCHED for a few seconds after the
+stamp: the app boots the chat within ~2s of landing and its boot re-save can put the old
+mode back, so the mode is re-read from disk until it has stayed bypass, re-stamped if it
+flipped, and the payload's `permissionMode` is what the disk said LAST, never what was written.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
+import re
 import time
 import sys
 from dataclasses import dataclass
@@ -81,6 +106,19 @@ IDLE_WAIT_POLL_SECS = 15
 # How long to give the source app to write its archive flag after its own control settled
 # the row. Polled, not slept: the usual case lands in well under a second.
 SETTLE_CONFIRM_SECS = 3.0
+# How long the landed record is watched for the app's boot re-save putting a prompting mode
+# back (owner, 2026-09-04: a move must ALWAYS leave the chat on bypassPermissions). The app
+# boots a landed chat within ~2s; its re-save follows. Polled every second, re-stamped on a
+# flip, and only a mode that STAYS bypass is reported as bypass.
+BYPASS_WATCH_SECS = 8.0
+# Fuzzy title matching: every query word must match some title word at least this closely
+# (difflib ratio), OR the whole normalized query must match the whole title this closely.
+# 0.8 lets one letter-pair slip in a nine-letter word ("arkitecht"/"arkitekt" = 0.82) and
+# still rejects "cleanup" against "expansion" (0.25).
+FUZZY_WORD_RATIO = 0.8
+FUZZY_WHOLE_RATIO = 0.85
+# Two candidates whose scores are this close are a tie, and a tie is a refusal, not a pick.
+FUZZY_TIE_MARGIN = 0.05
 
 
 def _wait_until(pred, timeout_secs: float, step_secs: float = 0.25) -> bool:
@@ -137,20 +175,113 @@ def _untruncated_title(session_id: str, shown: str | None) -> str | None:
     return shown
 
 
-def resolve_for_migrate(query: str) -> dict:
+def _norm_title(text: str) -> str:
+    """Lower-case, punctuation folded to spaces, whitespace collapsed - the shape both sides
+    of a fuzzy comparison are put in, so case and punctuation can never be the difference."""
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+def fuzzy_title_score(query: str, title: str) -> float:
+    """0.0-1.0: how well `query` names `title`. 1.0 is a normalized substring (the old exact
+    rule); below that, the weaker of (a) every query word's best match against a title word
+    and (b) the whole-string ratio - whichever criterion the pair clears. A query with a word
+    that matches NOTHING in the title ("cleanup" vs "...design critic expansion") scores that
+    word's ratio, well under the bar, so a misspelling is forgiven but a different chat is not."""
+    q, t = _norm_title(query), _norm_title(title)
+    if not q or not t:
+        return 0.0
+    if q in t:
+        return 1.0
+    words = t.split()
+    per_word = [max((difflib.SequenceMatcher(None, qw, tw).ratio() for tw in words), default=0.0)
+                for qw in q.split()]
+    word_score = min(per_word) if per_word else 0.0
+    whole = difflib.SequenceMatcher(None, q, t).ratio()
+    if word_score >= FUZZY_WORD_RATIO or whole >= FUZZY_WHOLE_RATIO:
+        return max(word_score, whole)
+    return min(word_score, whole)
+
+
+def _fuzzy_pick(query: str, rows: list[dict]) -> list[dict]:
+    """The sessions-table rows `query` names fuzzily: the best-scoring chat alone when it is
+    clearly best, every tied chat when it is not (the caller refuses on more than one), and
+    nothing when nothing clears the bar. Rows are the daemon's (`title`, `session_id`)."""
+    scored = []
+    for r in rows:
+        s = fuzzy_title_score(query, str(r.get("title") or ""))
+        if s >= FUZZY_WORD_RATIO:
+            scored.append((s, r))
+    if not scored:
+        return []
+    scored.sort(key=lambda x: -x[0])
+    best = scored[0][0]
+    top = [r for s, r in scored if best - s <= FUZZY_TIE_MARGIN]
+    # The same chat can sit on several rows only through lineage ids; distinct session ids
+    # are distinct chats, and one chat at the top is the answer even if it tied with itself.
+    if len({r.get("session_id") for r in top}) == 1:
+        return top[:1]
+    return top
+
+
+def _in_source(instance_name, source_name: str | None) -> bool:
+    return source_name is None or str(instance_name or "").lower() == source_name.lower()
+
+
+def _row_to_match(row: dict) -> dict:
+    return {
+        "cliSessionId": row.get("session_id"),
+        "chatId": None,
+        "title": row.get("title"),
+        "instance": row.get("instance"),
+        "archived": bool(row.get("archived")),
+        "lastActivityAt": row.get("last_activity_at"),
+        # No desktop record means no registry-backed liveness here; the daemon's import
+        # itself refuses a live session, and we surface that refusal honestly below.
+        "live": None,
+        "_from_sessions_table": True,
+    }
+
+
+def resolve_for_migrate(query: str, source_name: str | None = None) -> dict:
     """Resolve the chat to migrate. The dossier only knows chats that ALREADY have a desktop
     record - which is exactly what a console-only session lacks, and landing those is this
     script's main job (found live 2026-08-31: every console landing died on 'no chat
     matches'). So: dossier first; on no-match, fall back to the daemon's sessions table and
-    build the same match shape from the row. Ambiguity stays a deterministic refusal."""
+    build the same match shape from the row. Ambiguity stays a deterministic refusal.
+
+    `source_name` (--from) is the instance the chat is said to live on: dossier matches and
+    table rows on any other instance are not candidates. That is what makes a title shared
+    by two accounts unambiguous, and what stops a fuzzy match from ever selecting a chat on
+    an account the caller did not name.
+
+    THE FUZZY RUNG (2026-09-04, "arkitecht cleanup" for a chat titled "Arkitekt cleanup"):
+    an exact-substring miss used to be the end - the operator then spent round trips listing
+    the instance's chats to find the spelling. Now the table is scored (fuzzy_title_score); a
+    row it names is re-resolved THROUGH THE DOSSIER by its session id, so a chat that has a
+    desktop record comes back with its real live block and metaPath (a bare table row has
+    neither, and moving on it would post an import against a possibly-live engine)."""
+    all_matches = hydralib.dossier(query)
+    matches = [m for m in all_matches if _in_source(m.get("instance"), source_name)]
+    if source_name and matches and all(m.get("archived") for m in matches):
+        # Only a retired twin sits on the named account: the chat itself lives elsewhere. Say
+        # where, rather than moving a chat off an account the caller did not name - and this
+        # is a final answer, not a miss for the table fallback to second-guess.
+        elsewhere = sorted({str(m.get("instance")) for m in all_matches
+                            if not m.get("archived") and not _in_source(m.get("instance"), source_name)})
+        if elsewhere:
+            raise hydralib.ChatNotFound(
+                f"{query} - only an archived copy is on {source_name}; its live copy is on "
+                f"{', '.join(elsewhere)}")
     try:
-        return hydralib.resolve_one(query)
+        return hydralib.choose_match(query, matches)
     except hydralib.ChatNotFound:
-        rows = hydralib.sessions()
+        rows = [r for r in hydralib.sessions() if _in_source(r.get("instance"), source_name)]
         hits = [r for r in rows if r.get("session_id") == query]
         if not hits:
             q = query.lower()
             hits = [r for r in rows if q in str(r.get("title") or "").lower()]
+        if not hits:
+            hits = _fuzzy_pick(query, rows)
         if not hits:
             raise
         if len(hits) > 1:
@@ -160,18 +291,17 @@ def resolve_for_migrate(query: str) -> dict:
                   "cliSessionId": h.get("session_id")} for h in hits],
             ) from None
         row = hits[0]
-        return {
-            "cliSessionId": row.get("session_id"),
-            "chatId": None,
-            "title": row.get("title"),
-            "instance": row.get("instance"),
-            "archived": bool(row.get("archived")),
-            "lastActivityAt": row.get("last_activity_at"),
-            # No desktop record means no registry-backed liveness here; the daemon's import
-            # itself refuses a live session, and we surface that refusal honestly below.
-            "live": None,
-            "_from_sessions_table": True,
-        }
+        sid = str(row.get("session_id") or "")
+        if sid and sid != query:
+            # Found by title: the dossier may well know this chat under its id even though
+            # the misspelled fragment found nothing - prefer its answer (live block, metaPath).
+            try:
+                by_id = [m for m in hydralib.dossier(sid) if _in_source(m.get("instance"), source_name)]
+                if by_id:
+                    return hydralib.choose_match(sid, by_id)
+            except hydralib.DaemonError:
+                pass  # the table row is still a real answer; the daemon's import gates liveness
+        return _row_to_match(row)
 
 
 # The instance resolver lives in hydralib (shared judgment); this alias keeps migrate's own
@@ -263,6 +393,9 @@ class MigrateArgs:
     title: str | None
     idle_wait: int
     query: str
+    source: str | None = None   # --from: the instance the chat lives on
+    now: bool = False           # --now: a person's move, the fast quiet window
+    dry_run: bool = False       # --dry-run: plan, post nothing
 
 
 class _MigrateRefusal(Exception):
@@ -284,7 +417,9 @@ def _parse_migrate_argv(argv: list[str]) -> MigrateArgs | int:
     as_json = "--json" in argv
     force = "--force" in argv
     stop_idle = "--stop-idle" in argv
-    to = title = None
+    now = "--now" in argv
+    dry_run = "--dry-run" in argv
+    to = title = source = None
     idle_wait = 0
     args: list[str] = []
     i = 0
@@ -292,6 +427,10 @@ def _parse_migrate_argv(argv: list[str]) -> MigrateArgs | int:
         a = argv[i]
         if a == "--to" and i + 1 < len(argv):
             to = argv[i + 1]
+            i += 2
+            continue
+        if a == "--from" and i + 1 < len(argv):
+            source = argv[i + 1]
             i += 2
             continue
         if a == "--title" and i + 1 < len(argv):
@@ -320,25 +459,109 @@ def _parse_migrate_argv(argv: list[str]) -> MigrateArgs | int:
     if len(args) != 1 or not to:
         print(__doc__.strip(), file=sys.stderr)
         return 3
-    return MigrateArgs(as_json, force, stop_idle, to, title, idle_wait, args[0])
+    if now and not stop_idle:
+        stop_idle = True  # --now IS a stop-idle move; saying so twice is not required
+    return MigrateArgs(as_json, force, stop_idle, to, title, idle_wait, args[0],
+                       source=source, now=now, dry_run=dry_run)
 
 
-def _resolve_chat_or_raise(query: str) -> tuple[dict, dict]:
+def _resolve_chat_or_raise(query: str, source: str | None = None) -> tuple[dict, dict]:
     """Resolve the chat to migrate plus the fleet, or raise the same refusal main() used to
-    return inline."""
+    return inline. `source` (--from) is resolved to a fleet row FIRST: an instance nobody has
+    is a deterministic refusal, not an empty search that reads as 'no such chat'."""
     try:
-        match = resolve_for_migrate(query)
         fleet = hydralib.fleet()
+        source_name = None
+        if source:
+            src = resolve_instance(fleet, source)
+            if src is None:
+                known = ", ".join(f"#{i.get('num')} {i.get('name')}" for i in fleet.get("instances", []))
+                raise _MigrateRefusal(
+                    {"landed": False,
+                     "report": f"REFUSED (deterministic): --from names no instance ({source!r}). Known: {known}"},
+                    3,
+                )
+            source_name = str(src.get("name") or "")
+        match = resolve_for_migrate(query, source_name)
     except (hydralib.ChatNotFound, hydralib.AmbiguousChat) as err:
-        raise _MigrateRefusal({"landed": False, "report": f"REFUSED (deterministic): {err}"}, 3) from err
+        where = f" on {source}" if source else ""
+        raise _MigrateRefusal({"landed": False, "report": f"REFUSED (deterministic): {err}{where}"}, 3) from err
     except hydralib.DaemonError as err:
         raise _MigrateRefusal({"landed": False, "report": f"migrate FAILED: {err}"}, 1) from err
     return match, fleet
 
 
-def _resolve_target_or_raise(fleet: dict, to: str, match: dict, session_id: str, chat_title) -> dict:
-    """Resolve --to to a real instance, and short-circuit a no-op move."""
-    target = resolve_instance(fleet, to)
+def _tier_multiplier(fleet_row: dict) -> int:
+    """How much quota a 'percent left' is worth on this account: Max 20x = 20, Max 5x = 5,
+    Pro (or unknown) = 1. Read off the fleet row's plan label, which the daemon renders from
+    the rate-limit tier; the '×' can arrive mojibaked, so only the digits are trusted."""
+    label = str((fleet_row.get("account") or {}).get("planLabel") or "")
+    m = re.search(r"max\D*(\d+)", label, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return 1
+
+
+def best_target(fleet: dict, exclude_name: str | None, survey: dict | None = None) -> tuple[dict | None, list[dict]]:
+    """--to best: the desktop instance with the most REAL headroom, from the daemon's own
+    usage survey. Returns (winner, the ranked shortlist it was chosen from) so the report can
+    say who came second and by how much.
+
+    The ranking is deliberately simple and stated: a RUNNING app beats a closed one (a chat
+    landed in a closed app sits there until someone opens it); then tier x remaining weekly %
+    (Max 20x at 60% used has 8 'Pro-weeks' left, Max 5x at 0% has 5); then the emptier 5-hour
+    window. Excluded outright: the source instance, any row without a real usage read
+    (severity 'unknown' is not headroom - AgentHydra's own rule), and a 5-hour window at or
+    past 95% (that account is walled NOW, whatever its weekly says)."""
+    if survey is None:
+        survey = hydralib.usage_survey(max_age_secs=120)
+    by_num = {int(i.get("num")): i for i in fleet.get("instances", []) if i.get("num") is not None}
+    ranked: list[dict] = []
+    for row in survey.get("rows", []):
+        if row.get("kind") != "desktop":
+            continue
+        inst = by_num.get(int(row.get("num") or -1))
+        if not inst or not inst.get("signedIn", True):
+            continue
+        if exclude_name and str(inst.get("name", "")).lower() == exclude_name.lower():
+            continue
+        advice = row.get("advice") or (row.get("result") or {}).get("advice") or {}
+        snap = (row.get("result") or {}).get("snapshot") or {}
+        week = (snap.get("weekAll") or {}).get("pct")
+        sess = (snap.get("session") or {}).get("pct")
+        if advice.get("severity") == "unknown" or not isinstance(week, (int, float)):
+            continue
+        if isinstance(sess, (int, float)) and sess >= 95:
+            continue
+        mult = _tier_multiplier(inst)
+        ranked.append({
+            "num": inst.get("num"), "name": inst.get("name"), "isRunning": bool(inst.get("isRunning")),
+            "weekPct": week, "sessionPct": sess if isinstance(sess, (int, float)) else None,
+            "tierX": mult, "headroom": round(mult * (100 - float(week)), 1),
+        })
+    ranked.sort(key=lambda r: (not r["isRunning"], -r["headroom"], r["sessionPct"] or 0))
+    return (by_num.get(int(ranked[0]["num"])) if ranked else None), ranked
+
+
+def _resolve_target_or_raise(fleet: dict, to: str, match: dict, session_id: str, chat_title,
+                             choice_out: dict | None = None) -> dict:
+    """Resolve --to to a real instance, and short-circuit a no-op move. `--to best` asks
+    best_target and records its shortlist into `choice_out` for the report."""
+    if str(to).strip().lower() == "best":
+        try:
+            target, ranked = best_target(fleet, str(match.get("instance") or "") or None)
+        except hydralib.DaemonError as err:
+            raise _MigrateRefusal({"landed": False, "report": f"migrate FAILED: usage survey unavailable ({err})"}, 1) from err
+        if choice_out is not None:
+            choice_out["ranked"] = ranked[:5]
+        if target is None:
+            raise _MigrateRefusal(
+                {"landed": False, "report": "REFUSED (deterministic): --to best found no desktop instance "
+                                            "with a real usage read and headroom (besides the source)."},
+                3,
+            )
+    else:
+        target = resolve_instance(fleet, to)
     if target is None:
         known = ", ".join(f"#{i.get('num')} {i.get('name')}" for i in fleet.get("instances", []))
         ledgerlib.note("migrate", session_id, deterministic=True, note=f"no instance matches {to!r}")
@@ -365,15 +588,44 @@ def _check_hold_or_raise(session_id: str, force: bool) -> None:
         raise _MigrateRefusal({"landed": False, "held": True, "report": f"REFUSED: {hold_why}"}, 6)
 
 
+def quiet_window(match: dict, now: bool) -> tuple[int, int, dict | None]:
+    """(min_quiet_secs, idle_after_secs, background) for this move. The standing window
+    unless --now AND the transcript was scanned AND no background job is outstanding - then
+    enginelib.NOW_QUIET_SECS for both. `background` is enginelib.background_work's answer
+    (None when --now was not asked, so nothing was scanned) for the report."""
+    from lib import enginelib
+
+    if not now:
+        return enginelib.IDLE_STOP_SECS, gatelib_idle_after(), None
+    bg = enginelib.background_work(match)
+    if bg.get("scanned") and not bg.get("outstanding"):
+        return enginelib.NOW_QUIET_SECS, enginelib.NOW_QUIET_SECS, bg
+    return enginelib.IDLE_STOP_SECS, gatelib_idle_after(), bg
+
+
+def gatelib_idle_after() -> int:
+    from lib import gatelib
+
+    return gatelib.IDLE_AFTER_SECS
+
+
 def _stop_idle_engine_or_raise(match: dict, query: str, chat_title, session_id: str,
-                                idle_wait: int, force: bool) -> dict:
+                                idle_wait: int, force: bool, now: bool = False,
+                                source_name: str | None = None, notes: dict | None = None) -> dict:
     """--stop-idle's wait dance: stop an engine that is idle, or wait out the one refusal
     (R_TOO_SOON) that more time actually cures, re-checking liveness and any newly-placed
     hold on every lap. Returns the re-resolved match once it is safe to proceed; raises the
-    same refusal main() used to return inline otherwise."""
+    same refusal main() used to return inline otherwise. `now` picks the fast window when
+    the transcript shows no background job (quiet_window); `notes` receives what was decided
+    so the report can say which window applied and why."""
     from lib import enginelib
 
-    stopped = enginelib.stop_idle_engine(match)
+    min_quiet, idle_after, bg = quiet_window(match, now)
+    if notes is not None:
+        notes["quietWindowSecs"] = min_quiet
+        if bg is not None:
+            notes["backgroundTasks"] = bg
+    stopped = enginelib.stop_idle_engine(match, min_quiet, idle_after)
     # --idle-wait: the ONE refusal that more time actually cures is R_TOO_SOON - the engine
     # finished its turn and simply has not been quiet long enough yet. Every other code
     # (STUCK, WORKING, ungateable, unreadable) falls straight through to the refusal below at
@@ -399,7 +651,7 @@ def _stop_idle_engine_or_raise(match: dict, query: str, chat_title, session_id: 
         # match["live"]["pid"], and a pid captured minutes ago can have been recycled by the
         # OS onto an unrelated process by the time we would act on it.
         try:
-            match = resolve_for_migrate(query)
+            match = resolve_for_migrate(query, source_name)
         except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
             raise _MigrateRefusal(
                 {"landed": False, "report": f"migrate FAILED while waiting out the idle window: {err}"}, 1
@@ -414,13 +666,20 @@ def _stop_idle_engine_or_raise(match: dict, query: str, chat_title, session_id: 
         hold_now = holdlib.why_blocked(session_id)
         if hold_now and not force:
             raise _MigrateRefusal({"landed": False, "held": True, "report": f"REFUSED: {hold_now}"}, 6)
-        stopped = enginelib.stop_idle_engine(match)
+        # Re-decide the window too: a background job the engine launched during the nap
+        # would otherwise be stopped under the fast window it no longer qualifies for.
+        min_quiet, idle_after, bg = quiet_window(match, now)
+        if notes is not None:
+            notes["quietWindowSecs"] = min_quiet
+            if bg is not None:
+                notes["backgroundTasks"] = bg
+        stopped = enginelib.stop_idle_engine(match, min_quiet, idle_after)
     if stopped.get("stopped"):
         waited = f" after waiting {int(waited_for)}s" if waited_for else ""
         ledgerlib.annotate("migrate", session_id,
                            f"stopped idle engine pid {stopped.get('pid')}{waited} ({stopped.get('why')})")
         try:
-            return resolve_for_migrate(query)
+            return resolve_for_migrate(query, source_name)
         except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
             raise _MigrateRefusal(
                 {"landed": False, "report": f"migrate FAILED after stopping the idle engine: {err}"}, 1
@@ -439,14 +698,17 @@ def _stop_idle_engine_or_raise(match: dict, query: str, chat_title, session_id: 
 
 
 def _settle_live_writer_or_raise(match: dict, query: str, chat_title, session_id: str,
-                                  stop_idle: bool, idle_wait: int, force: bool) -> dict:
+                                  stop_idle: bool, idle_wait: int, force: bool,
+                                  now: bool = False, source_name: str | None = None,
+                                  notes: dict | None = None) -> dict:
     """Rule 2, absolute: the import rewrites the transcript, and the daemon itself refuses a
     live session - refusing here first keeps the reason honest and the attempt un-spent.
     --stop-idle (live smoke, 2026-09-01) is the one escape hatch: the desktop keeps an engine
     alive indefinitely after the turn ends, so without it every desktop chat had a "live
     writer" forever and nothing could ever move."""
     if match.get("live") and stop_idle:
-        match = _stop_idle_engine_or_raise(match, query, chat_title, session_id, idle_wait, force)
+        match = _stop_idle_engine_or_raise(match, query, chat_title, session_id, idle_wait, force,
+                                           now=now, source_name=source_name, notes=notes)
     if match.get("live"):
         pid = match["live"].get("pid")
         raise _MigrateRefusal(
@@ -718,10 +980,41 @@ def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str,
     )
 
 
-def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict]) -> tuple[bool, str, bool, str]:
+def watch_bypass(meta_path: str, watch_secs: float = BYPASS_WATCH_SECS,
+                 sleep=time.sleep, clock=time.time) -> dict:
+    """Keep the landed record on bypassPermissions THROUGH the app's boot re-save.
+
+    Reads the mode back from disk once a second for `watch_secs`; any read that is not
+    bypass is re-stamped (stamplib.stamp_doctrine) and counted. Returns {mode, flips,
+    stable}: `mode` is what the disk said on the LAST read - never what was written - and
+    `stable` is whether the final second of the watch saw bypass hold. A record that cannot
+    be read reports mode None; the caller says so rather than claiming bypass."""
+    flips = 0
+    mode = None
+    deadline = clock() + watch_secs
+    while True:
+        try:
+            meta = stamplib.read_meta(meta_path)
+            mode = meta.get("permissionMode")
+        except (OSError, ValueError):
+            mode = None
+        if mode != stamplib.BYPASS:
+            got = stamplib.stamp_doctrine(meta_path)
+            if got.get("bypass"):
+                flips += 1
+                mode = stamplib.BYPASS
+        if clock() >= deadline:
+            break
+        sleep(1)
+    return {"mode": mode, "flips": flips, "stable": mode == stamplib.BYPASS}
+
+
+def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict]) -> tuple[bool, str, bool, str, str | None]:
     """The automation doctrine (module docstring): stamp bypassPermissions on every verified
     landing, and ultracode, mechanically, into the landed chat's meta record (stamplib
-    docstring). Returns (stamped, stamp_note, ultracode_ok, ultracode_note)."""
+    docstring). Returns (stamped, stamp_note, ultracode_ok, ultracode_note, permission_mode)
+    where permission_mode is what the disk said LAST (watch_bypass), or None when no record
+    could be read."""
     try:
         stamp = hydralib.api_post(f"/api/sessions/{session_id}/automation", {})
         stamped = bool(isinstance(stamp, dict) and stamp.get("ok"))
@@ -759,10 +1052,21 @@ def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict])
                        f"ultracode={got['ultracode']}, {got['error']}) - run automation_chat.py")
         uc_ok = bool(got["bypass"] and got["ultracode"])
         stamped = stamped or got["bypass"]
+        # ALWAYS BYPASS, VERIFIED, NOT HOPED (owner, 2026-09-04): watch the record through the
+        # app's boot re-save and re-stamp any flip; report what the disk said last.
+        watched = watch_bypass(meta_path)
+        mode = watched["mode"]
+        if watched["flips"]:
+            uc_note += (f"; the app re-saved a prompting mode {watched['flips']}x during the "
+                        f"{int(BYPASS_WATCH_SECS)}s watch and was re-stamped each time")
+        if not watched["stable"]:
+            uc_note += f" - ⚠ permissionMode on disk is {mode!r}, NOT bypass; re-stamp before it runs"
+            stamped = False
     else:
         uc_ok = False
+        mode = None
         uc_note = "not stamped - the dossier gave no metaPath; run automation_chat.py on it"
-    return stamped, stamp_note, uc_ok, uc_note
+    return stamped, stamp_note, uc_ok, uc_note, mode
 
 
 def out(payload: dict, as_json: bool, code: int) -> int:
@@ -781,18 +1085,27 @@ def main(argv: list[str]) -> int:
         return parsed
     as_json, force, stop_idle = parsed.as_json, parsed.force, parsed.stop_idle
     to, title, idle_wait, query = parsed.to, parsed.title, parsed.idle_wait, parsed.query
+    now, source, dry_run = parsed.now, parsed.source, parsed.dry_run
 
     sw = _Stopwatch()
+    notes: dict = {}  # what the fast path decided (window, background scan, target choice)
     try:
-        match, fleet = _resolve_chat_or_raise(query)
+        match, fleet = _resolve_chat_or_raise(query, source)
         session_id = match.get("cliSessionId") or ""
         chat_title = match.get("title")
         door_title = _untruncated_title(session_id, chat_title)
+        src_name = str(match.get("instance") or "")
         sw.lap("resolve")
 
-        target = _resolve_target_or_raise(fleet, to, match, session_id, chat_title)
+        choice: dict = {}
+        target = _resolve_target_or_raise(fleet, to, match, session_id, chat_title, choice_out=choice)
+        if choice:
+            notes["targetChoice"] = choice
+        if dry_run:
+            return out(_dry_run_plan(match, target, session_id, chat_title, now, notes, sw), as_json, 0)
         _check_hold_or_raise(session_id, force)
-        match = _settle_live_writer_or_raise(match, query, chat_title, session_id, stop_idle, idle_wait, force)
+        match = _settle_live_writer_or_raise(match, query, chat_title, session_id, stop_idle, idle_wait, force,
+                                             now=now, source_name=src_name or None, notes=notes)
         sw.lap("stop-idle")
         _check_breaker_or_raise(session_id, force)
 
@@ -808,6 +1121,7 @@ def main(argv: list[str]) -> int:
     except _MigrateRefusal as refusal:
         refusal.payload["secs"] = sw.total()
         refusal.payload["timings"] = sw.phases
+        refusal.payload.update(notes)
         return out(refusal.payload, as_json, refusal.code)
 
     # MUTATION LEDGER: before = where it lived, after = the verified landing target. Recorded
@@ -827,13 +1141,19 @@ def main(argv: list[str]) -> int:
     if source_row != "visible":
         ledgerlib.clear("migrate", session_id)  # a clean move: the brake is for futility
 
-    stamped, stamp_note, uc_ok, uc_note = _stamp_automation_doctrine(session_id, target, after)
+    stamped, stamp_note, uc_ok, uc_note, mode = _stamp_automation_doctrine(session_id, target, after)
     sw.lap("stamp")
 
     return out(
         {
             "landed": True,
+            "sessionId": session_id,
+            "title": chat_title,
+            "from": src_instance,
+            "to": target.get("name"),
+            "toNum": target.get("num"),
             "bypassStamped": stamped,
+            "permissionMode": mode,
             "ultracodeStamped": uc_ok,
             # sourceRow is the machine half; sourceSettled stays for older readers.
             "sourceRow": source_row,
@@ -841,6 +1161,7 @@ def main(argv: list[str]) -> int:
             "daemon": result,
             "secs": sw.total(),
             "timings": sw.phases,
+            **notes,
             "report": (
                 f"landed and VERIFIED: '{chat_title}' now lives in {target.get('name')}. "
                 f"{stamp_note}; {uc_note}.{settle_note}{sw.text()}"
@@ -849,6 +1170,51 @@ def main(argv: list[str]) -> int:
         as_json,
         0,
     )
+
+
+def _dry_run_plan(match: dict, target: dict, session_id: str, chat_title, now: bool,
+                  notes: dict, sw: _Stopwatch) -> dict:
+    """--dry-run: everything the move would decide, decided, and nothing done. The hold is
+    read (not enforced), the engine's idleness is read under the window --now would pick,
+    and the background scan is reported - so a caller can see 'would wait 240s' or 'HELD'
+    before spending the act."""
+    from lib import enginelib
+
+    held = holdlib.why_blocked(session_id)
+    min_quiet, idle_after, bg = quiet_window(match, now)
+    idle = enginelib.idle_report(match, min_quiet, idle_after) if match.get("live") else None
+    if idle is None:
+        would = "no live engine - the import would post at once"
+    elif idle.get("idle"):
+        would = f"engine idle ({idle.get('why')}) - it would be stopped and the import posted"
+    elif idle.get("reason") == enginelib.R_TOO_SOON:
+        deficit = int(idle.get("needs_secs") or 0) - int(idle.get("quiet_secs") or 0)
+        would = f"engine quiet only {idle.get('quiet_secs')}s - --idle-wait would sleep ~{max(deficit, 0)}s first"
+    else:
+        would = f"REFUSE: {idle.get('why')}"
+    sw.lap("dry-run")
+    return {
+        "dryRun": True,
+        "landed": False,
+        "sessionId": session_id,
+        "title": chat_title,
+        "from": match.get("instance"),
+        "to": target.get("name"),
+        "toNum": target.get("num"),
+        "held": held,
+        "live": match.get("live"),
+        "quietWindowSecs": min_quiet,
+        "backgroundTasks": bg,
+        "idle": idle,
+        "secs": sw.total(),
+        "timings": sw.phases,
+        **notes,
+        "report": (f"DRY RUN: would move '{chat_title}' ({session_id[:8]}) from {match.get('instance')} "
+                   f"to {target.get('name')} (#{target.get('num')}). "
+                   + (f"HELD: {held} " if held else "")
+                   + would + f". Quiet window {min_quiet}s"
+                   + (f"; {bg.get('why')}" if bg else "") + f".{sw.text()}"),
+    }
 
 
 if __name__ == "__main__":

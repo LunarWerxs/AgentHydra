@@ -1462,6 +1462,125 @@ export const TOOLS: McpEngineTool[] = [
       }),
   },
   {
+    name: 'move_chat',
+    description:
+      'MUTATES: MOVE ONE CHAT BETWEEN ACCOUNTS IN ONE CALL — the path for "move the X chat from Martin to here" (owner, 2026-09-04: by hand this took a dozen round trips and minutes; now it is this call). `chat` is a title fragment — matched FUZZILY, so case, punctuation and a misspelling still find it ("arkitecht cleanup" finds "Arkitekt cleanup") — or a session id. `from` (optional) is the account it lives on — instance number, name, label or email — and scopes the search, so a title two accounts share is not ambiguous. `to` defaults to "here" (the instance THIS process runs as, resolved like whoami; refused unless that identity is exact); "best" picks the running desktop instance with the most real headroom (tier × remaining weekly %, from the usage survey, never the source); or name any instance by number/name/label/email. It runs the orchestrator\'s migrate_chat with EVERY rail it has — hold, breaker, live-writer refusal, verified landing, source row settled so the old account no longer shows it — plus --now: a chat whose turn is finished and whose transcript shows NO background job outstanding moves after 15s of quiet instead of the standing 300s (an outstanding job, a working or stuck engine still wait or refuse). `wait_secs` (default 330, max 360) is how long the call itself waits for a chat that is idle but not yet quiet enough. EVERY LANDING IS STAMPED bypassPermissions + ultracode and the mode is re-read from disk after the app boots the chat: `permissionMode` in the result is what the disk said LAST. `force` is a PERSON\'S word — pass it only when the human asked for this move (it overrides a hold or a superseded lineage; a live writer is never overridden). `dry_run` resolves the chat, the target, the hold and the engine\'s idleness and reports the plan without moving anything. Read `report`; `landed` is the verdict. A just-landed chat does not process peer messages until the user first interacts with it.',
+    inputSchema: S(
+      {
+        chat: { type: 'string', description: 'Title fragment (fuzzy) or session id.' },
+        from: {
+          type: ['string', 'number'],
+          description:
+            'The instance the chat lives on: number, name, label or email. Optional; scopes the search and disambiguates a shared title.',
+        },
+        to: {
+          type: ['string', 'number'],
+          description:
+            '"here" (default: the instance this process runs as), "best" (most headroom), or an instance number/name/label/email.',
+        },
+        title: {
+          type: 'string',
+          description:
+            'Rename on landing (a real, non-generic name). Default: keep the current title.',
+        },
+        force: {
+          type: 'boolean',
+          description:
+            "A person's word: override a hold / superseded lineage. Only when the human asked.",
+        },
+        wait_secs: {
+          type: 'number',
+          description:
+            'Seconds to wait inside the call for an idle-but-young engine (default 330, max 360).',
+        },
+        dry_run: { type: 'boolean', description: 'Plan only: resolve everything, move nothing.' },
+      },
+      ['chat'],
+    ),
+    run: async (a) => {
+      const chat = str(a.chat).trim()
+      if (!chat) throw new Error('chat is required: a title fragment or a session id')
+      const wait = Math.max(0, Math.min(360, Number(a.wait_secs ?? 330) || 0))
+      const toArg = a.to == null || str(a.to).trim() === '' ? 'here' : str(a.to).trim()
+      let toRef: string
+      let targetNote: string | undefined
+      if (toArg.toLowerCase() === 'here') {
+        // "here" bills THIS process's account, so it is accepted only on a proven identity: an
+        // assumed or disambiguated answer would make the wrong account the destination.
+        const self = await selfIdentity()
+        if (!self.instance || self.confidence !== 'exact' || self.warning) {
+          throw new Error(
+            `cannot resolve "here" with certainty (${self.summary}${self.warning ? ` — ${self.warning}` : ''}). Pass \`to\` as the target's instance number (list_instance_numbers).`,
+          )
+        }
+        if (self.instance.kind !== 'desktop') {
+          throw new Error(
+            `"here" is ${instanceLabel(self.instance)}, a ${self.instance.kind} instance; a chat can only land in a Claude DESKTOP instance — pass \`to\` explicitly.`,
+          )
+        }
+        toRef = String(self.instance.num)
+        targetNote = `here = ${instanceLabel(self.instance)}`
+      } else if (toArg.toLowerCase() === 'best') {
+        toRef = 'best' // the orchestrator ranks the fleet itself, excluding the chat's own account
+      } else {
+        const row = await resolveRef(toArg)
+        if (row.kind !== 'desktop')
+          throw new Error(
+            `${instanceLabel(row)} is a ${row.kind} instance; a chat can only land in a Claude DESKTOP instance.`,
+          )
+        toRef = String(row.num)
+        targetNote = `to = ${instanceLabel(row)}`
+      }
+      const args = [
+        chat,
+        '--to',
+        toRef,
+        '--stop-idle',
+        '--now',
+        '--idle-wait',
+        String(wait),
+        '--json',
+      ]
+      if (a.from != null && str(a.from).trim() !== '') {
+        const src = await resolveRef(str(a.from).trim())
+        args.push('--from', String(src.num))
+      }
+      if (a.force === true) args.push('--force')
+      if (a.title != null && str(a.title).trim() !== '') args.push('--title', str(a.title).trim())
+      if (a.dry_run === true) args.push('--dry-run')
+      const run = (await api('/api/orchestrator/run', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          script: 'migrate_chat',
+          args,
+          // the wait happens INSIDE the script, so the deadline must outlast it
+          timeoutMs: (wait + 180) * 1000,
+        }),
+      })) as Record<string, unknown>
+      let payload: Record<string, unknown> | null = null
+      try {
+        const parsed: unknown = JSON.parse(str(run.stdout))
+        if (parsed && typeof parsed === 'object') payload = parsed as Record<string, unknown>
+      } catch {
+        payload = null
+      }
+      if (!payload) {
+        // no JSON means the script never got to its own report (usage error, python missing,
+        // daemon busy) — hand back the raw run so the reason is visible, never a bare failure
+        return { ...run, ok: false, args, targetNote }
+      }
+      return {
+        ok: payload.landed === true || payload.dryRun === true,
+        ...payload,
+        targetNote,
+        exitCode: run.exitCode,
+        exitMeaning: run.exitMeaning,
+        ...(str(run.stderr).trim() ? { stderr: run.stderr } : {}),
+      }
+    },
+  },
+  {
     name: 'archive_desktop_chat',
     description:
       'MUTATES: archive (archived=true, the default) or unarchive a chat in the Claude DESKTOP app by flipping its per-profile metadata flag. Caveat the caller must relay: for an instance whose app is RUNNING, the change appears only after that instance next restarts (a running app may even re-save the old state); for closed instances it is reliable. The AgentHydra done-mark is the immediate in-AgentHydra signal either way.',
@@ -1627,7 +1746,8 @@ Mutating tools say MUTATES: in their description; never run /login for a human.
 
 THE ORCHESTRATOR IS INSIDE THIS SERVER: what should happen to a chat (dry loop, sweep, moving
 chats between accounts, archiving) is orchestrator_menu/run/loop/switch - no second program.
-Nothing there acts unless the tray icon is up: orchestrator_switch {action:"armed"} first.`
+Nothing there acts unless the tray icon is up: orchestrator_switch {action:"armed"} first.
+Move a chat between accounts in ONE call: move_chat {chat, from, to}.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {

@@ -31,11 +31,17 @@ class ActTestBase(unittest.TestCase):
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
         from lib import hydralib
+        import migrate_chat
 
         hydralib.BASE = self.stub.url
         self.stub.routes["/api/fleet"] = fleet()
+        # The post-landing bypass watch is real seconds in production (the app's boot re-save
+        # is what it waits for); a stub daemon boots nothing, so one pass is the whole watch.
+        self._watch = mock.patch.object(migrate_chat, "BYPASS_WATCH_SECS", 0)
+        self._watch.start()
 
     def tearDown(self):
+        self._watch.stop()
         self.stub.close()
         os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
         self._state.cleanup()

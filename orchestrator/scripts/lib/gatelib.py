@@ -533,18 +533,29 @@ def _finished_evidence(records: list[dict]) -> dict:
     }
 
 
-def gate_match(match: dict, session_row_lookup) -> dict | None:
-    """Gate a resolved dossier match: transcript from the sessions table, liveness from the
-    match. The one place that join lives - archive_chat, gate_chat and any future act script
-    all need it, and having them import it FROM each other coupled unrelated scripts
-    together (review finding). `session_row_lookup` is hydralib.session_row (passed in so
-    this module keeps no daemon dependency)."""
+def transcript_for_match(match: dict, session_row_lookup) -> str:
+    """The transcript path behind a resolved dossier match: the sessions table first, the
+    projects folder second. Shared by gate_match and enginelib.background_work so the two
+    never disagree about WHICH file a chat is."""
     session_id = match.get("cliSessionId") or ""
     row = session_row_lookup(session_id)
     transcript = (row or {}).get("transcript_path") or ""
     if not transcript:
         transcript = find_transcript_on_disk(session_id)
-    return gate(session_id, transcript, match.get("live"))
+    return transcript
+
+
+def gate_match(match: dict, session_row_lookup, idle_after_secs: int = IDLE_AFTER_SECS) -> dict | None:
+    """Gate a resolved dossier match: transcript from the sessions table, liveness from the
+    match. The one place that join lives - archive_chat, gate_chat and any future act script
+    all need it, and having them import it FROM each other coupled unrelated scripts
+    together (review finding). `session_row_lookup` is hydralib.session_row (passed in so
+    this module keeps no daemon dependency). `idle_after_secs` is gate()'s: a caller that has
+    ITSELF established the engine has nothing in flight (enginelib.background_work) may ask
+    for the tail to be read sooner than the standing 180s."""
+    session_id = match.get("cliSessionId") or ""
+    transcript = transcript_for_match(match, session_row_lookup)
+    return gate(session_id, transcript, match.get("live"), idle_after_secs=idle_after_secs)
 
 
 # Claude Code writes every transcript here, in a per-project folder, named by session id.
