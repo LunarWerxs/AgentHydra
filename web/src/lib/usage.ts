@@ -15,6 +15,8 @@ export type UsageReason =
   | 'no_token'
   | 'not_logged_in'
   | 'check_failed'
+  | 'stale_token_app_closed'
+  | 'rate_limited'
   | 'unknown'
 
 /** The binding weekly-all-models percentage used for pacing decisions. Null when the
@@ -117,6 +119,10 @@ export function usageReasonMessageKey(reason: UsageReason | undefined): string |
       return 'instances.usageReasonNotLoggedIn'
     case 'check_failed':
       return 'instances.usageReasonCheckFailed'
+    case 'stale_token_app_closed':
+      return 'instances.usageReasonAppClosed'
+    case 'rate_limited':
+      return 'instances.usageReasonRateLimited'
     case 'ok':
       return null
     default:

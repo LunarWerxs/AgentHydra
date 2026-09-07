@@ -403,6 +403,23 @@ export function pruneUsageProbeTranscripts(): number {
   return removed
 }
 
+/**
+ * The last direct-API failure per account label, so a no-data result can say WHAT went wrong
+ * instead of "check failed".
+ *
+ * The API read is the path that normally succeeds; when it stops, the CLI fallback almost always
+ * fails too (same rejected credential), and the user is told nothing useful. `status` is the HTTP
+ * status - 401 the token was refused, 429 rate-limited, 0 the request never completed.
+ */
+const lastApiFailure = new Map<string, { status: number; error: string; retryAfterSec?: number }>()
+
+/** The last API failure recorded for `label`, or null. Cleared as soon as that label reads OK. */
+export function lastUsageApiFailure(
+  label: string | null,
+): { status: number; error: string; retryAfterSec?: number } | null {
+  return lastApiFailure.get(label ?? '(ambient)') ?? null
+}
+
 export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapshot> {
   const label = opts.account ?? null
 
@@ -415,9 +432,28 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
     const token = injected ?? fromDir?.token ?? null
     if (token) {
       const res = await fetchUsageApi({ token, account: label, timeoutMs: opts.timeoutMs })
-      if (res.ok) return res.snapshot
+      if (res.ok) {
+        lastApiFailure.delete(label ?? '(ambient)')
+        return res.snapshot
+      }
       // Not fatal: fall through to the CLI spawn (a 401 here just means "this token can't read
       // usage" — the CLI may still succeed by refreshing, or via a configDir login).
+      //
+      // ⛔ BUT RECORD WHY. Discarding this was the single thing that made every usage problem
+      // undiagnosable: whatever the endpoint said - 401 rejected, 429 rate-limited, 0 no network -
+      // the user saw the same "Claude returned no usage numbers for this instance", and so did
+      // anyone reading the code. Kept per label (not returned) so the snapshot type and every
+      // caller stay unchanged; usage-service reads it when it builds the no-data result.
+      lastApiFailure.set(label ?? '(ambient)', {
+        status: res.status,
+        error: res.error,
+        ...(res.retryAfterSec === undefined ? {} : { retryAfterSec: res.retryAfterSec }),
+      })
+      // ⛔ A 429 IS NOT A REASON TO SPAWN. The CLI would present the same credential to the same
+      // rate-limited endpoint and fail identically, ~9s and a process later - and on a fleet that
+      // turns one rate limit into a burst of doomed processes. Answer no-data now; the caller
+      // reports it as rate-limited (usage-service) instead of pretending the account is broken.
+      if (res.status === 429) return parseUsageOutput('', label)
     }
   }
 

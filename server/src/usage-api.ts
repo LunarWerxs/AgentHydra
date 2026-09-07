@@ -23,6 +23,9 @@
 // can refresh its own credentials, we deliberately do not (rotating the user's refresh token out
 // from under their real login is not ours to do).
 
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { UsageLimit, UsageSnapshot } from './types'
 
 /** The endpoint the CLI's own `/usage` screen reads (verified against the shipped CLI, 2026-07-14). */
@@ -43,12 +46,63 @@ const ANTHROPIC_VERSION = '2023-06-01'
  * mysteriously 429ing after a while, which matters much more now that the background sweep polls on
  * a timer rather than only on a user click.
  */
-const CLAUDE_USER_AGENT = 'claude-code/2.1.80'
+const CLAUDE_USER_AGENT_FALLBACK = 'claude-code/2.1.80'
+
+/**
+ * ⛔ AND THE VERSION IN IT HAS TO BE A REAL, CURRENT ONE.
+ *
+ * Pinning a literal here was the bug the paragraph above predicted and did not prevent: the string
+ * sat at 2.1.80 while the installed CLI moved to 2.1.245, and a `claude-code/<version>` that no
+ * longer exists is not "the real UA" - it lands in the same sticky bucket a generic one does.
+ * Symptom (owner, 2026-09-07): the usage endpoint answering HTTP 429 for hours, so Refresh did
+ * nothing on an account that was signed in perfectly fine, and the UI could only say "no usage
+ * numbers".
+ *
+ * Read from the installed CLI's own package.json, once, and memoized - so it tracks every update
+ * with nothing to remember. The literal above remains only as the answer when that read fails.
+ */
+let cachedUserAgent: string | null = null
+function claudeUserAgent(): string {
+  if (cachedUserAgent) return cachedUserAgent
+  try {
+    const pkg = join(
+      process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'),
+      'npm',
+      'node_modules',
+      '@anthropic-ai',
+      'claude-code',
+      'package.json',
+    )
+    const version = JSON.parse(readFileSync(pkg, 'utf8'))?.version
+    cachedUserAgent =
+      typeof version === 'string' && version.trim()
+        ? `claude-code/${version.trim()}`
+        : CLAUDE_USER_AGENT_FALLBACK
+  } catch {
+    cachedUserAgent = CLAUDE_USER_AGENT_FALLBACK
+  }
+  return cachedUserAgent
+}
 
 export type UsageApiResult =
   | { ok: true; snapshot: UsageSnapshot }
-  /** `status` is the HTTP status, or 0 when the request never completed (network error/timeout). */
-  | { ok: false; status: number; error: string }
+  /** `status` is the HTTP status, or 0 when the request never completed (network error/timeout).
+   *  `retryAfterSec` is present only on a 429 that told us when to come back. */
+  | { ok: false; status: number; error: string; retryAfterSec?: number }
+
+/** `Retry-After` is either delay-seconds or an HTTP-date (RFC 9110 §10.2.3). Returns whole seconds
+ *  in the future, or null for absent/garbage/past values - a bad header must not become a countdown
+ *  to a moment that already passed. */
+function parseRetryAfter(header: string | null): number | null {
+  if (!header?.trim()) return null
+  const raw = header.trim()
+  const asSeconds = Number(raw)
+  if (Number.isFinite(asSeconds)) return asSeconds > 0 ? Math.round(asSeconds) : null
+  const at = Date.parse(raw)
+  if (Number.isNaN(at)) return null
+  const secs = Math.round((at - Date.now()) / 1000)
+  return secs > 0 ? secs : null
+}
 
 // --- response shape (only the fields we read) --------------------------------
 
@@ -195,12 +249,22 @@ export async function fetchUsageApi(opts: {
         Accept: 'application/json',
         'anthropic-beta': OAUTH_BETA,
         'anthropic-version': ANTHROPIC_VERSION,
-        'user-agent': CLAUDE_USER_AGENT, // load-bearing for rate limiting — see above
+        'user-agent': claudeUserAgent(), // load-bearing for rate limiting — see above
       },
       signal: controller.signal,
     })
     if (!res.ok) {
-      return { ok: false, status: res.status, error: `usage endpoint returned HTTP ${res.status}` }
+      // A 429 is the one failure with a KNOWN end, and the server usually says when. Carrying it
+      // turns "try again shortly" - which invites exactly the hammering that keeps the bucket hot -
+      // into a real number the UI can count down. Seconds per RFC 9110; a date form is also legal,
+      // so parse both and ignore anything that yields no sane future instant.
+      const retryAfter = res.status === 429 ? parseRetryAfter(res.headers.get('retry-after')) : null
+      return {
+        ok: false,
+        status: res.status,
+        error: `usage endpoint returned HTTP ${res.status}`,
+        ...(retryAfter === null ? {} : { retryAfterSec: retryAfter }),
+      }
     }
     const json = await res.json()
     const snapshot = mapUsageApiResponse(json, opts.account ?? null)

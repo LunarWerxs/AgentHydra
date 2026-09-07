@@ -792,6 +792,16 @@ export type UsageReason =
   | 'no_token' // desktop instance signed in but no usable/decryptable token
   | 'not_logged_in' // CLI instance has no login and no associated account
   | 'check_failed' // the probe ran but returned no parseable usage
+  // A CLOSED desktop instance whose stored grant the usage endpoint no longer accepts. Split
+  // out of check_failed because the two need OPPOSITE advice: check_failed says 'try again in
+  // a moment', which is false here - nothing refreshes that grant except opening the app, so
+  // retrying forever is exactly the wrong thing to tell someone (owner hit this, 2026-09-07).
+  | 'stale_token_app_closed'
+  // The usage endpoint answered 429. Distinct from every other failure because the account is
+  // FINE and there is nothing to fix - retrying is the one thing that cannot help, and telling
+  // someone to 'try again in a moment' while they hammer a rate limit is worse than saying
+  // nothing (owner hit exactly this on a signed-in account, 2026-09-07).
+  | 'rate_limited'
   | 'unknown'
 
 /**
@@ -963,6 +973,13 @@ export interface UsageCheckResult {
   reason?: UsageReason
   /** What to do about these numbers. Attached by the routes so an MCP caller never re-derives it. */
   advice?: UsageAdvice
+  /**
+   * The concrete failure behind a no-data result, when one is known - e.g. `HTTP 401` from the
+   * usage endpoint. Exists because `reason: 'check_failed'` is a category, not a diagnosis: it
+   * cannot tell a refused token from a rate limit from a dead network, and every one of those
+   * reached the user as the same sentence. Never populated on success.
+   */
+  detail?: string
 }
 
 // --- CLI instances (Feature A) ----------------------------------------------

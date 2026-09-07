@@ -23,6 +23,7 @@ import { resolveAccount, resolveCliConfigDirToken, resolveInstanceToken } from '
 import { cliInstanceForDesktop, getCliInstance, listCliInstances } from './core/cli-instances'
 import { listInstances } from './core/instances'
 import { normalizeInstancePath } from './core/paths'
+import { listClaudeProcesses } from './core/process'
 import { db } from './db'
 import { noteUsageSnapshot } from './reset-watch'
 import type { AuthType, UsageCheckResult, UsageReason, UsageSnapshot } from './types'
@@ -30,6 +31,7 @@ import {
   checkUsage,
   dropCachedUsage,
   isNoData,
+  lastUsageApiFailure,
   parseUsageOutput,
   setCachedUsage,
   type UsageAuth,
@@ -172,8 +174,31 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
 
   // Nothing worked → honest no-data with an actionable reason. NEVER cached: a "—" is the absence of
   // a reading, not a reading, and caching it would hide a later successful check behind it.
+  // A CLOSED instance whose grant the endpoint no longer accepts is its own case, not a generic
+  // failure: only the app itself refreshes that grant, so "try again in a moment" is advice that
+  // cannot work. Measured 2026-09-07 - every RUNNING instance read fine, every closed one failed.
+  // listClaudeProcesses is the lenient, cached enumeration on purpose: this decides a LABEL, and
+  // an unanswerable scan should degrade to the generic message rather than invent a diagnosis.
+  const isRunning =
+    grant && account?.status !== 'loggedout'
+      ? (await listClaudeProcesses()).some(
+          (p) => p.dir && normalizeInstancePath(p.dir) === normalizeInstancePath(dir),
+        )
+      : true
+  const apiFail = lastUsageApiFailure(label)
+  // 429 takes precedence over every other explanation: the credential is fine, the endpoint is
+  // simply refusing everyone for a while. Blaming a closed app or a bad token here would send the
+  // owner to fix something that is not broken.
   const reason: UsageReason =
-    account?.status === 'loggedout' ? 'logged_out' : grant ? 'check_failed' : 'no_token'
+    apiFail?.status === 429
+      ? 'rate_limited'
+      : account?.status === 'loggedout'
+        ? 'logged_out'
+        : grant
+          ? isRunning
+            ? 'check_failed'
+            : 'stale_token_app_closed'
+          : 'no_token'
   // ⛔ OWNER RULE (Michael, 2026-09-07): *"when the account is not logged in, it should reset and
   // clear the usage data, session, weekly, five-hour."* Not caching the no-data result is not
   // enough on its own - the PREVIOUS reading is still in the cache, and the routes serve the cache
@@ -185,7 +210,16 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // through a network blip is the right behaviour and must not be swept up in this.
   if (reason === 'logged_out') dropCachedUsage(key)
   const snapshot = parseUsageOutput('', label)
-  return { snapshot, cached: false, key, reason, advice: usageAdvice(snapshot) }
+  // Say WHAT failed, not just that something did. See UsageCheckResult.detail.
+  const detail = apiFail
+    ? apiFail.status === 429 && apiFail.retryAfterSec
+      ? // The one failure with a known end: say when, so nobody hammers it waiting.
+        `rate limited - retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min`
+      : apiFail.status > 0
+        ? `usage endpoint returned HTTP ${apiFail.status}`
+        : apiFail.error
+    : undefined
+  return { snapshot, cached: false, key, reason, detail, advice: usageAdvice(snapshot) }
 }
 
 // --- CLI instances ------------------------------------------------------------

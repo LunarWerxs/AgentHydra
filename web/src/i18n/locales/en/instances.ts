@@ -182,6 +182,14 @@ export default {
   usageReasonNotLoggedIn: 'No login yet. Use the Log in helper, or associate a dispatch account.',
   usageReasonCheckFailed:
     'Claude returned no usage numbers for this instance. Try again in a moment.',
+  // Says what to DO, because "try again in a moment" is false here: a closed instance's stored
+  // login is only refreshed by the app itself, so retrying can never succeed while it is shut.
+  // Nothing is wrong with the account, and retrying is the one thing that cannot help - so this
+  // says to wait, where every other reason says to act.
+  usageReasonRateLimited:
+    'Anthropic is rate-limiting usage checks right now. Nothing is wrong with this account - it will read again on its own shortly.',
+  usageReasonAppClosed:
+    'This account is closed, so its saved login is too old to read usage. Open it and check again.',
   usageSession: 'Session (5h)',
   usageWeekAll: 'Week (all models)',
   usageWeekModel: 'Week ({model})',
