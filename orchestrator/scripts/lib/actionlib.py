@@ -373,6 +373,15 @@ CATALOG: dict[str, dict] = {
     # test_actionlib went red the moment it ran anywhere else. Whoever commits
     # migrate_batch.py adds its entry here in the same commit; the disk-vs-catalog test
     # names it until they do, which is that test working.
+    "migrate_batch": {
+        "kind": "mutate",
+        "invocation": "direct",
+        "platforms": "windows-only",
+        "guards": ("hold", "breaker", "live-writer", "force"),
+        "result": "0 every asked chat landed - 5 some landed and some were refused (read `refused` and the per-chat results) - 4 nothing landed - 3 bad usage - 1 daemon failure",
+        "availability": "available",
+        "summary": "ACT: land MANY chats in a desktop instance, by phase, sharing every read.",
+    },
     "migrate_chat": {
         "kind": "mutate",
         "invocation": "direct",

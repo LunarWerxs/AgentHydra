@@ -51,11 +51,22 @@ test('"7claude" is a NAME, never instance 7', () => {
   expect(pickInstance(named, '7claude')?.num).toBe(40)
 })
 
-test('a ref and a bare dir both resolve, whatever the path is spelled like', () => {
+test('a ref and a bare dir both resolve', () => {
   const target = FLEET[0] as ResolvedInstance
-  for (const input of [target.ref, target.handle, target.handle.toUpperCase()])
-    expect(pickInstance(FLEET, input)?.num).toBe(3)
+  for (const input of [target.ref, target.handle]) expect(pickInstance(FLEET, input)?.num).toBe(3)
 })
+
+// ⛔ CASE-FOLDING A PATH IS A WINDOWS FACT, NOT A GENERAL ONE. normalizeInstancePath lowercases
+// only on win32, correctly: ext4 really can hold two dirs differing by case, so folding there
+// would resolve one instance's spelling onto another's. The first draft of this file asserted the
+// uppercase spelling resolves everywhere and went red on CI's ubuntu leg while passing here.
+test.skipIf(process.platform !== 'win32')(
+  'on Windows only, a dir resolves whatever case it is spelled in',
+  () => {
+    const target = FLEET[0] as ResolvedInstance
+    expect(pickInstance(FLEET, target.handle.toUpperCase())?.num).toBe(3)
+  },
+)
 
 test('an account EMAIL resolves - the spelling the tools document and a person actually knows', () => {
   expect(pickInstance(FLEET, 'ada@example.com')?.num).toBe(3)
