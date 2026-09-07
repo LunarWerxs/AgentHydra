@@ -155,6 +155,19 @@ export const NEVER_SYNCED = [
   // would let a machine running the .zip silence the notice on a machine running the .exe, which
   // is the one place it actually needed to be said.
   'no_tray_build_notified',
+  // Whether AgentHydra keeps itself registered as an MCP server with Claude Code
+  // (server/src/mcp-register.ts). It writes to ANOTHER PROGRAM'S CONFIG FILE on this machine,
+  // unattended, which is the same shape as the two master switches above.
+  //
+  // It was briefly in PREF_KEYS on the argument that "it is ON by default, so the only value that
+  // can ever travel is a deliberate OFF". That argument is FALSE, and review caught it: collectPrefs
+  // pushes getSetting(k), which returns the DEFAULT for a key nobody has touched - so a machine
+  // whose owner never opened the setting publishes '1', and pulling it silently undoes a deliberate
+  // opt-out somewhere else. The direction that actually travelled was the surprising one.
+  //
+  // Syncing it would also be half-applied: applyPrefs writes the settings row and nothing more, so
+  // a synced-down OFF would leave the live entry in ~/.claude.json until the next daemon restart.
+  'mcp_register_claude_code',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

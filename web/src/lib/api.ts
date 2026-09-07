@@ -6,6 +6,7 @@ import type {
   ArchivedScope,
   AuthType,
   ChatGptContextPack,
+  ChatListResult,
   CliInstance,
   CMAccount,
   CMActionResult,
@@ -22,6 +23,7 @@ import type {
   IncidentState,
   InstanceColorKey,
   InstanceIconKey,
+  McpRegistrationSettings,
   MonitorSettings,
   MonitorView,
   NotificationSettings,
@@ -64,6 +66,8 @@ export type {
   ArchivedScope,
   AuthType,
   ChatGptContextPack,
+  ChatListResult,
+  ChatListRow,
   CliInstance,
   CMAccount,
   CMAccountStatus,
@@ -214,6 +218,22 @@ export const getSessions = (
   )
 /** Every folder with conversations in it, for a "where has work happened" overview. */
 export const getSessionProjects = () => j<ProjectSummary[]>('/api/sessions/projects')
+/**
+ * ONE desktop instance's chats, read straight from that account's own chat store.
+ *
+ * Deliberately NOT getSessions(): that answers "what has been worked on lately" over every
+ * provider and every account, and narrowing it to one instance means matching a session's
+ * recorded instance NAME, over a period, and hoping the two agree. This asks the store the app
+ * itself reads, so the answer is "what does this account hold", including chats with no recent
+ * transcript activity, which is exactly the set a session listing drops.
+ *
+ * `ref` is any spelling /api/chats accepts; pass `desktop:<dir>` from the UI, which is the one
+ * spelling that cannot be ambiguous between two similarly named accounts.
+ */
+export const getInstanceChats = (ref: string, archived: ArchivedScope = 'hide', limit = 200) =>
+  j<ChatListResult>(
+    `/api/chats?instance=${encodeURIComponent(ref)}&archived=${archived}&limit=${limit}`,
+  )
 export const getSession = (id: string, source: SessionSource, locator?: string) =>
   j<SessionSummary>(`/api/sessions/${encodeURIComponent(id)}${sourceQuery(source, locator)}`)
 /** Set the user's own "done" mark on a session (distinct from Claude Desktop's read-only
@@ -588,7 +608,8 @@ export type AppSettings = PortableModeSettings &
   UsageSettings &
   ProviderSettings &
   TranscriptSettings &
-  NotificationSettings
+  NotificationSettings &
+  McpRegistrationSettings
 /**
  * What a settings PATCH may carry. Identical to AppSettings except for the SMTP password, which is
  * WRITE-ONLY: the server never returns it (AppSettings carries `notifySmtpPassSet` instead), so it

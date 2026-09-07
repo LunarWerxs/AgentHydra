@@ -4,6 +4,7 @@ import { basename, join } from 'node:path'
 import { chatDossier, listChats } from '../chat-dossier'
 import { CLIPBOARD_DIR } from '../config'
 import { resolveInstance } from '../core/instance-ref'
+import { defaultClaudeUserDataDir } from '../core/paths'
 import { db, getSetting } from '../db'
 import { contentDispositionAttachment, safeTranscriptFilename } from '../filenames'
 import { app } from '../http-app'
@@ -232,6 +233,27 @@ app.get('/api/chats/dossier', (c) => {
     return c.json({ error: 'q required: a title fragment or any session/chat id' }, 400)
   return c.json(chatDossier(q.trim()))
 })
+/**
+ * The chat-store LABEL an instance's user-data dir is filed under, matching collectChats exactly.
+ *
+ * THE DEFAULT INSTALL IS NOT LABELLED BY ITS FOLDER. collectChats (chat-dossier.ts) files the
+ * non-isolated Claude Desktop install under the literal `default` and every isolated one under its
+ * folder name. Taking basename() for both was right for nine rows out of ten and wrong for the one
+ * everybody has: the default row's dir is `.../AppData/Roaming/Claude`, whose basename is `Claude`,
+ * which appears in no scan - so `?instance=` for the regular install answered 404 "no desktop
+ * instance matched", i.e. "that account does not exist", for the account most people are using.
+ * Found by review 2026-09-07, before the Instances "Chats" dialog shipped on top of it.
+ */
+export function chatStoreLabel(handle: string): string {
+  const trimSep = (p: string) => p.replace(/[\\/]+$/, '')
+  const trimmed = trimSep(handle)
+  // Case-folded: Windows paths are case-insensitive, the instance registry stores dirs lowercased,
+  // and the paths helper builds this one from %APPDATA% as the OS spells it. A literal comparison
+  // would reintroduce the same 404 on exactly the machines this runs on.
+  const fold = (p: string) => trimSep(p).toLowerCase()
+  return fold(trimmed) === fold(defaultClaudeUserDataDir()) ? 'default' : basename(trimmed)
+}
+
 // One desktop instance's chats, compactly — the read that did not exist until 2026-09-06, when
 // answering "what does this account hold" cost five round trips and produced a wrong number.
 // See listChats in chat-dossier.ts for why it lives beside the dossier rather than in sessions.ts.
@@ -251,7 +273,7 @@ app.get('/api/chats', async (c) => {
         },
         400,
       )
-    instances = [hit ? basename(hit.handle.replace(/[\\/]+$/, '')) : raw]
+    instances = [hit ? chatStoreLabel(hit.handle) : raw]
   }
   const archived = c.req.query('archived')
   const got = listChats({

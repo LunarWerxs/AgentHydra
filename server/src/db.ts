@@ -554,6 +554,13 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // weekly cap to start a window that refills the same day is exactly backwards.
   keepalive_enabled: '0',
   keepalive_weekly_floor: '80',
+  // Keep this daemon registered as an MCP server in Claude Code's user config (see
+  // server/src/mcp-register.ts). ON by default and deliberately so: the tools are the product's
+  // whole agent-facing surface, and until 2026-09-07 getting them required following a doc that
+  // only worked from a source checkout - so every downloaded install had none of them and no
+  // indication why. It writes one key of ~/.claude.json, removes that key when turned off, and
+  // never touches another server's entry.
+  mcp_register_claude_code: '1',
 }
 
 export function getSetting(key: string): string {

@@ -35,6 +35,10 @@ export interface SyncStatus {
   /** Last-synced appearance blob (e.g. `{ theme }`) to apply locally, or null. */
   appearance: Record<string, unknown> | null
 }
+/** One account's chat list (see ./chat-dossier.ts), re-exported here for the same reason. TYPE
+ * re-exports only: chat-dossier reads the desktop stores at runtime and must never be pulled
+ * into the browser bundle, and `export type` is erased before it could be. */
+export type { ChatListResult, ChatListRow } from './chat-dossier'
 // The Codex/ChatGPT instance-account DTOs, defined next to their resolver for the same reason as
 // the Claude ones below.
 export type {
@@ -727,6 +731,38 @@ export interface PortableModeSettings {
   /** Hide the tray's NotifyIcon (the daemon keeps running; the tray keeps re-reading this
    *  live so re-enabling it here restores the icon without a restart). */
   hideTrayIcon: boolean
+}
+
+/**
+ * The MCP-registration half of /api/settings (see server/src/mcp-register.ts).
+ *
+ * Carries the SWITCH and, separately, what Claude Code's config file actually says. The two can
+ * disagree - a read-only config, a hand-written entry - and the panel has to be able to show a
+ * switch that is on over a registration that did not land, rather than reporting the wish as the
+ * fact. Everything but the switch is derived on read; POST ignores it.
+ */
+export interface McpRegistrationSettings {
+  mcpRegisterClaudeCode: boolean
+  /** Is an entry present AND pointing at this daemon's current URL? */
+  mcpRegistered: boolean
+  /** The file the entry lives in, shown so a failure names something the user can go and look at. */
+  mcpConfigPath: string
+  /** The URL that is (or would be) registered. */
+  mcpUrl: string
+  /** Why the last attempt could not be completed; null when there is nothing wrong. */
+  mcpRegisterError: string | null
+  /**
+   * Is the Python toolbox installed beside the executable?
+   *
+   * Registration is only half of "the MCP server works". Every chat-moving tool (move_chat,
+   * move_chats, the orchestrator_* family) runs a script out of orchestrator/, so an install
+   * without that folder answers `no orch.py under <dir>` to all of them while every other tool
+   * behaves perfectly - which reads as the feature being broken rather than absent.
+   */
+  mcpToolboxPresent: boolean
+  /** Release-owned folders this install is missing, restorable by re-applying the current version
+   *  (see missingComponents in server/src/github-updater.ts). Empty on a healthy install. */
+  mcpMissingComponents: string[]
 }
 
 /** Transcript-file-open setting (server/src/transcript-open.ts). */

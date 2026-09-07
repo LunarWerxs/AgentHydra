@@ -253,10 +253,16 @@ export default {
   toastShortcutCreated: 'Desktop shortcut created.',
   toastShortcutFailed: 'Failed to create desktop shortcut.',
 
-  // "Move all chats" on a row's menu (the kebab, or right-click on the row): every active chat on
-  // this instance, one hop to another. A closed target is opened first, since the import has to
-  // land in a running app.
-  moveChats: 'Move all chats to another account',
+  // "Move chats to account" on a row's menu (the kebab, or right-click on the row): every active
+  // chat on this instance, one hop to another. A closed target is opened first, since the import
+  // has to land in a running app.
+  //
+  // Short on purpose (owner, 2026-09-07). It used to read "Move all chats to another account",
+  // which is a sentence, and it sits one line BELOW the new "Chats" item in the same menu, the
+  // long form made the two look unrelated when they are the two things you do with an account's
+  // chats. The submenu that opens names the destination, so "to account" is not a promise the
+  // menu has to keep by itself.
+  moveChats: 'Move chats to account',
   moveChatsNoTargets: 'No other instances',
   // Shown under EVERY closed target in the submenu and again in the confirm dialog, so it has to
   // read at a glance seven rows deep: one clause, same wording as the Sessions flyout's group.
@@ -275,4 +281,31 @@ export default {
   // The chat list inside the move dialog: grouped by project, each row opens that chat in Sessions.
   moveChatsGroupCount: '{n} chat(s)',
   moveChatsRowHint: 'Grouped by project. Click a chat to open it in Sessions.',
+
+  // "Chats" on the same row menu, one item above the move submenu: WHICH chats are on THIS
+  // account, without moving anything (owner, 2026-09-07: "so you can just easily figure out which
+  // one has which chats"). It reads the account's own chat store, not the session list, so a chat
+  // with no recent transcript activity is still here, see getInstanceChats in web/src/lib/api.ts.
+  chats: 'Chats',
+  chatsTitle: 'Chats on {name}',
+  chatsLoading: 'Reading this account’s chats…',
+  // The counts describe the WHOLE account, deliberately not narrowed by the archived toggle: "3
+  // shown, 206 total" is what stops a filtered list reading as an empty account.
+  chatsCounts: '{unarchived} active · {archived} archived · {all} total',
+  chatsLiveCount: '{n} running now',
+  chatsShowArchived: 'Include archived',
+  chatsEmpty: 'No active chats on this account.',
+  chatsEmptyArchived: 'No chats on this account at all.',
+  chatsFailed: 'Couldn’t read the chats on {name}.',
+  chatsTruncated: 'Showing the {shown} most recent of {total}.',
+  // A chat whose engine is running right now. Same fact the move refuses on, so seeing it here
+  // explains a refusal before it happens rather than after.
+  chatsLive: 'Running',
+  chatsArchivedBadge: 'Archived',
+  chatsNoTitle: '(untitled chat)',
+  chatsNeverActive: 'No recorded activity',
+  // Only a chat with a CLI transcript can be opened in Sessions; one without is a Desktop-only
+  // row, so the button is absent rather than present and broken.
+  chatsOpen: 'Open in Sessions',
+  chatsClose: 'Close',
 }

@@ -18,12 +18,14 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { VERSION } from '../src/config'
 import {
   applyUpdate,
   CHECKSUM_MANIFEST,
   componentVersions,
   currentTarget,
   installedComponentVersion,
+  missingComponents,
   RELEASE_COMPONENTS,
   RELEASE_VERSION_FILE,
   reconcileComponent,
@@ -217,19 +219,22 @@ function applyFixture(): { root: string; bundle: string; install: string } {
 
 const FAKE_ASSET_NAME = `AgentHydra-9.9.9-${currentTarget()}${process.platform === 'win32' ? '.zip' : '.tar.gz'}`
 
-function fakeCheckForUpdate() {
+/** `remoteCommit` matters for the repair path: it only engages when the latest release IS this
+ *  build's version, so a "no update available" fake must say so with the REAL version. */
+function fakeCheckForUpdate(over: { updateAvailable?: boolean; remoteCommit?: string } = {}) {
+  const available = over.updateAvailable ?? true
   return async () => ({
     ok: true,
     service: 'agenthydra',
-    currentVersion: '9.9.8',
+    currentVersion: VERSION,
     currentCommit: null,
-    remoteCommit: 'v9.9.9',
+    remoteCommit: over.remoteCommit ?? (available ? 'v9.9.9' : `v${VERSION}`),
     branch: null,
     upstream: null,
     remote: 'https://github.com/LunarWerxs/agenthydra/releases',
     dirty: false,
-    updateAvailable: true,
-    canApply: true,
+    updateAvailable: available,
+    canApply: available,
     checkedAt: 1735689600000,
     reason: null,
   })
@@ -303,6 +308,147 @@ test('applyUpdate rolls back the executable AND every already-swapped component 
     expect(readFileSync(join(install, 'orchestrator/orch.py'), 'utf8')).toBe('old driver')
     // No .old- artifacts left behind anywhere in the install.
     expect(readdirSync(install).some((n) => n.includes('.old-'))).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ── the repair path (2026-09-07) ────────────────────────────────────────────────────────────────
+//
+// The component-aware updater landed IN v0.39.0, so the update that INSTALLED 0.39.0 was performed
+// by the old one and brought the executable alone. The result is an install running the latest
+// version with no orchestrator/ - every chat-moving tool answers `no orch.py under <dir>` - which
+// no update can ever repair, because there is no newer version to update TO. Measured on a real
+// install that day. These pin the fall-through that lets the current version be reinstalled.
+
+test('missingComponents names a component that is absent from a bundle install', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-missing-'))
+  try {
+    put(root, 'AgentHydra.exe', 'exe')
+    put(root, 'misc/lunarwerx-tray.exe', 'tray')
+    expect(missingComponents(root)).toEqual(['orchestrator'])
+    put(root, 'orchestrator/orch.py', 'driver')
+    expect(missingComponents(root)).toEqual([])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// A bare single-file .exe legitimately ships none of the folders (release.yml puts them in the
+// .zip only). Reading that as damage would offer every such user a "repair" that silently
+// converts their install into a bundle.
+test('an install with NO components at all is a bare .exe, not a damaged bundle', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-bare-'))
+  try {
+    put(root, 'AgentHydra.exe', 'exe')
+    expect(missingComponents(root, 'win32')).toEqual([])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ⛔ misc/ IS WINDOWS-ONLY (release.yml stages it inside the windows-x64 branch), so a perfectly
+// healthy linux/macOS install has no misc/ and never will. Reporting it missing there made
+// "already up to date" unreachable and turned every apply into a reinstall + restart that could
+// never converge, because reconcile has no misc/ in the bundle to install.
+test('a healthy POSIX install is complete without misc/', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-posix-'))
+  try {
+    put(root, 'agenthydra', 'exe')
+    put(root, 'orchestrator/orch.py', 'driver')
+    expect(missingComponents(root, 'linux')).toEqual([])
+    expect(missingComponents(root, 'darwin')).toEqual([])
+    // The same tree on Windows IS missing something, and says so.
+    expect(missingComponents(root, 'win32')).toEqual(['misc'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ...and the bail-out must not swallow the real case there. Unix publishes ONLY tarballs, and
+// every tarball stages orchestrator/, so there is no download that yields a componentless POSIX
+// install - "all missing" on Unix is damage, not a deliberate single-file install.
+test('a POSIX install missing orchestrator/ is damage, not a bare binary', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-posix-broken-'))
+  try {
+    put(root, 'agenthydra', 'exe')
+    expect(missingComponents(root, 'linux')).toEqual(['orchestrator'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('applyUpdate reinstalls the CURRENT version when a component is missing', async () => {
+  const { root, bundle, install } = applyFixture()
+  try {
+    // The install this repairs: latest version, misc/ present, orchestrator/ gone.
+    rmSync(join(install, 'orchestrator'), { recursive: true, force: true })
+    const result = await applyUpdate({
+      installDir: install,
+      exePath: join(install, 'AgentHydra.exe'),
+      // No update available - the ONLY thing that used to matter, and the whole refusal.
+      checkForUpdate: fakeCheckForUpdate({ updateAvailable: false }),
+      fetchLatestRelease: fakeFetchLatestRelease(),
+      downloadAndVerifyUpdate: async () => ({
+        newExe: join(bundle, 'AgentHydra.exe'),
+        bundleDirPath: bundle,
+      }),
+      orchestratorBusy: () => false,
+    })
+    expect(result.ok).toBe(true)
+    expect(readFileSync(join(install, 'orchestrator/orch.py'), 'utf8')).toBe('new driver')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ⛔ A REPAIR MAY RESTORE WHAT IS MISSING; IT MAY NEVER TAKE THE APP BACKWARDS. `updateAvailable`
+// is also false when the newest RELEASE is older than this build (a yanked release, a rolled-back
+// tag), and there "reinstall the latest" is a silent downgrade of the exe and both folders.
+test('a missing component does NOT license a downgrade when the latest release is older', async () => {
+  const { root, bundle, install } = applyFixture()
+  try {
+    rmSync(join(install, 'orchestrator'), { recursive: true, force: true })
+    const result = await applyUpdate({
+      installDir: install,
+      exePath: join(install, 'AgentHydra.exe'),
+      checkForUpdate: fakeCheckForUpdate({ updateAvailable: false, remoteCommit: 'v0.0.1' }),
+      fetchLatestRelease: fakeFetchLatestRelease(),
+      downloadAndVerifyUpdate: async () => ({
+        newExe: join(bundle, 'AgentHydra.exe'),
+        bundleDirPath: bundle,
+      }),
+      orchestratorBusy: () => false,
+    })
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('already up to date')
+    // Says WHICH versions, so "up to date" on an install newer than the latest release is not a
+    // mystery, and nothing was touched.
+    expect(result.message).toContain('v0.0.1')
+    expect(readFileSync(join(install, 'AgentHydra.exe'), 'utf8')).toBe('old exe')
+    expect(existsSync(join(install, 'orchestrator'))).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a complete install on the current version is still refused as up to date', async () => {
+  const { root, bundle, install } = applyFixture()
+  try {
+    const result = await applyUpdate({
+      installDir: install,
+      exePath: join(install, 'AgentHydra.exe'),
+      checkForUpdate: fakeCheckForUpdate({ updateAvailable: false }),
+      fetchLatestRelease: fakeFetchLatestRelease(),
+      downloadAndVerifyUpdate: async () => ({
+        newExe: join(bundle, 'AgentHydra.exe'),
+        bundleDirPath: bundle,
+      }),
+      orchestratorBusy: () => false,
+    })
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('already up to date')
+    expect(readFileSync(join(install, 'AgentHydra.exe'), 'utf8')).toBe('old exe')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

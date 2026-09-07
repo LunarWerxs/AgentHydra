@@ -20,6 +20,7 @@ import {
   MessageCircleQuestion,
   Monitor,
   MonitorDown,
+  Plug,
   Power,
   RefreshCw,
   Repeat,
@@ -223,6 +224,7 @@ async function refreshSettings() {
     const s = await api.getSettings()
     portableMode.value = s.portableMode
     hideTrayIcon.value = s.hideTrayIcon
+    readMcpSettings(s)
   } catch {
     /* keep last-known value on a failed refresh */
   }
@@ -273,6 +275,54 @@ async function toggleHideTrayIcon(enabled: boolean) {
     hideTrayIcon.value = s.hideTrayIcon
   } catch {
     toast.error(t('settings.hideTrayIconToastFailed'))
+  }
+}
+
+// --- MCP registration (server/src/mcp-register.ts) ---
+// Two values, not one: the SWITCH and what the config file actually says. The daemon reports both
+// because they can disagree - a read-only ~/.claude.json, or an entry someone wrote by hand - and
+// showing only the switch would report success over a registration that never landed.
+const mcpRegister = ref(true)
+const mcpRegistered = ref(false)
+const mcpUrl = ref('')
+const mcpConfigPath = ref('')
+const mcpError = ref<string | null>(null)
+// The toolbox half. Separate from the registration because they fail independently and a user
+// with one and not the other sees a completely different symptom.
+const mcpToolboxPresent = ref(true)
+const mcpMissingComponents = ref<string[]>([])
+
+function readMcpSettings(s: Awaited<ReturnType<typeof api.getSettings>>) {
+  mcpRegister.value = s.mcpRegisterClaudeCode
+  mcpRegistered.value = s.mcpRegistered
+  mcpUrl.value = s.mcpUrl
+  mcpConfigPath.value = s.mcpConfigPath
+  mcpError.value = s.mcpRegisterError
+  mcpToolboxPresent.value = s.mcpToolboxPresent
+  mcpMissingComponents.value = s.mcpMissingComponents
+}
+
+/** Re-apply the CURRENT release to restore a missing component. applyUpdate() already treats an
+ *  install with a missing release folder as installable at its own version (see
+ *  missingComponents / resolveUpdateToApply), so this is the same path the update row uses.
+ *
+ *  The OUTCOME is toasted rather than left to applyMessage/applyError, which render inside the
+ *  Updates group ~300 lines further down the page: a failed repair would otherwise look like a
+ *  button that did nothing at all. */
+async function onRepairInstall() {
+  await onApplyUpdate()
+  await refreshSettings()
+  if (applyError.value) toast.error(applyError.value)
+  else if (mcpMissingComponents.value.length)
+    toast.warning(applyMessage.value ?? t('settings.mcpRepairFailed'))
+  else toast.success(applyMessage.value ?? t('settings.mcpRepairDone'))
+}
+
+async function toggleMcpRegister(enabled: boolean) {
+  try {
+    readMcpSettings(await api.updateSettings({ mcpRegisterClaudeCode: enabled }))
+  } catch {
+    toast.error(t('settings.mcpRegisterToastFailed'))
   }
 }
 
@@ -959,6 +1009,47 @@ defineExpose({ save })
            renders the same four table switches in a flyout (InstanceSectionsMenu.vue) where they
            take effect. One component, one behaviour — the two surfaces cannot drift. -->
       <ProviderRows />
+    </SettingsGroup>
+
+    <!-- MCP: the agent-facing half of the app. On by default, because the alternative was a
+         documented command that only worked from a source checkout. -->
+    <SettingsGroup :label="$t('settings.mcpTitle')" :description="$t('settings.mcpHint')">
+      <SettingsRow :icon="Plug" :label="$t('settings.mcpRegisterLabel')">
+        <template #info>
+          <InfoHint :text="$t('settings.mcpRegisterHint')" />
+        </template>
+        <template #control>
+          <Switch :model-value="mcpRegister" @update:model-value="toggleMcpRegister" />
+        </template>
+      </SettingsRow>
+      <div class="space-y-0.5 px-3.5 py-2.5 text-[11px] text-muted-foreground">
+        <p v-if="mcpError" class="text-destructive">{{ mcpError }}</p>
+        <p v-else-if="mcpRegistered">{{ $t('settings.mcpRegisteredYes', { url: mcpUrl }) }}</p>
+        <p v-else>
+          {{ mcpRegister ? $t('settings.mcpRegisteredNo') : $t('settings.mcpRegisteredOff') }}
+        </p>
+        <p v-if="mcpConfigPath" class="break-all">
+          {{ $t('settings.mcpConfigPath', { path: mcpConfigPath }) }}
+        </p>
+      </div>
+      <!-- Any release-owned folder this install is missing, whichever it is. The message is
+           SPECIFIC to the consequence: a missing orchestrator/ breaks moving chats, a missing
+           misc/ costs the tray icon, and claiming the first when it is the second would be a
+           false alarm. A repair is the ordinary update path applied to the CURRENT version, so
+           the button is the same apply the update row uses. -->
+      <div v-if="mcpMissingComponents.length" class="space-y-1.5 px-3.5 py-2.5 text-[11px]">
+        <p class="text-warning">
+          {{
+            mcpToolboxPresent
+              ? $t('settings.mcpComponentsMissing', { names: mcpMissingComponents.join(', ') })
+              : $t('settings.mcpToolboxMissing', { names: mcpMissingComponents.join(', ') })
+          }}
+        </p>
+        <p class="text-muted-foreground">{{ $t('settings.mcpToolboxMissingWhy') }}</p>
+        <Button size="sm" variant="outline" :disabled="updateApplying" @click="onRepairInstall">
+          {{ $t(updateApplying ? 'settings.mcpRepairing' : 'settings.mcpRepair') }}
+        </Button>
+      </div>
     </SettingsGroup>
 
     <!-- usage: keep the quota numbers warm.

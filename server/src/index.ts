@@ -59,7 +59,7 @@ import { getSetting, setSetting } from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import { activeCount, reattachRuns, startImportSweep, startRetrySweep } from './dispatch'
 import { findFreePort } from './find-free-port.mjs'
-import { cleanupStaleUpdateArtifacts } from './github-updater'
+import { cleanupStaleUpdateArtifacts, missingComponents } from './github-updater'
 import { app } from './http-app'
 import {
   clearInstanceInfo,
@@ -77,6 +77,12 @@ import {
   TOOLS as MCP_TOOLS,
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
+import {
+  mcpRegisterEnabled,
+  mcpRegistrationStatus,
+  setMcpRegisterEnabled,
+  syncMcpRegistration,
+} from './mcp-register'
 import { handleRpc as handleMcpRpc } from './mcp-stdio.mjs'
 import { startMonitor } from './monitor'
 import { sendOsNotification } from './notify-os'
@@ -86,7 +92,7 @@ import {
   setNotificationSettings,
 } from './notify-settings'
 import { openUi } from './open-ui'
-import { setOrchestratorDaemonUrl } from './orchestrator'
+import { orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
@@ -164,6 +170,17 @@ function computeAllowedApiOrigins(port: number): string[] {
   // drift apart again; only the "what origin am I" question differs between them.
   return apiOriginAllowlist(readInstanceInfo()?.url ?? `http://127.0.0.1:${port}`)
 }
+/**
+ * This daemon's own base URL, resolved ONCE at boot from the port actually bound.
+ *
+ * Same late-bound shape as allowedApiOrigins above, and for the same reason: everything that has
+ * to name this server must name the same thing. The MCP registration WRITES this URL into another
+ * program's config and the settings panel COMPARES against it, and those two had independently
+ * spelled fallbacks - `boundPort` at boot, the configured `PORT` in the panel. They agree until a
+ * port hop coincides with an unreadable runtime pointer, and then the panel calls a correct
+ * registration wrong and toggling the switch replaces it with a dead URL. One value, no drift.
+ */
+let daemonSelfUrl = `http://127.0.0.1:${PORT}`
 
 // CORS narrowed to the exact allowlist above (defense-in-depth for cross-origin READABILITY); the
 // actual cross-site protection is loopbackGuard below, which rejects the REQUEST — see
@@ -333,6 +350,26 @@ const appSettings = () => ({
   // ONE settings round-trip. The SMTP password is not in here by construction — the DTO carries
   // `notifySmtpPassSet` instead (see notify-settings.ts).
   ...getNotificationSettings(),
+  // The MCP registration: the switch AND what the config file actually says right now. Both,
+  // because they can disagree in ways only the file can explain, a read-only ~/.claude.json,
+  // or a hand-written stdio entry someone added years ago. A panel showing only the switch would
+  // report "on" over a registration that never landed.
+  mcpRegisterClaudeCode: mcpRegisterEnabled(),
+  ...(() => {
+    const st = mcpRegistrationStatus({
+      daemonUrl: daemonSelfUrl,
+    })
+    return {
+      mcpRegistered: st.registered,
+      mcpConfigPath: st.configPath,
+      mcpUrl: st.desired.url,
+      mcpRegisterError: st.error,
+    }
+  })(),
+  // Cheap on purpose: a path probe, not orchestratorStatus(), which spawns python. This is read
+  // on every settings load and only has to answer "is the folder there".
+  mcpToolboxPresent: existsSync(join(orchestratorDir(), 'orch.py')),
+  mcpMissingComponents: IS_COMPILED ? missingComponents(APP_ROOT) : [],
 })
 // Cross-window UI preferences (see core/ui-prefs.ts). Deliberately NOT folded into /api/settings:
 // these are a mirror of the browser's own localStorage, written on every toggle, and they must be
@@ -344,6 +381,17 @@ app.post('/api/settings', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.portableMode === 'boolean') setPortableMode(body.portableMode)
   if (typeof body.hideTrayIcon === 'boolean') setHideTrayIcon(body.hideTrayIcon)
+  // Applied IMMEDIATELY, not at the next boot: a toggle whose effect you cannot see until you
+  // restart is a toggle nobody trusts, and the failure this exists to fix was invisible enough
+  // already. The sync writes the entry (or removes it) and reports through the same GET below.
+  if (typeof body.mcpRegisterClaudeCode === 'boolean') {
+    setMcpRegisterEnabled(body.mcpRegisterClaudeCode)
+    const reg = syncMcpRegistration({
+      daemonUrl: daemonSelfUrl,
+      enabled: body.mcpRegisterClaudeCode,
+    })
+    if (reg.error) console.warn(`[agenthydra] MCP registration: ${reg.error}`)
+  }
   if (typeof body.transcriptEditor === 'string')
     setSetting('transcript_editor', body.transcriptEditor.trim())
   // setUsageSettings re-arms the background timer, so flipping autoRefresh takes effect immediately
@@ -750,7 +798,18 @@ writeInstanceInfo(boundPort, {
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
 // port, not the configured one, so a hop off a busy 7787 does not leave the Python side talking
 // to whatever answers there. See orchestratorChildEnv.
-setOrchestratorDaemonUrl(readInstanceInfo()?.url ?? `http://127.0.0.1:${boundPort}`)
+daemonSelfUrl = readInstanceInfo()?.url ?? `http://127.0.0.1:${boundPort}`
+setOrchestratorDaemonUrl(daemonSelfUrl)
+// Keep Claude Code's user-scope MCP config pointing at THIS daemon (see mcp-register.ts). Here,
+// after the port is bound, because the entry carries the URL: registering before the hop is
+// resolved would write a URL nothing is listening on. Runs on every boot so a hop cannot leave a
+// stale one behind, writes only when the entry actually differs, and never throws.
+{
+  const reg = syncMcpRegistration({ daemonUrl: daemonSelfUrl })
+  if (reg.error) console.warn(`[agenthydra] MCP registration: ${reg.error}`)
+  else if (reg.action === 'added' || reg.action === 'updated' || reg.action === 'removed')
+    console.log(`[agenthydra] MCP registration ${reg.action} in ${reg.configPath}`)
+}
 // AH-11: now that boundPort (and the runtime pointer) are known, resolve the exact-origin
 // allowlist the cors() and loopbackGuard() callbacks above read on every request. This runs well
 // before Bun.serve() starts accepting connections, so no request can observe the empty initial []

@@ -191,6 +191,39 @@ export default {
   monitorToastDisabled: 'Auto-resume monitor disabled.',
   monitorToastFailed: 'Failed to save auto-resume monitor settings.',
 
+  // The MCP server group. See server/src/mcp-register.ts for what the switch actually does and
+  // why it defaults to ON: before 2026-09-07 the only way to get these tools was a documented
+  // command that assumed a source checkout, so every downloaded install silently had none of them.
+  mcpTitle: 'MCP server',
+  mcpHint:
+    'AgentHydra’s whole API is available to AI agents over MCP: moving chats between accounts, the fleet, the queue, the quota reads. A client only sees the tools once it has been told where the server is.',
+  mcpRegisterLabel: 'Register with Claude Code',
+  mcpRegisterHint:
+    'Keeps an “agenthydra” entry in Claude Code’s user-scope config pointing at this daemon, refreshed on every start so it survives a port change. It writes that one key and nothing else, and turning this off removes it. A Claude Code session already open keeps the tool list it started with; start a new one.',
+  // The switch says what SHOULD be true; this line says what the config file actually says. They
+  // can disagree (a read-only file, a hand-written entry), and only the second one is the truth.
+  mcpRegisteredYes: 'Registered at {url}',
+  mcpRegisteredNo: 'Not registered yet.',
+  mcpRegisteredOff: 'Not registered, the switch is off.',
+  mcpConfigPath: 'Config: {path}',
+  mcpRegisterToastFailed: 'Failed to change the MCP registration.',
+  // The other half of "the MCP server works": the Python toolbox every chat-moving tool runs
+  // through. Named here rather than left to a tool error, because a caller only ever sees "no
+  // orch.py under <dir>" after asking for a move, which reads as the feature being broken.
+  mcpToolboxMissing:
+    'Moving chats between accounts will not work: this install is missing {names}. Everything else keeps working.',
+  // The same gap when it is NOT the toolbox, a missing misc/ costs the tray icon, not the chat
+  // moves, and saying "moving chats will not work" there would be a false alarm.
+  mcpComponentsMissing:
+    'This install is missing {names}, which the release ships beside the executable.',
+  mcpToolboxMissingWhy:
+    'Releases ship these folders beside the executable, and an update applied by a build older than 0.39.0 replaced only the executable. Re-applying the current version restores them.',
+  mcpRepair: 'Repair install',
+  mcpRepairing: 'Repairing…',
+  // Toasted at the button, because the update row's own message renders far down the page.
+  mcpRepairDone: 'Repaired. The missing files are installed.',
+  mcpRepairFailed: 'The missing files are still not installed.',
+
   // The accounts section's strings are gone with the section itself: it only ever listed legacy
   // pasted credentials, so in practice it rendered as an empty box telling you to go to the
   // Instances tab. Accounts are added by signing an instance in there.

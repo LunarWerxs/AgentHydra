@@ -14,6 +14,7 @@ import {
   Gauge,
   LogIn,
   LogOut,
+  MessagesSquare,
   MonitorDown,
   Pencil,
   Play,
@@ -83,15 +84,22 @@ import { useSortable } from '@/composables/useSortable'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
-import type { CliInstance, CMDesktopInstall, CMInstance, SessionSummary } from '@/lib/api'
+import type {
+  ChatListRow,
+  CliInstance,
+  CMDesktopInstall,
+  CMInstance,
+  SessionSummary,
+} from '@/lib/api'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
   DESKTOP_DOWNLOAD_PAGE_URL,
   getDesktopInstall,
+  getInstanceChats,
   getSessions,
   migrateSession,
 } from '@/lib/api'
-import { formatBytes, formatUptime } from '@/lib/format'
+import { baseName, formatBytes, formatUptime, timeAgo } from '@/lib/format'
 import {
   accountDisplayName,
   accountEmail,
@@ -692,6 +700,102 @@ function onEditClosed(isOpen: boolean) {
 // same effect"). Controlled `open` on the row's DropdownMenu keyed by dir: the kebab's own click
 // reports through update:open, and a right-click on another row moves the key, closing this one.
 const rowMenuOpen = ref<string | null>(null)
+
+// --- what chats are ON this account ------------------------------------------------------------
+// The read that used to require opening the account (owner, 2026-09-07). The move submenu answers
+// "send them somewhere"; this answers the question you have to settle FIRST on a fleet of near
+// -identically named rows - which account is holding the chat you are looking for.
+//
+// Deliberately reads /api/chats, the account's own store, and NOT the session list: a session
+// listing is scoped by period and by the instance NAME a transcript happens to record, so a chat
+// nobody has touched this week simply is not in it. That would make an account with twenty chats
+// look empty, which is the one wrong answer this panel must never give.
+const chatsFor = ref<CMInstance | null>(null)
+const chatsBusy = ref(false)
+const chatsError = ref<string | null>(null)
+const chatsRows = ref<ChatListRow[]>([])
+const chatsTotal = ref(0)
+const chatsCounts = ref<{ all: number; unarchived: number; archived: number; live: number } | null>(
+  null,
+)
+// Archived is the resting state of a Claude Desktop chat and therefore the majority of any
+// account, so the list opens on the active ones and says how many it is not showing.
+const chatsShowArchived = ref(false)
+const CHATS_PAGE = 200
+
+// Which load is the current one. Guarding by instance dir alone is not enough: toggling "Include
+// archived" twice quickly issues two loads for the SAME row, and the store scan is slow enough
+// (~1300 files) that they can land in either order - so the list could settle on the reply that
+// disagrees with the checkbox. A monotonic id means only the newest load may write.
+let chatsRequest = 0
+
+async function loadChats(inst: CMInstance) {
+  const seq = ++chatsRequest
+  const mine = () => chatsRequest === seq && chatsFor.value?.dir === inst.dir
+  chatsBusy.value = true
+  chatsError.value = null
+  try {
+    // `desktop:<dir>` is the one spelling that cannot be ambiguous: a label and an account name
+    // are both user-editable and two rows may share either. The server maps it to the chat-store
+    // label, including the default install's literal `default` (see chatStoreLabel in
+    // server/src/routes/sessions.ts).
+    const got = await getInstanceChats(
+      `desktop:${inst.dir}`,
+      chatsShowArchived.value ? 'include' : 'hide',
+      CHATS_PAGE,
+    )
+    // A slower reply for a row the user has since closed or swapped, or for a filter they have
+    // since changed, must not overwrite the one they are looking at now.
+    if (!mine()) return
+    chatsRows.value = got.rows
+    chatsTotal.value = got.total
+    chatsCounts.value = got.counts
+  } catch (e) {
+    if (!mine()) return
+    chatsRows.value = []
+    chatsTotal.value = 0
+    chatsCounts.value = null
+    chatsError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (mine()) chatsBusy.value = false
+  }
+}
+
+function openChats(inst: CMInstance) {
+  rowMenuOpen.value = null
+  chatsFor.value = inst
+  chatsRows.value = []
+  chatsTotal.value = 0
+  chatsCounts.value = null
+  // Reset the filter BEFORE the load, and let the watcher below own the fetch when this actually
+  // changes the value: setting it and then loading here as well means an open with the toggle
+  // left on pays for two identical full store scans.
+  if (chatsShowArchived.value) chatsShowArchived.value = false
+  else void loadChats(inst)
+}
+
+function closeChats() {
+  chatsFor.value = null
+  chatsBusy.value = false
+  // Nothing in flight may write into the next dialog that opens.
+  chatsRequest++
+}
+
+// Re-reads on the toggle rather than filtering what is already loaded: the archived chats were
+// never fetched, and a client-side filter over a 200-row page would silently under-report an
+// account holding two hundred of them.
+watch(chatsShowArchived, () => {
+  const inst = chatsFor.value
+  if (inst) void loadChats(inst)
+})
+
+/** A chat in the list, clicked: land on it in Sessions. Only reachable for a chat that HAS a CLI
+ *  transcript - a Desktop-only row has no session for Sessions to show. */
+function openChatFromList(row: ChatListRow) {
+  if (!row.sessionId) return
+  closeChats()
+  requestSessionJump({ session_id: row.sessionId, source: 'claude' })
+}
 
 // --- move every active chat on one instance to another -----------------------------------------
 // The instance-level version of the session list's migrate: every chat on this account that is
@@ -1516,6 +1620,12 @@ onUnmounted(() => {
                     <DropdownMenuItem :disabled="isBusy(inst)" @click="onCreateShortcut(inst)">
                       <MonitorDown /> {{ $t('instances.createShortcut') }}
                     </DropdownMenuItem>
+                    <!-- What this account is HOLDING, before any question about moving it. Sits
+                         directly above the move submenu because they are the two halves of one
+                         thought and the answer here decides whether the other is wanted. -->
+                    <DropdownMenuItem @click="openChats(inst)">
+                      <MessagesSquare /> {{ $t('instances.chats') }}
+                    </DropdownMenuItem>
                     <!-- Every active chat on this account, moved to one other account. Running
                          destinations first; a closed one says it will be started. -->
                     <DropdownMenuSub>
@@ -1608,6 +1718,86 @@ onUnmounted(() => {
         :cli-enabled="codexCliEnabled"
       />
     </div>
+
+    <!-- "Chats": this one account's chats, read-only. No action on the account itself, so it
+         closes on any outside click and its only control is the archived toggle. -->
+    <Dialog :open="chatsFor !== null" @update:open="(v) => { if (!v) closeChats() }">
+      <DialogContent class="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {{ $t('instances.chatsTitle', { name: chatsFor ? instLabel(chatsFor) : '' }) }}
+          </DialogTitle>
+          <DialogDescription>
+            <template v-if="chatsCounts">
+              {{ $t('instances.chatsCounts', chatsCounts) }}
+              <template v-if="chatsCounts.live > 0">
+                · {{ $t('instances.chatsLiveCount', { n: chatsCounts.live }) }}
+              </template>
+            </template>
+            <template v-else-if="chatsBusy">{{ $t('instances.chatsLoading') }}</template>
+          </DialogDescription>
+        </DialogHeader>
+
+        <label class="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+          <input v-model="chatsShowArchived" type="checkbox" class="size-3.5 accent-current" />
+          {{ $t('instances.chatsShowArchived') }}
+        </label>
+
+        <p v-if="chatsError" class="text-xs text-destructive">
+          {{ $t('instances.chatsFailed', { name: chatsFor ? instLabel(chatsFor) : '' }) }}
+          {{ chatsError }}
+        </p>
+        <div v-else-if="chatsBusy" class="space-y-2">
+          <Skeleton v-for="n in 4" :key="n" class="h-9 w-full" />
+        </div>
+        <p v-else-if="chatsRows.length === 0" class="text-xs text-muted-foreground">
+          {{ chatsShowArchived ? $t('instances.chatsEmptyArchived') : $t('instances.chatsEmpty') }}
+        </p>
+        <ul v-else class="scroll-slim max-h-80 space-y-1 overflow-y-auto text-xs">
+          <li
+            v-for="row in chatsRows"
+            :key="row.chatId ?? row.sessionId ?? row.title ?? ''"
+            class="rounded border border-border px-2 py-1.5"
+          >
+            <div class="flex items-center gap-2">
+              <span class="min-w-0 flex-1 truncate" :title="row.title ?? undefined">
+                {{ row.title || $t('instances.chatsNoTitle') }}
+              </span>
+              <Badge v-if="row.live" variant="outline" class="shrink-0">
+                {{ $t('instances.chatsLive') }}
+              </Badge>
+              <Badge v-if="row.isArchived" variant="secondary" class="shrink-0">
+                {{ $t('instances.chatsArchivedBadge') }}
+              </Badge>
+              <!-- Absent, not disabled, for a Desktop-only chat: there is no session to open. -->
+              <button
+                v-if="row.sessionId"
+                type="button"
+                class="shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                :aria-label="$t('instances.chatsOpen')"
+                :title="$t('instances.chatsOpen')"
+                @click="openChatFromList(row)"
+              >
+                <ArrowRightLeft class="size-3.5" />
+              </button>
+            </div>
+            <div class="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span v-if="row.cwd" class="truncate" :title="row.cwd">{{ baseName(row.cwd) }}</span>
+              <span class="ml-auto shrink-0">
+                {{ row.lastActivityAt ? timeAgo(row.lastActivityAt) : $t('instances.chatsNeverActive') }}
+              </span>
+            </div>
+          </li>
+        </ul>
+        <p v-if="chatsRows.length && chatsTotal > chatsRows.length" class="text-[11px] text-muted-foreground">
+          {{ $t('instances.chatsTruncated', { shown: chatsRows.length, total: chatsTotal }) }}
+        </p>
+
+        <DialogFooter>
+          <Button variant="ghost" @click="closeChats">{{ $t('instances.chatsClose') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <!-- "Move all chats" confirmation: the count, both accounts, the list, and a second click. -->
     <Dialog :open="moveAll !== null" @update:open="(v) => { if (!v) moveAll = null }">

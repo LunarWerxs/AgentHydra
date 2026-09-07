@@ -526,12 +526,26 @@ export interface ReleaseComponent {
   /** Paths inside the folder that are USER STATE, never release content: carried across a swap
    *  and never deleted by a reconcile. */
   preserve: string[]
+  /** Platforms whose release archive actually SHIPS this folder. Absent = every platform.
+   *  Only `missingComponents` reads this; the swap/reconcile machinery is unaffected, because it
+   *  works from what a downloaded bundle contains rather than from what it ought to contain. */
+  platforms?: NodeJS.Platform[]
 }
 
 export const RELEASE_COMPONENTS: readonly ReleaseComponent[] = [
   { name: 'orchestrator', strategy: 'swap', preserve: ['state'] },
-  { name: 'misc', strategy: 'reconcile', preserve: [] },
+  // WINDOWS-ONLY, and saying so is load-bearing: release.yml stages misc/ inside
+  // `if [ "$target" = "windows-x64" ]`, so a perfectly healthy linux or macOS install has no
+  // misc/ and never will. Without this field `missingComponents` reported ['misc'] on every
+  // POSIX install, which made "already up to date" unreachable there and turned each apply into
+  // a full reinstall + daemon restart that could never converge (review, 2026-09-07).
+  { name: 'misc', strategy: 'reconcile', preserve: [], platforms: ['win32'] },
 ]
+
+/** The components this platform's release archive is expected to carry. */
+export function componentsForPlatform(platform: NodeJS.Platform = process.platform) {
+  return RELEASE_COMPONENTS.filter((c) => !c.platforms || c.platforms.includes(platform))
+}
 
 /** Written into every installed component with the release version it came from. */
 export const RELEASE_VERSION_FILE = '.release-version'
@@ -732,6 +746,41 @@ export function componentVersions(
   }))
 }
 
+/**
+ * Release-owned folders that are NOT installed beside the executable.
+ *
+ * The hole this closes (measured 2026-09-07 on a real install): the component-aware updater landed
+ * IN v0.39.0, so the update that installed 0.39.0 was performed by the OLD updater and brought the
+ * executable alone. That install therefore runs the latest version with no orchestrator/ - every
+ * chat-moving tool answers `no orch.py under <dir>` - and because it IS the latest version,
+ * checkForUpdate says "up to date" and no update will ever repair it. An updater that can only fix
+ * a component while ALSO bumping a version cannot fix the install its own predecessor broke.
+ *
+ * Deliberately conservative: this reports missing components only when at least one component IS
+ * installed. A bare single-file .exe download legitimately has none of them (release.yml ships the
+ * folders in the .zip only, and the daemon already says so at boot), and reading that as damage
+ * would offer every such user a "repair" that quietly converts their install into a bundle.
+ */
+export function missingComponents(
+  installDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  // Only components this platform's archive actually ships can be "missing" here. misc/ is
+  // Windows-only, so on linux/macOS the expected set is orchestrator/ alone - without that, every
+  // healthy POSIX install reported ['misc'] forever.
+  const expected = componentsForPlatform(platform)
+  const missing = expected.filter((c) => !existsSync(join(installDir, c.name)))
+  if (missing.length === 0) return []
+  // THE BARE-BINARY BAIL-OUT IS WINDOWS-ONLY, because the bare binary is. release.yml publishes a
+  // standalone `.exe` for windows-x64 and NOTHING but tarballs for every Unix target, and those
+  // tarballs always stage orchestrator/. So on Windows "none of them are here" is a legitimate
+  // single-file install and not damage, while on Unix there is no download that could produce it -
+  // a missing orchestrator/ there is damage, and reporting nothing would swallow the one case this
+  // repair path exists for.
+  if (platform === 'win32' && missing.length === expected.length) return []
+  return missing.map((c) => c.name)
+}
+
 function fail(message: string): UpdateApplyResult {
   // Every early return in applyUpdate goes through here, so this is the one place that has to
   // settle the progress record — otherwise a failed apply leaves the UI on "Downloading…" forever,
@@ -859,13 +908,29 @@ interface ResolvedUpdate {
 async function resolveUpdateToApply(
   doCheckForUpdate: NonNullable<ApplyUpdateDeps['checkForUpdate']>,
   doFetchLatestRelease: NonNullable<ApplyUpdateDeps['fetchLatestRelease']>,
+  installDir: string,
 ): Promise<ResolvedUpdate | UpdateApplyResult> {
   beginUpdateProgress('Checking for the latest release…')
   const status = await doCheckForUpdate({ fresh: true })
   if (!status.ok) return fail(status.reason ?? 'update check failed')
-  if (!status.updateAvailable) return fail('already up to date')
-
   const remoteVersion = (status.remoteCommit ?? '').replace(/^v/, '')
+  // "Up to date" is not the same as "complete". An install missing a release-owned folder is
+  // repaired by reinstalling THIS version - the same download, the same verification, the same
+  // component install - so the only thing that changes here is that the version equality stops
+  // being a refusal. See missingComponents() for why a bare .exe is not treated as damaged.
+  //
+  // ONLY when the latest release IS this version. `!updateAvailable` is also true when the remote
+  // is OLDER (a yanked release, a rolled-back tag), and there "reinstall the latest" would silently
+  // DOWNGRADE the executable and both component folders to fix a missing folder. A repair may
+  // restore what is missing; it may never take the app backwards.
+  const repairable = !status.updateAvailable && remoteVersion === VERSION
+  const repairing = repairable ? missingComponents(installDir) : []
+  if (!status.updateAvailable && repairing.length === 0)
+    return fail(
+      !repairable && remoteVersion && remoteVersion !== VERSION
+        ? `already up to date (this install is v${VERSION}; the latest release is v${remoteVersion})`
+        : 'already up to date',
+    )
   // Re-fetch the release to get the asset URL (checkForUpdate intentionally doesn't carry it).
   // The check above already marked the ping reported on success, so this second hit never
   // resends `new=1` — one "first ping" signal per install, no matter how many requests it takes.
@@ -881,7 +946,12 @@ async function resolveUpdateToApply(
   } catch {
     asset = null
   }
-  if (!asset) return fail(`no ${currentTarget()} build attached to v${remoteVersion}`)
+  if (!asset)
+    return fail(
+      repairing.length
+        ? `this install is missing ${repairing.join(', ')}, but no ${currentTarget()} build is attached to v${remoteVersion} to restore it from - download the .zip from ${RELEASES_PAGE}`
+        : `no ${currentTarget()} build attached to v${remoteVersion}`,
+    )
   // Same rule install.ps1 applies: a release without its manifest cannot be verified, so it is not
   // installed. Every release since the manifest step landed carries one.
   if (!sums)
@@ -1041,12 +1111,12 @@ export async function applyUpdate(deps: ApplyUpdateDeps = {}): Promise<UpdateApp
   const rename = deps.rename ?? renameSync
   const move = deps.move ?? ((from: string, to: string) => moveInto(from, to, rename))
 
-  const resolved = await resolveUpdateToApply(doCheckForUpdate, doFetchLatestRelease)
+  const exePath = deps.exePath ?? process.execPath
+  const installDir = deps.installDir ?? APP_ROOT
+  const resolved = await resolveUpdateToApply(doCheckForUpdate, doFetchLatestRelease, installDir)
   // A refusal is already a finished result; only a ResolvedUpdate carries a version to install.
   if (!('remoteVersion' in resolved)) return resolved
 
-  const exePath = deps.exePath ?? process.execPath
-  const installDir = deps.installDir ?? APP_ROOT
   return installVerifiedUpdate(resolved, {
     exePath,
     exeName: basename(exePath),

@@ -18,43 +18,68 @@ Agents looking for the quota tools specifically want [AI_USAGE_SELFCHECK.md](AI_
 
 ## MCP server
 
-The daemon's REST API is also exposed over MCP stdio (`server/src/mcp.ts`, or `bun run mcp`), so
-agents (Claude Code, Claude Desktop, Cursor) can drive sessions, the run queue, accounts, the
-scheduler, and instances the same way the web UI does. Start the daemon first; the MCP server
-follows its actual bound port via the runtime pointer, overridable with `AGENTHYDRA_URL` (full base
-URL) or `AGENTHYDRA_PORT`.
+The daemon's REST API is also exposed over MCP, so agents (Claude Code, Claude Desktop, Cursor) can
+drive sessions, the run queue, accounts, the scheduler, and instances the same way the web UI does.
+Two transports, one dispatcher (`handleRpc`), so they cannot drift:
+
+- **HTTP**: `POST /api/mcp` on the running daemon. One shared server process however many clients
+  connect to it. **This is the one to use.**
+- **stdio**: `server/src/mcp.ts`, or `bun run mcp`. One process per client, each a relay to the
+  daemon over HTTP anyway. Kept for clients that speak nothing else.
+
+### It registers itself
+
+**The daemon writes its own entry into Claude Code's user-scope config on every
+start**, pointing at the port it actually bound (`server/src/mcp-register.ts`):
 
 ```json
-{
-  "mcpServers": {
-    "agenthydra": {
-      "command": "bun",
-      "args": ["run", "--cwd", "<path-to-agenthydra>", "mcp"]
-    }
-  }
-}
+{ "mcpServers": { "agenthydra": { "type": "http", "url": "http://127.0.0.1:7787/api/mcp" } } }
 ```
 
-### Register it at USER scope, not project scope
+It is on by default and lives in **Settings → MCP server → Register with Claude Code**, which also
+shows what the config file actually says. Turning it off removes the entry. It touches that one key
+and nothing else, and it refuses to write a `~/.claude.json` it could not parse rather than
+replacing state it cannot read. `CLAUDE_CONFIG_DIR` is honoured; `AGENTHYDRA_MCP_CONFIG` names the
+file outright.
 
-For Claude Code, the one-liner below is the supported way to write that entry, and the **scope is
-load-bearing**:
+Re-registering on every boot is the point: the URL carries the bound port, so a hop off a busy 7787
+would otherwise leave an entry pointing at nothing.
+
+**A session already open when it is registered will not see the new tools**: a client fixes its
+tool list at startup. Start a new one. `claude mcp list` should say `✔ Connected`.
+
+### Why this exists
+
+Until 2026-09-07 the instruction here was `claude mcp add --scope user agenthydra -- bun run --cwd
+<path-to-agenthydra> mcp`, and it is wrong for everyone who did not clone the repo: a downloaded
+release has no checkout to point `--cwd` at, and usually no Bun to run it with. The people most
+likely to want the tools were the least able to get them, and the failure is silent: a client with
+no entry simply has no tools and nothing says why. Found twice: registered **nowhere at all** on
+2026-08-30, and again on a release install on 2026-09-07.
+
+Register by hand only if you have turned the automatic one off:
 
 ```sh
-claude mcp add --scope user agenthydra -- bun run --cwd <path-to-agenthydra> mcp
+claude mcp add --scope user --transport http agenthydra http://127.0.0.1:7787/api/mcp
 ```
 
-User scope is load-bearing: it makes the tools available from any directory, not only from
-inside this checkout. A project-scoped registration gives the server its tools in this repo and
-nowhere else, which is the same as not having them.
+User scope is load-bearing: it makes the tools available from any directory. A project-scoped
+registration gives the server its tools in one repo and nowhere else, which is close to not having
+them.
 
-That is not hypothetical. On 2026-08-30 the server was found registered **nowhere at all**, not at
-user scope, not in a single project. The server itself was fine the whole time (all tools
-present); it had simply never been plugged in. If anything reports that it is driving the daemon
-over HTTP directly, this registration is missing on that machine.
+### Moving chats needs the Python toolbox, not just the server
 
-Verify with `claude mcp list`. The entry should say `✔ Connected`. A session already open when you
-register it will not see the new tools; its tool list is fixed at startup, so start a new one.
+`move_chat`, `move_chats` and the `orchestrator_*` tools do not do the work themselves. They run a
+script out of `orchestrator/`, which releases ship beside the executable. An install without that
+folder answers `no orch.py under <dir>` to all of them while every other tool works perfectly, which
+reads as the feature being broken rather than absent. `GET /api/orchestrator` says `present: false`,
+and **Settings → MCP server** says so too, with a **Repair install** button: re-applying the current
+release restores the folder (see `missingComponents` in `server/src/github-updater.ts`).
+
+This is not hypothetical either. The component-aware updater landed *in* v0.39.0, so the update that
+installed 0.39.0 was performed by the previous one and brought the executable alone, leaving
+installs on the newest version with no toolbox and, until the repair path existed, no update that
+could ever fix it.
 
 Tools cover sessions (list / get / tail / search / export across Claude, Codex, OpenCode, Hermes and
 the foreign readers), project discovery (`list_projects`), chats a usage limit cut off

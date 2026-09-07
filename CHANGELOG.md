@@ -11,6 +11,40 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **AgentHydra registers itself as an MCP server with Claude Code, on by default**
+  (`server/src/mcp-register.ts`, `server/tests/mcp-register.test.ts`, Settings → MCP server). On
+  every start the daemon writes one entry into Claude Code's user-scope config:
+  `{ "type": "http", "url": "<bound daemon>/api/mcp" }`. Until now the only documented route was
+  `claude mcp add --scope user agenthydra -- bun run --cwd <path-to-agenthydra> mcp`, which is
+  wrong for everyone who did not clone the repo: a downloaded release has no checkout to point
+  `--cwd` at and usually no Bun to run it with. So the people most likely to want the tools were
+  the least able to get them, and the failure is silent: a client with no entry simply has no
+  tools, and nothing anywhere says why. Measured on a release install 2026-09-07: three other MCP
+  servers registered by their own installers, and no `agenthydra` entry at all.
+
+  It registers the HTTP transport, never stdio: stdio is one server process per client, each one a
+  relay to this daemon over HTTP anyway. Re-registering on every boot is deliberate, because the
+  entry carries the port the daemon actually bound, so a hop off a busy 7787 cannot leave a stale
+  URL behind. **It writes that one key and nothing else**: every other server and every unrelated
+  key is preserved, the write is a temp file and a rename that keeps the target's permission bits
+  and follows a symlink to its target, and nothing is written when the entry is already correct.
+  A `~/.claude.json` that does not parse is REPORTED rather than replaced, because that file holds
+  the user's logins and project history and a naive read-default-write would destroy all of it to
+  add a convenience. Claude Code writes the same file, so each write is bracketed by a size+mtime
+  check and abandoned rather than allowed to clobber a concurrent one. Turning the switch off
+  removes the entry; the panel shows what the config file actually says, not merely what the switch
+  says, because a read-only file or a hand-written entry can make the two disagree.
+- **A row's ⋮ menu lists the chats on that account** (`web/src/components/InstancesView.vue`,
+  `getInstanceChats` in `web/src/lib/api.ts`). "Chats" opens a dialog naming every chat the account
+  holds: title, project, when it was last active, and whether an engine is running in it right now,
+  with a count of active / archived / total and an "Include archived" toggle. Answers the question
+  you have to settle before any move on a fleet of near-identically named rows: which account is
+  holding the chat you are looking for. It reads `/api/chats`, the account's own store, and not the
+  session list: a session listing is scoped by period and by the instance name a transcript records,
+  so a chat nobody has touched this week is not in it, and an account with twenty chats would look
+  empty, which is the one wrong answer this panel must never give. A chat with a CLI transcript
+  opens in Sessions; one without has no button rather than a broken one.
+
 - **The Instances toolbar's "Usage filter" is now just "Filter", and it asks three questions
   instead of one** (`web/src/lib/instance-filter.ts`, `web/src/composables/useInstanceFilter.ts`,
   `web/src/components/InstanceFilterMenu.vue`). Alongside the two quota windows it now filters by
@@ -28,8 +62,47 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   stops rows blinking out of the table and back on every refresh, and what stops "show me the open
   ones" emptying the CLI table. The Codex table joins the filter on the same terms.
 
+### Fixed
+
+- **An install missing a release-owned folder can be repaired without waiting for a new version**
+  (`missingComponents` / `resolveUpdateToApply` in `server/src/github-updater.ts`, a **Repair
+  install** button in Settings → MCP server). The component-aware updater landed *in* v0.39.0, so
+  the update that installed 0.39.0 was performed by its predecessor and brought the executable
+  alone. The result, measured on a real install 2026-09-07: the newest version running with no
+  `orchestrator/` beside it, so `move_chat`, `move_chats` and every `orchestrator_*` tool answered
+  `no orch.py under <dir>` while every other tool worked perfectly. And because it IS the newest
+  version, the update check said "up to date" and no update could ever repair it. An updater that
+  can only fix a component while also bumping a version cannot fix the install its own predecessor
+  broke. Reinstalling the current release is now allowed when a component is missing.
+
+  Three things it refuses, because a repair must never make an install worse. A complete install on
+  the current version is still "already up to date". A repair is offered only when the latest
+  release IS this version, never when the newest release is OLDER (a yanked tag), where
+  "reinstall the latest" would be a silent downgrade. And the expected component set is
+  per-platform: `misc/` ships only on Windows, so a healthy Linux or macOS install is complete
+  without it, where treating it as missing would have made every apply a reinstall-and-restart that
+  could never converge. On Windows alone, an install with NO components at all is left alone, being
+  the bare single-file `.exe` rather than a damaged bundle; Unix publishes only tarballs, which
+  always carry `orchestrator/`, so there a missing folder is unambiguously damage.
+- **The MCP docs no longer hand a release user an instruction that cannot work**
+  (`docs/REFERENCE.md`). The section now leads with the automatic registration and the HTTP
+  transport, keeps the manual `claude mcp add` for anyone who turns the automatic one off, and says
+  out loud that moving chats needs the Python toolbox beside the executable, the dependency that
+  made a working MCP server look broken.
+- **`/api/chats?instance=` answers for the regular Claude Desktop install** (`chatStoreLabel` in
+  `server/src/routes/sessions.ts`). The route mapped an instance to its chat-store label with
+  `basename()`, which is right for every isolated instance and wrong for the one everybody has:
+  the default install is filed under the literal `default`, while the basename of its user-data dir
+  is `Claude`. The route therefore answered 404 "no desktop instance matched" for the account most
+  people are using, which reads as "that account does not exist". Found by review before the new
+  Chats dialog shipped on top of it.
+
 ### Changed
 
+- **"Move all chats to another account" is now "Move chats to account"**
+  (`web/src/i18n/locales/en/instances.ts`). It was a sentence, and it sits one line below the new
+  "Chats" item. The long form made the two look unrelated when they are the two things you do with
+  an account's chats. The submenu names the destination, so the label does not have to.
 - **The two 5-hour quota cells are grey now; colour is spent on the weekly ones**
   (`web/src/components/UsageBar.vue`, `UsageBadge.vue`). A usage-mode row carried four coloured
   cells, and four hues side by side average out to "busy" - the eye had to read each one to find
