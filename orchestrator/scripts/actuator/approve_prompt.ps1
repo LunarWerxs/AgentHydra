@@ -213,16 +213,31 @@ if (-not (OpenChatIs $el $Title)) {
     foreach ($p in @('Idle ', 'Running ')) { if ($s.StartsWith($p)) { $s = $s.Substring($p.Length) } }
     return $s.Trim()
   }
-  $rows = @()
-  foreach ($b in $el.FindAll($TREE, $btnCond)) {
-    try {
-      $n = $b.Current.Name
-      $r = $b.Current.BoundingRectangle
-      if (-not $n -or $r.IsEmpty -or $r.Left -ge $minX) { continue }
-      if ((StripRowDecoration $n) -eq $Title.Trim()) { $rows += $b }
-    } catch { continue }
+  function Find-Rows($root) {
+    $found = @()
+    foreach ($b in $root.FindAll($TREE, $btnCond)) {
+      try {
+        $n = $b.Current.Name
+        $r = $b.Current.BoundingRectangle
+        if (-not $n -or $r.IsEmpty -or $r.Left -ge $minX) { continue }
+        if ((StripRowDecoration $n) -eq $Title.Trim()) { $found += $b }
+      } catch { continue }
+    }
+    return $found
   }
-  if ($rows.Count -eq 0) { Write-Output "REFUSED: no sidebar row for '$Title' in $($proc.Dir)"; exit 4 }
+  # ⛔ A CHAT THAT LANDED A SECOND AGO IS NOT YET A ROW (measured 2026-09-07: five of the six
+  # chats in the Andreea drain refused with "no sidebar row" while the row existed moments
+  # later - the import posts the record and the app renders its list on its own clock). One
+  # instant look turned a rendering delay into "that chat does not exist here", and the whole
+  # permission stamp was lost with it. Poll instead; a genuinely absent row still refuses,
+  # just 6s later, and a row already on screen costs one scan exactly as before.
+  $rows = Find-Rows $el
+  $rowDeadline = (Get-Date).AddMilliseconds(6000)
+  while ($rows.Count -eq 0 -and (Get-Date) -lt $rowDeadline) {
+    Start-Sleep -Milliseconds 400
+    $rows = Find-Rows $el
+  }
+  if ($rows.Count -eq 0) { Write-Output "REFUSED: no sidebar row for '$Title' in $($proc.Dir) (waited 6s for it to render)"; exit 4 }
   if ($rows.Count -gt 1) {
     Write-Output "REFUSED: $($rows.Count) sidebar rows exactly match '$Title' in $($proc.Dir) - ambiguous"
     exit 4
@@ -538,7 +553,37 @@ if ($SetMode) {
   # which silently disarms must-be-new and lets an unrelated button be pressed as the confirm.
   function Get-ProcRoots($procId, $mainHwnd) {
     $roots = @()
-    try { if ($mainHwnd) { $roots += [pscustomobject]@{ Elem = [System.Windows.Automation.AutomationElement]::FromHandle($mainHwnd); IsMain = $true } } } catch {}
+    $mainEl = $null
+    try { if ($mainHwnd) { $mainEl = [System.Windows.Automation.AutomationElement]::FromHandle($mainHwnd) } } catch {}
+    # ⛔ THE CONFIRMATION IS AN IN-PAGE MODAL, NOT A TOP-LEVEL WINDOW (measured 2026-09-07 on a
+    # live window - the run that finally reproduced it end to end). Everything below assumed
+    # the dialog owns its own HWND. It does not: it renders as a ControlType.Window element
+    # INSIDE the main window's tree (name 'Bypass all permissions?', a 'Cancel' and a confirm
+    # button named for the mode), and while it is up the composer toolbar is dropped from the
+    # tree entirely - which is what every failing run reported as "the picker now reads 'gone'".
+    #
+    # ⛔ AND THIS IS WHY THE HUNT SAW IT AND THREW IT AWAY. A modal is CENTRED: its confirm sat
+    # at x=1312 while $minXm (the 'Model: ...' anchor minus 40) was 1586, so Find-Confirm's
+    # `-ge $minXm` guard rejected the one button it came for - the exact defect this file's
+    # -SetMode header already records for Find-ModeBtn, repeated one function down. The
+    # positional guards exist only to tell this confirm from the composer's own picker and the
+    # sidebar chips; INSIDE a modal Window element there is nothing to confuse it with, which
+    # is the same carve-out a separate dialog window already gets, so a modal is handed over as
+    # a NON-main root. Scanned FIRST: a modal on screen is unambiguously the thing to answer.
+    if ($mainEl) {
+      try {
+        $winCond = New-Object System.Windows.Automation.PropertyCondition(
+          [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+          [System.Windows.Automation.ControlType]::Window)
+        foreach ($w in $mainEl.FindAll($TREE, $winCond)) {
+          try {
+            if ($w.Current.IsOffscreen -or $w.Current.BoundingRectangle.IsEmpty) { continue }
+            $roots += [pscustomobject]@{ Elem = $w; IsMain = $false }
+          } catch { continue }
+        }
+      } catch {}
+      $roots += [pscustomobject]@{ Elem = $mainEl; IsMain = $true }
+    }
     try {
       $pidCond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$procId)

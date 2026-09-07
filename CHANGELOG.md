@@ -57,6 +57,30 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **The "Bypass all permissions?" popup is finally clicked - it was an in-page modal all along**
+  (`orchestrator/scripts/actuator/approve_prompt.ps1`). Every previous fix here assumed the
+  confirmation owned its own top-level HWND. Measured live 2026-09-07: it does not. It renders as a
+  `ControlType.Window` element INSIDE the main window's tree (name `Bypass all permissions?`, a
+  `Cancel` and a confirm named for the mode), and while it is up the composer toolbar leaves the
+  tree entirely - which is what every failing run reported as "the picker now reads 'gone'". The
+  hunt did see the confirm and threw it away: a modal is CENTRED, so its confirm sat at x=1312
+  while the `Model: ...` anchor put the pane guard at 1586, and `-ge $minXm` rejected the one button
+  it came for - the same defect this file's own header records for `Find-ModeBtn`, repeated one
+  function down. In-page modals are now handed to the confirm hunt as non-main roots (no positional
+  guard, since inside a modal there is nothing to confuse the confirm with) and scanned first; the
+  deny list and the must-be-new rail are unchanged. Proven on two chats in two workspaces:
+  `MODE SET 'Accept edits' -> 'Bypass permissions' ... (confirmed the app's 'Bypass permissions' prompt)`.
+- **A move can no longer claim `app-confirmed` on a confirmation the OTHER account earned**
+  (`orchestrator/scripts/migrate_chat.py`). `mode-confirmed.json` is keyed by session id alone, so
+  a chat confirmed long ago in the app it just LEFT still answered yes for the app it just joined.
+  Measured on the six-chat Andreea drain of 2026-09-07: all six reported `app-confirmed` while
+  their own evidence string began `REFUSED`, and the four nobody checked were sitting on
+  `acceptEdits`. The adjudicator now voids any prior confirmation before driving the picker, so the
+  only entry that can exist is the one this run's actuator earned.
+- **A chat that landed a second ago is no longer "not here"** (same actuator). The sidebar row is
+  rendered on the app's own clock, and one instant look turned that delay into `no sidebar row`,
+  losing the whole permission stamp - five of six chats in the same drain. It polls for 6s now; an
+  absent row still refuses, and a row already on screen costs the same single scan as before.
 - **A crashed orchestrator run no longer blocks every retry forever** (`server/src/orchestrator.ts`,
   `server/tests/orchestrator-stale-lock.test.ts`). The daemon-side `inFlight` map held only a start
   time, and the `finally` that clears it runs on every normal path - so the one way an entry could

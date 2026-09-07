@@ -1262,6 +1262,17 @@ def _app_confirmed(session_id: str) -> bool:
         return False
 
 
+def _drop_confirmed(session_id: str) -> None:
+    """Void any picker confirmation held for this chat. Module scope so a test can replace it,
+    same as confirm_bypass_in_app; never raises."""
+    try:
+        import automation_chat
+
+        automation_chat.drop_confirmed(session_id)
+    except Exception:  # a ledger that cannot be written must not fail the move
+        pass
+
+
 def _adjudicate_bypass(session_id: str, chat_title, target: dict, meta_path: str,
                        fleet: dict, watched: dict) -> tuple[str, str, str]:
     """WHAT A MOVE MAY CLAIM ABOUT THE PERMISSION MODE, AND ON WHAT EVIDENCE.
@@ -1296,6 +1307,15 @@ def _adjudicate_bypass(session_id: str, chat_title, target: dict, meta_path: str
                 f"{target.get('name')}'s app is not running, so it reads this store at its own "
                 "boot - the stamp on disk IS the mode it will open with", "")
 
+    # ⛔ A CONFIRMATION EARNED ON THE OLD ACCOUNT IS NOT EVIDENCE ABOUT THE NEW ONE (measured
+    # 2026-09-07: all six chats of the Andreea drain reported `app-confirmed` while their own
+    # evidence string began "REFUSED"). mode-confirmed.json is keyed by session id ALONE, and
+    # these chats had been confirmed months of ticks ago in the app they just left - so
+    # _app_confirmed answered yes without this run's picker having agreed to anything, which
+    # is precisely the "green nobody earned" this adjudicator exists to stop. A move changes
+    # which app holds the record, so every prior confirmation about it is void: drop it first
+    # and let the only entry that can exist be the one THIS run's actuator wrote (exit 0).
+    _drop_confirmed(session_id)
     said = confirm_bypass_in_app(
         {"sessionId": session_id, "title": chat_title,
          # dir-first (2026-09-06): target is already the unique fleet row; hand its dir
