@@ -71,6 +71,13 @@ import {
 } from './instance'
 import { initFileLogging } from './log-file.mjs'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
+import {
+  SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
+  SERVER_INFO as MCP_SERVER_INFO,
+  TOOLS as MCP_TOOLS,
+} from './mcp'
+import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
+import { handleRpc as handleMcpRpc } from './mcp-stdio.mjs'
 import { startMonitor } from './monitor'
 import { sendOsNotification } from './notify-os'
 import {
@@ -198,6 +205,30 @@ app.get('/api/health', (c) =>
     dataDirNotice: DATA_DIR_NOTICE,
     ts: Date.now(),
   }),
+)
+
+// --- MCP over HTTP (added 2026-09-06) ----------------------------------------------------------
+// One shared server for every client, instead of one stdio process per client. The whole rationale
+// (and why it cannot drift from the stdio server, and why it is stateless) is in mcp-http.mjs.
+// It lives under /api/* deliberately: that is where the loopback CSRF guard is mounted, and this
+// is the route where it matters most, because `tools/call` can launch instances and move chats.
+app.post('/api/mcp', async (c) => {
+  let body: unknown
+  try {
+    body = await c.req.json()
+  } catch {
+    body = PARSE_ERROR
+  }
+  const ctx = { serverInfo: MCP_SERVER_INFO, tools: MCP_TOOLS, instructions: MCP_INSTRUCTIONS }
+  const { status, json } = await handleMcpHttp(body, ctx, handleMcpRpc)
+  return json === null ? c.body(null, status as 202) : c.json(json, status as 200)
+})
+
+// GET opens the spec's OPTIONAL server->client SSE stream. This server never initiates a message
+// to the client, so 405 is the correct, spec-sanctioned answer - and saying so explicitly stops a
+// client from holding an idle stream open per tab, which is the very cost this endpoint removes.
+app.get('/api/mcp', (c) =>
+  c.text('This MCP endpoint does not offer a server-initiated stream.', 405),
 )
 
 // --- self-update (source: git engine; compiled: GitHub Releases — see server/src/updater.ts) --
