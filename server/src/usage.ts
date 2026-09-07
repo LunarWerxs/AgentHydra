@@ -20,7 +20,7 @@ import {
   DATA_DIR,
   resolveClaudeExe,
 } from './config'
-import { resolveCliConfigDirToken } from './core/accounts'
+import { cliConfigDirCredentialState, resolveCliConfigDirToken } from './core/accounts'
 import { encodeCwdKey } from './transcript'
 import type { UsageAdvice, UsageSnapshot } from './types'
 import { fetchUsageApi } from './usage-api'
@@ -425,6 +425,16 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
   // See CLI_PROBE_COOLDOWN_MS. Checked HERE, at the single chokepoint every caller goes through,
   // so no future caller can spawn around it by accident. `forceCli` alone does NOT bypass it -
   // that flag means "skip the API read", not "spawn no matter how recently we already did".
+  // --- futility gate: never spawn a probe that cannot possibly authenticate -------------------
+  // Cheaper and more honest than rate-limiting it. A config dir whose access AND refresh tokens are
+  // both expired gives the CLI nothing to work with, so the spawn burns ~9s and a process to return
+  // the same all-null snapshot forever. See cliConfigDirCredentialState for the incident behind it:
+  // a leftover ambient login did exactly this, every 30 seconds, for weeks. An injected credential
+  // bypasses the check - that is a token we brought ourselves, not one the dir has to supply.
+  if (!opts.auth && opts.configDir && cliConfigDirCredentialState(opts.configDir) === 'dead') {
+    return parseUsageOutput('', label)
+  }
+
   const cooldownKey = label ?? opts.configDir ?? '(ambient)'
   if (!opts.bypassCooldown) {
     const gate = cliProbeGate(cooldownKey, Date.now())

@@ -504,6 +504,57 @@ export async function resolveInstanceToken(
  * user's real CLI login out from under them. An expired token simply falls back to the CLI spawn,
  * which refreshes its own credentials properly.
  */
+/**
+ * Can a `claude -p "/usage"` spawn against this config dir POSSIBLY authenticate?
+ *
+ * The comment above says an expired token "simply falls back to the CLI spawn, which refreshes its
+ * own credentials properly" - true, but only while the REFRESH token is still alive. When both are
+ * dead the spawn cannot succeed by any route, and firing it anyway costs ~9s and a process every
+ * time the caller asks.
+ *
+ * ⛔ THIS IS NOT HYPOTHETICAL, AND IT IS WHY THIS FUNCTION EXISTS. On MPC-HELL the ambient dir
+ * (`~/.claude`) held a leftover CLI login with `expiresAt: 0` and a refresh token that expired
+ * 2026-08-06. The monitor asks for an ambient reading every 30 SECONDS, so the daemon had been
+ * booting a Claude CLI twice a minute, for weeks, to run a probe whose cached result was `null`
+ * every single time. The owner is desktop-only: his real accounts read fine over the API (their
+ * tokens are decrypted out of the desktop app's own store), so this probe was pure waste with no
+ * signal behind it at all.
+ *
+ * Deliberately conservative - it answers `false` ONLY on proof of futility:
+ *   'usable'      - a live, usage-capable token; the API path will take it and never spawn.
+ *   'refreshable' - expired access token but a live refresh token; the CLI can still fix itself.
+ *   'absent'      - no credentials file; the spawn may still authenticate from inherited env.
+ *   'dead'        - the file is there and BOTH tokens are expired. Nothing can save this one.
+ * Anything unreadable answers 'absent', never 'dead': a parse failure is ignorance, not proof.
+ */
+export function cliConfigDirCredentialState(
+  configDir: string,
+): 'usable' | 'refreshable' | 'absent' | 'dead' {
+  try {
+    if (!configDir?.trim()) return 'absent'
+    const credPath = path.join(configDir, '.credentials.json')
+    if (!existsSync(credPath)) return 'absent'
+    const raw = readFileSync(credPath, 'utf8')
+    if (!raw?.trim()) return 'absent'
+    const oauth = (JSON.parse(raw) as { claudeAiOauth?: Record<string, unknown> })?.claudeAiOauth
+    if (!oauth || typeof oauth !== 'object') return 'absent'
+    if (typeof oauth.accessToken !== 'string' || !oauth.accessToken.trim()) return 'absent'
+
+    const now = Date.now()
+    const access = typeof oauth.expiresAt === 'number' ? oauth.expiresAt : 0
+    const refresh =
+      typeof oauth.refreshTokenExpiresAt === 'number' ? oauth.refreshTokenExpiresAt : 0
+    // An access token with expiresAt 0 is not "never expires" - it is a token whose expiry was
+    // never written, and every observed one of those has been dead. Treat 0 as expired.
+    if (access > now) return 'usable'
+    if (refresh > now) return 'refreshable'
+    // Unknown refresh expiry (0/absent) is not proof of death - only a past date is.
+    return refresh > 0 ? 'dead' : 'refreshable'
+  } catch {
+    return 'absent'
+  }
+}
+
 export function resolveCliConfigDirToken(
   configDir: string,
 ): { token: string; scopes: string } | null {
