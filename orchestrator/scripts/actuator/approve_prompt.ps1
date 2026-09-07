@@ -70,15 +70,32 @@ public delegate bool EnumProc(IntPtr h, IntPtr p);
 [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
 [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
-// ⛔ THE FOREGROUND GRAB IS LOAD-BEARING, NOT A COURTESY (measured 2026-09-07).
-// Press-Space posts WM_KEYDOWN/WM_KEYUP straight at the render widget and the header used
-// to claim that was focus-free - "no foreground change, no cursor". It is not: with the app
-// in the BACKGROUND the picker never opens, the posted key is swallowed with no error, and
-// Press-Space still returns $true because all it ever checked was that PostMessage was
-// called. That is the whole reason a human kept having to click Bypass permissions by hand,
-// and why the confirm-dialog hunt below found nothing to click - there was never a dialog,
-// because the menu it comes from never opened. Proven both ways on one live window: same
-// process, same button, same posted key - background = 0 picker items, foreground = 5.
+// ⛔ THE FOREGROUND GRAB IS LOAD-BEARING, NOT A COURTESY (measured 2026-09-07, owner:
+// "when you select bypass permissions, it ends up needing to have the click selected, and
+// it's not currently selecting it").
+//
+// Press-Space posts WM_KEYDOWN/WM_KEYUP straight at the render widget, and the header called
+// that focus-free - "no foreground change, no cursor". A minimized or background window
+// DROPS that key. No error, nothing rendered, and Press-Space still returned $true, because
+// all it ever checked was that PostMessage had been called. So the picker never opened, the
+// mode was never selected, and a person had to click it by hand.
+//
+// ⛔ AND THIS IS WHY IT LOOKED INTERMITTENT RATHER THAN BROKEN - the part that cost a whole
+// investigation. UIA SetFocus() on the button SOMETIMES activates the window as a side
+// effect and sometimes does not, so the same code on the same chat opens the picker on one
+// run and silently does nothing on the next. Measured on one live window, picker forced
+// closed and verified closed before every attempt (an earlier probe left it OPEN and the
+// next run counted its leftovers as a success - do not measure this without that guard):
+//
+//     minimized   0 of 2 opened
+//     background  1 of 2 opened   <- the one that opened, SetFocus had activated the window
+//     foreground  2 of 2 opened
+//
+// The rule that fits every row: the window must be non-iconic AND foreground at the moment
+// the key is posted. Do not "simplify" this back to SetFocus alone; that is the coin flip.
+// A previous fix aimed at a confirmation dialog that was never the problem - the dialog is
+// raised BY the menu, and the menu was not opening.
+//
 // SetForegroundWindow alone is a no-op for a background process, so attach to the target's
 // input queue first. Callers restore the previous foreground window afterwards.
 public static bool Foreground(IntPtr h) {
@@ -142,6 +159,33 @@ if ($procs.Count -ne 1) {
 $proc = $procs | Select-Object -First 1
 $hwnd = (Get-Process -Id $proc.ProcId -ErrorAction SilentlyContinue).MainWindowHandle
 if (-not $hwnd -or $hwnd -eq [IntPtr]::Zero) { Write-Output 'FAIL: that instance has no window'; exit 1 }
+
+# ⛔ RESTORE AND ACTIVATE ONCE, HERE, BEFORE ANY RAIL READS THE TREE (2026-09-07).
+# This started life inside Press-Space, which is too late: measured on a MINIMIZED window,
+# the -Select path fails first with "selected the row but the pane still does not show
+# '<title>'" - the row's Invoke fires, but a minimized window does not re-render, so the
+# receipt the rail demands can never appear. Every step here (row select, the kebab receipt,
+# the pane's own words, the picker, the confirm dialog) reads a tree the app only keeps
+# current while it is actually drawing. So: one grab up front, one restore on the way out.
+# Whatever the person was working in is handed back by Restore-Foreground.
+$script:PriorFg = [IntPtr]::Zero
+function Restore-Foreground {
+  if ($script:PriorFg -ne [IntPtr]::Zero) {
+    [void][Approve.Inv]::Foreground($script:PriorFg)
+    $script:PriorFg = [IntPtr]::Zero
+  }
+}
+# Covers every `exit N` path below without wrapping the whole script in a try/finally.
+[void](Register-EngineEvent PowerShell.Exiting -Action { Restore-Foreground })
+function Grab-Window {
+  if ($script:PriorFg -eq [IntPtr]::Zero) {
+    $fg = [Approve.Inv]::GetForegroundWindow()
+    if ($fg -ne $hwnd) { $script:PriorFg = $fg }
+  }
+  [void][Approve.Inv]::Foreground($hwnd)
+  Start-Sleep -Milliseconds 300
+}
+Grab-Window
 
 # Chromium builds its accessibility tree lazily; the MSAA poke switches the full tree on.
 function Wake($h, [int]$SleepMs = 900) {
@@ -454,26 +498,11 @@ if ($SetMode) {
     }
     return $null
   }
-  # Whatever the person was working in, given back when we are done. Captured ONCE, on the
-  # first grab, so a run that foregrounds three times still returns to where it started.
-  $script:PriorFg = [IntPtr]::Zero
-  function Restore-Foreground {
-    if ($script:PriorFg -ne [IntPtr]::Zero) {
-      [void][Approve.Inv]::Foreground($script:PriorFg)
-      $script:PriorFg = [IntPtr]::Zero
-    }
-  }
-  # Covers every `exit N` path below without wrapping the whole block in a try/finally.
-  [void](Register-EngineEvent PowerShell.Exiting -Action { Restore-Foreground })
   function Press-Space($target) {
-    # THE WINDOW MUST BE FOREGROUND BEFORE THE KEY (see Approve.Inv::Foreground). This used
-    # to go straight to SetFocus and post, which does nothing at all to a background app.
-    if ($script:PriorFg -eq [IntPtr]::Zero) {
-      $fg = [Approve.Inv]::GetForegroundWindow()
-      if ($fg -ne $hwnd) { $script:PriorFg = $fg }
-    }
-    [void][Approve.Inv]::Foreground($hwnd)
-    Start-Sleep -Milliseconds 250
+    # Re-assert the grab: the window was activated up front, but a person can click away
+    # mid-run and a posted key is dropped the moment it is not foreground. Cheap when it is
+    # already ours; PriorFg is captured once, so this never overwrites the real prior window.
+    Grab-Window
     try { $target.SetFocus() } catch { return $false }
     Start-Sleep -Milliseconds 150
     # RAIL 4 (review 2026-09-06): never post a key into unknown focus - this is the most
@@ -529,8 +558,9 @@ if ($SetMode) {
       } catch { continue }
     }
     if ($anyItems -eq 0) {
-      Write-Output ("REFUSED: the picker ('$before') did not open - the Space key was posted but " +
-        "nothing rendered. The app must be FOREGROUND for its render widget to take a posted key.")
+      Write-Output ("REFUSED: the picker ('$before') never opened - the Space key was posted and " +
+        "nothing rendered. The window must be non-minimized AND foreground for its render widget " +
+        "to take a posted key. This is NOT a missing label; do not add one.")
       exit 6
     }
     Write-Output ("REFUSED: opened the picker ('$before') but no item starting with '$SetMode' appeared" +

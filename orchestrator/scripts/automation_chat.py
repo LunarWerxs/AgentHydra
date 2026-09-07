@@ -251,6 +251,31 @@ def _finalize_mode_attempt(sid: str, returncode: int, last: str) -> None:
         ledgerlib.annotate("mode", sid, last, failure=True)
 
 
+# ⛔ A VERDICT ABOUT *THIS RUN* MUST COME FROM THIS RUN (2026-09-07).
+# The report used to compute `app_confirmed = session_id in load_confirmed()` AFTER driving
+# the picker. load_confirmed() is a PERSISTENT ledger, so a chat confirmed at any time in the
+# past reported "APP-CONFIRMED via its own picker" on every later run no matter what the
+# picker actually did. Observed printing its own refusal inside the confirmation:
+#
+#   '<chat>': ... APP-CONFIRMED via its own picker
+#   (REFUSED: no sidebar row for '<chat>' in <instance> (waited 6s for it to render)).
+#
+# That is the worst shape a gate can take - a green whose own evidence says red - and it is
+# why "app-confirmed" stopped matching what the owner saw on screen. The ledger itself is
+# fine (only _finalize_mode_attempt writes it, and only on returncode 0); it answers "has
+# this chat ever been confirmed", which is NOT the question a just-driven picker is asking.
+# So: when the picker ran this run, judge it by what it said this run.
+_PICKER_OK_PREFIXES = ("MODE SET", "MODE already")
+
+
+def picker_line_ok(line: str) -> bool:
+    """True only for an actuator line that reports the mode actually set (or already right).
+    Everything else - REFUSED, FAIL, 'actuator missing', 'no permission picker', a retry
+    notice - is not a confirmation. Deliberately an allow-list: a new failure string added to
+    the actuator must read as NOT confirmed, never silently as success."""
+    return str(line or "").lstrip().startswith(_PICKER_OK_PREFIXES)
+
+
 def set_mode_via_app(row: dict, fleet: dict, force: bool = False) -> str:
     """THE ROUTE FOR A LIVE CHAT (2026-09-01): a running app holds the chat's record in memory
     and re-saves it over any disk stamp, so a live chat off-doctrine stays off-doctrine until
@@ -537,12 +562,16 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
     # prompting mode. Gated on --force for the same reason the fleet pass gates its picker on
     # the icon: -Select flips what the owner is looking at, so it takes a by-hand act.
     via_app = ""
-    if app_running and force:
+    drove_picker = bool(app_running and force)
+    if drove_picker:
         via_app = set_mode_via_app(
             {"sessionId": session_id, "title": title,
              "instance": match.get("instance") or "", "metaPath": meta_path},
             fleet, force=True)
-    app_confirmed = session_id in load_confirmed()
+    # If the picker ran, THIS run's line is the verdict (see picker_line_ok). Only fall back
+    # to the ledger when no picker ran this time - there, "has it ever been confirmed" really
+    # is the question, and the caveat below says the app is running and may have drifted.
+    app_confirmed = picker_line_ok(via_app) if drove_picker else (session_id in load_confirmed())
 
     caveat = (
         (f" APP-CONFIRMED via its own picker ({via_app})." if app_confirmed else

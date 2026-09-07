@@ -1,13 +1,23 @@
 # misc/Manage-DesktopChat.ps1 - manage a RUNNING Claude desktop app's chats (archive,
-# unarchive, rename, list) WITHOUT stealing
-# focus and WITHOUT moving the mouse, by invoking the app's own sidebar controls through the
-# Windows UI Automation patterns they expose.
+# unarchive, rename, list) WITHOUT moving the mouse, by invoking the app's own sidebar
+# controls through the Windows UI Automation patterns they expose.
+#
+# ⛔ IT DOES ACTIVATE THE WINDOW, AND THAT IS NOT NEGOTIABLE (corrected 2026-09-07). This
+# header used to promise "zero focus theft", and every -Action run now briefly restores and
+# activates the target window before reading its tree, handing the previous foreground window
+# back on the way out. The claim was not free: a MINIMIZED window renders nothing, this script
+# reads only what is rendered, and so it failed with two confident and completely wrong
+# diagnoses - "collapsed group or virtualized out" from the kebab hunt, and an EMPTY
+# "menu opened but no 'Archive' item matched a known label. Menu showed: ." from the archive
+# path. Neither names the real cause and both send the reader after an imaginary
+# virtualization or locale bug. -List is still passive and never activates anything.
+# If you are here to restore the no-focus promise: it costs correctness. Do not.
 #
 # WHY THIS EXISTS (owner directive, Michael, 2026-08-29): a running Electron app holds its chat
 # list in memory, so a flag flipped on DISK stays on screen until the app restarts - and
 # restarting is not an option. The app's OWN archive action is the one channel that is both
 # immediate AND durable (the app makes the write, so its later memory->disk re-saves cannot undo
-# it). This drives that action with zero focus theft.
+# it). This drives that action through the app's own controls (see the header on activation).
 #
 # THE MECHANISM, measured 2026-08-29 (do not "simplify" back to cursor clicks):
 #   - The row's kebab (localized: "More options for <Title>" / "Weitere Optionen fur <Title>")
@@ -16,8 +26,9 @@
 #   - The "Archive" context-menu item exposes InvokePattern. `Invoke()` fires it - focus-free,
 #     and it targets that EXACT element, so unlike a coordinate click it can never land on the
 #     "Delete" item that sits directly beneath Archive. No point-verification needed.
-#   - Neither call moves the mouse or calls SetForegroundWindow. (A cursor-and-foreground variant
-#     was the first cut; this replaced it - it is both safer and genuinely focus-free.)
+#   - Neither call moves the mouse. (A cursor-CLICK variant was the first cut; invoking the
+#     exact element replaced it and is strictly safer - it cannot land on the neighbouring
+#     Delete item. The window IS activated first, see the header.)
 #   - Chromium/Electron builds its accessibility tree LAZILY. A UIA query alone sees only bare
 #     panes; the MSAA poke (AccessibleObjectFromWindow on each Chrome_RenderWidgetHostHWND) is
 #     what switches the full tree on. Without it every Find returns nothing.
@@ -50,8 +61,8 @@
 # ONE write a running app cannot undo (v1 measured every outside metadata write being re-saved
 # away), so this is how a landed chat's DISPLAYED name is fixed immediately. Mechanics: the
 # Rename menu item Invokes; the inline editor is an Edit named 'Rename' exposing ValuePattern
-# (SetValue is focus-free); the commit is a posted WM_KEYDOWN Enter to the render widget - no
-# global focus, no cursor. After committing, the app re-saves the metadata itself, so disk and
+# (SetValue needs no typing); the commit is a posted WM_KEYDOWN Enter to the render widget -
+# no cursor, and the window is activated first so the key is not dropped. After committing, the app re-saves the metadata itself, so disk and
 # app memory AGREE on the name (verified). -NewTitle must be a real name: generic non-names are
 # refused here with the same patterns chat-title.ts owns (that file is canonical; keep in sync).
 #
@@ -82,6 +93,31 @@ public static class Ax{
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int m);
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [In,Out,MarshalAs(UnmanagedType.IUnknown)] ref object p);
   [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool f);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr p);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  // ⛔ A MINIMIZED WINDOW DOES NOT RENDER, AND THIS SCRIPT ONLY EVER READS WHAT IS RENDERED
+  // (measured 2026-09-07). Against an iconic window the kebab hunt reports "not rendered in
+  // any searched running instance (collapsed group or virtualized out - scroll it into view)"
+  // and the archive path reports "menu opened but no 'Archive' item matched a known label.
+  // Menu showed: ." with an EMPTY menu - two confident, specific, WRONG diagnoses that send
+  // the reader after a virtualization or locale problem that is not there. Same root cause as
+  // approve_prompt.ps1's picker; the evidence table lives in that file's header. Restore and
+  // activate before searching, hand the person's window back afterwards.
+  public static bool Foreground(IntPtr h) {
+    if (IsIconic(h)) ShowWindow(h, 9);
+    uint tgt = GetWindowThreadProcessId(h, IntPtr.Zero);
+    uint me = GetCurrentThreadId();
+    if (tgt == me) return SetForegroundWindow(h);
+    AttachThreadInput(me, tgt, true);
+    bool ok = SetForegroundWindow(h);
+    AttachThreadInput(me, tgt, false);
+    return ok;
+  }
   delegate bool EnumFunc(IntPtr h, IntPtr l);
   static List<IntPtr> widgets(IntPtr top){
     var ws = new List<IntPtr>();
@@ -104,6 +140,18 @@ public static class Ax{
 }
 '@
 Add-Type -TypeDefinition $src
+
+# Whatever the person was working in, handed back on the way out. Captured once, on the first
+# grab, so a run that activates several times still returns to where it started.
+$script:PriorFg = [IntPtr]::Zero
+function Restore-Foreground {
+  if ($script:PriorFg -ne [IntPtr]::Zero) {
+    [void][Ax]::Foreground($script:PriorFg)
+    $script:PriorFg = [IntPtr]::Zero
+  }
+}
+# Covers every `exit N` path below without wrapping the script in a try/finally.
+[void](Register-EngineEvent PowerShell.Exiting -Action { Restore-Foreground })
 
 $root = [System.Windows.Automation.AutomationElement]::RootElement
 $TREE = [System.Windows.Automation.TreeScope]::Descendants
@@ -328,6 +376,16 @@ foreach ($m in $mains) {
   $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$m.ProcId)
   $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
   if (-not $win) { continue }
+  # Restore + activate BEFORE the first tree read (see Ax::Foreground). -List is exempt: it
+  # only reports what happens to be rendered and must never yank a window onto the screen.
+  if (-not $List) {
+    if ($script:PriorFg -eq [IntPtr]::Zero) {
+      $fgNow = [Ax]::GetForegroundWindow()
+      if ($fgNow -ne [IntPtr]$win.Current.NativeWindowHandle) { $script:PriorFg = $fgNow }
+    }
+    [void][Ax]::Foreground([IntPtr]$win.Current.NativeWindowHandle)
+    Start-Sleep -Milliseconds 300
+  }
   $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
 
   if ($List) {
@@ -501,14 +559,14 @@ foreach ($m in $mains) {
       $renamed = [bool](KebabFor $el $NewTitle)
     }
     if (-not $renamed) { Write-Output 'RENAME INVOKED but the row does not render the new name - report this'; exit 2 }
-    Write-Output "Rename done: '$Title' -> '$NewTitle' (focus-free; committed through the app, so disk and app memory agree)"
+    Write-Output "Rename done: '$Title' -> '$NewTitle' (committed through the app, so disk and app memory agree)"
     exit 0
   }
 
   $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
   $still = [bool](KebabFor $el $Title)
   if (($Action -eq 'Archive' -or $Action -eq 'Delete') -and $still) { Write-Output 'INVOKED but row still present - report this, do not blind-retry'; exit 2 }
-  Write-Output "$Action done for '$Title' (focus-free: no SetForegroundWindow, no cursor)"
+  Write-Output "$Action done for '$Title' (driven through the app's own controls, not synthetic clicks)"
   exit 0
 }
 } finally { RestoreGroups }

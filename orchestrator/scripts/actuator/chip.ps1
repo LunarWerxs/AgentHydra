@@ -33,6 +33,28 @@ Add-Type -Namespace ChipAx -Name W -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h, EnumProc cb, IntPtr p);
 public delegate bool EnumProc(IntPtr h, IntPtr p);
 [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
+[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+[DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+// Same fix as approve_prompt.ps1's Foreground, and for the same measured reason - this
+// script's Press-Space was a byte-for-byte copy of the broken one. A minimized or background
+// window DROPS a posted key with no error, and UIA SetFocus only sometimes activates the
+// window, which is what made the failure look intermittent instead of broken. Full evidence
+// table lives in approve_prompt.ps1; keep the two in step.
+public static bool Foreground(IntPtr h) {
+  if (IsIconic(h)) ShowWindow(h, 9);
+  uint tgt = GetWindowThreadProcessId(h, IntPtr.Zero);
+  uint me = GetCurrentThreadId();
+  if (tgt == me) return SetForegroundWindow(h);
+  AttachThreadInput(me, tgt, true);
+  bool ok = SetForegroundWindow(h);
+  AttachThreadInput(me, tgt, false);
+  return ok;
+}
 public static IntPtr RenderWidget(IntPtr top) {
   IntPtr found = IntPtr.Zero;
   EnumChildWindows(top, (h, p) => {
@@ -76,7 +98,23 @@ function AllNamed($root) {
   }
   return $out
 }
+$script:PriorFg = [IntPtr]::Zero
+function Restore-Foreground {
+  if ($script:PriorFg -ne [IntPtr]::Zero) {
+    [void][ChipAx.W]::Foreground($script:PriorFg)
+    $script:PriorFg = [IntPtr]::Zero
+  }
+}
+[void](Register-EngineEvent PowerShell.Exiting -Action { Restore-Foreground })
 function Press-Space($e) {
+  # The window must be non-minimized AND foreground before the key is posted (see the
+  # Foreground helper above). SetFocus alone is a coin flip.
+  if ($script:PriorFg -eq [IntPtr]::Zero) {
+    $fg = [ChipAx.W]::GetForegroundWindow()
+    if ($fg -ne $hwnd) { $script:PriorFg = $fg }
+  }
+  [void][ChipAx.W]::Foreground($hwnd)
+  Start-Sleep -Milliseconds 250
   try { $e.SetFocus() } catch { return $false }
   Start-Sleep -Milliseconds 150
   $rw = [ChipAx.W]::RenderWidget($hwnd)
