@@ -14,7 +14,7 @@ export const USAGE_REFRESH_INTERVALS = [5, 15, 30, 60] as const
 // Defaults mirror the server's (see getUsageSettings in server/src/usage-refresh.ts): auto-refresh
 // ON, both sections visible. They only show for the moment before the first load resolves.
 const autoRefresh = ref(true)
-const autoRefreshIntervalMin = ref(15)
+const autoRefreshIntervalMin = ref(30)
 const showDesktopInstances = ref(true)
 const showCliInstances = ref(true)
 const codexDesktopEnabled = ref(true)

@@ -29,6 +29,8 @@ import {
   startOrchestratorOperation,
 } from '../orchestrator'
 import { jsonBody } from '../route-helpers'
+import { dropCachedUsage } from '../usage'
+import { desktopKey } from '../usage-service'
 
 /** Multi-instance (isolated Claude Desktop instances), instance-number lookups, and the
  *  orchestrator control routes. See index.ts for the app-wide middleware these routes run
@@ -96,7 +98,14 @@ app.post('/api/instances/:dir/quit', async (c) => {
 // Electron app is worse than not doing it at all).
 app.post('/api/instances/:dir/logout', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))
-  return c.json(await logoutInstance(dir))
+  const result = await logoutInstance(dir)
+  // OWNER RULE (Michael, 2026-09-07): signing out clears the usage numbers - session, weekly,
+  // five-hour. logoutInstance already drops our cached IDENTITY for the dir; the cached USAGE
+  // outlived it, and since the usage routes serve the cache before checking anything, the row
+  // went on showing the signed-out account's percentages. Dropped here so it clears the moment
+  // the button is pressed rather than whenever a check next happens to run.
+  if (result.ok) dropCachedUsage(desktopKey(dir))
+  return c.json(result)
 })
 app.post('/api/instances/:dir/focus', async (c) => {
   const dir = decodeURIComponent(c.req.param('dir'))

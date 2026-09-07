@@ -27,12 +27,22 @@ import type { UsageSnapshot } from '@/lib/api'
 /**
  * How old a cached reading may be before an opening window re-checks it.
  *
- * Ten minutes, which sits deliberately BELOW the server's 15-minute default sweep: the point is to
- * catch the window that opened just before a sweep was due, not to duplicate the sweep. Above the
- * sweep interval this gate would essentially never fire; far below it, every window open turns back
- * into the herd this module exists to prevent.
+ * ⛔ OWNER RULE (Michael, 2026-09-07): *"I don't want AgentHydra constantly checking for updates on
+ * the instances. I only want it to do it when I tell it to, like when I click the refresh button.
+ * Or maybe at best, every 30 minutes. It seems to do it when I refresh the page, or way more
+ * often."* Thirty minutes is therefore a CEILING on how often anything checks by itself, not a
+ * tuning knob to shave down, and it MATCHES the server's default sweep rather than sitting below
+ * it. Reopening a window must not be a way to buy a fresh probe: the Refresh button is that, and it
+ * always forces one (useUsage.checkDesktop passes refresh=true).
+ *
+ * The earlier value was ten minutes, deliberately BELOW the then-15-minute sweep so an opening
+ * window could catch up a reading the sweep had not reached yet. That reasoning is sound and is
+ * exactly what the owner did not want: it makes every window open a probe round for anything the
+ * sweep last touched more than ten minutes ago, which on a fleet this size is most rows, most of
+ * the time. Equal to the sweep, this now only fires for genuinely stale rows - the app was closed
+ * through a sweep, or an instance is new.
  */
-export const USAGE_CATCHUP_MAX_AGE_MS = 10 * 60 * 1000
+export const USAGE_CATCHUP_MAX_AGE_MS = 30 * 60 * 1000
 
 /** Probes in flight at once. Two, not the four used for identity resolves: this is speculative
  *  background catch-up that nobody asked for, and it must never compete with a probe the user

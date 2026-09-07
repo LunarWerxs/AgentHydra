@@ -28,6 +28,7 @@ import { noteUsageSnapshot } from './reset-watch'
 import type { AuthType, UsageCheckResult, UsageReason, UsageSnapshot } from './types'
 import {
   checkUsage,
+  dropCachedUsage,
   isNoData,
   parseUsageOutput,
   setCachedUsage,
@@ -173,6 +174,16 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // a reading, not a reading, and caching it would hide a later successful check behind it.
   const reason: UsageReason =
     account?.status === 'loggedout' ? 'logged_out' : grant ? 'check_failed' : 'no_token'
+  // ⛔ OWNER RULE (Michael, 2026-09-07): *"when the account is not logged in, it should reset and
+  // clear the usage data, session, weekly, five-hour."* Not caching the no-data result is not
+  // enough on its own - the PREVIOUS reading is still in the cache, and the routes serve the cache
+  // before they check anything, so a signed-out row went on showing the old percentages
+  // indefinitely. Signed out means we no longer know this account's quota, and a number we no
+  // longer know is worse than a dash: it is indistinguishable from a current one.
+  //
+  // Only on 'logged_out'. A failed check is ignorance, not absence - keeping the last good reading
+  // through a network blip is the right behaviour and must not be swept up in this.
+  if (reason === 'logged_out') dropCachedUsage(key)
   const snapshot = parseUsageOutput('', label)
   return { snapshot, cached: false, key, reason, advice: usageAdvice(snapshot) }
 }
@@ -228,6 +239,9 @@ export async function checkUsageForCliInstance(id: string): Promise<UsageCheckRe
 
   const hasAnyCredential =
     inst.loggedIn || !!inst.associatedAccountId || !!inst.associatedDesktopDir
+  // Same owner rule as the desktop path above: signed out clears the numbers, a failed check does
+  // not. `hasAnyCredential` false IS the signed-out case for a CLI instance.
+  if (!hasAnyCredential) dropCachedUsage(key)
   const snapshot = parseUsageOutput('', inst.name)
   return {
     snapshot,

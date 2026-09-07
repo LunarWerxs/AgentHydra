@@ -24,8 +24,18 @@ import { runKeepaliveSweep } from './session-keepalive'
 import type { UsageSettings } from './types'
 import { checkUsageForCliInstance, checkUsageForDesktop, desktopIsCheckable } from './usage-service'
 
-/** Default sweep interval. Quota moves on the scale of hours, so 15 minutes is plenty fresh. */
-const DEFAULT_INTERVAL_MIN = 15
+/**
+ * Default sweep interval. Quota moves on the scale of hours, so this only has to be fresh enough
+ * to be useful, never fast.
+ *
+ * ⛔ OWNER RULE (Michael, 2026-09-07): *"I don't want AgentHydra constantly checking for updates on
+ * the instances. I only want it to do it when I tell it to... or maybe at best, every 30 minutes."*
+ * Thirty is a CEILING on unattended checking, not a tuning knob - do not lower it back toward 15
+ * for freshness. The Refresh button is the on-demand path and always forces a real probe; the
+ * window-open catch-up in web/src/lib/usage-catchup.ts is pinned to this same number on purpose,
+ * so reopening the app can never become a way to buy a probe round.
+ */
+const DEFAULT_INTERVAL_MIN = 30
 /** Guard rails on a user-supplied interval (a 10-second sweep would be pointless, not dangerous). */
 const MIN_INTERVAL_MIN = 5
 const MAX_INTERVAL_MIN = 24 * 60

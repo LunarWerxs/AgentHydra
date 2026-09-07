@@ -124,3 +124,17 @@ test('an abort signal stops the queue mid-flight', async () => {
   // Leaving the tab must not leave a slow queue of network requests running behind you.
   expect(seen).toEqual([1, 2])
 })
+
+test('the window-open catch-up never checks more often than the owner allows', () => {
+  // ⛔ OWNER RULE (Michael, 2026-09-07): "I don't want AgentHydra constantly checking for updates on
+  // the instances. I only want it to do it when I tell it to, like when I click the refresh button.
+  // Or maybe at best, every 30 minutes. It seems to do it when I refresh the page, or way more
+  // often." Thirty minutes is a CEILING on unattended checking, not a tuning knob.
+  //
+  // This is pinned because the pressure is always toward FRESHER, and the previous value (10
+  // minutes, deliberately below the then-15-minute server sweep) was a perfectly reasonable
+  // freshness argument that produced exactly the behaviour he objected to: reopening the window
+  // became a probe round for most rows. If a future change lowers this, it must argue with him,
+  // not with a comment.
+  expect(USAGE_CATCHUP_MAX_AGE_MS).toBeGreaterThanOrEqual(30 * 60 * 1000)
+})
