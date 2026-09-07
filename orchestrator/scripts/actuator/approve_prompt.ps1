@@ -444,10 +444,49 @@ if ($SetMode) {
   # invoked by ANY method (Select, Invoke or Press-Space), so the confirmation-dialog hunt
   # below can require its match to be NEW rather than trusting a name match alone against
   # whatever button already happened to be on screen.
+  # THE APP'S WINDOWS, main first. The confirmation dialog is its own top-level HWND owned by
+  # the same process, so a hunt rooted at MainWindowHandle alone never sees it. `IsMain` is
+  # carried because Find-Confirm's positional guards only make sense in the main window: the
+  # composer's picker and the sidebar chips live THERE, so a mode-named button in a separate
+  # dialog window cannot be either of them and must not be rejected for sitting in the wrong
+  # place. Never widens WHAT may be pressed - the deny list and the must-be-new rail are
+  # unchanged, and the snapshot below covers these same roots so nothing pre-existing qualifies.
+  # ⛔ DEFINED HERE, ABOVE ITS FIRST USE: PowerShell binds functions as the script runs, so a
+  # definition further down would leave the snapshot call in a catch{} with an EMPTY set -
+  # which silently disarms must-be-new and lets an unrelated button be pressed as the confirm.
+  function Get-ProcRoots($procId, $mainHwnd) {
+    $roots = @()
+    try { if ($mainHwnd) { $roots += [pscustomobject]@{ Elem = [System.Windows.Automation.AutomationElement]::FromHandle($mainHwnd); IsMain = $true } } } catch {}
+    try {
+      $pidCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$procId)
+      foreach ($w in [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+                       [System.Windows.Automation.TreeScope]::Children, $pidCond)) {
+        try {
+          $h = $w.Current.NativeWindowHandle
+          if ($mainHwnd -and $h -eq [int]$mainHwnd) { continue }
+          if ($w.Current.IsOffscreen) { continue }
+          $roots += [pscustomobject]@{ Elem = $w; IsMain = $false }
+        } catch { continue }
+      }
+    } catch {}
+    return $roots
+  }
+  # ⛔ AND IT MUST COVER EVERY TOP-LEVEL WINDOW OF THE APP, NOT JUST ITS MAIN ONE (owner,
+  # 2026-09-07: "stuck on the popup again. I had to click it"). This dialog is an OWNED
+  # top-level window with its own HWND, so it is NOT a descendant of MainWindowHandle and a
+  # scan rooted there cannot see it however long it polls. Both failures read the same way -
+  # "waited 9s for a confirmation, pressed 0" while the diagnostic listed the main frame's own
+  # Minimize/Maximize - which looks like "no dialog appeared" and was really "looked in the
+  # wrong window". Roots are recomputed each look because the dialog does not exist yet here.
   $preInvokeIds = New-Object System.Collections.Generic.HashSet[string]
   try {
-    foreach ($b in ([System.Windows.Automation.AutomationElement]::FromHandle($hwnd)).FindAll($TREE, $btnCond)) {
-      try { [void]$preInvokeIds.Add(($b.GetRuntimeId() -join ',')) } catch {}
+    foreach ($root in (Get-ProcRoots $proc.ProcId $hwnd)) {
+      try {
+        foreach ($b in $root.Elem.FindAll($TREE, $btnCond)) {
+          try { [void]$preInvokeIds.Add(($b.GetRuntimeId() -join ',')) } catch {}
+        }
+      } catch {}
     }
   } catch {}
   $picked = $false
@@ -501,7 +540,7 @@ if ($SetMode) {
   # One tree scan per look, not one PER CANDIDATE NAME. The old shape ran FindAll once for
   # each of eighteen accept labels - eighteen full descendant walks of an Electron tree, every
   # round - which is a real part of why a batch of these felt slow.
-  function Find-Confirm($root, $pRect, $preIds) {
+  function Find-Confirm($root, $pRect, $preIds, $isMain = $true) {
     $byName = @{}
     $modeHit = $null
     foreach ($b in $root.FindAll($TREE, $btnCond)) {
@@ -525,7 +564,12 @@ if ($SetMode) {
           # invoked - the picker itself after the mode took, a chip, a second composer's picker
           # - is not this dialog's confirm whatever its position says.
           $rid = ($b.GetRuntimeId() -join ',')
-          if ($r.Left -ge $minXm -and -not (Same-Spot $r $pRect) -and -not $preIds.Contains($rid)) {
+          # The pane/position guards discriminate the dialog's confirm from the composer's own
+          # picker and the sidebar chips - all of which live in the MAIN window. In a separate
+          # dialog window there is nothing to confuse it with, so requiring it to sit right of
+          # the pane would reject the very button we came for. Must-be-new still applies.
+          $placeOk = if ($isMain) { $r.Left -ge $minXm -and -not (Same-Spot $r $pRect) } else { $true }
+          if ($placeOk -and -not $preIds.Contains($rid)) {
             if (-not $modeHit) { $modeHit = $b }
           }
           continue
@@ -552,7 +596,13 @@ if ($SetMode) {
     # THE ONLY SUCCESS CONDITION. Not "a dialog was clicked" and not "no dialog appeared" -
     # the picker itself reading the mode we asked for.
     if ($cur -and $cur.Current.Name -eq $SetMode) { break }
-    $dlgBtn = Find-Confirm $fresh $pickerRect $preInvokeIds
+    # Look in the main window FIRST (the common case, and the cheapest), then in any other
+    # top-level window the app owns - which is where this dialog actually lives.
+    $dlgBtn = $null
+    foreach ($root in (Get-ProcRoots $proc.ProcId $hwnd)) {
+      $dlgBtn = Find-Confirm $root.Elem $pickerRect $preInvokeIds $root.IsMain
+      if ($dlgBtn) { break }
+    }
     if (-not $dlgBtn) {
       if ((Get-Date) -ge $confirmDeadline) { break }
       Start-Sleep -Milliseconds 300
@@ -587,8 +637,16 @@ if ($SetMode) {
     # ACCEPT_NAMES nor DENY_NAMES) can be read off the lane's log and added, instead of
     # failing mutely. Disabled and offscreen buttons are marked rather than hidden: the last
     # failure's list looked complete and was not.
+    # ⛔ AND IT MUST LIST EVERY WINDOW THE APP OWNS, not just the main one (2026-09-07). This
+    # scan used to root at $el, so when the confirm sat in its own top-level dialog the list
+    # came back as the main frame's Minimize/Maximize and read as "no dialog appeared" - the
+    # message that sent the last two investigations down the wrong path. A button found
+    # outside the main window is tagged so the two can never be confused again.
     $seenBtns = @()
-    foreach ($b in $el.FindAll($TREE, $btnCond)) {
+    $diagRoots = @()
+    try { $diagRoots = Get-ProcRoots $proc.ProcId $hwnd } catch { $diagRoots = @([pscustomobject]@{ Elem = $el; IsMain = $true }) }
+    foreach ($dr in $diagRoots) {
+    foreach ($b in $dr.Elem.FindAll($TREE, $btnCond)) {
       try {
         $n = $b.Current.Name
         if (-not $n) { continue }
@@ -597,8 +655,10 @@ if ($SetMode) {
         if ($n -like 'More options*' -or $n -like 'Idle *' -or $n -like 'Running *') { continue }
         if ($b.Current.IsOffscreen) { $n = "$n(offscreen)" }
         elseif (-not $b.Current.IsEnabled) { $n = "$n(disabled)" }
+        if (-not $dr.IsMain) { $n = "$n[dialog]" }
         $seenBtns += $n
       } catch { continue }
+    }
     }
     $seenBtns = @($seenBtns | Select-Object -Unique | Select-Object -First 30)
     Write-Output "REFUSED: picked '$SetMode' but the picker now reads '$now' - the mode did not take$confirmNote (waited $([int]($CONFIRM_WAIT_MS/1000))s for a confirmation, pressed $clicks; buttons on screen: $($seenBtns -join ' | '))"
