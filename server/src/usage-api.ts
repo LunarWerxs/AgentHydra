@@ -259,10 +259,23 @@ export async function fetchUsageApi(opts: {
       // into a real number the UI can count down. Seconds per RFC 9110; a date form is also legal,
       // so parse both and ignore anything that yields no sane future instant.
       const retryAfter = res.status === 429 ? parseRetryAfter(res.headers.get('retry-after')) : null
+      // READ WHAT THE SERVER ACTUALLY SAID. A bare status is an invitation to guess, and guessing
+      // "429 means someone refreshed too often" was wrong once already (owner, 2026-09-07: the
+      // account had never been refreshed by hand at all). Anthropic returns a typed error body -
+      // `{"type":"error","error":{"type":...,"message":...}}` - and its `type` distinguishes a
+      // volume limit from an account/quota state that no amount of waiting will change.
+      // Truncated, and only ever an ERROR body: a success body carries usage figures, not this.
+      let serverSaid = ''
+      try {
+        const text = (await res.text()).trim()
+        if (text) serverSaid = ` - ${text.slice(0, 300)}`
+      } catch {
+        // A body we cannot read is not worth failing over; the status still stands on its own.
+      }
       return {
         ok: false,
         status: res.status,
-        error: `usage endpoint returned HTTP ${res.status}`,
+        error: `usage endpoint returned HTTP ${res.status}${serverSaid}`,
         ...(retryAfter === null ? {} : { retryAfterSec: retryAfter }),
       }
     }

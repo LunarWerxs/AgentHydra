@@ -211,13 +211,13 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   if (reason === 'logged_out') dropCachedUsage(key)
   const snapshot = parseUsageOutput('', label)
   // Say WHAT failed, not just that something did. See UsageCheckResult.detail.
+  // The server's own words FIRST (see usage-api.ts), plus the retry window when it gave one. Both,
+  // because they answer different questions: the text says WHAT limit was hit, the window says
+  // when it lifts, and showing only the window is what let "429" get read as "you clicked too much".
   const detail = apiFail
     ? apiFail.status === 429 && apiFail.retryAfterSec
-      ? // The one failure with a known end: say when, so nobody hammers it waiting.
-        `rate limited - retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min`
-      : apiFail.status > 0
-        ? `usage endpoint returned HTTP ${apiFail.status}`
-        : apiFail.error
+      ? `${apiFail.error} (retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min)`
+      : apiFail.error
     : undefined
   return { snapshot, cached: false, key, reason, detail, advice: usageAdvice(snapshot) }
 }
