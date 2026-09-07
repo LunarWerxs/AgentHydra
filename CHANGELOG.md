@@ -36,7 +36,46 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the second is worth an alarm. Both 5-hour cells keep their number, their length and their
   popover; the Session bar simply reads in the same neutral grey the Plan chip does.
 
+### Removed
+
+- **`fleet-git.ts`, and with it every git call AgentHydra made on its own initiative**
+  (`server/src/fleet-git.ts` and `server/tests/fleet-git.test.ts` deleted, the `git` key dropped
+  from `GET /api/fleet`). That section ran `rev-parse --show-toplevel` per live session cwd, then
+  `rev-parse --abbrev-ref` + `status --porcelain` + `rev-list --count` per repo - concurrently,
+  uncapped, uncached, on EVERY request. Against a 22.7k-file checkout that is a full status walk
+  each time, and anything calling the endpoint in a loop buries the machine; the owner watched
+  exactly that happen. Nothing consumed the result: no web code, no orchestrator code and no
+  Python read `git`, `offMain`, `dirtyCount`, `notRepo` or `aheadCount`, and the module's own
+  header said what to DO about a dirty or off-main repo was "a later piece's business" - a piece
+  never built. A producer with no consumer paying the most expensive read in the process.
+  Cross-repo git state is Odin's job, and Odin only does it when a person runs a scan. Standing
+  rule (owner, 2026-09-07): **nothing runs git unless it was explicitly asked for, for a specific
+  reason.** `path-key.ts` stays - `desktop-landing` and `codex-desktop` still use it - with its
+  header de-referenced. The five remaining git callers are all explicitly triggered and untouched:
+  the source-mode version stamp, the updater's own `git pull`, the ChatGPT context pack's
+  `ls-files`, and the tunnel's `check-ignore`.
+
 ### Fixed
+
+- **The permission-mode confirmation is hunted in every window the app owns, not just its main
+  one** (`orchestrator/scripts/actuator/approve_prompt.ps1`). Switching a chat to bypass raises an
+  acceptance dialog, and that dialog is an OWNED TOP-LEVEL WINDOW with its own HWND - so a scan
+  rooted at `MainWindowHandle` could never reach it however long it polled. Two migrations landed
+  `disk-only` and the owner clicked Confirm by hand both times. The diagnostic hid the cause: its
+  "buttons on screen" list scanned the same main window, so it printed the frame's own
+  Minimize/Maximize and read as "no dialog appeared", sending two investigations at dialog timing
+  instead of at the search root. `Get-ProcRoots` now returns the main window plus every visible
+  top-level window of the same process, used in all three places - the pre-invoke RuntimeId
+  snapshot, the confirm poll, and the diagnostic (buttons outside the main window are tagged
+  `[dialog]`). Nothing widens about WHAT may be pressed: `DENY_NAMES` is still never pressed and
+  the must-be-new rail is intact, strictly so because the snapshot now covers the same roots the
+  hunt does. The pane/position guards that separate the dialog's confirm from the composer's
+  picker and the sidebar chips apply only in the main window, since those live there and requiring
+  a separate dialog's button to sit right of the pane would reject the very button wanted.
+  `Get-ProcRoots` is deliberately defined above its first caller: PowerShell binds functions as
+  the script runs, and a definition further down left the snapshot call in its `catch{}` with an
+  EMPTY set, silently disarming must-be-new. Not yet exercised against a live dialog - proving it
+  needs a real mode change that raises one.
 
 - **The window actuators aim by identity, never by substring or position** (every
   `orchestrator/scripts/actuator/*.ps1`, plus `spawn_chat.py` and `migrate_chat.py`), after the
