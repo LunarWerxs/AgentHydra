@@ -356,6 +356,27 @@ export function resolveClaudeExe(): string {
 }
 
 /**
+ * Args that make a `claude -p` PROBE load NO MCP servers. Append these to every spawn that asks
+ * the CLI a question and reads a value back - the usage probe, the keepalive nudge - and to none
+ * that runs a real chat, which needs the owner's tools.
+ *
+ * WHY IT MATTERS MORE THAN IT LOOKS. Every configured MCP server is a process the probe starts and
+ * then throws away, and on Windows a server launched through a `.cmd` shim drags a cmd.exe and a
+ * console host behind it too. Measured on MPC-HELL 2026-09-07: 7 child processes per probe, 0 with
+ * these flags. These refreshes are PERIODIC and run per account, so on a fleet-sized machine that
+ * is a steady churn of processes appearing and vanishing on their own schedule, with no user action
+ * to blame it on - which is exactly how the owner experienced it ("something is mass spawning CLI").
+ *
+ * `--strict-mcp-config` means "only use servers from --mcp-config, ignore all other configuration",
+ * so the empty object is what makes it none rather than merely fewer.
+ */
+export const CLAUDE_PROBE_NO_MCP_ARGS = [
+  '--strict-mcp-config',
+  '--mcp-config',
+  '{"mcpServers":{}}',
+] as const
+
+/**
  * Resolve the Codex CLI. The Microsoft Store/Desktop install keeps version-addressed helper
  * binaries below LocalAppData, while npm/homebrew installs normally put `codex` on PATH.
  */

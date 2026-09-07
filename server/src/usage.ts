@@ -14,7 +14,12 @@
 
 import { mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { CLAUDE_PROJECTS_ROOT, DATA_DIR, resolveClaudeExe } from './config'
+import {
+  CLAUDE_PROBE_NO_MCP_ARGS,
+  CLAUDE_PROJECTS_ROOT,
+  DATA_DIR,
+  resolveClaudeExe,
+} from './config'
 import { resolveCliConfigDirToken } from './core/accounts'
 import { encodeCwdKey } from './transcript'
 import type { UsageAdvice, UsageSnapshot } from './types'
@@ -270,6 +275,61 @@ export type UsageCheckOpts = {
   timeoutMs?: number
   /** Skip the fast direct-API path and always spawn `claude`. Escape hatch + used by tests. */
   forceCli?: boolean
+  /** Ignore the CLI-spawn cooldown below. For a human pressing "check now", never for a timer. */
+  bypassCooldown?: boolean
+}
+
+/**
+ * Minimum gap between CLI-SPAWN probes for the same label.
+ *
+ * ⛔ WHY THIS EXISTS - a failing fast path must never become a process mill. The API read is
+ * ~300ms and spawns nothing; the CLI fallback boots the ~250 MB binary for ~9s. Fine as a
+ * fallback, ruinous on a timer: the monitor ticks every 30 SECONDS (MONITOR_POLL_MS), so the
+ * moment the fast path stops working, every tick becomes a CLI boot, indefinitely.
+ *
+ * That is not hypothetical. Measured on MPC-HELL 2026-09-07: the ambient config dir's OAuth
+ * token had `expiresAt: 0` - permanently expired - so the API read 401'd on EVERY call and the
+ * daemon had been booting a Claude CLI every ~30s for as long as that credential sat there. The
+ * owner saw it as "something is mass spawning CLI", and nothing in the logs named it, because
+ * each spawn is individually correct behaviour.
+ *
+ * The cooldown is per label, so one broken account cannot silence the others, and it returns the
+ * LAST CACHED READING rather than a fresh no-data: a poller asking "what is the quota" gets the
+ * last true answer instead of a false "no data", which callers must not read as 0%.
+ */
+const CLI_PROBE_COOLDOWN_MS = 5 * 60_000
+const lastCliProbeAt = new Map<string, number>()
+const lastCliSnapshot = new Map<string, UsageSnapshot>()
+
+/** Test seam: forget every cooldown stamp and remembered reading. */
+export function resetCliProbeCooldowns(): void {
+  lastCliProbeAt.clear()
+  lastCliSnapshot.clear()
+}
+
+/**
+ * May a CLI probe run for `key` right now? Exported so the rule can be tested directly - the
+ * spawn around it cannot be exercised in a unit test, and an untested rate limiter is how the
+ * thing it prevents comes back.
+ *
+ * Returns the remembered reading when it refuses, so a caller always has the best answer
+ * available rather than a hole. `null` there means "refused and nothing remembered yet".
+ */
+export function cliProbeGate(
+  key: string,
+  now: number,
+): { allow: boolean; cached: UsageSnapshot | null } {
+  const last = lastCliProbeAt.get(key)
+  if (last !== undefined && now - last < CLI_PROBE_COOLDOWN_MS) {
+    return { allow: false, cached: lastCliSnapshot.get(key) ?? null }
+  }
+  return { allow: true, cached: null }
+}
+
+/** Stamp that a CLI probe just ran for `key`, and remember its reading if it said anything. */
+export function rememberCliProbe(key: string, now: number, snap?: UsageSnapshot): void {
+  lastCliProbeAt.set(key, now)
+  if (snap && !isNoData(snap)) lastCliSnapshot.set(key, snap)
 }
 
 /**
@@ -361,6 +421,21 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
     }
   }
 
+  // --- cooldown gate: a broken fast path must not turn a 30s poller into a CLI mill -------------
+  // See CLI_PROBE_COOLDOWN_MS. Checked HERE, at the single chokepoint every caller goes through,
+  // so no future caller can spawn around it by accident. `forceCli` alone does NOT bypass it -
+  // that flag means "skip the API read", not "spawn no matter how recently we already did".
+  const cooldownKey = label ?? opts.configDir ?? '(ambient)'
+  if (!opts.bypassCooldown) {
+    const gate = cliProbeGate(cooldownKey, Date.now())
+    if (!gate.allow) {
+      // The last real reading, not a fresh no-data: callers are told never to read no-data as 0%,
+      // and a stale-but-true number is strictly better information than none.
+      return gate.cached ?? parseUsageOutput('', label)
+    }
+  }
+  rememberCliProbe(cooldownKey, Date.now())
+
   // --- fallback: spawn `claude -p "/usage"` and parse the text screen ----------------------------
   const env: Record<string, string> = { ...(process.env as Record<string, string>) }
   // Only override the ambient auth when we actually have a credential to inject (mirrors
@@ -401,7 +476,10 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
     // `claude.cmd` when the packaged claude.exe is absent, and a .cmd runs THROUGH cmd.exe. This
     // refresh is also periodic, so on a machine without the .exe an unhidden spawn is a CMD window
     // that flashes on its own schedule, with no user action to blame it on.
-    proc = Bun.spawn([resolveClaudeExe(), '-p', '/usage'], {
+    // ⛔ NO MCP SERVERS - see CLAUDE_PROBE_NO_MCP_ARGS in config.ts. `/usage` reads a number off a
+    // screen and uses no tools, so booting the machine's whole MCP roster to ask it was 7 child
+    // processes per probe, on a periodic schedule, for nothing.
+    proc = Bun.spawn([resolveClaudeExe(), '-p', '/usage', ...CLAUDE_PROBE_NO_MCP_ARGS], {
       env,
       cwd: probeCwd ?? undefined,
       stdin: 'ignore',
@@ -434,7 +512,12 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
     // cost is one readdir of a folder that holds at most a handful of files.
     pruneUsageProbeTranscripts()
   }
-  return parseUsageOutput(out, label)
+  const snapshot = parseUsageOutput(out, label)
+  // Remember only a reading that actually says something. Caching a no-data result would make the
+  // cooldown hand back "no data" for five minutes after one hiccup, which reads like a broken
+  // account rather than a skipped probe.
+  rememberCliProbe(cooldownKey, Date.now(), snapshot)
+  return snapshot
 }
 
 // Re-export the small cache API so existing imports keep working. Its implementation lives in a

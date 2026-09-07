@@ -20,7 +20,7 @@
 //     to start a five-hour clock is exactly backwards;
 //   · an unreadable quota reading is a skip, never a guess. "I could not tell" must not spend.
 
-import { resolveClaudeExe } from './config'
+import { CLAUDE_PROBE_NO_MCP_ARGS, resolveClaudeExe } from './config'
 import type { UsageSnapshot } from './types'
 import { checkUsage, pruneUsageProbeTranscripts, usageProbeCwd } from './usage'
 import { getCachedUsage } from './usage-cache'
@@ -119,7 +119,11 @@ export async function nudgeWindow(
 
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   try {
-    proc = Bun.spawn([resolveClaudeExe(), '-p', KEEPALIVE_PROMPT], {
+    // ⛔ NO MCP SERVERS - see CLAUDE_PROBE_NO_MCP_ARGS in config.ts. The prompt is "reply with the
+    // single word: ok"; it cannot want a tool. Same reasoning as the usage probe this spawn was
+    // copied from, and the same measurement: 7 child processes per nudge, 0 with these flags. This
+    // one runs per idle account across the whole fleet, so it is the bigger of the two spawners.
+    proc = Bun.spawn([resolveClaudeExe(), '-p', KEEPALIVE_PROMPT, ...CLAUDE_PROBE_NO_MCP_ARGS], {
       env,
       cwd: probeCwd ?? undefined,
       stdin: 'ignore',
