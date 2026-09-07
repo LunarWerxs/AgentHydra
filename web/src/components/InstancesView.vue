@@ -1450,14 +1450,56 @@ onUnmounted(() => {
                       <span class="font-mono text-xs">{{
                         $t('instances.numberMenuLabel', { num: inst.num })
                       }}</span>
-                      <button
-                        type="button"
-                        class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        :aria-label="$t('instances.copyNumber')"
-                        @click.stop="copyInstanceNumber(inst.num)"
-                      >
-                        <Copy class="size-3.5" />
-                      </button>
+                      <!-- Icon row, everything to the LEFT of copy (owner spec, 2026-09-07).
+                           Refresh is the former "Check usage" ITEM: re-checking one account is the
+                           thing you want twice in a row, and as a menu item every click closed the
+                           menu and made you reopen it. It and Copy keep the menu open; Edit and Log
+                           out each open a dialog, so they close it first rather than leaving a menu
+                           floating over their own dialog. -->
+                      <div class="flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                          :disabled="isChecking(usageKeyFor(inst))"
+                          :aria-label="$t('instances.checkUsage')"
+                          :title="$t('instances.checkUsage')"
+                          @click.stop="onCheckUsage(inst)"
+                        >
+                          <RefreshCw
+                            class="size-3.5"
+                            :class="isChecking(usageKeyFor(inst)) ? 'animate-spin' : ''"
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                          :disabled="isBusy(inst)"
+                          :aria-label="$t('instances.edit')"
+                          :title="$t('instances.edit')"
+                          @click.stop="rowMenuOpen = null; openEditDialog(inst)"
+                        >
+                          <Pencil class="size-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                          :disabled="inst.isRunning || isBusy(inst)"
+                          :aria-label="$t('instances.logout')"
+                          :title="$t('instances.logout')"
+                          @click.stop="rowMenuOpen = null; openLogoutDialog(inst)"
+                        >
+                          <LogOut class="size-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          class="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          :aria-label="$t('instances.copyNumber')"
+                          :title="$t('instances.copyNumber')"
+                          @click.stop="copyInstanceNumber(inst.num)"
+                        >
+                          <Copy class="size-3.5" />
+                        </button>
+                      </div>
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     <!-- Quit lives here now (the row's primary button is Focus when running);
@@ -1473,12 +1515,6 @@ onUnmounted(() => {
                     </DropdownMenuItem>
                     <DropdownMenuItem :disabled="isBusy(inst)" @click="onCreateShortcut(inst)">
                       <MonitorDown /> {{ $t('instances.createShortcut') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      :disabled="isChecking(usageKeyFor(inst))"
-                      @click="onCheckUsage(inst)"
-                    >
-                      <Gauge /> {{ $t('instances.checkUsage') }}
                     </DropdownMenuItem>
                     <!-- Every active chat on this account, moved to one other account. Running
                          destinations first; a closed one says it will be started. -->
@@ -1548,22 +1584,6 @@ onUnmounted(() => {
                       @click="onUseAccountName(inst)"
                     >
                       <UserRound /> {{ $t('instances.useAccountName') }}
-                    </DropdownMenuItem>
-                    <!-- Sign this profile out. Disabled while it is RUNNING, because the server
-                         refuses it then anyway (Claude Desktop holds config.json open and would
-                         undo or corrupt the write) - better to say so on the item than to let the
-                         click produce an error toast. -->
-                    <DropdownMenuItem
-                      :disabled="inst.isRunning || isBusy(inst)"
-                      @click="openLogoutDialog(inst)"
-                    >
-                      <LogOut /> {{ $t('instances.logout') }}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      :disabled="isBusy(inst)"
-                      @click="openEditDialog(inst)"
-                    >
-                      <Pencil /> {{ $t('instances.edit') }}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       variant="destructive"

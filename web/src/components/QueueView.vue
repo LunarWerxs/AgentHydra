@@ -214,10 +214,10 @@ async function clearFinished() {
            work". Non-modal, not a toast: this is a state of the panel, not a one-off event. Shown
            whenever there is OLDER data still on screen but the latest poll failed. -->
       <p
-        v-if="queueStatus.stale"
+        v-if="queueStatus.stale.value"
         class="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-[11px] text-warning"
       >
-        {{ $t('queue.staleHint', { reason: queueStatus.error }) }}
+        {{ $t('queue.staleHint', { reason: queueStatus.error.value }) }}
       </p>
 
       <!-- first-load skeletons so the queue never looks blank -->
@@ -242,11 +242,11 @@ async function clearFinished() {
       <!-- the FIRST fetch failed and there is nothing to show — an error state with a Retry,
            never the "queue a run" empty-state CTA, which would claim there is genuinely no work. -->
       <div
-        v-else-if="queue.length === 0 && queueStatus.unavailable"
+        v-else-if="queue.length === 0 && queueStatus.unavailable.value"
         class="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground"
       >
         <CircleAlert class="size-8 text-warning opacity-70" />
-        <p>{{ $t('queue.unavailable', { reason: queueStatus.error }) }}</p>
+        <p>{{ $t('queue.unavailable', { reason: queueStatus.error.value }) }}</p>
         <Button size="sm" variant="outline" @click="refreshQueue()">{{ $t('queue.retry') }}</Button>
       </div>
 

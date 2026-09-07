@@ -163,7 +163,7 @@ const tone = computed(() => {
         </PopoverTrigger>
         <PopoverContent align="end" class="w-60 p-3">
           <p v-if="state === 'unavailable'" class="mb-2 text-[11px] text-warning">
-            {{ $t('scheduler.unavailableHint', { reason: schedulerStatus.error ?? '' }) }}
+            {{ $t('scheduler.unavailableHint', { reason: schedulerStatus.error.value ?? '' }) }}
           </p>
           <div class="flex items-center justify-between gap-3">
             <div class="min-w-0">

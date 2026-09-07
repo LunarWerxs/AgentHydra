@@ -49,7 +49,9 @@ export default {
   numberTooltipBody:
     'Permanent number for this instance — unique across Claude Desktop, Claude CLI and Codex, and never reused. Say “instance {num}” to an AI, or pass instance: {num} to the MCP tools. Click to copy.',
   numberCopyAria: 'Copy instance number {num}',
-  numberMenuLabel: 'Instance #{num}',
+  // Owner spec (2026-09-07): drop the word "Instance" - the menu is already open on one row,
+  // so the number alone is the identifier and the label stops competing with the icon row.
+  numberMenuLabel: '#{num}',
   copyNumber: 'Copy instance number',
   toastNumberCopied: 'Copied “{num}” — refer to this instance by that number.',
   // Account-column hover. The handle is on the badge; this is where the full address and the

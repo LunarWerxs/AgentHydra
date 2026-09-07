@@ -61,7 +61,7 @@ const STATE_VARIANT: Record<Incident['state'], 'warning' | 'secondary' | 'succes
 
 <template>
   <div
-    v-if="incidents.length > 0 || incidentsStatus.unavailable"
+    v-if="incidents.length > 0 || incidentsStatus.unavailable.value"
     class="shrink-0 border-b border-border px-3 pt-2 pb-1"
   >
     <div class="flex items-center gap-1">
@@ -86,21 +86,21 @@ const STATE_VARIANT: Record<Incident['state'], 'warning' | 'secondary' | 'succes
          instead of silently rendering as "no incidents", the exact lie AH-20 was filed against.
          Mirrors QueueView's unavailable state: an icon, the server's own reason, and Retry. -->
     <div
-      v-if="incidentsStatus.unavailable"
+      v-if="incidentsStatus.unavailable.value"
       class="mb-1.5 flex flex-col items-center gap-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-2 text-center text-[11px] text-warning"
     >
       <CircleAlert class="size-4 opacity-70" />
-      <p>{{ t('incidents.unavailable', { reason: incidentsStatus.error }) }}</p>
+      <p>{{ t('incidents.unavailable', { reason: incidentsStatus.error.value }) }}</p>
       <Button size="xs" variant="outline" @click="refreshIncidents()">{{ t('incidents.retry') }}</Button>
     </div>
 
     <!-- a LATER poll failed but we still have incidents on screen — keep showing them, just say
          they may be stale, same as the queue's staleHint. -->
     <p
-      v-else-if="incidentsStatus.stale"
+      v-else-if="incidentsStatus.stale.value"
       class="mb-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-[11px] text-warning"
     >
-      {{ t('incidents.staleHint', { reason: incidentsStatus.error }) }}
+      {{ t('incidents.staleHint', { reason: incidentsStatus.error.value }) }}
     </p>
 
     <div v-if="expanded" class="mb-1.5 flex flex-col gap-1.5">

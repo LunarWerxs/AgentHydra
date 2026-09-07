@@ -863,11 +863,11 @@ function onComposerSent(mode: 'now' | 'queued') {
                list — show why, with a Retry, rather than the plain "no sessions" copy that would
                read as an empty account instead of an outage. -->
           <div
-            v-else-if="filtered.length === 0 && sessionsStatus.unavailable"
+            v-else-if="filtered.length === 0 && sessionsStatus.unavailable.value"
             class="p-4 text-center text-xs text-muted-foreground"
           >
             <CircleAlert class="mx-auto mb-1.5 size-5 text-warning" />
-            <p>{{ $t('sessions.unavailable', { reason: sessionsStatus.error }) }}</p>
+            <p>{{ $t('sessions.unavailable', { reason: sessionsStatus.error.value }) }}</p>
             <button
               type="button"
               class="mt-1.5 font-medium text-primary hover:underline"
@@ -894,10 +894,10 @@ function onComposerSent(mode: 'now' | 'queued') {
           <!-- a LATER poll failing must not blank a list that already has good (if aging) data —
                it stays on screen, just labelled stale. Non-modal: a state of the list, not a toast. -->
           <p
-            v-if="sessionsStatus.stale"
+            v-if="sessionsStatus.stale.value"
             class="mb-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-[11px] text-warning"
           >
-            {{ $t('sessions.staleHint', { reason: sessionsStatus.error }) }}
+            {{ $t('sessions.staleHint', { reason: sessionsStatus.error.value }) }}
           </p>
 
           <template v-if="!bodySearchActive">

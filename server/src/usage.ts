@@ -435,8 +435,16 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
     return parseUsageOutput('', label)
   }
 
+  // ⛔ THE COOLDOWN IS FOR THE CREDENTIAL-LESS PATH ONLY. An `auth` here is a token WE resolved for
+  // a specific account - a desktop instance's decrypted grant, a dispatch account's secret - so the
+  // spawn has a real credential and a real chance of returning numbers. Rate-limiting those turns a
+  // human pressing "check usage" twice into "Claude returned no usage numbers for this instance",
+  // which is a lie about the account rather than a message about the button (reported by the owner,
+  // 2026-09-07, and caused by the first cut of this cooldown). The mill it exists to stop was the
+  // AMBIENT probe - no injected credential, nothing to authenticate with, spawning every 30s
+  // forever - and that is exactly the case this still covers.
   const cooldownKey = label ?? opts.configDir ?? '(ambient)'
-  if (!opts.bypassCooldown) {
+  if (!opts.bypassCooldown && !opts.auth) {
     const gate = cliProbeGate(cooldownKey, Date.now())
     if (!gate.allow) {
       // The last real reading, not a fresh no-data: callers are told never to read no-data as 0%,
@@ -444,7 +452,7 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
       return gate.cached ?? parseUsageOutput('', label)
     }
   }
-  rememberCliProbe(cooldownKey, Date.now())
+  if (!opts.auth) rememberCliProbe(cooldownKey, Date.now())
 
   // --- fallback: spawn `claude -p "/usage"` and parse the text screen ----------------------------
   const env: Record<string, string> = { ...(process.env as Record<string, string>) }
