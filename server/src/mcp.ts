@@ -67,7 +67,26 @@ async function api(pathname: string, init?: RequestInit): Promise<unknown> {
     )
   }
   if (!res.ok) throw new Error(`AgentHydra ${res.status}: ${await res.text()}`)
-  return res.json()
+  const text = await res.text()
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    // A 200 THAT IS NOT JSON IS THE WEB APP'S CATCH-ALL PAGE answering a route this daemon
+    // build does not have. Found live 2026-09-06: list_chats shipped at 23:15, the daemon on
+    // the box was compiled at 21:29, and every call came back as a bare "Failed to parse
+    // JSON" from the MCP layer - four retries with different arguments before anyone looked at
+    // the body. The daemon is not broken and the tool is not broken; they are different ages.
+    const html = /^\s*<!doctype html|^\s*<html/i.test(text)
+    const head = text.slice(0, 80).replace(/\s+/g, ' ').trim()
+    throw new Error(
+      `AgentHydra answered ${pathname} with ${html ? 'HTML' : 'non-JSON'} instead of JSON - ` +
+        `that is the web app's catch-all page, so the RUNNING daemon at ${daemonBase()} does not ` +
+        `serve this route: its build predates the tool that calls it. Rebuild it from this ` +
+        `checkout (bun run dist - the running exe is locked, so stop the daemon first) and ` +
+        `relaunch it, or point at a source daemon (bun run --cwd server start). ` +
+        `Body starts: ${head}`,
+    )
+  }
 }
 
 /**
@@ -1632,7 +1651,7 @@ export const TOOLS: McpEngineTool[] = [
         wait_secs: {
           type: 'number',
           description:
-            'Seconds to wait inside the call for an idle-but-young engine (default 330, max 360).',
+            "Seconds to wait inside the call for an idle-but-young engine (default 330, max 360). For a whole-account drain - several chats, a resume prompt typed into each landed chat, or a live engine killed on a person's word - use move_chats, which takes one chat as happily as twenty and has `resume` and `terminate_live`.",
         },
         dry_run: { type: 'boolean', description: 'Plan only: resolve everything, move nothing.' },
         archived: {
@@ -1751,6 +1770,16 @@ export const TOOLS: McpEngineTool[] = [
           description:
             'Seconds each chat may wait for an idle-but-young engine (default 60 for a batch, max 360). Lower than move_chat on purpose: waiting 330s per chat is what makes a batch take a quarter of an hour.',
         },
+        resume: {
+          type: 'string',
+          description:
+            "After EVERY landed chat is moved, settled and stamped, stage this text as a reply to each one and deliver it by hand - the courier's NAMED-delivery path: no tray icon, no fair-share cap, because a person is managing (owner, 2026-09-06). This is what makes a migrated chat CONTINUE WORKING: a landed chat is otherwise DORMANT until someone types into it. A chat whose engine booted on landing and is mid-turn keeps the reply staged (the courier never interrupts a live turn); its result carries `resume.retry`, the exact command. Read each result's `resume` ({delivered, why, retry}) - a landed chat with resume.delivered false is moved but has not been told to carry on. Say in the text that the chat was moved and why, and if terminate_live is on, that any in-flight tool result was lost.",
+        },
+        terminate_live: {
+          type: 'boolean',
+          description:
+            "A PERSON'S WORD: a chat refused for a live engine (working, or quiet but not yet past its window) has that engine KILLED - the whole process tree - and is then moved. For draining an account about to hit its limit, where letting the turn finish would spend the last of its quota and the turn would die on the wall anyway. The transcript survives; a tool result still in flight is lost, so pair it with `resume` text that says so. Never implied by `force` (which only overrides a hold); never applied to a hold, the breaker, or an archived chat; an unconfirmed kill leaves the refusal in place and says why.",
+        },
         dry_run: { type: 'boolean', description: 'Plan every chat, move nothing.' },
       },
       [],
@@ -1781,10 +1810,16 @@ export const TOOLS: McpEngineTool[] = [
       if (a.dry_run === true) args.push('--dry-run')
       const limit = Math.max(0, Math.floor(Number(a.limit ?? 0) || 0))
       if (limit > 0) args.push('--limit', String(limit))
+      const resume = typeof a.resume === 'string' ? a.resume.trim() : ''
+      if (resume !== '') args.push('--resume', resume)
+      const terminate = a.terminate_live === true
+      if (terminate) args.push('--terminate-live')
       // The batch's own deadline must outlast every chat's wait plus its work, or the daemon
-      // kills a run mid-move and the report never comes back.
+      // kills a run mid-move and the report never comes back. A resume delivery is a composer
+      // boot (~15-60s each); a terminate is a kill, a confirm (up to 30s) and a second move.
       const planned = all ? Math.max(limit || 40, 40) : chats.length
-      const timeoutMs = Math.min(3_600_000, (planned * (wait + 90) + 180) * 1000)
+      const perChat = wait + 90 + (resume !== '' ? 75 : 0) + (terminate ? 60 : 0)
+      const timeoutMs = Math.min(3_600_000, (planned * perChat + 180) * 1000)
       const run = (await api('/api/orchestrator/run', {
         method: 'POST',
         headers: JSON_HEADERS,

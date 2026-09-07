@@ -63,10 +63,29 @@ Usage:
   python migrate_batch.py --to here --chat "..." --dry-run      # plan only, moves none
   python orch.py migrate_batch --to here --all-unarchived       # the same, via the driver
 
+  python migrate_batch.py --to here --from 15 --all-unarchived --terminate-live \
+      --resume "MIGRATION NOTICE: you were moved to a fresh account; carry on."
+
 Flags other than --chat/--all-unarchived are passed through to every chat's own move, so
 --now, --force, --archived, --title, --idle-wait and --stop-idle mean exactly what they mean
 for a single move. --title is refused for a multi-chat batch: one new name cannot be right
 for several different chats.
+
+TWO FLAGS ARE THE BATCH'S OWN, added 2026-09-06 after draining two accounts (Carlos at 95%
+of its window, Martin at 88% of its week) took ~25 round trips by hand:
+
+  --terminate-live   A PERSON'S WORD. A chat refused for a live engine - working, or quiet
+                     but not yet past its window - has that engine KILLED (the whole process
+                     tree, enginelib.terminate_engine) and is then moved. The transcript
+                     survives; a tool result still in flight is lost, so say so in --resume.
+                     --force never implies this: --force overrides a hold, nothing more.
+  --resume TEXT      PHASE FOUR. After every landed chat is moved, settled and stamped, TEXT
+                     is staged as a reply to each one (stage_reply's own evidence rule) and
+                     delivered through the courier's named-delivery path - by hand, so no
+                     tray icon and no fair-share cap. That is what makes a migrated chat
+                     CONTINUE WORKING instead of sitting dormant in its new account. A chat
+                     whose engine booted on landing and is mid-turn keeps the reply STAGED;
+                     its result names the exact retry. Read each result's `resume`.
 
 Exit: 0 every named chat landed (or, under --dry-run, every plan resolved) - 2 the flags do
   not make sense - 4 nothing landed - 5 a PARTIAL batch: some landed, some were refused.
@@ -81,11 +100,12 @@ import sys
 import time
 
 import migrate_chat
-from lib import clilib, hydralib
+import stage_reply
+from lib import clilib, deliverylib, enginelib, hydralib, ledgerlib
 
 
 #: Flags this driver consumes itself; everything else is forwarded to each chat's own move.
-_BATCH_ONLY = {"--chat", "--all-unarchived", "--json", "--limit"}
+_BATCH_ONLY = {"--chat", "--all-unarchived", "--json", "--limit", "--resume", "--terminate-live"}
 
 #: Exit codes. 0 every chat landed - 4 nothing landed - 5 a partial batch (some landed, some
 #: refused). A partial batch gets its OWN code because "mostly worked" must never read to a
@@ -103,7 +123,7 @@ class _UnknownSource(Exception):
 
 class _BatchArgs:
     __slots__ = ("chats", "passthrough", "as_json", "all_unarchived", "source", "limit",
-                 "dry_run")
+                 "dry_run", "resume_text", "terminate_live")
 
     def __init__(self) -> None:
         self.chats: list[str] = []
@@ -113,6 +133,9 @@ class _BatchArgs:
         self.source: str | None = None
         self.limit = 0
         self.dry_run = False
+        # The batch's own two (docstring): neither reaches a per-chat move's argv.
+        self.resume_text = ""
+        self.terminate_live = False
 
 
 def _parse(argv: list[str]) -> _BatchArgs | int:
@@ -124,6 +147,14 @@ def _parse(argv: list[str]) -> _BatchArgs | int:
         if tok == "--chat" and i + 1 < len(argv):
             a.chats.append(argv[i + 1])
             i += 2
+            continue
+        if tok == "--resume" and i + 1 < len(argv):
+            a.resume_text = argv[i + 1]
+            i += 2
+            continue
+        if tok == "--terminate-live":
+            a.terminate_live = True
+            i += 1
             continue
         if tok == "--limit" and i + 1 < len(argv):
             try:
@@ -210,7 +241,7 @@ class _Item:
     and the payload it ends up printing. `landing is None` after phase one means this chat
     is DONE being touched - refused, planned, or crashed - and every later phase skips it."""
 
-    __slots__ = ("query", "landing", "payload", "errors")
+    __slots__ = ("query", "landing", "payload", "errors", "terminated")
 
     def __init__(self, query: str) -> None:
         self.query = query
@@ -219,6 +250,9 @@ class _Item:
         # A later phase that raised, one line each. The landing stays alive through the
         # remaining phases (each is its own tidy-up), and the payload says what did not finish.
         self.errors: list[str] = []
+        # What --terminate-live did to this chat's engine, if anything: enginelib's own
+        # answer, attached to whichever payload the chat ends up with (landed or refused).
+        self.terminated: dict | None = None
 
 
 def _crash(query: str, err: Exception, started: float, doing: str) -> dict:
@@ -228,20 +262,67 @@ def _crash(query: str, err: Exception, started: float, doing: str) -> dict:
             "secs": round(time.time() - started, 2)}
 
 
-def _move_one(query: str, passthrough: list[str]) -> _Item:
+#: migrate_chat's exit code for "a live engine stood in the way" - the ONLY refusal that
+#: --terminate-live may answer. A hold (6), the breaker (5), archived (7) and the
+#: deterministic refusals (3) are decisions, not obstacles, and a kill answers none of them.
+_EXIT_LIVE_ENGINE = 4
+
+
+def _terminate_for(query: str) -> dict:
+    """Re-read the chat NOW and kill its engine, on a person's word (--terminate-live).
+
+    Never from a pid carried in the refusal: liveness read a moment ago is not liveness, and
+    a stale pid may already belong to someone else's process. The kill goes on the attempt
+    ledger under its own kind, so the mutation trail says an engine was stopped deliberately
+    and by which flag."""
+    try:
+        match = hydralib.resolve_one(query)
+    except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
+        return {"stopped": False, "pid": None,
+                "why": f"could not re-read the chat to terminate it: {err}"}
+    if not match.get("live"):
+        return {"stopped": False, "pid": None, "why": "no live engine to terminate"}
+    sid = str(match.get("cliSessionId") or "")
+    stopped = enginelib.terminate_engine(match)
+    ledgerlib.note(
+        "terminate", sid,
+        note=(f"--terminate-live: pid {stopped.get('pid')} for '{match.get('title')}' - "
+              f"{'stopped' if stopped.get('stopped') else 'NOT stopped'}: "
+              f"{str(stopped.get('why') or '')[:120]}"))
+    return stopped
+
+
+def _attach_terminated(item: _Item) -> None:
+    """Put the terminate verdict on the payload the chat ended up with. Idempotent, because
+    a landed chat's payload is rebuilt after the finishing phases."""
+    if item.terminated is not None and item.payload:
+        item.payload["terminated"] = dict(item.terminated)
+
+
+def _move_one(query: str, passthrough: list[str], terminate_live: bool = False) -> _Item:
     """PHASE ONE for ONE chat: migrate_chat's own move_only() - resolve, gate, import, verify.
 
     Calls the same function main() calls, so this driver still cannot drift from the
     single-chat path: every gate, the import and the read-back verify are whatever
     migrate_chat says they are today. What it does NOT do is finish the move; the source
     settle and the permission stamp are run later, across the whole batch at once.
+
+    `terminate_live` (a person's word) answers exactly one refusal - a live engine, code 4 -
+    by killing that engine and running THE SAME MOVE AGAIN, every gate included, against a
+    chat that now has no writer. An unconfirmed kill leaves the refusal in place.
     """
     item = _Item(query)
     started = time.time()
     try:
         outcome = migrate_chat.move_only([query, *passthrough])
+        if (outcome.landing is None and terminate_live
+                and outcome.code == _EXIT_LIVE_ENGINE):
+            item.terminated = _terminate_for(query)
+            if item.terminated.get("stopped"):
+                outcome = migrate_chat.move_only([query, *passthrough])
     except Exception as err:  # a crash in one chat must not take the batch with it
         item.payload = _crash(query, err, started, "migrate")
+        _attach_terminated(item)
         return item
     if outcome.landing is not None:
         item.landing = outcome.landing
@@ -254,7 +335,73 @@ def _move_one(query: str, passthrough: list[str]) -> _Item:
     payload.setdefault("landed", False)
     payload["ok"] = outcome.code == 0 and bool(payload.get("landed"))
     item.payload = payload
+    _attach_terminated(item)
     return item
+
+
+def _resume_landed(items: list[_Item], text: str) -> dict:
+    """PHASE FOUR: tell every landed chat to carry on. Returns the batch-level tally.
+
+    A LANDED CHAT IS DORMANT. The import stops its engine and nothing wakes it, so a migrated
+    chat nobody types into just sits in its new sidebar - which is how seven chats were
+    "migrated" on 2026-09-06 and none of them was working until each was staged and couriered
+    by hand. Staging goes through stage_reply's own evidence rule, so the courier can still
+    prove it is typing into the right chat; delivery goes through the courier's HAND-RUN path
+    (a person's named rows: no tray icon, no fair-share cap). A chat whose engine booted on
+    landing and is mid-turn keeps its reply staged - the courier never interrupts a live turn -
+    and its result names the exact retry. Every chat's `resume` says which it was.
+    """
+    landed = [i for i in items if i.payload.get("landed") and i.payload.get("sessionId")]
+    tally = {"asked": len(landed), "delivered": 0, "staged": 0}
+    if not landed:
+        return tally
+    by_delivery: dict[str, _Item] = {}
+    for item in landed:
+        sid = str(item.payload["sessionId"])
+        try:
+            match = hydralib.resolve_one(sid)
+            evidence = stage_reply.gather_evidence(match, sid)
+            entry = deliverylib.stage(
+                sid, text,
+                title=str(match.get("title") or item.payload.get("title") or ""),
+                instance=str(match.get("instance") or item.payload.get("to") or ""),
+                evidence=evidence, by="migrate-resume")
+        except Exception as err:  # one chat's staging must not cost the others their resume
+            item.payload["resume"] = {
+                "staged": False, "delivered": False,
+                "why": f"staging raised {type(err).__name__}: {str(err)[:160]}"}
+            continue
+        by_delivery[entry["id"]] = item
+        item.payload["resume"] = {
+            "deliveryId": entry["id"], "staged": True, "delivered": False, "why": "",
+            "retry": f"python orch.py courier --yes --only {entry['id']}"}
+    if not by_delivery:
+        return tally
+    import courier  # local: the actuator libs it pulls in are no concern of a batch without --resume
+
+    try:
+        report = courier.run(len(by_delivery), set(by_delivery), act=True, hand_run=True)
+    except Exception as err:
+        for item in by_delivery.values():
+            item.payload["resume"]["why"] = (
+                f"the courier raised {type(err).__name__}: {str(err)[:160]}")
+        tally["staged"] = len(by_delivery)
+        return tally
+    outcome = {r.get("id"): r for r in report.get("results", [])}
+    skipped = {s.get("id"): s.get("why") for s in report.get("skipped", [])}
+    for did, item in by_delivery.items():
+        verdict = item.payload["resume"]
+        res = outcome.get(did)
+        if res and res.get("ok"):
+            verdict["delivered"] = True
+            verdict["why"] = str(res.get("outcome") or "delivered")
+            verdict.pop("retry", None)
+            tally["delivered"] += 1
+        else:
+            verdict["why"] = str(skipped.get(did) or (res or {}).get("detail")
+                               or (res or {}).get("outcome") or "not delivered - still staged")
+            tally["staged"] += 1
+    return tally
 
 
 def _finish_one(item: _Item) -> None:
@@ -380,6 +527,32 @@ def _report(results: list[dict], note: str, secs: float) -> str:
     for r in refused:
         why = (r.get("report") or "").splitlines()
         lines.append(f"  SKIP {r['chat']}: {(why[0] if why else 'refused')[:150]}")
+    # WHAT --terminate-live DID, chat by chat. A kill is the one act in this script that is
+    # not a move, so it is never folded into a move's line.
+    for r in results:
+        t = r.get("terminated")
+        if not t:
+            continue
+        title = r.get("title") or r["chat"]
+        if t.get("stopped"):
+            lines.append(f"  TERMINATED pid {t.get('pid')} for '{title}' on a person's word, "
+                         "then moved again")
+        else:
+            lines.append(f"  TERMINATE FAILED for '{title}': {str(t.get('why') or '')[:140]}")
+    # WHAT --resume DID. "Moved" and "told to carry on" are different facts; a chat that was
+    # moved and left dormant reads as done to anyone who only counts landings.
+    for r in results:
+        rs = r.get("resume")
+        if not rs:
+            continue
+        title = r.get("title") or r["chat"]
+        if rs.get("delivered"):
+            lines.append(f"  RESUME delivered -> {title}")
+        elif rs.get("staged"):
+            lines.append(f"  RESUME staged, NOT delivered -> {title}: "
+                         f"{str(rs.get('why') or '')[:120]} (retry: {rs.get('retry')})")
+        else:
+            lines.append(f"  RESUME NOT staged -> {title}: {str(rs.get('why') or '')[:140]}")
     if unfinished:
         lines.append("A LANDED-but-unfinished chat IS in its new account - do not re-move it; "
                      "finish its tidy-up (settle the source row / stamp the mode) by hand.")
@@ -432,8 +605,17 @@ def main(argv: list[str]) -> int:
 
     t0 = time.time()
     # PHASE ONE across every chat, then the finishing phases across every chat (_run_phases).
-    items = [_move_one(q, parsed.passthrough) for q in parsed.chats]
+    items = [_move_one(q, parsed.passthrough, terminate_live=parsed.terminate_live)
+             for q in parsed.chats]
     _run_phases(items)
+    # A landed chat's payload was just rebuilt by the finishing phases; put the terminate
+    # verdict back on it. (A refused chat already carries its own.)
+    for item in items:
+        _attach_terminated(item)
+    # PHASE FOUR, only on a real run: a dry run lands nothing, so there is nothing to wake.
+    resume = None
+    if parsed.resume_text and not parsed.dry_run:
+        resume = _resume_landed(items, parsed.resume_text)
     results = [i.payload for i in items]
     secs = time.time() - t0
 
@@ -458,6 +640,10 @@ def main(argv: list[str]) -> int:
         "results": results,
         "report": _report(results, note, secs),
     }
+    if resume is not None:
+        # The batch-level tally: `asked` landed chats were told to carry on, `delivered` of
+        # them took it, `staged` still hold the reply. Present only when --resume ran.
+        payload["resume"] = resume
     print(json.dumps(payload, indent=2) if parsed.as_json else payload["report"])
     if all_ok:
         return EXIT_OK

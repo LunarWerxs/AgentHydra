@@ -40,6 +40,45 @@ move_chat { chat: "...", to: 36, dry_run: true }                    # plan only,
 
 Read `report`; `landed` is the verdict, `timings` says where the seconds went.
 
+### Draining a whole account: move, terminate, resume - one call
+
+```
+move_chats { from: "Carlos", all_unarchived: true,
+             terminate_live: true,
+             resume: "MIGRATION NOTICE: you were moved to a fresh account because the old one
+                      was out of quota. Your engine was stopped mid-work, so re-run anything
+                      still in flight. Re-read your last message and carry on." }
+```
+
+What it replaced (2026-09-06, Carlos at 95% of its window and Martin at 88% of its week,
+seven chats to Eduardo): ~25 round trips and most of an hour. The four moves were fine; the
+rest was learning that a landed chat sits DORMANT until someone types into it, finding the
+`stage_reply` -> `courier` path, staging six prompts through a shell loop, parsing delivery
+ids out of JSON, six courier runs because `--only` took one id (two of them refused for the
+tray icon and the fair share first), then reading two working chats' pids out of a dry run,
+`taskkill` by hand, and moving again.
+
+- **`resume`** is phase four of the batch. Every landed chat gets the text staged as a reply
+  (stage_reply's own evidence rule, so the courier can still prove it is typing into the right
+  chat) and delivered through the courier's **named** path - a person's delivery, so no tray
+  icon and no fair-share cap (owner: "the fair share rule is just when you're auto managing;
+  I'm manually managing, it does not apply"). A chat whose engine booted on landing and is
+  mid-turn keeps its reply staged; its result carries `resume.retry`, the exact command. Read
+  each result's `resume` - a landed chat with `resume.delivered: false` is moved but has not
+  been told to carry on.
+- **`terminate_live`** is a person's word to KILL the engine of a chat refused for being alive
+  (working, or quiet but inside its window) and move it anyway. It is for the account that
+  will hit its wall before the turn ends - the turn dies there regardless, holding everything
+  it had not saved. The transcript survives; a tool result still in flight does not, so say so
+  in `resume`. `force` never implies it: `force` overrides a hold, nothing more. A hold or the
+  breaker is never killed through.
+- **Check the account first with `list_chats`**, not `list_sessions` (which missed one of
+  Martin's four chats behind its 7-day default) and not a dry-run move. If `list_chats` answers
+  with an HTML-instead-of-JSON error, the running daemon is older than the tool: rebuild and
+  restart it.
+- By hand, the same thing is `courier --yes --only <id> --only <id>` for the replies (several
+  ids, one run, no icon needed) and `migrate_batch ... --terminate-live --resume "..."`.
+
 ---
 
 Everything below was learned the hard way on 2026-08-28, moving 13 chats off an account

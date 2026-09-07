@@ -203,6 +203,48 @@ def stop_idle_engine(match: dict, min_quiet_secs: int = IDLE_STOP_SECS,
                    f"after {STOP_CONFIRM_SECS}s - not proceeding on an unconfirmed stop"}
 
 
+def terminate_engine(match: dict) -> dict:
+    """Stop the chat's engine WHETHER OR NOT IT IS IDLE, and confirm it is gone.
+
+    A PERSON'S WORD ONLY (migrate_batch --terminate-live; owner, 2026-09-06: "we need to
+    terminate and migrate the chats from Martin, we're way too close to hitting limits
+    there"). stop_idle_engine above is the unattended lane's rule and never touches a working
+    engine; this is the one deliberate exception, for draining an account NOW because letting
+    the turn finish would spend the last of its quota - and the turn would then die on the
+    usage wall anyway, holding everything it had not saved.
+
+    The transcript survives (the engine only appends to it), so a resumed chat carries on from
+    its own last words. What is lost is any tool result still in flight, and the caller is
+    expected to SAY SO in the resume prompt rather than let the chat wait on a job that will
+    never report back.
+
+    Same answer shape as stop_idle_engine, so a caller reads both through one door.
+    """
+    pid = (match.get("live") or {}).get("pid")
+    if not pid:
+        return {"stopped": False, "pid": None, "reason": R_IDLE,
+                "why": "no live engine to terminate"}
+    try:
+        clilib.run_text(["taskkill", "/PID", str(int(pid)), "/T", "/F"], timeout=30)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as err:
+        return {"stopped": False, "pid": pid, "reason": R_WORKING,
+                "why": f"taskkill failed: {err}"}
+    sid = match.get("cliSessionId") or match.get("sessionId") or ""
+    t0 = time.time()
+    while time.time() - t0 < STOP_CONFIRM_SECS:
+        try:
+            if not hydralib.live_for(sid):
+                return {"stopped": True, "pid": pid, "reason": R_IDLE,
+                        "why": f"terminated pid {pid} and its whole tree on a person's word",
+                        "confirmedSecs": round(time.time() - t0, 1)}
+        except hydralib.DaemonError:
+            pass  # a flaky read is not a confirmation either way - keep polling
+        time.sleep(1)
+    return {"stopped": False, "pid": pid, "reason": R_WORKING,
+            "why": f"taskkill was issued for pid {pid} but the daemon still lists the chat as live "
+                   f"after {STOP_CONFIRM_SECS}s - not proceeding on an unconfirmed stop"}
+
+
 # --- background work: the signal the 300s window was standing in for ---------------------
 #
 # The CLI reports a backgrounded job in the tool_result it hands the model, and reports the

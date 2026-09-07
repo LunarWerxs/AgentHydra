@@ -29,9 +29,14 @@ THE RAILS, in the order they are checked, because the order is the design:
 
 Usage: python courier.py                      # plan only: what would be delivered, and why
        python courier.py --yes [--max N]      # deliver (default cap 5 per run)
-       python courier.py --yes --only <id>    # one specific staged reply
-       (--cap-exempt: with --only, skip the machine-wide running cap - the overlord
-        watchdog's wake only, because a system at its cap with a dead manager stays dead)
+       python courier.py --yes --only <id> [--only <id> ...]   # NAMED replies, BY HAND
+       (--only is a PERSON's delivery, and takes several ids - repeated, or one comma list.
+        A named delivery needs no tray icon and skips the fair-share and machine-wide caps:
+        those exist to stop the UNATTENDED lanes hogging an account, and a person naming a
+        row is not the machinery (owner, 2026-09-06: "the fair share rule is just when
+        you're orchestrating, aka auto managing; I'm manually managing, it does not apply").
+        The usage-band gate stays: an account past its limit is not made affordable by a
+        person being in a hurry. --cap-exempt is kept as a spelling of the same thing.)
 Exit:  0 everything attempted was delivered and confirmed (or nothing to do) - 2 something was
        skipped or did not land (each named) - 1 daemon failure before acting.
 """
@@ -477,20 +482,32 @@ def _verify_of(report: dict, delivery_id: str) -> str:
     return ""
 
 
-def run(max_deliveries: int, only: str | None, act: bool, running_now: int | None = None,
-        cap_exempt: bool = False) -> dict:
+def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
+        running_now: int | None = None, cap_exempt: bool = False,
+        hand_run: bool = False) -> dict:
+    """Plan (and with `act`, deliver) the staged replies.
+
+    `only` names the rows: one id, or a set of them. `hand_run` says a PERSON named them
+    (courier --only; migrate_batch --resume): every named row is meant, so the per-run cap
+    stretches to fit them, and the two machinery caps - the machine-wide running cap and the
+    per-account share - are off. Those exist so the UNATTENDED lanes cannot hog an account,
+    and a person naming a row is not the machinery (owner, 2026-09-06). The usage-band gate
+    in deliverable() is NOT a machinery cap and stays on for everyone."""
     queue = deliverylib.pending()
     if only:
-        queue = [e for e in queue if e["id"] == only]
+        wanted = {only} if isinstance(only, str) else set(only)
+        queue = [e for e in queue if e["id"] in wanted]
+        if hand_run:
+            max_deliveries = max(max_deliveries, len(wanted))
     planned, skipped, results = [], [], []
     if queue:
         # THE MACHINE-WIDE CAP (hydralib.MAX_RUNNING_CHATS): every delivery can wake a chat,
         # so deliveries beyond the cap DEFER - they stay staged and the next 5-minute cycle
         # retries them, which is the owner's round robin. `running_now` lets sweep hand in
         # the count its plan already measured; standalone runs count fresh.
-        if cap_exempt and only:
+        if (cap_exempt or hand_run) and only:
             running_now = running_now if running_now is not None else -1
-            allowed_new = len(queue)  # the manager's wake (docstring); single --only rows only
+            allowed_new = len(queue)  # the manager's wake (docstring), or a person's named rows
         else:
             if running_now is None:
                 running_now = hydralib.running_count()
@@ -512,7 +529,11 @@ def run(max_deliveries: int, only: str | None, act: bool, running_now: int | Non
             live_ids, per_instance = None, None
         open_accounts = len({str(i.get("name")) for i in hydralib.fleet().get("instances", [])
                              if i.get("isRunning")})
-        share = bandlib.per_account_share(open_accounts, hydralib.MAX_RUNNING_CHATS)
+        # THE SHARE IS A RULE FOR THE MACHINERY, not for a person naming rows (owner,
+        # 2026-09-06: "the fair share rule is just when you're auto managing"). A hand-run
+        # carries no share, so deliverable()'s per-account gate stays quiet for it.
+        share = (None if hand_run
+                 else bandlib.per_account_share(open_accounts, hydralib.MAX_RUNNING_CHATS))
         # THE SHARE IS COUNTED FORWARD (review 2026-09-01, the same shape saturate's planner
         # already had). The snapshot says what runs NOW; each dormant wake this loop plans
         # adds a runner the snapshot cannot see, so three staged replies for one account at
@@ -652,9 +673,34 @@ def run(max_deliveries: int, only: str | None, act: bool, running_now: int | Non
 class _Args:
     as_json: bool
     act: bool
-    only: str | None
+    only: set[str] | None
     cap: int
     cap_exempt: bool
+    hand_run: bool = False
+
+
+def _parse_only(argv: list[str]) -> "set[str] | None | int":
+    """Every --only value - repeated, or one comma-separated list - as one set. None when the
+    flag is absent; 2 (a usage error) for a dangling --only.
+
+    SEVERAL IDS IN ONE RUN IS THE POINT (2026-09-06): six staged resume prompts meant six
+    courier runs, each a cold interpreter re-paying the fleet, session and usage-survey reads
+    for an answer that did not change between them - the same shape migrate_batch exists to
+    end for moves."""
+    ids: set[str] = set()
+    seen = False
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--only":
+            seen = True
+            if i + 1 >= len(argv) or argv[i + 1].startswith("--"):
+                print(__doc__.strip(), file=sys.stderr)
+                return 2
+            ids.update(p.strip() for p in argv[i + 1].split(",") if p.strip())
+            i += 2
+            continue
+        i += 1
+    return ids if seen else None
 
 
 def _parse_args(argv: list[str]) -> "_Args | int":
@@ -662,24 +708,28 @@ def _parse_args(argv: list[str]) -> "_Args | int":
     must end the run (a malformed --only)."""
     as_json = "--json" in argv
     act = "--yes" in argv
+    only = _parse_only(argv)
+    if isinstance(only, int):
+        return only
+    # A NAMED DELIVERY IS A PERSON'S ACT (owner, 2026-09-06: "the fair share rule is just when
+    # you're orchestrating, aka auto managing; I'm manually managing, it does not apply").
+    # --only is how a human says "this row, now" - the same shape as migrate_chat's hand-run
+    # exception - so it needs neither the tray icon nor the caps that keep the UNATTENDED
+    # lanes from hogging an account. What it does NOT step around is the usage-band gate in
+    # deliverable(): an account past its limit is not made affordable by a person in a hurry.
+    hand_run = bool(only)
     # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
     # window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so.
-    if act:
+    if act and not hand_run:
         refusal = armlib.refuse_unless_armed(argv, "delivering staged replies")
         if refusal:
             print(refusal)
             act = False
-    only = None
-    if "--only" in argv:
-        i = argv.index("--only")
-        if i + 1 >= len(argv):
-            print(__doc__.strip(), file=sys.stderr)
-            return 2
-        only = argv[i + 1]
     cap = DEFAULT_MAX
     if "--max" in argv:
         cap = int(argv[argv.index("--max") + 1])
-    return _Args(as_json=as_json, act=act, only=only, cap=cap, cap_exempt="--cap-exempt" in argv)
+    return _Args(as_json=as_json, act=act, only=only, cap=cap,
+                 cap_exempt="--cap-exempt" in argv or hand_run, hand_run=hand_run)
 
 
 def _print_placeholder_warning(report: dict) -> None:
@@ -740,7 +790,8 @@ def main(argv: list[str]) -> int:
         return parsed
 
     try:
-        report = run(parsed.cap, parsed.only, parsed.act, cap_exempt=parsed.cap_exempt)
+        report = run(parsed.cap, parsed.only, parsed.act, cap_exempt=parsed.cap_exempt,
+                     hand_run=parsed.hand_run)
     except hydralib.DaemonError as err:
         print(f"courier FAILED before acting: {err}", file=sys.stderr)
         return 1

@@ -179,10 +179,14 @@ def _resolve_target(query: str) -> tuple[dict | None, int]:
         return None, 1
 
 
-def _gather_evidence(match: dict, sid: str) -> str:
+def gather_evidence(match: dict, sid: str) -> str:
     """What this chat actually last said, pulled from the gate rather than typed by hand,
     so the verify snippet provably comes from THIS chat. Falls back to the raw transcript
-    for a chat mid-turn or stalled (see last_rendered_text)."""
+    for a chat mid-turn or stalled (see last_rendered_text).
+
+    Public because migrate_batch --resume stages a reply against every chat it lands, and
+    the evidence rule must be THIS one - a second copy would be a second place for the
+    limit-banner trap below to be forgotten."""
     verdict = gatelib.gate_match(match, hydralib.session_row)
     evidence = ""
     if verdict:
@@ -199,6 +203,11 @@ def _gather_evidence(match: dict, sid: str) -> str:
     return evidence
 
 
+#: The name this had while it was private; kept so an older caller (and the courier tests
+#: that pin the limit-banner trap through it) keep working.
+_gather_evidence = gather_evidence
+
+
 def _run_stage(query: str, text: str, by: str | None, as_json: bool) -> int:
     """Resolve the target chat, gather its evidence, and stage the reply against it."""
     match, code = _resolve_target(query)
@@ -206,7 +215,7 @@ def _run_stage(query: str, text: str, by: str | None, as_json: bool) -> int:
         return code
 
     sid = match.get("cliSessionId") or ""
-    evidence = _gather_evidence(match, sid)
+    evidence = gather_evidence(match, sid)
 
     entry = deliverylib.stage(
         sid, text, title=match.get("title") or "", instance=match.get("instance") or "",
