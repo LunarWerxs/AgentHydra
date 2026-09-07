@@ -101,7 +101,8 @@ import { jsonBody } from './route-helpers'
 import { warmSessionScanCache } from './sessions'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
 import { resolveEditor } from './transcript-open'
-import { startTrayHostIfMissing } from './tray-host'
+import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
+import { startTrayInvariant } from './tray-invariant'
 import { updateProgress } from './update-progress'
 import { applyUpdate, checkForUpdate } from './updater'
 import { getUsageSettings, setUsageSettings, startUsageRefresh } from './usage-refresh'
@@ -795,6 +796,35 @@ void startTrayHostIfMissing({
       console.log(`[agenthydra] tray host not started: ${r.reason}`)
   })
   .catch((err) => console.error('[agenthydra] tray host start failed:', err))
+// ⛔ AND KEEP IT TRUE, not just true at boot (owner, 2026-09-07: "AgentHydra can never run unless
+// it shows up in the status bar ... Not allowed"). The call above is a one-shot: kill the tray
+// afterwards and this daemon carries on headless forever - still answering on its port, still
+// migrating chats and driving windows, with nothing on screen to say it is alive or to stop it.
+// That exact state was found and killed by hand that night, on an app the owner had already
+// closed. The invariant below re-checks on a timer and, if the icon cannot be brought back, shuts
+// the daemon down: an invisible daemon that still acts is worse than no daemon at all. Every
+// ambiguity resolves towards staying alive - see tray-invariant.ts.
+startTrayInvariant({
+  compiled: IS_COMPILED,
+  hasTrayToolkit: existsSync(join(APP_ROOT, 'misc')),
+  hideTray: hideTrayIconEnabled,
+  trayRunning: trayHostRunning,
+  restartTray: async () => {
+    await startTrayHostIfMissing({
+      appRoot: APP_ROOT,
+      compiled: IS_COMPILED,
+      hideTray: hideTrayIconEnabled,
+    })
+  },
+  graceMs: 5_000,
+  wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+  shutdown: () => {
+    clearInstanceInfo()
+    stopAutoUpdate()
+    process.exit(0)
+  },
+  log: (m) => console.log(m),
+})
 // Clear any stale full-shutdown sentinel left by a previous (possibly hard-killed) run, so a
 // leftover file can't make the tray quit the instant it next polls. The tray clears it at its own
 // startup too; this covers a daemon started without the tray (dev).
