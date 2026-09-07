@@ -57,14 +57,37 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A crashed orchestrator run no longer blocks every retry forever** (`server/src/orchestrator.ts`,
+  `server/tests/orchestrator-stale-lock.test.ts`). The daemon-side `inFlight` map held only a start
+  time, and the `finally` that clears it runs on every normal path - so the one way an entry could
+  survive was a spawn promise that never settles, and then the lock was **immortal**, because
+  nothing else ever removed it. Measured 2026-09-07: a `migrate_batch` died with no python process
+  left anywhere on the machine, and the retry still returned `409 already running (started 85s
+  ago)`. That is the worst shape a lock can take - it turns a CRASH into a HANG, reports a dead run
+  as healthy, and the caller believes it. An entry now carries a `deadline` of its own
+  `timeoutMs` plus a 60s grace, which is a fact rather than a heuristic: `realSpawn` enforces that
+  timeout by killing the child, so a lock outliving it cannot have a live run behind it. Past the
+  deadline the entry is reaped and its kill switch fired defensively first; `orchestratorBusy()`
+  reaps too, so an immortal lock cannot wedge an update either. **Releasing is now an identity
+  check, not a name check** - once a lock can be replaced, an abandoned promise settling late would
+  otherwise delete the SUCCESSOR's entry and hand out the concurrent acting pass this map exists to
+  prevent. Four tests, verified to fail (3 of 4, including the successor case) against the old
+  never-reap behaviour before being accepted.
+
 - **The permission-mode confirmation is hunted in every window the app owns, not just its main
-  one** (`orchestrator/scripts/actuator/approve_prompt.ps1`). Switching a chat to bypass raises an
-  acceptance dialog, and that dialog is an OWNED TOP-LEVEL WINDOW with its own HWND - so a scan
-  rooted at `MainWindowHandle` could never reach it however long it polled. Two migrations landed
-  `disk-only` and the owner clicked Confirm by hand both times. The diagnostic hid the cause: its
-  "buttons on screen" list scanned the same main window, so it printed the frame's own
-  Minimize/Maximize and read as "no dialog appeared", sending two investigations at dialog timing
-  instead of at the search root. `Get-ProcRoots` now returns the main window plus every visible
+  one** (`orchestrator/scripts/actuator/approve_prompt.ps1`). ⚠ **This did NOT fix the by-hand
+  clicking, and the commit that landed it claimed a root cause that was wrong.** The real cause,
+  measured separately the same day, is the background-window swallow now documented in that
+  script's header: `Press-Space` posts its key at the render widget, a BACKGROUND window never
+  opens the picker menu at all, and `Press-Space` returned `$true` regardless because it only
+  ever checked that `PostMessage` was called - so the confirm hunt found nothing to click because
+  **there was never a dialog** (background = 0 picker items, foreground = 5, on one live window).
+  What is retained here is a narrower, still-true improvement: the hunt and its diagnostic no
+  longer assume a dialog must be a descendant of `MainWindowHandle`. The old diagnostic scanned
+  only the main window, so its "buttons on screen" list printed the frame's own Minimize/Maximize
+  and read as "no dialog appeared" - which is equally consistent with "looking in the wrong place"
+  and with "nothing was ever raised", and that ambiguity is what sent the investigation at the
+  search root instead of at focus. `Get-ProcRoots` now returns the main window plus every visible
   top-level window of the same process, used in all three places - the pre-invoke RuntimeId
   snapshot, the confirm poll, and the diagnostic (buttons outside the main window are tagged
   `[dialog]`). Nothing widens about WHAT may be pressed: `DENY_NAMES` is still never pressed and
@@ -74,8 +97,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   a separate dialog's button to sit right of the pane would reject the very button wanted.
   `Get-ProcRoots` is deliberately defined above its first caller: PowerShell binds functions as
   the script runs, and a definition further down left the snapshot call in its `catch{}` with an
-  EMPTY set, silently disarming must-be-new. Not yet exercised against a live dialog - proving it
-  needs a real mode change that raises one.
+  EMPTY set, silently disarming must-be-new. Not yet exercised against a live dialog - and with
+  the foreground fix in place the dialog now appears where the old code was already looking, so
+  this widening is defence against a shape that has not yet been observed, not a proven path.
 
 - **The window actuators aim by identity, never by substring or position** (every
   `orchestrator/scripts/actuator/*.ps1`, plus `spawn_chat.py` and `migrate_chat.py`), after the

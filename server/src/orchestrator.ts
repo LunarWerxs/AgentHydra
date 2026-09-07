@@ -76,12 +76,52 @@ const DRIVER_WORDS = new Set(['loop', 'arm', 'resume', 'pause', 'disarm', 'armed
 
 /** One run per script name at a time. The scripts carry their own locks for what must never
  *  overlap (a window, a lane's lockfile); this is the daemon-side backstop so two callers cannot
- *  start the same acting pass twice through this route. Different scripts may overlap. */
-const inFlight = new Map<string, number>()
+ *  start the same acting pass twice through this route. Different scripts may overlap.
+ *
+ *  ⛔ AND THE ENTRY MUST BE ABLE TO GO STALE (owner, 2026-09-07). The `finally` below deletes it
+ *  on every normal path, so the only way one survives is a spawn promise that never settles -
+ *  and then the lock is IMMORTAL, because nothing else ever removes it. Measured that day: a
+ *  migrate_batch died with no python process left anywhere on the machine, and the retry came
+ *  back `409 already running (started 85s ago)`. That is the worst shape a lock can take - it
+ *  turns a CRASH into a HANG, reports a dead run as healthy, and the caller believes it (this
+ *  one did, and told the owner the migration was progressing while nothing moved).
+ *
+ *  `deadline` settles it with a fact rather than a heuristic: every invocation carries a hard
+ *  `timeoutMs` that realSpawn enforces by killing the child, so a lock that outlives its own
+ *  timeout cannot have a live run behind it. `kill` is kept so a stale entry can also put down
+ *  anything that somehow outlived its deadline before the next run starts. */
+interface InFlightRun {
+  started: number
+  /** started + that run's own timeoutMs + grace. Past this, the entry is provably orphaned. */
+  deadline: number
+  /** realSpawn's kill switch, used defensively when reaping a stale entry. */
+  kill?: () => void
+}
+const inFlight = new Map<string, InFlightRun>()
+
+/** Grace on top of a run's own timeout before its lock is treated as orphaned. Covers the gap
+ *  between realSpawn's kill and its promise settling; deliberately generous, because reaping a
+ *  lock that IS live would let two acting passes overlap - the exact thing this map prevents. */
+const STALE_LOCK_GRACE_MS = 60_000
+
+/** The live entry for `script`, reaping it first if it is provably orphaned. Every reader goes
+ *  through here, so no caller can mistake a dead lock for a live one. */
+function liveRun(script: string): InFlightRun | null {
+  const run = inFlight.get(script)
+  if (!run) return null
+  if (Date.now() < run.deadline) return run
+  try {
+    run.kill?.()
+  } catch {}
+  inFlight.delete(script)
+  return null
+}
 
 /** Is any toolbox script running through this daemon right now? The compiled updater asks
- *  before it replaces orchestrator/ (audit AH-08). */
+ *  before it replaces orchestrator/ (audit AH-08). Reaps stale entries first - an immortal lock
+ *  must not block an update forever either. */
 export function orchestratorBusy(): boolean {
+  for (const script of [...inFlight.keys()]) liveRun(script)
   return inFlight.size > 0
 }
 
@@ -608,17 +648,25 @@ export async function runOrchestrator(
     }
   const command = [deps.python ?? pythonBinary(), 'orch.py', script, ...args]
   const spawn = deps.spawn ?? realSpawn
-  const since = inFlight.get(script)
-  if (since != null)
+  const running = liveRun(script)
+  if (running)
     return {
       ok: false,
       busy: true,
-      error: `${script} is already running through this route (started ${Math.round((Date.now() - since) / 1000)}s ago) - wait for it rather than starting a second one`,
+      error: `${script} is already running through this route (started ${Math.round((Date.now() - running.started) / 1000)}s ago) - wait for it rather than starting a second one`,
     }
   const started = Date.now()
-  inFlight.set(script, started)
+  const entry: InFlightRun = { started, deadline: started + timeoutMs + STALE_LOCK_GRACE_MS }
+  inFlight.set(script, entry)
   try {
-    const r = await spawn(command, dir, timeoutMs, { onProcess: deps.onProcess })
+    const r = await spawn(command, dir, timeoutMs, {
+      // Keep this run's kill switch on its own lock entry, so a later caller that finds the
+      // entry orphaned can put down a child that outlived its deadline before starting afresh.
+      onProcess: (kill) => {
+        entry.kill = kill
+        deps.onProcess?.(kill)
+      },
+    })
     return {
       ok: r.code === 0 && !r.timedOut,
       script,
@@ -638,7 +686,11 @@ export async function runOrchestrator(
       error: `could not start ${command[0]}: ${e instanceof Error ? e.message : String(e)}`,
     }
   } finally {
-    inFlight.delete(script)
+    // ⛔ ONLY IF THE MAP STILL HOLDS *THIS* RUN. Once a lock can be reaped as stale, a later run
+    // may already own the key by the time an abandoned promise finally settles, and an
+    // unconditional delete would release ITS lock - handing a second caller a concurrent acting
+    // pass, which is the one thing this map exists to prevent. Identity check, not a name check.
+    if (inFlight.get(script) === entry) inFlight.delete(script)
   }
 }
 
