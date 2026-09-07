@@ -57,6 +57,47 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **The permission picker never opened on a window that was minimized or not in front, so a chat
+  that moved accounts had to have "Bypass permissions" clicked by hand**
+  (`orchestrator/scripts/actuator/approve_prompt.ps1`). `Press-Space` posts `WM_KEYDOWN`/`WM_KEYUP`
+  straight at the render widget; such a window drops the key with no error, and the function
+  returned true anyway because all it checked was that `PostMessage` had been called. Measured on
+  one live window with the picker forced closed and verified closed before each attempt:
+  **minimized 0/2, background 1/2, foreground 2/2**. Background is a coin flip because UIA
+  `SetFocus()` only sometimes activates the window as a side effect - which is why this read as
+  intermittent rather than broken, and why an earlier fix went after a confirmation dialog that
+  was never the problem (the dialog is raised BY the menu, and the menu was not opening). The
+  window is now restored and activated once, before the first read of the accessibility tree
+  rather than at the keypress - doing it at the keypress still failed one rail earlier, on
+  `selected the row but the pane still does not show '<title>'` - and the previous foreground
+  window is handed back on every exit path. Only a by-hand act reaches this: the picker stays
+  gated behind `--force` and the fleet pass behind the tray icon, so no background lane pulls a
+  window onto your screen.
+- **A chat sitting in "Auto" or "Manual" could never be moved to bypass at all.** The composer
+  button is matched against a name list that had gone stale: the app renders Auto / Manual /
+  Accept edits / Plan / Bypass permissions, while the list carried three names that exist nowhere
+  in the app and still called Plan "Plan mode". A non-matching chat reported "no permission picker
+  is showing".
+- **"opened the picker but no item appeared" was printed for a picker that had never opened**,
+  which sent two separate investigations after an imaginary locale/label problem. The two failures
+  are now told apart and named, and the never-opened branch says so explicitly.
+- **`manage_desktop_chat.ps1` had the same defect, with two confidently wrong diagnoses.** Against
+  a minimized window the kebab hunt reported `not rendered in any searched running instance
+  (collapsed group or virtualized out)` and the archive path reported an EMPTY `menu opened but no
+  'Archive' item matched a known label. Menu showed: .` - neither naming the real cause. It now
+  restores and activates before searching (`-List` stays passive and never pulls a window
+  forward), and the header no longer promises "zero focus theft", because that promise was costing
+  correctness. `chip.ps1` carried a byte-for-byte copy of the broken `Press-Space` and is fixed the
+  same way.
+- **`automation_chat.py` reported `APP-CONFIRMED via its own picker` for runs whose picker had
+  just REFUSED**, quoting the refusal inside the confirmation. It computed the verdict from
+  `state/mode-confirmed.json` - a persistent ledger answering "has this chat ever been confirmed" -
+  *after* driving the picker, so any chat confirmed once claimed confirmation forever. A verdict
+  about this run now comes from this run, via an allow-list of the actuator's success lines so that
+  a new failure string reads as not-confirmed rather than silently as success; the ledger is
+  consulted only when no picker ran. Verified live from a fully minimized window: 5/5 mode flips
+  both directions, the archive and rename paths, and the full `--force` chain.
+
 - **The "Bypass all permissions?" popup is finally clicked - it was an in-page modal all along**
   (`orchestrator/scripts/actuator/approve_prompt.ps1`). Every previous fix here assumed the
   confirmation owned its own top-level HWND. Measured live 2026-09-07: it does not. It renders as a
