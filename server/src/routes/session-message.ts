@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { APP_ROOT } from '../config'
 import { app } from '../http-app'
 import { findTranscriptById } from '../live-registry'
 import { samePathKey } from '../path-key'
@@ -173,7 +174,11 @@ app.post('/api/sessions/:id/message', async (c) => {
     )
 
   const { spawnSync } = await import('node:child_process')
-  const actuator = join(process.cwd(), 'misc', 'Deliver-DesktopChat.ps1')
+  // APP_ROOT, never process.cwd(): the daemon's working directory is wherever it was
+  // started from (a daemon launched in server/ looked for server/misc/ and every delivery
+  // failed with 'delivery actuator missing'), and APP_ROOT is also what makes this resolve
+  // beside the executable in a compiled bundle.
+  const actuator = join(APP_ROOT, 'misc', 'Deliver-DesktopChat.ps1')
   if (!existsSync(actuator))
     return c.json({ ok: false, error: `delivery actuator missing at ${actuator}` }, 500)
   const type = () =>

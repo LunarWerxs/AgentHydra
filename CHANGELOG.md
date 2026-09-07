@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-09-07
+
 ### Added
 
 - **The Instances toolbar's "Usage filter" is now just "Filter", and it asks three questions
@@ -57,6 +59,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Every reply the courier tried to deliver failed with "delivery actuator missing"**
+  (`server/src/routes/session-message.ts`). The message endpoint resolved its PowerShell actuator
+  from `process.cwd()`, which is wherever the daemon happened to be started, not where the file
+  is: a daemon launched in `server/` looked for `server/misc/Deliver-DesktopChat.ps1` and refused
+  every delivery. It resolves from `APP_ROOT` now, like the rest of the codebase's `misc/` lookups,
+  which is also what makes it land beside the executable in a compiled bundle. Found when a batch
+  move's `resume` notes staged and then could not be delivered.
+- **The tray-invariant poll could take the whole daemon down, and the guardrail that exists to
+  catch exactly that could not see it** (`server/src/tray-invariant.ts`). Its tick was an arrow
+  assigned to a const, so `timer-callback-can-kill-the-daemon` - which only reads `function NAME()`
+  declarations - fell through to "unguarded" and gated CI red on `main`. The tick is a declaration
+  whose body opens with `try` now, so the protection is one the check can actually verify rather
+  than one it has to take on trust; the overlap guard keeps its old meaning, with `running` still
+  cleared only by the tick that set it.
 - **The permission picker never opened on a window that was minimized or not in front, so a chat
   that moved accounts had to have "Bypass permissions" clicked by hand**
   (`orchestrator/scripts/actuator/approve_prompt.ps1`). `Press-Space` posts `WM_KEYDOWN`/`WM_KEYUP`

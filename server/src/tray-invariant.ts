@@ -84,15 +84,21 @@ export function startTrayInvariant(
   everyMs = 30_000,
 ): { stop: () => void } {
   let running = false
-  const tick = async () => {
-    if (running) return // never overlap: the grace wait makes a tick outlast a short interval
-    running = true
+  // A function DECLARATION whose body opens with `try`, not an arrow const: that is the shape
+  // timer-callback-can-kill-the-daemon.mjs can actually verify, and the guarantee it buys - a
+  // failed tick is a tick SKIPPED - is the one this daemon needs, since an escaping rejection
+  // reaches the unhandledRejection handler and exits the process.
+  async function tick() {
     try {
-      await checkTrayInvariant(deps)
+      if (running) return // never overlap: the grace wait makes a tick outlast a short interval
+      running = true
+      try {
+        await checkTrayInvariant(deps)
+      } finally {
+        running = false // only ever cleared by the tick that set it
+      }
     } catch (e) {
       deps.log?.(`[agenthydra] tray invariant tick failed: ${e instanceof Error ? e.message : e}`)
-    } finally {
-      running = false
     }
   }
   const timer = setInterval(tick, everyMs)
