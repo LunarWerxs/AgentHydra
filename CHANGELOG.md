@@ -7,8 +7,6 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-## [0.40.0] - 2026-09-07
-
 ### Added
 
 - **AgentHydra registers itself as an MCP server with Claude Code, on by default**
@@ -34,6 +32,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   check and abandoned rather than allowed to clobber a concurrent one. Turning the switch off
   removes the entry; the panel shows what the config file actually says, not merely what the switch
   says, because a read-only file or a hand-written entry can make the two disagree.
+
 - **A row's ⋮ menu lists the chats on that account** (`web/src/components/InstancesView.vue`,
   `getInstanceChats` in `web/src/lib/api.ts`). "Chats" opens a dialog naming every chat the account
   holds: title, project, when it was last active, and whether an engine is running in it right now,
@@ -45,22 +44,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   empty, which is the one wrong answer this panel must never give. A chat with a CLI transcript
   opens in Sessions; one without has no button rather than a broken one.
 
-- **The Instances toolbar's "Usage filter" is now just "Filter", and it asks three questions
-  instead of one** (`web/src/lib/instance-filter.ts`, `web/src/composables/useInstanceFilter.ts`,
-  `web/src/components/InstanceFilterMenu.vue`). Alongside the two quota windows it now filters by
-  STATUS (open / closed) and by PLAN (Max 20×, Pro, Free, … - the list is built from the accounts
-  actually on screen, so it names your plans rather than a guessed catalogue). The three facets are
-  OR-ed: picking two narrows the tables rather than cancelling out. Both new facets are true
-  whichever columns are showing, so the button no longer appears only in usage mode - only the
-  QUOTA half stands down with the percentages it measures, and the flyout says so in place rather
-  than silently ceasing to apply. Existing settings are untouched: the storage keys keep their
-  `usageFilter` spelling (a preference key is a wire format, not a label), status defaults to
-  "any" and no plan is picked, so an upgraded install filters exactly as it did.
-- **A row whose fact is not KNOWN is never filtered out.** An unlinked CLI login has no window to
-  be open or closed and no account record of its own, and a desktop instance's plan arrives a beat
-  after its row does. Both were already the rule for an unread quota reading; extending it is what
-  stops rows blinking out of the table and back on every refresh, and what stops "show me the open
-  ones" emptying the CLI table. The Codex table joins the filter on the same terms.
+### Changed
+
+- **"Move all chats to another account" is now "Move chats to account"**
+  (`web/src/i18n/locales/en/instances.ts`). It was a sentence, and it sits one line below the new
+  "Chats" item. The long form made the two look unrelated when they are the two things you do with
+  an account's chats. The submenu names the destination, so the label does not have to.
 
 ### Fixed
 
@@ -84,11 +73,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   could never converge. On Windows alone, an install with NO components at all is left alone, being
   the bare single-file `.exe` rather than a damaged bundle; Unix publishes only tarballs, which
   always carry `orchestrator/`, so there a missing folder is unambiguously damage.
+
 - **The MCP docs no longer hand a release user an instruction that cannot work**
   (`docs/REFERENCE.md`). The section now leads with the automatic registration and the HTTP
   transport, keeps the manual `claude mcp add` for anyone who turns the automatic one off, and says
   out loud that moving chats needs the Python toolbox beside the executable, the dependency that
   made a working MCP server look broken.
+
 - **`/api/chats?instance=` answers for the regular Claude Desktop install** (`chatStoreLabel` in
   `server/src/routes/sessions.ts`). The route mapped an instance to its chat-store label with
   `basename()`, which is right for every isolated instance and wrong for the one everybody has:
@@ -97,12 +88,29 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   people are using, which reads as "that account does not exist". Found by review before the new
   Chats dialog shipped on top of it.
 
+## [0.40.0] - 2026-09-07
+
+### Added
+
+- **The Instances toolbar's "Usage filter" is now just "Filter", and it asks three questions
+  instead of one** (`web/src/lib/instance-filter.ts`, `web/src/composables/useInstanceFilter.ts`,
+  `web/src/components/InstanceFilterMenu.vue`). Alongside the two quota windows it now filters by
+  STATUS (open / closed) and by PLAN (Max 20×, Pro, Free, … - the list is built from the accounts
+  actually on screen, so it names your plans rather than a guessed catalogue). The three facets are
+  OR-ed: picking two narrows the tables rather than cancelling out. Both new facets are true
+  whichever columns are showing, so the button no longer appears only in usage mode - only the
+  QUOTA half stands down with the percentages it measures, and the flyout says so in place rather
+  than silently ceasing to apply. Existing settings are untouched: the storage keys keep their
+  `usageFilter` spelling (a preference key is a wire format, not a label), status defaults to
+  "any" and no plan is picked, so an upgraded install filters exactly as it did.
+- **A row whose fact is not KNOWN is never filtered out.** An unlinked CLI login has no window to
+  be open or closed and no account record of its own, and a desktop instance's plan arrives a beat
+  after its row does. Both were already the rule for an unread quota reading; extending it is what
+  stops rows blinking out of the table and back on every refresh, and what stops "show me the open
+  ones" emptying the CLI table. The Codex table joins the filter on the same terms.
+
 ### Changed
 
-- **"Move all chats to another account" is now "Move chats to account"**
-  (`web/src/i18n/locales/en/instances.ts`). It was a sentence, and it sits one line below the new
-  "Chats" item. The long form made the two look unrelated when they are the two things you do with
-  an account's chats. The submenu names the destination, so the label does not have to.
 - **The two 5-hour quota cells are grey now; colour is spent on the weekly ones**
   (`web/src/components/UsageBar.vue`, `UsageBadge.vue`). A usage-mode row carried four coloured
   cells, and four hues side by side average out to "busy" - the eye had to read each one to find
