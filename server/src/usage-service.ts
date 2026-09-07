@@ -217,14 +217,28 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // The server's own words FIRST (see usage-api.ts), plus the retry window when it gave one. Both,
   // because they answer different questions: the text says WHAT limit was hit, the window says
   // when it lifts, and showing only the window is what let "429" get read as "you clicked too much".
-  // Only report an endpoint's answer when this account HAS a credential - otherwise the detail is
-  // describing a request that was never sent.
+  // ⛔ THE 429 THAT IS NOT A RATE LIMIT (measured across seven instances, 2026-09-07).
+  //
+  // A desktop profile can hold two inference-capable grants: the short-lived Claude Code SESSION
+  // grant (scopes include `user:sessions:claude_code`, ~1 month), and a long-lived general one
+  // (~1 year, no session scope). The usage endpoint answers 429 to a profile that has ONLY the
+  // session grant, and does so indefinitely - one account here read nothing for twelve days.
+  // Correlation was exact: all six instances that read fine hold both grants; the one that never
+  // could holds only the session grant.
+  //
+  // This is why signing in again does not help, and why it is so misleading: the desktop login
+  // issues exactly the credential the profile already had, Claude itself works perfectly on it
+  // (that grant is what Claude needs), and only the usage read is refused. Saying "rate limited"
+  // to that sends someone to wait for a window that never opens.
+  const sessionGrantOnly = !!grant?.scopes?.includes('user:sessions:claude_code')
   const detail = !grant
     ? 'no usable login found for this instance - nothing was asked of Anthropic'
     : apiFail
-      ? apiFail.status === 429 && apiFail.retryAfterSec
-        ? `${apiFail.error} (retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min)`
-        : apiFail.error
+      ? apiFail.status === 429 && sessionGrantOnly
+        ? 'this profile holds only the Claude Code session credential, which the usage endpoint refuses (429). Signing in again reissues the same one - the accounts that report usage also hold a long-lived token.'
+        : apiFail.status === 429 && apiFail.retryAfterSec
+          ? `${apiFail.error} (retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min)`
+          : apiFail.error
       : undefined
   return { snapshot, cached: false, key, reason, detail, advice: usageAdvice(snapshot) }
 }
