@@ -1,8 +1,9 @@
 // server/src/path-key.ts - THE comparison key for path-shaped strings (consolidation pass,
 // 2026-08-29). Four modules grew private copies of "unify slashes, trim trailing, maybe fold
 // case" in one day - and two of the day's review-confirmed bugs were exactly this helper done
-// slightly differently (fleet-git's unconditional lowercase vanishing a repo on case-sensitive
-// filesystems; session-launch's missing slash-unify reading a RUNNING instance as not running).
+// slightly differently (the since-removed fleet-git's unconditional lowercase vanishing a repo
+// on case-sensitive filesystems; session-launch's missing slash-unify reading a RUNNING
+// instance as not running).
 // One definition ends that class.
 //
 // This is a PURE string key for comparing two spellings of the same path or 'desktop:<dir>'

@@ -1,5 +1,4 @@
 import { fleetStatus } from '../fleet'
-import { fleetGit } from '../fleet-git'
 import { fleetInstances } from '../fleet-instances'
 import { fleetUsage } from '../fleet-usage'
 import { app } from '../http-app'
@@ -48,9 +47,13 @@ app.post('/api/monitor/check', async (c) => {
 
 // --- fleet observation (see server/src/fleet.ts) ------------------------------------------
 // Deterministic and read-only: the observation core every later rebuild piece reads. Grows one
-// key per landed piece: sessions (piece 1, fleet.ts), usage (piece 2, fleet-usage.ts), git
-// (piece 3, fleet-git.ts), instances (piece 4, fleet-instances.ts - account identity). Zero
-// AI, zero writes, zero settings.
+// key per landed piece: sessions (piece 1, fleet.ts), usage (piece 2, fleet-usage.ts),
+// instances (piece 4, fleet-instances.ts - account identity). Zero AI, zero writes, zero
+// settings, and ZERO git: nothing here shells out to git. The old `git` section ran
+// `rev-parse` + `status --porcelain` + `rev-list` per repo on EVERY call, uncached and
+// unbounded, and no consumer ever read the result. Cross-repo git state is Odin's job, and
+// Odin does it only when a person runs a scan. Standing rule (owner, 2026-09-07): nothing
+// runs git unless it was explicitly asked for, for a specific reason.
 app.get('/api/fleet', async (c) => {
   const status = fleetStatus()
   // Sections fail INDEPENDENTLY: one broken store must not 500 the sessions/usage that already
@@ -64,9 +67,6 @@ app.get('/api/fleet', async (c) => {
       return null
     }
   }
-  const [git, instances] = await Promise.all([
-    section('git', () => fleetGit(status.sessions.map((s) => s.cwd))),
-    section('instances', () => fleetInstances()),
-  ])
-  return c.json({ ...status, usage: fleetUsage(), git, instances, errors })
+  const instances = await section('instances', () => fleetInstances())
+  return c.json({ ...status, usage: fleetUsage(), instances, errors })
 })
