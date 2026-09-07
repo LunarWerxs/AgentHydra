@@ -54,8 +54,8 @@ test('the probe directory is stable across calls', () => {
 // Built rather than written out, so the literal backslashes never have to survive escaping.
 const BACKSLASH = String.fromCharCode(92)
 const winPath = (...parts: string[]) => parts.join(BACKSLASH)
-const INSTANCE_3 = winPath('C:', 'Users', 'blogi', '.claude-instances', '3claude')
-const INSTANCE_4 = winPath('C:', 'Users', 'blogi', '.claude-instances', '4claude')
+const INSTANCE_3 = winPath('C:', 'Users', 'me', '.claude-instances', '3claude')
+const INSTANCE_4 = winPath('C:', 'Users', 'me', '.claude-instances', '4claude')
 
 // win32-gated, because the bug itself is a win32 one: drive letters, backslash separators and a
 // case-insensitive filesystem are what let a single folder be spelled several ways. Elsewhere
@@ -94,7 +94,7 @@ test('the key keeps its desktop: prefix so it cannot collide with cli:/acct: key
 // daemon log on 2026-08-27:
 //
 //   ERROR Error: ENOENT: no such file or directory, open
-//   '.../.claude/projects/C--Users-blogi--agenthydra-data-usage-probe/cc54bf76-....jsonl'
+//   '.../.claude/projects/C--Users-me--agenthydra-data-usage-probe/cc54bf76-....jsonl'
 //       at async parseMeta / at async <anonymous> / at async <anonymous>
 //
 // The two anonymous frames are toSummary and mapPooled's worker, so the whole /api/sessions request

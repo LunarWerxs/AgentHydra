@@ -16,11 +16,11 @@ import {
   userDataDirFromCommandLine,
 } from '../src/core/self-identity'
 
-const INSTANCES_ROOT = join('C:', 'Users', 'blogi', '.claude-instances')
+const INSTANCES_ROOT = join('C:', 'Users', 'me', '.claude-instances')
 const INSTANCE_DIR = join(INSTANCES_ROOT, 'pap3r rotate')
 const OTHER_INSTANCE_DIR = join(INSTANCES_ROOT, 'work')
-const DEFAULT_DESKTOP_DIR = join('C:', 'Users', 'blogi', 'AppData', 'Roaming', 'Claude')
-const DEFAULT_LOGIN_DIR = join('C:', 'Users', 'blogi', '.claude')
+const DEFAULT_DESKTOP_DIR = join('C:', 'Users', 'me', 'AppData', 'Roaming', 'Claude')
+const DEFAULT_LOGIN_DIR = join('C:', 'Users', 'me', '.claude')
 const HOST_SESSION_ID = 'local_cfb0838f-c8f3-4b2d-a812-26bf719b10e2'
 
 /** The env a stdio MCP server actually sees inside a Claude Desktop session. Note what is NOT
@@ -338,8 +338,7 @@ describe('detectSelfIdentity — the Claude Desktop MCP case (the regression)', 
       {
         pid: 76172,
         name: 'claude.exe',
-        executablePath:
-          'C:\\Users\\blogi\\AppData\\Local\\AnthropicClaude\\app-1.28929.0\\claude.exe',
+        executablePath: 'C:\\Users\\me\\AppData\\Local\\AnthropicClaude\\app-1.28929.0\\claude.exe',
         commandLine: `"claude.exe" "--user-data-dir=${INSTANCE_DIR}"`,
       },
     ]

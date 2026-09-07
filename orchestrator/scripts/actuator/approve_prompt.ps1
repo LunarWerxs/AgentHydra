@@ -44,8 +44,17 @@ param(
   # call). Exit 0 set (or already), 3 no picker in the pane, 4 wrong chat, 6 did not take.
   [string]$SetMode = ''
 )
-$MODE_NAMES = @('Default permissions', 'Accept edits', 'Plan mode', 'Bypass permissions',
-                'Ask permissions', 'Auto-accept edits')
+# THE PICKER'S OWN LABELS, read off a live window 2026-09-07 (probe: focus the composer's
+# mode button, press Space, enumerate the RadioButtons). The five it actually renders are
+# 'Auto', 'Manual', 'Accept edits', 'Plan', 'Bypass permissions'. Three names in the old list
+# ('Default permissions', 'Ask permissions', 'Auto-accept edits') exist nowhere in the app,
+# and 'Plan mode' has been 'Plan' for long enough that nobody noticed - which mattered,
+# because Find-ModeBtn matches the COMPOSER BUTTON against this list, so a chat sitting in
+# Auto or Manual reported "no permission picker is showing" and could never be moved to
+# bypass at all. The dead names are kept: an older build may still render them, and a name
+# that matches nothing costs one string comparison.
+$MODE_NAMES = @('Auto', 'Manual', 'Accept edits', 'Plan', 'Bypass permissions',
+                'Default permissions', 'Plan mode', 'Ask permissions', 'Auto-accept edits')
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 Add-Type -Namespace Approve -Name Inv -MemberDefinition @'
@@ -54,6 +63,34 @@ Add-Type -Namespace Approve -Name Inv -MemberDefinition @'
 public delegate bool EnumProc(IntPtr h, IntPtr p);
 [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
 [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
+[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+[DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+// ⛔ THE FOREGROUND GRAB IS LOAD-BEARING, NOT A COURTESY (measured 2026-09-07).
+// Press-Space posts WM_KEYDOWN/WM_KEYUP straight at the render widget and the header used
+// to claim that was focus-free - "no foreground change, no cursor". It is not: with the app
+// in the BACKGROUND the picker never opens, the posted key is swallowed with no error, and
+// Press-Space still returns $true because all it ever checked was that PostMessage was
+// called. That is the whole reason a human kept having to click Bypass permissions by hand,
+// and why the confirm-dialog hunt below found nothing to click - there was never a dialog,
+// because the menu it comes from never opened. Proven both ways on one live window: same
+// process, same button, same posted key - background = 0 picker items, foreground = 5.
+// SetForegroundWindow alone is a no-op for a background process, so attach to the target's
+// input queue first. Callers restore the previous foreground window afterwards.
+public static bool Foreground(IntPtr h) {
+  if (IsIconic(h)) ShowWindow(h, 9);
+  uint tgt = GetWindowThreadProcessId(h, IntPtr.Zero);
+  uint me = GetCurrentThreadId();
+  if (tgt == me) return SetForegroundWindow(h);
+  AttachThreadInput(me, tgt, true);
+  bool ok = SetForegroundWindow(h);
+  AttachThreadInput(me, tgt, false);
+  return ok;
+}
 public static IntPtr RenderWidget(IntPtr top) {
   IntPtr found = IntPtr.Zero;
   EnumChildWindows(top, (h, p) => {
@@ -402,7 +439,26 @@ if ($SetMode) {
     }
     return $null
   }
+  # Whatever the person was working in, given back when we are done. Captured ONCE, on the
+  # first grab, so a run that foregrounds three times still returns to where it started.
+  $script:PriorFg = [IntPtr]::Zero
+  function Restore-Foreground {
+    if ($script:PriorFg -ne [IntPtr]::Zero) {
+      [void][Approve.Inv]::Foreground($script:PriorFg)
+      $script:PriorFg = [IntPtr]::Zero
+    }
+  }
+  # Covers every `exit N` path below without wrapping the whole block in a try/finally.
+  [void](Register-EngineEvent PowerShell.Exiting -Action { Restore-Foreground })
   function Press-Space($target) {
+    # THE WINDOW MUST BE FOREGROUND BEFORE THE KEY (see Approve.Inv::Foreground). This used
+    # to go straight to SetFocus and post, which does nothing at all to a background app.
+    if ($script:PriorFg -eq [IntPtr]::Zero) {
+      $fg = [Approve.Inv]::GetForegroundWindow()
+      if ($fg -ne $hwnd) { $script:PriorFg = $fg }
+    }
+    [void][Approve.Inv]::Foreground($hwnd)
+    Start-Sleep -Milliseconds 250
     try { $target.SetFocus() } catch { return $false }
     Start-Sleep -Milliseconds 150
     # RAIL 4 (review 2026-09-06): never post a key into unknown focus - this is the most
@@ -439,7 +495,33 @@ if ($SetMode) {
     if ($item -or (Get-Date) -ge $itemDeadline) { break }
     Start-Sleep -Milliseconds 175
   }
-  if (-not $item) { Write-Output "REFUSED: opened the picker ('$before') but no item starting with '$SetMode' appeared"; exit 6 }
+  if (-not $item) {
+    # ⛔ DISTINGUISH "the menu opened and lacked my item" FROM "the menu never opened"
+    # (2026-09-07). Press-Space returns true when it POSTED the key, not when anything
+    # happened, so the old single message blamed the item list for a picker that had not
+    # opened at all - and sent two investigations hunting for a locale/label problem that
+    # did not exist. Count what is on screen and say which failure this actually is.
+    $anyItems = 0
+    $namesSeen = @()
+    foreach ($e in ([System.Windows.Automation.AutomationElement]::FromHandle($hwnd)).FindAll(
+                     $TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+      try {
+        if ($e.Current.ControlType.ProgrammaticName -notmatch 'RadioButton|MenuItem|ListItem') { continue }
+        $en = $e.Current.Name
+        if (-not $en -or $e.Current.BoundingRectangle.IsEmpty) { continue }
+        $anyItems++
+        if ($namesSeen.Count -lt 8) { $namesSeen += ($en -split '\s{2,}')[0] }
+      } catch { continue }
+    }
+    if ($anyItems -eq 0) {
+      Write-Output ("REFUSED: the picker ('$before') did not open - the Space key was posted but " +
+        "nothing rendered. The app must be FOREGROUND for its render widget to take a posted key.")
+      exit 6
+    }
+    Write-Output ("REFUSED: opened the picker ('$before') but no item starting with '$SetMode' appeared" +
+      " (menu showed: $($namesSeen -join ' | '))")
+    exit 6
+  }
   # RAIL (review 2026-09-06): snapshot every button's RuntimeId BEFORE the mode item is
   # invoked by ANY method (Select, Invoke or Press-Space), so the confirmation-dialog hunt
   # below can require its match to be NEW rather than trusting a name match alone against

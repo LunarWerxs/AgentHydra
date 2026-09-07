@@ -65,7 +65,7 @@ test('real prose is never mistaken for plumbing', () => {
 test('a scheduled task is titled by its name, not its boilerplate', () => {
   // The real case: without this the title was the whole envelope, file path and all.
   const raw =
-    '<scheduled-task name="studio-executor-parity-sweep" file="C:\\Users\\blogi\\.claude\\scheduled-tasks\\studio-executor-parity-sweep\\SKILL.md">\nThis is an automated run of a scheduled task. The user is not present to answer questions.'
+    '<scheduled-task name="studio-executor-parity-sweep" file="C:\\Users\\me\\.claude\\scheduled-tasks\\studio-executor-parity-sweep\\SKILL.md">\nThis is an automated run of a scheduled task. The user is not present to answer questions.'
   expect(unwrapTaggedText(raw)).toBe('studio-executor-parity-sweep')
 })
 

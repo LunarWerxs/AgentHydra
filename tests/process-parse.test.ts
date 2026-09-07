@@ -8,17 +8,17 @@
 import { describe, expect, test } from 'bun:test'
 import { extractUserDataDir } from '../server/src/core/process'
 
-const CLAUDE = 'C:\\Users\\blogi\\AppData\\Local\\AnthropicClaude\\app-1.20186.1\\claude.exe'
+const CLAUDE = 'C:\\Users\\me\\AppData\\Local\\AnthropicClaude\\app-1.20186.1\\claude.exe'
 
 describe('extractUserDataDir', () => {
   test('unquoted, space-free (openInstance, common case)', () => {
-    const cmd = `"${CLAUDE}" --user-data-dir=C:\\Users\\blogi\\.claude-instances\\work`
-    expect(extractUserDataDir(cmd)).toBe('C:\\Users\\blogi\\.claude-instances\\work')
+    const cmd = `"${CLAUDE}" --user-data-dir=C:\\Users\\me\\.claude-instances\\work`
+    expect(extractUserDataDir(cmd)).toBe('C:\\Users\\me\\.claude-instances\\work')
   })
 
   test('value-quoted, space-free (desktop-shortcut .lnk form)', () => {
-    const cmd = `"${CLAUDE}" --user-data-dir="c:\\users\\blogi\\.claude-instances\\work"`
-    expect(extractUserDataDir(cmd)).toBe('c:\\users\\blogi\\.claude-instances\\work')
+    const cmd = `"${CLAUDE}" --user-data-dir="c:\\users\\me\\.claude-instances\\work"`
+    expect(extractUserDataDir(cmd)).toBe('c:\\users\\me\\.claude-instances\\work')
   })
 
   test('value-quoted WITH a space keeps the whole path', () => {
@@ -45,11 +45,9 @@ describe('extractUserDataDir', () => {
   test('real child-process line (crashpad-handler, unquoted, trailing args)', () => {
     const cmd =
       `${CLAUDE} --type=crashpad-handler ` +
-      '--user-data-dir=C:\\Users\\blogi\\AppData\\Local\\Temp\\cmui-verify-11348 ' +
-      '/prefetch:4 --no-rate-limit --database=C:\\Users\\blogi\\AppData\\Local\\Temp\\cmui-verify-11348\\Crashpad'
-    expect(extractUserDataDir(cmd)).toBe(
-      'C:\\Users\\blogi\\AppData\\Local\\Temp\\cmui-verify-11348',
-    )
+      '--user-data-dir=C:\\Users\\me\\AppData\\Local\\Temp\\cmui-verify-11348 ' +
+      '/prefetch:4 --no-rate-limit --database=C:\\Users\\me\\AppData\\Local\\Temp\\cmui-verify-11348\\Crashpad'
+    expect(extractUserDataDir(cmd)).toBe('C:\\Users\\me\\AppData\\Local\\Temp\\cmui-verify-11348')
   })
 
   test('returns null when the flag is absent', () => {

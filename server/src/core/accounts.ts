@@ -45,7 +45,7 @@ function log(_level: 'info' | 'warn' | 'error', _message: string): void {
 }
 
 /** `planLabel` — NOT the raw pretty tier. Passing the tier here leaked the unmapped generic value
- *  into the Quick view's one-liner ("Michael <blogitech@gmail.com> · default_claude_ai") for every
+ *  into the Quick view's one-liner ("Michael <owner@example.com> · default_claude_ai") for every
  *  account whose tier is `default_claude_ai`; the label must show what the Plan column shows. */
 function buildLabel(name: string | null, email: string | null, planLabel: string | null): string {
   let namePart: string | null = null

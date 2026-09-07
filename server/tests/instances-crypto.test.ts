@@ -22,7 +22,7 @@ import path, { join } from 'node:path'
 import { resolveAccount } from '../src/core/accounts'
 import { decryptSafeStorage, deriveMacKey } from '../src/core/crypto/index'
 
-const GOLDEN_INSTANCE_DIR = 'C:\\Users\\blogi\\.claude-instances\\lunarwerx'
+const GOLDEN_INSTANCE_DIR = join(os.homedir(), '.claude-instances', 'lunarwerx')
 const GOLDEN_EMAIL = 'lunawerx@gmail.com'
 
 /** The plan assertions below are written as an INVARIANT against `orgType`, not as a hardcoded
