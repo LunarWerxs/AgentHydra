@@ -311,8 +311,8 @@ describe('labelDisagreesWithAccount', () => {
     // as a mismatch against a profile called something else. Both spellings are the same account.
     expect(
       labelDisagreesWithAccount({
-        label: 'noviero',
-        account: account({ name: 'Martin', email: 'noviero@gmail.com' }),
+        label: 't.mercer',
+        account: account({ name: 'Martin', email: 't.mercer@example.com' }),
       }),
     ).toBe(false)
   })

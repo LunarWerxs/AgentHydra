@@ -5,7 +5,7 @@
 // 1. Golden (Windows-only, this machine): decrypts the REAL lunarwerx instance's
 //    oauth:tokenCacheV2 via the full decryptSafeStorage() pipeline (Local State -> DPAPI ->
 //    AES-256-GCM) and asserts the plaintext contains 'sk-ant-oat01'. Skipped automatically on
-//    non-Windows platforms / if the fixture directory doesn't exist on this machine.
+//    non-Windows platforms, and whenever that instance is absent or signed out on this machine.
 // 2. Golden (Windows-only, no network): resolveAccount(lunarwerx, { noNetwork: true }) resolves
 //    from local decrypt/cache to lunawerx@gmail.com without ever calling fetch, and its plan label
 //    agrees with the cached organization_type rather than with the token cache's stale grants.
@@ -16,7 +16,7 @@
 //    returns a well-formed CMAccount and never throws, independent of any real machine state.
 
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path, { join } from 'node:path'
 import { resolveAccount } from '../src/core/accounts'
@@ -40,8 +40,22 @@ function expectPlanAgreesWithOrgType(account: {
   else if (account.orgType.includes('max')) expect(account.planLabel).toMatch(/^Max\b/)
 }
 
-const goldenAvailable =
-  process.platform === 'win32' && existsSync(join(GOLDEN_INSTANCE_DIR, 'config.json'))
+/** The golden vectors read a REAL signed-in instance on this machine, so `config.json` merely
+ *  EXISTING is not enough to run them. Signing that account out leaves the file in place with no
+ *  `oauth:tokenCacheV2`, which kept this gate true and turned an unusable fixture into two
+ *  failures instead of a skip: a red that says "your account logged out", dressed as a code
+ *  regression. Gate on the blob the vectors actually consume, not on the file that carries it. */
+function goldenTokenBlob(): string | null {
+  try {
+    const config = JSON.parse(readFileSync(join(GOLDEN_INSTANCE_DIR, 'config.json'), 'utf8'))
+    const blob = config['oauth:tokenCacheV2']
+    return typeof blob === 'string' && blob.length > 0 ? blob : null
+  } catch {
+    return null
+  }
+}
+
+const goldenAvailable = process.platform === 'win32' && goldenTokenBlob() !== null
 
 describe('decryptSafeStorage — Windows golden vector', () => {
   test.if(goldenAvailable)(

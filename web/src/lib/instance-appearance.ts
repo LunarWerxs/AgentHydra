@@ -126,10 +126,10 @@ export function accountName(account: CMAccount | null | undefined): string | nul
  * The account's IDENTIFYING handle: the local part of the email it is signed in with, always.
  *
  * One rule for every row, which is the entire point. The account column used to render
- * {@link accountName}, so a machine with several logins showed a column reading "noviero",
+ * {@link accountName}, so a machine with several logins showed a column reading "kestrel",
  * "5claude", "Martin", "Michael Griswold" — a mix of Anthropic profile display names and email
  * fragments, indistinguishable from each other and from the instance's own name and folder. There
- * was no way to tell that "noviero" was a profile name for akyl.cher@gmail.com while "5claude" was
+ * was no way to tell that "kestrel" was a profile name for t.mercer@example.com while "5claude" was
  * just an email with the domain cut off.
  *
  * The email is the one field that every signed-in account has, that is unique, and that the user

@@ -4,4 +4,4 @@
 ' getting annoying"). Same check, same cadence, zero windows - the same wscript pattern
 ' Supervisor-Tick.vbs and the orchestrator's job shims already use.
 Set sh = CreateObject("WScript.Shell")
-sh.Run """C:\Users\blogi\.bun\bin\bun.exe"" ""D:\PublicProjects\AgentHydra\app\scripts\watchdog.mjs""", 0, True
+sh.Run """" & sh.ExpandEnvironmentStrings("%USERPROFILE%") & "\.bun\bin\bun.exe"" ""D:\PublicProjects\AgentHydra\app\scripts\watchdog.mjs""", 0, True

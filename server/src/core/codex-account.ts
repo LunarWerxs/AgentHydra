@@ -69,7 +69,7 @@ export interface CodexAccount {
   subscriptionActiveUntil: string | null
   /** Where this came from: 'live' (network), 'cache', 'offline', … */
   source: string | null
-  /** One-line display label, e.g. "Oluwaferanmi Olotu <styceplug@gmail.com> · Plus". */
+  /** One-line display label, e.g. "Alex Doe <alex.doe@example.com> · Plus". */
   label: string
 }
 

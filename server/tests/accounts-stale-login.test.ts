@@ -7,7 +7,7 @@
 // noNetwork, expired token, undecryptable cache, profile API down — reads that entry, so without a
 // guard the manager keeps displaying an email the instance has not been logged into for weeks.
 // This was not hypothetical: on the machine this was written against, one instance's cache said
-// kumjude09@gmail.com while its config.json had been re-signed into a different account uuid.
+// j.tanaka@example.com while its config.json had been re-signed into a different account uuid.
 //
 // The guard compares the cached `uuid` against config.json's `lastKnownAccountUuid` and, on a
 // mismatch, discards AND purges the entry — no identity beats the wrong identity.
