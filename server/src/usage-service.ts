@@ -186,19 +186,22 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
         )
       : true
   const apiFail = lastUsageApiFailure(label)
-  // 429 takes precedence over every other explanation: the credential is fine, the endpoint is
-  // simply refusing everyone for a while. Blaming a closed app or a bad token here would send the
-  // owner to fix something that is not broken.
+  // ORDER MATTERS, AND "WE NEVER ASKED" BEATS "THEY SAID NO".
+  //
+  // A rate limit only outranks the other explanations when a request was actually made, which
+  // requires a credential. Signed out, or no token at all, means the network was never reached, so
+  // nothing the endpoint has ever said about this label can describe it. Ranking 429 above those
+  // told the owner an account he had never signed in was being rate-limited (2026-09-07).
   const reason: UsageReason =
-    apiFail?.status === 429
-      ? 'rate_limited'
-      : account?.status === 'loggedout'
-        ? 'logged_out'
-        : grant
-          ? isRunning
+    account?.status === 'loggedout'
+      ? 'logged_out'
+      : !grant
+        ? 'no_token'
+        : apiFail?.status === 429
+          ? 'rate_limited'
+          : isRunning
             ? 'check_failed'
             : 'stale_token_app_closed'
-          : 'no_token'
   // ⛔ OWNER RULE (Michael, 2026-09-07): *"when the account is not logged in, it should reset and
   // clear the usage data, session, weekly, five-hour."* Not caching the no-data result is not
   // enough on its own - the PREVIOUS reading is still in the cache, and the routes serve the cache
@@ -214,11 +217,15 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // The server's own words FIRST (see usage-api.ts), plus the retry window when it gave one. Both,
   // because they answer different questions: the text says WHAT limit was hit, the window says
   // when it lifts, and showing only the window is what let "429" get read as "you clicked too much".
-  const detail = apiFail
-    ? apiFail.status === 429 && apiFail.retryAfterSec
-      ? `${apiFail.error} (retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min)`
-      : apiFail.error
-    : undefined
+  // Only report an endpoint's answer when this account HAS a credential - otherwise the detail is
+  // describing a request that was never sent.
+  const detail = !grant
+    ? 'no usable login found for this instance - nothing was asked of Anthropic'
+    : apiFail
+      ? apiFail.status === 429 && apiFail.retryAfterSec
+        ? `${apiFail.error} (retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min)`
+        : apiFail.error
+      : undefined
   return { snapshot, cached: false, key, reason, detail, advice: usageAdvice(snapshot) }
 }
 

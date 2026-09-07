@@ -423,6 +423,16 @@ export function lastUsageApiFailure(
 export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapshot> {
   const label = opts.account ?? null
 
+  // ⛔ THE RECORD DESCRIBES *THIS* ATTEMPT, SO CLEAR IT FIRST.
+  //
+  // It used to be cleared only on success, which made it a permanent verdict: one 429 recorded for
+  // a label stuck to that label forever, and every LATER no-data result - including "this instance
+  // has no login at all", which never even reaches the network - was reported as a rate limit.
+  // The owner caught exactly that (2026-09-07): an account he had never signed in was being
+  // described as rate-limited, and the rate limit outranked the truth. A stale diagnosis is worse
+  // than none, because it is confidently specific and sends you to fix the wrong thing.
+  lastApiFailure.delete(label ?? '(ambient)')
+
   // --- fast path: the direct API read, whenever we can lay hands on an OAuth token ---------------
   if (!opts.forceCli) {
     // An API key is not accepted by the OAuth usage endpoint, so only an oauth_token qualifies.
@@ -432,10 +442,7 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
     const token = injected ?? fromDir?.token ?? null
     if (token) {
       const res = await fetchUsageApi({ token, account: label, timeoutMs: opts.timeoutMs })
-      if (res.ok) {
-        lastApiFailure.delete(label ?? '(ambient)')
-        return res.snapshot
-      }
+      if (res.ok) return res.snapshot
       // Not fatal: fall through to the CLI spawn (a 401 here just means "this token can't read
       // usage" — the CLI may still succeed by refreshing, or via a configDir login).
       //
