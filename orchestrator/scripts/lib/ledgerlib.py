@@ -46,7 +46,14 @@ VALID_KINDS = ("archive", "deliver", "surface", "migrate", "rename", "instance",
                # chat gets when the toolbox spawned it (unblock_prompts reads that one)
                "mode", "spawned",
                # 2026-09-04: a probe chat deleted after its drill (delete_chat.py)
-               "delete")
+               "delete",
+               # 2026-09-07: an engine killed on a person's word (migrate_batch.py's
+               # --terminate-live). It was writing this kind from the day it shipped but was
+               # never registered here, so EVERY --terminate-live run died in note() with
+               # "unknown breaker kind 'terminate'" before a single chat could move. Its test
+               # passed throughout because the test stubs note() with a lambda that accepts
+               # any kind - see test_migrate_batch_resume.py, where that stub now validates.
+               "terminate")
 
 # How long a writer may hold the state-file mutex before a waiter treats it as abandoned
 # (a crashed process must never wedge every future note() on this machine).

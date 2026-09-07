@@ -201,8 +201,15 @@ class TerminateLiveTest(_BatchTest):
                    lambda q: {"cliSessionId": q, "title": q, "instance": "another_meh",
                               "live": ({"pid": live_pid, "name": "x"} if live_pid else None)})
         self.patch(migrate_batch.enginelib, "terminate_engine", fake_terminate)
-        self.patch(migrate_batch.ledgerlib, "note",
-                   lambda kind, sid, **kw: notes.append(f"{kind}:{sid}:{kw.get('note', '')}"))
+        def fake_note(kind, sid, **kw):
+            # Validate the kind exactly as the real note() does. A stub that accepted any
+            # string is why --terminate-live shipped writing an UNREGISTERED kind: this test
+            # was green for the whole life of a feature that raised on its first real call.
+            if kind not in migrate_batch.ledgerlib.VALID_KINDS:
+                raise ValueError(f"unknown breaker kind {kind!r} - new acts must opt in deliberately")
+            notes.append(f"{kind}:{sid}:{kw.get('note', '')}")
+
+        self.patch(migrate_batch.ledgerlib, "note", fake_note)
         return terminated, notes
 
     def test_an_engine_refusal_is_killed_confirmed_and_moved_on_the_second_try(self):
