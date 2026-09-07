@@ -217,28 +217,27 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // The server's own words FIRST (see usage-api.ts), plus the retry window when it gave one. Both,
   // because they answer different questions: the text says WHAT limit was hit, the window says
   // when it lifts, and showing only the window is what let "429" get read as "you clicked too much".
-  // ⛔ THE 429 THAT IS NOT A RATE LIMIT (measured across seven instances, 2026-09-07).
+  // ⛔ A CORRELATION IS NOT A CAUSE, AND THIS ONE WAS NOT (retracted 2026-09-07, same day).
   //
-  // A desktop profile can hold two inference-capable grants: the short-lived Claude Code SESSION
-  // grant (scopes include `user:sessions:claude_code`, ~1 month), and a long-lived general one
-  // (~1 year, no session scope). The usage endpoint answers 429 to a profile that has ONLY the
-  // session grant, and does so indefinitely - one account here read nothing for twelve days.
-  // Correlation was exact: all six instances that read fine hold both grants; the one that never
-  // could holds only the session grant.
+  // The commit before this one shipped a confident diagnosis: a profile holding only the Claude
+  // Code session grant is refused by the usage endpoint. The correlation was real and exact across
+  // seven instances - the six that read usage held a second, year-long grant; the one that could
+  // not held only the session grant. It was still wrong. That instance now reads usage perfectly
+  // while holding the SAME single session grant, byte for byte unchanged. The 429 was a genuine
+  // rate limit with a long window, its retry-after counted down honestly (51 -> 50 -> 45 min), and
+  // it expired exactly as a rate limit does.
   //
-  // This is why signing in again does not help, and why it is so misleading: the desktop login
-  // issues exactly the credential the profile already had, Claude itself works perfectly on it
-  // (that grant is what Claude needs), and only the usage read is refused. Saying "rate limited"
-  // to that sends someone to wait for a window that never opens.
-  const sessionGrantOnly = !!grant?.scopes?.includes('user:sessions:claude_code')
+  // Kept as a comment rather than deleted, because the failure mode is the point: seven samples,
+  // a perfect split and a mechanism that sounded right produced a false explanation, and it was
+  // shipped to a user who would have acted on it. The disproof cost one command - re-read the
+  // grants after it recovered. Ask what would have to be true for the theory to be WRONG, and go
+  // look, before writing the explanation into the product.
   const detail = !grant
     ? 'no usable login found for this instance - nothing was asked of Anthropic'
     : apiFail
-      ? apiFail.status === 429 && sessionGrantOnly
-        ? 'this profile holds only the Claude Code session credential, which the usage endpoint refuses (429). Signing in again reissues the same one - the accounts that report usage also hold a long-lived token.'
-        : apiFail.status === 429 && apiFail.retryAfterSec
-          ? `${apiFail.error} (retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min)`
-          : apiFail.error
+      ? apiFail.status === 429 && apiFail.retryAfterSec
+        ? `${apiFail.error} (retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min)`
+        : apiFail.error
       : undefined
   return { snapshot, cached: false, key, reason, detail, advice: usageAdvice(snapshot) }
 }

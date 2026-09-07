@@ -190,7 +190,7 @@ export default {
   // per refresh. State the fact, name the one check that distinguishes a passing limit from a stuck
   // account, and let the number in `detail` speak for the window.
   usageReasonRateLimited:
-    'Anthropic is rate-limiting usage checks for this account. Refreshing cannot help. If it stays this way, open this instance and check /usage inside Claude - if that works too, the saved login here needs redoing.',
+    'Anthropic is rate-limiting usage checks for this account. Refreshing cannot help and signing in again does not either - the window can run for hours, and it clears on its own.',
   usageReasonAppClosed:
     'This account is closed, so its saved login is too old to read usage. Open it and check again.',
   usageSession: 'Session (5h)',
