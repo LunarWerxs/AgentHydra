@@ -251,7 +251,12 @@ export function chatStoreLabel(handle: string): string {
   // and the paths helper builds this one from %APPDATA% as the OS spells it. A literal comparison
   // would reintroduce the same 404 on exactly the machines this runs on.
   const fold = (p: string) => trimSep(p).toLowerCase()
-  return fold(trimmed) === fold(defaultClaudeUserDataDir()) ? 'default' : basename(trimmed)
+  // Split on EITHER separator rather than node's basename, which off Windows does not treat `\`
+  // as one and hands back the whole `C:\Users\me\.claude-instances\carlos` as the "folder name".
+  // trimSep above already accepts both, so basename() left this function disagreeing with itself
+  // on every non-Windows build - and this daemon ships linux and darwin binaries.
+  const lastSegment = (p: string) => p.split(/[\\/]/).pop() ?? p
+  return fold(trimmed) === fold(defaultClaudeUserDataDir()) ? 'default' : lastSegment(trimmed)
 }
 
 // One desktop instance's chats, compactly — the read that did not exist until 2026-09-06, when

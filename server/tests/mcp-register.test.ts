@@ -149,7 +149,13 @@ test('a config that changes under us is NOT overwritten from the stale snapshot'
     {
       afterRead: (p) => {
         landed++
-        writeFileSync(p, `${theirs}\n`.slice(0, theirs.length + landed)) // a different file each try
+        // Pad with one MORE newline each time, so every attempt changes the file's SIZE. The
+        // slice this replaced clamped at the string's own length, so attempts 2 and 3 rewrote
+        // byte-identical content: nothing had changed, no race guard of any kind could see one,
+        // and the test only went green when the clock happened to tick mid-rewrite (measured
+        // 4 pass / 4 fail here, and red on windows-latest while ubuntu passed on finer mtimes).
+        // A size change is detected on every platform regardless of timestamp resolution.
+        writeFileSync(p, theirs + '\n'.repeat(landed)) // 1, 2, 3 newlines: a different SIZE each try
       },
     },
   )

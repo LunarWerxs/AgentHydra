@@ -53,6 +53,28 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **`chatStoreLabel` disagreed with itself off Windows, and the linux CI leg was red for it**
+  (`server/src/routes/sessions.ts`). It trimmed a trailing separator with a pattern accepting
+  BOTH slashes, then took the folder name with node's `basename`, which off Windows does not
+  treat a backslash as a separator at all - so an isolated instance handed back the entire
+  `C:/Users/me/.claude-instances/carlos` as its "folder name" instead of `carlos`. It splits on
+  either separator now, which is what the trim beside it already assumed. This is not academic:
+  the daemon ships linux and darwin binaries, and both legs of its own CI failed on it.
+- **The new MCP race test was a coin flip on disk timestamps, and it kept `main` red**
+  (`server/tests/mcp-register.test.ts`). Its stand-in for Claude Code sliced a string with a
+  bound that began at that string's own length, so the clamp swallowed every increment and
+  attempts 2 and 3 rewrote byte-identical content. A file whose bytes have not changed has not
+  changed, so no race guard of any kind could flag those attempts - the test only passed when
+  the filesystem clock happened to tick mid-rewrite (measured 4 pass / 4 fail locally; red on
+  windows-latest while ubuntu's finer mtimes went green). The hook pads with one more newline
+  each try instead, so every attempt changes the file's SIZE and is caught on any platform
+  regardless of timestamp resolution: 10 runs, 10 passes. The implementation is untouched and
+  every assertion stands, including `landed === 3`.
+
+  Hardening `stamp()` to hash content instead was tried and rejected: built as a probe, it makes
+  this test fail 10 times out of 10, because a byte-identical write is identical to a hash too.
+  It would also be wrong - a byte-identical concurrent write loses nothing, so declining it is a
+  false positive that would turn a correct merge into a spurious boot-time failure.
 - **An install missing a release-owned folder can be repaired without waiting for a new version**
   (`missingComponents` / `resolveUpdateToApply` in `server/src/github-updater.ts`, a **Repair
   install** button in Settings → MCP server). The component-aware updater landed *in* v0.39.0, so
