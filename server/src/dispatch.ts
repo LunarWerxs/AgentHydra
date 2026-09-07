@@ -1436,8 +1436,25 @@ export function cancelItem(id: string): boolean {
  * whose process is gone with no marker is finalized as failed. Call once at boot, after db.ts is
  * ready. Idempotent: it only touches rows still marked 'running'.
  */
+/** Queue ids reattachRuns() has begun and not yet reached a verdict for. */
+const reattachPending = new Set<QueueItem['id']>()
+
+/** The runs still un-adjudicated, so a boot that blows its deadline can NAME what it stalled on
+ *  instead of only reporting that something did. */
+export function pendingReattachIds(): Array<QueueItem['id']> {
+  return [...reattachPending]
+}
+
 export async function reattachRuns(): Promise<void> {
   const rows = db.query<QueueItem, []>("select * from queue_items where status = 'running'").all()
+  // ⛔ A BOOT MUST SAY WHAT IT IS DOING (2026-09-07). This loop is up to two minutes of work
+  // against live sessions and it used to log NOTHING, so an unrelated event landing inside that
+  // window could not be cleared by reading this daemon's log: ruling the daemon out took the
+  // managed apps' own logs, a profile-wide mtime sweep and a code read. The most-suspected
+  // process on the machine has to be the most legible one, and every verdict below is already
+  // computed - only the printing was missing.
+  console.log(`[agenthydra] reattach: ${rows.length} run(s) marked running at boot`)
+  for (const row of rows) reattachPending.add(row.id)
   for (const row of rows) {
     const id = row.id
     // Rebuild events from whatever the runner has written so far (delete-then-replay = idempotent).
@@ -1471,6 +1488,8 @@ export async function reattachRuns(): Promise<void> {
         'run lost: AgentHydra restarted and this run left no output to recover from.',
         null,
       )
+      reattachPending.delete(id)
+      console.log(`[agenthydra] reattach: run ${id} (session ${row.session_id}) LOST - no output`)
       await finalize(id, -1)
       continue
     }
@@ -1494,6 +1513,10 @@ export async function reattachRuns(): Promise<void> {
           null,
         )
         entry.canceled = true
+        reattachPending.delete(id)
+        console.log(
+          `[agenthydra] reattach: run ${id} (session ${row.session_id}) STOPPED - surface violation, it lives in the desktop app now`,
+        )
         if (childPid) void killTree(childPid)
         await finalize(id, -1)
         continue
@@ -1503,6 +1526,12 @@ export async function reattachRuns(): Promise<void> {
     // finalizes from its terminal marker (finished while we were down) or, seeing the runner gone with
     // no marker, fails after its grace. childPid is null unless the runner is verified alive.
     if (childPid) db.query('update queue_items set pid = ? where id = ?').run(childPid, id)
+    reattachPending.delete(id)
+    console.log(
+      `[agenthydra] reattach: run ${id} (session ${row.session_id}) ADOPTED - runner ${
+        runnerAlive ? `alive, child pid ${childPid ?? 'unknown'}` : 'gone, replaying its log'
+      }`,
+    )
     void tailRun(id, entry)
   }
 }

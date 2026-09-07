@@ -57,7 +57,13 @@ import { reconcileCodexInstanceDirs } from './core/codex-instances'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { getSetting, setSetting } from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
-import { activeCount, reattachRuns, startImportSweep, startRetrySweep } from './dispatch'
+import {
+  activeCount,
+  pendingReattachIds,
+  reattachRuns,
+  startImportSweep,
+  startRetrySweep,
+} from './dispatch'
 import { findFreePort } from './find-free-port.mjs'
 import { cleanupStaleUpdateArtifacts, missingComponents } from './github-updater'
 import { app } from './http-app'
@@ -996,19 +1002,40 @@ if (IS_COMPILED) cleanupStaleUpdateArtifacts()
 // worse than a crash, because a crash gets restarted. After the deadline we un-park anyway: the
 // cost of that is a possible double-dispatch of one surviving run, against the certainty of no
 // automation at all.
+// ⛔⛔ THE TIMER MUST BE CLEARED WHEN THE RACE IS WON (2026-09-07). `Promise.race` settles, but it
+// does not cancel the loser: this timeout fired 120s into EVERY boot and logged the stall error
+// unconditionally, including boots with ZERO runs to reattach, where the loop is over before the
+// next line of code. So the daemon accused itself of a permanent automation stall on every start,
+// for as long as the message has existed, while `markDispatchReady()` had in fact already run.
+// That false alarm cost a real investigation: read as evidence the boot was doing two minutes of
+// work against live sessions, it made an unrelated Claude Desktop logout 36 seconds into boot look
+// like AgentHydra's doing. An alarm that always fires is worse than no alarm, because it spends
+// its credibility before the real stall arrives.
 const REATTACH_DEADLINE_MS = 120_000
 renewBootWatchdog('queue-recovery')
+let reattachDeadline: ReturnType<typeof setTimeout> | null = null
 void Promise.race([
   reattachRuns(),
-  new Promise<void>((r) =>
-    setTimeout(() => {
+  new Promise<void>((r) => {
+    reattachDeadline = setTimeout(() => {
+      // NAME the runs it stalled on. "Something did not settle" is the message that sent the
+      // investigation above to every managed app's log; the pending set costs nothing and turns
+      // the deadline into a lead. An empty set now means the stall is AFTER the loop.
+      const stuck = pendingReattachIds()
       console.error(
-        `[agenthydra] reattachRuns did not settle within ${REATTACH_DEADLINE_MS}ms - starting auto-dispatch anyway rather than leaving it parked forever`,
+        `[agenthydra] reattachRuns did not settle within ${REATTACH_DEADLINE_MS}ms - starting auto-dispatch anyway rather than leaving it parked forever` +
+          (stuck.length
+            ? ` (still un-adjudicated: run ${stuck.join(', ')})`
+            : ' (no run is un-adjudicated, so the stall is after the loop, not inside it)'),
       )
       r()
-    }, REATTACH_DEADLINE_MS).unref?.(),
-  ),
-]).finally(markDispatchReady)
+    }, REATTACH_DEADLINE_MS)
+    reattachDeadline.unref?.()
+  }),
+]).finally(() => {
+  if (reattachDeadline) clearTimeout(reattachDeadline)
+  markDispatchReady()
+})
 
 startAutoUpdate()
 
