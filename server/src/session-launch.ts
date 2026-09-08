@@ -464,6 +464,30 @@ export function archiveRootsForMove(
   return roots.filter((r) => !samePathKey(r, targetDir))
 }
 
+/**
+ * Every desktop profile whose store carries `sessionId`. Exists so a CALLER can tell the
+ * ambiguous case apart before flipping anything: after a migration the same session id lives in
+ * BOTH the source profile (residue, should be archived) and the target profile (the real chat,
+ * must stay visible), and an unscoped archive cannot tell "put the leftover away" apart from
+ * "hide the chat the owner is using".
+ *
+ * Found live 2026-09-08: archiving a migration's leftover twin also archived the real copy on the
+ * instance it had just been moved to - one of them still had a running engine, and its app had
+ * already dropped the row from its in-memory sidebar, so the owner simply lost sight of two chats.
+ */
+export function desktopChatCarriers(sessionId: string, roots?: string[]): string[] {
+  const out: string[] = []
+  for (const profile of roots ?? desktopProfileRoots()) {
+    if (!existsSync(join(profile, 'claude-code-sessions'))) continue
+    try {
+      if (findChatMetaPath(profile, sessionId)) out.push(profile)
+    } catch {
+      // an unreadable profile says nothing about the others
+    }
+  }
+  return out
+}
+
 export async function archiveDesktopChat(
   sessionId: string,
   archived: boolean,

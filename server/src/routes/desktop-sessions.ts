@@ -18,6 +18,7 @@ import {
   archiveDesktopChat,
   archiveRootsForMove,
   coldImportSessionToDesktop,
+  desktopChatCarriers,
   desktopHomeFor,
   importSessionToDesktop,
   isSessionSuperseded,
@@ -167,7 +168,49 @@ app.post('/api/sessions/:id/automation', async (c) => {
 app.post('/api/sessions/:id/desktop-archive', async (c) => {
   const body = await jsonBody(c)
   const sessionId = c.req.param('id')
-  const result = await archiveDesktopChat(sessionId, body.archived !== false)
+  const wantArchived = body.archived !== false
+  // SCOPE, AMBIGUITY AND LIVENESS (2026-09-08, after this route's fleet-wide sweep archived the
+  // real copy of a migrated chat - engine still running - on the instance it had just landed on).
+  // The migrate path already scopes itself (archiveRootsForMove); this door did not.
+  const scopeRef =
+    typeof body.instance_ref === 'string' && body.instance_ref.trim()
+      ? body.instance_ref.trim()
+      : null
+  let roots: string[] | undefined
+  if (scopeRef) {
+    if (!scopeRef.startsWith('desktop:'))
+      return c.json({ ok: false, error: "instance_ref must be 'desktop:<dir>'" }, 400)
+    roots = [scopeRef.slice('desktop:'.length)]
+  } else {
+    // AMBIGUITY IS A REFUSAL, the same rule the chat actuator applies to titles. Only when the
+    // caller did not name a scope: an explicit target is always honoured.
+    const carriers = desktopChatCarriers(sessionId)
+    if (carriers.length > 1)
+      return c.json(
+        {
+          ok: false,
+          error:
+            `ambiguous: ${carriers.length} profiles carry this session (${carriers.join(', ')}). ` +
+            'After a migration the source holds the leftover and the target holds the REAL chat, ' +
+            "so archiving both hides a chat in use. Pass instance_ref ('desktop:<dir>') to say which.",
+          carriers,
+        },
+        409,
+      )
+  }
+  // Never hide a chat whose engine is running, unless a caller says so outright.
+  if (wantArchived && body.force !== true && liveSessionEntry(sessionId))
+    return c.json(
+      {
+        ok: false,
+        error:
+          'session-live: refusing to archive a chat with a running engine (its app drops the row ' +
+          'from the sidebar and only re-reads the store at boot, so the owner loses sight of a ' +
+          'working chat); pass force:true if that is genuinely intended',
+      },
+      409,
+    )
+  const result = await archiveDesktopChat(sessionId, wantArchived, roots)
   // SAY when the flag landed under a running app, rather than returning a bare ok:true for a
   // chat the owner can still see. Measured 2026-08-26 by asking the app itself right after
   // this call: disk said archived, the app still reported isArchived:false, and the chat

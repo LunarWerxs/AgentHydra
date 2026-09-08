@@ -2093,16 +2093,43 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'archive_desktop_chat',
     description:
-      'MUTATES: archive (archived=true, the default) or unarchive a chat in the Claude DESKTOP app by flipping its per-profile metadata flag. Caveat the caller must relay: for an instance whose app is RUNNING, the change appears only after that instance next restarts (a running app may even re-save the old state); for closed instances it is reliable. The AgentHydra done-mark is the immediate in-AgentHydra signal either way.',
-    inputSchema: S({ session_id: { type: 'string' }, archived: { type: 'boolean' } }, [
-      'session_id',
-    ]),
-    run: (a) =>
-      api(`/api/sessions/${encodeURIComponent(str(a.session_id))}/desktop-archive`, {
+      'MUTATES: archive (archived=true, the default) or unarchive a chat in the Claude DESKTOP app by flipping its per-profile metadata flag. ⛔ WITHOUT `instance` THIS IS FLEET-WIDE - it flips EVERY profile whose store carries that session id, and after a migration that is BOTH the source leftover AND the real chat on the target, so an unscoped call can hide a chat the owner is using (it did, 2026-09-08). It now REFUSES (409) when more than one profile carries the session and no `instance` was named, and refuses to archive a chat whose engine is RUNNING unless `force`. Pass `instance` whenever you mean one copy. Caveat the caller must relay: for an instance whose app is RUNNING, the change appears only after that instance next restarts (a running app may even re-save the old state); for closed instances it is reliable. The AgentHydra done-mark is the immediate in-AgentHydra signal either way.',
+    inputSchema: S(
+      {
+        session_id: { type: 'string' },
+        archived: { type: 'boolean' },
+        instance: {
+          type: ['string', 'number'],
+          description:
+            "Which desktop instance's copy to flip - number, name, label, email or dir. Omit ONLY when you mean every profile carrying this session, and then only when exactly one does.",
+        },
+        force: {
+          type: 'boolean',
+          description: "A person's word: archive even though the chat has a running engine.",
+        },
+      },
+      ['session_id'],
+    ),
+    run: async (a) => {
+      let instanceRef: string | undefined
+      if (a.instance !== undefined && a.instance !== null && str(a.instance).trim()) {
+        const row = await resolveRef(str(a.instance).trim())
+        if (row.kind !== 'desktop')
+          throw new Error(
+            `${instanceLabel(row)} is a ${row.kind} instance; desktop chats live only in Claude DESKTOP instances.`,
+          )
+        instanceRef = row.ref // already 'desktop:<dir>'
+      }
+      return api(`/api/sessions/${encodeURIComponent(str(a.session_id))}/desktop-archive`, {
         method: 'POST',
         headers: JSON_HEADERS,
-        body: JSON.stringify({ archived: a.archived }),
-      }),
+        body: JSON.stringify({
+          archived: a.archived,
+          ...(instanceRef ? { instance_ref: instanceRef } : {}),
+          ...(a.force === true ? { force: true } : {}),
+        }),
+      })
+    },
   },
   // --- self-update ------------------------------------------------------------------
   {

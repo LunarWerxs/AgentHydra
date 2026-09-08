@@ -17,7 +17,12 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { archiveDesktopChat, archiveRootsForMove, desktopProfileRoots } from '../src/session-launch'
+import {
+  archiveDesktopChat,
+  archiveRootsForMove,
+  desktopChatCarriers,
+  desktopProfileRoots,
+} from '../src/session-launch'
 
 const notRunning = async () => false
 const SID = 'sess-move-target'
@@ -101,4 +106,27 @@ test('desktopProfileRoots lists real profile dirs, so the route can filter one o
   expect(roots.length).toBeGreaterThan(0)
   // The default install is always first; the isolated instances follow.
   expect(roots[0]!.toLowerCase()).toContain('claude')
+})
+
+// THE SIBLING DOOR, closed 2026-09-08. The 2026-09-04 fix above scoped POST /migrate, but
+// POST /:id/desktop-archive (and the archive_desktop_chat MCP tool behind it) still archived by
+// session id across EVERY profile. It hid two real chats on the instance they had just been
+// migrated to - one with a running engine - because after a migration the source holds the
+// leftover and the target holds the chat in use, and an unscoped flip cannot tell them apart.
+// desktopChatCarriers is the primitive that route's refusal now rests on.
+test('desktopChatCarriers names every profile holding the session, so an unscoped archive can refuse', () => {
+  const source = profileHolding(SID, false)
+  const target = profileHolding(SID, false)
+  const stranger = mkdtempSync(join(tmpdir(), 'agenthydra-move-')) // no store at all
+
+  const carriers = desktopChatCarriers(SID, [source, target, stranger])
+  expect(carriers.sort()).toEqual([source, target].sort())
+  // More than one carrier is exactly the ambiguous case the route turns into a 409 rather than
+  // flipping both - the failure that hid a live chat.
+  expect(carriers.length).toBeGreaterThan(1)
+
+  // One carrier is unambiguous, so the route may proceed without a scope.
+  expect(desktopChatCarriers(SID, [source, stranger])).toEqual([source])
+  // A session nobody carries is not a carrier list of one empty string.
+  expect(desktopChatCarriers('sess-nobody-has-this', [source, target])).toEqual([])
 })
