@@ -94,6 +94,35 @@ when everything cheaper came up empty.
 that is the credential `claude` uses, even for a terminal opened from inside a
 Desktop instance.
 
+### ⛔ A SHARED, LONG-LIVED SERVER CANNOT KNOW WHICH CHAT IS CALLING IT
+
+Every signal above describes **the process running the detection**, and the
+detection is memoized because an identity cannot change while a process lives.
+That is exactly right for a per-chat stdio server and **wrong for the daemon**:
+when AgentHydra is reached over HTTP (`/api/mcp`, which is how the daemon
+registers itself with Claude Code), ONE process serves every instance, and its
+`CLAUDE_CODE_HOST_SESSION_ID` is frozen to whatever chat happened to start it.
+
+Measured 2026-09-08: it named instance #12 at `confidence: 'exact'` while the
+caller was a live chat on #5, and a `move_chats { to: "here" }` landed 13 chats
+on the wrong account. The chat it named had no lineage link to the real caller at
+all, so the `storeConflict` cross-check could not see it.
+
+The guard that closes the reproduced case: a host-session-file win whose chat is
+**archived** is downgraded to `assumed` and reports `staleHostSession`, because a
+process genuinely hosting a live caller cannot have an archived host session.
+`resolveMoveTarget` then refuses `to: "here"` and demands an explicit instance.
+
+**It is not fully general** - a frozen launcher chat that is still open would
+still fool it. So:
+
+- **Never resolve "here" from `whoami` for a mutating action.** Name the target
+  instance, or prove the caller by matching its own session id against
+  `list_chats` (a `sessionId` equal to yours identifies the owning instance).
+- **A human naming an instance overrules every detection**, including `exact`.
+- Launch the daemon with the `CLAUDE_CODE_*` identity vars cleared, so it cannot
+  inherit and then confidently republish one chat's identity to everyone.
+
 ### THREE THINGS THAT LOOK AUTHORITATIVE AND ARE WRONG
 
 Each of these was tried during a real investigation and each produced a

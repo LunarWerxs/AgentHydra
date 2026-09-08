@@ -56,6 +56,14 @@
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Delete   # row menu Delete +
 #                                              the app's own confirm button, both by label
 #   powershell -File misc/Manage-DesktopChat.ps1 -List -Instance 5claude          # rendered rows
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action DumpMenu    # every menu item
+#                            with the properties that do NOT localize; invokes nothing. START HERE
+#                            when an -Action fails on an app whose UI is not in English.
+#
+# LOCALE: menu items are matched by known label FIRST, then by the app's own CSS palette, which
+# does not localize (see $ACTION_LABELS and StructuralMenuItem). Do NOT "fix" a failure on a
+# non-English app by appending that language to $ACTION_LABELS - that only defers the same break
+# to the next locale, and the structural path already handles Archive and Delete in any language.
 #
 # RENAME (piece 6 of the rebuild, proven live 2026-08-29): the app's own Rename control is the
 # ONE write a running app cannot undo (v1 measured every outside metadata write being re-saved

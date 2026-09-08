@@ -7,6 +7,40 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **A dead host session is no longer a confident identity, so `to: "here"` cannot land chats on the
+  wrong account** (`server/src/core/self-identity.ts`, `server/src/mcp.ts`,
+  `server/tests/self-identity.test.ts`). When the daemon is reached over HTTP it is ONE long-lived
+  process serving every instance, and its `CLAUDE_CODE_HOST_SESSION_ID` is frozen to whichever chat
+  started it. On 2026-09-08 that made `whoami` answer instance #12 at `confidence: 'exact'` while
+  the caller was a live chat on #5, and a `move_chats { to: "here" }` migrated 13 chats onto the
+  wrong account. The 2026-09-07 `storeConflict` guard could not catch it: the frozen id had no
+  lineage link to the real caller, so the chat store AGREED with the file. The new invariant is
+  that a process genuinely hosting a live caller cannot have an ARCHIVED host session, so that case
+  now reports `staleHostSession`, drops to `assumed`, and `resolveMoveTarget` refuses `"here"` and
+  demands an explicit instance. Not fully general - a still-open launcher chat would fool it - so
+  the docs now say plainly never to resolve "here" from `whoami` for a mutating action.
+- **`desktop-archive` is scoped to one instance, and refuses rather than hiding a chat in use**
+  (`server/src/routes/desktop-sessions.ts`, `server/src/session-launch.ts`, `server/src/mcp.ts`,
+  `server/tests/migrate-never-archives-the-target.test.ts`). The 2026-09-04 fix scoped
+  `POST /migrate`; the sibling door, `POST /:id/desktop-archive` and the `archive_desktop_chat` MCP
+  tool behind it, still flipped the flag in EVERY profile carrying that session id. After a
+  migration the source profile holds the leftover and the target holds the real chat, so an
+  unscoped call cannot tell "put the leftover away" apart from "hide the chat the owner is using" -
+  and on 2026-09-08 it archived two chats in the instance they had just been migrated to, one with
+  a running engine, whose app had already dropped them from its in-memory sidebar. The route now
+  takes `instance_ref`, returns 409 naming every carrier when several hold the session and none was
+  named, and refuses to archive a chat with a live engine unless `force`. New primitive:
+  `desktopChatCarriers`.
+- **`manage_desktop_chat.ps1` archives on a non-English app.** It matched menu items by display
+  text, so a Portuguese Claude Desktop (`Arquivar` / `Apagar`) refused every archive - correctly,
+  since it will not guess by position when Delete sits next to Archive. The app's CSS classes do
+  not localize and only Delete carries the danger palette (`menu-danger` / `text-danger`), so the
+  destructive item is now excluded POSITIVELY in any language and Archive is the last item left,
+  refusing unless exactly one danger item proves the menu shape. Adds `-Action DumpMenu`, which
+  prints every menu item's non-localized properties and invokes nothing.
+
 ### Added
 
 - **AgentHydra registers itself as an MCP server with Claude Code, on by default**
