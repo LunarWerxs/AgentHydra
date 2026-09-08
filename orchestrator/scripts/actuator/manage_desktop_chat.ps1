@@ -74,7 +74,7 @@ param(
   [string]$Instance = '',
   # DELETE (2026-09-04, owner rule: a probe chat must be deleted afterwards, not left in the
   # account): the row's own Delete item, then the app's own confirm button - both by label.
-  [ValidateSet('Archive', 'Unarchive', 'Rename', 'Delete')][string]$Action = 'Archive',
+  [ValidateSet('Archive', 'Unarchive', 'Rename', 'Delete', 'DumpMenu')][string]$Action = 'Archive',
   [string]$NewTitle = '',
   # RENAME ONLY: when several rendered rows carry the same title, take the Nth from the top
   # (1-based). A rename is reversible and lands on a row that wears this very title, so a
@@ -199,6 +199,59 @@ function MenuItemFor($cond, $action) {
     }
   }
   return @{ Item = $null; Seen = $seen }
+}
+
+# --- LOCALE-INDEPENDENT FALLBACK (2026-09-08) -------------------------------------------------
+# $ACTION_LABELS only ever covered six languages, so a Portuguese app ("Arquivar" / "Apagar")
+# refused every archive - and the fix is NOT to keep bolting on languages (owner, 2026-09-08:
+# "should be generic, not requiring multilingual labels"). The app's own CSS classes are the
+# generic key: they are its styling hooks, NOT display strings, so they are identical in every
+# locale (the same reasoning InPrimaryPane already relies on).
+#
+# The measured shape of the row kebab menu, dumped from a pt-BR app:
+#   Open in / Pin / Mark unread / Rename / Fork / Move to group / Archive / DELETE
+# Only DELETE carries the danger palette (menu-danger, text-danger, bg-fill-danger); every other
+# item is text-primary. The two submenu items (Open in, Move to group) are the only ones carrying
+# a popup-open class. So Delete is identified POSITIVELY in any language - which removes the exact
+# hazard that made guessing unsafe ("Delete sits next to Archive") - and once it is excluded, every
+# remaining item is non-destructive and Archive is the last of them.
+function MenuEntries($cond) {
+  $out = @()
+  $mic = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $MENUITEM)
+  foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+    foreach ($e in $t.FindAll($TREE, $mic)) {
+      try {
+        if (-not $e.Current.Name) { continue }
+        $out += @{ El = $e; Name = [string]$e.Current.Name; Class = [string]$e.Current.ClassName }
+      } catch { continue }
+    }
+  }
+  return $out
+}
+function IsDangerItem($c) { return ($c -match 'menu-danger|text-danger|bg-fill-danger') }
+function IsSubmenuItem($c) { return ($c -match 'data-\[popup-open\]') }
+
+# Returns @{ Item; Why } or @{ Item = $null }. Only Archive and Delete are resolvable this way:
+# Rename/Unarchive have no structural signature and keep requiring a known label.
+function StructuralMenuItem($cond, $action) {
+  $all = @(MenuEntries $cond)
+  if ($all.Count -eq 0) { return @{ Item = $null } }
+  $danger = @($all | Where-Object { IsDangerItem $_.Class })
+  # EXACTLY ONE danger item is the proof that this menu has the shape described above. Zero means
+  # the palette changed and the exclusion is worthless; more than one means it is ambiguous. Either
+  # way, refuse rather than guess - that is the whole point of this function.
+  if ($danger.Count -ne 1) { return @{ Item = $null } }
+  if ($action -eq 'Delete') {
+    return @{ Item = $danger[0].El; Why = "the only item carrying the danger palette ('" + $danger[0].Name + "')" }
+  }
+  if ($action -eq 'Archive') {
+    $safe = @($all | Where-Object { -not (IsDangerItem $_.Class) -and -not (IsSubmenuItem $_.Class) })
+    if ($safe.Count -lt 1) { return @{ Item = $null } }
+    $pick = $safe[$safe.Count - 1]
+    return @{ Item = $pick.El; Why = ("the last non-destructive, non-submenu item ('" + $pick.Name +
+      "'), with the danger item ('" + $danger[0].Name + "') positively excluded by its CSS palette") }
+  }
+  return @{ Item = $null }
 }
 
 # AMBIGUITY IS A REFUSAL: a suffix match means 'Notes' also matches the row for 'My Notes',
@@ -453,13 +506,50 @@ foreach ($m in $mains) {
   # not "ready"; the adversarial review said exactly this and was right. Do not poll here.
   Start-Sleep -Milliseconds 800
 
+  # DIAGNOSTIC: print every rendered menu item with the properties that do NOT localize, so a
+  # locale-independent selector can be found instead of adding yet another language's labels.
+  # Invokes nothing and always exits.
+  if ($Action -eq 'DumpMenu') {
+    $mic2 = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $MENUITEM)
+    $idx = 0
+    foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+      foreach ($e in $t.FindAll($TREE, $mic2)) {
+        try {
+          $c = $e.Current
+          if (-not $c.Name) { continue }
+          $acc = ''
+          try { $acc = [string]$e.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::AccessKeyProperty) } catch { }
+          $help = ''
+          try { $help = [string]$c.HelpText } catch { }
+          Write-Output ("[$idx] Name='" + $c.Name + "' AutomationId='" + $c.AutomationId +
+            "' ClassName='" + $c.ClassName + "' AccessKey='" + $acc + "' HelpText='" + $help + "'")
+          $idx++
+        } catch { continue }
+      }
+    }
+    if ($idx -eq 0) { Write-Output 'FAIL: menu opened but no MenuItem elements were rendered' }
+    try { $ec.Collapse() } catch { }
+    exit 0
+  }
+
   $found = MenuItemFor $cond $Action
   $item = $found.Item
   if (-not $item) {
+    # No known label - fall back to the locale-independent CSS-palette rule rather than failing
+    # (or, worse, growing $ACTION_LABELS by one more language every time).
+    $struct = StructuralMenuItem $cond $Action
+    if ($struct.Item) {
+      $item = $struct.Item
+      Write-Output ("NOTE: no known label matched for '$Action' in this app's locale (menu showed: " +
+        ($found.Seen -join ' | ') + "); selected " + $struct.Why + ".")
+    }
+  }
+  if (-not $item) {
     try { $ec.Collapse() } catch { }
-    Write-Output ("FAIL: menu opened but no '$Action' item matched a known label. Menu showed: " +
+    Write-Output ("FAIL: menu opened but no '$Action' item matched a known label, and the " +
+      "locale-independent CSS-palette fallback could not identify it either. Menu showed: " +
       ($found.Seen -join ' | ') +
-      ". Add this locale's label to `$ACTION_LABELS - refusing rather than guessing by position, because Delete sits next to Archive.")
+      ". Refusing rather than guessing by position, because Delete sits next to Archive.")
     exit 1
   }
   $inv = TryPattern $item ([System.Windows.Automation.InvokePattern]::Pattern)

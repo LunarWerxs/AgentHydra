@@ -39,6 +39,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
+import { collectChats, type DossierChat, lineageIdsOf } from './chat-store-scan'
 import { claudeUserDataDir, instancesRoot, normalizeInstancePath } from './paths'
 
 /** How an identity was established. Ordered from most to least certain — see the module header. */
@@ -90,6 +91,30 @@ export interface SelfIdentityDetection {
    *  rule used and the dirs passed over, so a caller can say the identification was disambiguated
    *  rather than observed. Absent when the winner was unique. */
   disambiguated?: string
+  /**
+   * Set when `host-session-file` won, but the CHAT STORE (the same lineage-aware read `list_chats`
+   * / `chat_dossier` use — current `cliSessionId` and `priorCliSessionIds`, not just a literal
+   * filename) says this session's chat ALSO — or INSTEAD — lives under a different instance than
+   * the file that was found. This is exactly the failure filed 2026-09-07: a chat migrated away
+   * leaves its old `claude-code-sessions/**\/<id>.json` behind at the OLD instance under the
+   * SAME filename, while its new home records the id only inside `priorCliSessionIds` under a
+   * DIFFERENT filename — so the file-only scan finds just the stale copy and calls it exact. When
+   * this is set, `confidence` is downgraded to `assumed` even though a clue still won: a bare
+   * filesystem hit is proof of *a* home this session has had, never proof it is the CURRENT one.
+   */
+  storeConflict?: string
+  /**
+   * Set when `host-session-file` won and the chat store agrees on the owner, but that chat is
+   * ARCHIVED — i.e. dead. A process actually hosting the CALLER cannot have an archived host
+   * session: your own live chat is never archived. So this env is a FROZEN LEFTOVER from a prior
+   * launch of a long-lived / shared server process — CLAUDE_CODE_HOST_SESSION_ID names the chat
+   * that STARTED the server, not the one calling now. This is the mechanism behind the 2026-09-08
+   * incident the 2026-09-07 storeConflict guard could not catch: the frozen id (a #12 chat) had no
+   * lineage link to the real caller (a #5 chat) at all, so no cross-check could connect them — but
+   * its being ARCHIVED proves it is not the live caller. When set, `confidence` is downgraded to
+   * `assumed` even though a clue still won, and `resolveMoveTarget` then refuses `to: "here"`.
+   */
+  staleHostSession?: string
 }
 
 /** Injection seams. Every one defaults to the real thing; tests pass fakes and touch no disk. */
@@ -111,6 +136,11 @@ export interface SelfIdentityDeps {
   defaultUserDataDir?: () => string
   /** The default `claude` CLI login dir (`~/.claude`). */
   defaultConfigDir?: () => string
+  /** The chat store's own lineage-aware read (`core/chat-store-scan.ts`'s `collectChats`), used
+   *  to cross-check a `host-session-file` filename hit against `list_chats`/`chat_dossier`'s
+   *  authoritative view — see `storeConflict`. Defaults to the real, pure (no-db) scan; tests
+   *  inject a fixture so this never touches real disk. */
+  collectChats?: (roots?: Array<{ dir: string; label: string }>) => DossierChat[]
 }
 
 /** One ancestor process, as {@link processAncestry} reports it. */
@@ -215,6 +245,13 @@ interface EnvSignalResult {
   /** A signal that resolved, but only by choosing among several equally-matching candidates.
    *  Surfaced as `disambiguated` on the detection so the choice is never silent. */
   note?: string
+  /** The chat store contradicts this clue. Surfaced as `storeConflict` on the detection, and
+   *  forces `confidence` down to `assumed` even though a clue still won — see that field. */
+  storeConflict?: string
+  /** The chat store agrees on the owner, but that chat is ARCHIVED (dead), so the host-session env
+   *  is a frozen leftover from a prior launch of this process. Surfaced as `staleHostSession` and
+   *  forces `confidence` down to `assumed` — see that field. */
+  staleHostSession?: string
 }
 
 /** Stage 1 — CODEX_HOME names its own home outright. */
@@ -300,6 +337,7 @@ function checkHostSessionSignal(
   readDir: (p: string) => string[] | null,
   exists: (p: string) => boolean,
   mtimeMs: (p: string) => number | null,
+  collectChatsFn: (roots?: Array<{ dir: string; label: string }>) => DossierChat[],
 ): EnvSignalResult {
   const hostSessionId = env.CLAUDE_CODE_HOST_SESSION_ID?.trim()
   if (!hostSessionId) {
@@ -308,6 +346,7 @@ function checkHostSessionSignal(
       ruledOut: 'CLAUDE_CODE_HOST_SESSION_ID is unset (not a Claude Desktop session)',
     }
   }
+  const dirs = candidateUserDataDirs({ readDir }, rootOf(), defaultUdd())
   // EVERY holder, not the first (2026-09-01). A migrated chat leaves its session file behind in
   // each instance it has lived in, so several dirs can hold this id at once. Returning the first
   // hit made the answer depend on directory ORDER: an Orchestrate chat moved to temp1 was reported
@@ -315,21 +354,21 @@ function checkHostSessionSignal(
   // read the wrong account's meter — the exact bug this module exists to prevent, back in through
   // a side door. The 0% weekly it kept seeing was real; it just belonged to someone else.
   const hits: { dir: string; path: string; mtime: number | null }[] = []
-  for (const dir of candidateUserDataDirs({ readDir }, rootOf(), defaultUdd())) {
+  for (const dir of dirs) {
     const sessionsRoot = join(dir, 'claude-code-sessions')
     if (!exists(sessionsRoot)) continue
     const hit = findFileUnder(sessionsRoot, `${hostSessionId}.json`, readDir, exists)
     if (hit) hits.push({ dir, path: hit, mtime: mtimeMs(hit) })
   }
   const first = hits[0]
+  let base: EnvSignalResult
   if (!first) {
-    return {
+    base = {
       clue: null,
       ruledOut: `no instance holds a claude-code-sessions file for CLAUDE_CODE_HOST_SESSION_ID=${hostSessionId}`,
     }
-  }
-  if (hits.length === 1) {
-    return {
+  } else if (hits.length === 1) {
+    base = {
       clue: {
         method: 'host-session-file',
         kind: 'desktop',
@@ -338,28 +377,100 @@ function checkHostSessionSignal(
       },
       ruledOut: '',
     }
+  } else {
+    // The live instance is the one still WRITING its copy, so the newest file is the home. When
+    // no timestamp can be read at all, the pick is not knowledge and is labelled so — it must
+    // never be reported with the same confidence as a unique hit.
+    const dated = hits.filter((h) => h.mtime !== null)
+    const winner = dated.length
+      ? dated.reduce((a, b) => ((b.mtime as number) > (a.mtime as number) ? b : a))
+      : first
+    const losers = hits.filter((h) => h !== winner).map((h) => h.dir)
+    const note = dated.length
+      ? `${hits.length} instances hold this session's file (a migrated chat leaves one behind in each home it has had); chose ${winner.dir} by newest file, over ${losers.join(', ')}`
+      : `AMBIGUOUS: ${hits.length} instances hold this session's file and no timestamp could be read to tell them apart; ${winner.dir} was taken as the first match, over ${losers.join(', ')} — confirm before spending quota on it`
+    base = {
+      clue: {
+        method: 'host-session-file',
+        kind: 'desktop',
+        configDir: winner.dir,
+        proof: winner.path,
+      },
+      ruledOut: '',
+      note,
+    }
   }
-  // The live instance is the one still WRITING its copy, so the newest file is the home. When no
-  // timestamp can be read at all, the pick is not knowledge and is labelled so — it must never be
-  // reported with the same confidence as a unique hit.
-  const dated = hits.filter((h) => h.mtime !== null)
-  const winner = dated.length
-    ? dated.reduce((a, b) => ((b.mtime as number) > (a.mtime as number) ? b : a))
-    : first
-  const losers = hits.filter((h) => h !== winner).map((h) => h.dir)
-  const note = dated.length
-    ? `${hits.length} instances hold this session's file (a migrated chat leaves one behind in each home it has had); chose ${winner.dir} by newest file, over ${losers.join(', ')}`
-    : `AMBIGUOUS: ${hits.length} instances hold this session's file and no timestamp could be read to tell them apart; ${winner.dir} was taken as the first match, over ${losers.join(', ')} — confirm before spending quota on it`
-  return {
-    clue: {
-      method: 'host-session-file',
-      kind: 'desktop',
-      configDir: winner.dir,
-      proof: winner.path,
-    },
-    ruledOut: '',
-    note,
+
+  // Cross-check the filename hit against the CHAT STORE itself — the same lineage-aware read
+  // list_chats/chat_dossier use (current cliSessionId + priorCliSessionIds, not just a literal
+  // filename) — before trusting it as `exact`. FILED 2026-09-07: a chat migrated away leaves its
+  // OLD claude-code-sessions file behind at the OLD instance under the SAME name (that is what
+  // the multi-hit branch above disambiguates), but its NEW home gets a DIFFERENT filename and
+  // records the old id only inside priorCliSessionIds — a filename-only scan never sees that new
+  // home at all. Only one instance held the literal file (the STALE, superseded one), so
+  // `hits.length === 1` above returned total confidence in the wrong account. The chat store is
+  // what `list_chats` reads and is authoritative; a bare filesystem hit is proof of *a* home this
+  // session has had, never proof it is the CURRENT one.
+  if (base.clue) {
+    const matches = chatStoreMatchesOf(hostSessionId, dirs, collectChatsFn)
+    const owners = new Set(matches.map((m) => m.instance))
+    const fileDir = normalizeInstancePath(base.clue.configDir)
+    const others = [...owners].filter((o) => normalizeInstancePath(o) !== fileDir)
+    if (others.length > 0) {
+      return {
+        ...base,
+        storeConflict:
+          `CONFLICT: the chat store also names ${others.join(', ')} as a home for ` +
+          `CLAUDE_CODE_HOST_SESSION_ID=${hostSessionId} via its current cliSessionId or ` +
+          `priorCliSessionIds — the filesystem-only scan above never saw it. The file at ` +
+          `${base.clue.configDir} may be a stale copy a prior move left behind; confirm before ` +
+          `spending quota on it`,
+      }
+    }
+    // The store agrees on the owner, but EVERY matching chat is ARCHIVED — the host session is
+    // dead. A process that is genuinely hosting the caller cannot have an archived host session
+    // (your own live chat is never archived), so CLAUDE_CODE_HOST_SESSION_ID is a frozen leftover
+    // from an earlier launch of this long-lived / shared process: it names the chat that STARTED
+    // the server, not the one calling now. This is the failure the storeConflict guard above
+    // cannot catch, because the frozen id has no lineage link to the real caller at all.
+    if (matches.length > 0 && matches.every((m) => m.archived || m.isArchived)) {
+      const titles = matches.map((m) => JSON.stringify(m.title ?? '(untitled)')).join(', ')
+      return {
+        ...base,
+        staleHostSession:
+          `STALE ENV: CLAUDE_CODE_HOST_SESSION_ID=${hostSessionId} resolves to an ARCHIVED chat ` +
+          `(${titles}) in ${base.clue.configDir}. A live caller's own session is never archived, ` +
+          `so this env is a frozen leftover from a prior launch of this shared server — it names ` +
+          `the chat that STARTED the server, not the one calling now. Resolve "here" by matching ` +
+          `the caller's own session id against list_chats, or pass the target instance explicitly`,
+      }
+    }
   }
+  return base
+}
+
+/** Every chat-store record answering to `hostSessionId` — by current `cliSessionId`, a
+ *  `priorCliSessionIds` entry, or the literal filename — not just the filename
+ *  `checkHostSessionSignal`'s fast path matched. Returns the CHATS (not just their instances) so a
+ *  caller can read the `archived` flag as well as the owner: a store hit alone drives the
+ *  storeConflict cross-check, and its archived-ness drives the staleHostSession check.
+ *  Deliberately built on `collectChats`/`lineageIdsOf` from `./chat-store-scan`, NOT
+ *  `./chat-dossier`: that module imports `./db`, which OPENS A REAL SQLITE HANDLE AS AN IMPORT-TIME
+ *  SIDE EFFECT, and this one must stay side-effect-free at the MCP server's cold start. */
+function chatStoreMatchesOf(
+  hostSessionId: string,
+  dirs: string[],
+  collectChatsFn: (roots?: Array<{ dir: string; label: string }>) => DossierChat[],
+): DossierChat[] {
+  // lineageIdsOf strips a filename's leading 'local_' before treating it as a lineage id.
+  // CLAUDE_CODE_HOST_SESSION_ID names the FILE, so it carries that prefix — strip it the same way
+  // to compare like with like.
+  const bareId = hostSessionId.startsWith('local_')
+    ? hostSessionId.slice('local_'.length)
+    : hostSessionId
+  // label === dir: this comparison only needs directory equality, never a display name.
+  const roots = dirs.map((dir) => ({ dir, label: dir }))
+  return collectChatsFn(roots).filter((chat) => lineageIdsOf(chat).includes(bareId))
 }
 
 /** Stage 5 (last resort) — walk this process's ancestry for a claude-code binary path or a
@@ -462,12 +573,29 @@ export async function detectSelfIdentity(
   }
 
   // --- 4. CLAUDE_CODE_HOST_SESSION_ID → the instance dir that holds this session's own file. -----
-  const hostSignal = checkHostSessionSignal(env, rootOf, defaultUdd, readDir, exists, mtimeMs)
+  const collectChatsFn = deps.collectChats ?? collectChats
+  const hostSignal = checkHostSessionSignal(
+    env,
+    rootOf,
+    defaultUdd,
+    readDir,
+    exists,
+    mtimeMs,
+    collectChatsFn,
+  )
   if (hostSignal.clue) add(hostSignal.clue)
   else ruledOut.push(hostSignal.ruledOut)
   // A choice among equals is recorded where a human will read it, never folded into "exact".
   const disambiguated = hostSignal.note
   if (disambiguated) ruledOut.push(disambiguated)
+  // The chat store disagrees with this filename hit — never report that as `exact` (see
+  // storeConflict on SelfIdentityDetection).
+  const storeConflict = hostSignal.storeConflict
+  if (storeConflict) ruledOut.push(storeConflict)
+  // The host-session env is a frozen leftover pointing at a dead (archived) chat — never `exact`
+  // either (see staleHostSession on SelfIdentityDetection).
+  const staleHostSession = hostSignal.staleHostSession
+  if (staleHostSession) ruledOut.push(staleHostSession)
 
   // --- 5. Process ancestry — the last resort, and the only one that survives a stripped env. -----
   // Skipped entirely when something above already answered: it is the one step that spawns a
@@ -484,17 +612,25 @@ export async function detectSelfIdentity(
   const winner = clues[0] ?? null
   const distinct = new Set(clues.map((c) => normalizeInstancePath(c.configDir)))
   const conflict = distinct.size > 1
+  // A store conflict / stale-env finding only downgrades the verdict when the CONTESTED clue is the
+  // one that actually won — a cheaper stage (CODEX_HOME / CLAUDE_CONFIG_DIR / CLAUDE_CODE_EXECPATH)
+  // answering first means the host-session-file finding was never acted on in the first place.
+  const winnerIsHostClue = winner === hostSignal.clue
+  const winnerIsContested =
+    (Boolean(storeConflict) || Boolean(staleHostSession)) && winnerIsHostClue
 
   if (winner) {
     return {
       configDir: winner.configDir,
       kind: winner.kind,
       method: winner.method,
-      confidence: 'exact',
+      confidence: winnerIsContested ? 'assumed' : 'exact',
       clues,
       ruledOut,
       conflict,
       ...(disambiguated ? { disambiguated } : {}),
+      ...(winnerIsContested && storeConflict ? { storeConflict } : {}),
+      ...(winnerIsContested && staleHostSession ? { staleHostSession } : {}),
     }
   }
 

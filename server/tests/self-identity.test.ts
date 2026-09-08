@@ -56,6 +56,31 @@ function deps(over: Partial<SelfIdentityDeps> = {}): SelfIdentityDeps {
     instancesRoot: () => INSTANCES_ROOT,
     defaultUserDataDir: () => DEFAULT_DESKTOP_DIR,
     defaultConfigDir: () => DEFAULT_LOGIN_DIR,
+    // Every test defaults the chat-store cross-check to "nothing else claims this session" -
+    // never the REAL collectChats, which would walk the operator's actual ~/.claude-instances
+    // tree. Tests that exercise the cross-check itself override this explicitly.
+    collectChats: () => [],
+    ...over,
+  }
+}
+
+/** A minimal DossierChat for the chat-store cross-check tests - only the fields lineageIdsOf
+ *  actually reads vary per test; everything else is a fixed, inert default. */
+function fakeChat(over: Partial<import('../src/core/chat-store-scan').DossierChat>) {
+  return {
+    instance: 'unset',
+    metaPath: 'unset',
+    metaMtime: null,
+    chatId: null,
+    cliSessionId: null,
+    priorCliSessionIds: [],
+    title: null,
+    cwd: null,
+    createdAt: null,
+    lastActivityAt: null,
+    archived: false,
+    isArchived: false,
+    permissionMode: null,
     ...over,
   }
 }
@@ -261,6 +286,184 @@ describe('detectSelfIdentity — a MIGRATED session (the same file in more than 
     )
     expect(got.configDir).toBe(LIVE_DIR)
     expect(got.disambiguated).toBeUndefined()
+  })
+})
+
+describe('detectSelfIdentity — a STALE filename hit vs. the chat store (filed 2026-09-07)', () => {
+  // THE THIRD REGRESSION. Unlike the 2026-09-01 fixture above (the SAME filename copied to both
+  // homes, so mtime disambiguates it), a chat moved through /import-desktop gets a BRAND NEW
+  // filename at its new home and records the old id only inside `priorCliSessionIds` - so the
+  // filename-only scan finds just the ONE stale copy at the OLD instance and never even sees the
+  // new home. A real whoami call answered instance #12 (stale) with confidence "exact" while the
+  // session actually ran on #5; a `move_chats { to: "here" }` then landed three chats on the wrong
+  // account. bareId strips HOST_SESSION_ID's 'local_' prefix the same way lineageIdsOf does.
+  const STALE_DIR = join(INSTANCES_ROOT, 'pap3r rotate2')
+  const LIVE_DIR = join(INSTANCES_ROOT, '5claude')
+  const bareId = HOST_SESSION_ID.slice('local_'.length)
+  const staleFile = join(STALE_DIR, 'claude-code-sessions', 'a', 'b', `${HOST_SESSION_ID}.json`)
+  const fs = fakeFs({
+    files: [marker(STALE_DIR), marker(LIVE_DIR), staleFile],
+    dirs: {
+      [INSTANCES_ROOT]: ['pap3r rotate2', '5claude'],
+      [join(STALE_DIR, 'claude-code-sessions')]: ['a'],
+      [join(STALE_DIR, 'claude-code-sessions', 'a')]: ['b'],
+      [join(STALE_DIR, 'claude-code-sessions', 'a', 'b')]: [],
+      // 5claude holds NO file named after HOST_SESSION_ID at all - only its own metadata file,
+      // under a different name, records the old id (via collectChats below, not the filesystem).
+      [join(LIVE_DIR, 'claude-code-sessions')]: [],
+    },
+  })
+
+  test('a unique filename hit is downgraded to assumed when the store names a DIFFERENT owner', async () => {
+    const collectChats = () => [
+      fakeChat({ instance: STALE_DIR, chatId: `local_${bareId}` }),
+      fakeChat({
+        instance: LIVE_DIR,
+        chatId: 'local_33882364-a521-4713-bcc2-ef3b7e792a85',
+        cliSessionId: '33882364-a521-4713-bcc2-ef3b7e792a85',
+        priorCliSessionIds: [bareId],
+      }),
+    ]
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...fs, collectChats, ancestry: async () => null }),
+    )
+    // The file hit is still what is RETURNED (never silently swapped for the store's guess) -
+    // but it must never be reported with total confidence again.
+    expect(got.configDir).toBe(STALE_DIR)
+    expect(got.method).toBe('host-session-file')
+    expect(got.confidence).toBe('assumed')
+    expect(got.storeConflict).toContain(LIVE_DIR)
+    expect(got.ruledOut.some((r) => r.includes('CONFLICT') && r.includes(LIVE_DIR))).toBe(true)
+  })
+
+  test('agreement: the store confirms the SAME owner - stays exact, no conflict noise', async () => {
+    const collectChats = () => [fakeChat({ instance: STALE_DIR, chatId: `local_${bareId}` })]
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...fs, collectChats, ancestry: async () => null }),
+    )
+    expect(got.configDir).toBe(STALE_DIR)
+    expect(got.confidence).toBe('exact')
+    expect(got.storeConflict).toBeUndefined()
+  })
+
+  test('a store conflict on a signal that did NOT win never downgrades the real winner', async () => {
+    // CLAUDE_CONFIG_DIR (stage 2) answers first; the host-session-file conflict below is real but
+    // irrelevant, because nothing ever acted on that clue.
+    const collectChats = () => [
+      fakeChat({ instance: STALE_DIR, chatId: `local_${bareId}` }),
+      fakeChat({ instance: LIVE_DIR, priorCliSessionIds: [bareId] }),
+    ]
+    const got = await detectSelfIdentity(
+      deps({
+        env: { ...DESKTOP_MCP_ENV, CLAUDE_CONFIG_DIR: 'C:\\cli-7' },
+        ...fs,
+        collectChats,
+        ancestry: async () => null,
+      }),
+    )
+    expect(got.configDir).toBe('C:\\cli-7')
+    expect(got.confidence).toBe('exact')
+    expect(got.storeConflict).toBeUndefined()
+  })
+
+  test('no chat-store signal at all (e.g. an unreadable file) leaves the filename hit untouched', async () => {
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...fs, collectChats: () => [], ancestry: async () => null }),
+    )
+    expect(got.configDir).toBe(STALE_DIR)
+    expect(got.confidence).toBe('exact')
+    expect(got.storeConflict).toBeUndefined()
+  })
+})
+
+describe('detectSelfIdentity — a FROZEN host-session env pointing at a DEAD chat (filed 2026-09-08)', () => {
+  // THE FOURTH REGRESSION, and the one the 2026-09-07 storeConflict guard cannot catch. The
+  // AgentHydra MCP server is long-lived and shared: its CLAUDE_CODE_HOST_SESSION_ID froze to the
+  // chat that STARTED it (a #12 chat), which has since been ARCHIVED. A live #5 chat then called
+  // whoami; the frozen id has NO lineage link to that caller, so no cross-check can connect them —
+  // but the chat it names being ARCHIVED proves the env is stale (a live caller's own session is
+  // never archived). whoami answered #12 "exact" and `move_chats { to: "here" }` landed 13 chats on
+  // the wrong account (#5's chats landed on #12) before the operator caught it.
+  const HOST_DIR = join(INSTANCES_ROOT, 'pap3r rotate2')
+  const bareId = HOST_SESSION_ID.slice('local_'.length)
+  const hostFile = join(HOST_DIR, 'claude-code-sessions', 'a', 'b', `${HOST_SESSION_ID}.json`)
+  const fs = fakeFs({
+    files: [marker(HOST_DIR), hostFile],
+    dirs: {
+      [INSTANCES_ROOT]: ['pap3r rotate2'],
+      [join(HOST_DIR, 'claude-code-sessions')]: ['a'],
+      [join(HOST_DIR, 'claude-code-sessions', 'a')]: ['b'],
+      [join(HOST_DIR, 'claude-code-sessions', 'a', 'b')]: [],
+    },
+  })
+
+  test('an ARCHIVED host-session chat downgrades a unique filename hit to assumed', async () => {
+    const collectChats = () => [
+      fakeChat({
+        instance: HOST_DIR,
+        chatId: `local_${bareId}`,
+        cliSessionId: bareId,
+        archived: true,
+        isArchived: true,
+        title: 'a chat that was archived long before this call',
+      }),
+    ]
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...fs, collectChats, ancestry: async () => null }),
+    )
+    // The file hit is still what is RETURNED — never silently swapped — but never "exact" again.
+    expect(got.configDir).toBe(HOST_DIR)
+    expect(got.method).toBe('host-session-file')
+    expect(got.confidence).toBe('assumed')
+    expect(got.staleHostSession).toContain('ARCHIVED')
+    // The OLD (storeConflict) guard finds no OTHER owner, so it never fires here — that is the
+    // whole point of the new one.
+    expect(got.storeConflict).toBeUndefined()
+    expect(got.ruledOut.some((r) => r.includes('STALE ENV'))).toBe(true)
+  })
+
+  test('an UNARCHIVED host-session chat stays exact — a genuine live per-chat server', async () => {
+    const collectChats = () => [
+      fakeChat({
+        instance: HOST_DIR,
+        chatId: `local_${bareId}`,
+        cliSessionId: bareId,
+        archived: false,
+        isArchived: false,
+      }),
+    ]
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...fs, collectChats, ancestry: async () => null }),
+    )
+    expect(got.confidence).toBe('exact')
+    expect(got.staleHostSession).toBeUndefined()
+  })
+
+  test('with no chat-store signal at all the filename hit is untouched (archived check needs a match)', async () => {
+    const got = await detectSelfIdentity(
+      deps({ env: DESKTOP_MCP_ENV, ...fs, collectChats: () => [], ancestry: async () => null }),
+    )
+    expect(got.confidence).toBe('exact')
+    expect(got.staleHostSession).toBeUndefined()
+  })
+
+  test('a stale-env finding on a signal that did NOT win never downgrades the real winner', async () => {
+    // CLAUDE_CONFIG_DIR (stage 2) answers first; the archived host-session finding is real but
+    // irrelevant, because nothing ever acted on that clue.
+    const collectChats = () => [
+      fakeChat({ instance: HOST_DIR, chatId: `local_${bareId}`, archived: true, isArchived: true }),
+    ]
+    const got = await detectSelfIdentity(
+      deps({
+        env: { ...DESKTOP_MCP_ENV, CLAUDE_CONFIG_DIR: 'C:\\cli-7' },
+        ...fs,
+        collectChats,
+        ancestry: async () => null,
+      }),
+    )
+    expect(got.configDir).toBe('C:\\cli-7')
+    expect(got.confidence).toBe('exact')
+    expect(got.staleHostSession).toBeUndefined()
   })
 })
 
