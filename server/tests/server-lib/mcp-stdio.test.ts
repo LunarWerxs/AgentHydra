@@ -175,12 +175,36 @@ function send(input: PassThrough, msg: unknown) {
   input.write(`${JSON.stringify(msg)}\n`);
 }
 
-async function waitUntil(check: () => boolean, timeoutMs = 2000) {
+// 15s, not 2s. These four tests drive real streams and a real event loop, and bun runs test
+// FILES concurrently: alone this file finishes in ~100 ms, but inside DevWebUI's 466-test /
+// 51-file suite the loop is busy enough that 2 s expired and four tests failed as
+// "condition never became true". That read as a bug in runMcpStdio and was not one - the
+// same code passes 18/18 alone, in all 13 pairwise combinations, and in ReDesign's smaller
+// suite. A timeout is a BACKSTOP against a hang, not a performance assertion, so it should
+// be far longer than the operation could plausibly take. The failure message now says what
+// it was waiting for, because "condition never became true" identifies neither.
+async function waitUntil(check: () => boolean, what = "condition", timeoutMs = 15000) {
   const start = Date.now();
   while (!check()) {
-    if (Date.now() - start > timeoutMs) throw new Error("waitUntil: condition never became true");
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`waitUntil: ${what} never became true within ${timeoutMs}ms`);
+    }
     await new Promise((r) => setTimeout(r, 5));
   }
+}
+
+// Indexing an array under `noUncheckedIndexedAccess` yields `T | undefined`, so `lines[0]`
+// and `releases[0](...)` do not typecheck in the apps that consume this file - ReDesign
+// sets that flag and went red on it. Reaching for `!` would silence the compiler and, when
+// the element really is missing, fail with "cannot read properties of undefined", which
+// says nothing about which index or how many there were. This says both.
+//
+// The kit repo has no tsconfig and never typechecks this file, so nothing here catches
+// that class of error before it reaches a consumer. See the note in sync.mjs.
+function at<T>(arr: readonly T[], i: number, what: string): T {
+  const v = arr[i];
+  if (v === undefined) throw new Error(`${what}[${i}] is missing (length ${arr.length})`);
+  return v;
 }
 
 test("runMcpStdio: a slow tool no longer blocks ping/a fast tool queued behind it", async () => {
@@ -199,19 +223,19 @@ test("runMcpStdio: a slow tool no longer blocks ping/a fast tool queued behind i
   send(input, { jsonrpc: "2.0", id: 2, method: "ping" });
   send(input, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "fast" } });
 
-  await waitUntil(() => lines.length >= 2);
+  await waitUntil(() => lines.length >= 2, "ping and the fast tool both answered");
   // Only ping + the fast tool have answered; the long tool must still be outstanding.
   expect(lines.length).toBe(2);
   expect(lines.map((l) => JSON.parse(l).id).sort()).toEqual([2, 3]);
 
   releaseLong("long-result");
-  await waitUntil(() => lines.length >= 3);
+  await waitUntil(() => lines.length >= 3, "all three responses written");
   const longRes = lines.map((l) => JSON.parse(l)).find((r) => r.id === 1);
   expect(longRes.result.content[0].text).toBe(JSON.stringify("long-result", null, 2));
 
   input.end();
   await done;
-});
+}, 30000);
 
 test("runMcpStdio: the in-flight cap holds — the (N+1)th request waits for a free slot", async () => {
   const releases: Array<(v: unknown) => void> = [];
@@ -228,18 +252,23 @@ test("runMcpStdio: the in-flight cap holds — the (N+1)th request waits for a f
   send(input, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "block" } });
   send(input, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "block" } });
 
+  // Wait for the cap to FILL, then check it HOLDS. A fixed sleep cannot do both: 20 ms was
+  // enough on an idle machine and not enough inside a 51-file suite, where this asserted
+  // `2` against a `releases` that was still empty. Waiting for 2 proves the first two
+  // started; the short settle after it is what proves the third did NOT.
+  await waitUntil(() => releases.length >= 2, "two tools in flight");
   await new Promise((r) => setTimeout(r, 20));
   expect(releases.length).toBe(2); // cap of 2: the 3rd request is queued, not yet running
 
-  releases[0]("first");
-  await waitUntil(() => releases.length === 3); // freeing a slot let the 3rd start
-  releases[1]("second");
-  releases[2]("third");
-  await waitUntil(() => lines.length >= 3);
+  at(releases, 0, "releases")("first");
+  await waitUntil(() => releases.length === 3, "the queued third tool started");
+  at(releases, 1, "releases")("second");
+  at(releases, 2, "releases")("third");
+  await waitUntil(() => lines.length >= 3, "all three responses written");
 
   input.end();
   await done;
-});
+}, 30000);
 
 test("runMcpStdio: notifications/cancelled aborts a tool that honours AbortSignal", async () => {
   const cancellable = {
@@ -258,15 +287,15 @@ test("runMcpStdio: notifications/cancelled aborts a tool that honours AbortSigna
   await new Promise((r) => setTimeout(r, 10));
   send(input, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 1, reason: "client gave up" } });
 
-  await waitUntil(() => lines.length >= 1);
-  const res = JSON.parse(lines[0]);
+  await waitUntil(() => lines.length >= 1, "the cancellation response");
+  const res = JSON.parse(at(lines, 0, "lines"));
   expect(res.id).toBe(1);
   expect(res.result.isError).toBe(true);
   expect(res.result.content[0].text).toContain("Cancelled");
 
   input.end();
   await done;
-});
+}, 30000);
 
 test("runMcpStdio: concurrent completions never interleave bytes on stdout", async () => {
   const tools = Array.from({ length: 6 }, (_, i) => ({
@@ -283,9 +312,14 @@ test("runMcpStdio: concurrent completions never interleave bytes on stdout", asy
   output.on("data", (chunk: Buffer) => rawChunks.push(chunk.toString("utf8")));
 
   const done = runMcpStdio({ serverInfo, tools }, { input, output, maxInFlight: 8 });
-  tools.forEach((t, i) => send(input, { jsonrpc: "2.0", id: i + 1, method: "tools/call", params: { name: t.name } }));
+  // for-of, not forEach: a concise arrow body RETURNS whatever it evaluates to, and biome's
+  // useIterableCallbackReturn rejects a forEach callback that returns anything. ReDesign runs
+  // `biome lint --error-on-warnings`, so this was the second thing keeping it red.
+  for (const [i, t] of tools.entries()) {
+    send(input, { jsonrpc: "2.0", id: i + 1, method: "tools/call", params: { name: t.name } });
+  }
 
-  await waitUntil(() => rawChunks.join("").split("\n").filter(Boolean).length >= tools.length);
+  await waitUntil(() => rawChunks.join("").split("\n").filter(Boolean).length >= tools.length, "every tool responded");
   input.end();
   await done;
 
@@ -296,4 +330,4 @@ test("runMcpStdio: concurrent completions never interleave bytes on stdout", asy
   for (const line of allLines) {
     expect(() => JSON.parse(line)).not.toThrow();
   }
-});
+}, 30000);
