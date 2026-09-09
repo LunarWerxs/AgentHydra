@@ -12,6 +12,13 @@ export interface UpdateStatus {
   canApply: boolean;
   checkedAt: number;
   reason: string | null;
+  /** The remote branch an apply would pull: the tracked/local branch when the remote has it, else
+   *  the remote's HEAD branch the check fell back to. OPTIONAL: set by the git-checkout engine only. */
+  remoteBranch?: string | null;
+  /** True when a newer remote commit exists but HEAD is not its ancestor, so `pull --ff-only`
+   *  cannot apply it (local commits the remote lacks). `canApply` is false and `reason` says so.
+   *  OPTIONAL: set by the git-checkout engine only. */
+  diverged?: boolean;
   /** Installed version of each release-owned component, or null where an install predates version
    *  stamping. OPTIONAL because only an app whose release ships sidecar components beside the
    *  executable can populate it: the git-checkout engine has no such components, and a fabricated

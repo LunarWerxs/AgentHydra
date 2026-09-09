@@ -464,6 +464,77 @@ def _archive_source_on_disk(session_id: str, src_instance: str, fleet_data: dict
     return done
 
 
+def _tombstone_source_session_file(session_id: str, src_instance: str, target: dict,
+                                    fleet_data: dict | None = None) -> str | None:
+    """TOMBSTONE the settled source meta record so it stops EXISTING as a same-named file,
+    not just stops rendering (filed 2026-09-07, item 3 - `_settle_source`/
+    `_archive_source_on_disk` above only flip `isArchived`; the file survives forever at its
+    original `local_<id>.json` name). Left in place, that name keeps answering to two
+    different lookups that both match on FILENAME, not on the archived flag:
+    self-identity.ts's `checkHostSessionSignal` (a Desktop session's own
+    CLAUDE_CODE_HOST_SESSION_ID -> `<instanceDir>/claude-code-sessions/**/<id>.json`) and
+    this module's own `stamplib.iter_metas` glob (`*/*/local_*.json`) - so every future scan
+    has to keep re-discovering the same stale twin and re-deciding it is stale. Renaming the
+    file to `<name>.tombstone` drops it out of BOTH globs at the source, so the ambiguity
+    stops being CREATED instead of merely being caught downstream (items 1+2's job).
+
+    The content is kept, never destroyed outright: the renamed file gets `tombstoned`,
+    `tombstonedAt` and `movedTo` fields written into the same JSON, so a human opening it by
+    hand finds the real answer instead of a dangling name. IDEMPOTENT on purpose (migrate_chat
+    is not atomic, and a batch's own retry or a later twins-lane pass may call this again for
+    the same session): once the `.json` is renamed away, `stamplib.iter_metas`'s own glob no
+    longer yields it, so a plain repeat call finds nothing left to do and returns None -
+    never a re-write, never an error. The one case that DOES find something on a repeat call
+    is the zombie-row leak `_settle_source` already documents: a running app can re-save the
+    row from memory, RESURRECTING a fresh `local_<id>.json` after this function removed it.
+    When that resurrected file's `.tombstone` sibling already exists, the FIRST tombstone's
+    content is kept as the authoritative record (never overwritten) and only the resurrected
+    duplicate is removed again - so a resurrection can reappear any number of times without
+    ever winning back its original name. Best-effort throughout - any failure here is
+    swallowed; the row is already settled by the time this runs, and a half-tombstoned record
+    must never be worse than the plain archived one it replaces.
+
+    Returns the tombstone path (as text) when a record was tombstoned, was already one, or a
+    resurrected duplicate was cleared; else None (nothing at the source named this session -
+    e.g. a same-instance no-op move, or a repeat call with nothing left to find)."""
+    from lib import stamplib
+
+    if fleet_data is None:
+        try:
+            fleet_data = hydralib.fleet()
+        except hydralib.DaemonError:
+            return None
+    done: str | None = None
+    for store in stamplib.store_roots(fleet_data):
+        if str(store["instance"]).lower() != str(src_instance).lower():
+            continue
+        for path, meta in stamplib.iter_metas(store["root"]):
+            cli = str(meta.get("cliSessionId") or path.stem.replace("local_", ""))
+            if cli != session_id:
+                continue
+            tomb_path = path.with_name(path.name + ".tombstone")
+            if tomb_path.exists():
+                # A prior settle already tombstoned this record and a running app resurrected
+                # a fresh copy under the same name from memory - clear the duplicate again
+                # without disturbing the first tombstone, which stays the authoritative record.
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                done = str(tomb_path)
+                continue
+            meta["tombstoned"] = True
+            meta["tombstonedAt"] = time.time()
+            meta["movedTo"] = target.get("name")
+            try:
+                tomb_path.write_text(json.dumps(meta), encoding="utf-8")
+                path.unlink()
+                done = str(tomb_path)
+            except OSError:
+                continue
+    return done
+
+
 @dataclass
 class MigrateArgs:
     """Parsed migrate_chat.py argv - see main()'s Usage docstring for the flags."""
@@ -1057,6 +1128,30 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
 
 
 def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str,
+                       chat_title, sw=None) -> tuple[str, str]:
+    """Settle the superseded source row, then TOMBSTONE its on-disk record so the stale copy
+    stops existing under its original name (item 3, filed 2026-09-07 - see
+    `_tombstone_source_session_file`'s docstring for why settling alone is not enough).
+    `_settle_source_row_core` does the actual settle; this wrapper is the single choke point
+    both `move_only` (one chat) and `migrate_batch`'s `phase_settle` (many) already share, so
+    the tombstone runs for every settle without a second call site to keep in sync.
+
+    Tombstoning runs ONLY for 'settled' and 'flagged' (the row is confirmed archived) - never
+    for 'visible' (the settle failed; a twin is legitimately still on screen and must stay
+    findable for the twins lane) or 'none' (there was nothing to settle). It is best-effort:
+    a tombstone failure is appended to the report as a note and never turns an otherwise
+    successful, verified move into a reported failure - callers still branch on STATE alone,
+    unchanged from `_settle_source_row_core`."""
+    note, state = _settle_source_row_core(match, target, fleet, session_id, chat_title, sw)
+    if state in ("settled", "flagged"):
+        src_name = str(match.get("instance") or "")
+        tomb = _tombstone_source_session_file(session_id, src_name, target, fleet)
+        note += (f" Source record tombstoned on disk ({tomb})." if tomb
+                 else " Source record could not be tombstoned (left archived on disk).")
+    return note, state
+
+
+def _settle_source_row_core(match: dict, target: dict, fleet: dict, session_id: str,
                        chat_title, sw=None) -> tuple[str, str]:
     """Settle the superseded SOURCE row (_settle_source docstring).
 

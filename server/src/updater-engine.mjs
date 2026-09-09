@@ -155,6 +155,12 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
     if (!remote.remoteArg) return { ...status, ok: false, reason: "no update remote configured" };
 
     const compareBranch = upstream.remoteBranch || branch;
+    // The remote branch the update would actually pull. `compareBranch` is what was ASKED for;
+    // when the remote has no such branch the check falls back to the remote's HEAD, and apply
+    // must then pull THAT branch, not the local name. It used to pull the local name, so a
+    // checkout on a branch the remote lacks was told an update existed and then failed to apply
+    // it with "couldn't find remote ref", every cycle.
+    let remoteBranch = compareBranch || null;
     let remoteCommit = null;
     if (compareBranch) {
       const ref = await git(["ls-remote", remote.remoteArg, `refs/heads/${compareBranch}`]);
@@ -165,11 +171,13 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
       if (head.ok) {
         const parsed = parseRemoteHead(head.stdout);
         remoteCommit = parsed.commit;
+        remoteBranch = parsed.branch;
         status.branch = status.branch || parsed.branch;
       }
     }
 
     status.remoteCommit = remoteCommit;
+    status.remoteBranch = remoteBranch;
     // A differing remote SHA is NOT enough: on a dev checkout the local branch is routinely
     // AHEAD of the update remote (committed-but-unpushed work). ls-remote gives us the SHA
     // without fetching, and when we're ahead that commit already exists locally, so
@@ -178,15 +186,35 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
     // which correctly read as "update available". Without this, an enabled auto-update
     // loop on an ahead checkout would ff-pull a no-op and reinstall + rebuild every cycle.
     let remoteIsAncestor = false;
+    // "Newer" is not "applicable". `pull --ff-only` succeeds only when HEAD is an ancestor of
+    // the remote commit; a checkout that has DIVERGED (local commits the remote lacks AND remote
+    // commits it lacks) used to be advertised as an update that apply then refused, every
+    // cycle. So the fast-forward is proven before it is advertised: fetch just that branch into
+    // FETCH_HEAD (no local branch and no working file moves) and ask git the ancestry question.
+    // A failed fetch is reported as its own reason rather than guessed either way.
+    let fastForward = "n/a"; // "yes" | "no" | "unknown" | "n/a"
     if (remoteCommit && remoteCommit !== currentCommit) {
       remoteIsAncestor = (await git(["merge-base", "--is-ancestor", remoteCommit, "HEAD"])).ok;
+      if (!remoteIsAncestor && remoteBranch) {
+        const fetched = await git(["fetch", "--quiet", "--no-tags", remote.remoteArg, remoteBranch], APPLY_TIMEOUT_MS);
+        if (!fetched.ok) fastForward = "unknown";
+        else fastForward = (await git(["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"])).ok ? "yes" : "no";
+      }
     }
-    status.updateAvailable = !!(remoteCommit && remoteCommit !== currentCommit && !remoteIsAncestor);
-    status.canApply = status.updateAvailable && !dirty && !!(compareBranch || status.branch);
-    status.reason = status.updateAvailable
+    const newer = !!(remoteCommit && remoteCommit !== currentCommit && !remoteIsAncestor);
+    status.updateAvailable = newer;
+    status.diverged = newer && fastForward === "no";
+    status.canApply = newer && fastForward === "yes" && !dirty && !!remoteBranch;
+    status.reason = newer
       ? dirty
         ? "local changes must be committed or stashed before updating"
-        : null
+        : fastForward === "no"
+          ? "local checkout has diverged from the update remote; a fast-forward is not possible (merge or rebase at your desk)"
+          : fastForward === "unknown"
+            ? "could not fetch the update remote to verify the update"
+            : !remoteBranch
+              ? "could not determine the remote branch to pull"
+              : null
       : remoteCommit
         ? remoteIsAncestor
           ? "local checkout is ahead of the update remote"
@@ -222,17 +250,20 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
       };
     }
     if (before.dirty) throw new Error("Commit or stash local changes before applying an update.");
+    // Diverged, unverifiable, or no pullable branch: the check already said why. Running the pull
+    // anyway is exactly the fail-every-cycle loop this guard exists to end.
+    if (!before.canApply) throw new Error(before.reason ?? "The update cannot be applied to this checkout.");
 
     const upstream = await currentUpstream();
     const remote = await remoteForCheck(upstream.remoteName);
-    const branch = upstream.remoteBranch || before.branch;
+    // Pull the branch the check just PROVED fast-forwardable, by name. A plain `git pull --ff-only`
+    // would pull the configured upstream, which is the same branch in the ordinary case; naming it
+    // keeps apply pointed at what check verified when the two differ (a local branch with no remote
+    // counterpart follows the remote's HEAD; an update remote given by URL is pulled from that URL).
+    const branch = before.remoteBranch || upstream.remoteBranch || before.branch;
     if (!remote.remoteArg || !branch) throw new Error("No update remote/branch is configured.");
 
-    await runStep(
-      upstream.upstream ? ["git", "pull", "--ff-only"] : ["git", "pull", "--ff-only", remote.remoteArg, branch],
-      APPLY_TIMEOUT_MS,
-      output,
-    );
+    await runStep(["git", "pull", "--ff-only", remote.remoteArg, branch], APPLY_TIMEOUT_MS, output);
     try {
       await runStep(installCmd, BUILD_TIMEOUT_MS, output);
       await runStep(buildCmd, BUILD_TIMEOUT_MS, output);

@@ -6,12 +6,9 @@ cd /d "%~dp0.."
 echo Rebuilding AgentHydra GUI...
 call bun run build
 if errorlevel 1 (
-  echo.
   echo Build FAILED - see the output above.
-  pause
   exit /b 1
 )
 
-echo.
 echo Done.
 exit /b 0

@@ -1,9 +1,7 @@
 # todo
 
-One markdown file per piece of open work. Subfolders are fine for grouping by owner or theme, the
-way Connections does it (`michael-do-me/`, `mcp-improvements/`).
+Open work for this repository. **One file: [`TODO.md`](TODO.md)** (owner directive, 2026-09-08).
 
 This README is the folder's index, not an item: Odin skips it when counting what is outstanding.
-
-**A completed to-do is assimilated, then deleted.** Whatever it taught belongs in the code, a check,
-or a document that outlives it; a finished item left here is just a thing to re-read and re-decide.
+It is also the only file here that git tracks in a public repository - `public_todo_guard.py`
+ignores the rest so a public repo never publishes its own backlog.

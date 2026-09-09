@@ -403,7 +403,7 @@ orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should ha
                (orchestrator/server + orchestrator/web). Driven by the daemon through
                server/src/orchestrator.ts; its own manual is orchestrator/README.md
 tests/         launcher.test.ts (the tray guard, Windows-gated) + server/instance unit tests
-misc/          the Windows launcher toolkit (tray .ps1 / .vbs / .ico / Create-Shortcut / Make-Icon / Rebuild.bat)
+misc/          the Windows launcher toolkit (tray .ps1 / .vbs / .ico / Create-Shortcut / Make-Icon / rebuild_agenthydra.bat)
 scripts/       repo tooling (screenshots/: regenerate the README images)
 ```
 

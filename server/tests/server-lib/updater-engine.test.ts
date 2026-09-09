@@ -11,7 +11,7 @@
 // and in what order" is checkable after the fact. All git operations are local (file:// clones of
 // tmpdir repos) — no network — so the suite is hermetic and deterministic.
 import { afterEach, test, expect } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
@@ -286,3 +286,55 @@ test("a rollback of a tree nobody touched creates no stash", async () => {
   expect(message).toBe("boom; rolled back to the previous version");
   expect((await $`git -C ${local} stash list`.text()).trim()).toBe("");
 }, 30_000);
+
+// ── "newer" is not "applicable" ─────────────────────────────────────────────────────────────
+// check used to advertise any non-ancestor remote commit as an applicable update. Two shapes
+// made apply fail on every cycle: a checkout that had DIVERGED (pull --ff-only refuses it), and a
+// local branch the remote does not have (check fell back to the remote's HEAD but apply pulled the
+// local branch name). check now proves the fast-forward with a bounded fetch and carries the
+// resolved remote branch through to apply.
+
+test("a diverged checkout is reported as an update that cannot fast-forward, and apply refuses it", async () => {
+  const remote = await remoteRepo();
+  const local = await cloneRepo(remote);
+  const logPath = join(scratchDir("ue-log-"), "log.txt");
+  // Local work the remote does not have...
+  writeFileSync(join(local, "local.txt"), "mine\n");
+  await $`git -C ${local} add -A`.quiet();
+  await $`git -C ${local} commit -q -m local`.quiet();
+  const headBefore = (await $`git -C ${local} rev-parse HEAD`.text()).trim();
+  // ...and remote work the local does not have.
+  await advanceRemote(remote, "0.2.0");
+
+  const updater = updaterFor(local, loggingCmd(logPath, "install"), loggingCmd(logPath, "build"));
+  const status = await updater.checkForUpdate();
+  expect(status.updateAvailable).toBe(true);
+  expect(status.canApply).toBe(false);
+  expect(status.diverged).toBe(true);
+  expect(status.reason).toContain("diverged");
+
+  await expect(updater.applyUpdate()).rejects.toThrow(/diverged/);
+  expect((await $`git -C ${local} rev-parse HEAD`.text()).trim()).toBe(headBefore);
+  expect(existsSync(logPath)).toBe(false); // install/build never ran
+});
+
+test("a local branch with no remote counterpart follows the remote's HEAD branch, and apply pulls THAT branch", async () => {
+  const remote = await remoteRepo();
+  const local = await cloneRepo(remote);
+  const logPath = join(scratchDir("ue-log-"), "log.txt");
+  await $`git -C ${local} checkout -q -b feature`.quiet(); // no upstream, and no `feature` on the remote
+  await advanceRemote(remote, "0.3.0");
+  const remoteHead = (await $`git -C ${remote} rev-parse HEAD`.text()).trim();
+
+  const updater = updaterFor(local, loggingCmd(logPath, "install"), loggingCmd(logPath, "build"));
+  const status = await updater.checkForUpdate();
+  expect(status.remoteBranch).toBe("main");
+  expect(status.updateAvailable).toBe(true);
+  expect(status.canApply).toBe(true);
+
+  const result = await updater.applyUpdate();
+  expect(result.ok).toBe(true);
+  expect((await $`git -C ${local} rev-parse HEAD`.text()).trim()).toBe(remoteHead);
+  // Line endings normalised: a Windows clone with core.autocrlf checks the marker out as CRLF.
+  expect(readFileSync(join(local, "marker.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("0.3.0\n");
+});

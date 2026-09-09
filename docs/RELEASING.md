@@ -155,7 +155,7 @@ REFERENCE.md, "The orchestrator"). The release job stages its python half - `orc
 looks for it (`APP_ROOT/orchestrator`). Not staged: `state/` (runtime), `scripts/tests/`, and the
 remote front-end (`orchestrator/server` + `orchestrator/web`), which need bun and are a source
 checkout's business. Python 3 is the user's own; the daemon does not bundle it, and
-`GET /api/orchestrator` reports whether it answers. `misc/Rebuild.bat` is unaffected: it rebuilds
+`GET /api/orchestrator` reports whether it answers. `misc/rebuild_agenthydra.bat` is unaffected: it rebuilds
 the daemon's own SPA, and the orchestrator's web dashboard is built separately with
 `bun run --cwd orchestrator remote:build`.
 

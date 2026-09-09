@@ -23,7 +23,7 @@ $appRoot = Split-Path -Parent $scriptDir
 
 # Dev-only gate for "Rebuild & Restart": a distributed build ships a prebuilt web\dist and no
 # server\src tree, so rebuilding there would just fail. Dev-only via AGENTHYDRA_DEV=1 — public/
-# source-checkout users never see "Rebuild & Restart"; they use misc/Rebuild.bat instead.
+# source-checkout users never see "Rebuild & Restart"; they use misc/rebuild_agenthydra.bat instead.
 $isDevTree = ($env:AGENTHYDRA_DEV -eq "1")
 
 # Release layout (the GitHub-release zip): a compiled AgentHydra.exe sits at the app root, next

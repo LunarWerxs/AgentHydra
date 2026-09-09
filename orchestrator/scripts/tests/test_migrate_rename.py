@@ -404,7 +404,12 @@ class MigrateTest(ActTestBase):
             payload = json.loads(out)
             self.assertEqual(payload["sourceRow"], "flagged")
             self.assertNotIn("STILL VISIBLE", payload["report"])
-            self.assertTrue(json.loads(meta.read_text(encoding="utf-8"))["isArchived"])
+            # A 'flagged' settle is also tombstoned (item 3, filed 2026-09-07): the flag lands
+            # in the renamed .tombstone sibling, not the original name, which no longer exists.
+            self.assertFalse(meta.exists())
+            tomb = json.loads(Path(str(meta) + ".tombstone").read_text(encoding="utf-8"))
+            self.assertTrue(tomb["isArchived"])
+            self.assertTrue(tomb["tombstoned"])
 
     def test_a_CLOSED_source_instance_is_VERIFIED_too_never_assumed_settled(self):
         """"A closed app's disk flag is durable on its own" was a claim about the daemon's
@@ -424,7 +429,10 @@ class MigrateTest(ActTestBase):
             settle.assert_not_called()  # a closed app has no control to drive
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(out)["sourceRow"], "flagged")
-            self.assertTrue(json.loads(meta.read_text(encoding="utf-8"))["isArchived"])
+            self.assertFalse(meta.exists())
+            tomb = json.loads(Path(str(meta) + ".tombstone").read_text(encoding="utf-8"))
+            self.assertTrue(tomb["isArchived"])
+            self.assertTrue(tomb["tombstoned"])
 
     def test_a_twin_that_survives_even_the_disk_flag_is_named_and_annotated(self):
         import migrate_chat
@@ -459,6 +467,128 @@ class MigrateTest(ActTestBase):
             payload = json.loads(out)
             self.assertNotIn("STILL VISIBLE", payload["report"])
             self.assertIn("settled through its app", payload["report"])
+
+    def test_a_settled_source_row_is_tombstoned_on_disk(self):
+        # Item 3, filed 2026-09-07: settling alone leaves the meta record sitting at its
+        # original local_<id>.json name forever, which is exactly the stale file
+        # self-identity.ts's checkHostSessionSignal (and this module's own iter_metas glob)
+        # can still find and mistake for a live home. A clean settle must also retire the
+        # FILE, not just its isArchived flag.
+        import migrate_chat
+        from util import run_cli
+
+        with tempfile.TemporaryDirectory() as td:
+            self._settle_verify_fixture(td, archived_on_disk=True)
+            meta = Path(td) / "src" / "claude-code-sessions" / "a" / "b" / "local_y.json"
+            tomb = Path(str(meta) + ".tombstone")
+            with mock.patch.object(migrate_chat, "_settle_source", return_value=(3, "not rendered")), \
+                 mock.patch.object(migrate_chat.time, "sleep"):
+                code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2claude", "--json"])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out)["sourceRow"], "settled")
+            self.assertFalse(meta.exists(), "the stale local_y.json must not survive a settle")
+            self.assertTrue(tomb.exists(), "a tombstone must replace it")
+            tombed = json.loads(tomb.read_text(encoding="utf-8"))
+            self.assertTrue(tombed["tombstoned"])
+            self.assertEqual(tombed["cliSessionId"], SID)
+            self.assertEqual(tombed["movedTo"], "2claude")
+
+    def test_a_flagged_source_row_is_also_tombstoned(self):
+        # The weaker disk-flag fallback (a window that never rendered the row) settles the
+        # row just as durably from item 3's point of view - it is still confirmed archived
+        # on disk by the time _settle_source_row_core returns "flagged", so the file must go.
+        import migrate_chat
+        from util import run_cli
+
+        with tempfile.TemporaryDirectory() as td:
+            self._settle_verify_fixture(td, archived_on_disk=False)
+            meta = Path(td) / "src" / "claude-code-sessions" / "a" / "b" / "local_y.json"
+            tomb = Path(str(meta) + ".tombstone")
+            with mock.patch.object(migrate_chat, "_settle_source", return_value=(3, "not rendered")), \
+                 mock.patch.object(migrate_chat.time, "sleep"):
+                code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2claude", "--json"])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out)["sourceRow"], "flagged")
+            self.assertFalse(meta.exists())
+            self.assertTrue(tomb.exists())
+            self.assertTrue(json.loads(tomb.read_text(encoding="utf-8"))["tombstoned"])
+
+    def test_a_twin_still_visible_is_never_tombstoned(self):
+        # A twin the settle could NOT clear must stay findable by its real name for the
+        # twins lane to keep chasing - tombstoning a row that is still genuinely visible
+        # would hide the very problem that lane exists to fix.
+        import migrate_chat
+        from util import run_cli
+
+        with tempfile.TemporaryDirectory() as td:
+            self._settle_verify_fixture(td, archived_on_disk=False)
+            meta = Path(td) / "src" / "claude-code-sessions" / "a" / "b" / "local_y.json"
+            tomb = Path(str(meta) + ".tombstone")
+            with mock.patch.object(migrate_chat, "_settle_source", return_value=(3, "not rendered")), \
+                 mock.patch.object(migrate_chat, "_archive_source_on_disk", return_value=False), \
+                 mock.patch.object(migrate_chat.time, "sleep"):
+                code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2claude", "--json"])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out)["sourceRow"], "visible")
+            self.assertTrue(meta.exists(), "a genuinely stuck twin must stay findable")
+            self.assertFalse(tomb.exists())
+
+    def test_tombstone_repeat_call_with_nothing_left_is_a_quiet_no_op(self):
+        # migrate_chat is not atomic and a batch's phase_settle may call this twice for the
+        # same chat (a retry, or a later twins-lane pass). Once the .json is renamed away,
+        # stamplib.iter_metas's own glob no longer yields it, so a plain repeat call finds
+        # nothing to act on - it must return None quietly, never raise, never invent a write.
+        import migrate_chat
+
+        with tempfile.TemporaryDirectory() as td:
+            src_root = Path(td) / "src" / "claude-code-sessions" / "a" / "b"
+            src_root.mkdir(parents=True)
+            meta = src_root / "local_y.json"
+            meta.write_text(json.dumps({"cliSessionId": SID, "isArchived": True, "title": "T"}),
+                            encoding="utf-8")
+            fleet_data = {"instances": [{"num": 4, "name": "src", "dir": str(Path(td) / "src"),
+                                        "ref": "desktop:c:\\i\\src", "isRunning": True}]}
+            target = {"name": "2claude"}
+            first = migrate_chat._tombstone_source_session_file(SID, "src", target, fleet_data)
+            self.assertIsNotNone(first)
+            self.assertFalse(meta.exists())
+            tomb = Path(str(meta) + ".tombstone")
+            self.assertTrue(tomb.exists())
+            written_once = tomb.read_text(encoding="utf-8")
+            second = migrate_chat._tombstone_source_session_file(SID, "src", target, fleet_data)
+            self.assertIsNone(second)
+            self.assertEqual(tomb.read_text(encoding="utf-8"), written_once,
+                             "a repeat call must not touch an already-tombstoned record")
+
+    def test_tombstone_clears_a_resurrected_meta_file_without_disturbing_the_record(self):
+        # THE ZOMBIE-ROW LEAK _settle_source already documents: a running app can re-save a
+        # row from memory, resurrecting a fresh local_<id>.json under the SAME name after this
+        # function removed it. The resurrection must be cleared again, and the FIRST
+        # tombstone's content (the true moved-to answer) must never be overwritten by it.
+        import migrate_chat
+
+        with tempfile.TemporaryDirectory() as td:
+            src_root = Path(td) / "src" / "claude-code-sessions" / "a" / "b"
+            src_root.mkdir(parents=True)
+            meta = src_root / "local_y.json"
+            meta.write_text(json.dumps({"cliSessionId": SID, "isArchived": True, "title": "T"}),
+                            encoding="utf-8")
+            fleet_data = {"instances": [{"num": 4, "name": "src", "dir": str(Path(td) / "src"),
+                                        "ref": "desktop:c:\\i\\src", "isRunning": True}]}
+            first = migrate_chat._tombstone_source_session_file(
+                SID, "src", {"name": "2claude"}, fleet_data)
+            tomb = Path(str(meta) + ".tombstone")
+            written_once = tomb.read_text(encoding="utf-8")
+            # The app resurrects the row under the SAME name, as if it never left - a
+            # different `movedTo` here proves the resurrection, not the first tombstone, wins.
+            meta.write_text(json.dumps({"cliSessionId": SID, "isArchived": False, "title": "T"}),
+                            encoding="utf-8")
+            second = migrate_chat._tombstone_source_session_file(
+                SID, "src", {"name": "someone-else"}, fleet_data)
+            self.assertEqual(second, first)
+            self.assertFalse(meta.exists(), "the resurrected duplicate must be cleared again")
+            self.assertEqual(tomb.read_text(encoding="utf-8"), written_once,
+                             "the FIRST tombstone stays authoritative, never overwritten")
 
 
 class RenameTest(ActTestBase):

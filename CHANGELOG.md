@@ -7,8 +7,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-09-08
+
 ### Fixed
 
+- **The git-checkout self-updater no longer advertises an update it cannot apply**
+  (`server/src/updater-engine.mjs`, `server/src/updater-engine.d.mts`,
+  `server/tests/server-lib/updater-engine.test.ts`; kit-synced). A checkout that had DIVERGED
+  from the update remote (local commits the remote lacks, and remote commits it lacks) was told
+  an update existed and then failed to apply it with `pull --ff-only`, every cycle; a checkout on
+  a branch the remote does not have pulled the LOCAL branch name and failed with "couldn't find
+  remote ref", every cycle. The check now proves the fast-forward before advertising it (a
+  fetch of just that branch into `FETCH_HEAD` and `merge-base --is-ancestor`), reports
+  `diverged` and `remoteBranch`, and apply pulls the branch the check verified, by name. A
+  fetch that fails is its own reason rather than a guess either way.
 - **"Move chats to account" moves ALL of an account's chats, and a chat it cannot land is left
   where it was instead of vanishing** (`web/src/components/InstancesView.vue`,
   `web/src/lib/move-chats.ts`, `server/src/routes/desktop-sessions.ts`,
@@ -79,6 +91,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **`move_chat` and `move_chats` confirm the resolved account by name AND email**
+  (`server/src/mcp.ts`, `server/tests/move-chat-mcp.test.ts`). `targetNote` used to carry a bare
+  name and nickname, read only after every chat had already imported, and a stale identity
+  signal landed three chats on the wrong account that way (2026-09-07). It now names the
+  instance number, the name, the tier and the account's email, is built from ONE resolve before the
+  orchestrator run is posted (one per batch, not per chat), reads identically for a `dry_run`
+  and the real move, and is reported on a refusal too. The tool descriptions point a caller at
+  `dry_run: true` + `targetNote` as the pre-flight check whenever `to`/"here" is not obviously
+  right.
 - **AgentHydra registers itself as an MCP server with Claude Code, on by default**
   (`server/src/mcp-register.ts`, `server/tests/mcp-register.test.ts`, Settings → MCP server). On
   every start the daemon writes one entry into Claude Code's user-scope config:
@@ -116,6 +137,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **A moved chat's settled source record is tombstoned on disk, not merely flagged**
+  (`orchestrator/scripts/migrate_chat.py`, `orchestrator/scripts/tests/test_migrate_rename.py`).
+  Settling only flipped `isArchived`, so the source's `local_<id>.json` survived forever under its
+  original name and kept answering two filename-keyed lookups (the daemon's own host-session
+  identity check, and the toolbox's metadata glob), so every later scan re-discovered the same
+  stale twin and re-decided it was stale. After a verified settle the file is renamed to
+  `<name>.tombstone` with `tombstoned`, `tombstonedAt` and `movedTo` written into it: out of both
+  globs at the source, content kept for a human, idempotent on a retry, and a copy a running app
+  resurrects from memory is removed again without ever winning back its name. Best-effort: a
+  tombstone failure is a note on the report, never a failed move. `chat-dossier.ts` now reads the
+  store through `core/chat-store-scan.ts` (the pure file scan, extracted 2026-09-07) and re-exports
+  the same names, so no caller changed.
+- **`misc/Rebuild.bat` is `misc/rebuild_agenthydra.bat`**, without the `pause` that held a
+  console open on failure; the tray, the reference docs and the root ignore rule follow the rename.
 - **The "Move chats to account" submenu is one line per destination and lists running accounts
   only, until asked** (`web/src/components/InstancesView.vue`,
   `web/src/i18n/locales/en/instances.ts`). A green dot marks a running app, the same mark the

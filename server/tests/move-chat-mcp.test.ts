@@ -20,11 +20,21 @@ let scriptStdout = JSON.stringify({
   permissionMode: 'bypassPermissions',
 })
 let scriptExit = 0
-const instances: Record<string, { num: number; kind: string; name: string; handle: string }> = {
+const instances: Record<
+  string,
+  { num: number; kind: string; name: string; handle: string; email?: string | null }
+> = {
   '36': { num: 36, kind: 'desktop', name: 'Darragh', handle: 'c:\\i\\anutha23' },
   martin: { num: 8, kind: 'desktop', name: 'Martin', handle: 'c:\\i\\another_meh' },
   '8': { num: 8, kind: 'desktop', name: 'Martin', handle: 'c:\\i\\another_meh' },
   '9': { num: 9, kind: 'cli', name: 'a CLI login', handle: 'cli-uuid' },
+  '42': {
+    num: 42,
+    kind: 'desktop',
+    name: 'Priya',
+    handle: 'c:\\i\\priya',
+    email: 'priya@example.com',
+  },
 }
 
 function respond(url: string, init?: RequestInit): Response {
@@ -37,7 +47,7 @@ function respond(url: string, init?: RequestInit): Response {
     return Response.json({
       ...row,
       ref: `${row.kind}:${row.handle}`,
-      email: null,
+      email: row.email ?? null,
       plan: null,
       tier: 'Max 20×',
       configDir: row.handle,
@@ -236,5 +246,69 @@ describe('how it reads the answer back', () => {
     expect(r.ok).toBe(false)
     expect(r.stdout).toContain('Usage')
     expect(r.args).toBeDefined()
+  })
+})
+
+// Item 4, filed 2026-09-07: a stale identity signal made move_chats { to: 'here' } land three
+// chats on the wrong account, and the only confirmation of WHICH account it actually used was
+// `targetNote`'s bare name+nickname, read only after every chat had already imported. These pin
+// that `targetNote` now also carries the resolved account's EMAIL - the detail a human or an
+// agent skimming a nickname is far less likely to miss - and that it is built from the SAME
+// resolve, before either tool posts the orchestrator run that does the actual importing.
+describe('targetNote confirms the resolved account by name AND email (item 4, filed 2026-09-07)', () => {
+  test('move_chat: a target with an email on record gets it appended to targetNote', async () => {
+    const r = (await moveChat().run({ chat: 'x', to: 42 })) as Record<string, unknown>
+    expect(r.targetNote).toBe('to = instance #42 (Priya · Max 20×) — priya@example.com')
+  })
+
+  test('move_chat: a target with NO email on record still gets a clean note, never a dangling dash', async () => {
+    const r = (await moveChat().run({ chat: 'x', to: 36 })) as Record<string, unknown>
+    expect(r.targetNote).toBe('to = instance #36 (Darragh · Max 20×)')
+    expect(r.targetNote).not.toContain('—')
+  })
+
+  test('move_chat: the resolve that produces targetNote happens before the orchestrator run is posted', async () => {
+    await moveChat().run({ chat: 'x', to: 42 })
+    const resolveIdx = calls.findIndex((c) => c.url.includes('/api/instance-numbers/resolve'))
+    const runIdx = calls.findIndex((c) => c.url.endsWith('/api/orchestrator/run'))
+    expect(resolveIdx).toBeGreaterThanOrEqual(0)
+    expect(resolveIdx).toBeLessThan(runIdx)
+  })
+
+  test('move_chat: targetNote is still reported on a refusal, not only after a landed move', async () => {
+    scriptExit = 6
+    scriptStdout = JSON.stringify({ landed: false, held: true, report: 'REFUSED: HELD ...' })
+    const r = (await moveChat().run({ chat: 'x', to: 42 })) as Record<string, unknown>
+    expect(r.ok).toBe(false)
+    expect(r.targetNote).toContain('priya@example.com')
+  })
+
+  test('move_chat: targetNote reads identically for a real move and a dry_run of the same target', async () => {
+    const real = (await moveChat().run({ chat: 'x', to: 42 })) as Record<string, unknown>
+    const planned = (await moveChat().run({ chat: 'x', to: 42, dry_run: true })) as Record<
+      string,
+      unknown
+    >
+    expect(planned.targetNote).toBe(real.targetNote)
+  })
+
+  test('move_chats: the batch target is resolved ONCE, with email, before the first import runs', async () => {
+    const t = TOOLS.find((x) => x.name === 'move_chats')
+    if (!t) throw new Error('no MCP tool named move_chats')
+    scriptStdout = JSON.stringify({ moved: ['x'], refused: [], results: [] })
+    const r = (await t.run({ chats: ['x'], to: 42 })) as Record<string, unknown>
+    expect(r.targetNote).toBe('to = instance #42 (Priya · Max 20×) — priya@example.com')
+    const resolves = calls.filter((c) => c.url.includes('/api/instance-numbers/resolve'))
+    expect(resolves).toHaveLength(1) // one resolve for the WHOLE batch, not per chat
+    const resolveIdx = calls.findIndex((c) => c.url.includes('/api/instance-numbers/resolve'))
+    const runIdx = calls.findIndex((c) => c.url.endsWith('/api/orchestrator/run'))
+    expect(resolveIdx).toBeLessThan(runIdx) // resolved before migrate_batch imports anything
+  })
+
+  test('the descriptions point a caller at targetNote and dry_run as the pre-flight check', () => {
+    const chats = TOOLS.find((x) => x.name === 'move_chats')
+    expect(moveChat().description).toContain('targetNote')
+    expect(moveChat().description.toLowerCase()).toContain('dry_run: true')
+    expect(chats?.description).toContain('targetNote')
   })
 })

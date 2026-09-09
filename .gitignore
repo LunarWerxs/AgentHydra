@@ -27,8 +27,8 @@ PLAN.md
 /CCManagerUI.lnk
 /CCManagerUI Instances.lnk
 
-# Local root rebuild convenience wrapper (delegates to misc/Rebuild.bat)
-/Rebuild.bat
+# Local root rebuild convenience wrapper (delegates to misc/rebuild_agenthydra.bat)
+/rebuild_agenthydra.bat
 
 # Owner handoff notes: internal, not for the public repo
 docs/HANDOFF_MICHAEL.md
