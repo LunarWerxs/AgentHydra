@@ -1811,6 +1811,11 @@ export const TOOLS: McpEngineTool[] = [
             "A PERSON'S WORD: a chat refused for a live engine (working, or quiet but not yet past its window) has that engine KILLED - the whole process tree - and is then moved. For draining an account about to hit its limit, where letting the turn finish would spend the last of its quota and the turn would die on the wall anyway. The transcript survives; a tool result still in flight is lost, so pair it with `resume` text that says so. Never implied by `force` (which only overrides a hold); never applied to a hold, the breaker, or an archived chat; an unconfirmed kill leaves the refusal in place and says why.",
         },
         dry_run: { type: 'boolean', description: 'Plan every chat, move nothing.' },
+        background: {
+          type: 'boolean',
+          description:
+            "Answer AT ONCE with `operationId` instead of holding the connection open for the whole batch, then poll `orchestrator_operation {id}` for the full report. STRONGLY PREFERRED for more than two or three chats: this batch's own deadline runs to an hour, which is far longer than most MCP callers will wait, and a caller that gives up first loses the entire per-chat report - what landed, every bypassVerdict, whether each resume was delivered - for work that is still running and WILL finish.",
+        },
       },
       [],
     ),
@@ -1850,11 +1855,34 @@ export const TOOLS: McpEngineTool[] = [
       const planned = all ? Math.max(limit || 40, 40) : chats.length
       const perChat = wait + 90 + (resume !== '' ? 75 : 0) + (terminate ? 60 : 0)
       const timeoutMs = Math.min(3_600_000, (planned * perChat + 180) * 1000)
+      // A DETERMINISTIC idempotency key over this exact batch. The caller's transport gives up
+      // long before a real batch finishes (measured 2026-09-09: a 6-chat drain with resume text
+      // outlived the MCP timeout, and the agent then had no way to learn that every chat HAD
+      // landed and every resume reply HAD been staged - so it staged five duplicates). Re-firing
+      // the identical call now returns the ORIGINAL operation instead of moving anything twice,
+      // which makes "I lost the answer, ask again" the safe move rather than a second act.
+      const idempotencyKey = `move_chats:${JSON.stringify(args)}`
+      const background = a.background === true
       const run = (await api('/api/orchestrator/run', {
         method: 'POST',
         headers: JSON_HEADERS,
-        body: JSON.stringify({ script: 'migrate_batch', args, timeoutMs }),
+        body: JSON.stringify({
+          script: 'migrate_batch',
+          args,
+          timeoutMs,
+          async: background,
+          idempotencyKey,
+        }),
       })) as Record<string, unknown>
+      // `background` answers with the id and nothing else yet - there is no report to parse.
+      if (background)
+        return {
+          ...run,
+          started: true,
+          targetNote,
+          poll: `orchestrator_operation { id: "${str(run.operationId)}" }`,
+          note: 'The batch is running in the daemon. Poll the id above for the full per-chat report; re-calling move_chats with these exact arguments returns this same operation rather than moving anything twice.',
+        }
       let payload: Record<string, unknown> | null = null
       try {
         const parsed: unknown = JSON.parse(str(run.stdout))
@@ -2166,6 +2194,16 @@ export const TOOLS: McpEngineTool[] = [
           description: 'Arguments for that script, one per element, no shell quoting.',
         },
         timeout_secs: { type: 'number' },
+        background: {
+          type: 'boolean',
+          description:
+            "Answer AT ONCE with `operationId` instead of holding the connection open until the script finishes. USE THIS for anything that runs longer than a minute or two - migrate_batch, courier over several chats, loop --live, a --idle-wait that sleeps out a window. Then poll `orchestrator_operation {id}` for the same result the blocking call would have returned. Without it a long script is at the mercy of the CALLER's transport timeout, and the work keeps running with nobody able to read its verdict.",
+        },
+        idempotency_key: {
+          type: 'string',
+          description:
+            "A caller-chosen key that makes a RETRY of this exact request return the ORIGINAL operation instead of starting a second act. Pass one whenever the script MUTATES and you might retry it (a dropped connection, a timeout you are unsure about): it is the difference between reading the first run's verdict and running the act twice.",
+        },
       },
       ['script'],
     ),
@@ -2177,8 +2215,31 @@ export const TOOLS: McpEngineTool[] = [
           script: a.script,
           args: Array.isArray(a.args) ? a.args : [],
           timeoutMs: a.timeout_secs != null ? Number(a.timeout_secs) * 1000 : undefined,
+          async: a.background === true,
+          idempotencyKey:
+            typeof a.idempotency_key === 'string' && a.idempotency_key.trim()
+              ? a.idempotency_key.trim()
+              : undefined,
         }),
       }),
+  },
+  {
+    name: 'orchestrator_operation',
+    description:
+      "READ THE VERDICT OF A RUN WHOSE CALL YOU LOST - poll one orchestrator operation by id, or list the recent ones. THE DAEMON KEEPS EVERY RUN'S FULL RESULT FOR AN HOUR, so a call that died on YOUR transport timeout is not lost work and never has to be guessed at or re-run: the script kept going in the daemon, finished, and its stdout/exit code/verdict are still here. Read them instead of re-firing the act. `id` polls one (`operationId` comes back from every orchestrator_run, INCLUDING the 409-busy refusal that names the run already in flight); omit it to list recent operations, which is how you find the id when the call that would have told you it never returned. `status` is 'running' or 'done'/'failed'; a running one can be polled again. Read-only - it starts nothing and cancels nothing.",
+    inputSchema: S({
+      id: {
+        type: 'string',
+        description:
+          'The operationId to poll. Omit to LIST recent operations - do that when a call timed out and you never saw its id.',
+      },
+    }),
+    run: async (a) =>
+      api(
+        typeof a.id === 'string' && a.id.trim()
+          ? `/api/orchestrator/operations/${encodeURIComponent(a.id.trim())}`
+          : '/api/orchestrator/operations',
+      ),
   },
   {
     name: 'orchestrator_loop',
