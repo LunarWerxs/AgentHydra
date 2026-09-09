@@ -17,6 +17,7 @@ import {
   applyDesktopChatAutomation,
   archiveDesktopChat,
   archiveRootsForMove,
+  awaitChatRecord,
   coldImportSessionToDesktop,
   desktopChatCarriers,
   desktopHomeFor,
@@ -25,6 +26,7 @@ import {
   launchTerminalSession,
   liveSessionEntry,
   reassertChatArchive,
+  unarchiveChatRecord,
 } from '../session-launch'
 import { getSession } from '../sessions'
 
@@ -276,12 +278,31 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       : MIGRATION_NOTICE
   const s = await getSession(sessionId, 'claude')
   if (!s) return c.json({ ok: false, error: 'session not found' }, 404)
+  // What the chat WAS SET TO, read before anything below touches its record: model, effort, the
+  // ultracode toggle, the Chrome permission mode, its permission grants (chat-settings-carry.ts).
+  // The app's import creates the target record with defaults, and the owner was putting these
+  // back by hand on every moved chat (2026-09-03, 13 of 16 reset). The whole source record is kept
+  // too: a CLOSED target receives a copy of it rather than an app-created record. Read before the
+  // title door because the record's own `title` is one of the two names that door accepts.
+  const sourceRendered = findDesktopChatMeta(sessionId)
+  let sourceMeta: Record<string, unknown> = {}
+  try {
+    if (sourceRendered?.path)
+      sourceMeta = JSON.parse(readFileSync(sourceRendered.path, 'utf8')) as Record<string, unknown>
+  } catch {
+    // an unreadable source record means nothing to carry; the move still proceeds
+  }
+  const carried = pickCarriedSettings(sourceMeta)
   // THE NAMING REQUIREMENT (owner directive, 2026-08-29): a migration is a landing, so the
   // same contract as import-desktop - a real new title, or the current one restated exactly.
+  // "Current" is either name the chat goes by right now: the session list's transcript-derived
+  // title, or the desktop record's own (what the app's sidebar and the Instances "Chats" list
+  // show, and so what a person planning a move from there has actually read).
   const migrateTitle = resolveRequiredTitle({
     title: body.title,
     confirmTitle: body.confirm_title,
     currentTitle: s.title ?? null,
+    recordTitle: typeof sourceMeta.title === 'string' ? sourceMeta.title : null,
   })
   if (!migrateTitle.ok) return c.json({ ok: false, error: migrateTitle.error }, 400)
   // One lineage, one continuation — checked BEFORE the kill below, so a refused migrate never
@@ -296,21 +317,6 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       },
       409,
     )
-
-  // What the chat WAS SET TO, read before anything below touches its record: model, effort, the
-  // ultracode toggle, the Chrome permission mode, its permission grants (chat-settings-carry.ts).
-  // The app's import creates the target record with defaults, and the owner was putting these
-  // back by hand on every moved chat (2026-09-03, 13 of 16 reset). The whole source record is kept
-  // too: a CLOSED target receives a copy of it rather than an app-created record.
-  const sourceRendered = findDesktopChatMeta(sessionId)
-  let sourceMeta: Record<string, unknown> = {}
-  try {
-    if (sourceRendered?.path)
-      sourceMeta = JSON.parse(readFileSync(sourceRendered.path, 'utf8')) as Record<string, unknown>
-  } catch {
-    // an unreadable source record means nothing to carry; the move still proceeds
-  }
-  const carried = pickCarriedSettings(sourceMeta)
 
   // A live chat's process must stop before anything appends to its transcript. User-initiated:
   // clicking "migrate" means "move this thread", current turn included.
@@ -338,42 +344,19 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       return c.json({ ok: false, error: 'could not stop the live session process' }, 409)
   }
 
-  // Old desktop entries: flagged archived now, BEFORE the import creates the fresh entry in
-  // the target profile.
+  // LAND FIRST, VERIFY BY READ-BACK, AND ONLY THEN ARCHIVE THE SOURCE (2026-09-08). This route
+  // used to archive the source's rows BEFORE importing, on the theory that the failure of an app
+  // import is not always knowable. That ordering is exactly what turned every failure into a
+  // vanished chat: the hot import answers ok when its 20s stamp wait runs out with no record
+  // (stampImportedChat's `false` is "not titled", not "not landed"), a target app busy with the
+  // previous chat of a bulk move regularly takes longer than that, an engine the app respawned
+  // on the source got the import refused as a live writer, and in every one of those cases the
+  // source was already archived, the target held nothing, and the UI counted the chat as moved.
+  // The orchestrator's migrate_chat never had this bug because it verifies the landing and settles
+  // the source afterwards; the route now does the same. A landing that cannot be verified leaves
+  // the chat where it was and says so; if the app creates the row late, the chat shows on both
+  // accounts, visibly, and the next move of it finds the target's copy and just settles the source.
   //
-  // EVERY OTHER PROFILE - NEVER THE TARGET'S OWN (bug, reproduced live 2026-09-04). This used to
-  // call archiveDesktopChat with no roots, which walks the default profile plus every isolated
-  // instance and flips the flag in each store that carries the chat, the TARGET included. When
-  // the target already held a record (a re-migrate, or a move whose target is the account the
-  // chat is already on), the move archived it and then nothing put it back: alreadyRendersIn
-  // reads an archived record as "not rendering" so the import proceeds, and the hot landing
-  // writes title, permission mode and carried settings but NEVER isArchived (the only forced
-  // `false` in the codebase is the cold path's buildColdImportRecord). Net effect: the route
-  // answered ok, the chat was hidden on the account it had just been moved to, and it had to be
-  // un-archived by hand. Excluding the target here fixes it upstream, where no write is made at
-  // all, rather than by racing the running app with a corrective write it re-saves over.
-  const targetDir = ref.slice('desktop:'.length)
-  const archived0 = await archiveDesktopChat(sessionId, true, archiveRootsForMove(targetDir)).catch(
-    () => null,
-  )
-  // ...and the meta cache dropped NOW, not only after the import: within the scan cache's
-  // 15s TTL, importSessionToDesktop's alreadyRendered check could read the PRE-archive rows
-  // and skip the reimport entirely while this handler still answered ok (adversarial review
-  // finding, 2026-08-31; bit live 2026-09-01).
-  invalidateSessionMetaCache()
-  // THE DURABLE FIX for the zombie twin (owner ask, 2026-09-01): a RUNNING source app
-  // re-saves isArchived=false within seconds and resurrects the stale row. For each source
-  // profile whose app was running, fire a bounded background watcher that keeps the flag true
-  // until the app's next boot makes it stick. Fire-and-forget: it must never delay the
-  // migrate's own response, and its own caps bound it. The TARGET dir is excluded so the
-  // fresh import is never touched — belt and braces now that the archive above cannot reach it
-  // either, and cheap: a watcher aimed at the target would fight the landing it just made.
-  for (const hit of archived0?.hits ?? []) {
-    if (!hit.changed || !hit.wasRunning) continue
-    if (samePathKey(hit.profile, targetDir)) continue
-    void reassertChatArchive(hit.profile, sessionId).catch(() => {})
-  }
-
   // NO CONSOLE IN AUTOMATION (owner ruling, 2026-08-29): every migration lands in the
   // target desktop app - the old terminal fallback for homeless threads is gone. Console is
   // only ever for chats a person deliberately created in a console.
@@ -391,6 +374,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   //     source's, and the app finds it there - settings intact - when it starts. No boot, nothing
   //     to fight. This used to be refused outright ("importing would boot that instance"); the
   //     refusal still holds for the app import, and this is the path that does not need one.
+  const targetDir = ref.slice('desktop:'.length)
   const targetRunning = (await listInstances()).some(
     (i) => i.isRunning && samePathKey(i.dir, targetDir),
   )
@@ -415,31 +399,71 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       sourceMeta,
       force: body.force === true,
     })
-    if (!cold.ok) {
-      // The source was archived above and the chat has landed nowhere: put it back where it was
-      // rather than leave a thread that shows in no app. The hot path cannot do this (its import
-      // is a spawn whose failure is not always knowable); this one can.
-      //
-      // ONLY the profiles THIS call changed. Un-archiving with no roots reaches every profile
-      // carrying the chat and un-hides copies that were archived long before this migrate ran —
-      // a failed move would then resurrect the twins it was never asked to touch. `changed` is
-      // false for a record already in the requested state, so this restores exactly what was
-      // flipped a moment ago.
-      const flipped = (archived0?.hits ?? []).filter((h) => h.changed).map((h) => h.profile)
-      if (flipped.length) await archiveDesktopChat(sessionId, false, flipped).catch(() => null)
-      invalidateSessionMetaCache()
-      return c.json({ ok: false, error: cold.reason ?? 'cold import failed' }, 422)
-    }
+    if (!cold.ok) return c.json({ ok: false, error: cold.reason ?? 'cold import failed' }, 422)
   }
-  // The move rewrote metadata in TWO stores (archived in the source, created in the target), and
+  // The proof: the target's store holds the record. The hot import already waited up to 20s for
+  // it; this grants the app another 25s (a bulk move keeps it busy) before the move is called
+  // unverified. The cold path wrote the file itself, so its read-back is immediate.
+  const landedPath = await awaitChatRecord(targetDir, sessionId, {
+    deadlineMs: landing === 'hot' ? 25_000 : 5_000,
+  })
+  if (!landedPath) {
+    invalidateSessionMetaCache()
+    return c.json(
+      {
+        ok: false,
+        error:
+          landing === 'hot'
+            ? 'landing-unverified: the target app did not create the chat record within 45s of the import; the chat was left on its current account - retry once the app is idle'
+            : 'landing-unverified: the record written into the closed target could not be read back; the chat was left on its current account',
+      },
+      422,
+    )
+  }
+  // A move INTO an account that still holds an ARCHIVED copy (the chat lived there before and was
+  // moved away): the app's import may reuse that record rather than create one, and nothing on
+  // the hot path writes isArchived=false, so the move used to complete with the chat hidden on
+  // the account it had just arrived at. Exactly the record that landed, never a session-wide
+  // flip, so an unrelated twin in the same store is not resurrected beside it.
+  const targetUnarchived = unarchiveChatRecord(landedPath)
+
+  // Old desktop entries: flagged archived NOW, after the landing is proven.
+  //
+  // EVERY OTHER PROFILE - NEVER THE TARGET'S OWN (bug, reproduced live 2026-09-04). This used to
+  // call archiveDesktopChat with no roots, which walks the default profile plus every isolated
+  // instance and flips the flag in each store that carries the chat, the TARGET included, and
+  // nothing downstream put it back. Excluding the target fixes it upstream, where no write is
+  // made at all, rather than by racing the running app with a corrective write it re-saves over.
+  const archived0 = await archiveDesktopChat(sessionId, true, archiveRootsForMove(targetDir)).catch(
+    () => null,
+  )
+  // The move rewrote metadata in TWO stores (created in the target, archived in the source), and
   // the scan behind every session listing caches for 15s. Without this the very next read serves
   // the pre-migrate rows: the caller sees the chat still on the old account, and setPreferred
   // never gets to pick the live copy over the source's fresh tombstone.
   invalidateSessionMetaCache()
+  // THE DURABLE FIX for the zombie twin (owner ask, 2026-09-01): a RUNNING source app
+  // re-saves isArchived=false within seconds and resurrects the stale row. For each source
+  // profile whose app was running, fire a bounded background watcher that keeps the flag true
+  // until the app's next boot makes it stick. Fire-and-forget: it must never delay the
+  // migrate's own response, and its own caps bound it. Started only here, after the landing is
+  // verified: a watcher started before a failed landing would re-hide the chat the failure had
+  // left in place. The TARGET dir is excluded so the fresh import is never touched — belt and
+  // braces now that the archive above cannot reach it either.
+  for (const hit of archived0?.hits ?? []) {
+    if (!hit.changed || !hit.wasRunning) continue
+    if (samePathKey(hit.profile, targetDir)) continue
+    void reassertChatArchive(hit.profile, sessionId).catch(() => {})
+  }
   return c.json({
     ok: true,
     surface: 'desktop',
     landing,
+    // Read back from the target's store, not taken from the import's own word.
+    verified: true,
+    landedPath,
+    targetUnarchived,
+    sourceArchived: (archived0?.hits ?? []).filter((h) => h.changed).map((h) => h.profile),
     carried: Object.keys(carried),
     stoppedLive: !!live,
     ranHeadless: false,

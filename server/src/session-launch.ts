@@ -868,7 +868,15 @@ async function importSessionToDesktopUnclaimed(opts: {
   // caller's next step (deliver into it) is what it actually wanted, so report success and let
   // it proceed. Matching on the metadata file's own location rather than a dir-name guess keeps
   // the default install and the isolated instances on one rule.
-  const rendered = (opts.findRendered ?? findDesktopChat)(opts.sessionId)
+  // Residency is asked of the TARGET'S OWN STORE, not of the cached "preferred" record. The
+  // index keeps one entry per session id across every profile and prefers the newest file, so
+  // while a chat is still live on its source (which is the state every move starts in, now that
+  // the source is archived only after the landing is verified) the source's row wins and a live
+  // copy already sitting in the target was invisible to this check - the exact spawn that makes
+  // the duplicate row described above. The seam is kept for the tests that inject a record.
+  const rendered = opts.findRendered
+    ? opts.findRendered(opts.sessionId)
+    : renderedInStore(opts.instanceDir, opts.sessionId)
   if (alreadyRendersIn(rendered, opts.instanceDir))
     return { ok: true, alreadyRendered: true, titled: false, titleDurable: false }
   const binary = await resolveLaunchBinary()
@@ -1012,7 +1020,10 @@ export async function coldImportSessionToDesktop(opts: {
   if (!existsSync(opts.instanceDir)) return { ok: false, reason: 'instance-dir-not-found' }
   if (await (opts.isInstanceRunning ?? defaultInstanceRunning)(opts.instanceDir))
     return { ok: false, reason: 'instance-running: use the app import for a running instance' }
-  const rendered = (opts.findRendered ?? findDesktopChat)(opts.sessionId)
+  // Same target-scoped residency read as the hot import, for the same reason.
+  const rendered = opts.findRendered
+    ? opts.findRendered(opts.sessionId)
+    : renderedInStore(opts.instanceDir, opts.sessionId)
   if (alreadyRendersIn(rendered, opts.instanceDir)) return { ok: true, alreadyRendered: true }
   const leaf = (opts.chooseLeaf ?? chooseStoreLeaf)(opts.instanceDir)
   if (!leaf)
@@ -1453,6 +1464,84 @@ export function findChatMetaPath(instanceDir: string, sessionId: string): string
     return null
   }
   return null
+}
+
+/**
+ * Does `instanceDir`'s OWN store hold a record for this session, and is it on screen? Read off
+ * that store directly, never off the cross-profile index: the index keeps one preferred entry
+ * per session id and prefers the newest file, so a chat that is live on two profiles reports
+ * only the newer one - which, for a move whose source is still visible while the landing is
+ * verified, is the SOURCE, and the target's own live copy goes unseen. The two importers ask
+ * this before spawning, so the answer decides whether a second row gets made.
+ */
+export function renderedInStore(
+  instanceDir: string,
+  sessionId: string,
+): { archived: boolean; path: string } | null {
+  const path = findChatMetaPath(instanceDir, sessionId)
+  if (!path) return null
+  try {
+    const meta = JSON.parse(readFileSync(path, 'utf8')) as { isArchived?: unknown }
+    return { archived: meta?.isArchived === true, path }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Wait for a chat's record to EXIST in `instanceDir`'s store, and hand back its path - the
+ * read-back a move is verified by. The hot import's own return value is not that proof: it
+ * answers ok once its stamp deadline passes whether or not the app ever created the row
+ * (stampImportedChat returns `false` for "never appeared" and the importer maps that to
+ * `titled: false`, not to failure). A route that archived the source on that word left chats
+ * hidden on the old account and absent from the new one, reported as moved (2026-09-08). Null
+ * means the record never appeared before the deadline; the caller must then NOT settle the
+ * source. Injectable clock and sleep so tests can run it without waiting.
+ */
+export async function awaitChatRecord(
+  instanceDir: string,
+  sessionId: string,
+  opts?: {
+    deadlineMs?: number
+    intervalMs?: number
+    sleep?: (ms: number) => Promise<void>
+    now?: () => number
+  },
+): Promise<string | null> {
+  const deadlineMs = opts?.deadlineMs ?? 25_000
+  const intervalMs = opts?.intervalMs ?? 500
+  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = opts?.now ?? Date.now
+  const deadline = now() + deadlineMs
+  for (;;) {
+    const path = findChatMetaPath(instanceDir, sessionId)
+    if (path) return path
+    if (now() >= deadline) return null
+    await sleep(intervalMs)
+  }
+}
+
+/**
+ * Put ONE record back on screen: `isArchived: true` -> `false` on exactly the file named. True
+ * when the flag was flipped, false when it already read visible or the file could not be
+ * updated. Exists for the landing of a move into an account that still holds an ARCHIVED copy of
+ * the chat (it lived there before and was moved away): the app's import may reuse that record
+ * rather than create one, and nothing on the hot path ever wrote isArchived=false, so the move
+ * completed with the chat hidden on the account it had just arrived at. Scoped to a path, never
+ * a session id, so an old twin elsewhere in the same store is not resurrected beside the row
+ * that just landed.
+ */
+export function unarchiveChatRecord(path: string): boolean {
+  try {
+    const meta = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    if (meta.isArchived !== true) return false
+    meta.isArchived = false
+    writeFileSync(path, JSON.stringify(meta))
+    invalidateSessionMetaCache()
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**

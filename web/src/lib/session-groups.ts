@@ -11,6 +11,10 @@
 // not a name; the first live render of this dialog showed exactly that string as a header. The
 // sessions list itself labels a row by the last segment of its cwd ("Connections"), so the groups
 // use the same, and the slug is only the fallback for a session with no cwd at all.
+//
+// Both fields are optional because the rows come from two stores: a SessionSummary (cwd and
+// project, both strings) and a ChatListRow off the desktop chat store (cwd or null, no project
+// slug at all). A row with neither lands under '?' rather than crashing the dialog.
 
 export interface ProjectGroup<T> {
   project: string
@@ -27,7 +31,7 @@ function lastSegment(path: string): string {
   )
 }
 
-export function groupByProject<T extends { project: string; cwd: string }>(
+export function groupByProject<T extends { project?: string | null; cwd?: string | null }>(
   rows: readonly T[],
 ): ProjectGroup<T>[] {
   const byProject = new Map<string, T[]>()

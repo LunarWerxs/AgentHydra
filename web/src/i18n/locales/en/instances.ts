@@ -264,15 +264,21 @@ export default {
   // menu has to keep by itself.
   moveChats: 'Move chats to account',
   moveChatsNoTargets: 'No other instances',
-  // Shown under EVERY closed target in the submenu and again in the confirm dialog, so it has to
-  // read at a glance seven rows deep: one clause, same wording as the Sessions flyout's group.
-  moveChatsClosedLands: 'Not running - lands in its store, ready when it starts',
+  // The submenu lists RUNNING destinations only, one line each with a green dot, until this is
+  // switched on (owner, 2026-09-08: on a fleet of twenty accounts the old two-line rows - name,
+  // then "Not running - lands in its store, ready when it starts" - made the list a scroll, and
+  // said nothing the dot's absence does not). Off by default, every time the page loads.
+  moveChatsShowNotRunning: 'Show not running',
+  moveChatsNoRunningTargets: 'No other running instances',
   moveChatsCounting: 'Counting active chats…',
   moveChatsNone: 'No active chats to move from {from}.',
   moveChatsFailed: "Couldn't list the chats on {from}.",
   moveChatsConfirmTitle: 'Move {n} chats from {from} to {to}?',
   moveChatsConfirmBody:
-    'Every active chat on {from} (not archived, not marked done) is stopped if it is running, archived there, and imported into {to}. They move one at a time; this cannot be undone in one step.',
+    'Every active chat on {from} (not archived, not marked done) is stopped if it is running, imported into {to}, and archived on {from} once it is confirmed there. They move one at a time; this cannot be undone in one step.',
+  // What the plan leaves behind, and why, so a count that is smaller than the account is never a
+  // silent one: a chat with no transcript has nothing to import; a done-marked one is refused.
+  moveChatsSkipped: '{n} chat(s) stay on {from}: no transcript to import, or already handed off.',
   moveChatsCancel: 'Cancel',
   moveChatsConfirmSubmit: 'Move {n} chats',
   moveChatsProgress: 'Moving chat {done} of {n}…',

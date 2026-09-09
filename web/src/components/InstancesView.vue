@@ -56,6 +56,7 @@ import {
 } from '@/components/ui/dialog'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -84,19 +85,13 @@ import { useSortable } from '@/composables/useSortable'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
-import type {
-  ChatListRow,
-  CliInstance,
-  CMDesktopInstall,
-  CMInstance,
-  SessionSummary,
-} from '@/lib/api'
+import type { ChatListRow, CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
   DESKTOP_DOWNLOAD_PAGE_URL,
   getDesktopInstall,
   getInstanceChats,
-  getSessions,
+  getSession,
   migrateSession,
 } from '@/lib/api'
 import { baseName, formatBytes, formatUptime, timeAgo } from '@/lib/format'
@@ -112,6 +107,7 @@ import {
   resolveIconKey,
 } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
+import { type MovePlan, moveTargets, planMove } from '@/lib/move-chats'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
 import { useTooltipConfig } from '@/lib/tooltip-config'
@@ -804,19 +800,16 @@ function openChatFromList(row: ChatListRow) {
 // confirmation for a column of error toasts. A closed destination is opened first: the import has
 // to land in a running app, and the rule that nothing opens an account on its own is satisfied by
 // the click that chose it.
-const moveAll = ref<{ from: CMInstance; to: CMInstance; sessions: SessionSummary[] } | null>(null)
+const moveAll = ref<{ from: CMInstance; to: CMInstance; plan: MovePlan } | null>(null)
 const moveAllBusy = ref(false)
+// Closed destinations are hidden from the submenu until asked for, and asked for afresh on every
+// page load (owner, 2026-09-08: off by default). One switch shared by every row's submenu.
+const moveShowClosed = ref(false)
 // The same name the table shows: label, else the account's name, else the folder. `label ?? name`
 // skipped the middle step and offered "5claude" for the row everyone knows as apebrain.
 const instLabel = (i: CMInstance) => displayName(i)
-function moveTargets(from: CMInstance): CMInstance[] {
-  return instances.value
-    .filter((i) => i.dir !== from.dir)
-    .sort(
-      (a, b) =>
-        Number(b.isRunning) - Number(a.isRunning) || instLabel(a).localeCompare(instLabel(b)),
-    )
-}
+const moveTargetsFor = (from: CMInstance) =>
+  moveTargets(instances.value, from, moveShowClosed.value, instLabel)
 // A closed destination is NOT started: the server lands each chat straight in that instance's
 // store, settings intact, and the app finds them there when it next starts. That is the whole
 // point of moving to a closed account, and it is the one landing that needs no restart afterwards.
@@ -830,16 +823,18 @@ async function prepareMoveAll(from: CMInstance, to: CMInstance) {
   const id = `move-all-${from.dir}`
   try {
     toast.loading(t('instances.moveChatsCounting'), { id })
-    // `instance` is matched server-side against the instance NAME a session's desktop entry records
-    // (the same field the session list's isCurrent compares), over all time, live rows only.
-    const rows = await getSessions(1000, from.name, 'hide', 'all', 'claude')
-    const sessions = rows.filter((s) => !s.done && !s.archived)
+    // The account's OWN chat store - the same read the "Chats" dialog makes - never the session
+    // list, which is scoped by a recorded instance name and by one preferred record per id and
+    // so came up short (planMove's header has the three ways). `desktop:<dir>` is the one
+    // spelling two similarly named accounts cannot share.
+    const got = await getInstanceChats(`desktop:${from.dir}`, 'hide', 1000)
+    const plan = planMove(got.rows)
     toast.dismiss(id)
-    if (sessions.length === 0) {
+    if (plan.chats.length === 0) {
       toast.info(t('instances.moveChatsNone', { from: instLabel(from) }))
       return
     }
-    moveAll.value = { from, to, sessions }
+    moveAll.value = { from, to, plan }
   } catch {
     toast.error(t('instances.moveChatsFailed', { from: instLabel(from) }), { id })
   } finally {
@@ -853,23 +848,26 @@ async function runMoveAll() {
   moveAllBusy.value = true
   const id = `move-all-${job.from.dir}`
   const ref = `desktop:${job.to.dir}`
+  const chats = job.plan.chats
   let ok = 0
   const failed: string[] = []
   try {
     // Serial on purpose: each migrate may stop a live run and wait for it, and the desktop app
     // takes imports one at a time anyway.
-    for (const [i, s] of job.sessions.entries()) {
-      toast.loading(t('instances.moveChatsProgress', { done: i + 1, n: job.sessions.length }), {
-        id,
-      })
+    for (const [i, row] of chats.entries()) {
+      toast.loading(t('instances.moveChatsProgress', { done: i + 1, n: chats.length }), { id })
+      const name = row.title || t('instances.chatsNoTitle')
       try {
-        // The row's title IS the current title (same listing the server reads), restated as the
-        // server's required title decision. A chat whose title is generic is refused by name below.
-        const r = await migrateSession(s.session_id, ref, { confirmTitle: s.title })
+        // The record's own title is the name this list showed, and one of the two names the
+        // route accepts as the chat's current one. A record with no title of its own is
+        // confirmed by the session list's title for it - the route's other current name -
+        // fetched only for that row. A chat neither store can name is refused by the route.
+        const confirmTitle = row.title?.trim() || (await getSession(row.sessionId, 'claude')).title
+        const r = await migrateSession(row.sessionId, ref, { confirmTitle })
         if (r.ok) ok++
-        else failed.push(`${s.title}: ${r.error ?? 'failed'}`)
+        else failed.push(`${name}: ${r.error ?? 'failed'}`)
       } catch (e) {
-        failed.push(`${s.title}: ${e instanceof Error ? e.message : String(e)}`)
+        failed.push(`${name}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
   } finally {
@@ -878,7 +876,7 @@ async function runMoveAll() {
   if (failed.length) console.warn('[agenthydra] move all chats: some could not be moved', failed)
   const summary = t('instances.moveChatsDone', {
     ok,
-    n: job.sessions.length,
+    n: chats.length,
     to: instLabel(job.to),
   })
   // Say WHY, not "see the console": the first refusal's own words, and an error rather than a
@@ -895,9 +893,10 @@ async function runMoveAll() {
 
 /** A chat in the move list, clicked: close the dialog and land on that chat in Sessions, filtered
  *  to it and selected. The tab switch happens in App.vue; the select happens in SessionsView. */
-function openChatFromMoveDialog(s: SessionSummary) {
+function openChatFromMoveDialog(row: ChatListRow) {
+  if (!row.sessionId) return
   moveAll.value = null
-  requestSessionJump(s)
+  requestSessionJump({ session_id: row.sessionId, source: 'claude' })
 }
 
 function openDeleteDialog(inst: CMInstance) {
@@ -1626,29 +1625,47 @@ onUnmounted(() => {
                     <DropdownMenuItem @click="openChats(inst)">
                       <MessagesSquare /> {{ $t('instances.chats') }}
                     </DropdownMenuItem>
-                    <!-- Every active chat on this account, moved to one other account. Running
-                         destinations first; a closed one says it will be started. -->
+                    <!-- Every active chat on this account, moved to one other account. One line
+                         per destination: a green dot marks a running app, the same mark the
+                         row's own icon carries. Closed accounts stay out of the list until the
+                         switch at the top is on (owner, 2026-09-08: two-line rows over twenty
+                         accounts were a scroll, and "not running - lands in its store" said
+                         nothing the dot's absence does not). A closed destination is still not
+                         started: the chat lands in its store and is there when the app opens. -->
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger :disabled="moveAllBusy">
                         <ArrowRightLeft /> {{ $t('instances.moveChats') }}
                       </DropdownMenuSubTrigger>
                       <DropdownMenuSubContent class="max-w-64">
-                        <DropdownMenuItem v-if="moveTargets(inst).length === 0" disabled>
-                          {{ $t('instances.moveChatsNoTargets') }}
+                        <!-- @select.prevent keeps the submenu open across the flip; reka closes
+                             it on select otherwise. -->
+                        <DropdownMenuCheckboxItem
+                          :model-value="moveShowClosed"
+                          @select.prevent
+                          @update:model-value="moveShowClosed = $event"
+                        >
+                          {{ $t('instances.moveChatsShowNotRunning') }}
+                        </DropdownMenuCheckboxItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem v-if="moveTargetsFor(inst).length === 0" disabled>
+                          {{ moveShowClosed || instances.length <= 1 ? $t('instances.moveChatsNoTargets') : $t('instances.moveChatsNoRunningTargets') }}
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                          v-for="to in moveTargets(inst)"
+                          v-for="to in moveTargetsFor(inst)"
                           :key="to.dir"
                           :disabled="moveAllBusy"
                           @click="prepareMoveAll(inst, to)"
                         >
-                          <ArrowRightLeft />
-                          <span class="flex flex-col">
-                            <span>{{ instLabel(to) }}</span>
-                            <span class="text-xs text-muted-foreground">
-                              {{ to.isRunning ? $t('instances.running') : $t('instances.moveChatsClosedLands') }}
-                            </span>
+                          <span
+                            class="inline-flex size-3 shrink-0 items-center justify-center"
+                            :title="to.isRunning ? $t('instances.running') : $t('instances.stopped')"
+                          >
+                            <span
+                              v-if="to.isRunning"
+                              class="size-2 rounded-full bg-success animate-pulse"
+                            />
                           </span>
+                          <span class="truncate">{{ instLabel(to) }}</span>
                         </DropdownMenuItem>
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
@@ -1804,29 +1821,37 @@ onUnmounted(() => {
       <DialogContent class="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {{ $t('instances.moveChatsConfirmTitle', { n: moveAll?.sessions.length ?? 0, from: moveAll ? instLabel(moveAll.from) : '', to: moveAll ? instLabel(moveAll.to) : '' }) }}
+            {{ $t('instances.moveChatsConfirmTitle', { n: moveAll?.plan.chats.length ?? 0, from: moveAll ? instLabel(moveAll.from) : '', to: moveAll ? instLabel(moveAll.to) : '' }) }}
           </DialogTitle>
           <DialogDescription>
             {{ $t('instances.moveChatsConfirmBody', { from: moveAll ? instLabel(moveAll.from) : '', to: moveAll ? instLabel(moveAll.to) : '' }) }}
           </DialogDescription>
         </DialogHeader>
         <p class="text-xs text-muted-foreground">{{ $t('instances.moveChatsRowHint') }}</p>
+        <!-- What the plan leaves behind, said up front: a count smaller than the account must
+             never be a silent one. -->
+        <p
+          v-if="moveAll && moveAll.plan.skippedNoSession + moveAll.plan.skippedDone > 0"
+          class="text-xs text-muted-foreground"
+        >
+          {{ $t('instances.moveChatsSkipped', { n: moveAll.plan.skippedNoSession + moveAll.plan.skippedDone, from: instLabel(moveAll.from) }) }}
+        </p>
         <!-- Grouped by project, largest group first, so the SHAPE of the move is visible before the
              click. Each row opens that chat in Sessions (filtered to it, selected). -->
         <ul class="scroll-slim max-h-56 space-y-2 overflow-y-auto text-xs">
-          <li v-for="g in groupByProject(moveAll?.sessions ?? [])" :key="g.project">
+          <li v-for="g in groupByProject(moveAll?.plan.chats ?? [])" :key="g.project">
             <div class="mb-1 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
               <span class="truncate">{{ g.project }}</span>
               <span class="shrink-0">{{ $t('instances.moveChatsGroupCount', { n: g.sessions.length }) }}</span>
             </div>
             <ul class="space-y-1">
-              <li v-for="s in g.sessions" :key="s.session_id">
+              <li v-for="s in g.sessions" :key="s.sessionId">
                 <button
                   type="button"
                   class="w-full truncate rounded border border-border px-2 py-1 text-left hover:bg-accent"
                   @click="openChatFromMoveDialog(s)"
                 >
-                  {{ s.title }}
+                  {{ s.title || $t('instances.chatsNoTitle') }}
                 </button>
               </li>
             </ul>
@@ -1834,8 +1859,8 @@ onUnmounted(() => {
         </ul>
         <DialogFooter>
           <Button variant="ghost" @click="moveAll = null">{{ $t('instances.moveChatsCancel') }}</Button>
-          <Button :disabled="moveAllBusy || !moveAll?.sessions.length" @click="runMoveAll">
-            {{ $t('instances.moveChatsConfirmSubmit', { n: moveAll?.sessions.length ?? 0 }) }}
+          <Button :disabled="moveAllBusy || !moveAll?.plan.chats.length" @click="runMoveAll">
+            {{ $t('instances.moveChatsConfirmSubmit', { n: moveAll?.plan.chats.length ?? 0 }) }}
           </Button>
         </DialogFooter>
       </DialogContent>

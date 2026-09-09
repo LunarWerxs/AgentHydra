@@ -96,7 +96,8 @@ describe('chat-dossier', () => {
 
 describe('listChats', () => {
   const root = fixtureRoot()
-  const opts = { roots: [root], liveIds: new Map<string, number>() }
+  // `done` reads the marks table by default; a fixture must never touch this machine's real DB.
+  const opts = { roots: [root], liveIds: new Map<string, number>(), markFor: () => null }
 
   test('archived is hidden by default, matching move_chats', () => {
     const got = listChats({}, opts)
@@ -123,7 +124,7 @@ describe('listChats', () => {
     // this chat, and a move would still be refused for it.
     const got = listChats(
       { archived: 'include' },
-      { roots: [root], liveIds: new Map([['prior-id-b', 4242]]) },
+      { ...opts, liveIds: new Map([['prior-id-b', 4242]]) },
     )
     const rolling = got.rows.find((r) => r.title === 'Rolling thread')
     const other = got.rows.find((r) => r.title === 'Unrelated work')
@@ -152,5 +153,24 @@ describe('listChats', () => {
     expect(page2.rows.map((r) => r.title)).toEqual(['Unrelated work'])
     // total is the match count, NOT the page size - a capped page must never read as the whole set.
     expect(page2.total).toBe(2)
+  })
+
+  test('done is the mark on ANY lineage id, so a move planned from this list can leave it out', () => {
+    // The mark was filed under a rolled-away id ('prior-id-a'); the chat's current id is
+    // 'current-id'. The migrate route refuses a done chat as superseded, and the Instances move
+    // plans from this list, so the flag has to be here or the plan collects a refusal per chat.
+    const marked = new Set(['prior-id-a'])
+    const got = listChats(
+      { archived: 'include' },
+      {
+        ...opts,
+        markFor: (ids) =>
+          ids.some((id) => marked.has(id)) ? { done: true, updatedAt: 'now' } : null,
+      },
+    )
+    expect(got.rows.find((r) => r.title === 'Rolling thread')?.done).toBe(true)
+    expect(got.rows.find((r) => r.title === 'Unrelated work')?.done).toBe(false)
+    // No mark at all reads as not done, never as unknown.
+    expect(listChats({ archived: 'include' }, opts).rows.every((r) => r.done === false)).toBe(true)
   })
 })

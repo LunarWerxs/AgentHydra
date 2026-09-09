@@ -9,6 +9,42 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **"Move chats to account" moves ALL of an account's chats, and a chat it cannot land is left
+  where it was instead of vanishing** (`web/src/components/InstancesView.vue`,
+  `web/src/lib/move-chats.ts`, `server/src/routes/desktop-sessions.ts`,
+  `server/src/session-launch.ts`, `server/src/chat-title.ts`, `server/src/chat-dossier.ts`).
+  Reported 2026-09-08 as "it's not moving all the chats", and it had four causes, each of which
+  lost chats in a different way:
+  - _The plan was built from the session list, not from the account._ That list is scoped by the
+    instance name a transcript's desktop record happens to carry (the default install's is
+    `default`, never its folder name, so the regular install always counted zero), keeps one
+    preferred record per session id across every profile (a chat that ever lived on two accounts
+    is attributed to whichever file is newer), and drops a transcript with no substantive turn.
+    Chats plainly sitting on the account were simply not in the plan. The move now reads the
+    account's own chat store, the same read the "Chats" dialog makes, and says up front how many
+    rows it leaves behind and why (no transcript to import, or already handed off). `ChatListRow`
+    gained `done` for that.
+  - _The route archived the source BEFORE the landing was known._ The app-side import answers ok
+    when its 20-second wait for the app to create the record runs out, so a target app still busy
+    with the previous chat of a bulk move, or an engine the source app respawned so the import was
+    refused as a live writer, left the chat archived on the old account, absent from the new one,
+    and counted as moved. The route now lands first, verifies by reading the record back from the
+    target's store (up to 45 seconds for a running app), and archives the source only then; an
+    unverified landing leaves the chat visible where it was and says so. The orchestrator's
+    `migrate_chat` always worked in this order; the route finally does too.
+  - _The naming door knew one of the chat's two names._ A chat's session-list title (from the
+    transcript) and the app's own record title (the sidebar's, the "Chats" list's) routinely
+    differ, and `confirm_title` was compared only against the first, so every move planned from
+    the name a person had actually read was refused with "does not match". Either current name
+    restated exactly is accepted now; the chat lands under the confirmed name when it is real,
+    under the other when only that one is, and never under a generic one.
+  - _Residency was read off the wrong store._ "Does the target already show this chat?" asked the
+    cross-profile index, which prefers the newest file, so a live copy already in the target was
+    invisible whenever the source's copy was newer, which is exactly the state a move starts in,
+    and a retry could create a second row for one chat, the row that makes it unreachable. Both
+    importers now read the target's own store. A move into an account that still holds an
+    archived copy of the chat also un-hides that record rather than completing with the chat
+    hidden on the account it just arrived at.
 - **A dead host session is no longer a confident identity, so `to: "here"` cannot land chats on the
   wrong account** (`server/src/core/self-identity.ts`, `server/src/mcp.ts`,
   `server/tests/self-identity.test.ts`). When the daemon is reached over HTTP it is ONE long-lived
@@ -80,6 +116,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **The "Move chats to account" submenu is one line per destination and lists running accounts
+  only, until asked** (`web/src/components/InstancesView.vue`,
+  `web/src/i18n/locales/en/instances.ts`). A green dot marks a running app, the same mark the
+  row's icon carries; the "Not running - lands in its store, ready when it starts" line under
+  every closed account is gone; and a "Show not running" switch at the top, off on every page
+  load, brings the closed ones back. On a fleet of twenty accounts the old list was a scroll.
 - **"Move all chats to another account" is now "Move chats to account"**
   (`web/src/i18n/locales/en/instances.ts`). It was a sentence, and it sits one line below the new
   "Chats" item. The long form made the two look unrelated when they are the two things you do with

@@ -216,6 +216,10 @@ export interface ChatListRow {
    *  move will be refused, and the reason a caller had to attempt the move to find out. */
   live: boolean
   livePid: number | null
+  /** AgentHydra's own done-mark on any id in this chat's lineage: handed off or already
+   *  migrated. The migrate route refuses a done chat as superseded, so a move planned from this
+   *  list leaves these out rather than collecting a column of refusals. */
+  done: boolean
 }
 
 export interface ChatListResult {
@@ -257,6 +261,7 @@ export function listChats(
 ): ChatListResult {
   const chats = collectChats(deps.roots)
   const live = deps.liveIds ?? liveIndex()
+  const markFor = deps.markFor ?? defaultMarkFor
   const scope = opts.archived ?? 'hide'
   const wanted = opts.instances?.length ? new Set(opts.instances) : null
   const q = opts.q?.trim()
@@ -292,9 +297,8 @@ export function listChats(
   const offset = Math.max(0, opts.offset ?? 0)
   const limit = Math.max(1, Math.min(opts.limit ?? 200, 1000))
   const rows = matched.slice(offset, offset + limit).map((c): ChatListRow => {
-    const pid = lineageIdsOf(c)
-      .map((id) => live.get(id))
-      .find((p) => p !== undefined)
+    const lineage = lineageIdsOf(c)
+    const pid = lineage.map((id) => live.get(id)).find((p) => p !== undefined)
     return {
       instance: c.instance,
       chatId: c.chatId,
@@ -306,6 +310,7 @@ export function listChats(
       cwd: c.cwd,
       live: pid !== undefined,
       livePid: pid ?? null,
+      done: markFor(lineage)?.done === true,
     }
   })
 

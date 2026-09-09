@@ -63,11 +63,23 @@ export async function resolveAutomatedTitle(
  *     accepted only when that current title is itself a real name. A mismatch is refused
  *     WITHOUT echoing the actual title - the caller proves review by reading it themselves
  *     (the dossier answers in one query), not by copying it out of this error.
+ *
+ * A CHAT HAS TWO CURRENT NAMES, and confirming either is reviewing it. `currentTitle` is the
+ * session list's title, derived from the transcript (a /rename, the CLI's own summary, the first
+ * turn). `recordTitle` is what the desktop app's own record calls the chat - the name in the
+ * sidebar, the name the Instances "Chats" dialog lists, the name a person actually reads before
+ * clicking "move". They routinely differ (a chat renamed in the app keeps its transcript title),
+ * and a door that only knew the transcript's name refused every move planned from the app's
+ * (2026-09-08: "confirm_title does not match" on chats the owner had just read by name). Either
+ * name restated exactly is accepted; the chat lands under the confirmed name when that name is
+ * real, else under the other one when THAT is real, and is refused when neither is - a generic
+ * name never lands, whichever store it came from.
  */
 export function resolveRequiredTitle(opts: {
   title?: unknown
   confirmTitle?: unknown
   currentTitle: string | null
+  recordTitle?: string | null
 }): TitleResolution {
   const supplied = typeof opts.title === 'string' ? opts.title.trim() : ''
   if (supplied) {
@@ -82,19 +94,26 @@ export function resolveRequiredTitle(opts: {
   }
   const confirm = typeof opts.confirmTitle === 'string' ? opts.confirmTitle.trim() : ''
   if (confirm) {
-    const current = (opts.currentTitle ?? '').trim()
-    if (isGenericChatTitle(current))
+    const current = [
+      ...new Set(
+        [opts.currentTitle, opts.recordTitle].map((n) => (n ?? '').trim()).filter(Boolean),
+      ),
+    ]
+    const real = current.filter((n) => !isGenericChatTitle(n))
+    if (real.length === 0)
       return {
         ok: false,
         error: 'the current title is generic; confirming it is not allowed - supply a real title',
       }
-    if (confirm !== current)
+    if (!current.includes(confirm))
       return {
         ok: false,
         error:
           'confirm_title does not match the current title - read the chat (the dossier answers in one query) and restate it exactly, or supply a new title',
       }
-    return { ok: true, title: current }
+    // The confirmed name wins when it is real; a confirmed generic name (the app's "Untitled"
+    // beside a transcript that knows better) lands under the real one instead of being refused.
+    return { ok: true, title: real.includes(confirm) ? confirm : (real[0] as string) }
   }
   return {
     ok: false,
