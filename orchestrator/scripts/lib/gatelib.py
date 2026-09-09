@@ -32,6 +32,8 @@ import re
 import time
 from pathlib import Path
 
+from lib import joblocklib
+
 # How long a live chat must be quiet AFTER a completed turn before it counts as idle rather
 # than thinking. Three minutes: long enough that a model pausing between tool calls is never
 # mistaken for an idle chat, short enough that the fleet is worked while the owner watches.
@@ -717,6 +719,23 @@ def _gate_running(
     # with no exit. The engine's own start time settles it: a call older than the process
     # is an orphan, and a chat parked on an orphan is IDLE - wakeable, never stalled.
     engine_started = _epoch_s(live.get("startedAt") or live.get("startedAtMs"))
+    # ⛔ AN UNKNOWN ENGINE START SILENTLY DISABLES THE ORPHAN RULE ABOVE (found 2026-09-09).
+    # _predates() returns False whenever engine_started is None - correctly, since "unknown must
+    # never read as orphaned" - but the effect is that the entire resume case above stops working
+    # with no signal at all: the chat reports "alive (quiet Ns - a long quiet can be background
+    # work)" forever and every courier wake is refused. Reproduced against this gate: the SAME
+    # transcript and pid returns idle with a start time and IN FLIGHT without one.
+    #
+    # The daemon's live block normally carries startedAt, so this is the degraded path, not the
+    # common one - which is exactly why it went unnoticed. The engine's start time is not really
+    # unknown though: the OS holds it, and the toolbox already reads it for proof-of-death on its
+    # locks. Ask the OS rather than giving up. Still tri-state-safe: None stays None, so an
+    # unreadable pid leaves the orphan rule off rather than guessing a chat is idle.
+    if engine_started is None and pid:
+        try:
+            engine_started = joblocklib._process_start_time(int(pid))
+        except (TypeError, ValueError, OSError):
+            engine_started = None
     stall_after = STALL_QUIET_SECS if stall_after_secs is None else stall_after_secs
     stalled = _stall_verdict(transcript_path, quiet, stall_after, engine_started)
     idle = None if stalled else _idle_verdict(transcript_path, quiet, idle_after_secs, engine_started)

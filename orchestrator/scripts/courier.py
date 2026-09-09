@@ -82,6 +82,53 @@ CLAIM_STALE_SECS = deliverylib.CLAIM_STALE_SECS
 ACTUATOR_TIMEOUT_SECS = 300
 
 
+def _rmtree_claim(path) -> None:
+    """Drop a claim directory and the owner record inside it. The claim used to be an empty
+    directory that `rmdir` could take in one call; it now carries owner.json, so releasing it
+    has to remove the file first or every release fails with 'directory not empty' and the
+    claim outlives its own run - the exact failure this file is fixing, re-introduced by the
+    fix. Best-effort throughout: a claim that cannot be removed still ages out."""
+    try:
+        (path / "owner.json").unlink()
+    except OSError:
+        pass
+    try:
+        path.rmdir()
+    except OSError:
+        pass
+
+
+def _sweep_dead_claims() -> int:
+    """Drop claim directories whose run is over, and return how many went.
+
+    Nothing ever swept these: a claim outlives its run whenever the run dies, and one found on
+    2026-09-09 was THIRTY-SIX HOURS old (129,481s) and still on disk. They are individually
+    harmless once aged out - claimed() ignores them - but they accumulate one entry per
+    abandoned run forever, and a lock directory full of dead claims is exactly the sort of
+    thing that makes a real one hard to see when something is wrong.
+
+    Conservative on purpose, same ladder as claimed(): a provably-live owner is never touched,
+    and an owner we cannot read has to also be past CLAIM_STALE_SECS before it goes."""
+    swept = 0
+    try:
+        locks = deliverylib.claim_path("x").parent
+        entries = list(locks.glob("deliver-*"))
+    except OSError:
+        return 0
+    for path in entries:
+        try:
+            alive = deliverylib.claim_owner_alive(path)
+            if alive is True:
+                continue
+            if alive is None and time.time() - path.stat().st_mtime <= CLAIM_STALE_SECS:
+                continue
+            _rmtree_claim(path)
+            swept += not path.exists()
+        except OSError:
+            continue
+    return swept
+
+
 @contextlib.contextmanager
 def _claim(delivery_id: str):
     """At-most-once delivery across OVERLAPPING courier runs (adversarial review,
@@ -95,11 +142,18 @@ def _claim(delivery_id: str):
     for attempt in (1, 2):
         try:
             path.mkdir()
+            deliverylib.write_claim_owner(path)  # so the NEXT run can prove death, not wait it out
             break
         except FileExistsError:
             try:
-                if attempt == 1 and time.time() - path.stat().st_mtime > CLAIM_STALE_SECS:
-                    path.rmdir()
+                # PROOF OF DEATH FIRST, AGE ONLY AS FALLBACK (2026-09-09). A run whose caller
+                # died leaves this claim behind; waiting out ten minutes for a process that
+                # provably no longer exists helps nobody, and the refusal it produces reads
+                # identically to a genuinely busy one.
+                alive = deliverylib.claim_owner_alive(path)
+                stale_by_age = time.time() - path.stat().st_mtime > CLAIM_STALE_SECS
+                if attempt == 1 and (alive is False or (alive is None and stale_by_age)):
+                    _rmtree_claim(path)
                     continue
             except OSError:
                 continue  # it vanished: the other run just finished - retry the claim
@@ -108,10 +162,7 @@ def _claim(delivery_id: str):
     try:
         yield True
     finally:
-        try:
-            path.rmdir()
-        except OSError:
-            pass
+        _rmtree_claim(path)
 
 
 def _activity_of(session_id: str, transcript_path: str | None = None) -> tuple[str | None, int]:
@@ -493,6 +544,7 @@ def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
     per-account share - are off. Those exist so the UNATTENDED lanes cannot hog an account,
     and a person naming a row is not the machinery (owner, 2026-09-06). The usage-band gate
     in deliverable() is NOT a machinery cap and stays on for everyone."""
+    _sweep_dead_claims()
     queue = deliverylib.pending()
     if only:
         wanted = {only} if isinstance(only, str) else set(only)
@@ -612,10 +664,26 @@ def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
                 # never send the same staged reply twice.
                 with _claim(entry["id"]) as ours:
                     if not ours:
+                        # SAY WHEN TO COME BACK. "present and fresh" told the caller nothing
+                        # about whether a run was really alive or how long to wait, so the only
+                        # way to make progress was to stop retrying - and nothing said so
+                        # (2026-09-09: four retries, each refused identically, while the owning
+                        # run had been dead for fifteen minutes).
+                        expires = deliverylib.claim_expires_at(entry["id"])
+                        if deliverylib.claim_owner_alive(deliverylib.claim_path(entry["id"])) is True:
+                            detail = ("its owner is RUNNING right now (proved by pid, not by a "
+                                      "clock) - the row stays staged and that run will land it")
+                        elif expires:
+                            left = max(0, int(expires - time.time()))
+                            detail = (f"its owner cannot be proved dead on this platform, so the "
+                                      f"claim ages out in {left}s (at "
+                                      f"{time.strftime('%H:%M:%S', time.localtime(expires))}) - "
+                                      "wait for that, retrying sooner cannot win")
+                        else:
+                            detail = "the claim vanished as it was read - retry now"
                         results.append({"id": entry["id"], "ok": False,
                                         "outcome": "skipped - another courier run holds this delivery",
-                                        "detail": "its claim is present and fresh; the row stays "
-                                                  "staged unless that run lands it"})
+                                        "detail": detail})
                         continue
                     # ONE DRIVER PER WINDOW (windowlib.instance_lock): a composer send and another
                     # lane's sidebar click on the same instance must never interleave. Busy means

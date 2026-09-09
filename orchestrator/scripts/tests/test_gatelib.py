@@ -538,3 +538,52 @@ class TaskDedupTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnknownEngineStartTest(unittest.TestCase):
+    """An engine whose start time the daemon did not report must not disable the orphan rule.
+
+    _predates() returns False when the engine's start time is unknown - correctly, since
+    "unknown must never read as orphaned". But the effect was that the whole resume case
+    silently stopped working: a chat parked on a tool call from a PREVIOUS engine reported
+    "alive (quiet Ns - a long quiet can be background work)" forever, and every courier wake
+    was refused. Reproduced 2026-09-09: same transcript, same pid, idle with a start time and
+    IN FLIGHT without one. The OS knows the pid's creation time, so ask it."""
+
+    def _orphan_transcript(self, tmp, age_secs=1200):
+        path = os.path.join(tmp, "t.jsonl")
+        written = time.time() - age_secs
+        rec = {
+            "type": "assistant",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(written)),
+            "message": {"content": [{"type": "text", "text": "working on it"},
+                                    {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]},
+        }
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+        os.utime(path, (written, written))
+        return path, written
+
+    def test_a_reported_start_time_still_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path, written = self._orphan_transcript(tmp)
+            v = gatelib.gate("s", path, {"pid": os.getpid(), "startedAtMs": int((written + 600) * 1000)})
+            self.assertTrue(v["idle"], "unchanged behaviour when the daemon reports startedAt")
+            self.assertTrue(v["idle"]["orphaned_tool_call"])
+
+    def test_a_missing_start_time_falls_back_to_the_os(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path, _ = self._orphan_transcript(tmp)
+            # This process is real and started long after that tool call was written, so the
+            # call is an orphan and the chat is idle - wakeable, exactly as with startedAt.
+            v = gatelib.gate("s", path, {"pid": os.getpid()})
+            if gatelib.joblocklib._process_start_time(os.getpid()) is None:
+                self.skipTest("no OS process creation time on this platform")
+            self.assertTrue(v["idle"], "an unreported start time must not disable the orphan rule")
+            self.assertTrue(v["idle"]["orphaned_tool_call"])
+
+    def test_an_unreadable_pid_stays_unknown_rather_than_guessing_idle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path, _ = self._orphan_transcript(tmp)
+            v = gatelib.gate("s", path, {"pid": 999999})
+            self.assertIsNone(v["idle"], "unknown must never be upgraded to idle - it stays in flight")

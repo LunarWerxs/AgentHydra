@@ -690,3 +690,93 @@ class WalledChatIsWakeableTest(unittest.TestCase):
         self.assertEqual(ev, self.REAL)
         self.assertNotEqual(deliverylib._verify_snippet(ev), "",
                             "with no usable snippet the courier refuses and the chat stays stuck")
+
+
+class ClaimProofOfDeathTest(unittest.TestCase):
+    """A claim must be released by PROOF that its owner is gone, not only by a clock.
+
+    2026-09-09: a courier run whose CALLER died (an MCP transport timeout - the normal case
+    for a multi-chat batch) left its claim behind. Four retries were each refused with "its
+    claim is present and fresh" while no courier process existed anywhere on the machine, and
+    nothing in the refusal said the only way to win was to stop retrying for ten minutes."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["ORCHESTRATOR_STATE_DIR"] = self._tmp.name
+
+    def tearDown(self):
+        os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
+        self._tmp.cleanup()
+
+    def _make_claim(self, did, owner):
+        path = deliverylib.claim_path(did)
+        path.mkdir(parents=True, exist_ok=True)
+        if owner is not None:
+            (path / "owner.json").write_text(json.dumps(owner), encoding="utf-8")
+        return path
+
+    def test_a_fresh_claim_whose_owner_is_dead_is_not_claimed(self):
+        # The whole bug: young by the clock, but its run is provably over.
+        self._make_claim("d1", {"pid": 999999, "started_at": 1.0})
+        with mock.patch.object(deliverylib.joblocklib, "_owner_alive", return_value=False):
+            self.assertFalse(deliverylib.claimed("d1"))
+
+    def test_a_live_owner_is_claimed_however_old_the_claim_is(self):
+        # The other direction, which matters just as much: a legitimately long send (a 300s
+        # actuator behind a slow confirm) must never have its claim stolen.
+        path = self._make_claim("d2", {"pid": os.getpid(), "started_at": 1.0})
+        old = time.time() - (deliverylib.CLAIM_STALE_SECS + 600)
+        os.utime(path, (old, old))
+        with mock.patch.object(deliverylib.joblocklib, "_owner_alive", return_value=True):
+            self.assertTrue(deliverylib.claimed("d2"))
+
+    def test_an_unreadable_owner_falls_back_to_age_in_both_directions(self):
+        # None is NOT permission to take over - it means use the clock, so a platform we
+        # cannot prove death on can never wedge the lane and can never lose a live send.
+        fresh = self._make_claim("d3", None)
+        self.assertTrue(deliverylib.claimed("d3"))
+        old = time.time() - (deliverylib.CLAIM_STALE_SECS + 60)
+        os.utime(fresh, (old, old))
+        self.assertFalse(deliverylib.claimed("d3"))
+
+    def test_the_claim_round_trips_and_leaves_nothing_behind(self):
+        # The fix's own regression: the claim dir now holds owner.json, so a release that
+        # still used a bare rmdir would fail and the claim would outlive its run.
+        with courier._claim("d4") as ours:
+            self.assertTrue(ours)
+            self.assertTrue((deliverylib.claim_path("d4") / "owner.json").exists())
+            self.assertTrue(deliverylib.claimed("d4"))
+        self.assertFalse(deliverylib.claim_path("d4").exists())
+        self.assertFalse(deliverylib.claimed("d4"))
+
+    def test_a_dead_runs_claim_is_taken_over_by_the_next_run(self):
+        self._make_claim("d5", {"pid": 999999, "started_at": 1.0})
+        with mock.patch.object(deliverylib.joblocklib, "_owner_alive", return_value=False):
+            with courier._claim("d5") as ours:
+                self.assertTrue(ours, "a claim whose owner is provably gone must be reclaimable at once")
+
+    def test_expiry_is_reportable_so_a_refusal_can_say_when_to_come_back(self):
+        path = self._make_claim("d6", None)
+        expires = deliverylib.claim_expires_at("d6")
+        self.assertIsNotNone(expires)
+        self.assertAlmostEqual(expires, path.stat().st_mtime + deliverylib.CLAIM_STALE_SECS, places=3)
+        self.assertIsNone(deliverylib.claim_expires_at("no-such-delivery"))
+
+    def test_the_sweep_takes_dead_claims_and_leaves_live_ones(self):
+        # One found on 2026-09-09 was 36 hours old and still on disk; nothing ever swept them.
+        dead = self._make_claim("d7", {"pid": 999999, "started_at": 1.0})
+        unknown_old = self._make_claim("d8", None)
+        old = time.time() - (deliverylib.CLAIM_STALE_SECS + 60)
+        os.utime(unknown_old, (old, old))
+        unknown_fresh = self._make_claim("d9", None)
+        live = self._make_claim("d10", {"pid": os.getpid(), "started_at": 1.0})
+
+        def alive(pid, started_at):
+            return True if pid == os.getpid() else False
+
+        with mock.patch.object(deliverylib.joblocklib, "_owner_alive", side_effect=alive):
+            courier._sweep_dead_claims()
+        self.assertFalse(dead.exists(), "a provably dead claim should be swept")
+        self.assertFalse(unknown_old.exists(), "an unreadable owner past its age should be swept")
+        self.assertTrue(unknown_fresh.exists(), "an unreadable owner still within its age must stay")
+        self.assertTrue(live.exists(), "a claim whose owner is running must never be swept")

@@ -28,7 +28,7 @@ import time
 import uuid
 from pathlib import Path
 
-from lib import ledgerlib
+from lib import joblocklib, ledgerlib
 
 VALID_STATES = ("staged", "delivered", "failed", "cancelled")
 
@@ -280,7 +280,8 @@ def mark_failed(delivery_id: str, why: str) -> dict | None:
 
 # A per-delivery courier CLAIM older than this belongs to a dead run and is reclaimable
 # (send pipeline worst case: actuator timeout 300s + confirm + margin). Lives here, beside
-# the row states, because cancel() has to read it too.
+# the row states, because cancel() has to read it too. Since 2026-09-09 age is only the
+# FALLBACK: a claim whose owner is provably gone is reclaimable immediately (claim_owner_alive).
 CLAIM_STALE_SECS = 600
 
 
@@ -289,12 +290,67 @@ def claim_path(delivery_id: str) -> Path:
     return ledgerlib._state_dir() / "locks" / f"deliver-{delivery_id}"
 
 
-def claimed(delivery_id: str) -> bool:
-    """Is a LIVE courier run sending this delivery right now?"""
+def write_claim_owner(path: Path) -> None:
+    """Record WHO holds this claim, so a later run can prove death instead of waiting out a
+    clock. Same record and same primitive as the UI lock in windowlib - PID plus that PID's OS
+    creation time, so a recycled PID can never impersonate the original holder. Best-effort: a
+    claim with no readable owner simply falls back to age, which is the old behaviour."""
     try:
-        return time.time() - claim_path(delivery_id).stat().st_mtime <= CLAIM_STALE_SECS
+        (path / "owner.json").write_text(
+            json.dumps({"pid": os.getpid(), "started_at": joblocklib._process_start_time(os.getpid())}),
+            encoding="utf-8",
+        )
     except OSError:
-        return False
+        pass
+
+
+def claim_owner_alive(path: Path) -> bool | None:
+    """True: the run holding this claim is still running. False: PROVABLY gone. None: unknown
+    (no owner record, or a platform/permission we cannot read). ⛔ None is not permission to
+    take over - it means fall back to age."""
+    try:
+        data = json.loads((path / "owner.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        return joblocklib._owner_alive(int(data.get("pid") or -1), data.get("started_at"))
+    except (TypeError, ValueError):
+        return None
+
+
+def claim_expires_at(delivery_id: str) -> float | None:
+    """Wall-clock epoch at which an age-based claim stops blocking, or None if there is no
+    claim. Exists so a refusal can say WHEN to come back instead of 'present and fresh',
+    which told a caller nothing and invited a retry loop that could never win."""
+    try:
+        return claim_path(delivery_id).stat().st_mtime + CLAIM_STALE_SECS
+    except OSError:
+        return None
+
+
+def claimed(delivery_id: str) -> bool:
+    """Is a LIVE courier run sending this delivery right now?
+
+    PROOF FIRST, AGE ONLY AS FALLBACK (2026-09-09), the same ladder windowlib._may_reclaim
+    uses for UI locks. The old rule was age alone, so a run whose CALLER died - an MCP
+    transport timeout, the normal case for a multi-chat batch - left a claim that refused
+    every retry for a silent ten minutes while no courier process existed anywhere on the
+    machine. Measured that day: a claim from a run dead for fifteen minutes still reported
+    'present and fresh'.
+    """
+    path = claim_path(delivery_id)
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return False  # no claim at all
+    alive = claim_owner_alive(path)
+    if alive is True:
+        return True  # a living owner is never stale, whatever the age says
+    if alive is False:
+        return False  # provably gone: reclaim now rather than waiting out the clock
+    return age <= CLAIM_STALE_SECS  # unknown: age only, so we can never wedge the lane
 
 
 class InFlight(RuntimeError):
