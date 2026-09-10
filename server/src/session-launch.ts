@@ -598,7 +598,15 @@ export function desktopChatArchiveState(
  * knows for it. "Untitled" / "General coding session" happens whenever a chat is created by
  * plumbing (imports, migrations) rather than by a person — the desktop derives nothing at
  * import time, and generic bootstrap turns earn generic AI titles. The owner's requirement is
- * standing, not one-time: names are MANAGED, continuously. Runs from the watcher tick.
+ * standing, not one-time: names are MANAGED, continuously.
+ *
+ * ⛔ THIS COMMENT USED TO END "Runs from the watcher tick", AND THAT STOPPED BEING TRUE ON
+ * 2026-08-29. The tick belonged to the v1 orchestrator, which was retired whole that day; this
+ * function survived only because it lives in a file kept for unrelated reasons, and for the next
+ * eleven days it was called from nowhere but its own test while the comment and the CHANGELOG both
+ * said otherwise. A moved chat named "General coding session" therefore had no floor under it at
+ * all (owner report, 2026-09-09). Its caller now is title-sweep.ts, on its own timer; that module's
+ * header carries the rest of the story.
  *
  * Never overwrites an existing non-empty title (a person's rename outranks everything), and
  * writes only when the scanner has something better than an id or a generic label. Metadata
@@ -1307,6 +1315,88 @@ export async function reassertChatArchive(
       restores++
       console.log(
         `[agenthydra] re-asserted archived on ${sessionId} in ${instanceDir} (the app's re-save resurrected the twin)`,
+      )
+    } catch {
+      // a contended or half-written pass says nothing about the next tick
+    }
+  }
+  return restores
+}
+
+/**
+ * THE TITLE twin of the two watchers above, and the one that was missing (owner report,
+ * 2026-09-09: "does the flipping thing seriously transfer the chats with the stupid name
+ * general coding session?").
+ *
+ * A move stamps the chat's real title once (stampImportedChat -> applyDesktopChatTitle) and then
+ * has no further say. The hot landing always aims at a RUNNING app - importSessionToDesktop
+ * refuses a closed one - and that app holds the record it just created in memory, where the
+ * import handler left the title unset, and re-saves it over the stamp the first time the chat
+ * wakes. The file then reads `title: undefined`, which the sidebar renders as "General coding
+ * session", and nothing put it back: `titleDurable: !running` reported the loss honestly and no
+ * caller acted on it, `title` is deliberately not a CARRIED_KEY, and the title janitor that was
+ * supposed to be the slow floor had been called from nowhere but its own test since the v1
+ * orchestrator was retired. So the name a person confirmed by hand, one click earlier, was the
+ * one thing about the move that did not survive it.
+ *
+ * ⛔ IT RESTORES ONLY OVER A NON-NAME. reassertChatAutomation and reassertChatArchive drive a
+ * fixed value home because there is exactly one right answer for a moved chat's mode and archive
+ * flag. A TITLE has two possible right answers: the one the move decided, and whatever the owner
+ * renamed the chat to afterwards in the app. A watcher that forced its own value would silently
+ * undo that rename for ten minutes. So it writes only when the record's current title is empty,
+ * generic or plumbing - exactly the janitor's rule - and stands down the moment a real name is
+ * there, whether it is ours or a better one.
+ *
+ * Bounded exactly like its siblings: a time window, a restore cap (a tug-of-war that reaches the
+ * cap is the app's to win), and a miss cap for a chat whose record never appears. Non-throwing;
+ * returns how many times it restored the name.
+ */
+export async function reassertChatTitle(
+  instanceDir: string,
+  sessionId: string,
+  title: string,
+  opts?: {
+    windowMs?: number
+    intervalMs?: number
+    maxRestores?: number
+    maxMisses?: number
+    sleep?: (ms: number) => Promise<void>
+    now?: () => number
+  },
+): Promise<number> {
+  // A generic name is not worth defending, and writing one would be the very bug this closes.
+  if (isGenericChatTitle(title)) return 0
+  const wanted = title.trim()
+  const windowMs = opts?.windowMs ?? 10 * 60_000
+  const intervalMs = opts?.intervalMs ?? 1_500
+  const maxRestores = opts?.maxRestores ?? 8
+  const maxMisses = opts?.maxMisses ?? 40
+  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = opts?.now ?? Date.now
+  const deadline = now() + windowMs
+  let restores = 0
+  let misses = 0
+  let metaPath: string | null = null
+  while (now() < deadline && restores < maxRestores) {
+    await sleep(intervalMs)
+    try {
+      if (!metaPath || !existsSync(metaPath)) metaPath = findChatMetaPath(instanceDir, sessionId)
+      if (!metaPath) {
+        if (++misses >= maxMisses) return restores
+        continue
+      }
+      misses = 0
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+      const current = typeof meta.title === 'string' ? meta.title : ''
+      // A real name - ours, or one the owner typed since - is the end of this watcher's business.
+      if (!isGenericChatTitle(current)) continue
+      meta.title = wanted
+      meta.titleSource = 'tool'
+      writeFileSync(metaPath, JSON.stringify(meta))
+      invalidateSessionMetaCache()
+      restores++
+      console.log(
+        `[agenthydra] re-asserted the title of ${sessionId} in ${instanceDir} (the app's re-save had blanked it to a generic name)`,
       )
     } catch {
       // a contended or half-written pass says nothing about the next tick

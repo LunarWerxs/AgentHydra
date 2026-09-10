@@ -26,6 +26,7 @@ import {
   launchTerminalSession,
   liveSessionEntry,
   reassertChatArchive,
+  reassertChatTitle,
   unarchiveChatRecord,
 } from '../session-launch'
 import { getSession } from '../sessions'
@@ -426,6 +427,18 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // the account it had just arrived at. Exactly the record that landed, never a session-wide
   // flip, so an unrelated twin in the same store is not resurrected beside it.
   const targetUnarchived = unarchiveChatRecord(landedPath)
+
+  // THE NAME HAS TO SURVIVE THE MOVE TOO (owner report, 2026-09-09: chats arriving on the new
+  // account called "General coding session"). The hot landing's title is a single disk write into
+  // a store the RUNNING target app is holding in memory - where the import handler left the title
+  // unset - so the app's first re-save of that chat blanks it, and the sidebar renders the blank
+  // as the app's generic label. `titleDurable: !running` has always reported this honestly and
+  // nothing acted on it. The same bounded watcher shape as the archive flag above, aimed at the
+  // TARGET, and it writes only over a non-name, so an owner who renames the chat in the app
+  // during the window keeps their name (reassertChatTitle's header has the full reasoning).
+  // Cold landings need none of this: nothing is running there to re-save over the record.
+  if (landing === 'hot')
+    void reassertChatTitle(targetDir, sessionId, migrateTitle.title).catch(() => {})
 
   // Old desktop entries: flagged archived NOW, after the landing is proven.
   //

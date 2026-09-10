@@ -112,6 +112,7 @@ import {
 import { jsonBody } from './route-helpers'
 import { warmSessionScanCache } from './sessions'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
+import { startTitleSweep } from './title-sweep'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
 import { startTrayInvariant } from './tray-invariant'
@@ -1063,6 +1064,12 @@ startMonitor()
 // re-saves, so the app's next boot makes it permanent - the durable half of the migrate fix.
 // See automation-stamp-sweep.ts for why the per-import watcher alone could not do this.
 startAutomationStampSweep()
+// The same thing for the chat's NAME. A moved chat's title is one disk write into a store the
+// running target app then re-saves from memory, blanking it, and a blank renders as the app's own
+// "General coding session". reassertChatTitle covers the ten minutes after the move; this is the
+// floor beneath it, and it is also the caller the title janitor lost when the v1 orchestrator was
+// retired - see title-sweep.ts.
+startTitleSweep()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

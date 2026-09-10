@@ -254,8 +254,10 @@ export default {
   toastShortcutFailed: 'Failed to create desktop shortcut.',
 
   // "Move chats to account" on a row's menu (the kebab, or right-click on the row): every active
-  // chat on this instance, one hop to another. A closed target is opened first, since the import
-  // has to land in a running app.
+  // chat on this instance, one hop to another. A closed target is NOT opened - the server writes
+  // the chat straight into that account's store and the app finds it there when it next starts
+  // (desktop-sessions.ts, the 'cold' landing). The line that used to sit here said the opposite,
+  // and it outlived the code by a release.
   //
   // Short on purpose (owner, 2026-09-07). It used to read "Move all chats to another account",
   // which is a sentence, and it sits one line BELOW the new "Chats" item in the same menu, the
@@ -264,18 +266,32 @@ export default {
   // menu has to keep by itself.
   moveChats: 'Move chats to account',
   moveChatsNoTargets: 'No other instances',
+  // The heading above the destination list. It exists because the submenu is ALL about accounts
+  // and never said so: with a switch reading "Show not running" directly under "Move chats to
+  // account", the natural reading is that the move filters CHATS by whether they are running
+  // (owner, 2026-09-09, asking exactly that). It does not - see moveChatsConfirmBody. Naming the
+  // list is what makes the switch below it unambiguous.
+  moveChatsTargetsLabel: 'Move to which account?',
   // The submenu lists RUNNING destinations only, one line each with a green dot, until this is
   // switched on (owner, 2026-09-08: on a fleet of twenty accounts the old two-line rows - name,
   // then "Not running - lands in its store, ready when it starts" - made the list a scroll, and
   // said nothing the dot's absence does not). Off by default, every time the page loads.
-  moveChatsShowNotRunning: 'Show not running',
+  //
+  // It reads "accounts" now for the reason above: the word the switch was missing is the noun it
+  // acts on. A closed account is a perfectly good destination - the chat lands in its store and is
+  // waiting when the app opens - so this hides a longer list, never an unsupported one.
+  moveChatsShowNotRunning: 'Show accounts that are not running',
   moveChatsNoRunningTargets: 'No other running instances',
-  moveChatsCounting: 'Counting active chats…',
-  moveChatsNone: 'No active chats to move from {from}.',
+  moveChatsCounting: 'Counting chats to move…',
+  moveChatsNone: 'No chats to move from {from}.',
   moveChatsFailed: "Couldn't list the chats on {from}.",
   moveChatsConfirmTitle: 'Move {n} chats from {from} to {to}?',
+  // Leads with "running or not" on purpose (owner, 2026-09-09, who read the submenu's old "Show
+  // not running" switch as a filter on CHATS and asked whether a live chat is left behind). It is
+  // not: a live chat's engine is stopped and the chat moves. That is the one fact this dialog has
+  // to state before the click, so it states it first.
   moveChatsConfirmBody:
-    'Every active chat on {from} (not archived, not marked done) is stopped if it is running, imported into {to}, and archived on {from} once it is confirmed there. They move one at a time; this cannot be undone in one step.',
+    'Every chat on {from} that is not archived and not marked done moves - running or not. A chat with a live engine is stopped first, then imported into {to}, then archived on {from} once it is confirmed there. They move one at a time; this cannot be undone in one step.',
   // What the plan leaves behind, and why, so a count that is smaller than the account is never a
   // silent one: a chat with no transcript has nothing to import; a done-marked one is refused.
   moveChatsSkipped: '{n} chat(s) stay on {from}: no transcript to import, or already handed off.',

@@ -7,6 +7,61 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **A moved chat keeps its NAME, instead of arriving on the new account called "General coding
+  session"** (`server/src/session-launch.ts`, `server/src/title-sweep.ts`,
+  `server/src/routes/desktop-sessions.ts`, `server/src/index.ts`,
+  `server/tests/reassert-chat-title.test.ts`, `server/tests/title-sweep.test.ts`). Reported
+  2026-09-09. The title was the one thing about a move that did not survive it, and it had two
+  independent causes stacked on each other:
+  - _The landing's title was a single disk write, and the target app overwrote it._ A hot landing
+    always aims at a RUNNING app, which is holding the record it has just created in memory, where
+    the import handler left the title unset, and re-saves that over the stamp the first time the
+    chat wakes. The file then reads a blank title, and the app renders a blank as its own generic
+    label. This was never hidden: `importSessionToDesktop` has always returned
+    `titleDurable: !running`, which on that path is always `false`. Nothing acted on it. The two
+    other values a move has to defend against the same re-save each had a bounded watcher already
+    (`reassertChatAutomation` for the permission stamp, `reassertChatArchive` for the archive
+    flag); the title, the one a person actually reads, had none. `reassertChatTitle` is that
+    watcher, fired after a verified hot landing. ⛔ Unlike its two siblings it does NOT drive its
+    value home unconditionally: a title has a second legitimate author, and an owner who renames
+    the chat in the app during the window keeps their name. It writes only over a non-name, by the
+    same definition of "non-name" every other surface uses (`chat-title.ts`).
+  - _The floor underneath it had no caller._ `sweepUntitledDesktopChats`, the title janitor, is
+    documented in its own comment as running from the watcher tick, and the CHANGELOG says the
+    same. That stopped being true on 2026-08-29, when the v1 orchestrator that owned the tick was
+    retired whole; the function survived only because it lives in `session-launch.ts`, a file kept
+    for unrelated reasons, and for the eleven days since it was called from nowhere but its own
+    test. So a chat whose title was lost more than ten minutes after its move, or lost before this
+    release, had nothing at all to repair it. `title-sweep.ts` is that wiring and nothing else: the
+    janitor is unchanged and keeps the test it always had. It sweeps closed profiles too, unlike
+    the automation stamp sweep, because a closed store cannot drift but can already BE wrong, and
+    is the one place a repair sticks immediately.
+
+  This is the second time a written, unit-tested, documented-as-scheduled fixer in this codebase
+  turned out to have no production caller (`automation-stamp-sweep.ts` opens with the same sentence
+  about `reassertAutomationStamps`). A green unit test proves a function works and says nothing
+  about whether anything calls it; both were found only when a user reported the symptom the fixer
+  existed to prevent. `title-sweep.test.ts` asserts the wiring itself for that reason.
+
+### Changed
+
+- **The "Move chats to account" submenu says what it is a list OF, and its switch says "accounts"**
+  (`web/src/components/InstancesView.vue`, `web/src/i18n/locales/en/instances.ts`). A switch reading
+  "Show not running", sitting directly under "Move chats to account", reads as a filter on CHATS,
+  and was read that way (owner, 2026-09-09: "does it only move chats that aren't actively
+  running?"). It never was. The move takes every chat on the account that is not archived and not
+  marked done, running or not, and stops a live one's engine first. The list is now headed "Move to
+  which account?", the switch reads "Show accounts that are not running", and the confirm dialog
+  leads with "running or not" instead of stating it halfway through a sentence. Nothing about which
+  chats move changed, only what the menu admits to.
+- **Two comments that outlived their code, both claiming a closed destination gets opened first**
+  (`web/src/components/InstancesView.vue`, `web/src/i18n/locales/en/instances.ts`). "The import has
+  to land in a running app" was true until the server grew its cold landing, which writes the chat
+  straight into a closed account's store for the app to find at its next start. One of the two sat
+  eleven lines above a comment saying the exact opposite.
+
 ## [0.41.0] - 2026-09-08
 
 ### Fixed

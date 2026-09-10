@@ -797,9 +797,18 @@ function openChatFromList(row: ChatListRow) {
 // The instance-level version of the session list's migrate: every chat on this account that is
 // not archived and not marked done, moved to one other account in one confirmed action. Done rows
 // are skipped because the server refuses them as superseded, so leaving them in would trade one
-// confirmation for a column of error toasts. A closed destination is opened first: the import has
-// to land in a running app, and the rule that nothing opens an account on its own is satisfied by
-// the click that chose it.
+// confirmation for a column of error toasts.
+//
+// ⛔ A LIVE CHAT IS NOT SKIPPED. It is stopped and then moved, which is what a person-driven move
+// means (web/tests/move-chats.test.ts pins it, and moveChatsConfirmBody now leads with it). The
+// submenu's "not running" switch is about DESTINATION ACCOUNTS and nothing else; the two got read
+// as one thing (owner, 2026-09-09: "does it only move chats that aren't actively running?").
+//
+// And a closed destination is NOT opened first. The line that used to sit here said it was, on the
+// grounds that "the import has to land in a running app" - true until the server grew its cold
+// landing (desktop-sessions.ts), which writes the chat straight into the closed account's store,
+// settings intact, for the app to find at its next start. See the note above prepareMoveAll, which
+// this used to contradict outright.
 const moveAll = ref<{ from: CMInstance; to: CMInstance; plan: MovePlan } | null>(null)
 const moveAllBusy = ref(false)
 // Closed destinations are hidden from the submenu until asked for, and asked for afresh on every
@@ -1637,6 +1646,16 @@ onUnmounted(() => {
                         <ArrowRightLeft /> {{ $t('instances.moveChats') }}
                       </DropdownMenuSubTrigger>
                       <DropdownMenuSubContent class="max-w-64">
+                        <!-- The list is DESTINATIONS, and until this heading it never said so.
+                             A switch reading "Show not running" sitting directly under "Move
+                             chats to account" reads as a filter on the chats (owner, 2026-09-09,
+                             asked exactly that: does it only move chats that are not running?).
+                             It never was: the move takes every unarchived, not-done chat and
+                             stops a live one first - see moveChatsConfirmBody, which now leads
+                             with that. Naming the list is what disambiguates the switch. -->
+                        <DropdownMenuLabel class="text-xs text-muted-foreground">
+                          {{ $t('instances.moveChatsTargetsLabel') }}
+                        </DropdownMenuLabel>
                         <!-- @select.prevent keeps the submenu open across the flip; reka closes
                              it on select otherwise. -->
                         <DropdownMenuCheckboxItem
