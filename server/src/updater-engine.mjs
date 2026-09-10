@@ -228,13 +228,42 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
     const suffix = result.timedOut ? "timed out" : result.ok ? "ok" : `exit ${result.code ?? "unknown"}`;
     return `$ ${args.join(" ")}\n${text || suffix}`;
   }
+  /** Lines that name a failure, so the excerpt below can prefer them over surrounding noise. */
+  const ERRORISH =
+    /\berror\b|\bfailed\b|\bfailure\b|cannot |can't |could not |not found|unable to|unresolved|does the file exist|ENOENT|EACCES|✗|✘/i;
+  const STEP_ERROR_LINES = 4;
+  const STEP_ERROR_CHARS = 400;
+
+  /**
+   * The user-facing reason a step failed.
+   *
+   * Taking `stderr.split("\n")[0]` looked right and was not: a `bun run <script>` failure begins by
+   * ECHOING the script it is about to run, so the dashboard showed people the command
+   * (`$ node scripts/i18n-check.mjs && vue-tsc -b && …`) and threw away the line that mattered
+   * (`Failed to resolve import "./button-variants"`), which is several lines further down. The full
+   * transcript is not a fallback either: `output` is only returned on the SUCCESS path, so on a
+   * failure this message is the only thing the user ever sees. (RepoYeti issue #24.)
+   *
+   * So: drop echoed commands and blank lines, prefer the lines that actually name a failure, and
+   * cap the result — this lands in a toast description, and an unbounded build log is not readable
+   * there. The command itself is not lost: `commandSummary` already recorded it in `output`.
+   */
+  function stepFailureMessage(args, result) {
+    const lines = `${result.stderr}\n${result.stdout}`
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("$ "));
+    const errorish = lines.filter((line) => ERRORISH.test(line));
+    const picked = (errorish.length ? errorish : lines).slice(0, STEP_ERROR_LINES);
+    const msg = picked.join(" · ");
+    if (!msg) return result.timedOut ? `${args[0]} timed out` : `${args[0]} failed`;
+    return msg.length > STEP_ERROR_CHARS ? `${msg.slice(0, STEP_ERROR_CHARS - 1)}…` : msg;
+  }
+
   async function runStep(args, timeoutMs, output) {
     const result = await runCommand(args, timeoutMs);
     output.push(commandSummary(args, result));
-    if (!result.ok) {
-      const msg = result.stderr.trim() || result.stdout.trim() || `${args[0]} failed`;
-      throw new Error(msg.split("\n")[0] ?? "update step failed");
-    }
+    if (!result.ok) throw new Error(stepFailureMessage(args, result));
   }
 
   async function applyUpdate() {

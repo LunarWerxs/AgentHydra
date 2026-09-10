@@ -1141,7 +1141,7 @@ onUnmounted(() => {
                  do these names even come from?" — one row's Name can be a label you typed, the
                  next row's the account it is signed into, the next its folder, and nothing said
                  which. The rule is now written down where the question gets asked. -->
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('name')">
+            <TableHead class="w-44 cursor-pointer select-none" @click="toggleSort('name')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colName') }}
                 <InfoHint :text="$t('instances.colNameHint')" @click.stop />
@@ -1149,7 +1149,7 @@ onUnmounted(() => {
                 <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('account')">
+            <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colAccount') }}
                 <InfoHint :text="$t('instances.colAccountHint')" @click.stop />
@@ -1183,15 +1183,21 @@ onUnmounted(() => {
             </template>
             <!-- … swapped one-for-one for the quota columns in usage mode, so the table keeps its
                  shape and only its subject changes. -->
+            <!-- The quota columns carry FIXED widths (w-28 / w-24) here and in the CLI and Codex
+                 tables, which is the one thing that makes the three stacked tables actually line
+                 up. Auto table layout sizes each table's columns from its own content, so the same
+                 "Weekly" column came out 110px here and 78px below — the bars for one kind of fact
+                 were different lengths depending on which table you read them in. Change a width
+                 here and you must change the matching one in the other two. -->
             <template v-else>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('session')">
+              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colSession') }}
                   <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
                   <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
                 </span>
               </TableHead>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('weekly')">
+              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colWeekly') }}
                   <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
@@ -1201,7 +1207,7 @@ onUnmounted(() => {
             </template>
             <TableHead
               v-if="usageMode"
-              class="cursor-pointer select-none"
+              class="w-24 cursor-pointer select-none"
               @click="toggleSort('usageSession')"
             >
               <span class="inline-flex items-center gap-0.5">
@@ -1210,14 +1216,14 @@ onUnmounted(() => {
                 <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('usage')">
+            <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colUsage') }}
                 <ArrowUp v-if="indicatorFor('usage') === 'asc'" class="size-3" />
                 <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('plan')">
+            <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('plan')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colPlan') }}
                 <ArrowUp v-if="indicatorFor('plan') === 'asc'" class="size-3" />

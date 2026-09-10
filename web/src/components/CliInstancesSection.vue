@@ -480,14 +480,14 @@ onUnmounted(stopPolling)
                 <ArrowDown v-else-if="indicatorFor('loggedIn') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('name')">
+            <TableHead class="w-44 cursor-pointer select-none" @click="toggleSort('name')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('cliInstances.colName') }}
                 <ArrowUp v-if="indicatorFor('name') === 'asc'" class="size-3" />
                 <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('account')">
+            <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('cliInstances.colAccount') }}
                 <ArrowUp v-if="indicatorFor('account') === 'asc'" class="size-3" />
@@ -505,15 +505,17 @@ onUnmounted(stopPolling)
                 <ArrowDown v-else-if="indicatorFor('configDir') === 'desc'" class="size-3" />
               </span>
             </TableHead>
+            <!-- Fixed widths, matching InstancesView and CodexInstancesSection — see the comment on
+                 the desktop table's quota headers for why all three tables pin these. -->
             <template v-else>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('session')">
+              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colSession') }}
                   <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
                   <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
                 </span>
               </TableHead>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('weekly')">
+              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colWeekly') }}
                   <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
@@ -523,7 +525,7 @@ onUnmounted(stopPolling)
             </template>
             <TableHead
               v-if="usageMode"
-              class="cursor-pointer select-none"
+              class="w-24 cursor-pointer select-none"
               @click="toggleSort('usageSession')"
             >
               <span class="inline-flex items-center gap-0.5">
@@ -532,7 +534,7 @@ onUnmounted(stopPolling)
                 <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('usage')">
+            <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('cliInstances.colUsage') }}
                 <ArrowUp v-if="indicatorFor('usage') === 'asc'" class="size-3" />

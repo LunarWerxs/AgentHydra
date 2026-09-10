@@ -24,10 +24,17 @@ export default {
   desktopStopped: 'Desktop stopped',
   loggedIn: 'Logged in',
   loggedOut: 'Not logged in',
-  loggedInShort: 'signed in',
+  /** The account column's fallback when nothing is signed in. There is deliberately no "signed in"
+   *  twin: an account cell that HAS a name/address already says so, and the status dot's title
+   *  carries the long-form `loggedIn` for both states. */
   loggedOutShort: 'signed out',
-  openDesktop: 'Open desktop',
+  /** The row's PRIMARY button, so it reads exactly like the Claude desktop table's: one word, and
+   *  which surface it opens is already obvious from the table you are looking at. The kebab menu
+   *  keeps the long forms below, where several actions sit side by side and need telling apart. */
+  openDesktop: 'Open',
   focusDesktop: 'Focus',
+  /** The primary button when the desktop surface is switched off — matches the CLI table's. */
+  launch: 'Launch',
   quitDesktop: 'Quit desktop',
   launchCli: 'Launch CLI',
   moreActions: 'More actions',

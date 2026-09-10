@@ -25,6 +25,7 @@ import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import UsageBadge from '@/components/UsageBadge.vue'
+import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -50,8 +51,18 @@ import { useInstanceFilter } from '@/composables/useInstanceFilter'
 import { useSortable } from '@/composables/useSortable'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
+import { useUsageMode } from '@/composables/useUsageMode'
 import type { CodexInstance } from '@/lib/api'
 import type { InstanceFacts } from '@/lib/instance-filter'
+import { bindingWeeklyPct } from '@/lib/usage'
+import {
+  msUntilReset,
+  resetLabel,
+  SESSION_WINDOW_MS,
+  WEEK_WINDOW_MS,
+  waitSeverity,
+  windowRemainingPct,
+} from '@/lib/usage-reset'
 
 const props = defineProps<{
   desktopEnabled: boolean
@@ -83,9 +94,49 @@ const isBusy = (instance: CodexInstance) => busyIds.value.has(instance.id)
 // Quota shares the app-wide usage store, keyed `codex:<id>` — so the Codex rows reuse the same
 // chip, the same cache, the same superseded-window rule as every other provider's rows.
 const { snapshotFor, isChecking, checkCodex, setSnapshot } = useUsage()
-const usageFor = (instance: CodexInstance) => snapshotFor(`codex:${instance.id}`)
-const isCheckingUsage = (instance: CodexInstance) => isChecking(`codex:${instance.id}`)
+const usageKey = (instance: CodexInstance) => `codex:${instance.id}`
+const usageFor = (instance: CodexInstance) => snapshotFor(usageKey(instance))
+const isCheckingUsage = (instance: CodexInstance) => isChecking(usageKey(instance))
 const onCheckUsage = (instance: CodexInstance) => checkCodex(instance.id)
+
+// Usage mode is TAB-WIDE (composables/useUsageMode.ts) — "anything added later" included, and this
+// table was the later thing that never joined. The toolbar toggle up in InstancesView flips all
+// three tables at once, and here it trades the CODEX_HOME column — the least useful thing on
+// screen when you're asking about quota — for the same two reset countdowns the others show.
+const { usageMode, now } = useUsageMode(true)
+const sessionResetFor = (instance: CodexInstance) =>
+  resetLabel(usageFor(instance)?.session, now.value)
+const weeklyResetFor = (instance: CodexInstance) =>
+  resetLabel(usageFor(instance)?.weekAll, now.value)
+// One number per window drives the bar's length; the WEEKLY one also drives its colour, and the
+// 5-hour bar is drawn `neutral` — same contract as the Claude tables (see UsageBar).
+const sessionRemaining = (instance: CodexInstance) =>
+  windowRemainingPct(usageFor(instance)?.session, SESSION_WINDOW_MS, now.value) ?? 0
+const weeklyRemaining = (instance: CodexInstance) =>
+  windowRemainingPct(usageFor(instance)?.weekAll, WEEK_WINDOW_MS, now.value) ?? 0
+const weeklyWait = (instance: CodexInstance) => waitSeverity(weeklyRemaining(instance))
+
+/** The one fact the status dot reports, matching the Claude tables' `w-10` dot column: is the thing
+ *  this row launches actually up? With the desktop surface switched off in Settings there is no
+ *  desktop to be up, so the dot falls back to the CLI's own fact — signed in or not. */
+const statusOn = (instance: CodexInstance) =>
+  props.desktopEnabled ? instance.isDesktopRunning : instance.loggedIn
+/** Both facts in one tooltip, because the column is now a dot: the words the cell used to spell out
+ *  ("Desktop stopped · signed out") are one hover away instead of setting the column's width. */
+function statusTitle(instance: CodexInstance): string {
+  const parts: string[] = []
+  if (props.desktopEnabled) {
+    parts.push(
+      instance.isDesktopRunning
+        ? t('codexInstances.desktopRunning')
+        : t('codexInstances.desktopStopped'),
+    )
+  }
+  if (props.cliEnabled) {
+    parts.push(instance.loggedIn ? t('codexInstances.loggedIn') : t('codexInstances.loggedOut'))
+  }
+  return parts.join(' · ')
+}
 
 // Mirrors the server's own redeem guard (core/codex-account.ts's codexResetGuard) against the
 // already-cached snapshot, so the button can disable itself instead of round-tripping just to
@@ -135,6 +186,29 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
       accessor: (instance: CodexInstance) => instance.account?.planLabel ?? undefined,
     },
     { key: 'codexHome', accessor: (instance: CodexInstance) => instance.codexHome },
+    // Usage-mode columns — by time remaining, so "soonest reset first" is what a sort gives you.
+    // Same keys and same accessors as the Claude tables, so a sort means the same thing in each.
+    {
+      key: 'session',
+      accessor: (instance: CodexInstance) =>
+        msUntilReset(usageFor(instance)?.session, now.value) ?? undefined,
+    },
+    {
+      key: 'weekly',
+      accessor: (instance: CodexInstance) =>
+        msUntilReset(usageFor(instance)?.weekAll, now.value) ?? undefined,
+    },
+    {
+      key: 'usage',
+      accessor: (instance: CodexInstance) => {
+        const snap = usageFor(instance)
+        return snap ? (bindingWeeklyPct(snap) ?? undefined) : undefined
+      },
+    },
+    {
+      key: 'usageSession',
+      accessor: (instance: CodexInstance) => usageFor(instance)?.session?.pct ?? undefined,
+    },
   ],
 )
 
@@ -161,6 +235,16 @@ const hiddenByFilter = computed(() => sortedRows.value.length - visibleRows.valu
 /** There ARE Codex instances, the filter just took all of them. */
 const allHiddenByFilter = computed(
   () => instances.value.length > 0 && visibleRows.value.length === 0,
+)
+/** "x of y" only while the filter is actually hiding rows — otherwise the plain total, exactly like
+ *  the two Claude tables' headings. */
+const headingCount = computed(() =>
+  hiddenByFilter.value > 0
+    ? t('codexInstances.countOfTotal', {
+        shown: visibleRows.value.length,
+        total: instances.value.length,
+      })
+    : String(instances.value.length),
 )
 
 const createOpen = ref(false)
@@ -281,9 +365,10 @@ onUnmounted(stopPolling)
 <template>
   <div>
     <div class="flex flex-wrap items-center justify-between gap-2 p-3">
+      <!-- Heading doubles as the collapse trigger, same as the two tables above it. -->
       <button
         type="button"
-        class="flex items-center gap-2 rounded-md text-sm font-semibold transition-colors hover:text-muted-foreground"
+        class="flex items-center gap-2 rounded-md text-sm font-semibold transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
         :aria-expanded="open"
         @click="open = !open"
       >
@@ -291,13 +376,7 @@ onUnmounted(stopPolling)
         {{ $t('codexInstances.title') }}
         <!-- "x of y" once the filter is hiding rows, so the count never silently disagrees with
              the number of Codex instances that exist. -->
-        <span class="text-muted-foreground">
-          ({{
-            hiddenByFilter > 0
-              ? $t('codexInstances.countOfTotal', { shown: visibleRows.length, total: instances.length })
-              : instances.length
-          }})
-        </span>
+        <span class="text-muted-foreground">({{ headingCount }})</span>
         <span v-if="hiddenByFilter > 0" class="text-xs font-normal text-muted-foreground">
           {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
         </span>
@@ -306,18 +385,30 @@ onUnmounted(stopPolling)
           :class="open ? '' : '-rotate-90'"
         />
       </button>
-      <div class="flex items-center gap-1.5">
+      <div class="flex flex-wrap items-center gap-1.5">
         <Button
           variant="outline"
           size="icon"
           :disabled="loading"
           :aria-label="$t('codexInstances.refresh')"
+          :title="$t('codexInstances.refresh')"
           @click="refresh()"
         >
           <RefreshCw :class="loading ? 'animate-spin' : ''" />
         </Button>
-        <Button size="sm" :aria-label="$t('codexInstances.createInstance')" @click="createOpen = true">
-          <Plus /> {{ $t('codexInstances.createInstance') }}
+        <!-- Plus at rest, label on hover/focus — the same expanding pill as Instances and CLI
+             instances. A permanently-labelled button here was the one control in the tab whose
+             width was set by a phrase you only read once. -->
+        <Button
+          size="sm"
+          class="group/create gap-0 overflow-hidden transition-all"
+          :aria-label="$t('codexInstances.createInstance')"
+          @click="createOpen = true"
+        >
+          <Plus class="shrink-0" />
+          <span
+            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ml-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ml-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
+          >{{ $t('codexInstances.createInstance') }}</span>
         </Button>
       </div>
     </div>
@@ -328,109 +419,146 @@ onUnmounted(stopPolling)
     <Table>
       <TableHeader class="sticky top-0 z-10 bg-card">
         <TableRow>
-          <TableHead class="cursor-pointer select-none" @click="toggleSort('status')">
+          <!-- `w-10` dot, not a spelled-out status: the two Claude tables above put a single dot
+               here, and this column's two-word labels ("Desktop stopped") were what shoved every
+               later column right and pushed the actions off the edge. Both facts moved into the
+               cell's title. -->
+          <TableHead
+            class="w-10 cursor-pointer select-none"
+            :title="$t('codexInstances.colStatus')"
+            @click="toggleSort('status')"
+          >
             <span class="inline-flex items-center gap-0.5">
-              {{ $t('codexInstances.colStatus') }}
-              <ArrowUp v-if="indicatorFor('status') === 'asc'" class="size-3" />
+              ● <ArrowUp v-if="indicatorFor('status') === 'asc'" class="size-3" />
               <ArrowDown v-else-if="indicatorFor('status') === 'desc'" class="size-3" />
             </span>
           </TableHead>
-          <TableHead class="cursor-pointer select-none" @click="toggleSort('name')">
+          <TableHead class="w-44 cursor-pointer select-none" @click="toggleSort('name')">
             <span class="inline-flex items-center gap-0.5">
               {{ $t('codexInstances.colName') }}
               <ArrowUp v-if="indicatorFor('name') === 'asc'" class="size-3" />
               <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
             </span>
           </TableHead>
-          <TableHead class="cursor-pointer select-none" @click="toggleSort('account')">
+          <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
             <span class="inline-flex items-center gap-0.5">
               {{ $t('codexInstances.colAccount') }}
               <ArrowUp v-if="indicatorFor('account') === 'asc'" class="size-3" />
               <ArrowDown v-else-if="indicatorFor('account') === 'desc'" class="size-3" />
             </span>
           </TableHead>
-          <TableHead>{{ $t('codexInstances.colUsage') }}</TableHead>
-          <TableHead class="cursor-pointer select-none" @click="toggleSort('plan')">
-            <span class="inline-flex items-center gap-0.5">
-              {{ $t('codexInstances.colPlan') }}
-              <ArrowUp v-if="indicatorFor('plan') === 'asc'" class="size-3" />
-              <ArrowDown v-else-if="indicatorFor('plan') === 'desc'" class="size-3" />
-            </span>
-          </TableHead>
-          <TableHead class="cursor-pointer select-none" @click="toggleSort('codexHome')">
+          <!-- CODEX_HOME in default mode, swapped one-for-one for the two reset countdowns in usage
+               mode — the same trade the CLI table makes with its config dir, in the same slot. -->
+          <TableHead
+            v-if="!usageMode"
+            class="cursor-pointer select-none"
+            @click="toggleSort('codexHome')"
+          >
             <span class="inline-flex items-center gap-0.5">
               {{ $t('codexInstances.colHome') }}
               <ArrowUp v-if="indicatorFor('codexHome') === 'asc'" class="size-3" />
               <ArrowDown v-else-if="indicatorFor('codexHome') === 'desc'" class="size-3" />
             </span>
           </TableHead>
+          <!-- Fixed widths, matching InstancesView and CliInstancesSection — see the comment on the
+               desktop table's quota headers for why all three tables pin these. -->
+          <template v-else>
+            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
+              <span class="inline-flex items-center gap-0.5">
+                {{ $t('instances.colSession') }}
+                <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
+                <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
+              </span>
+            </TableHead>
+            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
+              <span class="inline-flex items-center gap-0.5">
+                {{ $t('instances.colWeekly') }}
+                <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
+                <ArrowDown v-else-if="indicatorFor('weekly') === 'desc'" class="size-3" />
+              </span>
+            </TableHead>
+          </template>
+          <TableHead
+            v-if="usageMode"
+            class="w-24 cursor-pointer select-none"
+            @click="toggleSort('usageSession')"
+          >
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('instances.colUsageSession') }}
+              <ArrowUp v-if="indicatorFor('usageSession') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
+          <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('codexInstances.colUsage') }}
+              <ArrowUp v-if="indicatorFor('usage') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
+          <!-- Plan sits immediately before Actions, matching the desktop table: it is the last
+               thing you read on a row before the buttons, in every table that has one. -->
+          <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('plan')">
+            <span class="inline-flex items-center gap-0.5">
+              {{ $t('codexInstances.colPlan') }}
+              <ArrowUp v-if="indicatorFor('plan') === 'asc'" class="size-3" />
+              <ArrowDown v-else-if="indicatorFor('plan') === 'desc'" class="size-3" />
+            </span>
+          </TableHead>
           <TableHead class="text-right">{{ $t('codexInstances.colActions') }}</TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody v-if="instances.length === 0">
-        <TableEmpty v-if="!loading" :colspan="7">
+      <!-- visibleRows, not instances: with the filter set to hide, this table can be emptied while
+           it still has rows to show, and a blank tbody explains nothing. One branch covering both
+           empty states, exactly as the CLI table does it. -->
+      <TableBody v-if="visibleRows.length === 0">
+        <!-- Usage mode swaps the CODEX_HOME column for two countdowns and adds the 5-hour chip, so
+             the span is an expression rather than a literal that could silently desync. -->
+        <TableEmpty v-if="!loading" :colspan="usageMode ? 9 : 7">
           <div class="flex flex-col items-center gap-1 text-center">
-            <AppWindow class="mb-1 size-6 opacity-40" />
-            <p class="font-medium text-foreground">{{ $t('codexInstances.empty') }}</p>
-            <p class="text-xs text-muted-foreground">{{ $t('codexInstances.emptyHint') }}</p>
+            <component :is="allHiddenByFilter ? Funnel : AppWindow" class="mb-1 size-6 opacity-40" />
+            <p class="font-medium text-foreground">
+              {{ allHiddenByFilter ? $t('instances.filterAllHidden') : $t('codexInstances.empty') }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              {{
+                allHiddenByFilter
+                  ? $t('instances.filterAllHiddenHint')
+                  : $t('codexInstances.emptyHint')
+              }}
+            </p>
           </div>
         </TableEmpty>
         <TableRow v-for="i in 2" v-else :key="i">
           <TableCell><Skeleton class="size-2 rounded-full" /></TableCell>
           <TableCell><Skeleton class="h-4 w-28" /></TableCell>
           <TableCell><Skeleton class="h-4 w-36" /></TableCell>
-          <TableCell><Skeleton class="h-5 w-10" /></TableCell>
-          <TableCell><Skeleton class="h-5 w-12" /></TableCell>
-          <TableCell><Skeleton class="h-3 w-48" /></TableCell>
+          <TableCell v-if="!usageMode"><Skeleton class="h-3 w-32" /></TableCell>
+          <template v-else>
+            <TableCell><Skeleton class="h-8 w-16" /></TableCell>
+            <TableCell><Skeleton class="h-8 w-16" /></TableCell>
+            <TableCell><Skeleton class="h-5 w-14" /></TableCell>
+          </template>
+          <TableCell><Skeleton class="h-5 w-14" /></TableCell>
+          <TableCell><Skeleton class="h-5 w-16" /></TableCell>
           <TableCell><div class="flex justify-end"><Skeleton class="h-6 w-20" /></div></TableCell>
         </TableRow>
-      </TableBody>
-      <TableBody v-else-if="allHiddenByFilter">
-        <TableEmpty :colspan="7">
-          <div class="flex flex-col items-center gap-1 text-center">
-            <Funnel class="mb-1 size-6 opacity-40" />
-            <p class="font-medium text-foreground">{{ $t('instances.filterAllHidden') }}</p>
-            <p class="text-xs text-muted-foreground">{{ $t('instances.filterAllHiddenHint') }}</p>
-          </div>
-        </TableEmpty>
       </TableBody>
       <TableBody v-else>
         <TableRow
           v-for="instance in visibleRows"
           :key="instance.id"
-          class="transition-opacity duration-200"
+          class="transition-opacity"
           :class="filterDimmed(filterFacts(instance)) ? 'opacity-25 hover:bg-transparent' : ''"
         >
           <TableCell>
-            <div class="flex items-center gap-2 text-xs">
-              <span
-                v-if="desktopEnabled"
-                class="inline-block size-2 rounded-full"
-                :class="instance.isDesktopRunning ? 'bg-success' : 'bg-muted-foreground/40'"
-              />
-              <span
-                v-if="desktopEnabled"
-                :class="instance.isDesktopRunning ? 'text-foreground' : 'text-muted-foreground'"
-              >
-                {{
-                  instance.isDesktopRunning
-                    ? $t('codexInstances.desktopRunning')
-                    : $t('codexInstances.desktopStopped')
-                }}
-              </span>
-              <span
-                v-if="cliEnabled"
-                class="text-muted-foreground"
-                :title="instance.loggedIn ? $t('codexInstances.loggedIn') : $t('codexInstances.loggedOut')"
-              >
-                <template v-if="desktopEnabled">·</template>
-                {{
-                  instance.loggedIn
-                    ? $t('codexInstances.loggedInShort')
-                    : $t('codexInstances.loggedOutShort')
-                }}
-              </span>
-            </div>
+            <!-- One dot, same size and same colours as the CLI table's — see the header comment
+                 for why the words moved into the title. -->
+            <span
+              class="inline-block size-2 rounded-full"
+              :class="statusOn(instance) ? 'bg-success' : 'bg-muted-foreground/40'"
+              :title="statusTitle(instance)"
+            />
           </TableCell>
           <TableCell class="font-medium">
             <!-- Codex instances share ONE number sequence with the Claude Desktop and CLI tables,
@@ -483,11 +611,52 @@ onUnmounted(stopPolling)
               }}
             </span>
           </TableCell>
+          <!-- max-w-[16rem], not 28: the same cap the CLI table's config dir uses. At 28rem this one
+               column was wide enough on its own to push the actions cell past the right edge, which
+               is why the Open/Focus buttons were being clipped. -->
+          <TableCell
+            v-if="!usageMode"
+            class="mono max-w-[16rem] truncate text-[0.625rem] text-muted-foreground"
+            :title="instance.codexHome"
+          >
+            {{ instance.codexHome }}
+          </TableCell>
+          <template v-else>
+            <TableCell class="text-xs">
+              <UsageBar
+                v-if="sessionResetFor(instance)"
+                :fill-pct="sessionRemaining(instance)"
+                variant="neutral"
+                :label="sessionResetFor(instance) ?? ''"
+                :aria-label="$t('instances.resetsIn', { when: sessionResetFor(instance) })"
+              />
+              <span v-else class="text-muted-foreground">—</span>
+            </TableCell>
+            <TableCell class="text-xs">
+              <UsageBar
+                v-if="weeklyResetFor(instance)"
+                :fill-pct="weeklyRemaining(instance)"
+                :variant="weeklyWait(instance)"
+                :label="weeklyResetFor(instance) ?? ''"
+                :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(instance) })"
+              />
+              <span v-else class="text-muted-foreground">—</span>
+            </TableCell>
+          </template>
+          <TableCell v-if="usageMode">
+            <UsageBadge
+              scope="session"
+              :snapshot="usageFor(instance)"
+              :checking="isCheckingUsage(instance)"
+              :usage-key="usageKey(instance)"
+              @check="onCheckUsage(instance)"
+            />
+          </TableCell>
           <TableCell>
             <UsageBadge
               :snapshot="usageFor(instance)"
               :checking="isCheckingUsage(instance)"
-              :usage-key="`codex:${instance.id}`"
+              :usage-key="usageKey(instance)"
               @check="onCheckUsage(instance)"
             />
           </TableCell>
@@ -499,16 +668,13 @@ onUnmounted(stopPolling)
             </Badge>
             <span v-else class="text-xs text-muted-foreground">—</span>
           </TableCell>
-          <TableCell class="mono max-w-[28rem] truncate text-[0.625rem] text-muted-foreground">
-            {{ instance.codexHome }}
-          </TableCell>
           <TableCell>
             <!-- A DISCOVERED row (the default install, or a Codex Desktop running from a profile we
                  didn't create) has no store entry, so every mutating action would fail with "not
                  found". It is listed to be READ — identity, plan, quota — and says so instead of
                  offering buttons that cannot work. -->
             <div v-if="instance.isExternal" class="flex items-center justify-end">
-              <span class="text-[0.625rem] text-muted-foreground">
+              <span class="whitespace-nowrap text-[0.625rem] text-muted-foreground">
                 {{ $t('codexInstances.externalHint') }}
               </span>
             </div>
@@ -547,7 +713,7 @@ onUnmounted(stopPolling)
                 :disabled="isBusy(instance)"
                 @click="onLaunchCli(instance)"
               >
-                <Terminal /> {{ $t('codexInstances.launchCli') }}
+                <Terminal /> {{ $t('codexInstances.launch') }}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
