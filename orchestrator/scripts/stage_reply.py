@@ -144,11 +144,17 @@ def _run_list(as_json: bool) -> int:
         print("nothing staged - the courier has nothing to deliver")
     else:
         for r in rows:
-            mark = {"staged": "·", "delivered": "✓", "failed": "✗", "cancelled": "-"}.get(r["state"], "?")
+            mark = {"staged": "·", "delivered": "✓", "failed": "✗",
+                    "cancelled": "-", "expired": "⌛"}.get(r["state"], "?")
             print(f"  {mark} [{r['state']}] {r['id']}  {r.get('title') or r['session']}")
             print(f"      {r['text'][:100]}")
+            if r.get("deferrals"):
+                print(f"      deferred {r['deferrals']}x (still staged - the world was not ready)")
             if r.get("lastError"):
-                print(f"      last error: {r['lastError'][:120]}")
+                # An expired row's lastError is its REASON, not an error - say which, so the
+                # reader does not read a shelf-life expiry as something that went wrong.
+                label = "reason" if r["state"] == "expired" else "last error"
+                print(f"      {label}: {r['lastError'][:120]}")
     return 0
 
 

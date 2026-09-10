@@ -89,6 +89,24 @@ app.post('/api/sessions/:id/message', async (c) => {
         },
         422,
       )
+    // PEER_ONLY - THE CALLER'S MID-TURN RAIL, HONOURED HERE BECAUSE HERE IS WHERE THE CHANNEL
+    // IS CHOSEN (2026-09-10). The composer fallback below TYPES, and typing into a chat whose
+    // turn is in flight is the one thing the courier's rail 4 forbids. A caller that knows the
+    // turn is in flight sets peer_only, and then "no pipe" is a refusal, never a downgrade to
+    // the route that would interrupt. Without this the courier could only obey rail 4 by
+    // refusing every live chat up front - which is exactly the bug it was fixed out of.
+    if (body.peer_only === true)
+      return c.json(
+        {
+          ok: false,
+          route: 'peer',
+          delivered: false,
+          error: 'peer_only: no peer pipe for this session, and its turn is in flight',
+          detail:
+            'the composer is the only route left and it types - refusing to interrupt a live turn. Retry when the chat is idle.',
+        },
+        409,
+      )
     // 'not-live' => no pipe (dormant/crashed): fall through to the composer, which boots it.
   }
   // The verify snippet: a line of the chat's OWN last words, so the actuator proves it found

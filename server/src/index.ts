@@ -328,6 +328,48 @@ app.post('/api/update/apply', async (c) => {
   return c.json(result)
 })
 
+// RESTART THE DAEMON ON DEMAND (2026-09-10) - the GRACEFUL restart, in-process.
+//
+// ⛔ THIS IS NOT misc/Restart-Daemon.ps1, AND NEITHER REPLACES THE OTHER. Read the difference
+// before adding a third door:
+//   · Restart-Daemon.ps1 is the REBUILD SLEDGEHAMMER (owner directive, 2026-07-15: "a rebuild
+//     must NEVER leave you on old code"). It kills the daemon AND the tray host by identity from
+//     OUTSIDE, then relaunches. It is what you run when you do not trust the running process, and
+//     it needs a human at a shell.
+//   · This route is the daemon relaunching ITSELF, the same relaunchDaemon() every auto-update
+//     already exercises: the successor is spawned first, waits for the port, and takes over the
+//     SAME port; the tray is untouched. Nothing is killed - the predecessor exits on its own once
+//     a replacement exists, so there is never a window with no daemon.
+// The gap it closes: relaunchDaemon() was reachable only through /api/update/apply, gated on
+// IS_COMPILED, so a SOURCE build (what this fleet runs) had no graceful path at all - a change in
+// server/src/ sat inert until someone remembered the .ps1. Restarting and updating are different
+// acts, and only one of them had a door.
+app.post('/api/daemon/restart', async (c) => {
+  const body = await jsonBody(c)
+  // ⛔ IN-FLIGHT DISPATCH RUNS ARE THE ONE REASON TO SAY NO, and it is the same reason the
+  // auto-update loop already refuses (setAutoUpdateHooks.hasActiveRuns below). A person who knows
+  // what they are restarting past may say so; the runs are detached and reattached at boot, so
+  // this is a courtesy rather than data loss - but it must be a DECISION, never a surprise.
+  const active = activeCount()
+  if (active > 0 && body.force !== true)
+    return c.json(
+      {
+        ok: false,
+        error: `${active} dispatch run(s) in flight - pass force:true to restart past them`,
+        activeRuns: active,
+      },
+      409,
+    )
+  const ok = relaunchDaemon()
+  return c.json({
+    ok,
+    activeRuns: active,
+    detail: ok
+      ? 'successor spawned; this daemon frees the port in ~800ms - poll /api/health until it answers'
+      : 'the successor could not be spawned, so this daemon is STAYING UP (nothing was restarted)',
+  })
+})
+
 // --- auto-update settings (background loop; see server/src/auto-update.ts) -------------------
 app.get('/api/update/settings', (c) =>
   c.json({ enabled: autoUpdateEnabled(), intervalSecs: getAutoUpdateIntervalSecs() }),

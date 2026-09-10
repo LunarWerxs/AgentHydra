@@ -14,9 +14,11 @@
 #
 # THE AIM RAILS, all four required before a single Invoke:
 #   1. the instance matches (exact --user-data-dir for a path, substring for a bare name);
-#   2. the TARGET CHAT is the one open in that window - proved by its own kebab button,
-#      "More options for <Title>", being present in the conversation pane. If the row must be
-#      selected first, -Select does that through the sidebar row and re-checks the receipt;
+#   2. the TARGET CHAT is the one open in that window - proved by its own kebab button
+#      ("More options for <Title>", or whatever that phrase is in the app's language: it is
+#      read off the sidebar, never listed - see RAIL 2 below) being present in the
+#      conversation pane. If the row must be selected first, -Select does that through the
+#      sidebar row and re-checks the receipt;
 #   2b. with -VerifyText, that chat's OWN WORDS are visible in the conversation pane. A title
 #      is not an identity (same-titled chats in two instances are a known fleet shape), so the
 #      caller passes a snippet of this chat's transcript tail and nothing is pressed unless the
@@ -54,8 +56,46 @@ param(
 # bypass at all. The dead names are kept: an older build may still render them, and a name
 # that matches nothing costs one string comparison.
 $MODE_NAMES = @('Auto', 'Manual', 'Accept edits', 'Plan', 'Bypass permissions',
-                'Default permissions', 'Plan mode', 'Ask permissions', 'Auto-accept edits')
+                'Default permissions', 'Plan mode', 'Ask permissions', 'Auto-accept edits',
+                # SPANISH, read off instance #56 on 2026-09-10 with the same probe (composer button
+                # 'Omitir permisos' -> Space -> five RadioButtons). OBSERVED, never translated - the
+                # guess 'Cambiar nombre' sat in the rename table for weeks matching nothing.
+                'Aceptar ediciones', 'Omitir permisos')
+# The picker's localized names per CANONICAL (English) mode, so a caller can keep asking for
+# '-SetMode "Bypass permissions"' on any locale: Find-ModeItem tries every spelling here and,
+# on a hit, REBINDS $SetMode to the label the app actually renders, so every later comparison
+# ("did the mode take") reads the same string the window does. Add a locale by OBSERVING it
+# (the probe above), one row per canonical name; a name that matches nothing costs one compare.
+$MODE_ALIASES = @{
+  'Auto'               = @('Auto')
+  'Manual'             = @('Manual')
+  'Accept edits'       = @('Accept edits', 'Aceptar ediciones')
+  'Plan'               = @('Plan')
+  'Bypass permissions' = @('Bypass permissions', 'Omitir permisos')
+}
+function Mode-Spellings($canonical) {
+  $names = @($canonical) + @($MODE_ALIASES[$canonical])
+  return @($names | Where-Object { $_ } | Select-Object -Unique)
+}
 $ErrorActionPreference = 'Stop'
+# ⛔ UTF-8 ON THE WAY OUT, OR A NON-ASCII TITLE COMES BACK AS QUESTION MARKS (2026-09-10).
+# This script's stdout is a PIPE, read by the daemon (Bun) and by the Python toolbox. PowerShell
+# encodes a piped stream with [Console]::OutputEncoding, which defaults to the machine's OEM code
+# page rather than UTF-8 - so a chat titled 'Alcancé mi límite' left this process as
+# 'Alcanc? mi l?mite'. The accents were destroyed HERE, and a literal '?' is perfectly valid
+# UTF-8, so NO reader can detect the loss or recover from it: clilib.decode_console is already
+# UTF-8-first with an OEM fallback and still saw question marks. The visible symptom was a
+# refusal naming a chat that does not exist ("no sidebar row is named 'Alcanc? mi l?mite'"),
+# which reads as a missing chat rather than an encoding fault - and any non-Latin title (CJK,
+# Cyrillic, emoji) degrades to a row of question marks the same way.
+# $OutputEncoding is the mirror of the same setting for anything piped INTO a native exe.
+# Best-effort: a console handle that refuses the assignment must not take down a UIA act, which
+# is what this script is actually for - mojibake is a bad answer, no answer is a worse one.
+try {
+  $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+  [Console]::OutputEncoding = $OutputEncoding
+} catch { }
+
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 Add-Type -Namespace Approve -Name Inv -MemberDefinition @'
 [DllImport("oleacc.dll")] public static extern int AccessibleObjectFromWindow(IntPtr hwnd, int id, ref System.Guid iid, ref System.IntPtr ppv);
@@ -228,46 +268,213 @@ function PaneMinX($root) {
   return $r.Left + ($r.Width * 0.38)
 }
 
-# RAIL 2: is OUR chat the open one? Its kebab renders in the conversation pane header.
-function OpenChatIs($root, $title) {
-  $minX = PaneMinX $root
+# RAIL 2 MATCHES THE UI'S SHAPE, NEVER ITS LANGUAGE (rebuilt 2026-09-09).
+#
+# Found live on instance #56, a Claude Desktop rendering in Spanish. This file carried THREE
+# English literals for one job: the pane receipt wanted a Name starting 'More options for ',
+# and the -Select path wanted a row Name equal to the title once 'Idle ' or 'Running ' was
+# stripped. On that app the row's kebab reads 'Mas opciones para <Title>' and the row itself
+# carries a Spanish status word, so every chat refused with "no sidebar row ... (waited 6s
+# for it to render)" while -List printed the row plainly. ⛔ THE 6s POLL WAS NEVER THE
+# PROBLEM - that message sent readers hunting a rendering delay that did not exist, and the
+# refusals below now say which of the two it actually is.
+#
+# WHAT DOES NOT LOCALIZE: a chat row and ITS OWN kebab render the SAME title behind two
+# different decorations ('Idle X' + 'More options for X'; 'Inactivo X' + 'Mas opciones para
+# X'). Their longest common TAIL is therefore the title, read off this window on this run -
+# and what remains of the kebab's name is the kebab PHRASE. One phrase, measured, replaces
+# every English literal, and matching stays EXACT (name equality against phrase + title),
+# which is what the 2026-09-06 review demanded: a longer neighbour title that merely ENDS
+# with ours must never match. ⛔ Do not answer the next locale by adding its words here;
+# there is nothing to add. (The one list that still needs observed labels is $MODE_NAMES at
+# the top - a mode has no row/kebab pair to read itself off; see its refusal below.)
+#
+# >>> STRUCTURAL-MATCH REGION - extracted VERBATIM and unit-tested by
+#     orchestrator/scripts/tests/test_approve_prompt_matching.py. Keep it dependency-free:
+#     no UIA types, no window state, plain descriptors in and decisions out. >>>
+function Get-CommonTail([string]$a, [string]$b) {
+  if (-not $a -or -not $b) { return '' }
+  $i = $a.Length - 1; $j = $b.Length - 1; $n = 0
+  while ($i -ge 0 -and $j -ge 0 -and $a[$i] -ceq $b[$j]) { $i--; $j--; $n++ }
+  if ($n -le 0) { return '' }
+  return $a.Substring($a.Length - $n)
+}
+function Get-PairTitle([string]$rowName, [string]$kebabName) {
+  # The title of the chat this row/kebab pair belongs to - or '' when the pair cannot prove
+  # one. The tail is only trusted at a WORD BOUNDARY: either it is the row's whole name (an
+  # undecorated row) or it starts at the space that separates decoration from title.
+  # Anything else is a coincidental overlap of two prefixes, not a title.
+  $t = Get-CommonTail $rowName $kebabName
+  if (-not $t) { return '' }
+  if ($t -ceq $rowName) { return $t.Trim() }
+  if ($t.StartsWith(' ')) { return $t.Trim() }
+  return ''
+}
+function Get-OwningRow($buttons, $kebab) {
+  # The ROW that owns this kebab: it takes Invoke (that is what selects the chat) and never
+  # ExpandCollapse (that is the kebab), it begins at or left of the kebab, and the kebab
+  # renders inside its band. One candidate is the answer; several are settled by geometric
+  # containment (a row contains its own kebab, a neighbouring control does not) and never
+  # by picking the first.
+  $cy = ($kebab.Top + $kebab.Bottom) / 2.0
+  $band = @($buttons | Where-Object {
+    $_.HasInvoke -and -not $_.HasExpand -and $_.Left -le $kebab.Left -and
+    $_.Top -le ($cy + 2) -and $_.Bottom -ge ($cy - 2)
+  })
+  if ($band.Count -eq 0) { return $null }
+  if ($band.Count -eq 1) { return $band[0] }
+  $holds = @($band | Where-Object {
+    $_.Right -ge $kebab.Right -and $_.Top -le $kebab.Top -and $_.Bottom -ge $kebab.Bottom
+  })
+  if ($holds.Count -eq 1) { return $holds[0] }
+  return $null
+}
+function Get-KebabPhrase($buttons) {
+  # Every kebab on screen reads '<phrase> <title>' with the SAME phrase, whatever the app's
+  # language. Read each pair's title off the pair itself, and the phrase is what is left.
+  # The phrase most rows agree on wins; a single unreadable row cannot move it.
+  $seen = @{}
+  foreach ($k in @($buttons | Where-Object { $_.HasExpand -and $_.Name })) {
+    $row = Get-OwningRow $buttons $k
+    if (-not $row) { continue }
+    $t = Get-PairTitle $row.Name $k.Name
+    if (-not $t) { continue }
+    if ($k.Name.Length -le $t.Length) { continue }
+    $p = $k.Name.Substring(0, $k.Name.Length - $t.Length)
+    if (-not $p.EndsWith(' ')) { continue }
+    if ($seen.ContainsKey($p)) { $seen[$p] = $seen[$p] + 1 } else { $seen[$p] = 1 }
+  }
+  $best = ''; $bestN = 0
+  foreach ($p in $seen.Keys) {
+    if ($seen[$p] -gt $bestN -or ($seen[$p] -eq $bestN -and $p.Length -gt $best.Length)) { $best = $p; $bestN = $seen[$p] }
+  }
+  return $best
+}
+function Get-FoldedTitle([string]$s) {
+  # Case-folded, accent-folded, whitespace-collapsed, with a trailing ellipsis (the sidebar's
+  # own truncation mark - the glyph or a literal run of dots) stripped first. Used ONLY by the
+  # normalised fallback below; the exact pass above never calls this.
+  if (-not $s) { return '' }
+  $t = $s.Trim() -replace '\s*(…|\.\.\.+)\s*$', ''
+  $decomposed = $t.Normalize([System.Text.NormalizationForm]::FormD)
+  $sb = New-Object System.Text.StringBuilder
+  foreach ($ch in $decomposed.ToCharArray()) {
+    $cat = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($ch)
+    if ($cat -ne [System.Globalization.UnicodeCategory]::NonSpacingMark) { [void]$sb.Append($ch) }
+  }
+  $folded = $sb.ToString().Normalize([System.Text.NormalizationForm]::FormC).ToLowerInvariant()
+  return ($folded -replace '\s+', ' ').Trim()
+}
+function Test-FoldedPrefixMatch([string]$a, [string]$b) {
+  $na = Get-FoldedTitle $a
+  $nb = Get-FoldedTitle $b
+  if (-not $na -or -not $nb) { return $false }
+  $n = [Math]::Min($na.Length, $nb.Length)
+  return $na.Substring(0, $n) -ceq $nb.Substring(0, $n)
+}
+function Select-SidebarChat($buttons, [double]$minX, [string]$title, [string]$phrase) {
+  # EXACT: the sidebar kebab whose name IS phrase + title. Never EndsWith/Contains - the
+  # 2026-09-06 review's hazard ('todo list' must not match 'GlimmerAC todo list') is exactly
+  # what an inexact tail test would reopen. Two exact hits is a refusal, not a guess.
+  $side = @($buttons | Where-Object { $_.Left -lt $minX -and $_.Name })
+  $rendered = @()
+  $candidates = @()   # (Kebab, StrippedName) pairs, phrase already peeled off - feeds the fallback
+  foreach ($b in @($side | Where-Object { $_.HasExpand })) {
+    if ($phrase -and $b.Name.Length -gt $phrase.Length -and $b.Name.StartsWith($phrase)) {
+      $s = $b.Name.Substring($phrase.Length)
+    } else {
+      $s = $b.Name            # verbatim: a kebab we could not read is still evidence
+    }
+    $rendered += $s
+    $candidates += [pscustomobject]@{ Kebab = $b; Name = $s }
+  }
+  $hits = @($side | Where-Object { $_.HasExpand -and $_.Name -eq ($phrase + $title.Trim()) })
+  if ($hits.Count -eq 0) {
+    # NORMALISED FALLBACK (2026-09-10 - the Spanish, sentence-shaped title): a long row can be
+    # rendered TRUNCATED with an ellipsis, so its accessibility Name is only ever a PREFIX of
+    # the stored title and can never satisfy the exact test above; separately, accented
+    # characters can reach the two sides of the compare in different Unicode forms. Reached
+    # ONLY when the exact pass found nothing - it never second-guesses a title that already
+    # resolved. Compares case-folded, accent-folded, whitespace-collapsed, ellipsis-stripped,
+    # on the SHORTER of the two strings as a prefix, so truncation on either side still matches.
+    $loose = @($candidates | Where-Object { Test-FoldedPrefixMatch $_.Name $title })
+    if ($loose.Count -gt 1) {
+      # AMBIGUITY MUST STAY A REFUSAL in the loosened pass too - never guess between two rows
+      # that could each be a truncated prefix of the wanted title.
+      return @{ Row = $null; Kebab = $null; Rendered = $rendered; Why = "ambiguous:$($loose.Count)" }
+    }
+    if ($loose.Count -eq 1) { $hits = @($loose[0].Kebab) }
+  }
+  if ($hits.Count -eq 0) { return @{ Row = $null; Kebab = $null; Rendered = $rendered; Why = 'no-row' } }
+  if ($hits.Count -gt 1) { return @{ Row = $null; Kebab = $null; Rendered = $rendered; Why = "ambiguous:$($hits.Count)" } }
+  $row = Get-OwningRow $buttons $hits[0]
+  if (-not $row) { return @{ Row = $null; Kebab = $hits[0]; Rendered = $rendered; Why = 'no-owning-row' } }
+  return @{ Row = $row; Kebab = $hits[0]; Rendered = $rendered; Why = 'ok' }
+}
+function Test-PaneShows($buttons, [double]$minX, [string]$title, [string]$phrase) {
+  # The receipt: the conversation pane's own header kebab, right of the sidebar boundary.
+  foreach ($b in $buttons) {
+    if ($b.Left -lt $minX -or -not $b.Name) { continue }
+    if ($b.Name -eq ($phrase + $title.Trim())) { return $true }
+  }
+  return $false
+}
+# <<< STRUCTURAL-MATCH REGION <<<
+
+# The phrase to use when the sidebar renders nothing to read one off (collapsed, or still
+# empty). It is the ENGLISH app's measured phrase - the literal this file used to hardcode -
+# and deliberately not a translation of anything: an unreadable sidebar is not a licence to
+# guess. Only a MEASURED phrase is ever cached, so a sidebar that renders one second later
+# still gets read properly.
+$KEBAB_PHRASE_FALLBACK = 'More options for '
+$script:KebabPhrase = ''
+
+# UIA -> plain descriptors, in one pass. Patterns are probed ONLY for the sidebar and only
+# while the phrase is still unknown: each probe is a cross-process call, and the pane receipt
+# needs names alone once the phrase has been measured.
+function Read-Buttons($root, [double]$minX, [bool]$withPatterns) {
+  $out = @()
   foreach ($b in $root.FindAll($TREE, $btnCond)) {
     try {
       $n = $b.Current.Name
-      if (-not $n -or -not $n.StartsWith('More options for ')) { continue }
+      if (-not $n) { continue }
       $r = $b.Current.BoundingRectangle
-      if ($r.IsEmpty -or $r.Left -lt $minX) { continue }   # the sidebar rows have one too
-      if ($n.Substring(17).Trim() -eq $title.Trim()) { return $true }
+      if ($r.IsEmpty) { continue }
+      $he = $false; $hi = $false
+      if ($withPatterns -and $r.Left -lt $minX) {
+        $he = $null -ne (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern))
+        $hi = $null -ne (TryPattern $b ([System.Windows.Automation.InvokePattern]::Pattern))
+      }
+      $out += [pscustomobject]@{
+        Name = $n; Left = $r.Left; Top = $r.Top; Right = $r.Right; Bottom = $r.Bottom
+        HasExpand = $he; HasInvoke = $hi; El = $b
+      }
     } catch { continue }
   }
-  return $false
+  return $out
+}
+function Resolve-Phrase($buttons) {
+  if ($script:KebabPhrase) { return $script:KebabPhrase }
+  $p = Get-KebabPhrase $buttons
+  if ($p) { $script:KebabPhrase = $p; return $p }
+  return $KEBAB_PHRASE_FALLBACK
+}
+
+# RAIL 2: is OUR chat the open one? Its kebab renders in the conversation pane header.
+function OpenChatIs($root, $title) {
+  $minX = PaneMinX $root
+  $btns = Read-Buttons $root $minX (-not $script:KebabPhrase)
+  return (Test-PaneShows $btns $minX $title (Resolve-Phrase $btns))
 }
 
 if (-not (OpenChatIs $el $Title)) {
   if (-not $Select) { Write-Output "REFUSED: '$Title' is not the chat open in $($proc.Dir)"; exit 4 }
   # Bring it up through its own sidebar row, then re-check the receipt - never press a button
   # in a pane we have not proved belongs to this chat.
-  $minX = PaneMinX $el
-  # RAIL 2: exact Name equality to $Title after stripping known decoration - never
-  # EndsWith/StartsWith/Contains (review 2026-09-06: EndsWith let a row decorated with a
-  # status prefix, or a longer neighbour title, match a chat it was not). Two exact matches
-  # is a refusal, not "take the first".
-  function StripRowDecoration($n) {
-    $s = $n
-    foreach ($p in @('Idle ', 'Running ')) { if ($s.StartsWith($p)) { $s = $s.Substring($p.Length) } }
-    return $s.Trim()
-  }
   function Find-Rows($root) {
-    $found = @()
-    foreach ($b in $root.FindAll($TREE, $btnCond)) {
-      try {
-        $n = $b.Current.Name
-        $r = $b.Current.BoundingRectangle
-        if (-not $n -or $r.IsEmpty -or $r.Left -ge $minX) { continue }
-        if ((StripRowDecoration $n) -eq $Title.Trim()) { $found += $b }
-      } catch { continue }
-    }
-    return $found
+    $mx = PaneMinX $root
+    $btns = Read-Buttons $root $mx $true
+    return (Select-SidebarChat $btns $mx $Title (Resolve-Phrase $btns))
   }
   # ⛔ A CHAT THAT LANDED A SECOND AGO IS NOT YET A ROW (measured 2026-09-07: five of the six
   # chats in the Andreea drain refused with "no sidebar row" while the row existed moments
@@ -275,18 +482,38 @@ if (-not (OpenChatIs $el $Title)) {
   # instant look turned a rendering delay into "that chat does not exist here", and the whole
   # permission stamp was lost with it. Poll instead; a genuinely absent row still refuses,
   # just 6s later, and a row already on screen costs one scan exactly as before.
-  $rows = Find-Rows $el
+  $pick = Find-Rows $el
   $rowDeadline = (Get-Date).AddMilliseconds(6000)
-  while ($rows.Count -eq 0 -and (Get-Date) -lt $rowDeadline) {
+  # Only a row that is genuinely ABSENT can still arrive; an ambiguous or unownable match is
+  # already decided, and re-scanning that for six seconds just delays the refusal.
+  while (-not $pick.Row -and $pick.Why -eq 'no-row' -and (Get-Date) -lt $rowDeadline) {
     Start-Sleep -Milliseconds 400
-    $rows = Find-Rows $el
+    $pick = Find-Rows $el
   }
-  if ($rows.Count -eq 0) { Write-Output "REFUSED: no sidebar row for '$Title' in $($proc.Dir) (waited 6s for it to render)"; exit 4 }
-  if ($rows.Count -gt 1) {
-    Write-Output "REFUSED: $($rows.Count) sidebar rows exactly match '$Title' in $($proc.Dir) - ambiguous"
+  if (-not $pick.Row) {
+    # ⛔ SAY WHICH FAILURE THIS IS. One message used to blame the 6s poll for all of them,
+    # which is how a pure MATCHING break (the Spanish app, 2026-09-09) read as a rendering
+    # delay for a whole session and sent the reader after the wrong thing.
+    $rendered = @($pick.Rendered)
+    $lens = if ($script:KebabPhrase) { "(rows read by the kebab phrase '$($script:KebabPhrase)', measured off this window)" }
+            else { "(no kebab phrase could be read off this window - fell back to '$KEBAB_PHRASE_FALLBACK')" }
+    if ($pick.Why -like 'ambiguous:*') {
+      Write-Output "REFUSED: $($pick.Why.Split(':')[1]) sidebar rows are named exactly '$Title' in $($proc.Dir) - refusing to guess which"
+      exit 4
+    }
+    if ($pick.Why -eq 'no-owning-row') {
+      Write-Output "REFUSED: the sidebar row for '$Title' IS rendered in $($proc.Dir), but no button owning it takes Invoke - the app's sidebar markup changed"
+      exit 4
+    }
+    if ($rendered.Count -eq 0) {
+      Write-Output "REFUSED: the sidebar in $($proc.Dir) rendered NO chat rows at all in 6s, so '$Title' could not be looked for - the window is still loading, or its sidebar is collapsed $lens"
+      exit 4
+    }
+    Write-Output ("REFUSED: no sidebar row is named '$Title' in $($proc.Dir) - a MATCH failure, not a timing one: $($rendered.Count) rows are rendered right now $lens. Rows: " +
+      ((@($rendered | Select-Object -First 12) | ForEach-Object { "'" + $_ + "'" }) -join ' | '))
     exit 4
   }
-  $row = $rows[0]
+  $row = $pick.Row.El
   $inv = TryPattern $row ([System.Windows.Automation.InvokePattern]::Pattern)
   if (-not $inv) { Write-Output 'REFUSED: that row exposes no Invoke'; exit 4 }
   $inv.Invoke()
@@ -437,7 +664,41 @@ if ($SetMode) {
     return $null
   }
   $modeBtn = Find-ModeBtn $el
-  if (-not $modeBtn) { Write-Output "no permission picker is showing in '$Title' (looked for: $($MODE_NAMES -join ', '))"; exit 3 }
+  if (-not $modeBtn) {
+    # ⛔ $MODE_NAMES IS ENGLISH, AND ON A NON-ENGLISH APP THAT IS WHY YOU ARE READING THIS
+    # (measured 2026-09-09 on instance #56, whose composer button reads 'Aceptar ediciones').
+    # A chat ROW can be matched structurally - it has its own kebab to read its title off,
+    # see RAIL 2 - but a MODE has no such pair: the five modes are sibling radio items whose
+    # only distinguishing feature is their text, and position is not a discriminator when
+    # 'Bypass permissions' sits beside 'Plan'. Translating them is the guess that left
+    # 'Cambiar nombre' in the rename table for weeks matching nothing (the app says
+    # 'Renombrar'), so this refusal DOES THE PROBE INSTEAD: it prints the composer row
+    # verbatim, and the labels on that line - observed, never looked up - are the ones to
+    # add here. -SetMode also compares the picker's own name to $SetMode to prove the mode
+    # took, so a localized app needs the caller to ask for the mode by the name it renders.
+    # (If a live dump ever shows the bypass item carrying its own CSS palette the way the
+    # row menu's Delete does, THAT is the structural route - Manage-DesktopChat's
+    # StructuralMenuItem is the pattern to copy.)
+    $onRow = @()
+    foreach ($b in $el.FindAll($TREE, $btnCond)) {
+      try {
+        $n = $b.Current.Name
+        if (-not $n) { continue }
+        $r = $b.Current.BoundingRectangle
+        if ($r.IsEmpty) { continue }
+        if ($null -ne $rowY) { if ([Math]::Abs($r.Top - $rowY) -gt 40) { continue } }
+        elseif ($r.Left -lt $minXm) { continue }
+        if ($null -ne (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern))) { $n = "$n(opens a menu)" }
+        $onRow += $n
+      } catch { continue }
+    }
+    $onRow = @($onRow | Select-Object -Unique | Select-Object -First 12)
+    $where = if ($null -ne $rowY) { 'the composer row' } else { 'the composer half of the window (no Model: anchor on screen)' }
+    Write-Output ("no permission picker is showing in '$Title' (looked for a button named one of: $($MODE_NAMES -join ', ')). " +
+      "$where renders: " + (($onRow | ForEach-Object { "'" + $_ + "'" }) -join ' | ') +
+      " - if this app's UI is not in English its mode names are localized, and these OBSERVED labels are the ones to add to `$MODE_NAMES; never a translated guess.")
+    exit 3
+  }
   $before = $modeBtn.Current.Name
   # WHERE THE COMPOSER'S OWN PICKER SITS, read BEFORE the menu opens. The confirmation dialog
   # below carries a button with the SAME NAME as the mode being set ('Bypass permissions'),
@@ -445,7 +706,7 @@ if ($SetMode) {
   # position. The composer toolbar does not move while a modal is up, and a rect survives the
   # React re-render that a RuntimeId does not, which is why this is the discriminator.
   $pickerRect = $modeBtn.Current.BoundingRectangle
-  if ($before -eq $SetMode) { Write-Output "MODE already '$SetMode' for '$Title' in $($proc.Dir)"; exit 0 }
+  if ((Mode-Spellings $SetMode) -contains $before) { Write-Output "MODE already '$before' for '$Title' in $($proc.Dir)"; exit 0 }
   # OPENING THE PICKER (measured 2026-09-01 on a live window): the picker Button exposes
   # ExpandCollapse and ScrollItem, NOT Invoke - so requiring Invoke refused every chat whose
   # mode was wrong ("the permission picker ('Accept edits') exposes no Invoke"). Its parent
@@ -485,14 +746,21 @@ if ($SetMode) {
   # description ('Bypass permissions Accepts all permissions Default'), which is why an
   # exact-name match found "no item"; SelectionItem.Select on the radio switches the mode.
   function Find-ModeItem($root) {
+    $spellings = Mode-Spellings $SetMode
     foreach ($e in $root.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
       try {
         $n = $e.Current.Name
-        if (-not $n -or -not $n.StartsWith($SetMode)) { continue }
+        if (-not $n) { continue }
+        $hit = $spellings | Where-Object { $n.StartsWith($_) } | Select-Object -First 1
+        if (-not $hit) { continue }
         $ct = $e.Current.ControlType.ProgrammaticName
         if ($ct -notmatch 'RadioButton|MenuItem|ListItem') { continue }
         $r = $e.Current.BoundingRectangle
         if ($r.IsEmpty) { continue }
+        # Rebind to the label this window RENDERS: every comparison below ("did it take", the
+        # confirm-dialog hunt, the receipt line) reads $SetMode, and on a localized app the
+        # canonical English name would never equal what the picker shows.
+        $script:SetMode = $hit
         return $e
       } catch { continue }
     }
@@ -563,8 +831,8 @@ if ($SetMode) {
         "to take a posted key. This is NOT a missing label; do not add one.")
       exit 6
     }
-    Write-Output ("REFUSED: opened the picker ('$before') but no item starting with '$SetMode' appeared" +
-      " (menu showed: $($namesSeen -join ' | '))")
+    Write-Output ("REFUSED: opened the picker ('$before') but no item starting with any of '$((Mode-Spellings $SetMode) -join ""' / '"")' appeared" +
+      " (menu showed: $($namesSeen -join ' | ') - if this is a locale not in `$MODE_ALIASES, these OBSERVED labels are the ones to add)")
     exit 6
   }
   # RAIL (review 2026-09-06): snapshot every button's RuntimeId BEFORE the mode item is
@@ -809,6 +1077,10 @@ if ($SetMode) {
         if (-not $n) { continue }
         $n = $n.Trim()
         if ($n.Length -gt 60) { $n = $n.Substring(0, 60) }
+        # Sidebar rows are noise in a dialog hunt. Drop them by the kebab phrase THIS window
+        # renders (measured by RAIL 2) so the list is about dialogs on a Spanish app too; the
+        # English patterns stay for the case where no phrase could be read.
+        if ($script:KebabPhrase -and $n.StartsWith($script:KebabPhrase)) { continue }
         if ($n -like 'More options*' -or $n -like 'Idle *' -or $n -like 'Running *') { continue }
         if ($b.Current.IsOffscreen) { $n = "$n(offscreen)" }
         elseif (-not $b.Current.IsEnabled) { $n = "$n(disabled)" }

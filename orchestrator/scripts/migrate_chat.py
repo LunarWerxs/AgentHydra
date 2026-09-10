@@ -1328,7 +1328,7 @@ def watch_bypass_many(meta_paths: list[str], watch_secs: float = BYPASS_WATCH_SE
     return state
 
 
-BYPASS_REMEDY_CMD = "python automation_chat.py {sid} --force"
+BYPASS_REMEDY_CMD = "python scripts/automation_chat.py {sid} --force"
 
 
 def confirm_bypass_in_app(row: dict, fleet: dict) -> str:

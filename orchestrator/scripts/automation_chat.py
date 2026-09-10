@@ -203,6 +203,34 @@ def _verify_text_for_row(row: dict, fleet: dict) -> str:
     return "|||".join(alts)
 
 
+def title_for_row(row: dict) -> str:
+    """The name the APP RENDERS, which is the only thing the picker can aim by.
+
+    ⛔ AN IMPORTED CHAT'S DISK META RECORD CARRIES NO TITLE (found 2026-09-09, still live
+    2026-09-10). The app derives a landed chat's display name from its transcript at render
+    time, so `meta["title"]` is None while the sidebar shows a perfectly good name. Every row
+    builder here reads that field, so `-Title ""` reached PowerShell and approve_prompt.ps1's
+    [ValidateNotNullOrEmpty] killed the whole pipeline with
+    `ParameterArgumentValidationErrorEmptyStringNotAllowed` - which reads like a permissions or
+    environment fault and is neither. The remedy `--force` prints for a `disk-only` landing
+    could therefore never work on the one population it exists to serve.
+
+    The title is not really unknown: the daemon resolves it, because the APP knows it (that is
+    how the courier delivers to these same chats by rendered name). Ask it. A chat the daemon
+    cannot name either returns "" and the caller refuses honestly - never an empty argument.
+    """
+    title = str(row.get("title") or "").strip()
+    if title:
+        return title
+    sid = str(row.get("sessionId") or "")
+    if not sid:
+        return ""
+    try:
+        return str((hydralib.resolve_one(sid) or {}).get("title") or "").strip()
+    except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError):
+        return ""
+
+
 def _actuator_args(row: dict, inst_dir: str, verify: str) -> list[str]:
     args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(MODE_ACTUATOR),
             "-Title", str(row.get("title") or ""), "-Instance", inst_dir,
@@ -295,10 +323,20 @@ def set_mode_via_app(row: dict, fleet: dict, force: bool = False) -> str:
         return "actuator missing"
 
     sid = str(row.get("sessionId") or "")
+    # THE NAME FIRST, AND NEVER AN EMPTY ONE (see title_for_row). An empty -Title is not a
+    # weaker attempt, it is a PowerShell parameter-validation crash that never reaches the
+    # picker at all - and it surfaces as an error message about argument validation, which
+    # sent a whole session's reader after an environment fault that did not exist.
+    title = title_for_row(row)
+    if not title:
+        return ("REFUSED: this chat has no name to aim at - its desktop record carries no title "
+                "and the daemon cannot supply the rendered one either, so the picker has nothing "
+                "to select. Nothing was driven; land or re-title the chat first.")
+    row = {**row, "title": title}
     retry = None if force else _mode_retry_status(sid)
     if retry is not None:
         return retry
-    ledgerlib.note("mode", sid, note=f"picker -> {REQUIRED_MODE} for '{row.get('title') or ''}'")
+    ledgerlib.note("mode", sid, note=f"picker -> {REQUIRED_MODE} for '{title}'")
 
     inst = hydralib.resolve_instance(fleet, str(row.get("instance") or "")) or {}
     inst_dir = str(inst.get("dir") or row.get("instance") or "")

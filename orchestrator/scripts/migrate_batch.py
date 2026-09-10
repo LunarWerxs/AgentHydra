@@ -474,6 +474,7 @@ def _run_phases(items: list[_Item]) -> None:
             item.landing.source_row = "unknown"
     if not live:
         return
+    _name_landings(live)
     # The shared watch. It re-stamps any record the app flipped back, exactly as each chat's
     # own watch did, so this is the same guarantee bought once instead of N times.
     try:
@@ -496,6 +497,50 @@ def _run_phases(items: list[_Item]) -> None:
 
 
 
+def _name_landings(live: list) -> None:
+    """Give every nameless landing its real name BEFORE the stamp phase tries to aim at one.
+
+    ⛔ AN IMPORT LANDS NAMELESS, AND A NAMELESS CHAT CANNOT BE STAMPED (found 2026-09-09,
+    reproduced and fixed 09-10). `session-launch` reports `titleDurable: false` for a landing
+    into a RUNNING app and means it: the title is written to disk and the app re-saves over it
+    from memory, so the record comes back with `title: null` while the sidebar renders a name
+    derived from the transcript. Everything that aims BY NAME then breaks at once - the
+    permission picker is handed an empty `-Title` and dies inside PowerShell's parameter
+    validation (which reads like an environment fault and is not one), `chat_rename` cannot
+    find the row, and the `disk-only` remedy the move itself prints fails on the exact
+    population it exists to serve. The durable channel has always been the app's OWN rename;
+    that is what the naming pass drives, and the batch is the last place that still knows each
+    chat's intended title, so this is where the two have to meet.
+
+    Best-effort and never fatal: by this point every chat is moved and verified, and a name is
+    not worth failing a landing over. Reported on the item, never swallowed.
+    """
+    import name_chats
+
+    by_instance: dict[str, dict[str, str]] = {}
+    for item in live:
+        inst = str((item.landing.target or {}).get("name") or "")
+        sid = str(item.landing.session_id or "")
+        title = str(item.landing.chat_title or "")
+        if inst and sid and title:
+            by_instance.setdefault(inst, {})[sid] = title
+    for inst, titles in by_instance.items():
+        try:
+            got = name_chats.name_pass(inst, extra_titles=titles)
+        except Exception as err:  # a name is a courtesy; a landed chat is the deliverable
+            for item in live:
+                item.errors.append(f"naming raised {type(err).__name__}: {str(err)[:150]}")
+            continue
+        if got.get("needsJudgment") or got.get("remaining"):
+            for item in live:
+                if str((item.landing.target or {}).get("name") or "") != inst:
+                    continue
+                item.errors.append(
+                    f"naming pass on '{inst}' left {len(got.get('remaining') or [])} nameless / "
+                    f"{len(got.get('needsJudgment') or [])} needing an AI-written name"
+                    + (f": {got['why']}" if got.get("why") else ""))
+
+
 def _report(results: list[dict], note: str, secs: float) -> str:
     # A DRY RUN IS NOT A REFUSAL. Reporting a plan as SKIP made a clean plan read like 13
     # blocked chats, which is the same class of lie as calling a skipped step a pass.
@@ -513,7 +558,20 @@ def _report(results: list[dict], note: str, secs: float) -> str:
     # "was NOT moved - re-run it" trailer below must never be printed about one of them.
     unfinished = [r for r in landed if not r.get("ok")]
     refused = [r for r in results if not r.get("landed")]
-    lines = [f"{len(landed)}/{len(results)} landed in {secs:.0f}s"
+    # ⛔ THE HEADLINE MUST NOT OVER-REPORT (found 2026-09-09, fixed 09-10). A landed chat is
+    # DORMANT until something types into it, so when a caller asked for --resume, "3/3 landed"
+    # described a migration in which zero chats had actually been told to carry on - and that
+    # is the number people read. The per-chat RESUME lines below were right the whole time and
+    # were scrolled past. Counted only when a resume was ASKED for; a plain move says nothing
+    # about resumes, because there was nothing to say.
+    asked_resume = [r for r in results if r.get("resume")]
+    resume_tally = ""
+    if asked_resume:
+        told = len([r for r in asked_resume if (r.get("resume") or {}).get("delivered")])
+        resume_tally = f", {told}/{len(asked_resume)} told to carry on"
+        if told < len(asked_resume):
+            resume_tally += " (the rest are moved but DORMANT)"
+    lines = [f"{len(landed)}/{len(results)} landed in {secs:.0f}s{resume_tally}"
              + (f" ({note})" if note else "")]
     for r in clean:
         title = r.get("title") or r["chat"]

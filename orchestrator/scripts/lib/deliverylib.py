@@ -14,6 +14,17 @@ States:
   delivered   typed into the chat AND the chat was observed to move afterwards
   failed      the courier tried and could not land it (reason recorded; attempts counted)
   cancelled   a person withdrew it before it went
+  expired     it waited too long, or its premise stopped being true - never sent, never lost
+
+WHY `expired` EXISTS (2026-09-07, reproduced 09-09; fixed 09-10). A staged reply had no end:
+the queue held rows up to six days old, several of them migration notices reading "this chat
+was migrated from X to Y" for chats that had since been migrated BACK. Arming the tray on
+that queue would have delivered a batch of statements that were no longer true. The fix is
+NOT to delete them - a decision nobody acted on must not silently disappear, which is exactly
+why _prune leaves staged rows alone. It is to give a staged reply a shelf life and a premise,
+and to move it to a terminal state that is still READABLE in --list, with the reason on it.
+Two things end a staged reply: age past STAGED_TTL_SECS, and a premise that has gone void
+(the courier expires a notice whose chat has changed accounts since it was written).
 
 State lives beside the attempt ledger and the holds file in <repo>/state/deliveries.json
 (override: ORCHESTRATOR_STATE_DIR), same atomic-write discipline.
@@ -30,7 +41,21 @@ from pathlib import Path
 
 from lib import joblocklib, ledgerlib
 
-VALID_STATES = ("staged", "delivered", "failed", "cancelled")
+VALID_STATES = ("staged", "delivered", "failed", "cancelled", "expired")
+
+# HOW LONG A DECIDED-BUT-UNSENT REPLY STAYS TRUE. A staged reply is a judgment about a chat's
+# situation at a moment; two days later that situation is someone else's. Measured 2026-09-10:
+# 37 staged rows, the oldest 5.9 days, addressed to accounts some of which no longer exist by
+# that name. This is deliberately generous - the courier retries every 5 minutes, so a reply
+# that has not gone in two days is not waiting on a cycle, it is waiting on something that
+# never happened.
+STAGED_TTL_SECS = 48 * 3600
+
+# A DEFERRAL IS NOT A FAILURE, BUT IT IS NOT FREE EITHER. The courier defers a delivery whose
+# refusal is transient (the target app is closed, the daemon dropped the socket) and leaves the
+# row staged. Without a ceiling that is an infinite retry against a chat nobody will ever open
+# again, which is how the queue filled with rows retried into a wall for days.
+MAX_DEFERRALS = 12
 
 # A settled row (delivered/failed/cancelled) this old has nothing left to say: nobody reads
 # deliveries.json for its history, only for what is pending or recent (recent_delivery(),
@@ -62,7 +87,7 @@ def _prune(rows: list[dict], now_ms: int | None = None) -> list[dict]:
     floor = now_ms - PRUNE_AFTER_SECS * 1000
     kept = []
     for r in rows:
-        if r.get("state") in ("delivered", "failed", "cancelled"):
+        if r.get("state") in ("delivered", "failed", "cancelled", "expired"):
             newest = r.get("deliveredAt") or r.get("stagedAt") or 0
             if int(newest) < floor:
                 continue
@@ -222,8 +247,35 @@ def _verify_snippet(evidence: str, prefer_len: int = 24, max_len: int = 80) -> s
     return ""
 
 
-def pending(session_id: str | None = None) -> list[dict]:
-    """Staged replies waiting to go, oldest first (delivery order is decision order)."""
+def expire_stale(now_ms: int | None = None) -> list[dict]:
+    """Move every staged row past STAGED_TTL_SECS to `expired`, and say which.
+
+    Expiry happens HERE, on the read every delivery passes through, rather than on a separate
+    sweep nobody remembers to run: a queue is only dangerous at the moment something tries to
+    send from it. The row is kept and readable - only its right to be delivered ends.
+    """
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    floor = now_ms - STAGED_TTL_SECS * 1000
+    dead = [r for r in _load()
+            if r.get("state") == "staged" and int(r.get("stagedAt") or 0) < floor]
+    out = []
+    for r in dead:
+        age_h = (now_ms - int(r.get("stagedAt") or 0)) / 3_600_000
+        got = expire(r["id"], f"staged {age_h:.0f}h ago and never sent - past the "
+                              f"{STAGED_TTL_SECS // 3600}h shelf life, so it is no longer "
+                              "known to be true; re-stage it if it still is")
+        if got:
+            out.append(got)
+    return out
+
+
+def pending(session_id: str | None = None, now_ms: int | None = None) -> list[dict]:
+    """Staged replies waiting to go, oldest first (delivery order is decision order).
+
+    Stale rows are expired first, so nothing past its shelf life can be handed to a sender -
+    this is the one door every lane's deliveries come through.
+    """
+    expire_stale(now_ms)
     rows = [r for r in _load() if r.get("state") == "staged"]
     if session_id:
         rows = [r for r in rows if r.get("session") == session_id]
@@ -274,8 +326,43 @@ def mark_delivered(delivery_id: str, now_ms: int | None = None) -> dict | None:
 
 def mark_failed(delivery_id: str, why: str) -> dict | None:
     """Failed means TRIED AND DID NOT LAND. A reply the courier deliberately skipped (held,
-    live, breaker) stays STAGED - skipping is not failing, and it must be retried later."""
+    live, breaker) stays STAGED - skipping is not failing, and it must be retried later.
+    A refusal that says the world was not ready - the target app is closed, the daemon dropped
+    the socket - is not a failure either: that is defer()."""
     return _update(delivery_id, only_from=("staged",), state="failed", lastError=str(why)[:400])
+
+
+def defer(delivery_id: str, why: str) -> dict | None:
+    """The delivery could not be ATTEMPTED, so the row stays staged and is counted.
+
+    THE FAILED GRAVEYARD (measured 2026-09-10: 42 failed rows, 41 of them with attempts=1).
+    Almost every one was `HTTP 409 instance is not running` or `WinError 10054` - the target
+    app was closed, or the daemon dropped the socket. Neither is a delivery that went wrong;
+    both are "not now". Recording them as `failed` burned the row permanently, so the next
+    cycle staged a NEW one for the same chat, which failed the same way - the queue grew a
+    layer of headstones per closed app rather than retrying one row.
+
+    Past MAX_DEFERRALS the row is expired instead, with the reason: an unopenable chat must
+    not be retried forever, but it must not be silently dropped either.
+    """
+    row = get(delivery_id)
+    if not row or row.get("state") != "staged":
+        return None
+    n = int(row.get("deferrals", 0)) + 1
+    if n >= MAX_DEFERRALS:
+        return expire(delivery_id,
+                      f"deferred {n} times and never became sendable - last reason: {str(why)[:200]}")
+    return _update(delivery_id, only_from=("staged",), deferrals=n, lastError=str(why)[:400])
+
+
+def expire(delivery_id: str, why: str) -> dict | None:
+    """End a staged reply WITHOUT sending it, and keep it readable with the reason.
+
+    Not a delete and not a failure: the courier never tried. Used for a row past its shelf
+    life, a premise that has gone void (its chat changed accounts after it was written), and
+    a row that has been deferred to the ceiling.
+    """
+    return _update(delivery_id, only_from=("staged",), state="expired", lastError=str(why)[:400])
 
 
 # A per-delivery courier CLAIM older than this belongs to a dead run and is reclaimable
@@ -411,9 +498,18 @@ def transcript_tail_text(transcript_path: str | None, nbytes: int = 8000, last_n
     return "\n".join(texts[-last_n:])
 
 
-def requeue(delivery_id: str) -> dict | None:
-    """Put a failed reply back in the queue - a person's word after fixing the cause."""
+def requeue(delivery_id: str, now_ms: int | None = None) -> dict | None:
+    """Put a failed or expired reply back in the queue - a person's word after fixing the cause.
+
+    ⛔ THE CLOCK RESTARTS, or this is a silent no-op (2026-09-10, caught while adding the shelf
+    life). A row keeps its original `stagedAt`, so putting a five-day-old one back as `staged`
+    without touching that field means the very next pending() expires it again, instantly and
+    invisibly: the person is told it was requeued and nothing is ever sent. Re-staging IS a new
+    decision - it gets a new clock and a clean deferral count.
+    """
     row = get(delivery_id)
-    if not row or row.get("state") != "failed":
+    if not row or row.get("state") not in ("failed", "expired"):
         return None
-    return _update(delivery_id, state="staged", lastError=None)
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    return _update(delivery_id, state="staged", lastError=None,
+                   stagedAt=now_ms, deferrals=0)

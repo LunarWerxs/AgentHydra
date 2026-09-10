@@ -69,12 +69,16 @@ describe('what each tool sends to the daemon', () => {
       script: 'migrate_chat',
       args: ['Odin', '--to', '3claude'],
       timeoutMs: 90_000,
+      // `background` gained an explicit false rather than being omitted (mcp.ts, 2026-09-09):
+      // a run's sync/async shape is a decision the route should read off the body, not infer
+      // from an absent key. Asserted, not loosened - the value is part of the contract.
+      async: false,
     })
   })
 
   test('orchestrator_run with no args and no timeout sends an empty argv and no deadline', async () => {
     await tool('orchestrator_run').run({ script: 'census' })
-    expect(calls[0]!.body).toEqual({ script: 'census', args: [] })
+    expect(calls[0]!.body).toEqual({ script: 'census', args: [], async: false })
   })
 
   test('orchestrator_run never lets a non-array args through as argv', async () => {

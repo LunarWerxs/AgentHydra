@@ -61,9 +61,18 @@
 #                            when an -Action fails on an app whose UI is not in English.
 #
 # LOCALE: menu items are matched by known label FIRST, then by the app's own CSS palette, which
-# does not localize (see $ACTION_LABELS and StructuralMenuItem). Do NOT "fix" a failure on a
-# non-English app by appending that language to $ACTION_LABELS - that only defers the same break
-# to the next locale, and the structural path already handles Archive and Delete in any language.
+# does not localize (see $ACTION_LABELS and StructuralMenuItem). ⚠ THAT STRUCTURAL FALLBACK
+# COVERS ARCHIVE AND DELETE ONLY - Delete is the one item carrying the danger palette, and
+# Archive is what remains once Delete is positively excluded. For those two, do NOT "fix" a
+# failure on a non-English app by appending that language to $ACTION_LABELS: it only defers the
+# same break to the next locale, and the structural path already handles them in any language.
+# RENAME and UNARCHIVE have NO structural signature, so for them a label IS the only route and
+# the refusal below asks for one - add it OBSERVED via -Action DumpMenu, never translated.
+# (Narrowed 2026-09-09: this header used to say "do not append a locale" with no carve-out
+# while the code had always required one for Rename, so the two disagreed and the code was
+# right - 'Cambiar nombre' sat in the table for weeks matching nothing; the app says
+# 'Renombrar'. A per-locale table is still the wrong answer wherever shape can do the job:
+# approve_prompt.ps1's RAIL 2 now reads a chat's title off its own row/kebab pair instead.)
 #
 # RENAME (piece 6 of the rebuild, proven live 2026-08-29): the app's own Rename control is the
 # ONE write a running app cannot undo (v1 measured every outside metadata write being re-saved
@@ -93,6 +102,24 @@ param(
   [switch]$List
 )
 $ErrorActionPreference = 'Stop'
+# ⛔ UTF-8 ON THE WAY OUT, OR A NON-ASCII TITLE COMES BACK AS QUESTION MARKS (2026-09-10).
+# This script's stdout is a PIPE, read by the daemon (Bun) and by the Python toolbox. PowerShell
+# encodes a piped stream with [Console]::OutputEncoding, which defaults to the machine's OEM code
+# page rather than UTF-8 - so a chat titled 'Alcancé mi límite' left this process as
+# 'Alcanc? mi l?mite'. The accents were destroyed HERE, and a literal '?' is perfectly valid
+# UTF-8, so NO reader can detect the loss or recover from it: clilib.decode_console is already
+# UTF-8-first with an OEM fallback and still saw question marks. The visible symptom was a
+# refusal naming a chat that does not exist ("no sidebar row is named 'Alcanc? mi l?mite'"),
+# which reads as a missing chat rather than an encoding fault - and any non-Latin title (CJK,
+# Cyrillic, emoji) degrades to a row of question marks the same way.
+# $OutputEncoding is the mirror of the same setting for anything piped INTO a native exe.
+# Best-effort: a console handle that refuses the assignment must not take down a UIA act, which
+# is what this script is actually for - mojibake is a bad answer, no answer is a worse one.
+try {
+  $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+  [Console]::OutputEncoding = $OutputEncoding
+} catch { }
+
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $src = @'
 using System;using System.Runtime.InteropServices;using System.Collections.Generic;using System.Text;
@@ -188,7 +215,12 @@ function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch 
 $ACTION_LABELS = @{
   'Archive'   = @('Archive', 'Archivieren', 'Archiver', 'Archivar', 'Archiviare', 'Archiveren')
   'Unarchive' = @('Unarchive', 'Nicht mehr archivieren', 'Désarchiver', 'Desarchivar', 'Dearchiviare', 'Dearchiveren')
-  'Rename'    = @('Rename', 'Umbenennen', 'Renommer', 'Cambiar nombre', 'Rinomina', 'Hernoemen')
+  # 'Renombrar' observed live on a Spanish app 2026-09-09 (menu read: Abrir en | Renombrar | Vista
+  # de transcripcion | Estilo de salida | Bifurcar | Archivar | Eliminar) - 'Cambiar nombre' was a
+  # guess and never matched. Rename is the one action with NO structural fallback, so the LOCALE
+  # note above ("do not append a language") does not reach it: a label is the only route, and the
+  # refusal itself asks for one. Add labels OBSERVED via -Action DumpMenu, never translated ones.
+  'Rename'    = @('Rename', 'Umbenennen', 'Renommer', 'Renombrar', 'Cambiar nombre', 'Rinomina', 'Hernoemen')
   'Delete'    = @('Delete', 'Löschen', 'Supprimer', 'Eliminar', 'Elimina', 'Verwijderen')
 }
 function MenuItemFor($cond, $action) {

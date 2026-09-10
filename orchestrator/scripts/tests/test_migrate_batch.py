@@ -59,11 +59,19 @@ def _payload(chat: str, landed: bool, code: int = 0, **extra) -> dict:
 
 
 class _StubLanding:
-    """Stands in for migrate_chat._Landing. The batch only ever hands one back to the phase
-    functions, and those are stubbed below, so the payload it carries is the whole of it."""
+    """Stands in for migrate_chat._Landing. The batch hands one back to the phase functions,
+    and those are stubbed below - but the NAMING phase (2026-09-10) reads three real fields off
+    it rather than going through a stubbed call, so the double carries them: a landing always
+    knows its target account, its session id and the title the caller asked for."""
 
     def __init__(self, payload: dict) -> None:
         self.payload = payload
+        self.target = {"name": payload.get("to") or "target"}
+        # A real landing ALWAYS has a session id - it is what was moved - so the double must
+        # too, or the naming phase silently skips every chat and the order test would pass by
+        # testing nothing. Derived from the title when the fixture payload omits it.
+        self.session_id = payload.get("sessionId") or f"sid-{payload.get('title') or ''}"
+        self.chat_title = payload.get("title") or ""
 
 
 def _run(argv: list[str]) -> tuple[int, dict]:
@@ -125,6 +133,12 @@ class _MigrateBatchTest(unittest.TestCase):
         self.patch(migrate_chat, "landed_meta_path", lambda land: "")
         self.patch(migrate_chat, "watch_bypass_many", lambda paths, **k: {})
         self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        # The naming phase drives a REAL app's rename on the owner's screen - stubbed, never
+        # reached from a unit test. Its wiring is asserted in test_migrate_batch_resume.
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
         return calls
 
     def fake_move(self) -> tuple[list[list[str]], dict]:
@@ -253,10 +267,21 @@ class BatchDriverTest(_MigrateBatchTest):
         self.patch(migrate_chat, "watch_bypass_many",
                    lambda paths, **k: (order.append(f"watch:{len(paths)}"), {})[-1])
         self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: (
+                       order.append(f"name:{len(extra_titles or {})}"),
+                       {"named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                        "why": ""})[-1])
 
         _run(["--chat", "one", "--chat", "two", "--chat", "three", "--to", "8"])
+        # ⛔ NAMING SITS BETWEEN SETTLING AND STAMPING, ONCE FOR THE WHOLE BATCH (2026-09-10).
+        # It must come BEFORE the stamp, because the permission picker aims by the chat's
+        # rendered name and an import lands with none; and once, not per chat, because the pass
+        # takes the target window's lock and walks that account's whole store either way.
         assert order == ["move:one", "move:two", "move:three",
                          "settle:one", "settle:two", "settle:three",
+                         "name:3",
                          "watch:3",
                          "stamp:one", "stamp:two", "stamp:three"]
 

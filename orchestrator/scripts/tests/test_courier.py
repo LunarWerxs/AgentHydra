@@ -150,6 +150,33 @@ class LedgerTest(unittest.TestCase):
         self.assertIsNone(deliverylib.recent_delivery(SID, 180, now_ms=now_ms))
 
 
+class TransientRefusalTest(unittest.TestCase):
+    """A closed target app is not a failed delivery (measured 2026-09-10: 42 `failed` rows, 41
+    of them with a single attempt, nearly all of them one of these two shapes)."""
+
+    def _err(self, status, detail):
+        return hydralib.DaemonError("/api/sessions/x/message", status, detail)
+
+    def test_a_closed_target_app_is_transient(self):
+        self.assertTrue(courier._is_transient(
+            self._err(409, '{"ok":false,"error":"instance \'temp1\' is not running - open it first"}')))
+
+    def test_a_dropped_socket_is_transient(self):
+        # No HTTP status at all: the socket died before an answer (the WinError 10054 shape).
+        self.assertTrue(courier._is_transient(
+            self._err(None, "[WinError 10054] An existing connection was forcibly closed")))
+
+    def test_mid_turn_with_no_pipe_is_transient(self):
+        self.assertTrue(courier._is_transient(
+            self._err(409, '{"error":"peer_only: no peer pipe for this session"}')))
+
+    def test_a_real_refusal_is_NOT_transient(self):
+        """The wrong-chat guard firing is a genuine failure and must still burn the row -
+        a deferral there would retry a blind type forever."""
+        self.assertFalse(courier._is_transient(
+            self._err(422, "no verify snippet derivable from the transcript - refusing to type blind")))
+
+
 class RunActuatorTest(unittest.TestCase):
     """A hung actuator must read as an ordinary (code, why) failure - never an uncaught
     subprocess.TimeoutExpired that would skip mark_failed and the results row entirely."""
@@ -220,19 +247,67 @@ class CourierRailTest(unittest.TestCase):
         self.assertTrue(ok, why)
         self.assertEqual(match["cliSessionId"], SID)
 
-    def test_never_into_a_turn_in_flight(self):
+    def test_a_live_chat_mid_turn_goes_PEER_and_is_never_deferred(self):
+        """Rail 4 guards the COMPOSER, not the chat (fixed 2026-09-10).
+
+        The gate used to run before the channel was chosen, so every live chat - the exact
+        population the peer channel serves - was refused with the composer's wording, and a
+        chat in a continuous work loop never became idle and never got its reply at all.
+        A live session enqueues natively and drains after the turn, so it is deliverable;
+        what rides along is `peer_only`, which forbids every composer path downstream.
+        """
         self._write_tail("working on it", age=5, tool_use=True)
         self.live = {"pid": 99, "name": "w"}
         e = self._stage()
-        ok, why, _ = courier.deliverable(e)
+        ok, why, match = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertTrue(match["peer_only"])
+
+    def test_never_TYPES_into_a_turn_in_flight_when_there_is_no_peer_pipe(self):
+        """The other half of rail 4: no live block means no pipe, so the composer is the only
+        route - and that one is still never pointed at a turn in flight."""
+        self._write_tail("working on it", age=5, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        with mock.patch.object(courier.gatelib, "gate_match",
+                               return_value={"state": "running", "idle": None,
+                                             "cause": "process 99 is alive"}):
+            self.live = None          # the dossier no longer reports a pipe
+            ok, why, _ = courier.deliverable(e)
         self.assertFalse(ok)
         self.assertIn("IN FLIGHT", why)
+
+    def test_an_idle_live_chat_is_not_marked_peer_only(self):
+        """peer_only is the mid-turn rail. An idle chat may take either route, so it must not
+        carry a flag that would refuse the composer for no reason."""
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        ok, why, match = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertFalse(match["peer_only"])
 
     def test_an_idle_live_chat_is_the_normal_target(self):
         self.live = {"pid": 99, "name": "w"}   # alive but quiet, turn completed
         e = self._stage()
         ok, why, _ = courier.deliverable(e)
         self.assertTrue(ok, why)
+
+    def test_a_reply_whose_chat_changed_accounts_is_EXPIRED_not_delivered(self):
+        """Found 2026-09-07: three staged notices read "this chat was migrated from Andreea to
+        Joel" for the same three chats that had just been migrated back the other way. Arming
+        the tray would have told each chat it was on an account it was not on."""
+        e = deliverylib.stage(SID, "You were moved to another account.", title="A waiting chat",
+                              instance="another_meh", evidence=DONE_WAITING)
+        ok, why, _ = courier.deliverable(e)     # the dossier says this chat is on temp1 now
+        self.assertFalse(ok)
+        self.assertIn("premise is void", why)
+        self.assertEqual(deliverylib.get(e["id"])["state"], "expired")
+
+    def test_a_reply_staged_on_the_same_account_is_untouched(self):
+        e = self._stage()
+        ok, why, _ = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
 
     def test_never_without_a_verify_snippet(self):
         e = deliverylib.stage(SID, "go", title="A waiting chat", evidence="")

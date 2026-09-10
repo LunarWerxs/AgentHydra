@@ -430,5 +430,53 @@ class ViaAppTest(unittest.TestCase):
         self.assertEqual(len(payload["pendingInApp"]), 6 - automation_chat.PICKER_PER_TICK)
 
 
+class TitleForRowTest(unittest.TestCase):
+    """⛔ AN IMPORTED CHAT'S META RECORD CARRIES NO TITLE (found 2026-09-09, still live and
+    fixed 2026-09-10). Every row builder here reads `meta["title"]`, which is None for a fresh
+    landing while the sidebar renders a perfectly good name, so `-Title ""` reached PowerShell
+    and approve_prompt.ps1's [ValidateNotNullOrEmpty] killed the pipeline with an argument-
+    validation error - which reads like an environment or permissions fault and is neither.
+    The `--force` remedy a `disk-only` landing prints could therefore never work on the one
+    population it exists to serve."""
+
+    def test_a_disk_title_is_used_as_is(self):
+        with mock.patch.object(automation_chat.hydralib, "resolve_one",
+                               side_effect=AssertionError("must not ask the daemon")):
+            self.assertEqual(
+                automation_chat.title_for_row({"sessionId": SID, "title": "Ship the parser"}),
+                "Ship the parser")
+
+    def test_a_missing_disk_title_falls_back_to_the_name_the_APP_renders(self):
+        with mock.patch.object(automation_chat.hydralib, "resolve_one",
+                               return_value={"title": "Resume Stackspire project"}):
+            self.assertEqual(automation_chat.title_for_row({"sessionId": SID, "title": None}),
+                             "Resume Stackspire project")
+
+    def test_a_chat_nobody_can_name_returns_EMPTY_never_the_string_None(self):
+        with mock.patch.object(automation_chat.hydralib, "resolve_one",
+                               return_value={"title": None}):
+            self.assertEqual(automation_chat.title_for_row({"sessionId": SID, "title": None}), "")
+
+    def test_a_daemon_that_cannot_answer_is_not_an_exception(self):
+        for err in (hydralib.ChatNotFound("x"),
+                    hydralib.DaemonError("/api/chats/dossier", 500, "boom")):
+            with mock.patch.object(automation_chat.hydralib, "resolve_one", side_effect=err):
+                self.assertEqual(
+                    automation_chat.title_for_row({"sessionId": SID, "title": None}), "")
+
+    def test_set_mode_via_app_REFUSES_a_nameless_chat_and_drives_nothing(self):
+        """The floor: an empty -Title is not a weaker attempt, it is a crash that never reaches
+        the picker. Refuse in words, and never spawn the actuator."""
+        with mock.patch.object(automation_chat.hydralib, "resolve_one",
+                               return_value={"title": None}), \
+             mock.patch.object(automation_chat, "_run_actuator",
+                               side_effect=AssertionError("the actuator must not be spawned")):
+            said = automation_chat.set_mode_via_app(
+                {"sessionId": SID, "title": None, "instance": "temp1", "metaPath": "x"},
+                {"instances": []}, force=True)
+        self.assertIn("REFUSED", said)
+        self.assertIn("no name to aim at", said)
+
+
 if __name__ == "__main__":
     unittest.main()

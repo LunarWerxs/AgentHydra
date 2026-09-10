@@ -7,6 +7,113 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **`POST /api/daemon/restart` - the daemon relaunching itself, gracefully, on demand**
+  (`server/src/index.ts`). `relaunchDaemon()` has always existed and every auto-update exercises
+  it - the successor is spawned first, waits for the port, takes over the SAME port, and the
+  predecessor exits only once a replacement exists - but the only door to it was
+  `/api/update/apply`, gated on `IS_COMPILED`. A SOURCE build (what this fleet runs) therefore had
+  no graceful restart at all, so a change under `server/src/` sat inert until someone remembered
+  `misc/Restart-Daemon.ps1`. That script is NOT replaced and is not the same act: it is the
+  rebuild sledgehammer that kills the daemon AND the tray host from outside when you do not trust
+  the running process. This is the in-process one, and it refuses while dispatch runs are in
+  flight (`force: true` to override) for the same reason the auto-update loop already does.
+  Verified live: 53468 → 70080 on port 7787, hidden, healthy.
+
+### Fixed
+
+- **A non-ASCII chat title survives an actuator's stdout pipe** (`misc/Manage-DesktopChat.ps1`,
+  `misc/Deliver-DesktopChat.ps1`, `orchestrator/scripts/actuator/{manage_desktop_chat,
+  approve_prompt,deliver_desktop_chat,rename_first,chip}.ps1`,
+  `orchestrator/scripts/tests/test_actuator_utf8.py`). `chat_rename` refused with
+  `FAIL: 'Alcanc? mi l?mite de uso mientras trabajabas, pero ya se restableci?. …'` for a chat
+  whose real title carries Spanish accents - a message naming a chat that does not exist, which
+  reads as a missing chat rather than an encoding fault. PowerShell encodes a PIPED stream with
+  `[Console]::OutputEncoding`, which defaults to the machine's OEM code page, so the accents were
+  replaced with literal `?` bytes INSIDE PowerShell. A `?` is valid UTF-8, so nothing downstream
+  could detect or recover the loss: `clilib.decode_console` was already UTF-8-first with an OEM
+  fallback and still read question marks. Every script whose output a caller captures now pins
+  UTF-8 on the way out (best-effort - a console handle that refuses the assignment must not take
+  down a UIA act). Any non-Latin title degraded the same way, so the regression test probes
+  Spanish, an em dash, CJK and Cyrillic together, runs the prelude the scripts actually ship
+  rather than a retyped copy, and carries a control case proving the mangling is real without it.
+  Verified end to end through the MCP tool that found it.
+
+- **A landed chat is NAMED before anything tries to aim at its name, so the `disk-only` remedy
+  finally works on the population it exists for** (`orchestrator/scripts/migrate_batch.py`,
+  `orchestrator/scripts/automation_chat.py`, `orchestrator/scripts/migrate_chat.py`,
+  `orchestrator/scripts/actuator/approve_prompt.ps1`, plus their suites). An import lands with
+  `title: null` - `session-launch` already says `titleDurable: false` and means it: the title is
+  written to disk and the running app re-saves over it from memory, while the sidebar renders a
+  name derived from the transcript. Everything that aims BY NAME broke at once, and each break
+  disguised itself as something else:
+  - The permission picker was handed `-Title ""` and died inside PowerShell's
+    `ParameterArgumentValidationErrorEmptyStringNotAllowed`, which reads as an environment or
+    permissions fault and is neither. `title_for_row` now asks the daemon for the rendered name
+    when the disk record has none, and a chat nobody can name is refused **in words**, with the
+    actuator never spawned - never an empty argument.
+  - `migrate_batch` runs the naming pass over each target account between landing and stamping,
+    carrying every chat's intended title. It is the last place that still knows them, and the
+    app's own rename is the only durable channel (as `session-launch` has said all along).
+    Best-effort: a name is never worth failing a landing that already happened.
+  - The sidebar matcher compared the wanted title to the rendered row with full-string equality,
+    so a row TRUNCATED with an ellipsis - which is what a long title renders as - could never
+    match, and refused with "a MATCH failure, not a timing one" while the row sat on screen.
+    `Select-SidebarChat` keeps the exact pass first and falls back to a normalised prefix
+    comparison (trailing `…`/`...` stripped, NFD accents folded, case-folded, whitespace
+    collapsed) only when the exact pass finds nothing. More than one loose match is still a
+    refusal, exactly as before - it never guesses.
+  - `bypassRemedy` prints `python scripts/automation_chat.py …`, the path that actually runs
+    from the orchestrator directory every other printed command assumes.
+
+  Verified end to end on a real migrated chat: nameless and unstampable → named → `APP-CONFIRMED
+  via its own picker`.
+
+- **The courier chooses the channel BEFORE it applies the mid-turn rail, so a live chat is no
+  longer deferred forever** (`orchestrator/scripts/courier.py`,
+  `server/src/routes/session-message.ts`, `orchestrator/scripts/tests/test_courier.py`,
+  `server/tests/session-message-peer-only.test.ts`). Rail 4 has always said a turn IN FLIGHT is
+  never interrupted _for the composer route_, because the peer channel enqueues natively and the
+  chat drains it after the current turn. The gate ran before the channel was known, so it
+  refused the exact population the peer channel serves: three chats in one drain took twenty
+  minutes of hand-retries and one never landed, and the same shape reproduced on 09-09 and
+  09-10. `gate_match` derives "running" from the dossier's own live block, so every refusal it
+  ever produced was for a session that had a pipe. The gate now marks a mid-turn chat
+  `peer_only` and lets it go; that flag rides with the delivery and forbids **every** composer
+  path downstream - the endpoint's dormant fallback, the peer dead-letter fallback, and the
+  old-daemon actuator route - so the rail is enforced where the channel is actually picked
+  rather than by refusing everything up front. A live plan-only run over the fleet now shows
+  zero IN FLIGHT refusals; the remaining skips are the usage band, the verify snippet and the
+  per-account share, all working as intended.
+- **A staged reply now has an end: a shelf life, a premise, and a deferral ceiling**
+  (`orchestrator/scripts/lib/deliverylib.py`, `orchestrator/scripts/courier.py`,
+  `orchestrator/scripts/stage_reply.py`,
+  `orchestrator/scripts/tests/test_deliverylib_expiry.py`). Measured 2026-09-10: 37 staged rows,
+  the oldest 5.9 days, several addressed to accounts that no longer go by that name - and three
+  of them migration notices reading exactly backwards after their chats had been migrated back.
+  Arming the tray icon would have delivered a batch of statements that were no longer true.
+  Beside them sat 42 `failed` rows, 41 with a single attempt, nearly all of them `HTTP 409
+  instance is not running` or `WinError 10054`: a closed target app or a dropped socket, which
+  are not deliveries that went wrong but deliveries that never happened. Three changes, one
+  rule - a decision nobody acted on is never silently deleted, but it does not live forever:
+  - A new terminal state `expired` (readable in `--list`, carrying its reason) for a row past
+    `STAGED_TTL_SECS` (48h). Expiry runs inside `pending()`, the one door every lane's
+    deliveries come through, so nothing stale can reach a sender.
+  - `defer()` for a transient refusal: the row stays **staged** and is retried next cycle, and
+    only `MAX_DEFERRALS` (12) turns it into an expiry. A genuine refusal - the wrong-chat guard,
+    say - still burns the row as before.
+  - The courier expires a reply whose chat has changed accounts since it was staged: its premise
+    is void and no sender can know whether the text survived the move.
+
+  Swept live: 28 stale rows expired, nothing wrongly voided, 9 legitimate rows left staged.
+- **`move_chats`' headline no longer over-reports a migration nobody was told about**
+  (`orchestrator/scripts/migrate_batch.py`,
+  `orchestrator/scripts/tests/test_migrate_batch_resume.py`). A landed chat is DORMANT until
+  something types into it, so `3/3 landed` described a run in which zero chats had actually been
+  resumed. The per-chat `RESUME` lines were right the whole time and were scrolled past. When a
+  resume was asked for, the first line now carries the tally and says the rest are DORMANT.
+
 ## [0.41.0] - 2026-09-08
 
 ### Fixed

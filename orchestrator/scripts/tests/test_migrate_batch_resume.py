@@ -50,8 +50,15 @@ def _refused(chat: str, report: str) -> dict:
 
 
 class _StubLanding:
+    """A real _Landing always carries the three fields the naming phase reads (its target
+    account, the session id, and the title the caller asked for), so the stub carries them
+    too - a double that is missing what production always has tests a shape nothing ships."""
+
     def __init__(self, payload: dict) -> None:
         self.payload = payload
+        self.target = {"name": payload.get("to") or "blaarrrggghhh"}
+        self.session_id = payload.get("sessionId") or ""
+        self.chat_title = payload.get("title") or ""
 
 
 def _run(argv: list[str]) -> tuple[int, dict]:
@@ -95,6 +102,18 @@ class _BatchTest(unittest.TestCase):
         self.patch(migrate_chat, "landed_meta_path", lambda land: "")
         self.patch(migrate_chat, "watch_bypass_many", lambda paths, **k: {})
         self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        # THE NAMING PHASE IS STUBBED, NOT SKIPPED. name_pass drives a REAL app's rename on the
+        # owner's screen, so a unit test must never reach it - but the wiring that decides which
+        # account and which intended titles it gets is exactly what this phase adds, and that is
+        # asserted from `self.naming_calls`.
+        import name_chats
+        self.naming_calls: list[tuple[str, dict]] = []
+
+        def fake_name_pass(instance, extra_titles=None, **kw):
+            self.naming_calls.append((instance, dict(extra_titles or {})))
+            return {"named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""}
+
+        self.patch(name_chats, "name_pass", fake_name_pass)
         return calls
 
 
@@ -156,6 +175,21 @@ class ResumeTest(_BatchTest):
         self.assertNotIn("resume", by_chat["three"], "a refused chat has nothing to resume")
         self.assertEqual(out["resume"], {"asked": 2, "delivered": 1, "staged": 1})
         self.assertIn("RESUME", out["report"])
+        # ⛔ THE HEADLINE CARRIES THE RESUME TALLY (2026-09-10). "2/3 landed" alone described a
+        # migration in which one chat was moved and never told to carry on, and the headline is
+        # the line people read. A landed chat is DORMANT until something types into it.
+        headline = out["report"].splitlines()[0]
+        self.assertIn("1/2 told to carry on", headline)
+        self.assertIn("DORMANT", headline)
+        # ⛔ THE LANDINGS ARE NAMED BEFORE THEY ARE STAMPED (2026-09-10). An import lands with a
+        # null title, and every by-name path then breaks - the permission picker gets an empty
+        # -Title and dies inside PowerShell's parameter validation. One pass per target account,
+        # carrying the intended title of each chat that actually landed; a refused chat is not
+        # in it, because nothing of it landed to name.
+        self.assertEqual(len(self.naming_calls), 1)
+        inst, titles = self.naming_calls[0]
+        self.assertEqual(inst, "blaarrrggghhh")
+        self.assertEqual(sorted(titles.values()), ["one", "two"])
         # The move verdict is unchanged by the resume phase: partial because three refused.
         self.assertEqual(code, migrate_batch.EXIT_PARTIAL)
         for argv in calls:
