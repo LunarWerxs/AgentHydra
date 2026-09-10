@@ -12,34 +12,64 @@
 // Routes are exercised through the real registration on a PRIVATE Hono copied from the shared
 // app (see queue-patch-guard.test.ts for why the copy matters). Every collaborator the handler
 // reaches for is mocked, so nothing here touches a real app, a real pipe, or PowerShell.
-import { beforeEach, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, expect, mock, test } from 'bun:test'
 import { Hono } from 'hono'
 
 const HOME = 'c:\\i\\temp1'
 const SID = 'peeronly-1111-2222-3333-444455556666'
 
+// ⛔ THE REAL EXPORTS, CAPTURED BEFORE ANY FAKE IS INSTALLED, AND PUT BACK IN afterAll
+// (scripts/checks/test-stub-outlives-its-file.mjs rule 2). `bun test` runs every file in ONE
+// process and mock.module applies to the WHOLE run - mock.restore() does not undo it - so a fake
+// left installed here lands on whichever file happens to run next, and the failure surfaces
+// there rather than in the file that caused it. Captured BEFORE, never after: mock.module
+// rewrites the live bindings of a namespace that was already imported, so a copy taken after the
+// fake IS the fake, and "restoring" it would reinstall the mock forever.
+const realLiveRegistry = { ...(await import('../src/live-registry')) }
+const realInstanceSessions = { ...(await import('../src/instance-sessions')) }
+const realSessionLaunch = { ...(await import('../src/session-launch')) }
+const realCoreInstances = { ...(await import('../src/core/instances')) }
+const realPeerMessage = { ...(await import('../src/peer-message')) }
+
 // Mocks must be installed BEFORE the route module is imported: findTranscriptById is a static
 // import in the handler's module, and the rest are dynamic imports resolved at request time.
-mock.module('../src/live-registry', () => ({ findTranscriptById: () => null }))
+// Each fake spreads the real namespace first, so a collaborator this test does not care about
+// keeps its real implementation instead of becoming undefined.
+mock.module('../src/live-registry', () => ({
+  ...realLiveRegistry,
+  findTranscriptById: () => null,
+}))
 mock.module('../src/instance-sessions', () => ({
+  ...realInstanceSessions,
   findDesktopChat: () => ({ title: 'A working chat' }),
 }))
 mock.module('../src/session-launch', () => ({
+  ...realSessionLaunch,
   desktopHomeFor: async () => HOME,
   liveSessionEntry: () => null,
 }))
 mock.module('../src/core/instances', () => ({
+  ...realCoreInstances,
   listInstances: async () => [{ name: 'temp1', dir: HOME, isRunning: true }],
 }))
 // 'not-live' is the case under test: a session with NO peer pipe, which is exactly when the
 // route would otherwise downgrade to the composer.
 const peerCalls: string[] = []
 mock.module('../src/peer-message', () => ({
+  ...realPeerMessage,
   deliverPeerMessage: async (sessionId: string) => {
     peerCalls.push(sessionId)
     return { ok: false, reason: 'not-live' }
   },
 }))
+
+afterAll(() => {
+  mock.module('../src/live-registry', () => realLiveRegistry)
+  mock.module('../src/instance-sessions', () => realInstanceSessions)
+  mock.module('../src/session-launch', () => realSessionLaunch)
+  mock.module('../src/core/instances', () => realCoreInstances)
+  mock.module('../src/peer-message', () => realPeerMessage)
+})
 
 const { app } = await import('../src/http-app')
 await import('../src/routes/session-message')
