@@ -32,6 +32,10 @@ class StubDaemon:
         self.routes: dict[str, object] = {}
         self.posts: list[tuple[str, dict]] = []  # (path, body) of every POST received
         self.gets: list[tuple[str, str]] = []  # (path, query) of every GET received
+        # When set, every HTTP answer carries x-agenthydra-side-run: <store>, the way a daemon with
+        # a relocated store answers (server/src/side-run.ts). Wire-only: the in-process path has
+        # no headers, so a test of the announcement must pop INPROC[self.url] first.
+        self.side_run: str | None = None
 
         stub = self
 
@@ -47,6 +51,8 @@ class StubDaemon:
                 status, data = stub.dispatch(method, self.path, raw)
                 self.send_response(status)
                 self.send_header("content-type", "application/json")
+                if stub.side_run:
+                    self.send_header("x-agenthydra-side-run", stub.side_run)
                 self.end_headers()
                 self.wfile.write(data)
 

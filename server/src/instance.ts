@@ -2,7 +2,7 @@
 // (`createInstancePointer`, synced in as `./instance-pointer.mjs`). The daemon records the
 // port it ACTUALLY bound in <CONFIG_DIR>/runtime.json so the tray launcher and the
 // /api/health probe can find it and enforce single-instance. Best-effort throughout.
-import { CONFIG_DIR, DATA_DIR, HOST, SERVICE_NAME } from './config'
+import { CONFIG_DIR, DATA_DIR, HOST, PORT, SERVICE_NAME } from './config'
 import { isPathInside } from './core/paths'
 import { createInstancePointer, type InstanceInfo } from './instance-pointer.mjs'
 
@@ -28,7 +28,7 @@ export type { InstanceInfo }
  * process is a side-run, and its pointer goes beside ITS OWN state as a sidecar. Nothing to clean
  * up afterwards, which is the whole point — the previous fix was "remember to repair it by hand".
  */
-const IS_PRIMARY_INSTALL = isPathInside(CONFIG_DIR, DATA_DIR)
+export const IS_PRIMARY_INSTALL = isPathInside(CONFIG_DIR, DATA_DIR)
 
 /** Where this daemon records itself: the shared config dir when it is the primary install, else
  *  its own data dir. Exported for the boot log, so a side-run says out loud that it is one. */
@@ -46,6 +46,71 @@ export const updateInstanceInfo = pointer.updateInstanceInfo
 export const readInstanceInfo = pointer.readInstanceInfo
 export const clearInstanceInfo = pointer.clearInstanceInfo
 export const findLiveInstance = pointer.findLiveInstance
+
+/** The url a primary daemon binds when nothing is in its way: what every client falls back to. */
+export const DEFAULT_URL = `http://${HOST}:${PORT}`
+
+interface HealthBody {
+  ok?: boolean
+  service?: string
+  pid?: number
+}
+
+/** /api/health of `url` as OUR service, or null: not answering, not ok, or someone else's server. */
+async function ourHealthAt(url: string, timeoutMs: number): Promise<HealthBody | null> {
+  try {
+    const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return null
+    const body = (await res.json()) as HealthBody | null
+    return body?.ok && body.service === SERVICE_NAME ? body : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A live AgentHydra on the DEFAULT port that the pointer does NOT name.
+ *
+ * That is the shape a stale, missing or hijacked runtime.json leaves behind (2026-09-12: the
+ * pointer named a dead 7799 while the real daemon answered on 7787). findLiveInstance() trusts the
+ * pointer and answered null, and a boot that believes it waits out the busy port, hops to 7788 and
+ * writes a second pointer: two live daemons. So the boot guard asks the default port directly and,
+ * like the kit, accepts only a body that carries OUR service name. Null when the pointer already
+ * names that url (nothing new to learn there), when nothing answers, or when whatever answers is
+ * someone else's server. The pointer is deliberately NOT repaired from here: the live daemon owns
+ * it and re-asserts it itself (reassertInstancePointer).
+ */
+export async function findLiveOnDefaultPort(timeoutMs = 1500): Promise<InstanceInfo | null> {
+  if (readInstanceInfo()?.url === DEFAULT_URL) return null
+  const body = await ourHealthAt(DEFAULT_URL, timeoutMs)
+  if (!body) return null
+  return {
+    port: PORT,
+    url: DEFAULT_URL,
+    pid: typeof body.pid === 'number' ? body.pid : 0,
+    startedAt: 0,
+    foundOnDefaultPort: true,
+  }
+}
+
+/**
+ * THE POINTER HEALS ITSELF. Called by the running daemon on a timer: if runtime.json is missing, or
+ * names another pid whose url no longer answers as this service, write ours again. Never while it
+ * names a LIVE other daemon (a hopped successor, an auto-update relaunch mid-handover): that one
+ * owns the file. Before this, a pointer deleted by hand, lost to a crash, or overwritten by a
+ * pre-fix side-run stayed wrong until the next restart, and every client dialled a dead port for
+ * as long as the daemon lived.
+ */
+export async function reassertInstancePointer(
+  boundPort: number,
+  extra: () => Record<string, unknown>,
+): Promise<'kept' | 'foreign-live' | 'rewritten'> {
+  const info = readInstanceInfo()
+  if (info?.pid === process.pid) return 'kept'
+  if (info?.url && (await ourHealthAt(info.url, 1000))) return 'foreign-live'
+  writeInstanceInfo(boundPort, extra())
+  return 'rewritten'
+}
 
 /**
  * How many /api/health probes the single-instance guard should spend before concluding "nothing is

@@ -28,12 +28,18 @@ import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appEnv, IS_COMPILED, PORT, VERSION } from './config'
+import { appEnv, IS_COMPILED, PORT, SERVICE_NAME, VERSION } from './config'
 import type { SelfIdentityDetection } from './core/self-identity'
-import { readInstanceInfo } from './instance'
+import { instanceFilePath, readInstanceInfo } from './instance'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 import { runMcpStdio } from './mcp-stdio.mjs'
 import type { UsageAdvice, UsageSnapshot } from './types'
+
+const DEFAULT_BASE = `http://127.0.0.1:${PORT}`
+
+/** Set once a pointer-named port refused a connection and the default port answered instead: the
+ *  rest of this process talks to the default. Cleared only by resetDaemonResolutionForTests. */
+let staleFallbackBase: string | null = null
 
 // Resolve the base URL per call: an explicit AGENTHYDRA_URL/AGENTHYDRA_PORT always wins, else
 // follow the port the daemon ACTUALLY bound (~/.agenthydra/runtime.json), so an auto-hopped port
@@ -43,7 +49,8 @@ export function daemonBase(): string {
   if (url) return url
   const port = appEnv('PORT')
   if (port) return `http://127.0.0.1:${port}`
-  return readInstanceInfo()?.url ?? `http://127.0.0.1:${PORT}`
+  if (staleFallbackBase) return staleFallbackBase
+  return readInstanceInfo()?.url ?? DEFAULT_BASE
 }
 
 /** The daemon isn't listening. Distinct from a real API error, so a fallback can fire on THIS and
@@ -57,15 +64,115 @@ const startHint = IS_COMPILED
   ? 'Start it by running the AgentHydra executable (or its tray shortcut).'
   : 'Start it with `bun run start`.'
 
+interface DaemonHealth {
+  ok?: boolean
+  service?: string
+  version?: string
+}
+
+/** /api/health of `base`, or null unless it answers ok AS this service within timeoutMs. */
+async function healthOf(base: string, timeoutMs: number): Promise<DaemonHealth | null> {
+  try {
+    const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return null
+    const body = (await res.json()) as DaemonHealth | null
+    return body?.ok && body.service === SERVICE_NAME ? body : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * THE POINTER NAMED A PORT THAT REFUSED. Say so in those words, and ask the DEFAULT port before
+ * concluding the daemon is down.
+ *
+ * On 2026-09-12 a probe daemon left ~/.agenthydra/runtime.json naming a dead 7799 while the real
+ * daemon answered on 7787, and this client said "couldn't reach the daemon ... start it". Every
+ * word of that was the wrong advice: nothing suggested the pointer, and starting a daemon would
+ * have made a second one. The pointer's OWNER now keeps it honest (instance.ts); this is the
+ * client's half: name the file, name the port it names, and try the default once. Only a base that
+ * came from the pointer qualifies - an explicit AGENTHYDRA_URL/PORT is the caller's word and is
+ * never second-guessed.
+ */
+async function recoverFromStalePointer(): Promise<{ note: string; recovered: boolean }> {
+  if (appEnv('URL') || appEnv('PORT') || staleFallbackBase) return { note: '', recovered: false }
+  const named = readInstanceInfo()?.url
+  if (!named) return { note: '', recovered: false }
+  const note =
+    `${instanceFilePath()} names ${named}, nothing is listening there, and it may be stale ` +
+    '(a daemon that exits cleanly deletes it; a crash, a hard kill or a side-run leaves it behind). '
+  if (named === DEFAULT_BASE) return { note, recovered: false }
+  const health = await healthOf(DEFAULT_BASE, 1500)
+  if (!health) {
+    return { note: `${note}The default port ${PORT} did not answer either. `, recovered: false }
+  }
+  staleFallbackBase = DEFAULT_BASE
+  console.error(
+    `[agenthydra mcp] ${note}The default port ${PORT} answers as ${SERVICE_NAME} ${health.version ?? ''}, ` +
+      `so this process uses ${DEFAULT_BASE} from here on. Do NOT start another daemon.`,
+  )
+  return { note, recovered: true }
+}
+
+/** Non-null once the daemon we reached declared itself a SIDE-RUN (a relocated store). Put on
+ *  every tool result by withDaemonWarning, so no caller can read a scratch store as the fleet. */
+let daemonWarning: string | null = null
+
+/** The daemon stamps every answer with `x-agenthydra-side-run: <store>` when its store is not the
+ *  machine's (side-run.ts), so noticing costs no extra request. A client that silently reaches a
+ *  scratch database is worse than an outage, because it looks like it worked. */
+function noteSideRun(res: Response): void {
+  if (daemonWarning) return
+  const store = (res as { headers?: Headers }).headers?.get('x-agenthydra-side-run')
+  if (!store) return
+  daemonWarning =
+    `SIDE-RUN DAEMON: ${daemonBase()} serves ${store}, which is NOT this machine's fleet store. ` +
+    'Every read and write through these tools goes to that store. If you meant the real daemon, ' +
+    'set AGENTHYDRA_URL to it, or stop the side-run.'
+  console.error(`[agenthydra mcp] ${daemonWarning}`)
+}
+
+/** Every tool answer carries `daemonWarning` while one is set. Applied where tools are handed to a
+ *  transport (stdio and HTTP), not to TOOLS itself, so a test of one tool sees the bare result. */
+export function withDaemonWarning(tools: McpEngineTool[]): McpEngineTool[] {
+  return tools.map((t) => ({
+    ...t,
+    run: async (args: Record<string, unknown>, signal?: AbortSignal) => {
+      const value = await t.run(args, signal)
+      return daemonWarning && value && typeof value === 'object' && !Array.isArray(value)
+        ? { daemonWarning, ...(value as Record<string, unknown>) }
+        : value
+    },
+  }))
+}
+
+/** Tests only: forget a stale-pointer fallback and a side-run notice left by an earlier case. */
+export function resetDaemonResolutionForTests(): void {
+  staleFallbackBase = null
+  daemonWarning = null
+}
+
 async function api(pathname: string, init?: RequestInit): Promise<unknown> {
   let res: Response
   try {
     res = await fetch(`${daemonBase()}${pathname}`, init)
   } catch (e) {
-    throw new DaemonUnreachable(
-      `couldn't reach the AgentHydra daemon at ${daemonBase()}. ${startHint} (${e instanceof Error ? e.message : String(e)})`,
-    )
+    const first = e instanceof Error ? e.message : String(e)
+    const { note, recovered } = await recoverFromStalePointer()
+    if (!recovered) {
+      throw new DaemonUnreachable(
+        `couldn't reach the AgentHydra daemon at ${daemonBase()}. ${note}${startHint} (${first})`,
+      )
+    }
+    try {
+      res = await fetch(`${daemonBase()}${pathname}`, init)
+    } catch (e2) {
+      throw new DaemonUnreachable(
+        `couldn't reach the AgentHydra daemon at ${daemonBase()} even after setting the stale pointer aside. ${startHint} (${e2 instanceof Error ? e2.message : String(e2)})`,
+      )
+    }
   }
+  noteSideRun(res)
   if (!res.ok) throw new Error(`AgentHydra ${res.status}: ${await res.text()}`)
   const text = await res.text()
   try {
@@ -2415,14 +2522,16 @@ export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
  * - so it hands that answer in here rather than letting the identity tools guess from a process
  * that happens to be the daemon (see detectForCaller). */
 export function toolsForCaller(getCallerPid: () => Promise<number | null>): McpEngineTool[] {
-  return TOOLS.map((t) =>
-    CALLER_AWARE_TOOLS.has(t.name)
-      ? {
-          ...t,
-          run: (args: Record<string, unknown>, signal?: AbortSignal) =>
-            t.run({ ...args, [CALLER_PID_ARG]: getCallerPid }, signal),
-        }
-      : t,
+  return withDaemonWarning(
+    TOOLS.map((t) =>
+      CALLER_AWARE_TOOLS.has(t.name)
+        ? {
+            ...t,
+            run: (args: Record<string, unknown>, signal?: AbortSignal) =>
+              t.run({ ...args, [CALLER_PID_ARG]: getCallerPid }, signal),
+          }
+        : t,
+    ),
   )
 }
 
@@ -2471,7 +2580,11 @@ never left in the account: fan_out_delete {group}, or orchestrator_run delete_ch
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {
-  return runMcpStdio({ serverInfo: SERVER_INFO, tools: TOOLS, instructions: SERVER_INSTRUCTIONS })
+  return runMcpStdio({
+    serverInfo: SERVER_INFO,
+    tools: withDaemonWarning(TOOLS),
+    instructions: SERVER_INSTRUCTIONS,
+  })
 }
 
 // Only run the stdio loop when this file is the entry point (`bun run mcp`), not when a test

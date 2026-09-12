@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Callable
@@ -22,19 +23,44 @@ import urllib.request
 DEFAULT_PORT = 7787
 
 
-def _runtime_pointer_url(env, home: Path | None) -> str:
-    """The URL the daemon recorded in <config dir>/runtime.json when it bound its port, or ''.
-    The config dir is AGENTHYDRA_HOME when set, else ~/.agenthydra - the same rule the daemon's
-    own config.ts applies. A missing or unreadable pointer is simply '' (the caller falls back);
-    a stale one from a crashed daemon is caught by the first request failing, as it is for MCP."""
+def _runtime_pointer_path(env, home: Path | None) -> Path:
+    """<config dir>/runtime.json - the config dir is AGENTHYDRA_HOME when set, else ~/.agenthydra,
+    the same rule the daemon's own config.ts applies."""
     root = (env.get("AGENTHYDRA_HOME") or "").strip()
     base = Path(root) if root else (home or Path.home()) / ".agenthydra"
+    return base / "runtime.json"
+
+
+def _runtime_pointer_url(env, home: Path | None) -> str:
+    """The URL the daemon recorded in <config dir>/runtime.json when it bound its port, or ''.
+    A missing or unreadable pointer is simply '' (the caller falls back); a STALE one - a crash, a
+    hard kill or a pre-fix side-run left it naming a port nothing listens on - is caught by the
+    first request failing, and _send then says so and asks the default port (2026-09-12)."""
     try:
-        info = json.loads((base / "runtime.json").read_text(encoding="utf-8"))
+        info = json.loads(_runtime_pointer_path(env, home).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
     url = info.get("url") if isinstance(info, dict) else None
     return str(url).rstrip("/") if isinstance(url, str) and url.startswith("http") else ""
+
+
+def resolve_base(env=None, home: Path | None = None) -> tuple[str, str, str]:
+    """(url, source, pointer_path): where the daemon is, and HOW that was decided - 'url' or
+    'port' for an explicit AGENTHYDRA_URL / AGENTHYDRA_PORT, 'pointer' for the runtime.json the
+    daemon wrote when it bound its port, 'default' for 7787. The source matters the moment the
+    url refuses a connection: a pointer can be stale, the caller's own word never is."""
+    env = os.environ if env is None else env
+    pointer_path = str(_runtime_pointer_path(env, home))
+    url = (env.get("AGENTHYDRA_URL") or "").strip()
+    if url:
+        return url.rstrip("/"), "url", pointer_path
+    port = (env.get("AGENTHYDRA_PORT") or "").strip()
+    if port.isdigit():
+        return f"http://127.0.0.1:{int(port)}", "port", pointer_path
+    pointer = _runtime_pointer_url(env, home)
+    if pointer:
+        return pointer, "pointer", pointer_path
+    return f"http://127.0.0.1:{DEFAULT_PORT}", "default", pointer_path
 
 
 def resolve_base_url(env=None, home: Path | None = None) -> str:
@@ -48,20 +74,15 @@ def resolve_base_url(env=None, home: Path | None = None) -> str:
     while every fleet read failed - or, with an older daemon still on 7787, read the wrong one.
     The daemon now also pins AGENTHYDRA_URL into the children it spawns; this is the standalone
     half, for a script run from a shell."""
-    env = os.environ if env is None else env
-    url = (env.get("AGENTHYDRA_URL") or "").strip()
-    if url:
-        return url.rstrip("/")
-    port = (env.get("AGENTHYDRA_PORT") or "").strip()
-    if port.isdigit():
-        return f"http://127.0.0.1:{int(port)}"
-    pointer = _runtime_pointer_url(env, home)
-    if pointer:
-        return pointer
-    return f"http://127.0.0.1:{DEFAULT_PORT}"
+    return resolve_base(env, home)[0]
 
 
-BASE = resolve_base_url()
+BASE, _BASE_SOURCE, _POINTER_PATH = resolve_base()
+# The url the pointer named at import. The stale-pointer fallback in _send fires ONLY while BASE is
+# still that url: a caller (or a test) that reassigns BASE has made its own decision.
+_POINTER_BASE = BASE if _BASE_SOURCE == "pointer" else ""
+_DEFAULT_BASE = f"http://127.0.0.1:{DEFAULT_PORT}"
+_SIDE_RUN_ANNOUNCED = False
 TIMEOUT_SECS = float(os.environ.get("AGENTHYDRA_TIMEOUT_SECS", "30"))
 
 # THE TEST SEAM, AND WHY THE SUITE NEEDS ONE (measured 2026-09-05). The unit tests' stub daemon
@@ -109,10 +130,63 @@ class AmbiguousChat(LookupError):
         self.matches = matches
 
 
+def _stale_pointer_note() -> str:
+    """The sentence for a pointer-named BASE that refused, or '' when BASE is anyone else's word
+    (an explicit env, the default, or a caller's own reassignment)."""
+    if not _POINTER_BASE or BASE != _POINTER_BASE or BASE == _DEFAULT_BASE:
+        return ""
+    return (
+        f"{_POINTER_PATH} names {BASE}, nothing is listening there, and it may be stale "
+        "(a daemon that exits cleanly deletes it; a crash, a hard kill or a side-run leaves it behind)"
+    )
+
+
+def _default_port_answers() -> bool:
+    """One /api/health probe of the default port AS this service: in-process when a stub owns that
+    base (INPROC), else on the wire with a short timeout. Anything but an ok answer is False."""
+    inproc = INPROC.get(_DEFAULT_BASE)
+    try:
+        if inproc is not None:
+            status, raw = inproc("GET", "/api/health", None)
+        else:
+            req = urllib.request.Request(
+                f"{_DEFAULT_BASE}/api/health", headers={"accept": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=1.5) as res:
+                status, raw = res.status, res.read()
+        body = json.loads(raw) if status == 200 else None
+        return bool(isinstance(body, dict) and body.get("ok") and body.get("service") == "agenthydra")
+    except Exception:
+        return False
+
+
+def _note_side_run(store) -> None:
+    """The daemon stamps every answer with x-agenthydra-side-run: <store> when its store is not the
+    machine's (server/src/side-run.ts). Say so ONCE, loudly, on stderr: a script that silently
+    reads or writes a scratch database is worse than one that fails, because it looks like it
+    worked. Wire-only by construction - an in-process stub carries no headers."""
+    global _SIDE_RUN_ANNOUNCED
+    if not store or _SIDE_RUN_ANNOUNCED:
+        return
+    _SIDE_RUN_ANNOUNCED = True
+    sys.stderr.write(
+        f"hydralib: SIDE-RUN DAEMON at {BASE} serves {store}, which is NOT this machine's fleet "
+        "store; every read and write here goes to that store. Set AGENTHYDRA_URL to the real daemon "
+        "if that is what you meant.\n"
+    )
+
+
 def _send(method: str, path: str, data: bytes | None, timeout: float) -> tuple[int, bytes]:
     """(HTTP status, raw body) for one request to BASE - over the wire, or from the in-process
     stub registered for BASE (INPROC above). Only a transport failure raises here; the status is
-    the caller's to judge, so both transports feed the same mapping in _request."""
+    the caller's to judge, so both transports feed the same mapping in _request.
+
+    A REFUSED CONNECTION TO A POINTER-NAMED PORT IS NOT "THE DAEMON IS DOWN" (2026-09-12). A probe
+    daemon left ~/.agenthydra/runtime.json naming a dead 7799 while the real daemon answered on
+    7787, and this function said "is the daemon running?" - the advice that starts a second one. So
+    when BASE is the pointer's word and it refuses: say the pointer may be stale, in those words,
+    ask the default port once, and switch to it for the rest of the process if it answers as us."""
+    global BASE
     inproc = INPROC.get(BASE)
     if inproc is not None:
         try:
@@ -129,6 +203,7 @@ def _send(method: str, path: str, data: bytes | None, timeout: float) -> tuple[i
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as res:
+            _note_side_run(res.headers.get("x-agenthydra-side-run"))
             return res.status, res.read()
     except urllib.error.HTTPError as e:
         try:
@@ -137,6 +212,21 @@ def _send(method: str, path: str, data: bytes | None, timeout: float) -> tuple[i
             detail = b""
         return e.code, detail
     except (urllib.error.URLError, TimeoutError, OSError) as e:
+        stale = _stale_pointer_note()
+        if stale and _default_port_answers():
+            sys.stderr.write(
+                f"hydralib: {stale}; the default port answers as agenthydra, so this process uses "
+                f"{_DEFAULT_BASE} from here on. Do NOT start another daemon.\n"
+            )
+            BASE = _DEFAULT_BASE
+            return _send(method, path, data, timeout)
+        if stale:
+            raise DaemonError(
+                path,
+                None,
+                f"{e} - {stale}, and the default port did not answer either. Is the daemon "
+                f"running? try: curl {_DEFAULT_BASE}/api/health",
+            ) from None
         raise DaemonError(path, None, f"{e} - is the daemon running? try: curl {BASE}/api/health") from None
 
 

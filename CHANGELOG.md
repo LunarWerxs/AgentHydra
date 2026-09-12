@@ -187,6 +187,35 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
 
+- **A stale `runtime.json` no longer reads as "the daemon is not running", and can no longer make a
+  second daemon** (`server/src/instance.ts`, `index.ts`, `mcp.ts`, `side-run.ts`,
+  `orchestrator/scripts/lib/hydralib.py`, four suites). On 2026-09-12 a probe daemon left the
+  machine-wide pointer naming a dead port while the real daemon answered on 7787; every MCP tool and
+  every orchestrator script said "couldn't reach the daemon, start it", which is the advice that
+  starts a second one, and a daemon booted then would have found 7787 busy, hopped to 7788 and
+  written a second pointer. f44bfa4 stopped a side-run from taking the pointer; this closes the
+  rest of the class:
+
+  - **The clients say what they see.** When the base came from the pointer and the connection is
+    refused, `mcp.ts` and `hydralib` now say *"runtime.json names port N, nothing is listening
+    there, and it may be stale"*, ask the default port once, and switch to it for the rest of the
+    process if it answers as agenthydra, with a stderr line saying so and "Do NOT start another
+    daemon". An explicit `AGENTHYDRA_URL` / `AGENTHYDRA_PORT` is the caller's word and is never
+    second-guessed.
+  - **The boot guard asks the default port too.** `findLiveInstance` trusts the pointer; when it
+    answers null, `findLiveOnDefaultPort` asks 7787 directly and accepts only our service name, so
+    a stale pointer no longer produces two daemons. The pointer is left alone there: its owner
+    heals it.
+  - **The pointer heals itself.** Once a minute the running daemon rewrites `runtime.json` if it
+    is missing or names a dead daemon, and never touches one naming a live other daemon (a hopped
+    successor, an update relaunch mid-handover). A clean exit already deleted it; a crash, a hard
+    kill or a hand edit used to leave it wrong until the next restart.
+  - **A side-run announces itself to every client.** `/api/health` carries `pid`, `sideRun` and
+    `pointerFile`, and every `/api/*` answer from a daemon with a relocated store carries
+    `x-agenthydra-side-run: <dbPath>`. The MCP server puts `daemonWarning` on every tool result
+    from then on and `hydralib` prints one stderr line, because a client that silently reads and
+    writes a scratch database is worse than an outage: it looks like it worked.
+
 - **The kit-sync hook's own test had never run.** `bun test` does not descend into
   dot-directories, so `.githooks/tests/check-kit-sync-staged.test.ts` (AH-24, 2026-09-06) passed
   whenever someone named it by path and was collected by neither `bun run test` nor CI: the suite

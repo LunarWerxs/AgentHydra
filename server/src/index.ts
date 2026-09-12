@@ -70,8 +70,11 @@ import { app } from './http-app'
 import {
   clearInstanceInfo,
   findLiveInstance,
+  findLiveOnDefaultPort,
+  instanceFilePath,
   POINTER_DIR,
   readInstanceInfo,
+  reassertInstancePointer,
   singleInstanceProbeAttempts,
   updateInstanceInfo,
   writeInstanceInfo,
@@ -112,6 +115,7 @@ import {
 } from './reset-watch'
 import { jsonBody } from './route-helpers'
 import { warmSessionScanCache } from './sessions'
+import { sideRunHeader, sideRunHealthFields } from './side-run'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
@@ -213,6 +217,9 @@ app.use(
     onError: (c) => c.json({ error: 'request body exceeds 2 MiB' }, 413),
   }),
 )
+// A daemon with a relocated store stamps every answer with that store (side-run.ts), so no client
+// can mistake a scratch database for the fleet's.
+app.use('/api/*', sideRunHeader())
 
 // --- health (also the single-instance probe: body.service must equal SERVICE_NAME) ---
 // `dataDir`/`dbPath` are here for one reason: a daemon started from a checkout and the installed
@@ -229,6 +236,9 @@ app.get('/api/health', (c) =>
     dataDir: DATA_DIR,
     dbPath: DB_PATH,
     dataDirNotice: DATA_DIR_NOTICE,
+    // `pid`, `sideRun`, `pointerFile`: which process this is, whether its store is the machine's,
+    // and where it recorded itself - the three facts a stale-pointer investigation needs first.
+    ...sideRunHealthFields(),
     ts: Date.now(),
   }),
 )
@@ -839,10 +849,19 @@ if (!skipSingleInstanceGuard()) {
   // Attempts are chosen from the pointer rather than fixed at 3: a pointer whose process is gone
   // is a tombstone, and re-probing it only buys 500ms of setTimeout on the boot right after a
   // crash. See singleInstanceProbeAttempts in instance.ts.
-  const live = await findLiveInstance(2000, singleInstanceProbeAttempts(3))
+  // Then, if the pointer said nothing useful, ask the DEFAULT port directly (2026-09-12): a pointer
+  // that is missing, stale or was written by a pre-fix side-run says "nothing running" while the
+  // real daemon answers on 7787, and trusting it here is what makes the second daemon.
+  const live =
+    (await findLiveInstance(2000, singleInstanceProbeAttempts(3))) ??
+    (await findLiveOnDefaultPort(2000))
   if (live) {
+    const how = live.foundOnDefaultPort
+      ? `\n  (found on the default port; ${instanceFilePath()} did not name it - missing, stale, or` +
+        `\n   written by a side-run. Left alone here: the running daemon re-asserts its own pointer.)`
+      : ''
     console.log(
-      `\n  AgentHydra is already running  →  ${live.url}\n  Not starting a second instance.\n`,
+      `\n  AgentHydra is already running  →  ${live.url}${how}\n  Not starting a second instance.\n`,
     )
     if (releaseDoubleClick && !noAutoOpen()) openUi(live.url)
     process.exit(0)
@@ -869,6 +888,23 @@ writeInstanceInfo(boundPort, {
   portableMode: portableModeEnabled(),
   hideTrayIcon: hideTrayIconEnabled(),
 })
+// THE POINTER HEALS ITSELF (2026-09-12). Once a minute: if runtime.json is gone, or names another
+// pid whose url no longer answers as this service, write ours again. A pointer naming a LIVE other
+// daemon (a hopped successor, an update relaunch mid-handover) is that daemon's and is left alone.
+// Until this, a pointer deleted by hand or overwritten by a pre-fix probe stayed wrong for as long
+// as this daemon lived, and every client on the machine dialled a dead port.
+const POINTER_REASSERT_MS = 60_000
+setInterval(() => {
+  void reassertInstancePointer(boundPort, () => ({
+    portableMode: portableModeEnabled(),
+    hideTrayIcon: hideTrayIconEnabled(),
+  })).then((verdict) => {
+    if (verdict === 'rewritten')
+      console.warn(
+        `[agenthydra] ${instanceFilePath()} was missing or named a dead daemon; re-asserted it for this one (pid ${process.pid}, port ${boundPort})`,
+      )
+  })
+}, POINTER_REASSERT_MS).unref()
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
 // port, not the configured one, so a hop off a busy 7787 does not leave the Python side talking
 // to whatever answers there. See orchestratorChildEnv.
