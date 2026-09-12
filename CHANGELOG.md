@@ -9,6 +9,54 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **DeepSeek Harness homes are managed instances: launch, open, stop, and one home per account**
+  (`server/src/core/dsh-instances.ts` + its suite, `server/src/config.ts`, `server/src/routes/
+  instances.ts`, `server/src/core/instance-numbers.ts`, `server/src/transcript.ts`,
+  `web/src/components/DshInstancesSection.vue`, the API client and the locale). A "DeepSeek
+  instances" table now sits under the Codex one, listing every `DSH_HOME` on the machine — the
+  default `~/.dsh` first, then any created here — with whether a server is serving it, on which
+  port, and how many chats are in it. Launching starts `dsh web` HIDDEN and opens its chromeless
+  window; stopping kills the listener; the home, its chats and its credentials are untouched by
+  either.
+
+  - **⛔ THE SERVER'S URL NEVER LEAVES THE DAEMON.** `dsh web` prints a one-time `?token=` that IS
+    the session. So the daemon reads it out of the harness's own log, opens the window itself, and
+    answers with an outcome — no route returns it, the SPA never holds it, and "open" is an action
+    rather than a link. For the same reason there is no login verb and nothing here opens
+    `.credentials.yaml`: signing in is the user's own step.
+  - **It sees a server it did not start.** The harness's own desktop wrapper records its port in
+    `launcher.json` and its address in `.web-url`, so a harness the user launched from their own
+    shortcut shows as Serving, and "open" reuses it instead of starting a second one. Proven against
+    the live one on this machine: `#62 DeepSeek Harness · Serving port 3080 · 2 chats`.
+  - **Every home is indexed, not just the default** (`dshInstanceStores()`, the DSH twin of
+    `codexInstanceStores()`). A second account's conversations would otherwise be invisible to
+    listing, search and analytics — the exact hole config.ts's CODEX_HOME comment warns about, which
+    is why `deepseek-harness` joins BUILT_IN_TOOL_IDS: the indexer asks the registry, once.
+  - **The default home is listed but never managed.** It is the machine's own install: it can be
+    read, launched and stopped, and delete refuses unconditionally — no confirm string unlocks it.
+    Deleting a home AgentHydra did make needs the name typed back AND the path to be inside our own
+    instances directory, so a hand-edited registry cannot be turned into a delete of somewhere else.
+  - Numbers come from the one sequence desktop, CLI and Codex instances already share (`dsh` is its
+    fourth kind), so `#62` means the same thing in the table, the API and the MCP tools.
+
+### Changed
+
+- **"Open the transcript file" is no longer offered for a session whose file is not prose**
+  (`web/src/lib/session-labels.ts`, `web/src/components/SessionsView.vue`, `server/src/routes/
+  sessions.ts`). A DeepSeek Harness log is a real file worth copying and locating, and it is
+  Zstandard frames — so handing it to an editor produced a screen of binary that reads as a
+  corrupted session. The action is hidden for those sources and the route says why in its 409,
+  pointing at the readable exports that sit beside it. A second compiler-checked capability map
+  (`SOURCE_FILE_IS_TEXT`), because "has a file" and "that file is text" have different answers:
+  OpenCode and Hermes have no file at all, DSH has one that simply is not prose.
+
+- **The dispatched and rate-limited filters disable themselves off CLAUDE-ONLY, not off a list**
+  (`web/src/components/SessionsView.vue`). Both facts exist only for Claude sessions, and the
+  hand-written "codex or opencode" list had gone stale twice as sources were added — Hermes in
+  September, DeepSeek this week — leaving two filters enabled that could only ever return nothing.
+
+### Added
+
 - **DeepSeek Harness (`@deepseek-ai/dsh`) is a first-class session source** (`server/src/
   dsh-sessions.ts` and its suite, plus `agent-catalog.ts`, `types.ts`, `transcript.ts`,
   `sessions.ts`, `session-search.ts`, `session-export.ts`, `analytics.ts`, `pricing.ts`, `mcp.ts`

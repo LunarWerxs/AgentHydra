@@ -215,7 +215,8 @@ telemetry.
 - Optional: **Codex Desktop/CLI** for isolated Codex windows, CLI launch/login, and local rollout
   history; **OpenCode** for local OpenCode history; **Hermes Agent** and the **DeepSeek Harness**
   (`@deepseek-ai/dsh`) for theirs. Their sessions appear automatically when their standard local
-  stores exist — `~/.dsh` for the harness, or wherever `DSH_HOME` points.
+  stores exist — `~/.dsh` for the harness, or wherever `DSH_HOME` points. The harness can also be
+  launched, opened and stopped from the Instances tab, one row per home.
 - **Windows** for the tray launcher. macOS and Linux builds exist and the instance-account code is
   written for them, but they are not verified there yet.
 - **Windows instance management needs the classic Claude Desktop build** (the ~217 MB Squirrel

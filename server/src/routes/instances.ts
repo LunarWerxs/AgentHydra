@@ -1,5 +1,13 @@
 import { resolveAccount } from '../core/accounts'
 import { detectDesktopInstall } from '../core/desktop-install'
+import {
+  createDshInstance,
+  deleteDshInstance,
+  launchDshInstance,
+  listDshInstances,
+  quitDshInstance,
+  renameDshInstance,
+} from '../core/dsh-instances'
 import { logoutInstance } from '../core/instance-logout'
 import { setInstanceMeta } from '../core/instance-meta'
 import { createInstanceModeShortcut } from '../core/instance-mode-shortcut'
@@ -228,4 +236,38 @@ app.post('/api/instances', async (c) => {
     return c.json({ error: 'name is required' }, 400)
   }
   return c.json(await createInstance(body.name))
+})
+
+// --- DeepSeek Harness instances (a home per account; see core/dsh-instances.ts) ------------------
+//
+// ⛔ NO ROUTE HERE EVER RETURNS THE SERVER'S URL. `dsh web` prints a one-time `?token=` that IS the
+// session, so "open" is a server-side action that opens the window itself and answers with an
+// outcome. A route that handed the SPA that URL would put the token in a fetch response, in the
+// browser's memory and in anything watching the loopback socket.
+app.get('/api/dsh-instances', async (c) => c.json(await listDshInstances()))
+app.post('/api/dsh-instances', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.name !== 'string' || !body.name.trim())
+    return c.json({ error: 'name is required' }, 400)
+  return c.json(createDshInstance(body.name))
+})
+app.post('/api/dsh-instances/:id/launch', async (c) =>
+  c.json(await launchDshInstance(c.req.param('id'))),
+)
+app.post('/api/dsh-instances/:id/quit', async (c) =>
+  c.json(await quitDshInstance(c.req.param('id'))),
+)
+app.post('/api/dsh-instances/:id/rename', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.name !== 'string') return c.json({ error: 'name is required' }, 400)
+  return c.json(renameDshInstance(c.req.param('id'), body.name))
+})
+app.delete('/api/dsh-instances/:id', async (c) => {
+  const body = await jsonBody(c)
+  return c.json(
+    deleteDshInstance(c.req.param('id'), {
+      deleteFiles: body.deleteFiles === true,
+      confirmName: typeof body.confirmName === 'string' ? body.confirmName : undefined,
+    }),
+  )
 })

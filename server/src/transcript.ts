@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path'
 import { extraRootsWithFormat } from './agent-catalog'
 import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH } from './config'
 import { codexInstanceStores } from './core/codex-instances'
+import { dshInstanceStores } from './core/dsh-instances'
 import { listDshSessions, readDshSession } from './dsh-sessions'
 import {
   type ForeignSession,
@@ -936,10 +937,16 @@ function extraStoreRecords(): {
   }
   // DeepSeek Harness: a home, not a database — the reader walks `sessions/` under it and reads the
   // harness's own projection cache beside that for titles and totals.
+  //
+  // The set of homes comes from dshInstanceStores(), NOT from the catalog row: a machine can have
+  // several homes (one per DeepSeek account, the same way a machine has several CODEX_HOMEs), and
+  // reading only the default one would make every conversation in the others invisible to listing,
+  // search and analytics. The catalog row still earns its place — it is what DETECTS the harness on
+  // a machine — which is why 'deepseek-harness' is in BUILT_IN_TOOL_IDS: indexed from here, once.
   const dshFiles: TranscriptFile[] = []
-  for (const r of extraRootsWithFormat('dsh')) {
+  for (const home of dshInstanceStores()) {
     try {
-      dshFiles.push(...dshRecords(r.root, r.tool.id))
+      dshFiles.push(...dshRecords(home))
     } catch {
       // A directory that is not actually a DSH home contributes nothing, same safety story as above.
     }

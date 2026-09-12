@@ -35,6 +35,7 @@ import CliInstancesSection from '@/components/CliInstancesSection.vue'
 import CodexInstancesSection from '@/components/CodexInstancesSection.vue'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
+import DshInstancesSection from '@/components/DshInstancesSection.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
@@ -1768,6 +1769,10 @@ onUnmounted(() => {
         :desktop-enabled="codexDesktopEnabled"
         :cli-enabled="codexCliEnabled"
       />
+      <!-- No settings toggle gating this one, matching OpenCode and Hermes rather than Codex: the
+           section lists what is on the machine and shows an empty state when the harness is not
+           installed, so there is nothing for a switch to protect against. -->
+      <DshInstancesSection />
     </div>
 
     <!-- "Chats": this one account's chats, read-only. No action on the account itself, so it

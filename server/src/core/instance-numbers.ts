@@ -30,10 +30,11 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { appDataDir, instanceNumbersFile, normalizeInstancePath } from './paths'
 
-/** Which family of instance a number points at. One sequence spans all three. */
-export type InstanceKind = 'desktop' | 'cli' | 'codex'
+/** Which family of instance a number points at. One sequence spans all of them. */
+export type InstanceKind = 'desktop' | 'cli' | 'codex' | 'dsh'
 
-/** The stable string key a number is attached to: `desktop:<dir>` | `cli:<id>` | `codex:<id>`. */
+/** The stable string key a number is attached to: `desktop:<dir>` | `cli:<id>` | `codex:<id>` |
+ *  `dsh:<id>`. */
 export type InstanceRef = string
 
 /** Build the registry key for an instance. Desktop dirs are normalized because the same folder
@@ -50,7 +51,8 @@ export function parseInstanceRef(ref: string): { kind: InstanceKind; id: string 
   const kind = ref.slice(0, idx)
   const id = ref.slice(idx + 1)
   if (!id) return null
-  if (kind === 'desktop' || kind === 'cli' || kind === 'codex') return { kind, id }
+  if (kind === 'desktop' || kind === 'cli' || kind === 'codex' || kind === 'dsh')
+    return { kind, id }
   return null
 }
 

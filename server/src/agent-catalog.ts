@@ -794,7 +794,15 @@ export function rootsWithFormat(format: StoreFormat, home: string = HOME): Agent
  * where the original three are read from. Belt and braces: it also means a mistake in the catalog's
  * paths cannot break the stores people actually use.
  */
-export const BUILT_IN_TOOL_IDS = new Set(['claude-code', 'codex', 'opencode'])
+export const BUILT_IN_TOOL_IDS = new Set([
+  'claude-code',
+  'codex',
+  'opencode',
+  // Joined 2026-09-12 for the same reason Codex is here: a machine has one DeepSeek Harness home
+  // per account, and the set of them is core/dsh-instances.ts's dshInstanceStores(), which the
+  // indexer asks directly. Leaving this row out of that set would index the default home twice.
+  'deepseek-harness',
+])
 
 /** Catalog roots for a format, EXCLUDING the three the indexer already handles by constant. */
 export function extraRootsWithFormat(format: StoreFormat, home: string = HOME): AgentRoot[] {

@@ -104,6 +104,28 @@ export const SOURCE_HAS_FILE: Record<SessionSource, boolean> = {
   foreign: true,
 }
 
+/**
+ * Is that file TEXT an editor can show?
+ *
+ * "Open the transcript in an editor" is only a kindness when the editor can render what it opens.
+ * A DeepSeek Harness log is a real file worth copying and locating — and it is Zstandard frames, so
+ * handing it to an editor produces a screen of binary and a user who thinks the session is
+ * corrupted. The readable path for those is the export beside this action, which renders the same
+ * conversation as Markdown or JSON.
+ *
+ * Separate from {@link SOURCE_HAS_FILE} because the two questions have different answers: OpenCode
+ * and Hermes have NO file (nothing to copy, locate or open), while DSH has one that is simply not
+ * prose. Collapsing them would take away copy-the-file from a source that supports it perfectly.
+ */
+export const SOURCE_FILE_IS_TEXT: Record<SessionSource, boolean> = {
+  claude: true,
+  codex: true,
+  opencode: false,
+  hermes: false,
+  dsh: false,
+  foreign: true,
+}
+
 export const SOURCE_BADGE_CLASS: Record<SessionSource, string> = {
   claude: 'border-[#D97757]/40 bg-[#D97757]/10 text-[#B85D3D] dark:text-[#E9A287]',
   codex: 'border-[#10A37F]/40 bg-[#10A37F]/10 text-[#087D62] dark:text-[#65D4B3]',

@@ -271,6 +271,7 @@ const {
   rowSourceLabel,
   sourceBadgeClass,
   sourceHasFile: SOURCE_HAS_FILE,
+  sourceFileIsText: SOURCE_FILE_IS_TEXT,
   shapeLabel,
   shapeTitleOf,
   copyChipOf,
@@ -643,7 +644,12 @@ function onComposerSent(mode: 'now' | 'queued') {
                        every dispatch names the session id on the command line, so a queue row for
                        that id IS the fact. Never applied on our own initiative — 'all' is the
                        default and stays it. -->
-                  <DropdownMenuSub :disabled="sessionSourceFilter === 'codex' || sessionSourceFilter === 'opencode'">
+                  <!-- Disabled off CLAUDE-ONLY rather than off a list of other sources: both of
+                       these facts exist only for Claude (a dispatch names a session id on the
+                       command line; a usage wall is judged from a Claude transcript), and the
+                       hand-written "codex or opencode" list silently went stale twice as sources
+                       were added. -->
+                  <DropdownMenuSub :disabled="sessionSourceFilter !== 'all' && sessionSourceFilter !== 'claude'">
                     <DropdownMenuSubTrigger>
                       <ListTodo />
                       {{ $t('sessions.dispatched') }}
@@ -663,7 +669,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                   <!-- sessions a usage wall cut off. Server-side like the scopes above it, but
                        the verdict comes from the transcript parse rather than the mtime index, so
                        the first use after an upgrade is slow while the scan cache refills. -->
-                  <DropdownMenuSub :disabled="sessionSourceFilter === 'codex' || sessionSourceFilter === 'opencode'">
+                  <DropdownMenuSub :disabled="sessionSourceFilter !== 'all' && sessionSourceFilter !== 'claude'">
                     <DropdownMenuSubTrigger>
                       <CircleAlert />
                       {{ $t('sessions.rateLimited') }}
@@ -1127,7 +1133,10 @@ function onComposerSent(mode: 'now' | 'queued') {
                   {{ $t('sessions.openTranscript') }}
                 </ContextMenuItem>
                 <template v-if="SOURCE_HAS_FILE[s.source]">
-                  <ContextMenuItem @select="openFile(s)">
+                  <!-- Not offered for a source whose file is not prose (see SOURCE_FILE_IS_TEXT):
+                       an editor pointed at a compressed log shows binary, which reads as a corrupt
+                       session. The readable exports below are the way in for those. -->
+                  <ContextMenuItem v-if="SOURCE_FILE_IS_TEXT[s.source]" @select="openFile(s)">
                     <FileSymlink />
                     {{ $t('sessions.openFile') }}
                   </ContextMenuItem>
@@ -1450,7 +1459,10 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <DropdownMenuLabel class="flex items-center gap-2">
                           <FileSymlink class="size-3.5" />{{ $t('sessions.fileActions') }}
                         </DropdownMenuLabel>
-                        <DropdownMenuItem @select="openFile(selected)">
+                        <DropdownMenuItem
+                          v-if="SOURCE_FILE_IS_TEXT[selected.source]"
+                          @select="openFile(selected)"
+                        >
                           <FileSymlink />{{ $t('sessions.openFile') }}
                         </DropdownMenuItem>
                         <!-- one entry, three formats. The raw .jsonl is still here because it is

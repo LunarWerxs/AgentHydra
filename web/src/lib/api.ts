@@ -869,3 +869,43 @@ export const migrateSession = (
       }),
     },
   )
+
+// --- DeepSeek Harness instances (a home per account; see server/src/core/dsh-instances.ts) -------
+//
+// ⛔ Nothing here ever receives the harness's URL. Its `?token=` IS the session, so the daemon
+// opens the window itself and these calls answer with an outcome only — see the route comments.
+export interface DshInstance {
+  /** Permanent short handle (`#7`), from the sequence desktop/CLI/Codex instances share. */
+  num: number
+  id: string
+  name: string
+  /** The DSH_HOME this instance is. */
+  home: string
+  /** True for the machine's own harness install, which is listed but never managed by us. */
+  isDefault: boolean
+  sessions: number
+  port: number | null
+  running: boolean
+  createdAt: number
+}
+export const listDshInstances = () => j<DshInstance[]>('/api/dsh-instances')
+export const createDshInstance = (name: string) =>
+  j<CMActionResult>('/api/dsh-instances', { method: 'POST', body: JSON.stringify({ name }) })
+/** Start a server for this home (or open a window against one already running) — both are this. */
+export const launchDshInstance = (id: string) =>
+  j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}/launch`, { method: 'POST' })
+export const quitDshInstance = (id: string) =>
+  j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}/quit`, { method: 'POST' })
+export const renameDshInstance = (id: string, name: string) =>
+  j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}/rename`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+export const deleteDshInstance = (
+  id: string,
+  opts: { deleteFiles?: boolean; confirmName?: string } = {},
+) =>
+  j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    body: JSON.stringify(opts),
+  })

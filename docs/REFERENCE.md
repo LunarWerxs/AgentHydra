@@ -397,7 +397,8 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 
 ```
 server/        Bun + Hono daemon: sqlite, Claude/Codex/OpenCode/Hermes/DSH session readers, transcript tail,
-               dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances)
+               dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances,
+               DeepSeek Harness homes)
 web/           Vue 3 SPA (Sessions / Queue / Instances views)
 orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should happen to a chat
                (orch.py + scripts/), its own tests (scripts/tests/), and its remote front-end

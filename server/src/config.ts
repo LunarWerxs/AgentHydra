@@ -146,6 +146,22 @@ export const CLAUDE_PROJECTS_ROOT = join(HOME, '.claude', 'projects')
  */
 export const CODEX_HOME = appEnv('CODEX_HOME')?.trim() || join(HOME, '.codex')
 
+/**
+ * The DEFAULT DeepSeek Harness home, matching the harness's own precedence.
+ *
+ * `@deepseek-ai/dsh-home-paths` resolves its root as an explicit configured path, else `$DSH_HOME`,
+ * else `~/.dsh`, and treats a blank `$DSH_HOME` as unset rather than as the cwd — so this reads the
+ * harness's OWN variable first (a user who repointed it means it), with AgentHydra's prefixed
+ * override ahead of that for a test or a second checkout.
+ *
+ * DELIBERATELY NOT ACCOMPANIED BY A `…_SESSIONS_ROOT` CONSTANT, for the reason CODEX_HOME gives
+ * above: the set of homes is this one PLUS every instance created in the app, and that set is
+ * core/dsh-instances.ts's `dshInstanceStores()`. A reader that joins `sessions/` onto this constant
+ * would make every conversation in every other home invisible to listing, search and analytics.
+ */
+export const DSH_HOME =
+  appEnv('DSH_HOME')?.trim() || process.env.DSH_HOME?.trim() || join(HOME, '.dsh')
+
 /** OpenCode CLI and Desktop share this SQLite session store. */
 export const OPENCODE_DB_PATH =
   appEnv('OPENCODE_DB')?.trim() ||
