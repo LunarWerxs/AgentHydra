@@ -116,3 +116,52 @@ describe('what each tool sends to the daemon', () => {
     expect(calls).toHaveLength(0)
   })
 })
+
+// ⛔ A LONG BLOCKING RUN LOSES ITS OWN REPORT (2026-09-11). `sweep --all --yes` with
+// timeout_secs 1200 answered only "The operation timed out" while the sweep ran five minutes to
+// completion in the daemon - no stdout, no exit code, and no operationId to re-attach to, so a
+// finished verdict was unreachable. The detached path already existed; nobody could be expected to
+// know to ask for it the first time, so a declared-long run now detaches itself.
+describe('a run that will outlive the caller detaches instead of losing its report', () => {
+  test('a declared timeout past the ceiling is sent async, with the id and how to poll it', async () => {
+    const out = (await tool('orchestrator_run').run({
+      script: 'sweep',
+      args: ['--all', '--yes'],
+      timeout_secs: 1200,
+    })) as Record<string, unknown>
+    expect((calls[0]!.body as { async: boolean }).async).toBe(true)
+    expect(out.started).toBe(true)
+    expect(String(out.poll)).toContain('orchestrator_operation')
+    expect(String(out.note)).toContain('Detached automatically')
+  })
+
+  test('a short run still blocks, exactly as before', async () => {
+    const out = (await tool('orchestrator_run').run({
+      script: 'census',
+      timeout_secs: 60,
+    })) as Record<string, unknown>
+    expect((calls[0]!.body as { async: boolean }).async).toBe(false)
+    expect(out.started).toBeUndefined()
+    expect(out.poll).toBeUndefined()
+  })
+
+  test('an explicit background:false is a person choosing to wait, and is honoured', async () => {
+    const out = (await tool('orchestrator_run').run({
+      script: 'sweep',
+      timeout_secs: 3000,
+      background: false,
+    })) as Record<string, unknown>
+    expect((calls[0]!.body as { async: boolean }).async).toBe(false)
+    expect(out.poll).toBeUndefined()
+  })
+
+  test('an explicit background:true still says how to read the result', async () => {
+    const out = (await tool('orchestrator_run').run({
+      script: 'sweep',
+      background: true,
+    })) as Record<string, unknown>
+    expect((calls[0]!.body as { async: boolean }).async).toBe(true)
+    expect(String(out.poll)).toContain('orchestrator_operation')
+    expect(String(out.note)).toContain('Poll the id above')
+  })
+})

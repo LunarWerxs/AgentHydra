@@ -120,6 +120,10 @@ const S = (properties: Record<string, unknown> = {}, required: string[] = []) =>
 })
 const JSON_HEADERS = { 'content-type': 'application/json' }
 const str = (v: unknown): string => String(v ?? '')
+// Past this DECLARED run length, orchestrator_run detaches instead of blocking: no MCP client
+// holds a connection open that long, and a call the client abandons loses the report for work
+// the daemon finishes anyway (2026-09-11, the lost `sweep --all --yes`).
+const AUTO_DETACH_MS = 120_000
 const qs = (params: Record<string, unknown>): string => {
   const p = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) if (v != null) p.set(k, String(v))
@@ -165,7 +169,54 @@ interface ResolvedInstanceRow {
  *  loopback request. */
 let selfDetectionCache: Promise<SelfIdentityDetection> | null = null
 
-async function detectSelf(fresh = false): Promise<SelfIdentityDetection> {
+/** ⛔ OVER HTTP, "THIS PROCESS" IS THE DAEMON, AND THE ANSWER WAS USELESS (2026-09-11).
+ *  mcp-register.ts registers the HTTP transport for every client, so `whoami` ran inside the
+ *  daemon and walked the DAEMON'S ancestry - the tray, and whatever started that - then reported
+ *  "this process does not look like it is running under Claude Code at all" to an agent that very
+ *  much is. `to: "here"` (refused unless the identity is exact) and check_my_usage's attribution
+ *  went down with it, for every caller on the machine.
+ *
+ *  The caller is not unknowable: it opened a loopback socket, so the OS can name its pid, and that
+ *  pid IS the engine - `<instanceDir>/claude-code/<ver>/claude.exe`. Feeding that chain to the
+ *  EXISTING stage-5 signals identifies it exactly. The env stages are skipped deliberately (`env:
+ *  {}`): the daemon's environment says nothing about the caller, and a ruledOut line claiming a
+ *  check that was never performed against that process would be a fabricated working. */
+const callerDetectionCache = new Map<number, Promise<SelfIdentityDetection>>()
+
+async function detectForCaller(callerPid: number, fresh: boolean): Promise<SelfIdentityDetection> {
+  const cached = fresh ? undefined : callerDetectionCache.get(callerPid)
+  if (cached) return cached
+  const probe = (async () => {
+    const { detectSelfIdentity } = await import('./core/self-identity')
+    const { processAncestry } = await import('./core/process')
+    const detection = await detectSelfIdentity({
+      env: {},
+      ancestry: () => processAncestry(callerPid, { includeSelf: true }),
+    })
+    return {
+      ...detection,
+      ruledOut: [
+        `answered for the CALLING process (pid ${callerPid}), not for this daemon: MCP arrived over ` +
+          "HTTP, so the caller's own environment cannot be read from here and only its process " +
+          'chain was walked',
+        ...detection.ruledOut.filter((r) => r.includes('ancestor') || r.includes('ancestry')),
+      ],
+    }
+  })()
+  callerDetectionCache.set(callerPid, probe)
+  try {
+    return await probe
+  } catch (e) {
+    callerDetectionCache.delete(callerPid) // a failed probe must not be remembered as the answer
+    throw e
+  }
+}
+
+async function detectSelf(
+  fresh = false,
+  callerPid?: number | null,
+): Promise<SelfIdentityDetection> {
+  if (callerPid) return detectForCaller(callerPid, fresh)
   if (fresh || !selfDetectionCache) {
     selfDetectionCache = (async () => {
       const { detectSelfIdentity } = await import('./core/self-identity')
@@ -177,6 +228,24 @@ async function detectSelf(fresh = false): Promise<SelfIdentityDetection> {
   } catch (e) {
     selfDetectionCache = null // a failed probe must not be remembered as the answer
     throw e
+  }
+}
+
+/** How the HTTP route hands a tool the process that sent the request. It is a FUNCTION on
+ *  purpose: JSON cannot carry one, so a client cannot forge `callerPid` in its own arguments -
+ *  only our own route, which resolves it from the socket, can put one here. Lazy, because
+ *  resolving it costs a `netstat` and only the identity tools ever ask. */
+type CallerPidSource = () => Promise<number | null>
+const CALLER_PID_ARG = 'callerPid'
+const CALLER_AWARE_TOOLS = new Set(['whoami', 'check_my_usage'])
+
+export async function callerPidFromArgs(a: Record<string, unknown>): Promise<number | null> {
+  const source = a[CALLER_PID_ARG]
+  if (typeof source !== 'function') return null
+  try {
+    return await (source as CallerPidSource)()
+  } catch {
+    return null
   }
 }
 
@@ -196,9 +265,12 @@ interface SelfIdentityPayload {
   warning?: string
 }
 
-async function selfIdentity(fresh = false): Promise<SelfIdentityPayload> {
+async function selfIdentity(
+  fresh = false,
+  callerPid?: number | null,
+): Promise<SelfIdentityPayload> {
   const { describeSelfIdentity } = await import('./core/self-identity')
-  const detection = await detectSelf(fresh)
+  const detection = await detectSelf(fresh, callerPid)
 
   let instance: ResolvedInstanceRow | null = null
   if (detection.configDir) {
@@ -1134,7 +1206,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'whoami',
     description:
-      "WHICH INSTANCE AM I? Identifies the instance THIS process is actually running as — permanent number, kind, account email, plan and raw rate-limit tier — and shows its WORKING. It does NOT just read one env var: a Claude Desktop session sets no CLAUDE_CONFIG_DIR, so identification walks CODEX_HOME → CLAUDE_CONFIG_DIR → CLAUDE_CODE_EXECPATH → the instance folder holding this session's own claude-code-sessions file → the parent `claude.exe` process and the Electron host's --user-data-dir. Read `confidence`: 'exact' means a signal named the credential store and you may quote the number; 'assumed' means it fell back to the default ~/.claude login by ELIMINATION and must be hedged. `clues` is the literal proof, `ruledOut` says what was checked and came up empty. TWO THINGS THAT LOOK AUTHORITATIVE AND LIE, so never identify yourself from them: your transcript's location (a Desktop-instance session still writes to the DEFAULT ~/.claude/projects) and ~/.claude.json's oauthAccount email (the machine's default login, not the credential this session bills to). If a human tells you an instance number, THAT beats all of this.",
+      "WHICH INSTANCE AM I? Identifies the instance THIS process is actually running as — permanent number, kind, account email, plan and raw rate-limit tier — and shows its WORKING. It does NOT just read one env var: a Claude Desktop session sets no CLAUDE_CONFIG_DIR, so identification walks CODEX_HOME → CLAUDE_CONFIG_DIR → CLAUDE_CODE_EXECPATH → the instance folder holding this session's own claude-code-sessions file → the parent `claude.exe` process and the Electron host's --user-data-dir. Read `confidence`: 'exact' means a signal named the credential store and you may quote the number; 'assumed' means it fell back to the default ~/.claude login by ELIMINATION and must be hedged. `clues` is the literal proof, `ruledOut` says what was checked and came up empty. OVER HTTP (how this server is normally registered) the tools run inside the DAEMON, so \"this process\" would be the daemon and never you: the answer is resolved from the process that opened the connection instead - its own command line is the instance dir - and `ruledOut` says so outright when that is what happened. TWO THINGS THAT LOOK AUTHORITATIVE AND LIE, so never identify yourself from them: your transcript's location (a Desktop-instance session still writes to the DEFAULT ~/.claude/projects) and ~/.claude.json's oauthAccount email (the machine's default login, not the credential this session bills to). If a human tells you an instance number, THAT beats all of this.",
     inputSchema: S({
       fresh: {
         type: 'boolean',
@@ -1143,7 +1215,7 @@ export const TOOLS: McpEngineTool[] = [
       },
     }),
     run: async (a) => {
-      const self = await selfIdentity(a.fresh === true)
+      const self = await selfIdentity(a.fresh === true, await callerPidFromArgs(a))
       return {
         ...self,
         note: self.instance
@@ -1223,8 +1295,8 @@ export const TOOLS: McpEngineTool[] = [
     description:
       'Self-check: read YOUR OWN remaining Claude quota, right now, in ~300ms. Returns the session (5h) %, the weekly all-models % (the BINDING cap), an `advice` verdict with `shouldOffload` / `safeToFanOut` flags, and `identity` — WHICH numbered instance you are, on WHAT plan/tier, and HOW that was established, so you can report "instance #11 (Pro) is at 82% weekly" instead of an unattributed percentage. It identifies itself the same way whoami does (env → session file → parent process), so it reports the right account for a Claude DESKTOP session too, not just a CLI instance that sets CLAUDE_CONFIG_DIR. CALL THIS when you are doing long or heavy work: if `shouldOffload` is true you are close to being cut off mid-task, and you should WRITE YOUR WORKING CONTEXT, FINDINGS, AND NEXT STEPS TO A FILE BEFORE CONTINUING, so the work survives. Also call it before a big multi-agent fan-out — and gate on CURRENT + PROJECTED cost, because a fan-out cannot be recalled once launched while solo work can be stopped at any tool call. If `identity.warning` is present, the percentages are real but WHOSE they are is not settled: say so rather than quoting a bare number.',
     inputSchema: S(),
-    run: async () => {
-      const self = await selfIdentity()
+    run: async (a) => {
+      const self = await selfIdentity(false, await callerPidFromArgs(a))
 
       // Prefer the INSTANCE route. It matters: a desktop instance's credential lives in Electron
       // safeStorage, not in a `.credentials.json`, so reading it by configDir alone returns
@@ -2181,7 +2253,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'orchestrator_run',
     description:
-      "Run ONE orchestrator script by its menu name (`chats`, `migrate_chat`, `dossier`, `audit_twins`, `archive_chat`, `census`, ...) with its own arguments, exactly as `python orch.py <script> ...` would. OBSERVE scripts are read-only; ACT scripts MUTATE, and they keep every rail they have on the command line: NOTHING ACTS WITHOUT THE TRAY ICON (orchestrator_switch {action:'armed'} tells you), a live chat is never moved or archived, every attempt is counted, and `--force` is a PERSON'S word for one act - pass it only when the human asked for that act. TWO SCRIPTS ARE HAND-RUN AND DO NOT NEED THE ICON: `migrate_chat` and `chats --move-to` (the icon gates the unattended lanes, not a person's own move) - so for a targeted move do NOT arm first: arming resumes `saturate`, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet 300s. Pass `--idle-wait 330` with `--stop-idle` and the command sleeps out that window itself instead of you retrying on a guess (a working or stuck engine still refuses in a second). Returns stdout, stderr, the exit code and what the driver's codes mean (0 ok · 2 something failed · 3 refused/unknown/not armed · 1 daemon failure); a script's own codes are in its `--help`, which you can run here too (args: ['--help']). Long scripts get `timeout_secs` (default 600, max 3600).",
+      "Run ONE orchestrator script by its menu name (`chats`, `migrate_chat`, `dossier`, `audit_twins`, `archive_chat`, `census`, ...) with its own arguments, exactly as `python orch.py <script> ...` would. OBSERVE scripts are read-only; ACT scripts MUTATE, and they keep every rail they have on the command line: NOTHING ACTS WITHOUT THE TRAY ICON (orchestrator_switch {action:'armed'} tells you), a live chat is never moved or archived, every attempt is counted, and `--force` is a PERSON'S word for one act - pass it only when the human asked for that act. TWO SCRIPTS ARE HAND-RUN AND DO NOT NEED THE ICON: `migrate_chat` and `chats --move-to` (the icon gates the unattended lanes, not a person's own move) - so for a targeted move do NOT arm first: arming resumes `saturate`, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet 300s. Pass `--idle-wait 330` with `--stop-idle` and the command sleeps out that window itself instead of you retrying on a guess (a working or stuck engine still refuses in a second). Returns stdout, stderr, the exit code and what the driver's codes mean (0 ok · 2 something failed · 3 refused/unknown/not armed · 1 daemon failure); a script's own codes are in its `--help`, which you can run here too (args: ['--help']). Long scripts get `timeout_secs` (default 600, server cap 3600) - but YOUR client's transport gives up far below that, so a blocking call that outlives it loses the report for work the daemon keeps running. Anything you declare longer than 120s is DETACHED for you: you get an `operationId` and a `poll` line at once, and `orchestrator_operation {id}` hands back the same verdict the blocking call would have (every run's result is kept for an hour). Lost a call anyway? `orchestrator_operation {}` with no id lists the recent runs - nothing is gone.",
     inputSchema: S(
       {
         script: {
@@ -2207,21 +2279,43 @@ export const TOOLS: McpEngineTool[] = [
       },
       ['script'],
     ),
-    run: async (a) =>
-      api('/api/orchestrator/run', {
+    run: async (a) => {
+      const timeoutMs = a.timeout_secs != null ? Number(a.timeout_secs) * 1000 : undefined
+      // ⛔ A LONG BLOCKING RUN LOSES ITS OWN REPORT (2026-09-11). `sweep --all --yes` with
+      // timeout_secs 1200 (and again 1800) answered only "The operation timed out" while the
+      // sweep ran five minutes to completion in the daemon: no stdout, no exit code, and - the
+      // part that actually hurt - no operationId, so the finished verdict could not even be
+      // fetched afterwards. The detached path already existed; the caller simply had to know
+      // to ask for it, which is a rail nobody can follow the first time. A caller that DECLARES
+      // a run longer than this now gets detached automatically, with the id and how to poll it.
+      // An explicit `background: false` is still honoured - that is someone who wants to wait.
+      const detach =
+        a.background === true || (a.background == null && (timeoutMs ?? 0) > AUTO_DETACH_MS)
+      const run = (await api('/api/orchestrator/run', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           script: a.script,
           args: Array.isArray(a.args) ? a.args : [],
-          timeoutMs: a.timeout_secs != null ? Number(a.timeout_secs) * 1000 : undefined,
-          async: a.background === true,
+          timeoutMs,
+          async: detach,
           idempotencyKey:
             typeof a.idempotency_key === 'string' && a.idempotency_key.trim()
               ? a.idempotency_key.trim()
               : undefined,
         }),
-      }),
+      })) as Record<string, unknown>
+      if (!detach) return run
+      return {
+        ...run,
+        started: true,
+        poll: `orchestrator_operation { id: "${str(run.operationId)}" }`,
+        note:
+          a.background === true
+            ? 'Running in the daemon. Poll the id above for stdout, the exit code and the verdict; the result is kept for an hour.'
+            : `Detached automatically: you declared timeout_secs ${Number(a.timeout_secs)}, longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running. Poll the id above for the full result; pass background:false if you really do want to block.`,
+      }
+    },
   },
   {
     name: 'orchestrator_operation',
@@ -2300,6 +2394,25 @@ export const TOOLS: McpEngineTool[] = [
 ]
 
 export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
+
+/** The same tool set, with the identity tools bound to whoever sent THIS request.
+ *
+ * The stdio transport needs nothing of the sort: there, the server IS a child of the calling
+ * engine, so "this process" and "the caller" share an ancestry. Over HTTP they are different
+ * processes on the same machine, and only the route that owns the socket can say which one asked
+ * - so it hands that answer in here rather than letting the identity tools guess from a process
+ * that happens to be the daemon (see detectForCaller). */
+export function toolsForCaller(getCallerPid: () => Promise<number | null>): McpEngineTool[] {
+  return TOOLS.map((t) =>
+    CALLER_AWARE_TOOLS.has(t.name)
+      ? {
+          ...t,
+          run: (args: Record<string, unknown>, signal?: AbortSignal) =>
+            t.run({ ...args, [CALLER_PID_ARG]: getCallerPid }, signal),
+        }
+      : t,
+  )
+}
 
 /**
  * STANDING INSTRUCTIONS, handed to the model in the MCP `initialize` handshake, before it calls

@@ -478,5 +478,97 @@ class TitleForRowTest(unittest.TestCase):
         self.assertIn("no name to aim at", said)
 
 
+class RenderedNameRetryTest(unittest.TestCase):
+    """⛔ THE APP RENAMES A LANDED CHAT UNDER US (live, 2026-09-11). migrate_batch moved six
+    chats from one account to another; two came back `disk-only` because the picker aimed at
+    the title the record carried while the sidebar had already re-rendered them as
+    'QuickDictate' and 'Stackspire'. No wait cures that - the refusal says so itself ("a MATCH
+    failure, not a timing one") - and `automation_chat --force` by hand fixed both on the first
+    try minutes later, once the record had caught up. The refusal already NAMES every row it
+    can see, so the retry needs no new evidence, only to read what it was told."""
+
+    REFUSAL = (
+        "REFUSED: no sidebar row is named 'QuickDictate listening stops intermittently' in "
+        "c:/users/blogi/.claude-instances/another_meh - a MATCH failure, not a timing one: 3 "
+        "rows are rendered right now (rows read by the kebab phrase 'Chat options'). "
+        "Rows: 'QuickDictate' | 'Slite changelog review' | 'Ask AI rollout deployment'"
+    )
+
+    def setUp(self):
+        self._state = tempfile.TemporaryDirectory()
+        os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+
+    def tearDown(self):
+        os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
+        self._state.cleanup()
+
+    def test_rendered_rows_reads_a_match_failure_and_nothing_else(self):
+        self.assertEqual(automation_chat.rendered_rows(self.REFUSAL),
+                         ["QuickDictate", "Slite changelog review", "Ask AI rollout deployment"])
+        self.assertEqual(
+            automation_chat.rendered_rows("MODE SET 'Accept edits' -> 'Bypass permissions'"), [])
+        self.assertEqual(automation_chat.rendered_rows(
+            "REFUSED: the sidebar in x rendered NO chat rows at all in 6s"), [])
+        self.assertEqual(automation_chat.rendered_rows(""), [])
+
+    def test_an_alias_is_taken_only_when_ONE_row_stands_clear(self):
+        long_title = "QuickDictate listening stops intermittently"
+        self.assertEqual(
+            automation_chat.best_rendered_alias(long_title, ["QuickDictate", "Ask AI rollout"]),
+            "QuickDictate")
+        self.assertEqual(
+            automation_chat.best_rendered_alias("Resume Stackspire project",
+                                                ["Stackspire", "Slite changelog review"]),
+            "Stackspire")
+        # Nothing close: the actuator's honest refusal stands.
+        self.assertIsNone(automation_chat.best_rendered_alias(
+            long_title, ["Ask AI rollout", "Slite changelog review"]))
+        # Two rows fit equally well: a rename is recognised, never guessed.
+        self.assertIsNone(automation_chat.best_rendered_alias(
+            "Connections Architect burn-down resume", ["Connections", "Connections Architect"]))
+        self.assertIsNone(automation_chat.best_rendered_alias("anything", []))
+
+    def test_a_renamed_chat_is_pressed_under_the_name_the_app_shows(self):
+        calls = []
+
+        def fake(args, inst_dir):
+            calls.append(args)
+            if len(calls) == 1:
+                return 4, [self.REFUSAL]
+            return 0, ["MODE SET 'Accept edits' -> 'Bypass permissions' for 'QuickDictate'"]
+
+        with mock.patch.object(automation_chat, "_run_actuator", side_effect=fake):
+            said = automation_chat.set_mode_via_app(
+                {"sessionId": SID, "title": "QuickDictate listening stops intermittently",
+                 "instance": "another_meh", "metaPath": "x"},
+                {"instances": []}, force=True)
+        self.assertEqual(len(calls), 2, "exactly one retry, aimed at the rendered name")
+        self.assertEqual(calls[1][calls[1].index("-Title") + 1], "QuickDictate")
+        self.assertTrue(automation_chat.picker_line_ok(said), said)
+        self.assertIn("the app renders this chat as 'QuickDictate'", said)
+        # The app's own word is the verdict, so the chat is confirmed - no manual remedy left.
+        self.assertIn(SID, automation_chat.load_confirmed())
+
+    def test_a_refusal_with_no_plausible_alias_is_left_exactly_as_it_was(self):
+        refusal = (
+            "REFUSED: no sidebar row is named 'Ship the parser' in c:/x - a MATCH failure, not a "
+            "timing one: 2 rows are rendered right now (no kebab phrase could be read off this "
+            "window). Rows: 'Slite changelog review' | 'Ask AI rollout deployment'"
+        )
+        calls = []
+
+        def fake(args, inst_dir):
+            calls.append(args)
+            return 4, [refusal]
+
+        with mock.patch.object(automation_chat, "_run_actuator", side_effect=fake):
+            said = automation_chat.set_mode_via_app(
+                {"sessionId": SID, "title": "Ship the parser", "instance": "i", "metaPath": "x"},
+                {"instances": []}, force=True)
+        self.assertEqual(len(calls), 1, "no second press on a guess")
+        self.assertEqual(said, refusal[:160])
+        self.assertNotIn(SID, automation_chat.load_confirmed())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -677,10 +677,30 @@ def _idle_verdict(
     # on its own, and moving a chat that is about to resume rewrites a live transcript.
     walled = bool(last and last["api_error"]
                   and classify_limit(last["text"]) == "quota")
-    if not (completed or orphaned or walled):
+    # AN ENGINE THAT HAS WRITTEN NOTHING SINCE IT BOOTED IS NOT WORKING (2026-09-11).
+    # The orphan rule above says a PENDING TOOL CALL older than the engine is not in flight.
+    # The same evidence proves more than that: if the transcript's LAST record of any kind
+    # predates this engine, the engine has produced nothing at all since it started - no
+    # user turn was queued into it, no tool was called - so there is nothing in flight to
+    # lose. Only the shape differed live: 'Connections Architect burn-down resume' was cut
+    # off on its old account with a TOOL RESULT as the last record (the assistant still owed
+    # a reply), which is neither `completed` (type == user) nor `orphaned` (no tool_use on
+    # that record) nor `walled`. It read "alive and may be working" for the whole 20 minutes
+    # its freshly landed engine sat silent, so migrate refused to move it again and only
+    # terminate_live could - AgentHydra blocking its own follow-up move, for a chat whose
+    # every record was written hours earlier on another machine account.
+    #
+    # Tri-state-safe like the orphan rule: _predates() is False whenever either time is
+    # unknown, so an unreadable engine start leaves the chat WORKING rather than guessing.
+    resumed_silent = bool(
+        last and not completed and not orphaned and not walled
+        and _predates(last, engine_started)
+    )
+    if not (completed or orphaned or walled or resumed_silent):
         return None
     fe = _finished_evidence(records)
     return {"quiet_secs": quiet, "orphaned_tool_call": orphaned, "usage_wall": walled,
+            "resumed_silent": resumed_silent,
             **{k: fe[k] for k in (
                 "done_claim", "ends_with_question", "recap_present",
                 "last_assistant_text")}}
@@ -700,6 +720,10 @@ def _running_cause(pid, quiet: int, stalled: dict | None, idle: dict | None) -> 
     if idle.get("usage_wall"):
         return (f"process {pid} is alive but IDLE - it is parked at a USAGE WALL, so it cannot "
                 f"write until the account resets; quiet {idle['quiet_secs']}s")
+    if idle.get("resumed_silent"):
+        return (f"process {pid} is alive but IDLE - it has written NOTHING since it started, so "
+                f"the whole transcript predates it and nothing is in flight; quiet "
+                f"{idle['quiet_secs']}s and waiting for its next instruction")
     return (f"process {pid} is alive but IDLE - it finished its turn and has been quiet "
             f"{idle['quiet_secs']}s, so it is waiting for its next instruction, not working")
 

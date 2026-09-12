@@ -623,6 +623,79 @@ export function invalidateClaudeProcessCache(): void {
 }
 
 // ----------------------------------------------------------------------------
+// "Who just called me?" — the owner of a loopback TCP connection.
+// ----------------------------------------------------------------------------
+
+/**
+ * The pid of the process that owns the LOCAL TCP port `port` on this machine, or null.
+ *
+ * WHY THIS EXISTS: this daemon serves MCP over HTTP (`POST /api/mcp`, and mcp-register.ts
+ * registers exactly that transport), so `whoami` used to walk the DAEMON'S ancestry — the tray
+ * and whatever started it — and answer "this process does not look like it is running under
+ * Claude Code at all" for every caller alive. True of the daemon, useless to the agent asking,
+ * and it took `to: "here"` and check_my_usage down with it (2026-09-11). The caller is not
+ * unknowable: it opened a loopback socket, and the OS knows which process owns it. Resolve that
+ * pid and the EXISTING ancestry signals do the rest — the caller IS `claude.exe` under an
+ * instance dir.
+ *
+ * Never throws: every failure (no netstat, no lsof, unparseable output, two matching rows)
+ * resolves to null, which callers must treat as "could not tell", never as "nobody".
+ *
+ * ⛔ DELIBERATELY NOT CACHED. An ephemeral port is recycled, so a remembered answer can name a
+ * process that no longer owns that socket - and this answer decides which ACCOUNT an agent is,
+ * which is how `move_chats { to: "here" }` once landed 13 chats on the wrong one (2026-09-08,
+ * docs/AI_USAGE_SELFCHECK.md). A ~100ms table read per identity call is the cheap side of that
+ * trade; identity tools are called occasionally, not per tool call.
+ */
+export async function pidOwningLocalPort(port: number): Promise<number | null> {
+  if (!Number.isInteger(port) || port <= 0) return null
+  try {
+    return process.platform === 'win32' ? await windowsPortOwner(port) : await unixPortOwner(port)
+  } catch {
+    return null
+  }
+}
+
+/** The pid owning an ESTABLISHED TCP connection whose LOCAL port is `port`, read out of
+ *  `netstat -ano` output. Exported for its own test: this is a parser over another program's
+ *  text, which is exactly the kind of code that rots silently.
+ *
+ *  Exactly one owner or nothing. Two rows claiming one local port is a table we do not
+ *  understand, and guessing which one is the caller is how an identity answer becomes a lie. */
+export function netstatOwnerPid(stdout: string, port: number): number | null {
+  const pids = new Set<number>()
+  for (const line of stdout.split(/\r?\n/)) {
+    // "  TCP    127.0.0.1:54321   127.0.0.1:7787   ESTABLISHED   66800"
+    const m = /^\s*TCP\s+\S+:(\d+)\s+\S+:\d+\s+(\S+)\s+(\d+)\s*$/.exec(line)
+    if (!m || Number(m[1]) !== port || m[2] !== 'ESTABLISHED') continue
+    pids.add(Number(m[3]))
+  }
+  return pids.size === 1 ? [...pids][0]! : null
+}
+
+async function windowsPortOwner(port: number): Promise<number | null> {
+  const stdout = await runCaptureStdout(['netstat', '-ano', '-p', 'tcp'])
+  return stdout === null ? null : netstatOwnerPid(stdout, port)
+}
+
+async function unixPortOwner(port: number): Promise<number | null> {
+  const stdout = await runCaptureStdout([
+    'lsof',
+    '-nP',
+    `-iTCP:${port}`,
+    '-sTCP:ESTABLISHED',
+    '-Fp',
+  ])
+  if (stdout === null) return null
+  const pids = new Set<number>()
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = /^p(\d+)$/.exec(line.trim())
+    if (m) pids.add(Number(m[1]))
+  }
+  return pids.size === 1 ? [...pids][0]! : null
+}
+
+// ----------------------------------------------------------------------------
 // Ancestry walk — "which process launched me?" (core/self-identity.ts).
 // ----------------------------------------------------------------------------
 
@@ -652,17 +725,29 @@ const MAX_ANCESTRY_DEPTH = 12
  * (PowerShell absent, permission denied, malformed output, timeout) resolves to null, which
  * callers must treat as "could not enumerate", never as "no ancestors".
  */
-export async function processAncestry(startPid = process.pid): Promise<AncestorProcess[] | null> {
+export async function processAncestry(
+  startPid = process.pid,
+  opts: { includeSelf?: boolean } = {},
+): Promise<AncestorProcess[] | null> {
+  // `includeSelf` puts startPid itself at the head of the chain. The default is off because the
+  // original caller asks "who launched ME?" and already knows itself. It is on for the OTHER
+  // question this walk now answers - "who is the process that just called me?" (pidOwningLocalPort
+  // above, for MCP over HTTP), where the caller's OWN command line is the whole answer: it is the
+  // engine, `<instanceDir>/claude-code/<ver>/claude.exe`.
+  const includeSelf = opts.includeSelf === true
   try {
     return process.platform === 'win32'
-      ? await windowsAncestry(startPid)
-      : await unixAncestry(startPid)
+      ? await windowsAncestry(startPid, includeSelf)
+      : await unixAncestry(startPid, includeSelf)
   } catch {
     return null
   }
 }
 
-async function windowsAncestry(startPid: number): Promise<AncestorProcess[] | null> {
+async function windowsAncestry(
+  startPid: number,
+  includeSelf = false,
+): Promise<AncestorProcess[] | null> {
   // The loop lives in PowerShell so the whole chain costs ONE spawn (~300ms) instead of one per
   // hop. `$out` is forced to an array with @() — ConvertTo-Json serializes a single-element array
   // as a bare object otherwise, and the parse below would have to guess.
@@ -677,7 +762,8 @@ async function windowsAncestry(startPid: number): Promise<AncestorProcess[] | nu
     '  $proc = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$p"',
     '  if (-not $proc) { break }',
     '  $parent = $proc.ParentProcessId',
-    '  if ($i -gt 0) {',
+    // `-gt 0` skips the start process itself (the ancestors-only walk); `-ge 0` keeps it.
+    `  if ($i -${includeSelf ? 'ge' : 'gt'} 0) {`,
     '    $out += [pscustomobject]@{ ProcessId = $proc.ProcessId; Name = $proc.Name; ' +
       'ExecutablePath = $proc.ExecutablePath; CommandLine = $proc.CommandLine }',
     '  }',
@@ -715,7 +801,10 @@ async function windowsAncestry(startPid: number): Promise<AncestorProcess[] | nu
   }
 }
 
-async function unixAncestry(startPid: number): Promise<AncestorProcess[] | null> {
+async function unixAncestry(
+  startPid: number,
+  includeSelf = false,
+): Promise<AncestorProcess[] | null> {
   // One snapshot of every process, then walk the pid→ppid map in memory. `ps` has no ancestry
   // mode, and a per-hop `ps -p <pid>` would be a spawn each.
   const stdout = await runCaptureStdout(['ps', '-eo', 'pid=,ppid=,command='])
@@ -731,21 +820,26 @@ async function unixAncestry(startPid: number): Promise<AncestorProcess[] | null>
     })
   }
 
+  const entry = (pid: number, row: { command: string }): AncestorProcess => {
+    // `command` is the full argv; argv[0] is the executable path on both macOS and Linux.
+    const exe = row.command.split(/\s+/)[0] ?? null
+    return {
+      pid,
+      name: exe ? (exe.split('/').pop() ?? null) : null,
+      executablePath: exe,
+      commandLine: row.command,
+    }
+  }
   const out: AncestorProcess[] = []
   const seen = new Set<number>([startPid])
+  const self = byPid.get(startPid)
+  if (includeSelf && self) out.push(entry(startPid, self))
   let pid = byPid.get(startPid)?.ppid
   for (let i = 0; i < MAX_ANCESTRY_DEPTH && pid && !seen.has(pid); i++) {
     seen.add(pid)
     const row = byPid.get(pid)
     if (!row) break
-    // `command` is the full argv; argv[0] is the executable path on both macOS and Linux.
-    const exe = row.command.split(/\s+/)[0] ?? null
-    out.push({
-      pid,
-      name: exe ? (exe.split('/').pop() ?? null) : null,
-      executablePath: exe,
-      commandLine: row.command,
-    })
+    out.push(entry(pid, row))
     pid = row.ppid
   }
   return out

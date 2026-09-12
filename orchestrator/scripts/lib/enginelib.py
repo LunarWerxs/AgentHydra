@@ -155,9 +155,16 @@ def idle_report(match: dict, min_quiet_secs: int = IDLE_STOP_SECS,
         return {"idle": False, "reason": R_TOO_SOON,
                 "why": f"idle for only {quiet}s (needs {min_quiet_secs}s) - giving it time",
                 "quiet_secs": quiet, "needs_secs": int(min_quiet_secs)}
-    return {"idle": True, "reason": R_IDLE,
-            "why": (f"idle: finished its turn and quiet {quiet}s"
-                    + (" (pending call predates this engine)" if idle.get("orphaned_tool_call") else "")),
+    # SAY WHICH IDLE THIS IS. "finished its turn" is false for a chat that was cut off
+    # mid-turn and re-landed: its engine simply never wrote anything, which is a different
+    # (and, for a move, more reassuring) fact than a turn that ended cleanly.
+    if idle.get("resumed_silent"):
+        why = (f"idle: its engine has written nothing since it started - the whole transcript "
+               f"predates it, so nothing is in flight; quiet {quiet}s")
+    else:
+        why = (f"idle: finished its turn and quiet {quiet}s"
+               + (" (pending call predates this engine)" if idle.get("orphaned_tool_call") else ""))
+    return {"idle": True, "reason": R_IDLE, "why": why,
             "quiet_secs": quiet, "needs_secs": int(min_quiet_secs)}
 
 

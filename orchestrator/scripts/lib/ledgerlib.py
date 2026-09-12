@@ -53,7 +53,11 @@ VALID_KINDS = ("archive", "deliver", "surface", "migrate", "rename", "instance",
                # "unknown breaker kind 'terminate'" before a single chat could move. Its test
                # passed throughout because the test stubs note() with a lambda that accepts
                # any kind - see test_migrate_batch_resume.py, where that stub now validates.
-               "terminate")
+               "terminate",
+               # 2026-09-11: a permission prompt pressed through the actuator
+               # (unblock_prompts.press). Counting these is what turns "could not reach that
+               # chat's pane", re-queued in silence on every tick, into an incident.
+               "approval")
 
 # How long a writer may hold the state-file mutex before a waiter treats it as abandoned
 # (a crashed process must never wedge every future note() on this machine).

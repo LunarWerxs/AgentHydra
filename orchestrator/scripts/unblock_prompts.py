@@ -163,6 +163,9 @@ def find_stuck() -> list[dict]:
 # Below this much waiting, an unanswered tool call is far more likely a long command than a
 # prompt, so the row is never selected for it - the pane is only checked as it stands.
 SELECT_AFTER_SECS = 15 * 60
+# This many presses failing in a row for one chat stops being bad luck and becomes something a
+# person has to look at - it is raised as an incident rather than re-queued in silence.
+SURFACE_AFTER_FAILURES = 3
 
 
 def _row_quiet_secs(row: dict) -> float:
@@ -183,7 +186,40 @@ def _row_quiet_secs(row: dict) -> float:
     return 0.0
 
 
-def press(row: dict) -> dict:
+def _press_streak(row: dict, ok: bool, detail: str) -> int:
+    """Remember how this press went; return how many have now failed in a row for this chat.
+
+    ⛔ A PRESS THAT CANNOT REACH ITS PANE RE-QUEUES FOREVER AND SAYS NOTHING (2026-09-11,
+    seen twice from the standing overlord chat: `interview --apply` approved a chat and the
+    actuator answered exit 4 on both passes). Nothing counted those failures, so a chat that
+    can never be reached looks exactly like one that has not been tried yet, and the same
+    futile press comes round on every tick. One ledger row per press fixes both halves:
+    annotate(failure=True) files the incident the same way every other act in this toolbox
+    files one, and the count is what the report can finally say out loud. Bookkeeping never
+    fails a lane: any error here leaves the press's own verdict untouched."""
+    sid = str(row.get("sessionId") or row.get("id") or "")
+    if not sid:
+        return 0
+    try:
+        if ok:
+            ledgerlib.clear("approval", sid)  # it cleared: the streak is over
+            return 0
+        ledgerlib.note("approval", sid, note=f"press for '{row.get('title')}'"[:160])
+        ledgerlib.annotate("approval", sid, (detail or "press failed")[:160], failure=True)
+        return int(ledgerlib.check("approval", sid).get("attempts") or 0)
+    except Exception:  # a ledger hiccup must never change what the actuator said
+        return 0
+
+
+def press(row: dict, always_select: bool = False) -> dict:
+    """Press this chat's pending permission prompt through the actuator.
+
+    `always_select` is A PERSON ASKING FOR THIS CHAT (interview.py's approve branch): the
+    row selection flips what the owner is looking at, which is why an unattended lane earns
+    it only after SELECT_AFTER_SECS - but a person who just answered a question about THIS
+    chat has already decided where the window should be. Without it, an escalation answered
+    before that window elapsed never got the second attempt at all, and the answer the
+    person gave died as "could not reach that chat's pane"."""
     if not ACTUATOR.exists():
         return {**row, "ok": False, "outcome": f"actuator missing at {ACTUATOR}"}
 
@@ -210,18 +246,29 @@ def press(row: dict) -> dict:
             # selection, because that flips the owner's view of that window (every 5 minutes,
             # for every long-running command, was the first cut's behaviour).
             r = run(select=False)
-            if r.returncode == 4 and _row_quiet_secs(row) >= SELECT_AFTER_SECS:
+            if r.returncode == 4 and (always_select or _row_quiet_secs(row) >= SELECT_AFTER_SECS):
                 r = run(select=True)
     except Exception as err:  # a stuck chat is not worth crashing the lane over
         return {**row, "ok": False, "outcome": f"actuator error: {str(err)[:120]}"}
     said = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
     detail = said[-1][:180] if said else ""
-    return {**row, "ok": r.returncode == 0, "exit": r.returncode,
-            "outcome": ("approved - the chat carries on" if r.returncode == 0
-                        else "no prompt showing (it may have cleared)" if r.returncode == 3
-                        else "could not reach that chat's pane" if r.returncode == 4
-                        else "did NOT clear"),
-            "detail": detail}
+    ok = r.returncode == 0
+    # Exit 3 is "there was no prompt to press" - the chat is not stuck, the row was stale. That is
+    # not a press that failed, and counting it would file an incident about a chat that is fine.
+    streak = _press_streak(row, ok or r.returncode == 3, detail)
+    # ⛔ NAME THE FAILURE, DO NOT JUST LABEL IT. "could not reach that chat's pane" sent a
+    # whole session after the wrong thing: the actuator's own last line says WHICH window it
+    # drove and which rows it could see, and that line was being dropped into a `detail` field
+    # nobody printed. A bare refusal is not diagnosable; this one is.
+    outcome = ("approved - the chat carries on" if ok
+               else "no prompt showing (it may have cleared)" if r.returncode == 3
+               else f"could not reach that chat's pane - {detail}" if r.returncode == 4
+               else "did NOT clear")
+    if streak >= SURFACE_AFTER_FAILURES:
+        outcome += (f" [{streak} presses in a row have failed for this chat - filed as an "
+                    "incident; it will keep failing until someone looks]")
+    return {**row, "ok": ok, "exit": r.returncode, "outcome": outcome,
+            "failedStreak": streak, "detail": detail}
 
 
 def _run_context(argv: list[str]) -> str:

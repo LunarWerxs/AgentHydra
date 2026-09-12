@@ -113,12 +113,48 @@ The guard that closes the reproduced case: a host-session-file win whose chat is
 process genuinely hosting a live caller cannot have an archived host session.
 `resolveMoveTarget` then refuses `to: "here"` and demands an explicit instance.
 
-**It is not fully general** - a frozen launcher chat that is still open would
-still fool it. So:
+**That guard is not fully general** - a frozen launcher chat that is still open
+would still fool it.
 
-- **Never resolve "here" from `whoami` for a mutating action.** Name the target
-  instance, or prove the caller by matching its own session id against
-  `list_chats` (a `sessionId` equal to yours identifies the owning instance).
+### THE GENERAL ANSWER: ASK THE SOCKET, NOT THE PROCESS (2026-09-11)
+
+Every signal in the table describes the process running the detection, and over
+HTTP that process is the **daemon**. With the `CLAUDE_CODE_*` vars cleared (the
+mitigation above), the daemon has nothing left to read and walks its own parents
+- the tray, and whatever started that - so `whoami` answered *"this process does
+not look like it is running under Claude Code at all"* to a Claude Desktop agent
+that plainly was one. `to: "here"` was then refused for every caller on the
+machine, and `check_my_usage` reported the default login.
+
+The caller is not unknowable. It opened a **loopback socket**, and the OS knows
+which process owns it: Bun hands the route the peer's port, the connection table
+maps that port to a pid (`netstat -ano` / `lsof`, `core/process.ts`), and that
+pid IS the engine - `<instanceDir>/claude-code/<ver>/claude.exe`. The existing
+`ancestor-execpath` / `ancestor-user-data-dir` signals then identify it exactly,
+walking the CALLER's chain instead of the daemon's.
+
+What makes it trustworthy where the env route was not:
+
+- It is **per request**, so nothing can freeze to one chat's identity.
+- It is **unforgeable**: the route passes the lookup as a *function*, and JSON
+  cannot carry one, so a client sending `callerPid: 1234` is sending data, and
+  data is never an identity here.
+- Ambiguity answers **null**, not a guess: two rows claiming one local port, an
+  unreadable table, no `netstat` - all of them fall back to the old detection,
+  which says "could not tell" and keeps `to: "here"` refused.
+- The port→pid read is **deliberately uncached** (ports are recycled; a
+  remembered answer could name a process that no longer owns that socket). It
+  costs ~100ms, on top of the ~300ms ancestry walk, and only the identity tools
+  ever pay it.
+
+`ruledOut` says so in words whenever this is what happened: *"answered for the
+CALLING process (pid N), not for this daemon"*.
+
+So:
+
+- **Resolving "here" is safe only when the identity came from the caller itself**
+  - the socket route above, or a `sessionId` of yours found in `list_chats`.
+  Anything else: name the target instance.
 - **A human naming an instance overrules every detection**, including `exact`.
 - Launch the daemon with the `CLAUDE_CODE_*` identity vars cleared, so it cannot
   inherit and then confidently republish one chat's identity to everyone.

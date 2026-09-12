@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -93,6 +94,10 @@ REQUIRED_MODE = "Bypass permissions"  # the app's own label for bypassPermission
 # One picker attempt per chat per this long (the attempt selects the chat's row, which flips
 # the owner's view of that window); the lane itself runs every two minutes.
 MODE_RETRY_SECS = 10 * 60
+# How sure the rendered-name retry must be before it aims at a row the app named itself:
+# a clear score AND a clear gap to the runner-up (see best_rendered_alias).
+ALIAS_MIN_SCORE = 0.75
+ALIAS_MIN_MARGIN = 0.15
 # THE APP IS THE TRUTH FOR A RUNNING APP (owner, 2026-09-01: "I have a ton of chats set to
 # manual or accept edits, so it's clear you're not changing all of the chats"). A running app
 # holds every chat's mode in memory and never re-reads the file, so the disk stamp this lane
@@ -231,6 +236,49 @@ def title_for_row(row: dict) -> str:
         return ""
 
 
+_ROWS_MARK = ". Rows: "
+
+
+def rendered_rows(line: str) -> list[str]:
+    """The sidebar names the actuator says it CAN see right now, read out of its own
+    MATCH-failure refusal ("no sidebar row is named 'X' ... Rows: 'a' | 'b'"). Any other
+    line - a timing refusal, an ambiguity, a success - yields nothing, so a caller can only
+    ever act on rows the app actually rendered."""
+    if "no sidebar row is named" not in (line or "") or _ROWS_MARK not in line:
+        return []
+    tail = line.split(_ROWS_MARK, 1)[1]
+    return [m.group(1) for m in re.finditer(r"'([^']*)'", tail) if m.group(1).strip()]
+
+
+def best_rendered_alias(title: str, rows: list[str]) -> str | None:
+    """The ONE rendered row that is this chat under a different name, or None.
+
+    ⛔ THE APP RENAMES A LANDED CHAT UNDER US (live, 2026-09-11). migrate_batch moved six
+    chats; two came back `disk-only` because the picker aimed at the title the record
+    carried ('QuickDictate listening stops intermittently', 'Resume Stackspire project')
+    while the sidebar had already re-rendered them as 'QuickDictate' and 'Stackspire' - the
+    app derives a landed chat's display name from its transcript and re-saves it on its own
+    clock, so the disk title and the rendered name disagree for as long as that takes. The
+    refusal is honest ("a MATCH failure, not a timing one") and no amount of waiting fixes
+    it; automation_chat --force by hand fixed both on the first try minutes later, once the
+    record had caught up. That manual remedy is the defect: a move should not need it.
+
+    Scored in BOTH directions because either name may be the shorter one, and deliberately
+    refused unless ONE row stands clear: a rename is a near-certainty to recognise, never a
+    guess to make. Ambiguity keeps the original refusal, which is the honest answer."""
+    from migrate_chat import fuzzy_title_score  # local: migrate_chat imports this module too
+
+    scored = sorted(
+        ((max(fuzzy_title_score(r, title), fuzzy_title_score(title, r)), r) for r in rows),
+        key=lambda pair: pair[0], reverse=True,
+    )
+    if not scored or scored[0][0] < ALIAS_MIN_SCORE:
+        return None
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < ALIAS_MIN_MARGIN:
+        return None
+    return scored[0][1]
+
+
 def _actuator_args(row: dict, inst_dir: str, verify: str) -> list[str]:
     args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(MODE_ACTUATOR),
             "-Title", str(row.get("title") or ""), "-Instance", inst_dir,
@@ -349,8 +397,33 @@ def set_mode_via_app(row: dict, fleet: dict, force: bool = False) -> str:
     returncode, said = outcome
     said = _record_chip_lines(said, row)
     last = said[-1][:160] if said else f"exit {returncode}"
+    if returncode != 0:
+        # The app may simply be showing this chat under a name of its own (see
+        # best_rendered_alias). Aim once at that name before giving up, so a move never
+        # has to be finished by hand.
+        retried = _retry_under_rendered_name(row, inst_dir, verify, title, said)
+        if retried is not None:
+            returncode, last = retried
     _finalize_mode_attempt(sid, returncode, last)
     return last
+
+
+def _retry_under_rendered_name(row: dict, inst_dir: str, verify: str, title: str,
+                               said: list[str]) -> tuple[int, str] | None:
+    """One more press, aimed at the name the app itself rendered. Returns the retry's
+    (returncode, last line) or None when there was nothing to retry - an unambiguous
+    rename is the only case that qualifies, and the retry's own verdict stands on its own
+    (a failed retry reports the retry's words, never the first refusal's)."""
+    alias = best_rendered_alias(title, rendered_rows(said[-1] if said else ""))
+    if not alias or alias == title:
+        return None
+    outcome = _run_actuator(_actuator_args({**row, "title": alias}, inst_dir, verify), inst_dir)
+    if isinstance(outcome, str):
+        return None
+    returncode, retried = outcome
+    retried = _record_chip_lines(retried, row)
+    last = retried[-1][:160] if retried else f"exit {returncode}"
+    return returncode, f"{last} [the app renders this chat as '{alias}', not '{title}']"
 
 
 def _fetch_live_ids(fleet: dict) -> set:

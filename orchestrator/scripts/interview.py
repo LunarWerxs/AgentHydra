@@ -194,7 +194,11 @@ def _apply_approve(sid: str) -> dict:
     esc = approvallib.get_escalation(sid)
     if esc is None:
         raise ValueError("no queued approval escalation for this sessionId")
-    result = unblock_prompts.press(esc)
+    # always_select: a person just answered a question about THIS chat, so bringing its row
+    # up is their own doing, not a lane flipping the window under them (2026-09-11: without
+    # it an escalation answered inside the 15-minute window never got the second attempt and
+    # the answer died as "could not reach that chat's pane").
+    result = unblock_prompts.press(esc, always_select=True)
     if result.get("ok"):
         approvallib.resolve_escalation(sid)
     return {"ok": bool(result.get("ok")), "outcome": result.get("outcome") or "did not clear"}

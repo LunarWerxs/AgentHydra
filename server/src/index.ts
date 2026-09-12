@@ -80,7 +80,7 @@ import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
 import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   SERVER_INFO as MCP_SERVER_INFO,
-  TOOLS as MCP_TOOLS,
+  toolsForCaller as mcpToolsForCaller,
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import {
@@ -236,6 +236,22 @@ app.get('/api/health', (c) =>
 // (and why it cannot drift from the stdio server, and why it is stateless) is in mcp-http.mjs.
 // It lives under /api/* deliberately: that is where the loopback CSRF guard is mounted, and this
 // is the route where it matters most, because `tools/call` can launch instances and move chats.
+/** The pid of the process that sent this request, or null when it cannot be told. Bun exposes the
+ *  peer address through the server object Hono passes as `c.env`; everything after that is the OS
+ *  connection table. Every failure answers null - "could not tell" is a fine answer here, and a
+ *  guessed pid would become a confidently wrong identity. */
+async function callerPidOf(c: { env: unknown; req: { raw: Request } }): Promise<number | null> {
+  try {
+    const server = c.env as { requestIP?: (r: Request) => { port?: number } | null } | null
+    const port = typeof server?.requestIP === 'function' ? server.requestIP(c.req.raw)?.port : null
+    if (!port) return null
+    const { pidOwningLocalPort } = await import('./core/process')
+    return await pidOwningLocalPort(Number(port))
+  } catch {
+    return null
+  }
+}
+
 app.post('/api/mcp', async (c) => {
   let body: unknown
   try {
@@ -243,7 +259,15 @@ app.post('/api/mcp', async (c) => {
   } catch {
     body = PARSE_ERROR
   }
-  const ctx = { serverInfo: MCP_SERVER_INFO, tools: MCP_TOOLS, instructions: MCP_INSTRUCTIONS }
+  // WHO IS ASKING. Over HTTP the identity tools cannot read the caller from their own process -
+  // that process is this daemon - but the socket knows: Bun hands us the peer's port, and the OS
+  // maps it to the pid that opened it (core/process.ts). Resolved LAZILY, so only whoami and
+  // check_my_usage ever pay for the lookup, and cached per port so a keep-alive client pays once.
+  const ctx = {
+    serverInfo: MCP_SERVER_INFO,
+    tools: mcpToolsForCaller(() => callerPidOf(c)),
+    instructions: MCP_INSTRUCTIONS,
+  }
   const { status, json } = await handleMcpHttp(body, ctx, handleMcpRpc)
   return json === null ? c.body(null, status as 202) : c.json(json, status as 200)
 })
