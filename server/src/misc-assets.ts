@@ -30,6 +30,11 @@ import { APP_ROOT, DATA_DIR, IS_COMPILED, VERSION } from './config'
 /** The delivery actuator: the PowerShell that drives a desktop chat's own composer. */
 export const DELIVERY_ACTUATOR_FILE = 'Deliver-DesktopChat.ps1'
 
+/** The chat-management actuator: archive / unarchive / rename through the app's own controls.
+ *  Same defect, same day (2026-09-12), found the same way - a chat migrated between accounts
+ *  landed nameless and `chat_rename` answered ok:true over a PowerShell that had never run. */
+export const CHAT_MANAGER_FILE = 'Manage-DesktopChat.ps1'
+
 /**
  * Every file under misc\ that the RUNNING daemon opens by path.
  *
@@ -41,7 +46,7 @@ export const DELIVERY_ACTUATOR_FILE = 'Deliver-DesktopChat.ps1'
  * the `!IS_COMPILED` branch, so a compiled build never wants it. Embedding it would be weight with
  * no reader. If that guard ever goes, this list is where it belongs.
  */
-export const RUNTIME_MISC_FILES = [DELIVERY_ACTUATOR_FILE] as const
+export const RUNTIME_MISC_FILES = [DELIVERY_ACTUATOR_FILE, CHAT_MANAGER_FILE] as const
 
 /** Set by the generated release entrypoint (scripts/build.ts): filename -> embedded file path,
  *  readable with Bun.file(). Absent in every dev and test run, which is why this is a lookup and

@@ -20,14 +20,29 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isGenericChatTitle } from './chat-title'
+import { CHAT_MANAGER_FILE, resolveMiscAsset } from './misc-assets'
 import { findChatMetaPath } from './session-launch'
 
-const PS1 = join(import.meta.dir, '..', '..', 'misc', 'Manage-DesktopChat.ps1')
 const SPAWN_TIMEOUT_MS = 90_000
 
+// ⛔ NOT `join(import.meta.dir, '..', '..', 'misc', ...)`, which is what this was until
+// 2026-09-12 and which is BROKEN IN EVERY COMPILED BUILD: inside a `bun build --compile` exe
+// `import.meta.dir` is the virtual embedded root (`B:\~BUN\root` on Windows), so two `..`
+// hops land on `B:\` and the spawn asked for `B:\misc\Manage-DesktopChat.ps1`.
+//
+// It failed SILENTLY, and that is the part worth keeping: `powershell -File <missing>` prints
+// "The argument ... does not exist" and EXITS 0, so `uiRenameChat`'s `code === 0` reported
+// ok:true over a script that had never run. Measured live on a chat migrated between accounts
+// that landed nameless - the rename "succeeded" three times and the sidebar never changed.
+// resolveMiscAsset closes both halves: it returns a path that exists, or no path at all.
 async function runPs1(args: string[]): Promise<{ code: number; out: string }> {
+  const asset = await resolveMiscAsset(CHAT_MANAGER_FILE)
+  // A non-zero code is the contract every caller here already reads as failure. Never 0: that
+  // is exactly the false OK this guard exists to prevent.
+  if (!asset.path)
+    return { code: 1, out: asset.error ?? `misc\\${CHAT_MANAGER_FILE} could not be resolved` }
   const proc = Bun.spawn(
-    ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS1, ...args],
+    ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', asset.path, ...args],
     // A console spawn: windowsHide required (repo guardrail - only GUI spawns stay visible).
     { stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', windowsHide: true },
   )

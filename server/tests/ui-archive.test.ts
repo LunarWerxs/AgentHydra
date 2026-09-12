@@ -2,6 +2,9 @@
 // it may only fire on a real disk title rendered exactly once, and success is verified BY ID
 // on disk, never by title (the drill-cleanup law).
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { CHAT_MANAGER_FILE, RUNTIME_MISC_FILES } from '../src/misc-assets'
 import { parseListOutput, type UiArchiveDeps, uiArchiveChat, uiRenameChat } from '../src/ui-archive'
 
 function deps(over: {
@@ -191,4 +194,37 @@ test('two chats sharing the title, ALL already archived -> click, because none c
   expect(r.clicked).toBe(true)
   expect(r.verified).toBe(true)
   expect(calls).toContain('invoke:Real Chat Name')
+})
+
+// ⛔ THE ACTUATOR PATH, PINNED AT THE SOURCE. Until 2026-09-12 this module built its .ps1 path
+// with join(import.meta.dir, '..', '..', 'misc', ...), which is correct in a checkout and wrong
+// in every compiled build: inside a `bun build --compile` exe import.meta.dir is the virtual
+// embedded root, so two ..-hops land on B:\ and the spawn asked for B:\misc\...
+//
+// It could not be caught by the unit tests above, because they all inject `run`. And it failed
+// SILENTLY in production: `powershell -File <missing>` exits 0, so `code === 0` reported ok:true
+// over a script that never ran - a migrated chat's rename "succeeded" three times while the
+// sidebar never changed. So the guard is on the SOURCE, the same shape misc-assets.test.ts uses
+// for the build wiring, and it is the only thing standing between that regression and a reship.
+const UI_ARCHIVE_SRC = readFileSync(join(import.meta.dir, '..', 'src', 'ui-archive.ts'), 'utf8')
+
+test('the actuator path is resolved through misc-assets, never from import.meta.dir', () => {
+  const code = UI_ARCHIVE_SRC.split(/\r?\n/)
+    .filter((l) => !l.trimStart().startsWith('//'))
+    .join('\n')
+  expect(code).toContain('resolveMiscAsset')
+  expect(code).toContain('CHAT_MANAGER_FILE')
+  expect(code).not.toContain('import.meta.dir')
+})
+
+test('a misc file that cannot be resolved is a NON-ZERO code, never a silent ok', () => {
+  // The false OK is the half that made the wrong path invisible; pin it independently.
+  const code = UI_ARCHIVE_SRC.split(/\r?\n/)
+    .filter((l) => !l.trimStart().startsWith('//'))
+    .join('\n')
+  expect(code).toMatch(/if \(!asset\.path\)[\s\S]{0,200}code: [1-9]/)
+})
+
+test('the chat manager is on the list the build embeds, so a compiled exe carries it', () => {
+  expect(RUNTIME_MISC_FILES).toContain(CHAT_MANAGER_FILE)
 })
