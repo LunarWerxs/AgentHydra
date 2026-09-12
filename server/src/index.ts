@@ -893,18 +893,24 @@ writeInstanceInfo(boundPort, {
 // daemon (a hopped successor, an update relaunch mid-handover) is that daemon's and is left alone.
 // Until this, a pointer deleted by hand or overwritten by a pre-fix probe stayed wrong for as long
 // as this daemon lived, and every client on the machine dialled a dead port.
+// A tick that fails is a tick skipped (timer-callback-can-kill-the-daemon.mjs): the process exits
+// on an unhandled rejection, so the chain ends in .catch and the next tick is a minute away.
 const POINTER_REASSERT_MS = 60_000
-setInterval(() => {
-  void reassertInstancePointer(boundPort, () => ({
-    portableMode: portableModeEnabled(),
-    hideTrayIcon: hideTrayIconEnabled(),
-  })).then((verdict) => {
-    if (verdict === 'rewritten')
-      console.warn(
-        `[agenthydra] ${instanceFilePath()} was missing or named a dead daemon; re-asserted it for this one (pid ${process.pid}, port ${boundPort})`,
-      )
-  })
-}, POINTER_REASSERT_MS).unref()
+setInterval(
+  () =>
+    reassertInstancePointer(boundPort, () => ({
+      portableMode: portableModeEnabled(),
+      hideTrayIcon: hideTrayIconEnabled(),
+    }))
+      .then((verdict) => {
+        if (verdict === 'rewritten')
+          console.warn(
+            `[agenthydra] ${instanceFilePath()} was missing or named a dead daemon; re-asserted it for this one (pid ${process.pid}, port ${boundPort})`,
+          )
+      })
+      .catch(() => {}),
+  POINTER_REASSERT_MS,
+).unref()
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
 // port, not the configured one, so a hop off a busy 7787 does not leave the Python side talking
 // to whatever answers there. See orchestratorChildEnv.
