@@ -399,6 +399,32 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 `server/src/core/shared.ts`; the web mapping and deterministic defaults live in
 `web/src/lib/instance-appearance.ts`.
 
+## Known noise in an instance's own log
+
+Every Claude Desktop instance keeps its own `logs/main.log` under its profile folder. One line there
+is permanent, harmless, and not AgentHydra's:
+
+```
+[error] [Chrome Extension MCP] Registry verification failed for Edge: expected
+  ...\.claude-instances\<this instance>\ChromeNativeHost\com.anthropic.claude_browser_extension.json,
+  got ...\.claude-instances\<another instance>\ChromeNativeHost\...
+```
+
+Claude Desktop registers its browser-extension native host under ONE per-user registry key
+(`HKCU\SOFTWARE\Microsoft\Edge\NativeMessagingHosts\com.anthropic.claude_browser_extension`, and the
+Chrome twin), pointing at a manifest inside its own profile folder. Every instance re-registers that
+same key at startup, so whichever started last owns it and every other instance's verification
+"fails" against it, in both directions, on every start. Measured on this machine on 2026-09-12:
+1,687 registrations logged against 20 verification failures. It is the app's own behaviour with
+several profiles on one account; nothing in this repository touches native messaging, and no
+AgentHydra screen or tool surfaces an instance log, so there is nothing here to fix.
+
+Recorded because on 2026-09-07 an unrelated logout investigation read this line as evidence that
+AgentHydra had done something to the instance. It had not, and the whole logout question is settled
+from the app's own `main.log` (the `/logout` navigation) rather than from the daemon's log. The cost
+of the line is credibility: a permanent `[error]` that means nothing teaches a reader to skip the
+next one.
+
 ## Stack
 
 | Layer | Choice |
