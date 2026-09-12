@@ -24,7 +24,7 @@
  * It does not push. The pre-push gate decides that, with its own announcement.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -32,8 +32,20 @@ function git(...args: string[]): string {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
 }
 
+/** The OS's one true spelling of a path. On Windows a cwd can arrive as an 8.3 short name
+ *  (`C:\Users\RUNNER~1\...` on GitHub's runner) while git reports the same repo by its long name,
+ *  and `relative()` between the two climbs to the drive root instead of answering `a.txt`. A path
+ *  that no longer exists (a deleted file listed as --mine) keeps its given spelling. */
+function canonical(p: string): string {
+  try {
+    return realpathSync.native(p)
+  } catch {
+    return p
+  }
+}
+
 function normalize(root: string, p: string): string {
-  const abs = isAbsolute(p) ? p : resolve(process.cwd(), p)
+  const abs = canonical(isAbsolute(p) ? p : resolve(process.cwd(), p))
   return relative(root, abs).replace(/\\/g, '/')
 }
 
@@ -101,7 +113,7 @@ export function buildMessage(
 
 function main(): number {
   const args = parseArgs(process.argv.slice(2))
-  const root = git('rev-parse', '--show-toplevel').trim()
+  const root = canonical(git('rev-parse', '--show-toplevel').trim())
   if (args.mine.length === 0) {
     console.error(
       'save-bundle: --mine <path>... is required (what THIS session edited). Nothing staged.',

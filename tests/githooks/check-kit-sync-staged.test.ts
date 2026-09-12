@@ -25,7 +25,15 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REPO_ROOT } from '../repo-root'
@@ -96,7 +104,11 @@ describe('.githooks/pre-commit: the kit-sync guard covers both vendored targets 
   let offender: string
 
   beforeEach(() => {
-    sandbox = mkdtempSync(join(tmpdir(), 'ah24-hook-'))
+    // realpathSync.native: on GitHub's Windows runner the temp dir is an 8.3 short path (RUNNER~1)
+    // and git runs the hook from the worktree's LONG path, so the stub kit's "differs" line and
+    // the guard's staged paths never matched and the drift passed the commit. First seen the day
+    // this suite first ran in CI at all (2026-09-12).
+    sandbox = realpathSync.native(mkdtempSync(join(tmpdir(), 'ah24-hook-')))
     repo = join(sandbox, 'repo')
     kit = join(sandbox, 'lunarwerx-ui')
     mkdirSync(join(repo, '.githooks'), { recursive: true })

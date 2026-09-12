@@ -17,7 +17,15 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -83,7 +91,9 @@ describe('.githooks/pre-push: a public remote is announced and refused', () => {
   let origin: string
 
   beforeEach(() => {
-    sandbox = mkdtempSync(join(tmpdir(), 'ah-prepush-'))
+    // realpathSync.native: GitHub's Windows runner hands out an 8.3 temp path (RUNNER~1) while git
+    // reports the worktree by its long name, and every path comparison in a hook test then misses.
+    sandbox = realpathSync.native(mkdtempSync(join(tmpdir(), 'ah-prepush-')))
     repo = join(sandbox, 'repo')
     origin = join(sandbox, 'origin')
     mkdirSync(join(repo, '.githooks'), { recursive: true })

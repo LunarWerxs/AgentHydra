@@ -10,7 +10,16 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REPO_ROOT } from '../repo-root'
@@ -71,7 +80,10 @@ describe('.githooks/commit-msg: a bundle commit names what it swept', () => {
   let repo: string
 
   beforeEach(() => {
-    sandbox = mkdtempSync(join(tmpdir(), 'ah-bundle-'))
+    // realpathSync.native: GitHub's Windows runner hands out an 8.3 temp path (RUNNER~1) while git
+    // reports the worktree by its long name; save-bundle.ts canonicalises too, this keeps the
+    // sandbox honest on its own.
+    sandbox = realpathSync.native(mkdtempSync(join(tmpdir(), 'ah-bundle-')))
     repo = join(sandbox, 'repo')
     mkdirSync(join(repo, '.githooks'), { recursive: true })
     writeFileSync(join(repo, '.githooks', 'commit-msg'), readFileSync(REAL_HOOK))
@@ -191,6 +203,24 @@ describe('.githooks/commit-msg: a bundle commit names what it swept', () => {
         const r = saveBundle(repo, '--mine', 'a.txt', 'b.txt')
         expect(r.status).toBe(2)
         expect(r.output).toContain('nothing to sweep')
+      },
+      HOOK_TEST_TIMEOUT,
+    )
+
+    test(
+      'a cwd spelled differently from the path git reports still resolves --mine (8.3 names, junctions)',
+      () => {
+        // GitHub's Windows runner runs from C:\Users\RUNNER~1\... while `git rev-parse
+        // --show-toplevel` answers the long name, and `relative()` between the two climbed to the
+        // drive root: every --mine path read as "not dirty". A junction (symlink elsewhere) is the
+        // same shape on any machine, so this proves the canonicalisation without an 8.3 volume.
+        writeFileSync(join(repo, 'c.txt'), 'c\n')
+        const alias = join(sandbox, 'alias')
+        symlinkSync(repo, alias, process.platform === 'win32' ? 'junction' : 'dir')
+        const r = saveBundle(alias, '--mine', 'a.txt', '--dry-run')
+        expect(r.status).toBe(0)
+        expect(r.output).toContain('Mine:\n  a.txt')
+        expect(r.output).toContain('Swept:\n  b.txt\n  c.txt')
       },
       HOOK_TEST_TIMEOUT,
     )
