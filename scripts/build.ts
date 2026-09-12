@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 /**
  * Build one self-contained AgentHydra executable. The generated compile-only entrypoint embeds
  * every Vite output, then loads server/src/main.ts. No web/ or misc/ sidecars are required.
@@ -13,6 +13,9 @@ import { dirname, join, relative, resolve } from 'node:path'
  */
 import { $ } from 'bun'
 import pkg from '../package.json'
+// ONE list, shared with the runtime that writes these files out again (server/src/tray-toolkit.ts).
+// Two copies of a filename list is how an app ends up embedding a file nothing reads.
+import { TRAY_TOOLKIT_FILES } from '../server/src/tray-toolkit.ts'
 
 const ROOT = join(import.meta.dir, '..')
 const TMP = join(ROOT, 'tmp', 'release-build')
@@ -85,7 +88,29 @@ function buildStamp(): { commit?: string; builtAt?: string } {
   return { builtAt }
 }
 
-function writeReleaseEntrypoint(): string {
+/**
+ * The tray host, its config and its icon, embedded so a SINGLE-FILE build still has a tray icon.
+ *
+ * ⛔ It did not, until 2026-09-11, and the owner was right to call that a bug rather than a
+ * limitation: the exe embedded every Vite asset and nothing from misc\, so the daemon's own
+ * `startTrayHostIfMissing` skipped with 'no-tray-toolkit' on every run and the app told the person
+ * to download a different artifact instead. 340 KB of Win32 binary is not a reason to ship an app
+ * with no icon, no Quit and no supervisor. A missing file here FAILS the build for the same reason.
+ */
+function trayToolkitPaths(embedTray: boolean): string[] {
+  if (!embedTray) return []
+  return TRAY_TOOLKIT_FILES.map((name) => {
+    const path = join(ROOT, 'misc', name)
+    if (!existsSync(path))
+      throw new Error(
+        `cannot build: ${path} is missing. A build without the tray toolkit ships an app that can ` +
+          'never show its icon - fix the file (the kit syncs misc\\, see lunarwerx-ui) or say so here.',
+      )
+    return path
+  })
+}
+
+function writeReleaseEntrypoint(embedTray: boolean): string {
   rmSync(TMP, { recursive: true, force: true })
   mkdirSync(TMP, { recursive: true })
   const entry = join(TMP, 'entry.ts')
@@ -99,14 +124,29 @@ function writeReleaseEntrypoint(): string {
     `/${relative(webRoot, file).replaceAll('\\', '/')}`,
     `asset${index}`,
   ])
+  const trayFiles = trayToolkitPaths(embedTray)
+  const trayImports = trayFiles.map(
+    (file, index) =>
+      `import tray${index} from ${JSON.stringify(importPath(entry, file))} with { type: "file" };`,
+  )
+  const trayBlock =
+    trayFiles.length === 0
+      ? ''
+      : `
+(globalThis as { __AGENTHYDRA_EMBEDDED_TRAY__?: Readonly<Record<string, string>> })
+  .__AGENTHYDRA_EMBEDDED_TRAY__ = Object.freeze({
+${trayFiles.map((file, index) => `  ${JSON.stringify(basename(file))}: tray${index},`).join('\n')}
+});
+`
   writeFileSync(
     entry,
-    `${imports.join('\n')}
+    `${[...imports, ...trayImports].join('\n')}
 
 (globalThis as { __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>> })
   .__AGENTHYDRA_EMBEDDED_WEB__ = Object.freeze({
 ${routes.map(([route, asset]) => `  ${JSON.stringify(route)}: ${asset},`).join('\n')}
 });
+${trayBlock}
 (globalThis as { __AGENTHYDRA_RELEASE_BUILD__?: boolean }).__AGENTHYDRA_RELEASE_BUILD__ = true;
 // Stamped here because a compiled binary can be copied anywhere: asking git at runtime would
 // describe whatever checkout the exe was dropped into, not the build. Read by
@@ -202,7 +242,7 @@ if (!process.argv.includes('--skip-web')) {
 }
 
 console.log('→ compile daemon + embedded web app')
-const entry = writeReleaseEntrypoint()
+const entry = writeReleaseEntrypoint(windowsTarget)
 try {
   if (windowsTarget) {
     if (targetFlag) {

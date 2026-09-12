@@ -115,6 +115,7 @@ import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './s
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
 import { startTrayInvariant } from './tray-invariant'
+import { materializeTrayToolkit } from './tray-toolkit'
 import { updateProgress } from './update-progress'
 import { applyUpdate, checkForUpdate } from './updater'
 import { getUsageSettings, setUsageSettings, startUsageRefresh } from './usage-refresh'
@@ -887,21 +888,35 @@ setOrchestratorDaemonUrl(daemonSelfUrl)
 // before Bun.serve() starts accepting connections, so no request can observe the empty initial []
 // declared above.
 allowedApiOrigins = computeAllowedApiOrigins(boundPort)
-// Say ONCE that this build has no tray icon. The single-file .exe carries no misc\ sidecar, so
-// misc\lunarwerx-tray.exe cannot exist and no tray icon can ever appear whatever the in-app
-// setting says (release.yml's asset table states this, but only on the Releases page - the .exe
-// is the bigger, more obvious download and nothing at the moment of RUNNING it admits the
-// difference). The build is also --windows-hide-console, so a console.log here reaches nobody;
-// an OS toast is the only channel that actually lands. Gated three ways so it stays quiet:
-// IS_COMPILED is false in every dev and test run, so this is a true no-op under `bun test`;
-// isRelaunchSuccessor() skips the auto-update hop, which happens every few days; and the settings
-// flag means a person who knows and doesn't care is told exactly once, never again.
-if (IS_COMPILED && !isRelaunchSuccessor() && !existsSync(join(APP_ROOT, 'misc'))) {
+// EVERY BUILD CARRIES ITS TRAY (owner, 2026-09-11: a compiled exe without one "needs to be
+// fixed"). The single-file exe has no misc\ sidecar, so it writes the host, its config and its icon
+// out of its own binary on first run (tray-toolkit.ts) and the rest of this file treats that copy
+// exactly like a sidecar. This used to be the place that told the person their download had no tray
+// icon and to go fetch a different artifact - a toast instead of a feature.
+const trayToolkit = await materializeTrayToolkit({
+  appRoot: APP_ROOT,
+  compiled: IS_COMPILED,
+  stateDir: DATA_DIR,
+  version: VERSION,
+  exePath: process.execPath,
+})
+if (trayToolkit.wrote.length > 0)
+  console.log(
+    `[agenthydra] placed the tray toolkit in ${trayToolkit.dir} (${trayToolkit.wrote.join(', ')})`,
+  )
+// The ONLY honest toast left: a compiled build that could not place it. The binary is
+// --windows-hide-console, so a console.log reaches nobody; gated on the settings flag so a person
+// who cannot fix it is told once, not every boot.
+if (IS_COMPILED && !isRelaunchSuccessor() && trayToolkit.dir === null) {
+  console.error(
+    `[agenthydra] no tray host available: ${trayToolkit.reason}`,
+    trayToolkit.error ?? '',
+  )
   if (getSetting('no_tray_build_notified') !== '1') {
     setSetting('no_tray_build_notified', '1')
     void sendOsNotification({
-      title: 'AgentHydra has no tray icon in this build',
-      body: 'This is the single-file .exe. For the tray icon and the auto-restart supervisor, download the .zip release instead.',
+      title: 'AgentHydra could not start its tray icon',
+      body: `The tray host could not be placed (${trayToolkit.reason}). The app is running, but it has no icon and no Quit - see the log beside it.`,
     })
   }
 }
@@ -916,6 +931,7 @@ void startTrayHostIfMissing({
   appRoot: APP_ROOT,
   compiled: IS_COMPILED,
   hideTray: hideTrayIconEnabled,
+  toolkitDir: trayToolkit.dir,
 })
   .then((r) => {
     if (r.start) console.log(`[agenthydra] started the tray host (${r.exe}) - nothing else had`)
@@ -937,7 +953,10 @@ void startTrayHostIfMissing({
 // ambiguity resolves towards staying alive - see tray-invariant.ts.
 startTrayInvariant({
   compiled: IS_COMPILED,
-  hasTrayToolkit: existsSync(join(APP_ROOT, 'misc')),
+  // A single-file build now HAS a toolkit (materialized above), so this invariant covers it too -
+  // which is the point: before, `existsSync(APP_ROOT/misc)` was false for every compiled exe, so
+  // the one build most people run was exempt from "never run without an icon".
+  hasTrayToolkit: trayToolkit.dir !== null,
   hideTray: hideTrayIconEnabled,
   trayRunning: trayHostRunning,
   restartTray: async () => {
@@ -945,6 +964,7 @@ startTrayInvariant({
       appRoot: APP_ROOT,
       compiled: IS_COMPILED,
       hideTray: hideTrayIconEnabled,
+      toolkitDir: trayToolkit.dir,
     })
   },
   graceMs: 5_000,
