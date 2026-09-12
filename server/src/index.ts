@@ -70,6 +70,7 @@ import { app } from './http-app'
 import {
   clearInstanceInfo,
   findLiveInstance,
+  POINTER_DIR,
   readInstanceInfo,
   singleInstanceProbeAttempts,
   updateInstanceInfo,
@@ -992,6 +993,14 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
 const moved = boundPort !== PORT ? `  (port ${PORT} was busy)` : ''
 console.log(`[agenthydra] http://${HOST}:${boundPort}${moved}`)
 console.log(`[agenthydra] state: ${DB_PATH}`)
+// A side-run says so, out loud, on the line after its state: its store is somewhere else, so it
+// deliberately did NOT take the machine-wide pointer every client resolves the daemon through, and
+// no tool on this machine will find it. That is the correct behaviour and it is also surprising, so
+// it is printed rather than left for someone to deduce. See IS_PRIMARY_INSTALL in instance.ts.
+if (POINTER_DIR !== CONFIG_DIR)
+  console.log(
+    `[agenthydra] side-run: this daemon's pointer is ${join(POINTER_DIR, 'runtime.json')}, and the machine-wide one was left alone`,
+  )
 // Loud on purpose. This line only prints when a second state directory exists, and the whole cost
 // of that situation is someone not knowing about it (see resolveDataDir in config.ts).
 if (DATA_DIR_NOTICE) console.warn(`[agenthydra] WARNING: ${DATA_DIR_NOTICE}`)

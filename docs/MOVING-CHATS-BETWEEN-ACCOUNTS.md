@@ -66,18 +66,84 @@ tray icon and the fair share first), then reading two working chats' pids out of
   mid-turn keeps its reply staged; its result carries `resume.retry`, the exact command. Read
   each result's `resume` - a landed chat with `resume.delivered: false` is moved but has not
   been told to carry on.
+  - A delivery that was ATTEMPTED and FAILED is **retried once automatically** (2026-09-12).
+    The retry RE-STAGES first, and that is the whole point: a failed row is no longer
+    `staged`, so the retry a person reaches for - `courier --yes --only <id>` - answers
+    "nothing staged - the courier has nothing to deliver" and READS AS SUCCESS while doing
+    nothing. A row the courier SKIPPED is left alone: a mid-turn chat and a tripped breaker
+    are deliberate deferrals, and hammering them is the cycle the breaker exists to end.
+  - ⛔ **A COMPILED BUILD COULD NOT DELIVER AT ALL until 2026-09-12**, so `resume` silently
+    did nothing on one: the single-file exe embedded the web assets and the tray but not
+    `misc\Deliver-DesktopChat.ps1`, and the daemon answered `delivery actuator missing at
+    <dist>\misc\...` by BOTH routes (the composer route IS that script, and the peer route
+    is refused by the same endpoint first). The build now embeds it or fails. If you meet
+    that error, the daemon predates the fix - see `server/src/misc-assets.ts`.
 - **`terminate_live`** is a person's word to KILL the engine of a chat refused for being alive
   (working, or quiet but inside its window) and move it anyway. It is for the account that
   will hit its wall before the turn ends - the turn dies there regardless, holding everything
   it had not saved. The transcript survives; a tool result still in flight does not, so say so
   in `resume`. `force` never implies it: `force` overrides a hold, nothing more. A hold or the
   breaker is never killed through.
+- **A detached batch's report does not survive a daemon RESTART** (2026-09-12). Operation
+  records live in the daemon process that ran them, while the batch's child process outlives
+  a restart and finishes its work orphaned - so the chats move and the report vanishes. A
+  poll now answers `reason: 'daemon-restarted'` and names when the daemon started. ⛔ On that
+  answer do NOT re-fire the move: read the toolbox's ledger and check `list_chats` for what
+  actually landed.
 - **Check the account first with `list_chats`**, not `list_sessions` (which missed one of
   Martin's four chats behind its 7-day default) and not a dry-run move. If `list_chats` answers
   with an HTML-instead-of-JSON error, the running daemon is older than the tool: rebuild and
   restart it.
 - By hand, the same thing is `courier --yes --only <id> --only <id>` for the replies (several
   ids, one run, no icon needed) and `migrate_batch ... --terminate-live --resume "..."`.
+
+## Moving a CODEX chat: a different mechanism, and not an MCP tool
+
+`move_chat` and `move_chats` are CLAUDE. A Codex chat cannot move that way, and the reason is not
+an omission: a Codex thread belongs to the home it was written in, and Codex has no verb that
+re-homes one. AgentHydra does it by copy, verify, then archive, driven from the Codex instances
+table in the web UI over two routes:
+
+```
+GET  /api/codex-instances/:id/move-chats?targetId=<destination>   # plan only, moves nothing
+POST /api/codex-instances/:id/move-chat                           # one reviewed chat
+```
+
+The plan lists every active chat in the source home with its title, its folder and the account
+identity at both ends. The move then copies the rollout under a fresh id, imports it into the
+destination, confirms it really landed, and only then archives the source.
+
+**There is deliberately no `move_codex_chat` MCP tool.** The plan exists to be READ by a person
+first, and the destructive half only accepts a chat that came back from a plan, carrying its
+`updatedAt` and both account ids, so a stale or unreviewed request is refused rather than guessed
+at.
+
+### What it refuses, and what an interruption leaves behind
+
+Every refusal happens at planning time, before anything connects:
+
+- an unfinished CLI turn, even with the desktop stopped;
+- an unknown process state, or a login that changed under the plan;
+- a destination that is the same home as the source;
+- a transcript that is archived, edited since the plan, or outside the home;
+- a corrupt move history, which prevents any copy rather than being quietly repaired.
+
+The ORDER of the remaining steps is chosen so an interruption is readable rather than lossy:
+
+- a failed import keeps the copy on disk and never archives the source;
+- a failed archive retries the SAVED copy instead of copying again, so a repeat cannot create a
+  duplicate;
+- an edit during the import keeps both chats and refuses the stale retry;
+- failed destination verification preserves the original untouched.
+
+The worst case is two readable chats. It is never zero.
+
+### The copy keeps its DISPLAYED history, which is not the same as keeping its messages
+
+`copyCodexTranscript` rewrites the identity in `session_meta` and in every `thread_id`, and carries
+paginated ordinals and `item-completed` events across untouched. Downgrading `history_mode` would
+be simpler and is wrong: Codex silently drops the displayed items while the model messages sit
+intact on disk, so the moved chat opens LOOKING empty and reads as a failed move.
 
 ---
 

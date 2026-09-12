@@ -9,19 +9,44 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **A Codex chat moves between accounts, and the copy is verified before the original is archived**
+  (`server/src/core/codex-chat-move.ts`, `core/codex-transcript-copy.ts`, `core/codex-rpc.ts`, the
+  routes `GET /api/codex-instances/:id/move-chats` and `POST /api/codex-instances/:id/move-chat`,
+  and four suites). Codex itself has no move: a thread belongs to the home it was written in. So
+  this copies the rollout under a fresh id, imports it into the destination, confirms it really
+  landed, and only then archives the source, which means an interrupted move leaves two readable
+  chats rather than none.
+
+  - **The copy keeps its DISPLAYED history, not merely its model messages.** Paginated ordinals and
+    `item-completed` events are carried across untouched, because downgrading `history_mode` makes
+    Codex silently drop the items from view while the model messages sit intact on disk: a chat that
+    looks empty and is not.
+  - **Every rail refuses BEFORE it connects.** An unfinished CLI turn, an unknown process state, a
+    changed login, a destination that is the same home, an archived or out-of-home transcript, and a
+    corrupt move history each stop the move at planning time. A failed import keeps the copy and
+    never archives the source; a failed archive retries the saved copy instead of copying again; an
+    edit during the import keeps both chats and refuses a stale retry.
+
+- **Codex usage is read per instance, through the same paths that read Claude's**
+  (`server/src/usage-service.ts`, `usage-refresh.ts`, `routes/usage.ts`, `core/codex-account.ts`,
+  `web/src/components/UsageBadge.vue`). `checkUsageForCodex` is shared by the manual refresh, the
+  fleet sweep and the instance routes, so a ChatGPT-authed Codex home reports its own remaining
+  quota instead of nothing at all. A home that is not ChatGPT-authed drops its cached reading rather
+  than serving a stale one, and a logout clears it.
+
 - **DeepSeek Harness homes are managed instances: launch, open, stop, and one home per account**
   (`server/src/core/dsh-instances.ts` + its suite, `server/src/config.ts`, `server/src/routes/
   instances.ts`, `server/src/core/instance-numbers.ts`, `server/src/transcript.ts`,
   `web/src/components/DshInstancesSection.vue`, the API client and the locale). A "DeepSeek
-  instances" table now sits under the Codex one, listing every `DSH_HOME` on the machine — the
-  default `~/.dsh` first, then any created here — with whether a server is serving it, on which
+  instances" table now sits under the Codex one, listing every `DSH_HOME` on the machine - the
+  default `~/.dsh` first, then any created here - with whether a server is serving it, on which
   port, and how many chats are in it. Launching starts `dsh web` HIDDEN and opens its chromeless
   window; stopping kills the listener; the home, its chats and its credentials are untouched by
   either.
 
   - **⛔ THE SERVER'S URL NEVER LEAVES THE DAEMON.** `dsh web` prints a one-time `?token=` that IS
     the session. So the daemon reads it out of the harness's own log, opens the window itself, and
-    answers with an outcome — no route returns it, the SPA never holds it, and "open" is an action
+    answers with an outcome - no route returns it, the SPA never holds it, and "open" is an action
     rather than a link. For the same reason there is no login verb and nothing here opens
     `.credentials.yaml`: signing in is the user's own step.
   - **It sees a server it did not start.** The harness's own desktop wrapper records its port in
@@ -30,49 +55,31 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
     the live one on this machine: `#62 DeepSeek Harness · Serving port 3080 · 2 chats`.
   - **Every home is indexed, not just the default** (`dshInstanceStores()`, the DSH twin of
     `codexInstanceStores()`). A second account's conversations would otherwise be invisible to
-    listing, search and analytics — the exact hole config.ts's CODEX_HOME comment warns about, which
+    listing, search and analytics - the exact hole config.ts's CODEX_HOME comment warns about, which
     is why `deepseek-harness` joins BUILT_IN_TOOL_IDS: the indexer asks the registry, once.
   - **The default home is listed but never managed.** It is the machine's own install: it can be
-    read, launched and stopped, and delete refuses unconditionally — no confirm string unlocks it.
+    read, launched and stopped, and delete refuses unconditionally - no confirm string unlocks it.
     Deleting a home AgentHydra did make needs the name typed back AND the path to be inside our own
     instances directory, so a hand-edited registry cannot be turned into a delete of somewhere else.
   - Numbers come from the one sequence desktop, CLI and Codex instances already share (`dsh` is its
     fourth kind), so `#62` means the same thing in the table, the API and the MCP tools.
 
-### Changed
-
-- **"Open the transcript file" is no longer offered for a session whose file is not prose**
-  (`web/src/lib/session-labels.ts`, `web/src/components/SessionsView.vue`, `server/src/routes/
-  sessions.ts`). A DeepSeek Harness log is a real file worth copying and locating, and it is
-  Zstandard frames — so handing it to an editor produced a screen of binary that reads as a
-  corrupted session. The action is hidden for those sources and the route says why in its 409,
-  pointing at the readable exports that sit beside it. A second compiler-checked capability map
-  (`SOURCE_FILE_IS_TEXT`), because "has a file" and "that file is text" have different answers:
-  OpenCode and Hermes have no file at all, DSH has one that simply is not prose.
-
-- **The dispatched and rate-limited filters disable themselves off CLAUDE-ONLY, not off a list**
-  (`web/src/components/SessionsView.vue`). Both facts exist only for Claude sessions, and the
-  hand-written "codex or opencode" list had gone stale twice as sources were added — Hermes in
-  September, DeepSeek this week — leaving two filters enabled that could only ever return nothing.
-
-### Added
-
 - **DeepSeek Harness (`@deepseek-ai/dsh`) is a first-class session source** (`server/src/
   dsh-sessions.ts` and its suite, plus `agent-catalog.ts`, `types.ts`, `transcript.ts`,
   `sessions.ts`, `session-search.ts`, `session-export.ts`, `analytics.ts`, `pricing.ts`, `mcp.ts`
   and the web's label/filter/chart maps). Its chats now list, search, tail, export and PRICE
-  alongside Claude, Codex, OpenCode and Hermes — read straight off `~/.dsh` (or `$DSH_HOME`, the
+  alongside Claude, Codex, OpenCode and Hermes - read straight off `~/.dsh` (or `$DSH_HOME`, the
   harness's own override precedence), with nothing to configure and nothing written back.
 
   It is a sixth reader rather than a catalog row claiming someone else's format because the store is
   a third shape: one file per session like Claude's, but the bytes are **multi-frame Zstandard**, so
   every generic path that opens a transcript and reads lines would have got binary and silently
-  found nothing — `Bun.file().text()` on those bytes does not throw, it returns mojibake, and the
+  found nothing - `Bun.file().text()` on those bytes does not throw, it returns mojibake, and the
   session would have listed with a garbage title and an empty transcript rather than erroring. Read
   out of the harness's OWN shipped source (0.1.5-rc.1), not inferred from one transcript:
 
   - **The listing is cheap because the harness already did the work.** `storages/session_projcache/`
-    is its own materialized view of each log — title, cwd, created-at, token totals, last prompt —
+    is its own materialized view of each log - title, cwd, created-at, token totals, last prompt  - 
     so listing N sessions costs N small JSON reads instead of N decompressions. It is treated as the
     cache it is: every field re-derives from the log, and a session with no projection still lists
     by decoding its header.
@@ -80,24 +87,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
     backend documents crash recovery, so the last frame on disk can be half-written; a failed decode
     falls back to the longest prefix that ends on a frame boundary, which costs nothing in the
     normal case because the normal case succeeds first time.
-  - **Archived state is real**, read from the harness's own `workspace.json` — the thing the
+  - **Archived state is real**, read from the harness's own `workspace.json` - the thing the
     `foreign` lane structurally cannot do, where every adapter hardcodes `archived: false`.
   - **The transcript shows the conversation and not the bookkeeping.** Fifty-odd event types exist;
     four carry who-said-what. The harness's injected runtime-context snapshots arrive as user
-    messages with `source.kind: 'plugin'` and are dropped — showing them would put "Current DSH file
+    messages with `source.kind: 'plugin'` and are dropped - showing them would put "Current DSH file
     policy: workspace-write…" on screen as though the user had typed it.
   - **Spend is per TURN, a first for a non-Claude source.** OpenCode and Hermes hand back one
     aggregate and land a whole session on one day; DSH timestamps every assistant message, so its
     turns are apportioned to the days and hours they happened in. ⛔ Its counts are DISJOINT
     (`inputTokens` is uncached input only, cache reads reported separately), which its own type
-    documents and which this reader relies on — folding cache reads back into input would
+    documents and which this reader relies on - folding cache reads back into input would
     double-count most of a long session.
   - **`deepseek-flash` and `deepseek-v4-pro` are priced** from DeepSeek's published rates (checked
     2026-09-12), because the downloaded LiteLLM catalog has no `deepseek-flash` key at all and every
     harness session would otherwise have read UNPRICED forever. Cache rates are absolute, not
     derived: DeepSeek's cache hit is 2% of its input rate against Anthropic's 10%, so the derived
     ratio would have overstated a cached token fivefold. The peak (list) rate is used and the
-    off-peak halving is deliberately not applied per turn — read the figure as an upper bound. This
+    off-peak halving is deliberately not applied per turn - read the figure as an upper bound. This
     also prices the OpenCode sessions that route to the same model, which were unpriced before.
   - **Presence counting looks at `sessions/`, not the whole home** (a new `detectSubdir` on a
     catalog row). A harness launched as a desktop app keeps a 216 MB Chromium profile under
@@ -106,7 +113,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   Verified end to end against a real harness install: the chat lists with its title and workspace,
   the transcript renders (reasoning included), body search hits it, and it appears in Tokens-by-tool
   priced at published rates. One caveat, unfixed on purpose: "open the transcript file" hands an
-  editor a `.zstd`, because that IS the session file — the in-app transcript and the exporter are
+  editor a `.zstd`, because that IS the session file - the in-app transcript and the exporter are
   the readable paths.
 
 - **`POST /api/daemon/restart` - the daemon relaunching itself, gracefully, on demand**
@@ -120,27 +127,108 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the running process. This is the in-process one, and it refuses while dispatch runs are in
   flight (`force: true` to override) for the same reason the auto-update loop already does.
   Verified live: 53468 → 70080 on port 7787, hidden, healthy.
-
 ### Changed
 
-- **A long name no longer stretches the Name column — it is cut to 18 characters and the whole of
+- **"Open the transcript file" is no longer offered for a session whose file is not prose**
+  (`web/src/lib/session-labels.ts`, `web/src/components/SessionsView.vue`, `server/src/routes/
+  sessions.ts`). A DeepSeek Harness log is a real file worth copying and locating, and it is
+  Zstandard frames - so handing it to an editor produced a screen of binary that reads as a
+  corrupted session. The action is hidden for those sources and the route says why in its 409,
+  pointing at the readable exports that sit beside it. A second compiler-checked capability map
+  (`SOURCE_FILE_IS_TEXT`), because "has a file" and "that file is text" have different answers:
+  OpenCode and Hermes have no file at all, DSH has one that simply is not prose.
+
+- **The dispatched and rate-limited filters disable themselves off CLAUDE-ONLY, not off a list**
+  (`web/src/components/SessionsView.vue`). Both facts exist only for Claude sessions, and the
+  hand-written "codex or opencode" list had gone stale twice as sources were added - Hermes in
+  September, DeepSeek this week - leaving two filters enabled that could only ever return nothing.
+
+- **A long name no longer stretches the Name column - it is cut to 18 characters and the whole of
   it is one hover away** (`web/src/lib/instance-appearance.ts`, `web/src/components/
   InstancesView.vue`, `CliInstancesSection.vue`, `CodexInstancesSection.vue`,
   `web/src/shell/IconTooltip.vue`, plus tests). The Name column started naming a row after the
   ACCOUNT behind it earlier the same day, and an Anthropic profile name is a person's real name:
   "LUIS FERNANDO LOPEZ ESPINOZA" on a column that is 176px wide. Table layout is auto, so `w-44` is
-  only a hint a long cell overruns — one such row widened Name and pushed the desktop, CLI and
+  only a hint a long cell overruns - one such row widened Name and pushed the desktop, CLI and
   Codex tables out of the alignment their fixed widths exist to guarantee. `shortDisplayName()`
   does the cut for all three tables, counting CODE POINTS so it can never split a surrogate pair
   and leave a replacement glyph on the row, and charging the ellipsis to the budget so the result
   is never wider than asked for. ⛔ It is a DISPLAY cut only: sorting, filtering, the move submenu
   and every dialog keep the full `displayName()`, because a truncated name is not an identifier.
   The desktop table reveals the full name in the rich tooltip it already had (the name takes the
-  first line and pushes the folder and the focus hint down one each — hence `detail`, a third line
+  first line and pushes the folder and the focus hint down one each - hence `detail`, a third line
   on IconTooltip); the CLI and Codex tables, which have no such tooltip, use a native `title` that
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
-
 ### Fixed
+
+- **A daemon with a relocated store no longer takes the machine-wide pointer** (`server/src/
+  instance.ts`, `server/src/index.ts`, `server/tests/instance-pointer-side-run.test.ts`).
+  `<CONFIG_DIR>/runtime.json` is how every client on this machine finds the daemon: the MCP tools,
+  the orchestrator scripts, `hydralib`, the tray. A session started a daemon from source on port
+  7799 with a scratch database to click through a UI change; it overwrote that pointer to name
+  itself and exited without restoring it, and from then on every tool reported "couldn't reach the
+  daemon" while the real one answered `/api/health` 200 on 7787 the whole time. Nothing in the error
+  text suggested a stale pointer, so the obvious next move would have been to start a second daemon.
+
+  Where a daemon records itself is now decided by its STORE rather than its port:
+  `isPathInside(CONFIG_DIR, DATA_DIR)`. A process whose data dir sits outside the config dir writes
+  its pointer beside its own state and says so at boot; nothing has to be cleaned up afterwards,
+  which was the whole complaint. ⚠ The port is deliberately NOT the test — a primary install that
+  finds 7787 busy hops to 7788 and is still the machine's daemon, and the auto-update successor
+  takes the same port on purpose. A scratch `AGENTHYDRA_HOME` moves both directories together and
+  was never the problem; `AGENTHYDRA_DATA_DIR` alone, which moves the store and leaves the pointer
+  behind, was.
+
+
+- **A compiled install could not deliver a message to ANY chat, by any route**
+  (`server/src/misc-assets.ts` and its suite, `server/src/routes/session-message.ts`,
+  `scripts/build.ts`). This is the tray defect again, and it was total rather than degraded. The
+  single-file exe embeds every Vite asset and, since 2026-09-11, the tray toolkit, but nothing else
+  from `misc\`. `APP_ROOT` for a compiled build is the directory of the exe, so the composer route
+  looked for `<dist>\misc\Deliver-DesktopChat.ps1`, a file the build had never put there, and
+  answered `delivery actuator missing`. The peer route is refused by that same endpoint before it
+  ever picks a channel, so on a compiled install no chat could be woken by anything, which also
+  silently voided `move_chats --resume`: a migrated chat landed dormant with nothing able to tell it
+  to carry on.
+
+  The shape is deliberately the tray's. `RUNTIME_MISC_FILES` names every `misc\` file the running
+  daemon opens by path, the build embeds exactly that list and FAILS when one is missing, and at
+  runtime `resolveMiscAsset` hands back a real path: from `misc\` when there is one, else written
+  once out of the binary beside the app's own state. Copying `misc\` next to the exe was tried by
+  hand the day this was found. It works, and it re-introduces the sidecar the single-file build
+  exists to remove, so an exe moved anywhere on its own would break again, silently, exactly as
+  here.
+
+- **A rate-limited account can recover, because a 429 we already hold is obeyed instead of re-hit**
+  (`server/src/usage.ts`, `usage-refresh.ts`, `server/tests/usage-backoff.test.ts`).
+  `/api/oauth/usage` limits per account, and when it says 429 it hands back a `Retry-After` measured
+  in TENS OF MINUTES. Nothing honoured it. The fleet has several independent pollers (the 30 minute
+  sweep, the reset watcher, the resume monitor, an open web app), so an account that tripped a limit
+  was re-hit every ~30 seconds, and on a rolling limiter each early knock re-arms the very window
+  being waited out. It could never recover, which is exactly the "not reading usage for the active
+  accounts" seen on 2026-09-11: accounts that had read fine two hours earlier sat at 429 all day
+  while every poller kept knocking.
+
+  The server's own number is now recorded per label and honoured at the single chokepoint
+  (`checkUsage`), so every caller backs off together and no limit is invented here. Inside the
+  window the failure is re-asserted with the REMAINING seconds, so the UI still reads "rate limited,
+  retry in N min" and counts down, and the caller serves its last cached reading rather than a fresh
+  and false 0%.
+
+- **An orchestrator operation id that is missing now says WHY it is missing**
+  (`server/src/orchestrator.ts`, `server/tests/orchestrator-operation-miss.test.ts`). A migration
+  batch was launched detached, the daemon restarted while it ran, and the batch's child survived the
+  restart and finished its work orphaned. Every poll of its id then answered a bare "no such
+  operation" with an empty recent list, and the tool descriptions promise an unconditional hour and
+  that nothing is gone, so the honest reading of that answer was that the run had never existed. An
+  hour went into reconstructing the per-chat verdicts from four other tools.
+
+  Nothing is made durable in response, which would be the audit log this deliberately is not. A miss
+  is instead interpreted against the answering process's own start time: `daemon-restarted` when
+  this daemon is younger than the one hour TTL, since an id minted before it cannot be in this
+  process's map, and `unknown-id` when it is older. The count of records held rides along, so
+  "empty" is distinguishable from "pruned". A caller can now tell "never existed" from "did not
+  survive a restart" and is told to read the toolbox's own ledger rather than re-fire the act.
 
 - **The single-file `.exe` ships its tray icon, and "is the tray running?" stops answering
   backwards** (`server/src/tray-toolkit.ts`, `server/src/tray-host.ts`, `server/src/index.ts`,

@@ -159,6 +159,22 @@ dispatch account id or label) or `configDir` (a `CLAUDE_CONFIG_DIR` that's been 
 `check_my_usage` is a self-check that works out which account the calling process actually bills to.
 Both report the session (5h) %, the weekly (all-models) %, and any per-model weekly %.
 
+### A 429 is obeyed, never re-hit
+
+`/api/oauth/usage` limits per account, and when it says 429 it hands back a `Retry-After` measured
+in TENS OF MINUTES. That instant is recorded per account and honoured at the single chokepoint
+(`checkUsage`, `server/src/usage.ts`), so the 30 minute fleet sweep, the reset watcher, the resume
+monitor and an open web app all back off together. Inside the window nothing calls the endpoint at
+all: the failure is re-asserted with the REMAINING seconds, so a reader still sees "rate limited,
+retry in N min" counting down, and the last cached reading is served rather than a fresh and false
+0%.
+
+The limiter is rolling, which is what makes this load-bearing rather than polite. Before it, several
+independent pollers re-hit a limited account roughly every 30 seconds and each early knock re-armed
+the window being waited out, so an account that tripped a limit could never recover: measured on
+2026-09-11, accounts that had read fine two hours earlier sat at 429 all day. The number obeyed is
+always the server's own. None is invented here.
+
 ### Built-in guidance
 
 The MCP `initialize` handshake returns an `instructions` block (`SERVER_INSTRUCTIONS` in
@@ -406,6 +422,12 @@ orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should ha
                server/src/orchestrator.ts; its own manual is orchestrator/README.md
 tests/         launcher.test.ts (the tray guard, Windows-gated) + server/instance unit tests
 misc/          the Windows launcher toolkit (tray .ps1 / .vbs / .ico / Create-Shortcut / Make-Icon / rebuild_agenthydra.bat)
+               plus the files the RUNNING daemon opens by path, listed in
+               server/src/misc-assets.ts as RUNTIME_MISC_FILES. The single-file build embeds
+               exactly that list and FAILS when one is missing, and resolveMiscAsset hands
+               back a real path at runtime: misc\ when there is one, else written out of the
+               binary once. Adding a runtime dependency on a misc\ file without adding it to
+               that list ships a compiled build where the feature is simply gone.
 scripts/       repo tooling (screenshots/: regenerate the README images)
 ```
 
