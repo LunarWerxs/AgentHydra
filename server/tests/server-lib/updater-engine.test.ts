@@ -358,7 +358,12 @@ test("a diverged checkout is reported as an update that cannot fast-forward, and
   await expect(updater.applyUpdate()).rejects.toThrow(/diverged/);
   expect((await $`git -C ${local} rev-parse HEAD`.text()).trim()).toBe(headBefore);
   expect(existsSync(logPath)).toBe(false); // install/build never ran
-});
+  // real git — same widened timeout every spawning test in this file carries. ⛔ These last two
+  // tests shipped without it (2026-09-11): the kit has no repo-wide `bun test --timeout`, so the
+  // omission was invisible here and turned DevWebUI's "subprocess tests must set an explicit
+  // timeout" guardrail red the moment a sync carried them downstream. The kit is less strict than
+  // its consumers, and that asymmetry is exactly what sync.mjs warns about.
+}, 30_000);
 
 test("a local branch with no remote counterpart follows the remote's HEAD branch, and apply pulls THAT branch", async () => {
   const remote = await remoteRepo();
@@ -379,4 +384,4 @@ test("a local branch with no remote counterpart follows the remote's HEAD branch
   expect((await $`git -C ${local} rev-parse HEAD`.text()).trim()).toBe(remoteHead);
   // Line endings normalised: a Windows clone with core.autocrlf checks the marker out as CRLF.
   expect(readFileSync(join(local, "marker.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("0.3.0\n");
-});
+}, 30_000); // real git+install+build — see the note on the test above.

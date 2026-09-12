@@ -16,9 +16,12 @@
 // because that one can shut the daemon down.
 
 import { describe, expect, test } from 'bun:test'
+import { join } from 'node:path'
 import { parseTrayHostCount, startTrayHostIfMissing, TRAY_HOST_EXE } from '../src/tray-host'
 
-const APP_ROOT = 'C:\\app'
+// Paths are built with node's join, never typed with separators: the suite also runs on the Linux
+// CI leg, where a hand-written 'C:\app\misc\...' can only ever fail (it did, on the first run).
+const APP_ROOT = join('C:', 'app')
 
 function starter(isRunning: () => Promise<boolean | null>) {
   const spawned: string[] = []
@@ -57,7 +60,7 @@ describe('startTrayHostIfMissing', () => {
     const s = starter(async () => false)
     const got = await s.run()
     expect(got.start).toBe(true)
-    expect(s.spawned).toEqual([`${APP_ROOT}\\misc\\${TRAY_HOST_EXE}`.replaceAll('\\\\', '\\')])
+    expect(s.spawned).toEqual([join(APP_ROOT, 'misc', TRAY_HOST_EXE)])
   })
 
   test('a host that IS running is left alone', async () => {
@@ -79,20 +82,21 @@ describe('startTrayHostIfMissing', () => {
 
   test('a materialized toolkit directory is used instead of <appRoot>/misc', async () => {
     const spawned: Array<{ exe: string; cwd: string }> = []
+    const placed = join('C:', 'state', 'tray', '0.41.0')
     const got = await startTrayHostIfMissing({
       appRoot: APP_ROOT,
       compiled: true,
       hideTray: () => false,
       platform: 'win32',
-      toolkitDir: 'C:\\state\\tray\\0.41.0',
+      toolkitDir: placed,
       exists: () => true,
       isRunning: async () => false,
       spawnHost: (exe, cwd) => void spawned.push({ exe, cwd }),
     })
     expect(got.start).toBe(true)
-    expect(spawned[0]?.exe).toBe(`C:\\state\\tray\\0.41.0\\${TRAY_HOST_EXE}`)
+    expect(spawned[0]?.exe).toBe(join(placed, TRAY_HOST_EXE))
     // The host resolves its config against its own directory, so the cwd must be that directory.
-    expect(spawned[0]?.cwd).toBe('C:\\state\\tray\\0.41.0')
+    expect(spawned[0]?.cwd).toBe(placed)
   })
 
   test('no toolkit anywhere is a named fault, not a silent skip', async () => {

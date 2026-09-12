@@ -14,6 +14,7 @@
 //      non-zero exit as "running" - so "start the tray if nothing else did" could never fire.
 
 import { describe, expect, test } from 'bun:test'
+import { join as nodeJoin } from 'node:path'
 import {
   isCompleteTrayToolkit,
   materializeTrayToolkit,
@@ -209,10 +210,17 @@ describe('starting the host', () => {
   })
 
   test('a materialized directory is used instead of <appRoot>/misc, and is the cwd', async () => {
-    const dir = j('C:', 'state', 'tray', '1.2.3')
+    // nodeJoin, not the backslash `j` the fake disk uses: startTrayHostIfMissing joins with
+    // node:path, so on the Linux CI leg a hand-written 'C:\...\tray.exe' can only ever fail.
+    // It did, on this test's first run - the lib was right and the expectation was Windows-shaped.
+    const dir = nodeJoin('C:', 'state', 'tray', '1.2.3')
     const s = start(async () => false, { toolkitDir: dir })
     await s.run()
-    expect(s.spawned[0]).toEqual({ exe: j(dir, TRAY_HOST_EXE), cwd: dir, config: CONFIG })
+    expect(s.spawned[0]).toEqual({
+      exe: nodeJoin(dir, TRAY_HOST_EXE),
+      cwd: dir,
+      config: CONFIG,
+    })
   })
 
   test('no toolkit anywhere is a named fault, not a silent skip', async () => {
