@@ -14,6 +14,9 @@ import type {
   CMInstance,
   CodexAccount,
   CodexInstance,
+  CodexMovePlan,
+  CodexMoveRequest,
+  CodexMoveResult,
   CodexResetRedeemResult,
   ConcurrencyPoint,
   DispatchedScope,
@@ -756,6 +759,21 @@ export const checkCliInstanceUsage = (id: string, refresh = false) =>
   )
 
 // --- Codex CLI + Desktop instances -------------------------------------------
+export type {
+  CodexMoveChat,
+  CodexMovePlan,
+  CodexMoveRequest,
+  CodexMoveResult,
+} from '@agenthydra/server/types'
+export const planCodexChatMove = (id: string, targetId: string) =>
+  j<CodexMovePlan>(
+    `/api/codex-instances/${encodeURIComponent(id)}/move-chats?targetId=${encodeURIComponent(targetId)}`,
+  )
+export const moveCodexChat = (id: string, request: CodexMoveRequest) =>
+  j<CodexMoveResult>(`/api/codex-instances/${encodeURIComponent(id)}/move-chat`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
 // Each listed instance already carries a locally-resolved `account` (auth.json is plain JSON, so
 // the server can afford to attach it eagerly); getCodexInstanceAccount is the LIVE refresh, which
 // re-reads the plan from ChatGPT rather than from the token's mint-time claim.

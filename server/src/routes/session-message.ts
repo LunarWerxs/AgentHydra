@@ -1,9 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { APP_ROOT } from '../config'
 import { app } from '../http-app'
 import { findTranscriptById } from '../live-registry'
+import { DELIVERY_ACTUATOR_FILE, resolveMiscAsset } from '../misc-assets'
 import { samePathKey } from '../path-key'
 import { jsonBody } from '../route-helpers'
 import { desktopHomeFor, liveSessionEntry } from '../session-launch'
@@ -192,13 +192,24 @@ app.post('/api/sessions/:id/message', async (c) => {
     )
 
   const { spawnSync } = await import('node:child_process')
-  // APP_ROOT, never process.cwd(): the daemon's working directory is wherever it was
-  // started from (a daemon launched in server/ looked for server/misc/ and every delivery
-  // failed with 'delivery actuator missing'), and APP_ROOT is also what makes this resolve
-  // beside the executable in a compiled bundle.
-  const actuator = join(APP_ROOT, 'misc', 'Deliver-DesktopChat.ps1')
-  if (!existsSync(actuator))
-    return c.json({ ok: false, error: `delivery actuator missing at ${actuator}` }, 500)
+  // ⛔ TWO WAYS THIS PATH HAS BEEN WRONG, so it is resolved in one place now and never joined
+  // here. It was process.cwd() once: a daemon started in server/ looked for server/misc/ and
+  // every delivery failed. It was join(APP_ROOT, 'misc', ...) after that, which is right for a
+  // checkout and wrong for a COMPILED build, where APP_ROOT is the directory of the exe and the
+  // build had never put misc\ beside it - so every delivery on every compiled install failed
+  // with 'delivery actuator missing', by BOTH routes, since the peer channel is refused here
+  // too. resolveMiscAsset prefers a real misc\ and otherwise writes the embedded copy out of
+  // the binary. See server/src/misc-assets.ts.
+  const resolved = await resolveMiscAsset(DELIVERY_ACTUATOR_FILE)
+  const actuator = resolved.path
+  if (!actuator)
+    return c.json(
+      {
+        ok: false,
+        error: `delivery actuator unavailable (${resolved.reason}): ${resolved.error ?? ''}`,
+      },
+      500,
+    )
   const type = () =>
     spawnSync(
       'powershell',

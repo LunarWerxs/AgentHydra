@@ -24,6 +24,7 @@ import {
   cancelOrchestratorOperation,
   getOrchestratorOperation,
   listOrchestratorOperations,
+  operationMissReason,
   orchestratorStatus,
   runOriginAllowed,
   startOrchestratorOperation,
@@ -174,7 +175,7 @@ app.post('/api/orchestrator/run', async (c) => {
 app.get('/api/orchestrator/operations', (c) => c.json({ operations: listOrchestratorOperations() }))
 app.get('/api/orchestrator/operations/:id', (c) => {
   const op = getOrchestratorOperation(c.req.param('id'))
-  return op ? c.json(op) : c.json({ ok: false, error: 'no such operation' }, 404)
+  return op ? c.json(op) : c.json(operationMissReason(), 404)
 })
 app.post('/api/orchestrator/operations/:id/cancel', (c) => {
   if (!runOriginAllowed(c.req.header('origin'), c.req.url))

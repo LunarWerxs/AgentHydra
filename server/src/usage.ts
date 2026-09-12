@@ -420,6 +420,38 @@ export function lastUsageApiFailure(
   return lastApiFailure.get(label ?? '(ambient)') ?? null
 }
 
+/**
+ * Server-issued backoff per label: the earliest instant the usage API may be called again, and the
+ * 429 body to keep reporting until then.
+ *
+ * ⛔ WHY THIS EXISTS - a rate limit you keep hitting never lifts. `/api/oauth/usage` limits per
+ * account, and when it says 429 it hands back a `Retry-After` measured in TENS OF MINUTES. That is
+ * the server telling us when to come back; a request made before then cannot succeed, and on a
+ * rolling/penalty limiter each early hit re-arms the very window we are waiting out. The fleet has
+ * several independent pollers (the 30-min sweep, the reset watcher, the resume monitor, the open
+ * web app), so an account that trips a 429 was being re-hit every ~30s and could NEVER recover -
+ * its usage read as a permanent "rate limited", which is exactly the "not reading usage for the
+ * active accounts" the owner saw (2026-09-11). Measured that day: accounts last read fine ~2h
+ * earlier sat 429 the whole time while every poller kept knocking.
+ *
+ * Honored at the single chokepoint (checkUsage) so every caller backs off together, and it defers
+ * to the SERVER's own number - we are not inventing a limit, we are obeying the one it stated.
+ */
+const apiBackoffUntil = new Map<string, { until: number; error: string }>()
+
+/** Milliseconds until `label`'s usage API backoff lifts, or 0 if it may be called now. Exported so
+ *  the rule is testable without a live endpoint - an untested backoff is how the mill comes back. */
+export function usageApiBackoffMsRemaining(label: string | null, now = Date.now()): number {
+  const entry = apiBackoffUntil.get(label ?? '(ambient)')
+  return entry && entry.until > now ? entry.until - now : 0
+}
+
+/** Test seam: forget every recorded API failure and server-issued backoff. */
+export function resetUsageApiBackoff(): void {
+  lastApiFailure.clear()
+  apiBackoffUntil.clear()
+}
+
 export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapshot> {
   const label = opts.account ?? null
 
@@ -441,8 +473,28 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
     const fromDir = !injected && opts.configDir ? resolveCliConfigDirToken(opts.configDir) : null
     const token = injected ?? fromDir?.token ?? null
     if (token) {
+      // ⛔ OBEY A 429 WE ALREADY HAVE. If the server told this label to come back later and that
+      // window has not lifted, do NOT call the endpoint again - it cannot succeed, and re-hitting a
+      // rolling limiter is what keeps the account stuck at "rate limited" forever (see
+      // apiBackoffUntil). Re-assert the failure with the REMAINING seconds so the UI still reads
+      // "rate_limited, retry in N min" and counts down, and hand back no-data (the caller serves
+      // the last cached reading, never a fresh "0%"). Skipping the fetch here is the whole fix.
+      const backoff = apiBackoffUntil.get(label ?? '(ambient)')
+      const nowMs = Date.now()
+      if (backoff && backoff.until > nowMs) {
+        lastApiFailure.set(label ?? '(ambient)', {
+          status: 429,
+          error: backoff.error,
+          retryAfterSec: Math.max(1, Math.ceil((backoff.until - nowMs) / 1000)),
+        })
+        return parseUsageOutput('', label)
+      }
       const res = await fetchUsageApi({ token, account: label, timeoutMs: opts.timeoutMs })
-      if (res.ok) return res.snapshot
+      // A good read clears the backoff: the limit has lifted, resume normal polling immediately.
+      if (res.ok) {
+        apiBackoffUntil.delete(label ?? '(ambient)')
+        return res.snapshot
+      }
       // Not fatal: fall through to the CLI spawn (a 401 here just means "this token can't read
       // usage" — the CLI may still succeed by refreshing, or via a configDir login).
       //
@@ -460,7 +512,18 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
       // rate-limited endpoint and fail identically, ~9s and a process later - and on a fleet that
       // turns one rate limit into a burst of doomed processes. Answer no-data now; the caller
       // reports it as rate-limited (usage-service) instead of pretending the account is broken.
-      if (res.status === 429) return parseUsageOutput('', label)
+      //
+      // AND ARM THE BACKOFF so the NEXT poll skips this endpoint until the window lifts. The server
+      // usually names the delay; when it does not, wait a conservative minute rather than resume the
+      // 30-second knocking that turns one 429 into a stuck one.
+      if (res.status === 429) {
+        const waitSec = res.retryAfterSec && res.retryAfterSec > 0 ? res.retryAfterSec : 60
+        apiBackoffUntil.set(label ?? '(ambient)', {
+          until: Date.now() + waitSec * 1000,
+          error: res.error,
+        })
+        return parseUsageOutput('', label)
+      }
     }
   }
 

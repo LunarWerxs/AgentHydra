@@ -132,11 +132,19 @@ if (
 /** Canonical Claude Code CLI transcript store: <home>/.claude/projects/<encoded-cwd>/<session-id>.jsonl */
 export const CLAUDE_PROJECTS_ROOT = join(HOME, '.claude', 'projects')
 
-/** Codex stores active rollouts in date folders and archived rollouts in a flat sibling folder. */
+/**
+ * The DEFAULT Codex install's home. Active rollouts live in date folders under `sessions/`,
+ * archived ones in the flat sibling `archived_sessions/`, and the sidebar's titles in
+ * `session_index.jsonl` beside them.
+ *
+ * DELIBERATELY NOT ACCOMPANIED BY `…_SESSIONS_ROOT` CONSTANTS ANY MORE. Those existed, the reader
+ * globbed them and nothing else, and that is exactly how every chat on a MANAGED Codex account
+ * became invisible to listing, search and tailing (found 2026-09-11). This machine has one Codex
+ * home PER ACCOUNT; the set of them is core/codex-instances.ts's `codexInstanceStores()`, and a
+ * reader that wants Codex transcripts asks it rather than joining paths onto this. Naming the
+ * default's subdirectories here again would re-open the hole on the first person who imported one.
+ */
 export const CODEX_HOME = appEnv('CODEX_HOME')?.trim() || join(HOME, '.codex')
-export const CODEX_SESSIONS_ROOT = join(CODEX_HOME, 'sessions')
-export const CODEX_ARCHIVED_SESSIONS_ROOT = join(CODEX_HOME, 'archived_sessions')
-export const CODEX_SESSION_INDEX_PATH = join(CODEX_HOME, 'session_index.jsonl')
 
 /** OpenCode CLI and Desktop share this SQLite session store. */
 export const OPENCODE_DB_PATH =

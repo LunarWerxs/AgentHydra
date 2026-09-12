@@ -766,6 +766,48 @@ class WalledChatIsWakeableTest(unittest.TestCase):
         self.assertNotEqual(deliverylib._verify_snippet(ev), "",
                             "with no usable snippet the courier refuses and the chat stays stuck")
 
+    def test_real_words_beyond_the_tail_window_are_still_found(self):
+        """THE THIRD ROUTE TO THE SAME DEAD END (found live 2026-09-12, on a chat walled
+        after eleven minutes of tool work). The walk-back was bounded by the window it read:
+        the chat's last real words were older than _TAIL_BYTES of tool records, so the only
+        assistant text inside the window was the banner - and skipping that correctly left
+        nothing at all. Evidence collapsed, the snippet came out empty, and the actuator died
+        on an empty -VerifyText, exactly as before the walk-back existed."""
+        import stage_reply
+        pad = "x" * 20_000
+        with open(self.tp, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "assistant",
+                                "message": {"content": [{"type": "text",
+                                                        "text": self.REAL}]}}) + "\n")
+            written = 0
+            while written < stage_reply._TAIL_BYTES * 2:
+                rec = json.dumps({"type": "user",
+                                  "message": {"content": [{"type": "tool_result",
+                                                          "content": pad}]}}) + "\n"
+                f.write(rec)
+                written += len(rec)
+            f.write(json.dumps({"type": "assistant",
+                                "message": {"content": [{"type": "text",
+                                                        "text": self.BANNER}]}}) + "\n")
+        self.assertGreater(self.tp.stat().st_size, stage_reply._TAIL_BYTES,
+                           "the fixture must outgrow one window or it proves nothing")
+        with mock.patch.object(stage_reply.hydralib, "session_row",
+                               return_value={"transcript_path": str(self.tp)}):
+            got = stage_reply.last_rendered_text("any-sid")
+        self.assertEqual(got, self.REAL,
+                         "the scan must widen past the tail window, not stop at it")
+        self.assertNotEqual(deliverylib._verify_snippet(got), "")
+
+    def test_the_widening_scan_terminates_when_there_are_no_real_words(self):
+        """The widening must END. A transcript that never says anything but the banner
+        returns empty instead of looping, and the ceiling keeps a pathological file out of
+        memory."""
+        import stage_reply
+        self._write(self.BANNER)
+        with mock.patch.object(stage_reply.hydralib, "session_row",
+                               return_value={"transcript_path": str(self.tp)}):
+            self.assertEqual(stage_reply.last_rendered_text("any-sid"), "")
+
 
 class ClaimProofOfDeathTest(unittest.TestCase):
     """A claim must be released by PROOF that its owner is gone, not only by a clock.

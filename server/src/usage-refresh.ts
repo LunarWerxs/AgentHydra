@@ -17,12 +17,18 @@
 // way; this only decides whether the numbers go stale between visits.
 
 import { listCliInstances } from './core/cli-instances'
+import { listCodexInstances } from './core/codex-instances'
 import { listInstances } from './core/instances'
 import { getSetting, setSetting } from './db'
 import { getProviderSettings } from './provider-settings'
 import { runKeepaliveSweep } from './session-keepalive'
 import type { UsageSettings } from './types'
-import { checkUsageForCliInstance, checkUsageForDesktop, desktopIsCheckable } from './usage-service'
+import {
+  checkUsageForCliInstance,
+  checkUsageForCodex,
+  checkUsageForDesktop,
+  desktopIsCheckable,
+} from './usage-service'
 
 /**
  * Default sweep interval. Quota moves on the scale of hours, so this only has to be fresh enough
@@ -128,6 +134,19 @@ export async function sweepUsage(): Promise<number> {
         console.error(`[usage-refresh] cli '${cli.id}' failed:`, err)
       }
       await sleep(STAGGER_MS)
+    }
+    const providers = getProviderSettings()
+    if (providers.codexDesktopEnabled || providers.codexCliEnabled) {
+      for (const inst of await listCodexInstances()) {
+        if (inst.account?.authMode !== 'chatgpt') continue
+        try {
+          await checkUsageForCodex(inst.codexHome, inst.id)
+          checked++
+        } catch {
+          console.error(`[usage-refresh] codex '${inst.id}' failed`)
+        }
+        await sleep(STAGGER_MS)
+      }
     }
     lastSweepAt = new Date().toISOString()
 

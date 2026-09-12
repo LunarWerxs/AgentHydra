@@ -17,6 +17,7 @@ import {
   localCodexAccount,
   readCodexAuth,
   redeemCodexResetCredit,
+  resolveCodexAccount,
 } from '../src/core/codex-account'
 
 // --- helpers ------------------------------------------------------------------
@@ -79,6 +80,7 @@ describe('codexPlanLabel', () => {
     expect(codexPlanLabel('free')).toBe('Free')
     expect(codexPlanLabel('plus')).toBe('Plus')
     expect(codexPlanLabel('pro')).toBe('Pro')
+    expect(codexPlanLabel('prolite')).toBe('Pro Lite')
     expect(codexPlanLabel('business')).toBe('Business')
     expect(codexPlanLabel('team')).toBe('Team')
     expect(codexPlanLabel('enterprise')).toBe('Enterprise')
@@ -98,6 +100,123 @@ describe('codexPlanLabel', () => {
     expect(codexPlanLabel(undefined)).toBeNull()
     expect(codexPlanLabel('')).toBeNull()
     expect(codexPlanLabel('   ')).toBeNull()
+  })
+})
+
+describe('Codex live usage regressions', () => {
+  test('reads wham usage and keeps a live plan over old token claims on later list polls', async () => {
+    const home = makeCodexHome(chatgptAuth({ planType: 'plus' }))
+    const original = globalThis.fetch
+    globalThis.fetch = (async (url: unknown) => {
+      expect(String(url)).toBe('https://chatgpt.com/backend-api/wham/usage')
+      return Response.json({
+        account_id: 'acct-1',
+        plan_type: 'prolite',
+        rate_limit: {
+          primary_window: { used_percent: 83, limit_window_seconds: 604800 },
+          secondary_window: null,
+        },
+        additional_rate_limits: [
+          {
+            limit_name: 'Spark',
+            rate_limit: {
+              primary_window: { used_percent: 12, limit_window_seconds: 18000 },
+              secondary_window: { used_percent: 21, limit_window_seconds: 604800 },
+            },
+          },
+        ],
+      })
+    }) as typeof fetch
+    try {
+      const result = await resolveCodexAccount(home)
+      expect(result.account.planLabel).toBe('Pro Lite')
+      expect(localCodexAccount(home).planLabel).toBe('Pro Lite')
+      expect(result.usage?.codexAccountId).toBe('acct-1')
+      expect(result.usage?.weekAll?.pct).toBe(83)
+      expect(result.usage?.session).toBeNull()
+      expect(result.usage?.sessionLimitUnavailable).toBe(true)
+      expect(result.usage?.additionalLimits?.[0]?.session?.pct).toBe(12)
+      expect(result.usage?.additionalLimits?.[0]?.weekAll?.pct).toBe(21)
+      writeFileSync(
+        join(home, 'auth.json'),
+        JSON.stringify(chatgptAuth({ accountId: 'another', planType: 'free' })),
+      )
+      expect(localCodexAccount(home).planLabel).toBe('Free')
+    } finally {
+      globalThis.fetch = original
+      cleanup()
+    }
+  })
+  test('expired credentials use Codex refresh and the main bucket of multi-limit responses', async () => {
+    const auth = chatgptAuth()
+    auth.tokens.access_token = jwt({ exp: 1 })
+    const home = makeCodexHome(auth)
+    const methods: string[] = []
+    try {
+      const result = await resolveCodexAccount(home, {
+        connect: async () => ({
+          close() {
+            methods.push('close')
+          },
+          async call<T>(method: string): Promise<T> {
+            methods.push(method)
+            if (method === 'account/read')
+              return { account: { email: 'user@example.com', planType: 'plus' } } as T
+            return {
+              accountId: 'acct-1',
+              rateLimits: { primary: { usedPercent: 1, windowDurationMins: 300 } },
+              rateLimitsByLimitId: {
+                codex: {
+                  planType: 'pro',
+                  primary: { usedPercent: 45, windowDurationMins: 300, resetsAt: 4102444800 },
+                  secondary: { usedPercent: 70, windowDurationMins: 10080, resetsAt: 4102444800 },
+                },
+              },
+              rateLimitResetCredits: { availableCount: 2 },
+            } as T
+          },
+        }),
+      })
+      expect(methods).toEqual(['account/read', 'account/rateLimits/read', 'close'])
+      expect(result.account.planLabel).toBe('Pro')
+      expect(result.usage?.session?.pct).toBe(45)
+      expect(result.usage?.weekAll?.pct).toBe(70)
+      expect(result.usage?.resetCredits).toBe(2)
+    } finally {
+      cleanup()
+    }
+  })
+  test('noNetwork does not start a refresh process even for expired credentials', async () => {
+    const auth = chatgptAuth()
+    auth.tokens.access_token = jwt({ exp: 1 })
+    const home = makeCodexHome(auth)
+    let connected = false
+    try {
+      const result = await resolveCodexAccount(home, {
+        noNetwork: true,
+        connect: async () => {
+          connected = true
+          throw new Error('unexpected')
+        },
+      })
+      expect(result.usage).toBeNull()
+      expect(connected).toBe(false)
+    } finally {
+      cleanup()
+    }
+  })
+  test('a response for a different account is not displayed or cached', async () => {
+    const home = makeCodexHome(chatgptAuth())
+    const original = globalThis.fetch
+    globalThis.fetch = (async () =>
+      Response.json({ account_id: 'wrong-account', plan_type: 'pro' })) as unknown as typeof fetch
+    try {
+      expect((await resolveCodexAccount(home)).usage).toBeNull()
+      expect(localCodexAccount(home).planLabel).toBe('Plus')
+    } finally {
+      globalThis.fetch = original
+      cleanup()
+    }
   })
 })
 

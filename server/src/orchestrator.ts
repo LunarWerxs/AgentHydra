@@ -143,6 +143,16 @@ export function orchestratorBusy(): boolean {
 // Results are kept in memory, bounded (OPERATION_KEEP) and expiring (OPERATION_TTL_MS): this is
 // reconciliation for a dropped connection and a restart-free daemon, not an audit log - the
 // toolbox's own ledgers are the durable record of what an act did.
+//
+// ⛔ 'RESTART-FREE' IS THE LOAD-BEARING WORD, AND IT USED TO BE INVISIBLE TO CALLERS (2026-09-12).
+// A migration batch was launched detached, the daemon restarted while it ran, the batch's child
+// process survived the restart and finished its work ORPHANED - and every poll of its id then
+// answered a bare 'no such operation', with the recent list empty. The MCP descriptions promised
+// an unconditional hour and 'nothing is gone', so the honest conclusion from the answer was that
+// the run had never existed. An hour was spent reconstructing the per-chat verdicts from four
+// other tools. Nothing here is made durable in response - that WOULD be the audit log this
+// deliberately is not - but a miss now says WHY it missed, so a caller can tell 'never existed'
+// from 'did not survive a restart' and knows to read the toolbox's ledger instead.
 
 export type OrchestratorOutcome = OrchestratorRun | { ok: false; error: string; busy?: boolean }
 
@@ -171,6 +181,45 @@ interface OperationEntry {
 const OPERATION_TTL_MS = 60 * 60_000
 const OPERATION_KEEP = 200
 const operations = new Map<string, OperationEntry>()
+
+/** When THIS daemon process started. A miss is interpreted against it: an id minted by an
+ *  earlier process cannot be in this one's map, and that is a different fact from a bad id. */
+const REGISTRY_STARTED_AT = Date.now()
+
+/** Why an id is not here - so a 404 can be acted on instead of puzzled over. */
+export type OperationMiss = {
+  ok: false
+  error: string
+  reason: 'unknown-id' | 'daemon-restarted'
+  /** When the daemon that is answering started. */
+  daemonStartedAt: number
+  /** How many records this process is holding, so 'empty' is distinguishable from 'pruned'. */
+  held: number
+}
+
+export function operationMissReason(now = Date.now()): OperationMiss {
+  // A registry this young cannot have pruned anything: OPERATION_TTL_MS is an hour, so an id
+  // that is absent from a process younger than that was either never minted here or was minted
+  // before a restart. Either way the caller's next move is the same, and saying so is the fix.
+  const youngerThanTtl = now - REGISTRY_STARTED_AT < OPERATION_TTL_MS
+  const restarted = youngerThanTtl
+  return {
+    ok: false,
+    reason: restarted ? 'daemon-restarted' : 'unknown-id',
+    daemonStartedAt: REGISTRY_STARTED_AT,
+    held: operations.size,
+    error: restarted
+      ? 'no such operation here - THIS DAEMON STARTED AT ' +
+        new Date(REGISTRY_STARTED_AT).toISOString() +
+        ', less than an hour ago, and operation records live only in the daemon process that ' +
+        'ran them. If your run began before that time, it was a DIFFERENT process: the record ' +
+        'did not survive the restart, and the run itself may well have finished (a detached ' +
+        "child outlives the daemon). Do NOT re-fire the act - read the toolbox's own ledger " +
+        'for what it did, and verify the effect directly.'
+      : 'no such operation - this daemon has been up over an hour, so the id was either never ' +
+        'minted here or its record has passed the one-hour retention.',
+  }
+}
 
 function pruneOperations(now = Date.now()): void {
   const finished = [...operations.values()].filter((e) => e.op.finishedAt !== null)

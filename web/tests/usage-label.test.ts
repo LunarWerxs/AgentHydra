@@ -35,6 +35,13 @@ test('a window with no reading is "—", never "0%"', () => {
   expect(usagePctFor(snap({ session: null }), 'session')).toBeNull()
 })
 
+test('a confirmed absent Codex five-hour cap is N/A, separate from an unchecked window', () => {
+  expect(usageCellLabel(snap({ session: null, sessionLimitUnavailable: true }), 'session')).toBe(
+    'N/A',
+  )
+  expect(usageCellLabel(snap({ session: null, sessionLimitUnavailable: true }), 'week')).toBe('92%')
+})
+
 test('a snapshot with nothing in it at all is "—" for either scope', () => {
   const empty = snap({ session: null, weekAll: null, weekModel: null })
   expect(usageCellLabel(empty)).toBe('—')

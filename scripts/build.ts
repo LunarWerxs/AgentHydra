@@ -15,6 +15,7 @@ import { $ } from 'bun'
 import pkg from '../package.json'
 // ONE list, shared with the runtime that writes these files out again (server/src/tray-toolkit.ts).
 // Two copies of a filename list is how an app ends up embedding a file nothing reads.
+import { RUNTIME_MISC_FILES } from '../server/src/misc-assets.ts'
 import { TRAY_TOOLKIT_FILES } from '../server/src/tray-toolkit.ts'
 
 const ROOT = join(import.meta.dir, '..')
@@ -110,6 +111,27 @@ function trayToolkitPaths(embedTray: boolean): string[] {
   })
 }
 
+/**
+ * The misc\ files the RUNNING daemon opens by path, embedded for the same reason as the tray.
+ *
+ * ⛔ A missing file FAILS the build, deliberately. Shipping without the delivery actuator is
+ * not a degraded build, it is one where no chat can be delivered to by ANY route (the composer
+ * route IS that script, and the peer route is refused by the same endpoint first) - which is
+ * exactly how it shipped, and how a migrated chat was left dormant on 2026-09-12.
+ */
+function runtimeMiscPaths(): string[] {
+  return RUNTIME_MISC_FILES.map((name) => {
+    const path = join(ROOT, 'misc', name)
+    if (!existsSync(path))
+      throw new Error(
+        `cannot build: ${path} is missing. A build without it ships a daemon that can never ` +
+          'deliver a message to a chat - fix the file (the kit syncs misc\\, see lunarwerx-ui) ' +
+          'or take it out of RUNTIME_MISC_FILES.',
+      )
+    return path
+  })
+}
+
 function writeReleaseEntrypoint(embedTray: boolean): string {
   rmSync(TMP, { recursive: true, force: true })
   mkdirSync(TMP, { recursive: true })
@@ -125,6 +147,7 @@ function writeReleaseEntrypoint(embedTray: boolean): string {
     `asset${index}`,
   ])
   const trayFiles = trayToolkitPaths(embedTray)
+  const miscFiles = runtimeMiscPaths()
   const trayImports = trayFiles.map(
     (file, index) =>
       `import tray${index} from ${JSON.stringify(importPath(entry, file))} with { type: "file" };`,
@@ -138,15 +161,28 @@ function writeReleaseEntrypoint(embedTray: boolean): string {
 ${trayFiles.map((file, index) => `  ${JSON.stringify(basename(file))}: tray${index},`).join('\n')}
 });
 `
+  const miscImports = miscFiles.map(
+    (file, index) =>
+      `import misc${index} from ${JSON.stringify(importPath(entry, file))} with { type: "file" };`,
+  )
+  const miscBlock =
+    miscFiles.length === 0
+      ? ''
+      : `
+(globalThis as { __AGENTHYDRA_EMBEDDED_MISC__?: Readonly<Record<string, string>> })
+  .__AGENTHYDRA_EMBEDDED_MISC__ = Object.freeze({
+${miscFiles.map((file, index) => `  ${JSON.stringify(basename(file))}: misc${index},`).join('\n')}
+});
+`
   writeFileSync(
     entry,
-    `${[...imports, ...trayImports].join('\n')}
+    `${[...imports, ...trayImports, ...miscImports].join('\n')}
 
 (globalThis as { __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>> })
   .__AGENTHYDRA_EMBEDDED_WEB__ = Object.freeze({
 ${routes.map(([route, asset]) => `  ${JSON.stringify(route)}: ${asset},`).join('\n')}
 });
-${trayBlock}
+${trayBlock}${miscBlock}
 (globalThis as { __AGENTHYDRA_RELEASE_BUILD__?: boolean }).__AGENTHYDRA_RELEASE_BUILD__ = true;
 // Stamped here because a compiled binary can be copied anywhere: asking git at runtime would
 // describe whatever checkout the exe was dropped into, not the build. Read by

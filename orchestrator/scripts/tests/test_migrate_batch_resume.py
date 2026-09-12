@@ -221,6 +221,129 @@ class ResumeTest(_BatchTest):
         self.assertEqual(courier_calls[0]["only"], {"d-sid-two"})
 
 
+class ResumeRetryTest(_BatchTest):
+    """A resume delivery that was ATTEMPTED and FAILED gets exactly one more go.
+
+    ⛔ WHY (lived through 2026-09-12). Three chats were migrated off an account that had hit
+    its 5-hour limit. One resume was delivered, one was left merely staged, and one FAILED -
+    and the one that failed was the chat that most needed it, having been cut off mid-task by
+    the very quota wall the move existed to escape. The batch had no retry, so that chat sat
+    dormant. Worse, the retry a person would reach for does not work: a failed row is no
+    longer `staged`, so `courier --yes --only <id>` answers "nothing staged - the courier has
+    nothing to deliver" and reads as success. A retry MUST re-stage first.
+
+    A SKIPPED row is the opposite case and must be left alone: the courier skips a chat whose
+    turn is in flight, and the breaker skips one that has failed repeatedly. Retrying those is
+    the futile cycle the breaker exists to stop."""
+
+    def stub_resume_with_failures(self, outcomes: dict[str, tuple[str, str]]):
+        """outcomes maps delivery id -> (kind, why) where kind is ok | fail | skip.
+
+        `fail` is a RESULT with ok False (the courier tried and could not), which is the case
+        the base harness cannot express and the one this whole class is about. Each call to
+        the courier pops the next outcome for that id, so a retry can differ from the first go."""
+        staged: list[dict] = []
+        courier_calls: list[dict] = []
+        pending = {k: list(v) if isinstance(v, list) else [v] for k, v in outcomes.items()}
+
+        def fake_stage(sid, text, **kw):
+            entry = {"id": f"d-{sid}", "session": sid, "text": text, **kw}
+            staged.append(entry)
+            return entry
+
+        def fake_run(max_deliveries, only, act, running_now=None, cap_exempt=False,
+                     hand_run=False):
+            courier_calls.append({"only": set(only), "hand_run": hand_run})
+            results, skipped = [], []
+            for did in sorted(only):
+                queue = pending.get(did) or [("ok", "delivered")]
+                kind, why = queue.pop(0) if len(queue) > 1 else queue[0]
+                if kind == "ok":
+                    results.append({"id": did, "ok": True, "outcome": why, "detail": ""})
+                elif kind == "fail":
+                    results.append({"id": did, "ok": False, "outcome": why, "detail": why})
+                else:
+                    skipped.append({"id": did, "title": did, "why": why})
+            return {"planned": [], "skipped": skipped, "results": results, "staged": len(only)}
+
+        self.patch(migrate_batch.hydralib, "resolve_one",
+                   lambda q: {"cliSessionId": q, "title": q, "instance": "blaarrrggghhh"})
+        self.patch(stage_reply, "gather_evidence", lambda match, sid: "its own last words")
+        self.patch(migrate_batch.deliverylib, "stage", fake_stage)
+        self.patch(courier, "run", fake_run)
+        return staged, courier_calls
+
+    def test_a_hard_failure_is_re_staged_and_retried_once_and_then_reads_delivered(self):
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": [("fail", "the daemon endpoint refused"), ("ok", "delivered")]})
+        code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        # RE-STAGED, not merely re-couriered: a failed row is no longer staged.
+        self.assertEqual(len(staged), 2, "the retry must stage the reply again")
+        self.assertEqual(staged[1]["by"], "migrate-resume-retry")
+        self.assertEqual(staged[1]["text"], "carry on", "the retry says the same thing")
+        self.assertEqual(len(calls), 2, "one first attempt, one retry")
+        self.assertTrue(all(c["hand_run"] for c in calls))
+
+        verdict = out["results"][0]["resume"]
+        self.assertTrue(verdict["delivered"])
+        self.assertIn("retry", verdict["why"].lower())
+        self.assertNotIn("retry", verdict, "a delivered reply has no retry left to run")
+        self.assertEqual(out["resume"]["delivered"], 1)
+        self.assertEqual(out["resume"]["staged"], 0, "it is not still waiting - it went")
+        self.assertEqual(out["resume"].get("retried"), 1)
+
+    def test_a_skipped_row_is_never_retried(self):
+        """A deferral is a decision. Hammering a mid-turn chat or a tripped breaker is the
+        futile cycle the breaker exists to end."""
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": ("skip", "its turn is IN FLIGHT")})
+        _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(len(staged), 1, "a skip keeps its staged row - nothing to re-stage")
+        self.assertEqual(len(calls), 1, "no second courier run for a deliberate deferral")
+
+    def test_a_retry_that_also_fails_says_so_and_still_hands_over_a_working_command(self):
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": ("fail", "the composer refused")})
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(len(calls), 2)
+        verdict = out["results"][0]["resume"]
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("retried once", verdict["why"])
+        self.assertIn("composer refused", verdict["why"])
+        self.assertIn("courier --yes --only d-sid-one", verdict["retry"],
+                      "the named retry must point at the row that is actually staged now")
+        self.assertEqual(out["resume"]["delivered"], 0)
+        self.assertEqual(out["resume"]["staged"], 1)
+
+    def test_a_failure_the_retry_cannot_even_re_stage_is_reported_not_swallowed(self):
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": ("fail", "the daemon endpoint refused")})
+
+        first = {"done": False}
+
+        def flaky_resolve(q):
+            if first["done"]:
+                raise RuntimeError("daemon went away")
+            first["done"] = True
+            return {"cliSessionId": q, "title": q, "instance": "blaarrrggghhh"}
+
+        self.patch(migrate_batch.hydralib, "resolve_one", flaky_resolve)
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(len(calls), 1, "nothing was re-staged, so there is nothing to run")
+        verdict = out["results"][0]["resume"]
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("could not re-stage", verdict["why"])
+        self.assertIn("RuntimeError", verdict["why"])
+
+
 class TerminateLiveTest(_BatchTest):
     def stub_engine(self, live_pid: int | None, stopped: bool):
         terminated: list[dict] = []

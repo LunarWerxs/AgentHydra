@@ -339,6 +339,81 @@ def _move_one(query: str, passthrough: list[str], terminate_live: bool = False) 
     return item
 
 
+def _restage(item: _Item, sid: str, text: str) -> dict | None:
+    """Stage `text` against one landed chat again. Returns the new row, or None if it could
+    not be staged (the reason is written onto the item's verdict).
+
+    ⛔ A RETRY HAS TO RE-STAGE, it cannot just re-run the courier. A delivery that was
+    ATTEMPTED and failed is marked `failed`, which means it is no longer staged - so the
+    obvious retry (`courier --yes --only <id>`) answers "nothing staged - the courier has
+    nothing to deliver" and looks like success. That is exactly what happened by hand on
+    2026-09-12 before this existed."""
+    try:
+        match = hydralib.resolve_one(sid)
+        evidence = stage_reply.gather_evidence(match, sid)
+        return deliverylib.stage(
+            sid, text,
+            title=str(match.get("title") or item.payload.get("title") or ""),
+            instance=str(match.get("instance") or item.payload.get("to") or ""),
+            evidence=evidence, by="migrate-resume-retry")
+    except Exception as err:
+        item.payload["resume"]["why"] += (
+            f" | retry could not re-stage: {type(err).__name__}: {str(err)[:120]}")
+        return None
+
+
+def _retry_hard_failures(hard: dict[str, _Item], text: str, tally: dict) -> None:
+    """ONE more attempt for each chat whose delivery was tried and FAILED.
+
+    ⛔ WHY ONLY THE HARD FAILURES. A row the courier SKIPPED is a deliberate deferral - a
+    mid-turn chat is never interrupted, and a tripped breaker is telling the machinery to
+    stop - so those keep their staged reply and their named retry, and hammering them is the
+    futile cycle the breaker exists to end. A row that was attempted and failed is the other
+    case entirely: on 2026-09-12 one of three chats failed on a transient and the batch,
+    having no retry, left the chat that MOST needed its resume (it had just been cut off by
+    the source account's quota wall) sitting dormant.
+
+    Every outcome is still reported. A retry that also fails says so, and keeps the retry
+    command for the new row so a person has something that works.
+    """
+    import courier
+
+    restaged: dict[str, _Item] = {}
+    for item in hard.values():
+        sid = str(item.payload["sessionId"])
+        entry = _restage(item, sid, text)
+        if entry is None:
+            continue
+        restaged[entry["id"]] = item
+        item.payload["resume"]["deliveryId"] = entry["id"]
+        item.payload["resume"]["retry"] = f"python orch.py courier --yes --only {entry['id']}"
+    if not restaged:
+        return
+    try:
+        report = courier.run(len(restaged), set(restaged), act=True, hand_run=True)
+    except Exception as err:
+        for item in restaged.values():
+            item.payload["resume"]["why"] += (
+                f" | retry raised {type(err).__name__}: {str(err)[:120]}")
+        return
+    outcome = {r.get("id"): r for r in report.get("results", [])}
+    skipped = {s.get("id"): s.get("why") for s in report.get("skipped", [])}
+    for did, item in restaged.items():
+        verdict = item.payload["resume"]
+        res = outcome.get(did)
+        if res and res.get("ok"):
+            verdict["delivered"] = True
+            verdict["why"] = f"delivered on retry: {res.get('outcome') or ''}".strip()
+            verdict.pop("retry", None)
+            tally["delivered"] += 1
+            tally["staged"] = max(0, tally["staged"] - 1)
+            tally["retried"] = tally.get("retried", 0) + 1
+        else:
+            why = (skipped.get(did) or (res or {}).get("detail")
+                   or (res or {}).get("outcome") or "still not delivered")
+            verdict["why"] += f" | retried once: {why}"
+
+
 def _resume_landed(items: list[_Item], text: str) -> dict:
     """PHASE FOUR: tell every landed chat to carry on. Returns the batch-level tally.
 
@@ -389,6 +464,9 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
         return tally
     outcome = {r.get("id"): r for r in report.get("results", [])}
     skipped = {s.get("id"): s.get("why") for s in report.get("skipped", [])}
+    # A row the courier ATTEMPTED and failed is retried once below; a row it SKIPPED is a
+    # deliberate deferral and is left alone. See _retry_hard_failures.
+    hard: dict[str, _Item] = {}
     for did, item in by_delivery.items():
         verdict = item.payload["resume"]
         res = outcome.get(did)
@@ -401,6 +479,10 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
             verdict["why"] = str(skipped.get(did) or (res or {}).get("detail")
                                or (res or {}).get("outcome") or "not delivered - still staged")
             tally["staged"] += 1
+            if did not in skipped and res is not None:
+                hard[did] = item
+    if hard:
+        _retry_hard_failures(hard, text, tally)
     return tally
 
 

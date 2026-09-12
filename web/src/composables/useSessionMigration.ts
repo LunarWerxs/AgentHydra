@@ -53,7 +53,10 @@ export function useSessionMigration(deps: {
           // folder name a row's label happened to fall through to.
           name: displayName(i),
           account: snap?.account ?? null,
-          isCurrent: s?.instance != null && s.instance === i.name,
+          // Claude rows only: `instance` also carries a CODEX instance's name now, and a Codex
+          // account that happens to share a name with a desktop folder must not mark that folder
+          // as the chat's current home.
+          isCurrent: s?.source === 'claude' && s.instance != null && s.instance === i.name,
           isRunning: i.isRunning,
         }
       })

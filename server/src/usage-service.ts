@@ -21,6 +21,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { resolveAccount, resolveCliConfigDirToken, resolveInstanceToken } from './core/accounts'
 import { cliInstanceForDesktop, getCliInstance, listCliInstances } from './core/cli-instances'
+import { codexUsageSnapshot, localCodexAccount, resolveCodexAccount } from './core/codex-account'
 import { listInstances } from './core/instances'
 import { normalizeInstancePath } from './core/paths'
 import { listClaudeProcesses } from './core/process'
@@ -30,6 +31,7 @@ import type { AuthType, UsageCheckResult, UsageReason, UsageSnapshot } from './t
 import {
   checkUsage,
   dropCachedUsage,
+  getCachedUsage,
   isNoData,
   lastUsageApiFailure,
   parseUsageOutput,
@@ -114,6 +116,34 @@ export const cliKey = (id: string): string => `cli:${id}`
  *  CODEX_HOME is created by this app and never renamed, so there is no path-spelling problem to
  *  normalize away here. */
 export const codexKey = (id: string): string => `codex:${id}`
+
+/** Shared by manual refresh, the fleet sweep, and instance routes. */
+export async function checkUsageForCodex(
+  codexHome: string,
+  id: string,
+  refresh = true,
+): Promise<UsageCheckResult> {
+  const key = codexKey(id)
+  const local = localCodexAccount(codexHome)
+  if (local.authMode !== 'chatgpt') dropCachedUsage(key)
+  else if (!refresh) {
+    const cached = getCachedUsage(key)
+    if (cached?.codexAccountId === local.accountId && cached)
+      return { snapshot: cached, cached: true, key, reason: 'ok' }
+    dropCachedUsage(key)
+  }
+  const { account, usage } = await resolveCodexAccount(codexHome)
+  if (!usage) {
+    return {
+      snapshot: codexUsageSnapshot(null, account.label),
+      cached: false,
+      key,
+      reason: account.status === 'loggedout' ? 'not_logged_in' : 'check_failed',
+    }
+  }
+  setCachedUsage(key, usage)
+  return { snapshot: usage, cached: false, key, reason: 'ok' }
+}
 
 /**
  * Check a DESKTOP instance's usage, trying every credential that could speak for this account:

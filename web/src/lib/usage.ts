@@ -80,6 +80,7 @@ export function usageCellLabel(
   now: Date = new Date(),
 ): string {
   if (!snap || isNoDataSnap(snap)) return '—'
+  if (scope === 'session' && snap.sessionLimitUnavailable) return 'N/A'
   const pct = usagePctFor(snap, scope, now)
   if (pct == null) return '—'
   return withScope ? `${pct}% ${scope === 'session' ? '5h' : 'wk'}` : `${pct}%`

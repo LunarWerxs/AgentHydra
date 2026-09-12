@@ -10,7 +10,9 @@ from the gate - so the courier can prove at send time that it is looking at the 
 and so a person reviewing the queue can see what the AI was answering.
 
 Usage: python stage_reply.py <title fragment | session id> --text "the reply" [--by name] [--json]
-       python stage_reply.py --list [--json]
+       python stage_reply.py --list [--state staged,failed|all] [--instance NAME] [--limit N] [--json]
+         (--list defaults to the ACTIONABLE rows - staged and failed - newest first, capped at
+          50. It used to print every row ever held, which no caller could read.)
        python stage_reply.py --cancel <delivery id> [--json]
 Exit:  0 staged/listed/cancelled - 3 not resolvable or bad usage - 1 daemon failure.
 """
@@ -29,6 +31,32 @@ from lib import hydralib
 
 _TAIL_BYTES = 400_000
 
+# ⛔ --list USED TO MEAN 'EVERY ROW THIS MACHINE HAS EVER HELD' (found 2026-09-12, diagnosing
+# a migration whose resume did not arrive). That was 178,575 characters over 120+ rows across
+# 15 instances, most of them expired or cancelled and belonging to other accounts, each
+# carrying a full reply body - so it blew the caller's token cap and was REFUSED, and the one
+# fact anybody wanted (which of three chats got its reply) could not be read from the tool
+# that owns it. The question --list exists to answer is 'what is waiting to go out now', and
+# those rows are a handful. History is still reachable with --state all.
+ACTIONABLE_STATES = ("staged", "failed")
+_ALL_STATES = ("staged", "delivered", "failed", "cancelled", "expired")
+_LIST_TEXT_CHARS = 100
+_DEFAULT_LIST_LIMIT = 20
+# A LIST ROW IS AN INDEX ENTRY, NOT THE RECORD. Trimming only `text` still left 67KB for 50
+# rows, because a row also carries `evidence` (up to 600 chars of the chat's own words) and
+# `verifyText`. Those matter when you are looking at ONE delivery and are pure weight in a
+# list, so the list projects. Ask for a row by id to see everything it holds.
+_LIST_FIELDS = ("id", "session", "title", "instance", "state", "by", "stagedAt",
+                "deliveredAt", "attempts", "deferrals")
+# ⛔ THE TAIL WINDOW IS A FIRST GUESS, NOT THE SEARCH (found live 2026-09-12, on a chat
+# walled after eleven minutes of tool work). The banner walk-back below is bounded by the
+# window it reads, so a chat whose last REAL words are older than _TAIL_BYTES of tool
+# records yielded the banner, nothing else, and an empty verify snippet - leaving exactly
+# the walled chat the walk-back exists for unwakeable all over again, by a third route.
+# The scan now widens until it finds real words or reaches the file; this is the ceiling,
+# so a pathological transcript cannot be read whole into memory.
+_MAX_SCAN_BYTES = 32_000_000
+
 
 @dataclass
 class _ParsedArgs:
@@ -39,6 +67,9 @@ class _ParsedArgs:
     by: str | None = None
     cancel_id: str | None = None
     do_list: bool = False
+    states: list[str] | None = None
+    instance: str | None = None
+    limit: int | None = None
     positional: list[str] = field(default_factory=list)
 
 
@@ -70,13 +101,37 @@ def last_rendered_text(sid: str) -> str:
     try:
         p = Path(tp)
         size = p.stat().st_size
-        with open(p, "rb") as f:
-            if size > _TAIL_BYTES:
-                f.seek(size - _TAIL_BYTES)
-                f.readline()
-            raw = f.read().decode("utf-8", errors="replace")
     except OSError:
         return ""
+    # Widen the window until real words turn up, the whole file has been read, or the
+    # ceiling is hit. One pass over _TAIL_BYTES answers the ordinary chat; a walled one
+    # that worked hard first needs to look further back, and looking further back is
+    # cheap compared with a chat that cannot be woken at all.
+    window = _TAIL_BYTES
+    while True:
+        try:
+            with open(p, "rb") as f:
+                if size > window:
+                    f.seek(size - window)
+                    f.readline()
+                raw = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+        found = _last_non_banner_assistant_text(raw)
+        if found:
+            return found
+        if window >= size or window >= _MAX_SCAN_BYTES:
+            return ""
+        window = min(size, _MAX_SCAN_BYTES, window * 8)
+
+
+def _last_non_banner_assistant_text(raw: str) -> str:
+    """The last thing the CHAT said in this slice of transcript, banner turns skipped.
+
+    Split out of last_rendered_text so the same rule can be applied to a widening series
+    of windows: the rule must not change with how much was read, or two window sizes
+    would disagree about the same chat.
+    """
     for line in reversed(raw.splitlines()):
         if '"text"' not in line:
             continue
@@ -129,25 +184,91 @@ def _parse_argv(argv: list[str]) -> _ParsedArgs:
             parsed.cancel_id = argv[i + 1]
             i += 2
             continue
+        if a == "--state" and i + 1 < len(argv):
+            raw = [s.strip() for s in argv[i + 1].split(",") if s.strip()]
+            parsed.states = list(_ALL_STATES) if "all" in raw else raw
+            i += 2
+            continue
+        if a == "--instance" and i + 1 < len(argv):
+            parsed.instance = argv[i + 1]
+            i += 2
+            continue
+        if a == "--limit" and i + 1 < len(argv):
+            try:
+                parsed.limit = max(0, int(argv[i + 1]))
+            except ValueError:
+                parsed.limit = None
+            i += 2
+            continue
         if not a.startswith("--"):
             parsed.positional.append(a)
         i += 1
     return parsed
 
 
-def _run_list(as_json: bool) -> int:
-    """Print every staged/delivered/failed/cancelled delivery row."""
-    rows = deliverylib.all_rows()
+def select_rows(rows: list[dict], states: list[str] | None, instance: str | None,
+                limit: int | None) -> tuple[list[dict], int]:
+    """Apply the filters, newest first, and say how many matched BEFORE the limit.
+
+    Split out so a test can pin the defaults without going through argv: the defaults ARE the
+    fix, and a default that silently widens again is the bug coming back.
+    """
+    want = [s.lower() for s in (states if states is not None else ACTIONABLE_STATES)]
+    out = [r for r in rows if str(r.get("state", "")).lower() in want]
+    if instance:
+        needle = instance.lower()
+        out = [r for r in out if needle in str(r.get("instance", "")).lower()]
+    out.sort(key=lambda r: int(r.get("stagedAt") or 0), reverse=True)
+    total = len(out)
+    cap = _DEFAULT_LIST_LIMIT if limit is None else limit
+    if cap:
+        out = out[:cap]
+    return out, total
+
+
+def _trim(row: dict) -> dict:
+    """One list row, projected to the fields a list is read FOR.
+
+    Everything bulky is dropped rather than shortened: the full `text`, `evidence` and
+    `verifyText` belong to a single row's record, never to an index of them.
+    """
+    out = {k: row[k] for k in _LIST_FIELDS if k in row}
+    body = str(row.get("text") or "")
+    out["text"] = body[:_LIST_TEXT_CHARS]
+    if len(body) > _LIST_TEXT_CHARS:
+        out["textTruncated"] = True
+    err = str(row.get("lastError") or "")
+    if err:
+        out["lastError"] = err[:200]
+    return out
+
+
+def _run_list(as_json: bool, states: list[str] | None = None, instance: str | None = None,
+              limit: int | None = None) -> int:
+    """Print the delivery rows worth acting on. Defaults to staged+failed, newest first.
+
+    ⛔ The default is NOT every state. See ACTIONABLE_STATES. `--state all` restores history,
+    and one row's full body is still readable by asking for that row.
+    """
+    rows, total = select_rows(deliverylib.all_rows(), states, instance, limit)
     if as_json:
-        print(json.dumps({"deliveries": rows}, indent=2))
+        print(json.dumps({
+            "deliveries": [_trim(r) for r in rows],
+            "shown": len(rows),
+            "matched": total,
+            "states": list(states if states is not None else ACTIONABLE_STATES),
+            "note": ("full history with --state all; each row's text is trimmed to "
+                     f"{_LIST_TEXT_CHARS} chars"),
+        }, indent=2))
     elif not rows:
-        print("nothing staged - the courier has nothing to deliver")
+        print("nothing staged - the courier has nothing to deliver"
+              + ("" if states is None else f" in state(s) {','.join(states)}"))
     else:
         for r in rows:
             mark = {"staged": "·", "delivered": "✓", "failed": "✗",
                     "cancelled": "-", "expired": "⌛"}.get(r["state"], "?")
             print(f"  {mark} [{r['state']}] {r['id']}  {r.get('title') or r['session']}")
-            print(f"      {r['text'][:100]}")
+            print(f"      {r['text'][:_LIST_TEXT_CHARS]}")
             if r.get("deferrals"):
                 print(f"      deferred {r['deferrals']}x (still staged - the world was not ready)")
             if r.get("lastError"):
@@ -155,6 +276,8 @@ def _run_list(as_json: bool) -> int:
                 # reader does not read a shelf-life expiry as something that went wrong.
                 label = "reason" if r["state"] == "expired" else "last error"
                 print(f"      {label}: {r['lastError'][:120]}")
+        if total > len(rows):
+            print(f"  ... {total - len(rows)} more match; raise --limit to see them")
     return 0
 
 
@@ -249,7 +372,7 @@ def main(argv: list[str]) -> int:
     parsed = _parse_argv(argv)
 
     if parsed.do_list:
-        return _run_list(parsed.as_json)
+        return _run_list(parsed.as_json, parsed.states, parsed.instance, parsed.limit)
 
     if parsed.cancel_id:
         return _run_cancel(parsed.cancel_id, parsed.as_json)

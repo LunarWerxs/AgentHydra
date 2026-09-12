@@ -269,6 +269,66 @@ export async function listCodexInstances(
   return withNumbers([...stored, ...discoveredInstances(runtimes, claimed)])
 }
 
+/** One Codex instance reduced to what a transcript reader needs: where its store is, and what to
+ *  call the account that owns it. */
+export interface CodexInstanceStore {
+  /** `default` for the non-isolated install, else the stored instance's uuid. */
+  id: string
+  /** The permanent short handle (`#7`), shared with the Claude desktop + CLI instances in one
+   *  sequence. 0 only when the number registry could not be read. */
+  num: number
+  /** What the UI calls it: the stored label, or the CODEX_HOME folder name for the default. */
+  name: string
+  /** That instance's CODEX_HOME — the directory holding `sessions/`, `archived_sessions/` and
+   *  `session_index.jsonl`. */
+  codexHome: string
+  /** `codex:<id>` — the same ref instance-numbers.ts and usage-service.ts already key on. */
+  ref: string
+}
+
+/**
+ * Every Codex CODEX_HOME whose transcripts this machine can read, for the session indexer.
+ *
+ * WHY THIS EXISTS: the indexer resolved the Codex store from `CODEX_HOME` alone, so every chat on
+ * a MANAGED Codex account — which lives under `<CONFIG_DIR>/codex-instances/<id>/sessions` — was
+ * invisible to listing, search and tailing. Measured 2026-09-11: 100 Codex rows, not one of them
+ * from a managed instance, and `tail_session` answering "transcript not found" for a 2.9 MB
+ * rollout that was on disk the whole time. Three managed accounts' entire history was unreachable
+ * from the tools whose whole job is to answer "which account was doing X".
+ *
+ * SYNCHRONOUS AND STORE-ONLY, unlike {@link listCodexInstances}, and both halves are deliberate.
+ * The transcript index rebuilds on a TTL behind every session list, so the roots it scans must be
+ * answerable from a file read; listCodexInstances enumerates desktop PROCESSES, which on Windows
+ * means shelling out, and that cannot go inside a sweep. The rows it would add are also the ones
+ * this must not serve: an EXTERNAL Codex Desktop is only discovered while it is running, so its
+ * transcripts would appear in the index and vanish again with the app — a store that blinks is
+ * worse than an honest omission.
+ *
+ * The DEFAULT install is included, under the same synthetic `default` id listCodexInstances gives
+ * it, so EVERY Codex row can name the account that wrote it rather than only the managed ones.
+ */
+export function codexInstanceStores(): CodexInstanceStore[] {
+  const rows = readStore().instances.map((instance) => ({
+    id: instance.id,
+    name: instance.name,
+    codexHome: instance.codexHome,
+  }))
+  // First, so the default install's roots are scanned in exactly the order they were before this
+  // function existed. Skipped when a stored instance is deliberately pointed at the default home,
+  // which is the same claim rule listCodexInstances applies to discovery.
+  if (!rows.some((row) => codexPathKey(row.codexHome) === codexPathKey(CODEX_HOME)))
+    rows.unshift({
+      id: DEFAULT_CODEX_INSTANCE_ID,
+      name: basename(CODEX_HOME),
+      codexHome: CODEX_HOME,
+    })
+  const numbers = instanceNumbers(rows.map((row) => instanceRef('codex', row.id)))
+  return rows.map((row) => {
+    const ref = instanceRef('codex', row.id)
+    return { ...row, ref, num: numbers.get(ref) ?? 0 }
+  })
+}
+
 /**
  * One STORED instance by id. Stays synchronous, and stays store-only, because every caller is a
  * mutating action (launch / open / quit / rename / delete) and those apply solely to instances this
