@@ -23,6 +23,64 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **The single-file `.exe` ships its tray icon, and "is the tray running?" stops answering
+  backwards** (`server/src/tray-toolkit.ts`, `server/src/tray-host.ts`, `server/src/index.ts`,
+  `scripts/build.ts`, `server/src/tray-bootstrap.mjs` via the kit, plus their suites). Two faults,
+  one symptom - a fresh build with no icon anywhere:
+  - The compiled exe embedded every Vite asset and nothing from `misc\`, so
+    `misc\lunarwerx-tray.exe` could not exist beside it, `startTrayHostIfMissing` skipped with
+    `no-tray-toolkit` forever, the tray invariant exempted the build entirely, and the app fired a
+    notification telling the person to go download the ZIP instead. 340 KB of Win32 binary is not
+    a reason to ship an app with no icon, no Quit and no supervisor. The host, its config and its
+    icon now ride inside the binary and are written out to `<stateDir>/tray/<version>` on first
+    run, with the config's shipped `appRoot: ".."` (right only for the extracted zip) replaced by
+    the absolute directory of the RUNNING exe and `compiledExe` set to its real filename - so a
+    renamed or relocated download still gets a working watchdog.
+  - The probe said "running" PRECISELY when no tray existed. It read a non-zero exit from
+    `Get-Process -Name lunarwerx-tray -ErrorAction SilentlyContinue | Select -ExpandProperty Id`
+    as "running", but `SilentlyContinue` suppresses the error TEXT, not the error RECORD: an
+    absent process exits 1 (measured: absent → 1, present → 0). So the one case the probe exists
+    for was the one it got backwards, and the 2026-09-03 "the daemon starts its own tray host"
+    fix could never once have fired - the boot log said `already-running` while no host existed
+    on the machine. It now counts without raising an error record and returns a TRI-STATE, because
+    the two callers need opposite defaults: an unknown STARTS the host (a named mutex makes a
+    double start harmless) while the invariant still reads an unknown as running, since that one
+    can shut the daemon down. The mechanism moved into the kit (`tray-bootstrap`), because
+    RepoYeti, DevWebUI and ReDesign shipped the same hole and had each written it into their
+    README as a limitation.
+
+- **A Claude Desktop chat can identify itself again: `whoami` answers for the CALLER, not for the
+  daemon** (`server/src/mcp.ts`, `server/src/index.ts`, `server/src/core/process.ts`, plus tests).
+  `mcp-register` registers the HTTP transport for every client, so the identity tools ran inside
+  the daemon, walked the DAEMON's ancestry, and told an agent on instance #8 that it was "not
+  running under Claude Code at all" - taking `move_chat to: "here"` (refused unless the identity
+  is exact) and every quota attribution down with it. The caller opened a loopback socket, so the
+  OS can name its pid, and that pid IS the engine under its instance directory. Resolved per
+  request, unforgeable (the binding is a function; JSON cannot carry one), deliberately uncached
+  (a recycled port would name the wrong process, and that is how 13 chats once landed on the wrong
+  account), and null on any ambiguity so it falls back to the old refusal rather than guessing.
+
+- **A chat cut off mid-turn stops reading as "working" forever** (`orchestrator/scripts/lib/
+  gatelib.py`, `orchestrator/scripts/lib/enginelib.py`). Its last record is a tool RESULT, which is
+  neither a completed turn nor an orphaned tool call nor a usage wall, so a freshly landed engine
+  that had written nothing at all still gated as busy - migrate refused to move it again and only
+  `--terminate-live` could, AgentHydra blocking its own follow-up move. The orphan rule's own
+  evidence settles the general case: if the LAST record of any kind predates the engine, that
+  engine has produced nothing since it booted.
+
+- **A press that cannot reach its pane is diagnosable, counted, and no longer skipped when a
+  person asked for it** (`orchestrator/scripts/unblock_prompts.py`, `orchestrator/scripts/
+  interview.py`, `orchestrator/scripts/lib/ledgerlib.py`). `interview --apply` answered a queued
+  escalation and the row selection was withheld because the row was younger than the 15-minute
+  window meant for unattended LANES, so the person's own decision died as a bare "could not reach
+  that chat's pane" - twice, with the actuator's own diagnosis dropped into a field nothing
+  printed and nothing counting the failures.
+
+- **`orchestrator_run` stops losing a long run's report** (`server/src/mcp.ts`). A run declared
+  longer than 120s now detaches itself and answers with the `operationId` and how to poll it;
+  `sweep --all --yes` with `timeout_secs: 1200` used to return only "The operation timed out"
+  while the sweep ran to completion in the daemon, with no id to re-attach to.
+
 - **A non-ASCII chat title survives an actuator's stdout pipe** (`misc/Manage-DesktopChat.ps1`,
   `misc/Deliver-DesktopChat.ps1`, `orchestrator/scripts/actuator/{manage_desktop_chat,
   approve_prompt,deliver_desktop_chat,rename_first,chip}.ps1`,
