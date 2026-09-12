@@ -35,9 +35,13 @@
 // writes, moves or repairs one — same contract as every other store AgentHydra reads.
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
 import type { TailEvent } from './types'
+
+/** The last segment of a path on EITHER separator. A cwd is whatever the harness recorded, so a
+ *  home written on Windows keeps its backslashes wherever it is read. */
+const pathLeaf = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?? ''
 
 /** Directory names inside a DSH home. Named once because three different readers below join them. */
 const SESSIONS_DIR = 'sessions'
@@ -297,7 +301,10 @@ export function listDshSessions(root: string): DshSessionRecord[] {
 
       out.push({
         session_id: sessionId,
-        project: cwd ? basename(cwd) || cwd : projectDir,
+        // The cwd is whatever the HARNESS recorded, so a home written on Windows carries
+        // backslashes wherever it is read; node's basename only splits on the host's separator,
+        // which is why the Linux CI leg listed `D:\work\scratch` as the whole project name.
+        project: cwd ? pathLeaf(cwd) || cwd : projectDir,
         cwd,
         title: compact(title),
         created_at: created,

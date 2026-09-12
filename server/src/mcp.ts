@@ -2522,16 +2522,16 @@ export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
  * - so it hands that answer in here rather than letting the identity tools guess from a process
  * that happens to be the daemon (see detectForCaller). */
 export function toolsForCaller(getCallerPid: () => Promise<number | null>): McpEngineTool[] {
-  return withDaemonWarning(
-    TOOLS.map((t) =>
-      CALLER_AWARE_TOOLS.has(t.name)
-        ? {
-            ...t,
-            run: (args: Record<string, unknown>, signal?: AbortSignal) =>
-              t.run({ ...args, [CALLER_PID_ARG]: getCallerPid }, signal),
-          }
-        : t,
-    ),
+  // Only the identity tools are rebound; every other entry is the SAME object (pinned by
+  // mcp-caller-identity.test.ts). The side-run wrapper is applied by the HTTP route on top of this.
+  return TOOLS.map((t) =>
+    CALLER_AWARE_TOOLS.has(t.name)
+      ? {
+          ...t,
+          run: (args: Record<string, unknown>, signal?: AbortSignal) =>
+            t.run({ ...args, [CALLER_PID_ARG]: getCallerPid }, signal),
+        }
+      : t,
   )
 }
 

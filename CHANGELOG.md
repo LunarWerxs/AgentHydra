@@ -187,6 +187,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
 
+- **Main's CI had been red since 2026-09-11, on every GitHub leg, and is green again.** Three
+  inherited failures, none of them visible on a developer machine:
+
+  - **The tray tests never said which world they were in.** `startTrayHostIfMissing` answers
+    `reason: 'headless'` on a build agent (since ec329bc), which is right, and the four tests of the
+    desktop path inherited that from the runner's `CI=1` and failed on both GitHub legs while
+    passing everywhere else. They state `headless: false` now, and two new cases pin the build-agent
+    answer, explicit and from the environment (`tests/tray-host.test.ts`).
+  - **A DeepSeek session's project name was the whole Windows cwd on Linux** (`dsh-sessions.ts`).
+    The harness records the cwd it ran in, backslashes and all, and node's `basename` splits only on
+    the host's separator; the leaf is taken on either separator now.
+  - **The search index switched itself off for good after one failed open** (`search-index.ts`).
+    A transient cause (GitHub's Windows runner: one 6.6 s open of a fresh file, then a failure) set
+    a permanent latch, and every query for the rest of the process fell back to the scan. It is a
+    30-second cooldown now, proven by a test whose cause clears mid-run.
+
 - **A stale `runtime.json` no longer reads as "the daemon is not running", and can no longer make a
   second daemon** (`server/src/instance.ts`, `index.ts`, `mcp.ts`, `side-run.ts`,
   `orchestrator/scripts/lib/hydralib.py`, four suites). On 2026-09-12 a probe daemon left the

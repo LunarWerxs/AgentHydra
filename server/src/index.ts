@@ -85,6 +85,7 @@ import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   SERVER_INFO as MCP_SERVER_INFO,
   toolsForCaller as mcpToolsForCaller,
+  withDaemonWarning as mcpWithDaemonWarning,
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import {
@@ -275,9 +276,11 @@ app.post('/api/mcp', async (c) => {
   // that process is this daemon - but the socket knows: Bun hands us the peer's port, and the OS
   // maps it to the pid that opened it (core/process.ts). Resolved LAZILY, so only whoami and
   // check_my_usage ever pay for the lookup, and cached per port so a keep-alive client pays once.
+  // Wrapped here, not inside toolsForCaller: that function's contract is "identity tools rebound,
+  // everything else the same object", and the side-run warning (side-run.ts) is a transport concern.
   const ctx = {
     serverInfo: MCP_SERVER_INFO,
-    tools: mcpToolsForCaller(() => callerPidOf(c)),
+    tools: mcpWithDaemonWarning(mcpToolsForCaller(() => callerPidOf(c))),
     instructions: MCP_INSTRUCTIONS,
   }
   const { status, json } = await handleMcpHttp(body, ctx, handleMcpRpc)

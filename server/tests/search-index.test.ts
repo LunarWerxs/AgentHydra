@@ -8,7 +8,7 @@
 // Fixtures are hand-written JSONL in a temp dir: no real session data, no secrets.
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
 import {
@@ -21,6 +21,7 @@ import {
   searchIndexCoverage,
   searchIndexPath,
   searchIndexStatus,
+  setSearchIndexClockForTests,
   setSearchIndexPathForTests,
   toMatchExpression,
 } from '../src/search-index'
@@ -207,6 +208,32 @@ describe('refresh and query', () => {
     expect(searchIndexCoverage([a, b])).toEqual({ covered: 1, stale: 1 })
     await refreshSearchIndex([a, b])
     expect(searchIndexCoverage([a, b])).toEqual({ covered: 2, stale: 0 })
+  })
+
+  test('a failed open is a cooldown, not a latch: the index comes back once the cause clears', async () => {
+    // The GitHub Windows runner (2026-09-12) had exactly this shape: one open of a fresh file
+    // failed (6.6 s, a scanner still holding it), and the old permanent latch then answered
+    // "0 covered, all stale" for the rest of the process. Here the cause is a missing parent
+    // directory, which sqlite cannot create; it clears the moment the directory exists.
+    let clock = 1_000_000
+    setSearchIndexClockForTests(() => clock)
+    try {
+      const parent = join(dir, 'not-yet')
+      setSearchIndexPathForTests(join(parent, 'index.db'))
+      const a = session('a', [turn('user', 'hello')])
+      await refreshSearchIndex([a])
+      expect(searchIndexCoverage([a])).toEqual({ covered: 0, stale: 1 })
+
+      mkdirSync(parent) // the cause is gone...
+      await refreshSearchIndex([a])
+      expect(searchIndexCoverage([a])).toEqual({ covered: 0, stale: 1 }) // ...but the cooldown holds
+
+      clock += 31_000
+      await refreshSearchIndex([a])
+      expect(searchIndexCoverage([a])).toEqual({ covered: 1, stale: 0 }) // and then it recovers
+    } finally {
+      setSearchIndexClockForTests(null)
+    }
   })
 
   test('an unreadable transcript is skipped rather than failing the pass', async () => {
