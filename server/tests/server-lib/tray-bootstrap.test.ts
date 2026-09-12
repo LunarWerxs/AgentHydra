@@ -17,12 +17,14 @@ import { describe, expect, test } from 'bun:test'
 import { join as nodeJoin } from 'node:path'
 import {
   isCompleteTrayToolkit,
+  isHeadlessEnv,
   materializeTrayToolkit,
   parseTrayHostCount,
   patchTrayConfig,
   startTrayHostIfMissing,
   TRAY_HOST_EXE,
   trayHostDecision,
+  trayHostProbeArgv,
   trayToolkitFiles,
 } from '../../src/tray-bootstrap.mjs'
 
@@ -160,6 +162,34 @@ describe('a compiled build places its own tray', () => {
   })
 })
 
+describe('the probe asks about THIS app', () => {
+  // ⛔ Found live: every kit app runs the same `lunarwerx-tray.exe`, so counting by process name
+  // answered "running" for DevWebUI while the host it saw belonged to AgentHydra. DevWebUI placed
+  // its toolkit, skipped with 'already-running', and showed no icon. With four apps sharing the
+  // binary, only the first to start would ever get a tray.
+  test('the filter narrows to the config this app passes', () => {
+    const argv = trayHostProbeArgv(CONFIG)
+    const command = argv[argv.length - 1] ?? ''
+    expect(command).toContain(`Name='${TRAY_HOST_EXE}'`)
+    expect(command).toContain(`-like '*${CONFIG}*'`)
+  })
+
+  test('no config counts any host - the old behaviour, correct only on a one-app machine', () => {
+    const command = trayHostProbeArgv().at(-1) ?? ''
+    expect(command).toContain(`Name='${TRAY_HOST_EXE}'`)
+    expect(command).not.toContain('Where-Object')
+  })
+
+  test('a config name cannot close the quote and continue the command', () => {
+    // The danger is punctuation, not vocabulary: what must not survive is the quote that would end
+    // the argument and the semicolon that would start a second command. The surviving letters are
+    // inert inside a -like pattern.
+    const command = trayHostProbeArgv("x'; Remove-Item C:\\ -Recurse; '").at(-1) ?? ''
+    expect(command).not.toContain(';')
+    expect(command).toContain("-like '*xRemove-ItemC-Recurse*'")
+  })
+})
+
 describe('the probe answers a tri-state', () => {
   test('a count is a number, and only a number', () => {
     expect(parseTrayHostCount('0\r\n')).toBe(false)
@@ -185,6 +215,9 @@ describe('starting the host', () => {
           configFile: CONFIG,
           hideTray: () => false,
           platform: 'win32',
+          // Stated outright: this suite RUNS on CI, where the env sniff is true and every one of
+          // these cases would otherwise assert the wrong thing.
+          headless: false,
           exists: () => true,
           isRunning,
           spawnHost: (exe: string, cwd: string, config: string) =>
@@ -229,9 +262,27 @@ describe('starting the host', () => {
     expect(s.spawned).toEqual([])
   })
 
+  test('a build agent gets no tray host at all', async () => {
+    // ⛔ Three release pipelines went red at once on 2026-09-12, all with "EBUSY: resource busy or
+    // locked" deleting the smoke test's scratch HOME - AFTER the smoke test had printed its own ✓.
+    // The host is detached so it outlives the daemon it supervises, which is right on a desktop and
+    // exactly wrong on a runner that boots the exe, kills it, and removes the directory.
+    const s = start(async () => false, { headless: true })
+    expect(await s.run()).toMatchObject({ start: false, reason: 'headless' })
+    expect(s.spawned).toEqual([])
+  })
+
+  test('isHeadlessEnv reads the markers CI actually sets', () => {
+    expect(isHeadlessEnv({})).toBe(false)
+    expect(isHeadlessEnv({ CI: 'true' })).toBe(true)
+    expect(isHeadlessEnv({ GITHUB_ACTIONS: 'true' })).toBe(true)
+    expect(isHeadlessEnv({ PATH: '/usr/bin' })).toBe(false)
+  })
+
   test('the pure decision keeps every skip distinguishable', () => {
     const base = {
       platform: 'win32',
+      headless: false,
       compiled: true,
       toolkitPresent: true,
       hideTray: false,

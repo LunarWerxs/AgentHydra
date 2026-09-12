@@ -33,6 +33,9 @@ function starter(isRunning: () => Promise<boolean | null>) {
         compiled: true,
         hideTray: () => false,
         platform: 'win32',
+        // Stated outright: this suite RUNS on CI, where the headless sniff is true and every one
+        // of these cases would otherwise assert the wrong thing.
+        headless: false,
         exists: () => true, // the toolkit is there
         isRunning,
         spawnHost: (exe) => void spawned.push(exe),
@@ -88,6 +91,7 @@ describe('startTrayHostIfMissing', () => {
       compiled: true,
       hideTray: () => false,
       platform: 'win32',
+      headless: false,
       toolkitDir: placed,
       exists: () => true,
       isRunning: async () => false,
@@ -105,6 +109,7 @@ describe('startTrayHostIfMissing', () => {
       compiled: true,
       hideTray: () => false,
       platform: 'win32',
+      headless: false,
       exists: () => false,
       isRunning: async () => false,
       spawnHost: () => {

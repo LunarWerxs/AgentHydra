@@ -71,17 +71,27 @@ export function materializeTrayToolkit(deps: TrayToolkitDeps): Promise<TrayToolk
 /** The probe's stdout -> true / false / null (null = could not tell). */
 export function parseTrayHostCount(stdout: string): boolean | null;
 
-/** Is a tray host process alive right now? true / false / null = could not tell. */
+/** Is a tray host FOR THIS APP alive right now? true / false / null = could not tell. Every kit app
+ *  runs the same binary name, so `configFile` (which the host carries on its command line) is what
+ *  keeps a sibling's host from answering for yours. Omitting it counts any host. */
 export function trayHostProcessState(opts?: {
   spawnProbe?: (argv: string[]) => Promise<string>;
+  configFile?: string;
 }): Promise<boolean | null>;
+
+/** The probe's command line, exported so the filter can be asserted without spawning anything. */
+export function trayHostProbeArgv(configFile?: string): string[];
 
 export type TrayHostSkipReason =
   | 'not-windows'
+  | 'headless'
   | 'not-compiled'
   | 'no-tray-toolkit'
   | 'hidden-by-setting'
   | 'already-running';
+
+/** A build agent rather than a person's desktop (CI / GITHUB_ACTIONS / TF_BUILD / …). */
+export function isHeadlessEnv(env?: Record<string, string | undefined>): boolean;
 
 export type TrayHostDecision = { start: true } | { start: false; reason: TrayHostSkipReason };
 
@@ -92,6 +102,8 @@ export function trayHostDecision(input: {
   toolkitPresent: boolean;
   hideTray: boolean;
   alreadyRunning: boolean;
+  /** A build agent: no desktop to put an icon on, and a detached host would outlive the job. */
+  headless?: boolean;
 }): TrayHostDecision;
 
 export interface StartTrayHostDeps {
@@ -99,6 +111,9 @@ export interface StartTrayHostDeps {
   compiled: boolean;
   configFile: string;
   hideTray: () => boolean;
+  /** Overrides the CI sniff (isHeadlessEnv). */
+  headless?: boolean;
+  env?: Record<string, string | undefined>;
   /** Where a materialized copy landed; without one, `<appRoot>/misc` is used. */
   toolkitDir?: string | null;
   platform?: string;

@@ -39,7 +39,10 @@ export const TRAY_HOST_CONFIG = 'AgentHydra-Tray.json'
  *  the start path, where an unknown means "start it" because a named mutex makes a double start
  *  harmless. Two callers, two defaults, one honest tri-state underneath (tray-invariant.ts). */
 export async function trayHostRunning(): Promise<boolean> {
-  return (await trayHostProcessState()) ?? true
+  // Scoped to THIS app's config: every kit app runs the same lunarwerx-tray.exe, so an unscoped
+  // count answers "running" for whichever sibling happens to be up (measured 2026-09-11, when
+  // DevWebUI skipped its own tray because AgentHydra's host was alive).
+  return (await trayHostProcessState({ configFile: TRAY_HOST_CONFIG })) ?? true
 }
 
 /** Start the tray host if nothing else has. `toolkitDir` is where a materialized copy landed (a

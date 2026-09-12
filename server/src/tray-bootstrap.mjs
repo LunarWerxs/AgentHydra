@@ -169,13 +169,23 @@ export function parseTrayHostCount(stdout) {
 }
 
 /**
- * Is a tray host process alive right now? `true` / `false` / `null` = could not tell. The count
- * below cannot raise an error record at all, which is the whole point (see this file's header).
- * PowerShell is a console program, hence windowsHide.
+ * Is a tray host FOR THIS APP alive right now? `true` / `false` / `null` = could not tell.
+ *
+ * ⛔ WHICH APP'S HOST? (found live, 2026-09-11, minutes after the embed landed). Every kit app runs
+ * the SAME binary name, `lunarwerx-tray.exe`, so a probe that counts by process name answers "yes,
+ * running" for an app whose icon is nowhere - it is seeing a SIBLING's host. Measured: AgentHydra's
+ * host was up, DevWebUI placed its toolkit correctly, then skipped with 'already-running' and
+ * showed no icon. With four apps sharing the binary, only the first one to start would ever get a
+ * tray. The host's own command line carries its config filename (`lunarwerx-tray.exe
+ * DevWebUI-Tray.json`) - that IS the per-app discriminator, and the host already uses a per-app
+ * named mutex for the same reason. Without a configFile this counts any host, which is the old
+ * behaviour and only correct for a machine running one kit app.
+ *
+ * The count cannot raise an error record at all, which is the other half of this function's story
+ * (see the file header). PowerShell is a console program, hence windowsHide.
  */
-export async function trayHostProcessState({ spawnProbe } = {}) {
+export async function trayHostProcessState({ spawnProbe, configFile } = {}) {
   try {
-    const name = TRAY_HOST_EXE.replace(/\.exe$/i, '')
     const run =
       spawnProbe ??
       (async (argv) => {
@@ -189,18 +199,26 @@ export async function trayHostProcessState({ spawnProbe } = {}) {
         await proc.exited
         return out
       })
-    return parseTrayHostCount(
-      await run([
-        'powershell',
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `@(Get-Process | Where-Object { $_.ProcessName -eq '${name}' }).Count`,
-      ]),
-    )
+    return parseTrayHostCount(await run(trayHostProbeArgv(configFile)))
   } catch {
     return null
   }
+}
+
+/** The probe command line. Exported so its shape is testable without spawning anything: the
+ *  filter is the whole correctness question, and it is a string built at runtime. */
+export function trayHostProbeArgv(configFile) {
+  // Only the characters a config filename can legitimately hold, so nothing here can close the
+  // quote and continue the command - this string is interpolated into a shell.
+  const safe = String(configFile ?? '').replace(/[^A-Za-z0-9._-]/g, '')
+  const mine = safe ? ` | Where-Object { $_.CommandLine -like '*${safe}*' }` : ''
+  return [
+    'powershell',
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    `@(Get-CimInstance Win32_Process -Filter "Name='${TRAY_HOST_EXE}'"${mine}).Count`,
+  ]
 }
 
 /**
@@ -209,6 +227,13 @@ export async function trayHostProcessState({ spawnProbe } = {}) {
  */
 export function trayHostDecision(input) {
   if (input.platform !== 'win32') return { start: false, reason: 'not-windows' }
+  // ⛔ NEVER ON A BUILD AGENT (found 2026-09-12, by three release pipelines going red at once).
+  // A CI runner has no desktop to put an icon on, and the host is DETACHED on purpose so it
+  // outlives the daemon it supervises - which is right on a person's machine and wrong here: each
+  // app's release job boots the compiled exe against a scratch HOME, kills it, and deletes that
+  // directory, and the surviving host held it open. "EBUSY: resource busy or locked" on a smoke
+  // test that had already printed its own ✓ is what that looks like from the other end.
+  if (input.headless) return { start: false, reason: 'headless' }
   // A source checkout is launched from its own shortcut, which IS the tray host. Starting it from
   // `bun run dev` would give every developer an icon they did not ask for.
   if (!input.compiled) return { start: false, reason: 'not-compiled' }
@@ -236,14 +261,24 @@ function defaultSpawnHost(exe, cwd, configFile) {
  * Start the tray host if nothing else has. `toolkitDir` is where a materialized copy landed; without
  * one this looks in `<appRoot>/misc`, which is the source checkout and the extracted zip.
  */
+/** A build agent, not a person's desktop. The standard markers every major CI sets; an explicit
+ *  `headless` in deps wins, so a caller (or a test) can state it outright. */
+export function isHeadlessEnv(env = process.env) {
+  return Boolean(
+    env.CI || env.GITHUB_ACTIONS || env.TF_BUILD || env.BUILDKITE || env.JENKINS_URL || env.GITLAB_CI,
+  )
+}
+
 export async function startTrayHostIfMissing(deps) {
   const toolkitDir = deps.toolkitDir || join(deps.appRoot, 'misc')
   const exe = join(toolkitDir, TRAY_HOST_EXE)
   const exists = deps.exists ?? existsSync
   const platform = deps.platform ?? process.platform
+  const headless = deps.headless ?? isHeadlessEnv(deps.env)
   // Cheap facts first, so the process probe only ever runs when it could change the answer.
   const structural = trayHostDecision({
     platform,
+    headless,
     compiled: deps.compiled,
     toolkitPresent: exists(exe) && exists(join(toolkitDir, deps.configFile)),
     hideTray: deps.hideTray(),
@@ -252,12 +287,16 @@ export async function startTrayHostIfMissing(deps) {
   if (!structural.start) return { ...structural, exe }
   const decision = trayHostDecision({
     platform,
+    headless: false, // already ruled out above; this call only asks about the process probe
     compiled: deps.compiled,
     toolkitPresent: true,
     hideTray: false,
     // ⛔ An UNKNOWN starts it. See this file's header: a duplicate is impossible (named mutex),
     // while a skip leaves the app with no icon - which is the failure this module exists to prevent.
-    alreadyRunning: (await (deps.isRunning ?? trayHostProcessState)()) ?? false,
+    // The probe is scoped to THIS app's config, or a sibling app's host answers for us.
+    alreadyRunning:
+      (await (deps.isRunning ?? (() => trayHostProcessState({ configFile: deps.configFile })))()) ??
+      false,
   })
   if (decision.start) (deps.spawnHost ?? defaultSpawnHost)(exe, toolkitDir, deps.configFile)
   return { ...decision, exe }
