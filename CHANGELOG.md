@@ -9,6 +9,58 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **DeepSeek Harness (`@deepseek-ai/dsh`) is a first-class session source** (`server/src/
+  dsh-sessions.ts` and its suite, plus `agent-catalog.ts`, `types.ts`, `transcript.ts`,
+  `sessions.ts`, `session-search.ts`, `session-export.ts`, `analytics.ts`, `pricing.ts`, `mcp.ts`
+  and the web's label/filter/chart maps). Its chats now list, search, tail, export and PRICE
+  alongside Claude, Codex, OpenCode and Hermes — read straight off `~/.dsh` (or `$DSH_HOME`, the
+  harness's own override precedence), with nothing to configure and nothing written back.
+
+  It is a sixth reader rather than a catalog row claiming someone else's format because the store is
+  a third shape: one file per session like Claude's, but the bytes are **multi-frame Zstandard**, so
+  every generic path that opens a transcript and reads lines would have got binary and silently
+  found nothing — `Bun.file().text()` on those bytes does not throw, it returns mojibake, and the
+  session would have listed with a garbage title and an empty transcript rather than erroring. Read
+  out of the harness's OWN shipped source (0.1.5-rc.1), not inferred from one transcript:
+
+  - **The listing is cheap because the harness already did the work.** `storages/session_projcache/`
+    is its own materialized view of each log — title, cwd, created-at, token totals, last prompt —
+    so listing N sessions costs N small JSON reads instead of N decompressions. It is treated as the
+    cache it is: every field re-derives from the log, and a session with no projection still lists
+    by decoding its header.
+  - **A torn tail does not hide a live session.** The log is appended as independent frames and the
+    backend documents crash recovery, so the last frame on disk can be half-written; a failed decode
+    falls back to the longest prefix that ends on a frame boundary, which costs nothing in the
+    normal case because the normal case succeeds first time.
+  - **Archived state is real**, read from the harness's own `workspace.json` — the thing the
+    `foreign` lane structurally cannot do, where every adapter hardcodes `archived: false`.
+  - **The transcript shows the conversation and not the bookkeeping.** Fifty-odd event types exist;
+    four carry who-said-what. The harness's injected runtime-context snapshots arrive as user
+    messages with `source.kind: 'plugin'` and are dropped — showing them would put "Current DSH file
+    policy: workspace-write…" on screen as though the user had typed it.
+  - **Spend is per TURN, a first for a non-Claude source.** OpenCode and Hermes hand back one
+    aggregate and land a whole session on one day; DSH timestamps every assistant message, so its
+    turns are apportioned to the days and hours they happened in. ⛔ Its counts are DISJOINT
+    (`inputTokens` is uncached input only, cache reads reported separately), which its own type
+    documents and which this reader relies on — folding cache reads back into input would
+    double-count most of a long session.
+  - **`deepseek-flash` and `deepseek-v4-pro` are priced** from DeepSeek's published rates (checked
+    2026-09-12), because the downloaded LiteLLM catalog has no `deepseek-flash` key at all and every
+    harness session would otherwise have read UNPRICED forever. Cache rates are absolute, not
+    derived: DeepSeek's cache hit is 2% of its input rate against Anthropic's 10%, so the derived
+    ratio would have overstated a cached token fivefold. The peak (list) rate is used and the
+    off-peak halving is deliberately not applied per turn — read the figure as an upper bound. This
+    also prices the OpenCode sessions that route to the same model, which were unpriced before.
+  - **Presence counting looks at `sessions/`, not the whole home** (a new `detectSubdir` on a
+    catalog row). A harness launched as a desktop app keeps a 216 MB Chromium profile under
+    `~/.dsh`, and a detection walk over the root reported the browser's files as the harness's.
+
+  Verified end to end against a real harness install: the chat lists with its title and workspace,
+  the transcript renders (reasoning included), body search hits it, and it appears in Tokens-by-tool
+  priced at published rates. One caveat, unfixed on purpose: "open the transcript file" hands an
+  editor a `.zstd`, because that IS the session file — the in-app transcript and the exporter are
+  the readable paths.
+
 - **`POST /api/daemon/restart` - the daemon relaunching itself, gracefully, on demand**
   (`server/src/index.ts`). `relaunchDaemon()` has always existed and every auto-update exercises
   it - the successor is spawned first, waits for the port, takes over the SAME port, and the
@@ -20,6 +72,25 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the running process. This is the in-process one, and it refuses while dispatch runs are in
   flight (`force: true` to override) for the same reason the auto-update loop already does.
   Verified live: 53468 → 70080 on port 7787, hidden, healthy.
+
+### Changed
+
+- **A long name no longer stretches the Name column — it is cut to 18 characters and the whole of
+  it is one hover away** (`web/src/lib/instance-appearance.ts`, `web/src/components/
+  InstancesView.vue`, `CliInstancesSection.vue`, `CodexInstancesSection.vue`,
+  `web/src/shell/IconTooltip.vue`, plus tests). The Name column started naming a row after the
+  ACCOUNT behind it earlier the same day, and an Anthropic profile name is a person's real name:
+  "LUIS FERNANDO LOPEZ ESPINOZA" on a column that is 176px wide. Table layout is auto, so `w-44` is
+  only a hint a long cell overruns — one such row widened Name and pushed the desktop, CLI and
+  Codex tables out of the alignment their fixed widths exist to guarantee. `shortDisplayName()`
+  does the cut for all three tables, counting CODE POINTS so it can never split a surrogate pair
+  and leave a replacement glyph on the row, and charging the ellipsis to the budget so the result
+  is never wider than asked for. ⛔ It is a DISPLAY cut only: sorting, filtering, the move submenu
+  and every dialog keep the full `displayName()`, because a truncated name is not an identifier.
+  The desktop table reveals the full name in the rich tooltip it already had (the name takes the
+  first line and pushes the folder and the focus hint down one each — hence `detail`, a third line
+  on IconTooltip); the CLI and Codex tables, which have no such tooltip, use a native `title` that
+  is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 
 ### Fixed
 
@@ -4314,7 +4385,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   - `organization_type` is cached alongside the rest of the identity, so the offline/no-network path
     reaches the same answer instead of falling back to the stale grant.
 - **The account one-liner no longer leaks a raw tier string.** The Quick view showed
-  `Michael <blogitech@gmail.com> · default_claude_ai` for any account whose tier is the generic
+  `Michael <someone@example.com> · default_claude_ai` for any account whose tier is the generic
   value. It now shows the same reconciled label the Plan column does.
 - **A usage reading whose window has already reset no longer poses as current.** The same instance
   sat at "100% · resets now" from an eleven-day-old cached snapshot: the countdown said *now*

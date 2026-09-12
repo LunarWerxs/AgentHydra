@@ -81,8 +81,8 @@ installed 0.39.0 was performed by the previous one and brought the executable al
 installs on the newest version with no toolbox and, until the repair path existed, no update that
 could ever fix it.
 
-Tools cover sessions (list / get / tail / search / export across Claude, Codex, OpenCode, Hermes and
-the foreign readers), project discovery (`list_projects`), chats a usage limit cut off
+Tools cover sessions (list / get / tail / search / export across Claude, Codex, OpenCode, Hermes,
+DeepSeek Harness and the foreign readers), project discovery (`list_projects`), chats a usage limit cut off
 (`list_rate_limited_sessions`), the queue (list / add /
 update / run / cancel / events), accounts (secrets always masked), the scheduler (get / set),
 Claude Desktop instances (list / launch / quit), Claude CLI instances, and Codex CLI/Desktop
@@ -134,7 +134,8 @@ API error without appending its own bookkeeping, so any resume flips it on its o
 
 Detection trusts only the CLI's own error report (`isApiErrorMessage` / a `<synthetic>` assistant
 turn / an errored terminal `result`), never model prose or tool output, so a session that merely
-*discussed* rate limits is not listed. It is Claude-only: Codex, OpenCode and Hermes record an error,
+*discussed* rate limits is not listed. It is Claude-only: Codex, OpenCode, Hermes and the DeepSeek
+Harness record an error,
 but not in a form worth trusting, and a false claim here would be worse than a missing one. The judgment
 lives in one place (`createLimitStopTracker` in `server/src/rate-limit-signal.ts`) and is shared with
 the auto-resume monitor, so the badge and the resume queue cannot disagree.
@@ -395,7 +396,7 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 ## Layout
 
 ```
-server/        Bun + Hono daemon: sqlite, Claude/Codex/OpenCode/Hermes session readers, transcript tail,
+server/        Bun + Hono daemon: sqlite, Claude/Codex/OpenCode/Hermes/DSH session readers, transcript tail,
                dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances)
 web/           Vue 3 SPA (Sessions / Queue / Instances views)
 orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should happen to a chat

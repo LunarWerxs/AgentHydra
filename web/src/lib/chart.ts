@@ -145,6 +145,10 @@ const VENDOR_ALIAS: Record<string, string> = {
   google: 'google',
   xai: 'xai',
   deepseek: 'deepseek',
+  // DeepSeek Harness names its own first-party route `deepseek-official` (its other adapters carry
+  // their own names), so the id it writes is `deepseek-official/deepseek-flash`. The route is kept
+  // in the data because it is what the harness recorded; only the LABEL folds back to the brand.
+  'deepseek-official': 'deepseek',
 }
 
 const VENDOR_PREFIXES: ReadonlyArray<readonly [string, string]> = [

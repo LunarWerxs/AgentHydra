@@ -4,6 +4,13 @@
 // (see the Codex re-export block further down).
 import type { CodexAccount } from './core/codex-account'
 
+export type {
+  CodexMoveChat,
+  CodexMovePlan,
+  CodexMoveRequest,
+  CodexMoveResult,
+} from './core/codex-chat-move'
+
 // SessionSummary.limit_stop is this exact shape. It is DEFINED in rate-limit-signal.ts because the
 // detector and the DTO must never drift, and that module is a zero-import leaf, so pulling it in
 // here costs the web app's vue-tsc pass nothing.
@@ -108,16 +115,25 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | '
  * A supported conversation store, named by the READER that understands it.
  *
  * Claude/Codex are JSONL; OpenCode and Hermes are each their own shared SQLite DB — two different
- * schemas, so two different readers. `foreign` is the fifth: one reader with a small adapter per
- * tool (Grok, Kimi, VS Code Copilot, Copilot CLI, Zed), which share no format with each other but do
- * share the one thing that matters here — a list of conversations that can be read, and no per-token
- * usage to account for. See server/src/foreign-sessions.ts.
+ * schemas, so two different readers. `dsh` is DeepSeek Harness: one file per session like Claude's,
+ * except the bytes are zstd frames, so it needs a reader of its own rather than a catalog row
+ * claiming Claude's format (server/src/dsh-sessions.ts). `foreign` is the last: one reader with a
+ * small adapter per tool (Grok, Kimi, VS Code Copilot, Copilot CLI, Zed), which share no format with
+ * each other but do share the one thing that matters here — a list of conversations that can be
+ * read, and no per-token usage to account for. See server/src/foreign-sessions.ts.
  */
-export type SessionSource = 'claude' | 'codex' | 'opencode' | 'hermes' | 'foreign'
+export type SessionSource = 'claude' | 'codex' | 'opencode' | 'hermes' | 'dsh' | 'foreign'
 export type SessionSourceScope = 'all' | SessionSource
 
 export function isSessionSource(v: unknown): v is SessionSource {
-  return v === 'claude' || v === 'codex' || v === 'opencode' || v === 'hermes' || v === 'foreign'
+  return (
+    v === 'claude' ||
+    v === 'codex' ||
+    v === 'opencode' ||
+    v === 'hermes' ||
+    v === 'dsh' ||
+    v === 'foreign'
+  )
 }
 
 /** A session discovered in one of the supported local conversation stores. */
@@ -152,9 +168,30 @@ export interface SessionSummary {
   transcript_path: string
   /** Live status pulled from our own queue, if this session is scheduled/running under us. */
   queue_status: QueueStatus | null
-  /** Claude Desktop instance the session ran in: an `~/.claude-instances` dir name,
-   *  "default" for the non-isolated install, or null for plain CLI / another provider. */
+  /**
+   * The instance this conversation ran in, as a display label: an `~/.claude-instances` dir name
+   * for Claude Desktop, the Codex instance's NAME for a Codex chat, or null when nothing on disk
+   * says (a plain CLI transcript, or a store with no per-account split).
+   *
+   * Codex rows carried `null` unconditionally until 2026-09-11 — not because the account was
+   * unknown but because the reader only ever looked in one CODEX_HOME, so a managed instance's
+   * chats were not listed at all (see codexInstanceStores in core/codex-instances.ts). Read
+   * `instance_ref` when you need to know WHICH KIND of instance this label names; a Claude dir name
+   * and a Codex instance name live in the same field and could in principle collide.
+   */
   instance: string | null
+  /**
+   * The unambiguous form of {@link instance}: `desktop:<dir>` | `cli:<id>` | `codex:<id>`, the same
+   * ref core/instance-numbers.ts and the usage cache key on. Null whenever `instance` is.
+   *
+   * Codex only, today: a Claude row's desktop instance is resolved from a dir name and keeps that
+   * as its identity everywhere else in this codebase, so minting a ref for it here would invent a
+   * second spelling of something that already has one.
+   */
+  instance_ref: string | null
+  /** The permanent short handle (`#7`) of that instance — the one thing a human or an agent can say
+   *  out loud. Null when the row has no instance, 0 never appears. */
+  instance_num: number | null
   /** Provider archive state: Claude Desktop metadata, Codex's archived rollouts folder, or
    *  OpenCode's archived timestamp. False when the provider carries no archive signal. */
   archived: boolean
@@ -801,6 +838,12 @@ export type UsageSource = 'api' | 'cli'
 
 /** A parsed snapshot of one account's quota at a moment in time. */
 export interface UsageSnapshot {
+  /** Identifies the Codex login this cached quota belongs to. Never a credential. */
+  codexAccountId?: string | null
+  /** Provider-specific quotas, kept separate from the main account's windows. */
+  additionalLimits?: { label: string; session: UsageLimit | null; weekAll: UsageLimit | null }[]
+  /** A successful Codex read explicitly reports no main short-window cap. */
+  sessionLimitUnavailable?: boolean
   /** Account label/email if the caller knew it; the `/usage` text does not name the account. */
   account: string | null
   /** The 5-hour rolling session window. */

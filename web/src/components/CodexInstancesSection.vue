@@ -2,6 +2,7 @@
 import {
   AppWindow,
   ArrowDown,
+  ArrowRightLeft,
   ArrowUp,
   ChevronDown,
   Copy,
@@ -17,7 +18,7 @@ import {
   Terminal,
   Trash2,
 } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
@@ -29,11 +30,23 @@ import UsageBar from '@/components/UsageBar.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -52,9 +65,12 @@ import { useSortable } from '@/composables/useSortable'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
-import type { CodexInstance } from '@/lib/api'
+import { type CodexInstance, type CodexMovePlan, moveCodexChat, planCodexChatMove } from '@/lib/api'
+import { nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
+import { moveTargets } from '@/lib/move-chats'
 import { bindingWeeklyPct } from '@/lib/usage'
+import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import {
   msUntilReset,
   resetLabel,
@@ -93,11 +109,46 @@ const isBusy = (instance: CodexInstance) => busyIds.value.has(instance.id)
 
 // Quota shares the app-wide usage store, keyed `codex:<id>` — so the Codex rows reuse the same
 // chip, the same cache, the same superseded-window rule as every other provider's rows.
-const { snapshotFor, isChecking, checkCodex, setSnapshot } = useUsage()
+const { snapshotFor, isChecking, checkCodex, setSnapshot, hydrated } = useUsage()
 const usageKey = (instance: CodexInstance) => `codex:${instance.id}`
-const usageFor = (instance: CodexInstance) => snapshotFor(usageKey(instance))
+const usageFor = (instance: CodexInstance) => {
+  const snap = snapshotFor(usageKey(instance))
+  return instance.account?.authMode === 'chatgpt' &&
+    snap?.codexAccountId === instance.account.accountId
+    ? snap
+    : undefined
+}
 const isCheckingUsage = (instance: CodexInstance) => isChecking(usageKey(instance))
 const onCheckUsage = (instance: CodexInstance) => checkCodex(instance.id)
+const catchupSignal = { aborted: false }
+let didInitialUsage = false
+watch(
+  [instances, hydrated],
+  ([list, ready]) => {
+    if (didInitialUsage || !ready || !list.length) return
+    didInitialUsage = true
+    const due = selectUsageCatchup(
+      list.filter((i) => i.account?.authMode === 'chatgpt'),
+      usageFor,
+    )
+    void runUsageCatchup(due, onCheckUsage, { signal: catchupSignal })
+  },
+  { immediate: true },
+)
+const refreshingUsage = ref(false)
+async function refreshWithUsage() {
+  if (refreshingUsage.value) return
+  refreshingUsage.value = true
+  try {
+    await refresh()
+    await Promise.all(
+      instances.value.filter((i) => i.account?.authMode === 'chatgpt').map(onCheckUsage),
+    )
+    await refresh({ silent: true })
+  } finally {
+    refreshingUsage.value = false
+  }
+}
 
 // Usage mode is TAB-WIDE (composables/useUsageMode.ts) — "anything added later" included, and this
 // table was the later thing that never joined. The toolbar toggle up in InstancesView flips all
@@ -358,8 +409,96 @@ async function onQuitDesktop(instance: CodexInstance) {
   else toast.error(result?.message ?? t('codexInstances.toastDesktopQuitFailed'))
 }
 
+const moveShowClosed = ref(false)
+const moveBusy = ref(false)
+const moveJob = ref<{ from: CodexInstance; to: CodexInstance; plan: CodexMovePlan } | null>(null)
+const moveErrors = ref<string[]>([])
+const moveLabel = (instance: CodexInstance) => `#${instance.num} ${instance.name}`
+const moveTargetsFor = (from: CodexInstance) =>
+  moveTargets(
+    instances.value
+      .filter((i) => !i.isExternal && i.account?.authMode === 'chatgpt')
+      .map((i) => ({ ...i, dir: i.codexHome, isRunning: i.isDesktopRunning })),
+    { ...from, dir: from.codexHome, isRunning: from.isDesktopRunning },
+    moveShowClosed.value,
+    moveLabel,
+  )
+async function prepareMove(from: CodexInstance, to: CodexInstance) {
+  if (moveBusy.value) return
+  moveBusy.value = true
+  moveErrors.value = []
+  const id = `codex-move-${from.id}`
+  toast.loading(t('instances.moveChatsCounting'), { id })
+  try {
+    const plan = await planCodexChatMove(from.id, to.id)
+    toast.dismiss(id)
+    if (!plan.chats.length) toast.info(t('instances.moveChatsNone', { from: moveLabel(from) }))
+    else moveJob.value = { from, to, plan }
+  } catch (error) {
+    toast.error(
+      error instanceof Error
+        ? error.message
+        : t('instances.moveChatsFailed', { from: moveLabel(from) }),
+      { id },
+    )
+  } finally {
+    moveBusy.value = false
+  }
+}
+async function runMove() {
+  const job = moveJob.value
+  if (!job || moveBusy.value) return
+  moveBusy.value = true
+  moveErrors.value = []
+  let moved = 0
+  const id = `codex-move-${job.from.id}`
+  const failed = [] as typeof job.plan.chats
+  try {
+    for (const [index, chat] of job.plan.chats.entries()) {
+      toast.loading(
+        t('instances.moveChatsProgress', { done: index + 1, n: job.plan.chats.length }),
+        { id },
+      )
+      try {
+        const result = await moveCodexChat(job.from.id, {
+          targetId: job.to.id,
+          threadId: chat.id,
+          updatedAt: chat.updatedAt,
+          sourceAccountId: job.plan.sourceAccountId,
+          targetAccountId: job.plan.targetAccountId,
+        })
+        if (!result.ok) throw new Error(result.error)
+        moved++
+      } catch (error) {
+        failed.push(chat)
+        moveErrors.value.push(
+          `${chat.title}: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    }
+    const summary = t('instances.moveChatsDone', {
+      ok: moved,
+      n: job.plan.chats.length,
+      to: moveLabel(job.to),
+    })
+    if (failed.length) {
+      job.plan.chats = failed
+      toast.error(summary, { id })
+    } else {
+      moveJob.value = null
+      toast.success(summary, { id })
+    }
+    await refresh({ silent: true })
+  } finally {
+    moveBusy.value = false
+  }
+}
+
 onMounted(startPolling)
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  catchupSignal.aborted = true
+  stopPolling()
+})
 </script>
 
 <template>
@@ -389,12 +528,12 @@ onUnmounted(stopPolling)
         <Button
           variant="outline"
           size="icon"
-          :disabled="loading"
+          :disabled="loading || refreshingUsage"
           :aria-label="$t('codexInstances.refresh')"
           :title="$t('codexInstances.refresh')"
-          @click="refresh()"
+          @click="refreshWithUsage()"
         >
-          <RefreshCw :class="loading ? 'animate-spin' : ''" />
+          <RefreshCw :class="loading || refreshingUsage ? 'animate-spin' : ''" />
         </Button>
         <!-- Plus at rest, label on hover/focus — the same expanding pill as Instances and CLI
              instances. A permanently-labelled button here was the one control in the tab whose
@@ -565,7 +704,8 @@ onUnmounted(stopPolling)
                  so `#7` here can never be a different `#7` there. Same chip for the same reason. -->
             <div class="flex items-center gap-1.5">
               <InstanceNumber :num="instance.num" />
-              <span>{{ instance.name }}</span>
+              <!-- Same cap and same hover as the other two Name columns; see CliInstancesSection. -->
+              <span :title="nameOverflowTitle(instance.name)">{{ shortDisplayName(instance.name) }}</span>
             </div>
           </TableCell>
           <!-- Which ChatGPT account this CODEX_HOME is signed into. The name/email come straight
@@ -630,7 +770,7 @@ onUnmounted(stopPolling)
                 :label="sessionResetFor(instance) ?? ''"
                 :aria-label="$t('instances.resetsIn', { when: sessionResetFor(instance) })"
               />
-              <span v-else class="text-muted-foreground">—</span>
+              <span v-else class="text-muted-foreground" :title="usageFor(instance)?.sessionLimitUnavailable ? $t('codexInstances.noSessionLimit') : undefined">{{ usageFor(instance)?.sessionLimitUnavailable ? 'N/A' : '—' }}</span>
             </TableCell>
             <TableCell class="text-xs">
               <UsageBar
@@ -737,6 +877,24 @@ onUnmounted(stopPolling)
                     </button>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger :disabled="moveBusy || isBusy(instance)">
+                      <ArrowRightLeft /> {{ $t('instances.moveChats') }}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent class="max-w-72">
+                      <DropdownMenuCheckboxItem :model-value="moveShowClosed" @select.prevent @update:model-value="moveShowClosed = $event">
+                        {{ $t('instances.moveChatsShowNotRunning') }}
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem v-if="moveTargetsFor(instance).length === 0" disabled>
+                        {{ moveShowClosed ? $t('instances.moveChatsNoTargets') : $t('instances.moveChatsNoRunningTargets') }}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem v-for="to in moveTargetsFor(instance)" :key="to.id" @click="prepareMove(instance, to)">
+                        <span class="size-2 shrink-0 rounded-full" :class="to.isDesktopRunning ? 'bg-success' : 'bg-muted-foreground/40'" />
+                        <span class="truncate">{{ moveLabel(to) }}</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
                   <DropdownMenuItem
                     v-if="desktopEnabled"
                     :disabled="!instance.isDesktopRunning || isBusy(instance)"
@@ -791,6 +949,29 @@ onUnmounted(stopPolling)
       </TableBody>
     </Table>
     </ExpandArea>
+
+    <Dialog :open="moveJob !== null" @update:open="(value) => { if (!value && !moveBusy) moveJob = null }">
+      <DialogContent class="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{{ $t('instances.moveChatsConfirmTitle', { n: moveJob?.plan.chats.length ?? 0, from: moveJob ? moveLabel(moveJob.from) : '', to: moveJob ? moveLabel(moveJob.to) : '' }) }}</DialogTitle>
+          <DialogDescription>{{ $t('codexInstances.moveDescription') }}</DialogDescription>
+        </DialogHeader>
+        <p class="text-sm text-muted-foreground">{{ $t('codexInstances.moveCloseSource') }}</p>
+        <ul class="max-h-64 space-y-2 overflow-auto text-sm">
+          <li v-for="chat in moveJob?.plan.chats" :key="chat.id">
+            <div class="font-medium">{{ chat.title }}</div>
+            <div class="truncate text-xs text-muted-foreground">{{ chat.cwd }}</div>
+          </li>
+        </ul>
+        <ul v-if="moveErrors.length" class="max-h-40 space-y-1 overflow-auto text-xs text-destructive">
+          <li v-for="error in moveErrors" :key="error">{{ error }}</li>
+        </ul>
+        <DialogFooter>
+          <Button variant="ghost" :disabled="moveBusy" @click="moveJob = null">{{ $t('instances.moveChatsCancel') }}</Button>
+          <Button :disabled="moveBusy" @click="runMove">{{ $t('instances.moveChatsConfirmSubmit', { n: moveJob?.plan.chats.length ?? 0 }) }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <CliInstanceNameDialog
       v-model:open="createOpen"

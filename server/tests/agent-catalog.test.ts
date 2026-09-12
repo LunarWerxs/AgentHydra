@@ -38,7 +38,7 @@ describe('the catalog as data', () => {
   test('a format claim is only ever one we have a reader for', () => {
     for (const t of AGENT_TOOLS) {
       if (t.format === null) continue
-      expect(['claude', 'codex', 'opencode', 'hermes', 'foreign']).toContain(t.format)
+      expect(['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign']).toContain(t.format)
     }
   })
 

@@ -1,14 +1,10 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { stat as statAsync } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { extraRootsWithFormat } from './agent-catalog'
-import {
-  CLAUDE_PROJECTS_ROOT,
-  CODEX_ARCHIVED_SESSIONS_ROOT,
-  CODEX_SESSION_INDEX_PATH,
-  CODEX_SESSIONS_ROOT,
-  OPENCODE_DB_PATH,
-} from './config'
+import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH } from './config'
+import { codexInstanceStores } from './core/codex-instances'
+import { listDshSessions, readDshSession } from './dsh-sessions'
 import {
   type ForeignSession,
   listForeignSessions,
@@ -117,6 +113,51 @@ export interface TranscriptFile {
    * rather than falling back to the first match for `source` alone. Always set by finishIndex.
    */
   locator?: string
+  /**
+   * Which ACCOUNT's store this row was found in, when the store is split per account.
+   *
+   * Codex only, today, and it is the answer to "which Codex account was doing this" — the question
+   * AgentHydra exists to answer and could not, because the reader resolved one hardcoded
+   * CODEX_HOME and every managed instance's history was therefore not merely untagged but
+   * INVISIBLE (see codexInstanceStores in core/codex-instances.ts).
+   *
+   * Undefined for every other store, and for a catalog root (TraeX) that is a separate PRODUCT
+   * rather than a second account of this one — `tool` already says which product that is.
+   */
+  instance?: TranscriptInstance
+}
+
+/** The account that owns a per-account store, carried on every row it holds. */
+export interface TranscriptInstance {
+  /** `codex:<id>` — the ref instance-numbers.ts and usage-service.ts key on. */
+  ref: string
+  /** The permanent short handle (`#7`). 0 when the number registry could not be read. */
+  num: number
+  /** What the UI calls it. */
+  name: string
+}
+
+/**
+ * Does this row's own instance answer to `scope` — the `instance=` a caller typed?
+ *
+ * Accepts the same spellings core/instance-ref.ts does, minus the bare id: `7` / `#7` (the
+ * permanent number), `codex:<id>` (the explicit ref), or the instance's NAME, case-insensitively.
+ * The bare id is deliberately NOT matched, because the default Codex install's id is the literal
+ * string `default` and that already means the non-isolated CLAUDE install to this filter — one
+ * scope cannot mean two accounts.
+ *
+ * Shared by the session list and the body search so the two can never disagree about what
+ * `instance=` selected; a filter that silently answered "nothing" for a Codex account would
+ * recreate, one layer up, exactly the blind spot codexInstanceStores was written to close.
+ */
+export function instanceScopeMatches(tf: TranscriptFile, scope: string): boolean {
+  const inst = tf.instance
+  if (!inst) return false
+  const want = scope.trim()
+  if (!want) return false
+  if (want === inst.ref) return true
+  if (inst.num > 0 && (want === String(inst.num) || want === `#${inst.num}`)) return true
+  return want.toLowerCase() === inst.name.toLowerCase()
 }
 
 let cache: { at: number; files: TranscriptFile[] } | null = null
@@ -203,24 +244,26 @@ export function parseCodexSessionIndex(text: string): Map<string, CodexSessionIn
   return entries
 }
 
-let codexSessionIndexCache:
-  | {
-      mtimeMs: number
-      size: number
-      entries: Map<string, CodexSessionIndexEntry>
-    }
-  | undefined
+/** Keyed by index PATH, because every CODEX_HOME keeps its own sidebar index: a managed instance's
+ *  titles live in its own `session_index.jsonl` and one shared cache slot would hand the default
+ *  install's titles to every other account's rollouts. */
+const codexSessionIndexCache = new Map<
+  string,
+  {
+    mtimeMs: number
+    size: number
+    entries: Map<string, CodexSessionIndexEntry>
+  }
+>()
 
-function readCodexSessionIndex(): Map<string, CodexSessionIndexEntry> {
+/** The caller always names the store, because there is no longer one Codex home to default to. */
+function readCodexSessionIndex(path: string): Map<string, CodexSessionIndexEntry> {
   try {
-    const stat = statSync(CODEX_SESSION_INDEX_PATH)
-    if (
-      codexSessionIndexCache?.mtimeMs === stat.mtimeMs &&
-      codexSessionIndexCache.size === stat.size
-    )
-      return codexSessionIndexCache.entries
-    const entries = parseCodexSessionIndex(readFileSync(CODEX_SESSION_INDEX_PATH, 'utf8'))
-    codexSessionIndexCache = { mtimeMs: stat.mtimeMs, size: stat.size, entries }
+    const stat = statSync(path)
+    const cached = codexSessionIndexCache.get(path)
+    if (cached?.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.entries
+    const entries = parseCodexSessionIndex(readFileSync(path, 'utf8'))
+    codexSessionIndexCache.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, entries })
     return entries
   } catch {
     return new Map()
@@ -654,16 +697,79 @@ function codexFallbackId(rel: string): string {
   return name.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)?.[1] ?? name
 }
 
+/** One codex-format directory to scan: where it is, whether it is the archive half, whose account
+ *  it belongs to, and which sidebar index carries its titles. */
+interface CodexStoreRoot {
+  root: string
+  archived: boolean
+  /** The agent-catalog product id. 'codex' for every instance of Codex itself; a fork (TraeX) that
+   *  merely shares the rollout format brings its own. */
+  tool: string
+  /** That store's own `session_index.jsonl`. Every codex-format home keeps one beside its
+   *  `sessions/`; a fork that does not simply has no titles to offer, which reads as a miss. */
+  indexPath: string
+  /** The Codex account this store belongs to, or null for a fork that is a separate product. */
+  instance: TranscriptInstance | null
+}
+
+/**
+ * Every codex-format directory on this machine, the DEFAULT install's first.
+ *
+ * This is the fix for the finding this function exists because of: the two roots here used to be
+ * the two CODEX_HOME constants and nothing else, so a managed Codex instance's `sessions/` — where
+ * every chat on that account lives — was never globbed at all, and list/search/tail agreed that
+ * those conversations did not exist. Roots now come from the instance registry (which
+ * `list_codex_instances` already reads), so adding an account adds its history.
+ *
+ * Each instance contributes BOTH halves of its own store, and they keep one `tool` id on purpose:
+ * `storeKeyOf` (session-locator.ts) treats a tool's live and archived roots as one family, which is
+ * what lets a rollout mid-move between them stay a single row.
+ */
+function codexStoreRoots(): CodexStoreRoot[] {
+  const roots: CodexStoreRoot[] = []
+  for (const store of codexInstanceStores()) {
+    const instance: TranscriptInstance = { ref: store.ref, num: store.num, name: store.name }
+    const indexPath = join(store.codexHome, 'session_index.jsonl')
+    roots.push({
+      root: join(store.codexHome, 'sessions'),
+      archived: false,
+      tool: 'codex',
+      indexPath,
+      instance,
+    })
+    roots.push({
+      root: join(store.codexHome, 'archived_sessions'),
+      archived: true,
+      tool: 'codex',
+      indexPath,
+      instance,
+    })
+  }
+  // The catalog's OTHER codex-format products (TraeX and anything that follows it). Not accounts of
+  // ours and not instances — a different program that kept the rollout format. Its sidebar is
+  // looked for in ITS home (the parent of the roots the catalog names), never in Codex's: reading
+  // one product's titles out of another's index is how a fork ends up wearing someone else's
+  // chat names.
+  for (const r of extraRootsWithFormat('codex'))
+    roots.push({
+      root: r.root,
+      archived: r.archived,
+      tool: r.tool.id,
+      indexPath: join(dirname(r.root), 'session_index.jsonl'),
+      instance: null,
+    })
+  return roots
+}
+
 function codexRecord(
-  root: string,
+  store: CodexStoreRoot,
   rel: string,
-  archived: boolean,
   mtimeMs: number,
   sizeBytes: number,
   identity: CodexRolloutIdentity,
   indexed: CodexSessionIndexEntry | undefined,
-  tool = 'codex',
 ): TranscriptFile {
+  const { root, archived, tool } = store
   return {
     session_id: identity.sessionId,
     source: 'codex',
@@ -673,6 +779,7 @@ function codexRecord(
     size_bytes: sizeBytes,
     archived,
     title: indexed?.title,
+    ...(store.instance ? { instance: store.instance } : {}),
     tool,
   }
 }
@@ -710,6 +817,27 @@ function hermesRecords(store: HermesStore, tool = 'hermes'): TranscriptFile[] {
     cwd: session.cwd,
     created_at: session.created_at,
     parentId: session.parent_id,
+    tool,
+  }))
+}
+
+/** One DeepSeek Harness home's sessions, as index rows.
+ *
+ *  Unlike the two database stores above, `path` is the SESSION's own log rather than the store: DSH
+ *  writes a file per session, so every row already names the exact bytes to read and nothing
+ *  downstream has to carry a store path plus an id to find a conversation again. */
+function dshRecords(root: string, tool = 'deepseek-harness'): TranscriptFile[] {
+  return listDshSessions(root).map((session) => ({
+    session_id: session.session_id,
+    source: 'dsh' as const,
+    path: session.path,
+    project: session.project,
+    mtime_ms: session.last_activity_at,
+    size_bytes: session.size_bytes,
+    archived: session.archived,
+    title: session.title,
+    cwd: session.cwd,
+    created_at: session.created_at,
     tool,
   }))
 }
@@ -779,15 +907,10 @@ function foreignRecords(): TranscriptFile[] {
 }
 
 function extraStoreRecords(): {
-  codex: Array<{ root: string; tool: string; archived: boolean }>
   openCodeFiles: TranscriptFile[]
   hermesFiles: TranscriptFile[]
+  dshFiles: TranscriptFile[]
 } {
-  const codex = extraRootsWithFormat('codex').map((r) => ({
-    root: r.root,
-    tool: r.tool.id,
-    archived: r.archived,
-  }))
   const openCodeFiles: TranscriptFile[] = []
   for (const r of extraRootsWithFormat('opencode')) {
     if (!r.tool.dbName) continue
@@ -811,7 +934,17 @@ function extraStoreRecords(): {
       // A store whose schema is not actually Hermes' contributes nothing, same safety story as above.
     }
   }
-  return { codex, openCodeFiles, hermesFiles }
+  // DeepSeek Harness: a home, not a database — the reader walks `sessions/` under it and reads the
+  // harness's own projection cache beside that for titles and totals.
+  const dshFiles: TranscriptFile[] = []
+  for (const r of extraRootsWithFormat('dsh')) {
+    try {
+      dshFiles.push(...dshRecords(r.root, r.tool.id))
+    } catch {
+      // A directory that is not actually a DSH home contributes nothing, same safety story as above.
+    }
+  }
+  return { openCodeFiles, hermesFiles, dshFiles }
 }
 
 /** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
@@ -927,11 +1060,12 @@ function buildTranscriptIndex(): TranscriptFile[] {
   }
   promoteOrphans(files, claudeChildren, pendingChildren)
 
-  const codexSessionIndex = readCodexSessionIndex()
-  const addCodexRoot = (root: string, archived: boolean, tool = 'codex') => {
+  for (const store of codexStoreRoots()) {
+    // Per store, not once for the machine: a managed instance's titles live in its own sidebar.
+    const codexSessionIndex = readCodexSessionIndex(store.indexPath)
     const glob = new Bun.Glob(CODEX_ROLLOUT_GLOB)
-    for (const rel of scanRootSync(glob, root)) {
-      const path = join(root, rel)
+    for (const rel of scanRootSync(glob, store.root)) {
+      const path = join(store.root, rel)
       let st: ReturnType<typeof statSync>
       try {
         st = statSync(path)
@@ -950,25 +1084,21 @@ function buildTranscriptIndex(): TranscriptFile[] {
       if (identity.isSubagent) continue
       files.push(
         codexRecord(
-          root,
+          store,
           rel,
-          archived,
           st.mtimeMs,
           st.size,
           identity,
           codexSessionIndex.get(identity.sessionId),
-          tool,
         ),
       )
     }
   }
-  addCodexRoot(CODEX_SESSIONS_ROOT, false)
-  addCodexRoot(CODEX_ARCHIVED_SESSIONS_ROOT, true)
-  for (const r of extra.codex) addCodexRoot(r.root, r.archived, r.tool)
 
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
   files.push(...extra.hermesFiles)
+  files.push(...extra.dshFiles)
   files.push(...foreignRecords())
   return finishIndex(files, claudeChildren)
 }
@@ -1039,29 +1169,24 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   }
   promoteOrphans(files, claudeChildren, pendingChildren)
 
-  const codexSessionIndex = readCodexSessionIndex()
-  for (const { root, archived, tool } of [
-    { root: CODEX_SESSIONS_ROOT, archived: false, tool: 'codex' },
-    { root: CODEX_ARCHIVED_SESSIONS_ROOT, archived: true, tool: 'codex' },
-    ...extra.codex,
-  ]) {
-    const rels = await scanRootAsync(new Bun.Glob(CODEX_ROLLOUT_GLOB), root)
+  for (const store of codexStoreRoots()) {
+    // Same per-store sidebar read as the sync builder.
+    const codexSessionIndex = readCodexSessionIndex(store.indexPath)
+    const rels = await scanRootAsync(new Bun.Glob(CODEX_ROLLOUT_GLOB), store.root)
     const records = await mapPool(rels, INDEX_SCAN_WIDTH, async (rel) => {
-      const path = join(root, rel)
+      const path = join(store.root, rel)
       try {
         const st = await statAsync(path)
         const identity = await readCodexRolloutIdentityAsync(path, codexFallbackId(rel))
         // Same rule as the sync builder.
         if (identity.isSubagent) return null
         return codexRecord(
-          root,
+          store,
           rel,
-          archived,
           st.mtimeMs,
           st.size,
           identity,
           codexSessionIndex.get(identity.sessionId),
-          tool,
         )
       } catch {
         return null
@@ -1073,6 +1198,7 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   files.push(...openCodeRecords())
   files.push(...extra.openCodeFiles)
   files.push(...extra.hermesFiles)
+  files.push(...extra.dshFiles)
   // The async listing, which yields while it parses. Everything above this line already yields;
   // this was the last synchronous block in the sweep, and the largest.
   files.push(...(await foreignRecordsAsync()))
@@ -1616,6 +1742,23 @@ function tailOpenCodeStore(
   return tailResult(sessionId, tf, opts, content.events.filter(keep).slice(-limit))
 }
 
+/** DeepSeek Harness: one file per session, so `tf.path` IS the log — but it is zstd, so it cannot
+ *  go through the byte-tail path Claude and Codex use below. A tail of the last N events therefore
+ *  costs a whole decode: the frames are chained, so there is no suffix of the file that can be
+ *  decompressed on its own, and a session large enough for that to hurt is bounded by the reader's
+ *  own output cap rather than by anything this function could do. */
+function tailDshLog(
+  sessionId: string,
+  tf: TranscriptFile,
+  opts: TailOptions,
+  keep: (e: TailEvent) => boolean,
+  limit: number,
+): TailResult {
+  const content = readDshSession(tf.path)
+  if (!content) return tailResult(sessionId, tf, opts, [], 'transcript not found')
+  return tailResult(sessionId, tf, opts, content.events.filter(keep).slice(-limit))
+}
+
 /** Read the last `limit` real turns of a session's transcript, thinking filtered out.
  *
  *  One branch per STORE KIND, each in its own helper above: the stores answer the same question in
@@ -1650,6 +1793,7 @@ export async function tailTranscript(
   if (tf.source === 'foreign') return tailForeignStore(sessionId, tf, opts, keep, limit)
   if (tf.source === 'hermes') return tailHermesStore(sessionId, tf, opts, keep, limit)
   if (tf.source === 'opencode') return tailOpenCodeStore(sessionId, tf, opts, keep, limit)
+  if (tf.source === 'dsh') return tailDshLog(sessionId, tf, opts, keep, limit)
 
   // Claude and Codex: a real .jsonl on disk, read from the END rather than parsed whole.
   const raw = await readTailBytes(tf.path, 6 * 1024 * 1024)

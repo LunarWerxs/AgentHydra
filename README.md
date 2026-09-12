@@ -213,8 +213,9 @@ telemetry.
 - **[Bun](https://bun.sh)** if running from source.
 - The **`claude` CLI** for dispatch, and/or **Claude Desktop** for Claude instance management.
 - Optional: **Codex Desktop/CLI** for isolated Codex windows, CLI launch/login, and local rollout
-  history; **OpenCode** for local OpenCode history. Their sessions appear automatically when their
-  standard local stores exist.
+  history; **OpenCode** for local OpenCode history; **Hermes Agent** and the **DeepSeek Harness**
+  (`@deepseek-ai/dsh`) for theirs. Their sessions appear automatically when their standard local
+  stores exist — `~/.dsh` for the harness, or wherever `DSH_HOME` points.
 - **Windows** for the tray launcher. macOS and Linux builds exist and the instance-account code is
   written for them, but they are not verified there yet.
 - **Windows instance management needs the classic Claude Desktop build** (the ~217 MB Squirrel

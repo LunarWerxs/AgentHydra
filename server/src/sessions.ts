@@ -1,5 +1,6 @@
 import { markSessionGone } from './analytics'
 import { db } from './db'
+import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
 import { readHermesSession } from './hermes-sessions'
 import {
@@ -18,6 +19,7 @@ import {
   ensureTranscriptIndex,
   eventToTailEventsForSource,
   findTranscriptAsync,
+  instanceScopeMatches,
   isCommandWrapperText,
   listTranscriptFiles,
   type TranscriptFile,
@@ -289,15 +291,22 @@ function resolveTitleSource(
   return 'id'
 }
 
-// OpenCode, Hermes and foreign transcripts all carry their own title, cwd and timestamps on the
-// index row, because their stores record them as fields rather than leaving them to be inferred
-// from the conversation. Split out of parseMeta as a self-contained seam: this branch never touches
-// the line-by-line Claude/Codex parse below it.
+// OpenCode, Hermes, DeepSeek Harness and foreign transcripts all carry their own title, cwd and
+// timestamps on the index row, because their stores record them as fields rather than leaving them
+// to be inferred from the conversation. Split out of parseMeta as a self-contained seam: this branch
+// never touches the line-by-line Claude/Codex parse below it.
+//
+// DSH is here despite writing one FILE per session (not a shared store) for the same reason the
+// other three are: its metadata is a field, not something to infer. What it shares with them is the
+// shape of the answer, not the shape of the store.
 function parseSharedStoreMeta(tf: TranscriptFile, key: string): ScannedMeta {
   let content: { events: TailEvent[]; messageCount: number }
   if (tf.source === 'foreign') {
     const events = readForeignSession(tf.tool ?? '', tf.path)
     content = { events, messageCount: events.length }
+  } else if (tf.source === 'dsh') {
+    // tf.path is the session's own zstd log; there is no id lookup to do.
+    content = readDshSession(tf.path) ?? { events: [], messageCount: 0 }
   } else if (tf.source === 'hermes') {
     // tf.path, not a default: a Hermes profile is its own database, and this is the field that
     // says which one this row came from.
@@ -448,7 +457,12 @@ function applyMetaMessage(acc: MetaAccumulator, tf: TranscriptFile, ev: any): vo
 }
 
 async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta | null> {
-  if (tf.source === 'opencode' || tf.source === 'foreign' || tf.source === 'hermes') {
+  if (
+    tf.source === 'opencode' ||
+    tf.source === 'foreign' ||
+    tf.source === 'hermes' ||
+    tf.source === 'dsh'
+  ) {
     return parseSharedStoreMeta(tf, key)
   }
 
@@ -822,7 +836,11 @@ export interface ListSessionsOptions {
   /** How many real rows to skip first — the paging cursor. See the note at the batching loop for
    *  why this cannot be applied to the index instead. */
   offset?: number
-  /** An instance dir name, "default" (non-isolated install), or "other" (plain CLI). Claude only. */
+  /**
+   * One instance's sessions. A Claude Desktop dir name, "default" (non-isolated install), or
+   * "other" (plain CLI) — plus, since Codex rows carry their own account, a Codex instance's name,
+   * its `codex:<id>` ref, or its permanent number (`7` / `#7`). See instanceScopeMatches.
+   */
   instance?: string
   archived?: ArchivedScope
   /** Epoch cutoff on last activity, or null for no cutoff. */
@@ -890,6 +908,10 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
     // the same reason — a scope that runs before the cap cannot see anything only a parse knows,
     // and being conservative here costs a few parses where guessing would cost correctness.
     files = files.filter((f) => {
+      // A store that splits per ACCOUNT says so on the row itself, so no parse and no Desktop
+      // lookup is involved: Codex rows are settled here and never fall through to the Claude
+      // resolution below, which would answer "not this instance" for every one of them.
+      if (f.instance) return instance !== 'other' && instanceScopeMatches(f, instance)
       if (f.source !== 'claude') return false
       const known = idsOf(f)
         .map((id) => mmap.get(id))
@@ -970,8 +992,13 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
     // Desktop's own id link first; the origin join only for rows it has never heard of. Resolved
     // ONCE here and used for both the chip and the filter below, so the two cannot disagree.
     const desk = deskMetaFor(tf, m, idsOf(tf), mmap)
-    if (instance && (instance === 'other') !== (desk === null)) return null
-    if (instance && desk && desk.instance !== instance) return null
+    // A row whose store named its own account was settled exactly before the cap — there is no
+    // parse that could change the answer, and running the Desktop checks below on it would drop
+    // every Codex row (deskMetaFor is Claude-only, so `desk` is always null for them).
+    if (instance && !tf.instance) {
+      if ((instance === 'other') !== (desk === null)) return null
+      if (desk && desk.instance !== instance) return null
+    }
     return {
       session_id: tf.session_id,
       source: tf.source,
@@ -989,7 +1016,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
       size_bytes: tf.size_bytes,
       transcript_path: tf.path,
       queue_status: tf.source === 'claude' ? (qmap.get(tf.session_id) ?? null) : null,
-      instance: desk?.instance ?? null,
+      ...instanceFieldsFor(tf, desk),
       archived: tf.archived || (desk?.archived ?? false),
       done:
         dmap.get(sessionMarkKey(tf.source, tf.session_id, tf)) ??
@@ -1160,6 +1187,36 @@ function deskMetaFor(
 }
 
 /**
+ * The three `instance*` columns of a row, from whichever source actually knows.
+ *
+ * TWO different facts land in one triple, and the order is the point. A store that splits per
+ * ACCOUNT (Codex: one CODEX_HOME per instance) knows the answer from the row's own path, with no
+ * parse, no join and no guess — so it wins outright. Claude Desktop's answer is the resolved one
+ * (id link, then absorbed ids, then the origin join; see {@link deskMetaFor}) and it stays a bare
+ * dir name, because that is the identity every other Claude surface in this codebase uses.
+ *
+ * One function, used by both the list and the single-session route, so a row cannot change its
+ * account when you click on it.
+ */
+function instanceFieldsFor(
+  tf: TranscriptFile,
+  desk: SessionMeta | null,
+): Pick<SessionSummary, 'instance' | 'instance_ref' | 'instance_num'> {
+  const own = tf.instance
+  if (own)
+    return {
+      instance: own.name,
+      instance_ref: own.ref,
+      instance_num: own.num > 0 ? own.num : null,
+    }
+  return {
+    instance: tf.source === 'claude' ? (desk?.instance ?? null) : null,
+    instance_ref: null,
+    instance_num: null,
+  }
+}
+
+/**
  * Every folder that has conversations in it, newest first.
  *
  * THE POINT: a client that has been asked to search "all my chat histories" cannot start, because
@@ -1182,7 +1239,7 @@ export async function listProjects(): Promise<ProjectSummary[]> {
         cwd,
         project: f.project,
         sessions: 0,
-        by_source: { claude: 0, codex: 0, opencode: 0, hermes: 0, foreign: 0 },
+        by_source: { claude: 0, codex: 0, opencode: 0, hermes: 0, dsh: 0, foreign: 0 },
         first_activity_at: f.mtime_ms,
         last_activity_at: f.mtime_ms,
       }
@@ -1295,7 +1352,7 @@ export async function getSession(
     size_bytes: tf.size_bytes,
     transcript_path: tf.path,
     queue_status: tf.source === 'claude' ? (qmap.get(tf.session_id) ?? null) : null,
-    instance: tf.source === 'claude' ? (meta?.instance ?? null) : null,
+    ...instanceFieldsFor(tf, meta),
     archived: tf.archived || (meta?.archived ?? false),
     done:
       dmap.get(sessionMarkKey(tf.source, sessionId, tf)) ??

@@ -65,6 +65,7 @@ import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
+import { nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
 import { bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
 import {
   msUntilReset,
@@ -609,7 +610,12 @@ onUnmounted(stopPolling)
                    that guarantee stops being obvious. -->
               <div class="flex items-center gap-1.5">
                 <InstanceNumber :num="inst.num" />
-                <span>{{ inst.name }}</span>
+                <!-- Capped to the column like the desktop table's name, with the full name on
+                     hover: these are names a person typed, so nothing stops one being a sentence,
+                     and table layout is auto — one long name widens this column and the three
+                     stacked tables stop lining up. Native title, not IconTooltip: this cell has no
+                     other hover to extend, and the row above it already reveals its path this way. -->
+                <span :title="nameOverflowTitle(inst.name)">{{ shortDisplayName(inst.name) }}</span>
               </div>
             </TableCell>
             <TableCell>

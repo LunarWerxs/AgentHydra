@@ -65,6 +65,17 @@ export interface AgentTool {
   /** For a SQLite-backed tool (`opencode` or `hermes` format): the database file inside the root. */
   dbName?: string
   /**
+   * Count presence under THIS subdirectory instead of the whole root.
+   *
+   * The Gemini row below says the rule: "a store root has to be where the CONVERSATIONS are",
+   * because a detection walk over a root that holds other things reports a file count that is not
+   * about this tool at all. Gemini could obey it by pointing `dirs` one level deeper; DeepSeek
+   * Harness cannot — its READER needs the home itself (the projection cache and the archived-session
+   * list live beside `sessions/`, not inside it), while its home also contains a 216 MB Chromium
+   * profile when launched as a desktop app. So the root stays the home and the COUNT moves down.
+   */
+  detectSubdir?: string
+  /**
    * Transcript glob under the root, when the tool does not use its format's usual layout.
    *
    * Claude Code is `<project>/<session-id>.jsonl` and that is the default. Cowork writes the very
@@ -217,6 +228,24 @@ export const AGENT_TOOLS: AgentTool[] = [
     dirs: ['.local/share/icodemate'],
     format: 'opencode',
     dbName: 'icodemate.db',
+  },
+  {
+    id: 'deepseek-harness',
+    name: 'DeepSeek Harness',
+    vendor: 'DeepSeek',
+    // Read out of the harness's own shipped source rather than a registry: @deepseek-ai/dsh-home-paths
+    // resolves its root as an explicit configured path, else $DSH_HOME, else ~/.dsh — so the env var
+    // here is the tool's OWN, and a blank one is documented as unset rather than as the cwd.
+    //
+    // NOT the `deepseek-tui` row further down. That is a different DeepSeek product (.codewhale /
+    // .deepseek), it is detected-only, and giving the harness its own row is what keeps "DeepSeek
+    // Harness: 40 sessions, readable" from being reported under a tool nobody ran.
+    envVar: 'DSH_HOME',
+    dirs: ['.dsh'],
+    detectSubdir: 'sessions',
+    format: 'dsh',
+    verified:
+      '@deepseek-ai/dsh 0.1.5-rc.1 dsh-home-paths/lib/index.js + dsh-session-persistence-jsonl/lib/index.js (2026-09-12)',
   },
 
   // --- detected only: found on disk, not yet parsed -------------------------------------------
@@ -824,7 +853,12 @@ export function detectAgentTools(home: string = HOME): AgentPresence[] {
     const roots = rootsFor(tool, home)
     if (roots.length === 0) continue
     const state = { files: 0, newest: null as number | null }
-    for (const r of roots) walkCount(r.root, 0, state)
+    for (const r of roots)
+      walkCount(
+        tool.detectSubdir ? join(r.root, ...tool.detectSubdir.split('/')) : r.root,
+        0,
+        state,
+      )
     out.push({
       id: tool.id,
       name: tool.name,

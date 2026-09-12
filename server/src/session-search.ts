@@ -4,6 +4,7 @@
 // its own module so the fast/simple metadata list path (sessions.ts, GET /api/sessions) stays
 // completely untouched; this is a separate, slower, opt-in code path.
 import safeRegex from 'safe-regex2'
+import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
 import { listHermesSearchEvents } from './hermes-sessions'
 import { instanceSessionMap } from './instance-sessions'
@@ -15,7 +16,12 @@ import {
   searchIndexCoverage,
 } from './search-index'
 import { dedupeKey } from './session-locator'
-import { eventToTailEventsForSource, listTranscriptFiles, type TranscriptFile } from './transcript'
+import {
+  eventToTailEventsForSource,
+  instanceScopeMatches,
+  listTranscriptFiles,
+  type TranscriptFile,
+} from './transcript'
 import type { SessionSearchResponse, SessionSearchResult, SessionSource } from './types'
 
 export type { SessionSearchResponse, SessionSearchResult }
@@ -24,7 +30,8 @@ export interface SearchOptions {
   query: string
   regex?: boolean
   caseSensitive?: boolean
-  /** Scope to one instance dir name, "default", or "other"; same semantics as listSessions(). */
+  /** Scope to one instance: a Claude Desktop dir name, "default", "other", or a Codex instance's
+   *  name / `codex:<id>` / `#7`. Same semantics as listSessions(). */
   instance?: string
   /** Scope to one provider. Omitted means all supported stores. */
   source?: SessionSource
@@ -182,6 +189,39 @@ function searchForeignFile(
   return { stoppedEarly: false, hit }
 }
 
+/** DeepSeek Harness: the same shape as the foreign branch above, and for the same reason — the
+ *  conversation has to be decoded before there is any text to match. One decode per file, which is
+ *  what every other reader of this store already pays. */
+function searchDshFile(
+  tf: TranscriptFile,
+  matcher: Matcher,
+  perFileLimit: number,
+): FileSearchOutcome {
+  let matchCount = 0
+  const snippets: string[] = []
+  const content = readDshSession(tf.path)
+  if (!content) return { hit: null, stoppedEarly: false }
+  for (const ev of content.events) {
+    const idx = matcher(ev.text)
+    if (idx === -1) continue
+    matchCount++
+    if (snippets.length < perFileLimit) snippets.push(snippetAround(ev.text, idx, SNIPPET_LEN))
+  }
+  if (matchCount === 0) return { hit: null, stoppedEarly: false }
+  const hit: SessionSearchResult = {
+    session_id: tf.session_id,
+    source: tf.source,
+    cwd: tf.cwd || tf.project,
+    project: tf.project,
+    match_count: matchCount,
+    truncated: snippets.length < matchCount,
+    snippets,
+  }
+  resultStoreKey.set(hit, dedupeKey(tf))
+  // Whole-conversation read, so there is no part-way point and nothing to under-report.
+  return { hit, stoppedEarly: false }
+}
+
 /** One line's contribution to a file search: the cwd it revealed (if any, first-hit-wins so the
  *  caller only adopts it when it doesn't already have one), how many matches it added, and the
  *  snippets worth keeping. Pulled out of searchOneFile so the per-line parse/match branching
@@ -226,6 +266,10 @@ export async function searchOneFile(
   deadline: number,
 ): Promise<FileSearchOutcome> {
   if (tf.source === 'foreign') return searchForeignFile(tf, matcher, perFileLimit)
+  // DeepSeek Harness IS one file per session, so it belongs in this sweep rather than in a
+  // separate store pass — but the file is zstd, and streaming it as lines would fail every
+  // JSON.parse and report the same confident zero the foreign branch above exists to prevent.
+  if (tf.source === 'dsh') return searchDshFile(tf, matcher, perFileLimit)
 
   let matchCount = 0
   const snippets: string[] = []
@@ -453,12 +497,17 @@ function resolveSearchFiles(opts: SearchOptions): TranscriptFile[] {
   )
   if (opts.source) files = files.filter((file) => file.source === opts.source)
   if (opts.instance) {
+    const scope = opts.instance
     const imap = instanceSessionMap()
-    files = files.filter((f) =>
-      opts.instance === 'other'
+    files = files.filter((f) => {
+      // Same precedence the session list uses (see instanceFieldsFor in sessions.ts): a store that
+      // splits per ACCOUNT already names its own on the row, so it never falls through to the
+      // Claude Desktop map — which holds no Codex ids and would reject every one of them.
+      if (f.instance) return scope !== 'other' && instanceScopeMatches(f, scope)
+      return scope === 'other'
         ? f.source === 'claude' && !imap.has(f.session_id)
-        : f.source === 'claude' && imap.get(f.session_id) === opts.instance,
-    )
+        : f.source === 'claude' && imap.get(f.session_id) === scope
+    })
   }
   return files.slice().sort((a, b) => b.mtime_ms - a.mtime_ms)
 }

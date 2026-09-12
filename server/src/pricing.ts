@@ -117,6 +117,39 @@ const PRICES: Record<string, ModelPrice> = {
   'gpt-5': { input: 1.25, output: 10, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
   'gpt-5-mini': { input: 0.25, output: 2, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
   'gpt-5-nano': { input: 0.05, output: 0.4, cacheWrite5mUsd: 0, cacheWrite1hUsd: 0 },
+
+  // --- DeepSeek, as the DeepSeek Harness writes the ids ---------------------------------------
+  //
+  // Read off api-docs.deepseek.com/quick_start/pricing on 2026-09-12. These are here and not left
+  // to the downloaded LiteLLM catalog because that catalog has no `deepseek-flash` key at all
+  // (checked against the cached copy on this machine: it carries deepseek-chat, deepseek-reasoner
+  // and deepseek-v4-*, but not the id DeepSeek's own first-party API reports), so every harness
+  // session would have read UNPRICED forever while a published rate sat one page away.
+  //
+  // ⛔ PEAK RATES, WHICH ARE THE LIST PRICES. DeepSeek halves them outside 01:00-04:00 and
+  // 06:00-10:00 UTC on weekdays, so a session run overnight was billed half of what this reports.
+  // The discount is NOT applied per turn even though a DSH transcript does timestamp every one:
+  // the window is DeepSeek's to change, a stale window would misprice silently, and this file's
+  // standing rule is list prices only (see rule 3 at the top). Read it as an upper bound.
+  //
+  // The cache rates are absolute, not derived: DeepSeek's cache HIT is 2% of its input rate rather
+  // than Anthropic's 10%, so deriving would overstate a cached token fivefold. There is no separate
+  // cache-WRITE charge at all — a miss is billed at the plain input rate — which is why the write
+  // rates equal the input rate instead of carrying the 1.25x premium.
+  'deepseek-flash': {
+    input: 0.3,
+    output: 1.2,
+    cacheReadUsd: 0.006,
+    cacheWrite5mUsd: 0.3,
+    cacheWrite1hUsd: 0.3,
+  },
+  'deepseek-v4-pro': {
+    input: 1.32,
+    output: 3.96,
+    cacheReadUsd: 0.044,
+    cacheWrite5mUsd: 1.32,
+    cacheWrite1hUsd: 1.32,
+  },
 }
 
 /**

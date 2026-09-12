@@ -27,6 +27,7 @@
 // The HTML is produced by escaping first and assembling tags after, the same property the web
 // renderer holds (web/src/lib/markdown.ts): every tag in the output is one this file wrote.
 
+import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
 import { readHermesSession } from './hermes-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
@@ -85,6 +86,9 @@ async function readAllEvents(
   // their own (audit AH-34) - is what actually gets read, never always the default one.
   if (source === 'opencode') return readOpenCodeSession(sessionId, path)?.events ?? []
   if (source === 'hermes') return readHermesSession(sessionId, path)?.events ?? []
+  // DSH's `path` is the session's own compressed log rather than a store, so there is no id to look
+  // up — but it still cannot fall through to the line reader below, which would find no lines.
+  if (source === 'dsh') return readDshSession(path)?.events ?? []
   const events: TailEvent[] = []
   for await (const line of streamLines(path)) {
     const trimmed = line.trim()

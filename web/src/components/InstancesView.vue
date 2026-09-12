@@ -105,6 +105,7 @@ import {
   labelDisagreesWithAccount,
   resolveColorKey,
   resolveIconKey,
+  shortDisplayName,
 } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
 import { type MovePlan, moveTargets, planMove } from '@/lib/move-chats'
@@ -148,6 +149,7 @@ const {
   snapshotFor,
   isChecking,
   checkDesktop,
+  checkCodex,
   reasonFor,
   hydrated: usageHydrated,
   startPolling: startUsagePolling,
@@ -281,6 +283,28 @@ const editOpen = ref(false)
 const editTarget = ref<CMInstance | null>(null)
 const editing = ref(false)
 const editError = ref<string | null>(null)
+
+// What the name cell PRINTS: the row's name, cut to the column's width (see shortDisplayName).
+// Sorting, filtering, the move submenu and every dialog keep using displayName() — the cut is for
+// this one cell, and a truncated name must never become a value anything acts on.
+function nameCellText(inst: CMInstance): string {
+  return shortDisplayName(displayName(inst))
+}
+
+// The name cell's hover, and the only place the FULL name is readable once the cell elides it
+// (owner directive, 2026-09-11: cap the name, hover for the rest).
+//
+// Three facts compete for two lines here, so the cut decides the order. A name that fits keeps the
+// hover exactly as it was — folder on top, "click to focus" under it — because repeating text the
+// cell is already showing in full is noise. A name that was cut leads with the full name and pushes
+// the other two down a line each; `detail` on IconTooltip exists for that third line.
+function nameTooltip(inst: CMInstance): { label: string; description?: string; detail?: string } {
+  const full = displayName(inst)
+  const focus = inst.isRunning ? t('instances.focusHint') : undefined
+  return nameCellText(inst) === full
+    ? { label: inst.dir, description: focus }
+    : { label: full, description: inst.dir, detail: focus }
+}
 
 // The account cell identifies the LOGIN, so it shows the email handle and nothing else — see
 // accountHandle for why it is no longer accountName. The account's own label is the last resort so
@@ -460,6 +484,11 @@ async function onRefreshAllUsage() {
     await Promise.all([
       ...(showDesktopInstances.value ? instances.value.map((i) => checkDesktop(i.dir)) : []),
       ...(showCliInstances.value ? cliInstances.value.map((i) => checkCliUsage(i.id)) : []),
+      ...(codexDesktopEnabled.value || codexCliEnabled.value
+        ? codexInstances.value
+            .filter((i) => i.account?.authMode === 'chatgpt')
+            .map((i) => checkCodex(i.id))
+        : []),
     ])
   } finally {
     refreshingAllUsage.value = false
@@ -1328,16 +1357,15 @@ onUnmounted(() => {
                    every row two lines tall to show a path nobody reads at rest. It moved into the
                    tooltip, where it is one hover away and costs no height. The tooltip is on EVERY
                    row now, not just running ones, because the folder is what it is really for; the
-                   focus hint rides along as the description when clicking would actually focus. -->
+                   focus hint rides along as the description when clicking would actually focus.
+                   A name too long for the column takes the first line instead, and pushes both of
+                   those down one — see nameTooltip. -->
               <div class="flex items-center gap-1.5">
                 <!-- The permanent number sits BEFORE the name because the name is the untrustworthy
                      half: a profile signed into a different account than the folder it was named
                      after keeps showing the old name, and the number never drifts. -->
                 <InstanceNumber :num="inst.num" />
-                <IconTooltip
-                  :label="inst.dir"
-                  :description="inst.isRunning ? $t('instances.focusHint') : undefined"
-                >
+                <IconTooltip v-bind="nameTooltip(inst)">
                   <button
                     v-if="inst.isRunning"
                     type="button"
@@ -1345,9 +1373,9 @@ onUnmounted(() => {
                     :disabled="isBusy(inst)"
                     @click="onFocus(inst)"
                   >
-                    {{ displayName(inst) }}
+                    {{ nameCellText(inst) }}
                   </button>
-                  <span v-else class="cursor-default">{{ displayName(inst) }}</span>
+                  <span v-else class="cursor-default">{{ nameCellText(inst) }}</span>
                 </IconTooltip>
                 <Badge v-if="inst.isExternal" variant="outline">{{ $t('instances.external') }}</Badge>
                 <!-- The name you typed no longer matches the account this profile is signed into.

@@ -644,7 +644,7 @@ export const TOOLS: McpEngineTool[] = [
       },
       source: {
         type: 'string',
-        enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'],
+        enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
         description:
           'Optional provider filter. "foreign" is the shared reader for the other local agents ' +
           '(Cursor, Windsurf, Zed, Copilot CLI and the rest) — omit it to get every store at once.',
@@ -756,7 +756,10 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
+        source: {
+          type: 'string',
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+        },
       },
       ['id'],
     ),
@@ -780,7 +783,7 @@ export const TOOLS: McpEngineTool[] = [
         caseSensitive: { type: 'boolean', description: 'Match case exactly (default false).' },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'],
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
           description:
             "Optional provider filter. 'foreign' is the shared reader for the other local agents " +
             '(Cursor, Windsurf, Zed, Copilot CLI and the rest); omit it to search every store.',
@@ -916,7 +919,10 @@ export const TOOLS: McpEngineTool[] = [
           type: 'boolean',
           description: 'Only the user turns. Overrides textOnly. Use this to skim a long session.',
         },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
+        source: {
+          type: 'string',
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+        },
       },
       ['id'],
     ),
@@ -944,7 +950,10 @@ export const TOOLS: McpEngineTool[] = [
         id: { type: 'string' },
         format: { type: 'string', enum: ['markdown', 'html'], description: 'Default markdown.' },
         thinking: { type: 'boolean', description: "Include the model's reasoning blocks." },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
+        source: {
+          type: 'string',
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+        },
       },
       ['id'],
     ),
@@ -967,7 +976,10 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
+        source: {
+          type: 'string',
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+        },
       },
       ['id'],
     ),
@@ -2253,7 +2265,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'orchestrator_run',
     description:
-      "Run ONE orchestrator script by its menu name (`chats`, `migrate_chat`, `dossier`, `audit_twins`, `archive_chat`, `census`, ...) with its own arguments, exactly as `python orch.py <script> ...` would. OBSERVE scripts are read-only; ACT scripts MUTATE, and they keep every rail they have on the command line: NOTHING ACTS WITHOUT THE TRAY ICON (orchestrator_switch {action:'armed'} tells you), a live chat is never moved or archived, every attempt is counted, and `--force` is a PERSON'S word for one act - pass it only when the human asked for that act. TWO SCRIPTS ARE HAND-RUN AND DO NOT NEED THE ICON: `migrate_chat` and `chats --move-to` (the icon gates the unattended lanes, not a person's own move) - so for a targeted move do NOT arm first: arming resumes `saturate`, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet 300s. Pass `--idle-wait 330` with `--stop-idle` and the command sleeps out that window itself instead of you retrying on a guess (a working or stuck engine still refuses in a second). Returns stdout, stderr, the exit code and what the driver's codes mean (0 ok · 2 something failed · 3 refused/unknown/not armed · 1 daemon failure); a script's own codes are in its `--help`, which you can run here too (args: ['--help']). Long scripts get `timeout_secs` (default 600, server cap 3600) - but YOUR client's transport gives up far below that, so a blocking call that outlives it loses the report for work the daemon keeps running. Anything you declare longer than 120s is DETACHED for you: you get an `operationId` and a `poll` line at once, and `orchestrator_operation {id}` hands back the same verdict the blocking call would have (every run's result is kept for an hour). Lost a call anyway? `orchestrator_operation {}` with no id lists the recent runs - nothing is gone.",
+      "Run ONE orchestrator script by its menu name (`chats`, `migrate_chat`, `dossier`, `audit_twins`, `archive_chat`, `census`, ...) with its own arguments, exactly as `python orch.py <script> ...` would. OBSERVE scripts are read-only; ACT scripts MUTATE, and they keep every rail they have on the command line: NOTHING ACTS WITHOUT THE TRAY ICON (orchestrator_switch {action:'armed'} tells you), a live chat is never moved or archived, every attempt is counted, and `--force` is a PERSON'S word for one act - pass it only when the human asked for that act. TWO SCRIPTS ARE HAND-RUN AND DO NOT NEED THE ICON: `migrate_chat` and `chats --move-to` (the icon gates the unattended lanes, not a person's own move) - so for a targeted move do NOT arm first: arming resumes `saturate`, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet 300s. Pass `--idle-wait 330` with `--stop-idle` and the command sleeps out that window itself instead of you retrying on a guess (a working or stuck engine still refuses in a second). Returns stdout, stderr, the exit code and what the driver's codes mean (0 ok · 2 something failed · 3 refused/unknown/not armed · 1 daemon failure); a script's own codes are in its `--help`, which you can run here too (args: ['--help']). Long scripts get `timeout_secs` (default 600, server cap 3600) - but YOUR client's transport gives up far below that, so a blocking call that outlives it loses the report for work the daemon keeps running. Anything you declare longer than 120s is DETACHED for you: you get an `operationId` and a `poll` line at once, and `orchestrator_operation {id}` hands back the same verdict the blocking call would have (kept for an hour, FOR AS LONG AS THE DAEMON THAT RAN IT STAYS UP). Lost a call anyway? `orchestrator_operation {}` with no id lists the recent runs. ⛔ But a RESTART wipes those records while the detached child keeps running: if a poll says `reason: 'daemon-restarted'`, the act may well have COMPLETED - never re-fire it, read the toolbox's own ledger and verify the effect directly.",
     inputSchema: S(
       {
         script: {
@@ -2312,7 +2324,7 @@ export const TOOLS: McpEngineTool[] = [
         poll: `orchestrator_operation { id: "${str(run.operationId)}" }`,
         note:
           a.background === true
-            ? 'Running in the daemon. Poll the id above for stdout, the exit code and the verdict; the result is kept for an hour.'
+            ? 'Running in the daemon. Poll the id above for stdout, the exit code and the verdict; kept for an hour unless the daemon restarts, which wipes the record while the run itself carries on.'
             : `Detached automatically: you declared timeout_secs ${Number(a.timeout_secs)}, longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running. Poll the id above for the full result; pass background:false if you really do want to block.`,
       }
     },
@@ -2320,7 +2332,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'orchestrator_operation',
     description:
-      "READ THE VERDICT OF A RUN WHOSE CALL YOU LOST - poll one orchestrator operation by id, or list the recent ones. THE DAEMON KEEPS EVERY RUN'S FULL RESULT FOR AN HOUR, so a call that died on YOUR transport timeout is not lost work and never has to be guessed at or re-run: the script kept going in the daemon, finished, and its stdout/exit code/verdict are still here. Read them instead of re-firing the act. `id` polls one (`operationId` comes back from every orchestrator_run, INCLUDING the 409-busy refusal that names the run already in flight); omit it to list recent operations, which is how you find the id when the call that would have told you it never returned. `status` is 'running' or 'done'/'failed'; a running one can be polled again. Read-only - it starts nothing and cancels nothing.",
+      "READ THE VERDICT OF A RUN WHOSE CALL YOU LOST - poll one orchestrator operation by id, or list the recent ones. A RUN'S FULL RESULT IS KEPT FOR AN HOUR BY THE DAEMON PROCESS THAT RAN IT, so a call that died on YOUR transport timeout is not lost work and need not be guessed at or re-run: the script kept going, finished, and its stdout/exit code/verdict are still here. Read them instead of re-firing the act. ⛔ THE ONE CASE WHERE THEY ARE NOT: these records live in memory, so a daemon RESTART loses them - and a detached child survives the restart and finishes anyway, so the work is usually done even though the record is gone. A miss says which case it is (`reason`: 'daemon-restarted' vs 'unknown-id') and names when this daemon started; on 'daemon-restarted' do NOT re-fire the act, read the toolbox's own ledger for what it did and check the effect. `id` polls one (`operationId` comes back from every orchestrator_run, INCLUDING the 409-busy refusal that names the run already in flight); omit it to list recent operations, which is how you find the id when the call that would have told you it never returned. `status` is 'running' or 'done'/'failed'; a running one can be polled again. Read-only - it starts nothing and cancels nothing.",
     inputSchema: S({
       id: {
         type: 'string',

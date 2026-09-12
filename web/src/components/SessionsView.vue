@@ -270,6 +270,7 @@ const {
   sourceLabel,
   rowSourceLabel,
   sourceBadgeClass,
+  sourceHasFile: SOURCE_HAS_FILE,
   shapeLabel,
   shapeTitleOf,
   copyChipOf,
@@ -608,6 +609,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <DropdownMenuRadioItem value="codex">{{ $t('sessions.sourceCodex') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="opencode">{{ $t('sessions.sourceOpenCode') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="hermes">{{ $t('sessions.sourceHermes') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="dsh">{{ $t('sessions.sourceDsh') }}</DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
@@ -616,7 +618,8 @@ function onComposerSent(mode: 'now' | 'queued') {
                     :disabled="
                       sessionSourceFilter === 'codex' ||
                       sessionSourceFilter === 'opencode' ||
-                      sessionSourceFilter === 'hermes'
+                      sessionSourceFilter === 'hermes' ||
+                      sessionSourceFilter === 'dsh'
                     "
                   >
                     <DropdownMenuSubTrigger>
@@ -1010,6 +1013,17 @@ function onComposerSent(mode: 'now' | 'queued') {
                     >
                       <Boxes class="size-3" />{{ s.instance ? (s.instance === 'default' ? $t('sessions.instanceDefault') : instanceLabelFor(s.instance)) : $t('sessions.instanceUnknown') }}
                     </span>
+                    <!-- A store that splits per ACCOUNT (Codex: one CODEX_HOME per instance) names
+                         its own on the row, so the label is shown as-is rather than resolved
+                         against the Claude desktop list. No "unknown" branch: the path the rollout
+                         was read from IS the answer, so this is either known or not a row. -->
+                    <span
+                      v-else-if="s.instance"
+                      class="inline-flex items-center gap-1"
+                      :title="s.instance_num ? `#${s.instance_num}` : undefined"
+                    >
+                      <Boxes class="size-3" />{{ s.instance }}
+                    </span>
                     <!-- one conversation, several transcripts. Deliberately a label and not a
                          fold: every older copy measured held turns the newer one did not, and they
                          were things the user typed, so hiding one would lose them. -->
@@ -1112,7 +1126,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                   <MessagesSquare />
                   {{ $t('sessions.openTranscript') }}
                 </ContextMenuItem>
-                <template v-if="s.source !== 'opencode'">
+                <template v-if="SOURCE_HAS_FILE[s.source]">
                   <ContextMenuItem @select="openFile(s)">
                     <FileSymlink />
                     {{ $t('sessions.openFile') }}
@@ -1315,7 +1329,7 @@ function onComposerSent(mode: 'now' | 'queued') {
               <!-- Link, not Copy: it sits next to the copy-session-id button, and two identical
                    clipboard glyphs side by side are indistinguishable at icon size. -->
               <IconTooltip
-                v-if="selected.source !== 'opencode'"
+                v-if="SOURCE_HAS_FILE[selected.source]"
                 :label="$t('sessions.copyFileLocation')"
                 :description="$t('sessions.copyFileLocationHint')"
               >
@@ -1431,7 +1445,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <AlignJustify class="size-3.5" />{{ $t('sessions.compactLayout') }}
                       </DropdownMenuCheckboxItem>
 
-                      <template v-if="selected.source !== 'opencode'">
+                      <template v-if="SOURCE_HAS_FILE[selected.source]">
                         <DropdownMenuSeparator />
                         <DropdownMenuLabel class="flex items-center gap-2">
                           <FileSymlink class="size-3.5" />{{ $t('sessions.fileActions') }}

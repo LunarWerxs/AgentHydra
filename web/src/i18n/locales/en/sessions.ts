@@ -60,6 +60,7 @@ export default {
   sourceOther: 'Other tools',
   sourceOpenCode: 'OpenCode',
   sourceHermes: 'Hermes',
+  sourceDsh: 'DeepSeek',
   readOnlySource: '{source} sessions are read-only here. Carry this one on in {source} itself.',
   filterInstance: 'Instance',
   instanceAll: 'All instances',

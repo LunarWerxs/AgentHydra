@@ -33,6 +33,7 @@
 // precise, only differently wrong.
 
 import { db } from './db'
+import { readDshUsage } from './dsh-sessions'
 import { readHermesUsage } from './hermes-sessions'
 import { instanceSessionMap } from './instance-sessions'
 import { readOpenCodeUsage } from './opencode-sessions'
@@ -282,6 +283,47 @@ function scanHermesAnalytics(
   return out
 }
 
+/**
+ * DeepSeek Harness: per-turn usage, which is the first non-Claude store here that has any.
+ *
+ * OpenCode and Hermes hand back one aggregate per session, so their whole spend lands on a single
+ * day; DSH timestamps every assistant message, so its turns are apportioned to the days and hours
+ * they actually happened in, exactly as a Claude or Codex transcript's are. The weighting matches
+ * applyCodexTurnToAnalytics's, which matches addTurn's, so a DSH session is comparable with every
+ * other row on the same chart rather than merely present on it.
+ *
+ * REASONING TOKENS ARE NOT ADDED TO OUTPUT. DeepSeek's own type documents the counts as disjoint,
+ * and `reasoningTokens` is a SUBSET breakdown of the output it already reported — folding it in
+ * would bill thinking twice. Same call openCodeSpend makes for the same reason.
+ */
+function scanDshAnalytics(path: string, out: SessionAnalytics): SessionAnalytics {
+  const rows = readDshUsage(path)
+  if (rows.length === 0) return out
+  let prevTs: number | null = null
+  for (const row of rows) {
+    const model = row.model ?? 'unknown'
+    const t = {
+      input: row.tokens_input ?? 0,
+      cacheRead: row.tokens_cache_read ?? 0,
+      cacheWrite: row.tokens_cache_write ?? 0,
+      output: row.tokens_output ?? 0,
+    }
+    addTurn(out.tokens, model, t)
+    const ts = row.time_ms
+    if (ts === null) continue
+    const day = dayKey(ts)
+    out.days[day] =
+      (out.days[day] ?? 0) + t.input + t.cacheRead * 0.1 + t.cacheWrite * 1.25 + t.output * 5
+    const hour = String(hourKey(ts))
+    out.hours[hour] = (out.hours[hour] ?? 0) + 1
+    if (out.firstTs === null || ts < out.firstTs) out.firstTs = ts
+    if (out.lastTs === null || ts > out.lastTs) out.lastTs = ts
+    if (prevTs !== null && ts > prevTs) out.activeMs += Math.min(ts - prevTs, ACTIVE_GAP_CAP_MS)
+    prevTs = ts
+  }
+  return out
+}
+
 type TranscriptEventForAnalytics = {
   type?: string
   isCompactSummary?: boolean
@@ -391,6 +433,8 @@ export async function scanSessionAnalytics(
   // `output` rather than added to it.
   if (source === 'opencode') return scanOpenCodeAnalytics(sessionId, path, out)
   if (source === 'hermes') return scanHermesAnalytics(sessionId, path, out)
+  // DSH's `path` is the session's own log, and unlike the two above it records a cost per turn.
+  if (source === 'dsh') return scanDshAnalytics(path, out)
   // Not one of these stores records what a turn cost — Copilot bills credits and never writes a
   // token count, and Grok, Kimi and Zed simply do not persist one. So a foreign session is listed
   // and readable and contributes nothing to the spend charts. A zero would claim it was free.
