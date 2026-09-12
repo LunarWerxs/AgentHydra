@@ -9,6 +9,32 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **The public-push rule has teeth: a pre-push hook announces a PUBLIC remote and refuses the push
+  unless told to, refuses a release tag while the local work queue has an open section, and a
+  bundle commit must name every file it swept** (`.githooks/pre-push`, `check-public-push.mjs`,
+  `.githooks/commit-msg`, `check-bundle-message.mjs`, `scripts/save-bundle.ts`, `bun run
+  save:bundle`, two suites under `.githooks/tests/`). This repository is public and a push to
+  `main` is a release for every source install, so the standing rule was "check visibility,
+  announce it with an unmissable heading, let the owner decide". It lived only in memory, and on
+  2026-09-11 a session that had not read it pushed a peer's half-finished work unannounced. Now:
+
+  - **`git push` looks the remote up on GitHub** (stripping `.git`, which reads as 404 for a public
+    repo too) and, when it is public or cannot be proven private, prints
+    `# WARNING: THIS REPOSITORY IS **PUBLIC**` with the refs and stops. `AGENTHYDRA_PUSH_PUBLIC=1`
+    on that one command prints the heading again and proceeds: the rule is announce-then-do.
+    Fail-closed on purpose: a non-GitHub remote, a timeout or a rate limit all read as public.
+    With neither node nor bun on PATH it refuses rather than guesses.
+  - **A `v*.*.*` tag is refused while `docs/todo/TODO.md` has a section below its Contents**,
+    naming them. No override: the item gets done or the owner deletes it (nothing pending ships
+    past a release). The queue is local and gitignored, so a clone without it has nothing to gate
+    on and passes.
+  - **A `wip: bundle` commit carries `Mine:` and `Swept:` blocks** listing every path in the
+    commit, checked against the index by the commit-msg hook so a stale list cannot pass. `bun run
+    save:bundle -- --mine <paths>` sweeps the tree and writes the message from what is actually
+    dirty; a `--mine` path that is not dirty is refused. Bundling a peer's work is legitimate when
+    the owner asks for it (2026-09-12); publishing it without the author being able to find it in
+    the log was the hazard.
+
 - **A Codex chat moves between accounts, and the copy is verified before the original is archived**
   (`server/src/core/codex-chat-move.ts`, `core/codex-transcript-copy.ts`, `core/codex-rpc.ts`, the
   routes `GET /api/codex-instances/:id/move-chats` and `POST /api/codex-instances/:id/move-chat`,
@@ -161,6 +187,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
 
+- **The kit-sync hook's own test had never run.** `bun test` does not descend into
+  dot-directories, so `.githooks/tests/check-kit-sync-staged.test.ts` (AH-24, 2026-09-06) passed
+  whenever someone named it by path and was collected by neither `bun run test` nor CI: the suite
+  was two tests smaller than the tree said. All hook suites now live under `tests/githooks/`,
+  anchored by `tests/repo-root.ts` rather than a hop count, and `hook-tests-live-here.test.ts`
+  fails the moment a test file appears under `.githooks/` again.
+
 - **A daemon with a relocated store no longer takes the machine-wide pointer** (`server/src/
   instance.ts`, `server/src/index.ts`, `server/tests/instance-pointer-side-run.test.ts`).
   `<CONFIG_DIR>/runtime.json` is how every client on this machine finds the daemon: the MCP tools,
@@ -173,7 +206,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   Where a daemon records itself is now decided by its STORE rather than its port:
   `isPathInside(CONFIG_DIR, DATA_DIR)`. A process whose data dir sits outside the config dir writes
   its pointer beside its own state and says so at boot; nothing has to be cleaned up afterwards,
-  which was the whole complaint. ⚠ The port is deliberately NOT the test — a primary install that
+  which was the whole complaint. ⚠ The port is deliberately NOT the test: a primary install that
   finds 7787 busy hops to 7788 and is still the machine's daemon, and the auto-update successor
   takes the same port on purpose. A scratch `AGENTHYDRA_HOME` moves both directories together and
   was never the problem; `AGENTHYDRA_DATA_DIR` alone, which moves the store and leaves the pointer

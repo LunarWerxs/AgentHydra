@@ -1,4 +1,4 @@
-// .githooks/tests/check-kit-sync-staged.test.ts - AH-24: the kit-sync pre-commit guard must check
+// tests/githooks/check-kit-sync-staged.test.ts - AH-24: the kit-sync pre-commit guard must check
 // BOTH intentionally vendored UI kit targets, agenthydra and orchestrator. Before the fix,
 // .githooks/pre-commit invoked check-kit-sync-staged.mjs with only "agenthydra", so drift staged
 // under the orchestrator target went straight through a commit uncaught. The fix added a second
@@ -17,16 +17,21 @@
 // Revert check: comment out the "orchestrator" line in .githooks/pre-commit and both tests below
 // fail - "still fails the commit" no longer throws (the drift silently passes), and the call-log
 // assertion in both tests sees only "agenthydra".
+//
+// Moved here from .githooks/tests/ on 2026-09-12: `bun test` skips dot-directories, so for six days
+// this file passed whenever named by path and was never collected by the suite or CI (see
+// hook-tests-live-here.test.ts). The root is now RECOGNISED via tests/repo-root.ts rather than
+// hop-counted, so the move itself cannot silently re-aim it.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { REPO_ROOT } from '../repo-root'
 
 const HOOK_TEST_TIMEOUT = 20_000 // real git init/commit + two node subprocesses; ~1s locally
 
-const REPO_ROOT = join(import.meta.dir, '..', '..')
 const REAL_PRECOMMIT = join(REPO_ROOT, '.githooks', 'pre-commit')
 const REAL_GUARD = join(REPO_ROOT, '.githooks', 'check-kit-sync-staged.mjs')
 
@@ -110,7 +115,7 @@ describe('.githooks/pre-commit: the kit-sync guard covers both vendored targets 
     offender = join(offenderDir, 'drifted.ts')
     writeFileSync(offender, 'export const x = 1\n')
     git(repo, 'add', '.')
-  })
+  }, HOOK_TEST_TIMEOUT)
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true })

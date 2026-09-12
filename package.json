@@ -30,6 +30,8 @@
     "format": "biome format --write .",
     "test": "bun test --parallel=4",
     "audit": "bun run scripts/audit.ts",
+    "//save:bundle": "ONLY when the owner has said to sweep the whole dirty tree. Commits everything as one `wip: bundle` commit whose message names every file taken from another session (Mine:/Swept:), so the peer finds out from the log. Never --no-verify; the commit-msg hook checks the list.",
+    "save:bundle": "bun run scripts/save-bundle.ts",
     "test:orchestrator": "cd orchestrator && python -m unittest discover -s scripts/tests",
     "orchestrator": "python orchestrator/orch.py"
   },

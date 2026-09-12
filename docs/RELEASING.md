@@ -7,6 +7,24 @@ against `origin/main`. There is no separate publish step for that path: as soon 
 every instance with auto-update enabled will fast-forward to it on its next check. Treat a push to
 `main` as user-facing, not as a staging step.
 
+## The pre-push gate
+
+`.githooks/pre-push` (enabled by `core.hooksPath`, which `bun install`'s `prepare` sets) runs on
+every push and enforces two rules that used to be memory only:
+
+1. **A public remote is announced and refused.** The hook looks the remote up on GitHub; when it
+   is public, or cannot be proven private (not GitHub, a timeout, a rate limit), it prints
+   `# WARNING: THIS REPOSITORY IS **PUBLIC**` with the refs and stops. When the owner has decided
+   the push goes out, re-run the same command with `AGENTHYDRA_PUSH_PUBLIC=1`: it prints the
+   heading again and pushes. Announce, then do. Never `--no-verify`.
+2. **A `v*.*.*` tag is refused while `docs/todo/TODO.md` has an open section.** Nothing pending
+   ships past a release. There is no override: finish the item and delete its section, or the
+   owner deletes it. The queue is gitignored, so this can only fire on a machine that holds it.
+
+A commit whose subject starts with `wip: bundle` must also list every file in it under `Mine:` and
+`Swept:` (`.githooks/commit-msg`); `bun run save:bundle -- --mine <paths>` writes that message
+from the dirty tree. Both hooks have suites under `.githooks/tests/`.
+
 ## Recipe
 
 1. **Bump the version.** Update `version` in `package.json`.
