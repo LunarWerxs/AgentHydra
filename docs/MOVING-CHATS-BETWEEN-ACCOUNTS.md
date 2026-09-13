@@ -50,6 +50,28 @@ move_chats { from: "Carlos", all_unarchived: true,
                       still in flight. Re-read your last message and carry on." }
 ```
 
+⛔ **"Drain this account" means its UNARCHIVED chats, and nothing else** (owner directive,
+2026-09-05, restated angrily on 2026-09-13). An account's archive is usually the overwhelming
+majority of what it holds: in the incident that produced this paragraph, 25 chats were 3
+unarchived and 22 archived, and an agent that set the old `archived: true` flag for itself
+queued all 25. `all_unarchived: true` is the right call here and never needs anything else.
+
+To move archived chats you must have been ASKED for them, and then you pass `archived_count: N`,
+the number of archived chats in the batch. The engine refuses the whole batch if that number does
+not match what it actually holds, or if archived and unarchived chats are mixed in one call,
+because mixing is exactly how 22 rode in behind 3. The old `archived: true` boolean was REMOVED
+on 2026-09-13 rather than deprecated: a boolean cannot tell a human's instruction from an
+agent's own initiative, and a caller passing it now fails the schema loudly instead of quietly
+sweeping an archive.
+
+**A drain of any size answers immediately, not at the end.** Since 2026-09-13 `move_chats`
+auto-detaches whenever its own declared length exceeds 120s, which a one-chat batch already does
+(its floor is 180s), so the call returns an `operationId` and the per-chat report is read with
+`orchestrator_operation {id}`. Before that, a long batch could die on a bare transport timeout
+and return nothing at all about work it had in fact done. If a batch is stuck or was launched
+with the wrong scope, `orchestrator_cancel {id}` stops it and frees the route lock; that is not
+an undo, so read the fleet afterwards to see what had already landed.
+
 What it replaced (2026-09-06, Carlos at 95% of its window and Martin at 88% of its week,
 seven chats to Eduardo): ~25 round trips and most of an hour. The four moves were fine; the
 rest was learning that a landed chat sits DORMANT until someone types into it, finding the
@@ -226,6 +248,17 @@ minute. `session-launch.ts` already reports this honestly as `titleDurable: !run
 ```
 
 and re-apply the metadata write after any operation that boots the chat.
+
+⛔ **On a compiled daemon before 2026-09-13, `chat_rename` answered `ok: true` and did nothing,**
+and so did archive and unarchive. `ui-archive.ts` located its PowerShell by hopping `..` off
+`import.meta.dir`, which inside a `bun build --compile` exe is the virtual embedded root, so it
+asked for a path on a drive that does not exist; `powershell -File <missing>` prints its complaint
+and EXITS 0, so a `code === 0` check read that as success. Found by exactly the case above: a
+migrated chat landed with no title, `chat_rename` reported success three times, and the sidebar
+never changed. Fixed in `bd8bba2` (the script is embedded and resolved through `resolveMiscAsset`,
+and a missing path now returns non-zero), but ⛔ **that takes effect only at the next build.**
+Until the owner's 0.41.0 is rebuilt, treat a green `ok: true` from any of those three as no
+evidence at all; the rendered sidebar row is the proof.
 
 ## Imports land on `acceptEdits`, which deadlocks an unattended chat
 

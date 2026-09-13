@@ -9,6 +9,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **`orchestrator_cancel { id }` - a run that is still going can be stopped, without finding a pid**
+  (`server/src/mcp.ts`, `server/tests/orchestrator-mcp.test.ts`). The daemon has had
+  `cancelOrchestratorOperation` and `POST /api/orchestrator/operations/:id/cancel` all along; only
+  the MCP surface was missing, and `orchestrator_operation`'s own description says it "starts
+  nothing and cancels nothing", so every agent that read it correctly concluded no cancel existed.
+  On 2026-09-12 that sent a stuck one-chat batch to a hand-run `taskkill /PID <pid> /T /F`, which is
+  outside every rail these tools exist to provide.
+
+  Two things are in the description because both bite. ⛔ **Cancel is not an undo:** whatever the
+  run already did stays done, chats a `migrate_batch` already landed stay landed, and it stops only
+  the remainder. ⛔ **The per-item report dies with the process,** so what actually happened is
+  established by READING THE FLEET afterwards, never by assuming the run had not got that far.
+  Cancelling also frees the route lock the daemon keys by script name, which is what lets a
+  corrected call run at once instead of being refused `409 busy`. A finished operation is a safe
+  no-op that answers with the status it already had.
+
 - **The public-push rule has teeth: a pre-push hook announces a PUBLIC remote and refuses the push
   unless told to, refuses a release tag while the local work queue has an open section, and a
   bundle commit must name every file it swept** (`.githooks/pre-push`, `check-public-push.mjs`,
@@ -155,6 +171,31 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   Verified live: 53468 → 70080 on port 7787, hidden, healthy.
 ### Changed
 
+- **⛔ BREAKING: `move_chats` no longer accepts an `archived` boolean at all. It takes
+  `archived_count: number`, and there is no shim** (`server/src/mcp.ts`,
+  `orchestrator/scripts/migrate_batch.py`, `server/tests/move-chat-mcp.test.ts`). A caller still
+  passing the boolean fails the schema loudly, which is the intent: a silent fallback is what this
+  change exists to remove.
+
+  A boolean could not tell a human's instruction from an agent's own initiative. Asked to migrate
+  an account holding 3 unarchived and 22 archived chats, an agent set `archived: true` for itself
+  and queued all 25; the owner stopped it twice. `archived_count` must EQUAL the archived chats the
+  batch actually holds, and those chats must be the WHOLE batch, because archived chats riding
+  along with unarchived ones is exactly how 22 rode in behind 3. Counting them first is the point.
+  `all_unarchived` is unarchived by definition and drops the count rather than forwarding a
+  contradiction.
+
+  **`move_chat`, the singular, is UNCHANGED and still takes `archived: true`.** It goes through
+  `migrate_chat.py`, which has refused archived chats per chat with exit 7 since 2026-09-05, and it
+  remains the way to move one archived chat that a human named.
+
+  ⛔ **On the running 0.41.0 binary this combination currently refuses every archived batch.** The
+  python gate is live (python is read from disk) and demands the count; the compiled `move_chats`
+  still emits a bare `--archived`, so the gate answers `REFUSED: --archived needs --archived-count
+  to MATCH ... the count given was not stated`. That fails in the safe direction and is the
+  stopgap working, but until the next build the only route for a named archived chat is `move_chat`
+  one at a time.
+
 - **"Open the transcript file" is no longer offered for a session whose file is not prose**
   (`web/src/lib/session-labels.ts`, `web/src/components/SessionsView.vue`, `server/src/routes/
   sessions.ts`). A DeepSeek Harness log is a real file worth copying and locating, and it is
@@ -186,6 +227,53 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   on IconTooltip); the CLI and Codex tables, which have no such tooltip, use a native `title` that
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
+
+- **A compiled daemon could not archive, unarchive or rename a chat, and said `ok: true` every
+  time** (`server/src/ui-archive.ts`, `misc-assets.ts`, `server/tests/ui-archive.test.ts`). This is
+  the misc-assets defect of 2026-09-12 again, on the SECOND actuator, and the entry below about the
+  delivery actuator should be read as one of two, not as the class being closed.
+
+  `ui-archive.ts` built its PowerShell path with `join(import.meta.dir, '..', '..', 'misc',
+  'Manage-DesktopChat.ps1')`. That is right in a checkout and wrong in every compiled build: inside
+  a `bun build --compile` exe `import.meta.dir` is the virtual embedded root, so two `..` hops land
+  on `B:\` and the spawn asked for a path on a drive that does not exist.
+
+  **It failed silently, which is the half worth naming.** `powershell -File <missing>` prints its
+  complaint and EXITS 0, so `uiRenameChat`'s `code === 0` returned `ok: true` over a script that had
+  never run. Measured live: a chat migrated between accounts landed with no title, `chat_rename`
+  answered `ok: true` three times while the sidebar never changed, and the migration's own bypass
+  stamp stayed unverified because the permission picker had no row to aim at. `Manage-DesktopChat
+  .ps1` joins `RUNTIME_MISC_FILES` now, so the build embeds it or fails, and `runPs1` resolves it
+  through `resolveMiscAsset` and returns a NON-ZERO code when there is no path. Three regression
+  tests pin it at the source, because every other unit test here injects `run` and so none of them
+  could ever have caught it. ⛔ Takes effect at the next build; on the running 0.41.0 a green
+  `ok: true` from `chat_rename` is still not proof, the rendered sidebar row is.
+
+- **A one-chat `move_chats` ran fifteen minutes past its documented 15-25s budget, died on a bare
+  transport timeout, and returned no report at all** (`orchestrator/scripts/migrate_batch.py`,
+  `server/src/mcp.ts`, `server/src/orchestrator.ts`). No per-chat result, no `bypassVerdict`, no
+  `resume.delivered`, for work that had in fact done most of its job. Four changes, because the
+  call could die in four places:
+
+  - **Every post-landing phase is bounded.** Settle, stamp and resume each run on a worker thread
+    with a per-chat-scaled ceiling (`_run_bounded`, `SETTLE_PHASE_TIMEOUT_SECS`,
+    `STAMP_PHASE_TIMEOUT_SECS`, `RESUME_PHASE_TIMEOUT_SECS`). A phase over budget is ABANDONED, not
+    killed, because Python cannot safely kill a thread mid subprocess or mid UI-automation wait;
+    the timeout is then NAMED on every chat that never got a verdict rather than left blank.
+  - **`move_chats` auto-detaches** whenever its own declared `timeoutMs` exceeds `AUTO_DETACH_MS`,
+    mirroring `orchestrator_run`'s existing rule. A one-chat batch's 180s floor already exceeds the
+    120s ceiling, so this was silent dead code for the commonest case. `background: false` still
+    forces blocking for a caller who knows their transport can wait.
+  - **A `409 busy` refusal names the operation holding the route** and, with `orchestrator_cancel`
+    above, there is now a supported way out of a stuck batch.
+  - **The archived-chat gate takes a COUNT, not a boolean.** `--archived-count N` must MATCH the
+    archived chats the batch actually holds, and archived chats must be the WHOLE batch. See the
+    Changed entry above: `move_chats`' `archived` boolean is gone, with no shim.
+
+  Also fixed: `test_migrate_batch_resume.py`'s `_BatchTest` was missing the `hydralib.sessions` stub
+  its sibling already carried, so all twelve of its cases were silently reading this machine's real
+  chat store and being refused by the archive gate before touching any of the stubbed machinery
+  under test.
 
 - **Main's CI had been red since 2026-09-11, on every GitHub leg, and is green again.** Three
   inherited failures, none of them visible on a developer machine:

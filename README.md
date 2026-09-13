@@ -37,9 +37,13 @@ shows all of that local history at once. You alt-tab to remember which account i
 session is still going, and what you asked it to do.
 
 AgentHydra is a local dashboard for AI coding agents that brings your Claude Code, Codex, and
-OpenCode session history into one browser tab, lets you queue and schedule Claude Code runs, tracks
-cost and usage across models and projects, and manages isolated Claude Desktop and Codex Desktop
-accounts, all without a cloud service or account signup. It is not a Claude client and does not
+OpenCode session history into one browser tab, lets you reply into a running chat or move one
+between accounts, tracks cost and usage across models and projects, and manages isolated Claude
+Desktop and Codex Desktop accounts, all without a cloud service or account signup. It does not run
+a chat you cannot see: the run queue and scheduler are still in the code and still readable as a
+record, but every attempt to start a new headless run is refused, on purpose (see [Reply, fan out,
+or move a session, never headless](#reply-fan-out-or-move-a-session-never-headless) below). It is
+not a Claude client and does not
 replace one: it is the dashboard the CLI and the desktop app do not come with.
 
 ## Every session, in one list
@@ -69,7 +73,7 @@ database rather than exposed as a raw file.
 
 AgentHydra does not run a `claude` chat you cannot see. There is no headless queue or scheduler:
 every run happens in a real desktop app window, on purpose, so nothing is ever working away in a
-process with no chat for you to open. Three things actually work today:
+process with no chat for you to open. Four things actually work today:
 
 - **Reply straight into a session's own desktop chat.** The composer at the bottom of a session
   types your message into that chat's own app window (the same delivery `fan_out_send` uses over
@@ -78,6 +82,10 @@ process with no chat for you to open. Three things actually work today:
 - **Fan a task list out across your other signed-in accounts** with the MCP `fan_out` tool, one
   visible chat per account, then steer the whole group with `fan_out_send`.
 - **Import a session into a desktop app** so it becomes a real chat you can continue by hand.
+- **Move a chat onto another signed-in account** in one call with the MCP `move_chat` tool, or
+  `move_chats` for several at once, which is the one to reach for whenever more than a single chat
+  is moving. The chat keeps its history and lands ready to continue. See
+  [Moving chats between accounts](docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md).
 
 The **run queue** view still exists as a record of past runs: every historical item, its prompt,
 model, exit code and live output, stays inspectable and editable, but creating or dispatching a
@@ -215,7 +223,7 @@ telemetry.
 - Optional: **Codex Desktop/CLI** for isolated Codex windows, CLI launch/login, and local rollout
   history; **OpenCode** for local OpenCode history; **Hermes Agent** and the **DeepSeek Harness**
   (`@deepseek-ai/dsh`) for theirs. Their sessions appear automatically when their standard local
-  stores exist — `~/.dsh` for the harness, or wherever `DSH_HOME` points. The harness can also be
+  stores exist: `~/.dsh` for the harness, or wherever `DSH_HOME` points. The harness can also be
   launched, opened and stopped from the Instances tab, one row per home.
 - **Windows** for the tray launcher. macOS and Linux builds exist and the instance-account code is
   written for them, but they are not verified there yet.
