@@ -71,6 +71,14 @@ Flags other than --chat/--all-unarchived are passed through to every chat's own 
 for a single move. --title is refused for a multi-chat batch: one new name cannot be right
 for several different chats.
 
+⛔ ARCHIVED CHATS ARE GATED HERE AS WELL AS PER CHAT (_archive_gate, added 2026-09-13 after an
+agent set --archived for itself and queued an account's 22 archived chats behind its 3 live
+ones). --archived on a BATCH is not enough on its own: the batch must also state
+--archived-count N, N must EQUAL the number of archived chats it actually holds, and archived
+chats must be the WHOLE batch - never mixed in with unarchived ones. Any of the three failing
+refuses the batch whole, with the owner directive quoted. Stating the count is the point: it
+cannot be set reflexively, and the number reaches the human before anything moves.
+
 TWO FLAGS ARE THE BATCH'S OWN, added 2026-09-06 after draining two accounts (Carlos at 95%
 of its window, Martin at 88% of its week) took ~25 round trips by hand:
 
@@ -97,6 +105,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
 
 import migrate_chat
@@ -105,7 +114,16 @@ from lib import clilib, deliverylib, enginelib, hydralib, ledgerlib
 
 
 #: Flags this driver consumes itself; everything else is forwarded to each chat's own move.
-_BATCH_ONLY = {"--chat", "--all-unarchived", "--json", "--limit", "--resume", "--terminate-live"}
+_BATCH_ONLY = {"--chat", "--all-unarchived", "--json", "--limit", "--resume", "--terminate-live",
+               "--archived-count"}
+
+#: The law this batch enforces, quoted at the caller in every refusal so the reason arrives
+#: WITH the refusal rather than in a doc nobody opens at that moment.
+_ARCHIVE_LAW = (
+    "owner directive (Michael, 2026-09-05, restated ANGRILY 2026-09-13): only move UNARCHIVED "
+    "chats. An archived chat moves ONLY when the human explicitly asked for that chat - never "
+    "because an agent set a flag for itself while sweeping an account."
+)
 
 #: Exit codes. 0 every chat landed - 4 nothing landed - 5 a partial batch (some landed, some
 #: refused). A partial batch gets its OWN code because "mostly worked" must never read to a
@@ -116,6 +134,55 @@ EXIT_OK, EXIT_NONE, EXIT_PARTIAL = 0, 4, 5
 #: and "that account does not exist" are different facts and only one is safe to trust.
 EXIT_REFUSED = 3
 
+#: ⛔ EVERY POST-LANDING PHASE IS BOUNDED, SO A STUCK ONE STILL YIELDS A VERDICT (found
+#: 2026-09-13: a ONE-chat batch ran 15+ minutes past its documented 15-25s and returned no
+#: report at all - the MCP call died on a bare transport timeout with no operationId, no
+#: per-chat result, no `resume.delivered`). Every sub-call already carries its OWN timeout
+#: (the picker's actuator: 180s: the source-settle actuator: 240s: the courier's send: 300s)
+#: but nothing capped what a WHOLE PHASE could cost across N chats, so worst-case sub-timeouts
+#: chained instead of being bounded as a group - and if any single one of them ever fails to
+#: fire (a hung window, a zombie process a kill signal missed), there was NOTHING behind it.
+#: Each ceiling below is generous per chat - well above the documented per-chat budget, so a
+#: healthy batch never trips it - and scales WITH the batch, never a fixed ceiling that starves
+#: a big batch of the same wall-clock room a one-chat move gets. Tripping one no longer holds
+#: the run: `_run_bounded` gives up WAITING (Python cannot safely kill a thread mid syscall)
+#: and the phase's own marker function names exactly which chat, and which phase, did not
+#: finish - never a silent hang, never a report lost to the caller's transport.
+SETTLE_PHASE_TIMEOUT_SECS = 90.0
+STAMP_PHASE_TIMEOUT_SECS = 240.0
+RESUME_PHASE_TIMEOUT_SECS = 300.0
+
+
+def _run_bounded(phase_name: str, timeout_secs: float, fn) -> bool:
+    """Run `fn()` - one phase's own blocking work, across every chat in it - on a worker
+    thread, and stop WAITING on it after `timeout_secs`. Returns True if `fn` finished inside
+    the budget.
+
+    ⛔ THIS IS A DEADLINE ON WAITING, NEVER A KILL. Python has no safe way to terminate a
+    thread mid UI-automation or mid subprocess wait, so a phase that blows its budget is
+    ABANDONED, not stopped - the caller (each phase's own `_mark_*_timeout`) reads whatever
+    state the abandoned thread had already written and names anything still missing a verdict
+    as timed-out, then the batch moves on to build its report. The worker is a daemon thread:
+    it dies with the process rather than outliving this script or leaking into the next run.
+    """
+    done = threading.Event()
+    failure: list[BaseException] = []
+
+    def _worker() -> None:
+        try:
+            fn()
+        except BaseException as err:  # noqa: BLE001 - re-raised below, never swallowed
+            failure.append(err)
+        finally:
+            done.set()
+
+    threading.Thread(target=_worker, name=f"migrate_batch-{phase_name}", daemon=True).start()
+    if not done.wait(timeout_secs):
+        return False
+    if failure:
+        raise failure[0]
+    return True
+
 
 class _UnknownSource(Exception):
     """--from named no instance in the fleet."""
@@ -123,7 +190,7 @@ class _UnknownSource(Exception):
 
 class _BatchArgs:
     __slots__ = ("chats", "passthrough", "as_json", "all_unarchived", "source", "limit",
-                 "dry_run", "resume_text", "terminate_live")
+                 "dry_run", "resume_text", "terminate_live", "archived_count")
 
     def __init__(self) -> None:
         self.chats: list[str] = []
@@ -136,6 +203,9 @@ class _BatchArgs:
         # The batch's own two (docstring): neither reaches a per-chat move's argv.
         self.resume_text = ""
         self.terminate_live = False
+        # -1 = never stated. 0 is a REAL value ("I know this batch holds no archived chat"),
+        # so it must not collapse into "not given" - hence -1 rather than 0 as the sentinel.
+        self.archived_count = -1
 
 
 def _parse(argv: list[str]) -> _BatchArgs | int:
@@ -164,6 +234,14 @@ def _parse(argv: list[str]) -> _BatchArgs | int:
                 return 2
             i += 2
             continue
+        if tok == "--archived-count" and i + 1 < len(argv):
+            try:
+                a.archived_count = max(0, int(argv[i + 1]))
+            except ValueError:
+                print(f"--archived-count wants a number, got {argv[i + 1]!r}", file=sys.stderr)
+                return 2
+            i += 2
+            continue
         if tok == "--all-unarchived":
             a.all_unarchived = True
             i += 1
@@ -186,6 +264,104 @@ def _parse(argv: list[str]) -> _BatchArgs | int:
             a.passthrough.append(tok)
         i += 1
     return a
+
+
+def _archived_named(queries: list[str]) -> list[str] | None:
+    """Which of these queries name an ARCHIVED chat? None = the fleet could not be read.
+
+    PRECISE, not merely conservative - the first cut of this was "any substring hit on an
+    archived row counts", and a query as ordinary as "one" then matched a dozen real titles and
+    refused batches that named nothing archived at all. An over-eager gate is not a safe gate:
+    it gets switched off. So a query counts as archived only when it is UNAMBIGUOUSLY archived:
+
+      * it is an exact session id (or exact title) of an archived chat - the shape every
+        enumeration and every bulk caller uses, and the shape the 2026-09-13 incident had; or
+      * it is a fragment that matches archived chats and NO unarchived one, so there is nothing
+        else it could have meant.
+
+    A fragment that matches both is left to migrate_chat's own per-chat --archived refusal,
+    which resolves the one chat it really picked and gates THAT. Two gates, each precise about
+    what it can actually see, rather than one that guesses.
+    """
+    try:
+        rows = hydralib.sessions(period="all", archived="include")
+    except Exception:  # noqa: BLE001 - any read failure means "cannot tell", handled by the gate
+        return None
+    named: list[str] = []
+    for q in queries:
+        ql = str(q).strip().lower()
+        if not ql:
+            continue
+        exact = fuzzy_archived = fuzzy_unarchived = False
+        for r in rows:
+            sid = str(r.get("session_id") or "").lower()
+            title = str(r.get("title") or "").lower()
+            is_arch = bool(r.get("archived"))
+            if ql == sid or (title and ql == title):
+                if is_arch:
+                    exact = True
+                else:
+                    # An exact hit on a LIVE row settles it: this is not the archive's copy.
+                    exact = False
+                    fuzzy_archived = False
+                    break
+            elif title and ql in title:
+                if is_arch:
+                    fuzzy_archived = True
+                else:
+                    fuzzy_unarchived = True
+        if exact or (fuzzy_archived and not fuzzy_unarchived):
+            named.append(q)
+    return named
+
+
+def _archive_gate(parsed: "_BatchArgs") -> tuple[int, str] | None:
+    """The stopgap. Returns (exit_code, report) to REFUSE the whole batch, or None to proceed.
+
+    Why this exists on top of migrate_chat's own per-chat `--archived` refusal: that gate asks
+    "was the flag set?", and on 2026-09-13 an agent asked to migrate an account set the flag
+    for itself and queued all 22 of its archived chats behind 3 unarchived ones. A lone boolean
+    cannot tell a human's instruction from an agent's own initiative. A COUNT can: stating it
+    requires having enumerated the archive first, and the number lands in the transcript where
+    the human sees "22 archived" BEFORE anything moves.
+
+    Three keys, all required, and the batch is refused whole rather than in part - a partial
+    archive move is the outcome that then needs undoing by hand.
+    """
+    named = _archived_named(parsed.chats)
+    if named is None:
+        # Could not read the fleet. Only fatal when archived chats were being asked for at all;
+        # otherwise the ordinary unarchived path is unaffected and must not be held hostage.
+        if "--archived" in parsed.passthrough:
+            return EXIT_REFUSED, ("REFUSED: could not read the fleet to check which of these "
+                                  f"chats are archived, and --archived was passed. {_ARCHIVE_LAW}")
+        return None
+    if not named:
+        # Nothing archived here, so --archived is inert. STRIP it rather than forwarding a live
+        # override into per-chat moves that never needed it: a flag that reaches a gate it did
+        # not have to is the shape that eventually opens one.
+        parsed.passthrough = [t for t in parsed.passthrough if t != "--archived"]
+        return None
+
+    shown = ", ".join(named[:5]) + (f" (+{len(named) - 5} more)" if len(named) > 5 else "")
+    if "--archived" not in parsed.passthrough:
+        return EXIT_REFUSED, (f"REFUSED: {len(named)} of the {len(parsed.chats)} chats named are "
+                              f"ARCHIVED [{shown}]. {_ARCHIVE_LAW} Move the unarchived ones "
+                              "alone, or - if the human named these archived chats - re-run "
+                              f"with --archived --archived-count {len(named)}.")
+    if parsed.archived_count != len(named):
+        stated = "not stated" if parsed.archived_count < 0 else str(parsed.archived_count)
+        return EXIT_REFUSED, (f"REFUSED: --archived needs --archived-count to MATCH. This batch "
+                              f"holds {len(named)} archived chat(s) [{shown}]; the count given "
+                              f"was {stated}. {_ARCHIVE_LAW} Stating the number is what proves "
+                              "the archive was looked at rather than swept along.")
+    if len(named) != len(parsed.chats):
+        return EXIT_REFUSED, (f"REFUSED: this batch MIXES {len(named)} archived chat(s) with "
+                              f"{len(parsed.chats) - len(named)} unarchived one(s). {_ARCHIVE_LAW} "
+                              "Archived chats move in a batch of their own, so no archive can "
+                              "ride along on a routine account move; run the unarchived ones "
+                              "first, then the archived ones deliberately.")
+    return None
 
 
 def _movable_chats(source: str | None, limit: int) -> tuple[list[dict], str]:
@@ -486,6 +662,38 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
     return tally
 
 
+def _mark_unresumed_after_timeout(landed_items: list[_Item], budget: float) -> None:
+    """PHASE FOUR's own deadline gave up waiting on `_resume_landed` (most likely `courier.run`
+    itself, waiting on an engine it believes is mid-turn - see the module docstring's PHASE
+    FOUR note). Sweep every landed chat and make sure its `resume` verdict says so BY NAME:
+
+    ⛔ THE SILENT-DORMANT SHAPE THIS WHOLE FIX EXISTS TO CLOSE (found 2026-09-13) is a chat
+    that staged fine - `_resume_landed`'s first pass runs before the long courier call, so
+    EVERY landed chat usually already has `resume = {staged: True, delivered: False, why: ""}`
+    by the time the timeout trips - and then never gets `why` filled in because the courier
+    call that would have confirmed or denied delivery was abandoned. A landed chat with
+    `resume.delivered` false and an EMPTY `why` reads exactly like a caller forgot to check;
+    it must instead read as "known: not confirmed", with the retry command still attached.
+    """
+    for item in landed_items:
+        verdict = item.payload.get("resume")
+        if not isinstance(verdict, dict):
+            # Timed out before this chat was even staged (the timeout tripped inside the
+            # staging loop itself, before `by_delivery` was built) - name that too.
+            item.payload["resume"] = {
+                "staged": False, "delivered": False,
+                "why": f"the resume phase timed out after {budget:.0f}s before this chat's "
+                       "reply could be staged - resume NOT delivered.",
+            }
+            continue
+        if verdict.get("delivered"):
+            continue  # a real verdict already landed for this chat before the deadline hit
+        if not str(verdict.get("why") or "").strip():
+            verdict["why"] = (
+                f"the resume phase timed out after {budget:.0f}s waiting on the courier - "
+                "the reply is staged but delivery was never confirmed for this chat.")
+
+
 def _finish_one(item: _Item) -> None:
     """Turn a finished landing into the payload the report reads. Never raises.
 
@@ -541,40 +749,87 @@ def _run_phases(items: list[_Item]) -> None:
     each drive a real application window through its own instance lock. Two of those at once
     is two scripts fighting over one sidebar. The phases overlap the WAITING; they do not
     overlap the driving.
+
+    ⛔ EACH SUB-PHASE BELOW IS NOW ITS OWN BOUNDED GROUP (module-level SETTLE_PHASE_TIMEOUT_SECS
+    / STAMP_PHASE_TIMEOUT_SECS). A phase that blows its budget is abandoned, not awaited
+    forever: `_mark_settle_timeout` / `_mark_stamp_timeout` name whichever chats never got a
+    verdict, and the batch still reaches its report instead of holding the whole run hostage.
     """
     live = [i for i in items if i.landing is not None]
-    for item in live:
-        try:
-            migrate_chat.phase_settle(item.landing)
-        except Exception as err:
-            # The chat is in its new account regardless; the settle is one tidy-up of two.
-            # Its landing stays alive so the stamp phase still runs for it, and the payload
-            # will say the source row is in an unknown state rather than claim a settle.
-            item.errors.append(f"settling raised {type(err).__name__}: {str(err)[:200]}")
-            item.landing.settle_note = (f" ⚠ Source row NOT settled - settling raised "
-                                        f"{type(err).__name__}: {str(err)[:120]}.")
-            item.landing.source_row = "unknown"
     if not live:
         return
+
+    def _settle_all() -> None:
+        for item in live:
+            try:
+                migrate_chat.phase_settle(item.landing)
+            except Exception as err:
+                # The chat is in its new account regardless; the settle is one tidy-up of two.
+                # Its landing stays alive so the stamp phase still runs for it, and the payload
+                # will say the source row is in an unknown state rather than claim a settle.
+                item.errors.append(f"settling raised {type(err).__name__}: {str(err)[:200]}")
+                item.landing.settle_note = (f" ⚠ Source row NOT settled - settling raised "
+                                            f"{type(err).__name__}: {str(err)[:120]}.")
+                item.landing.source_row = "unknown"
+
+    settle_budget = SETTLE_PHASE_TIMEOUT_SECS * len(live)
+    if not _run_bounded("settle", settle_budget, _settle_all):
+        _mark_settle_timeout(live, settle_budget)
+
     _name_landings(live)
-    # The shared watch. It re-stamps any record the app flipped back, exactly as each chat's
-    # own watch did, so this is the same guarantee bought once instead of N times.
-    try:
-        watched = migrate_chat.watch_bypass_many(
-            [migrate_chat.landed_meta_path(i.landing) for i in live])
-    except Exception:
-        # ⛔ NEVER SILENTLY SKIP THE WATCH. A missing verdict means each chat watches its own
-        # record below (watched=None), which is slower and correct - not faster and unproven.
-        watched = {}
-    for item in live:
+
+    def _stamp_all() -> None:
+        # The shared watch. It re-stamps any record the app flipped back, exactly as each
+        # chat's own watch did, so this is the same guarantee bought once instead of N times.
         try:
-            path = migrate_chat.landed_meta_path(item.landing)
-            migrate_chat.phase_stamp(item.landing, watched=watched.get(path))
-        except Exception as err:
-            item.errors.append(f"stamping raised {type(err).__name__}: {str(err)[:200]}")
+            watched = migrate_chat.watch_bypass_many(
+                [migrate_chat.landed_meta_path(i.landing) for i in live])
+        except Exception:
+            # ⛔ NEVER SILENTLY SKIP THE WATCH. A missing verdict means each chat watches its
+            # own record below (watched=None), which is slower and correct - not faster and
+            # unproven.
+            watched = {}
+        for item in live:
+            try:
+                path = migrate_chat.landed_meta_path(item.landing)
+                migrate_chat.phase_stamp(item.landing, watched=watched.get(path))
+            except Exception as err:
+                item.errors.append(f"stamping raised {type(err).__name__}: {str(err)[:200]}")
+
+    stamp_budget = STAMP_PHASE_TIMEOUT_SECS * len(live) + migrate_chat.BYPASS_WATCH_SECS
+    if not _run_bounded("stamp", stamp_budget, _stamp_all):
+        _mark_stamp_timeout(live, stamp_budget)
+
     for item in items:
         if item.landing is not None:
             _finish_one(item)
+
+
+def _mark_settle_timeout(live: list[_Item], budget: float) -> None:
+    """The settle phase's own deadline gave up waiting. Any chat whose source row is still
+    unset never got a settle verdict; name the timeout on its own item so the report cannot
+    read as a clean settle that simply never happened. `_finish_one`/`landing_payload` already
+    turn an `errors` entry into 'LANDED but not finished', which is exactly the right shape -
+    the chat IS in its new account, only its tidy-up is outstanding."""
+    for item in live:
+        land = item.landing
+        if land is not None and land.source_row is None:
+            item.errors.append(
+                f"settle phase timed out after {budget:.0f}s - source row NOT settled; "
+                "the chat IS in its new account, do not re-move it")
+
+
+def _mark_stamp_timeout(live: list[_Item], budget: float) -> None:
+    """The stamp phase's own deadline gave up waiting. Any chat whose doctrine is still unset
+    never got a permission-mode verdict; `landing_payload`'s own fallback ('the stamp phase
+    did not run') already reports it honestly, so this only needs to name WHY, on the record
+    the caller actually reads (`item.errors` -> the 'LANDED but not finished' report)."""
+    for item in live:
+        land = item.landing
+        if land is not None and land.doctrine is None:
+            item.errors.append(
+                f"stamp phase timed out after {budget:.0f}s - permission mode NOT adjudicated; "
+                f"remedy: {migrate_chat.BYPASS_REMEDY_CMD.format(sid=land.session_id)}")
 
 
 
@@ -738,6 +993,15 @@ def main(argv: list[str]) -> int:
         print(json.dumps(payload, indent=2) if parsed.as_json else payload["report"])
         return EXIT_NONE
 
+    # THE ARCHIVE STOPGAP - after the chat list is final (so --all-unarchived is covered too),
+    # and before a single chat is touched. Refuses the batch WHOLE; see _archive_gate.
+    gate = _archive_gate(parsed)
+    if gate is not None:
+        code, report = gate
+        payload = {"ok": False, "moved": 0, "results": [], "report": report}
+        print(json.dumps(payload, indent=2) if parsed.as_json else report)
+        return code
+
     if len(parsed.chats) > 1 and "--title" in parsed.passthrough:
         print("--title renames ONE chat; it cannot be right for a batch of several.",
               file=sys.stderr)
@@ -753,9 +1017,35 @@ def main(argv: list[str]) -> int:
     for item in items:
         _attach_terminated(item)
     # PHASE FOUR, only on a real run: a dry run lands nothing, so there is nothing to wake.
+    # Bounded exactly like phases two and three (module-level RESUME_PHASE_TIMEOUT_SECS): the
+    # courier can wait on an engine it believes is mid-turn, and that must never hold the
+    # batch's report hostage - see `_mark_unresumed_after_timeout`.
     resume = None
     if parsed.resume_text and not parsed.dry_run:
-        resume = _resume_landed(items, parsed.resume_text)
+        landed_for_resume = [i for i in items if i.payload.get("landed") and i.payload.get("sessionId")]
+        resume_box: dict = {}
+
+        def _do_resume() -> None:
+            resume_box["tally"] = _resume_landed(items, parsed.resume_text)
+
+        resume_budget = RESUME_PHASE_TIMEOUT_SECS * max(1, len(landed_for_resume))
+        if _run_bounded("resume", resume_budget, _do_resume):
+            resume = resume_box.get("tally") or {"asked": len(landed_for_resume),
+                                                  "delivered": 0, "staged": 0}
+        else:
+            resume = {
+                "asked": len(landed_for_resume),
+                "delivered": sum(1 for i in landed_for_resume
+                                  if isinstance(i.payload.get("resume"), dict)
+                                  and i.payload["resume"].get("delivered")),
+                "staged": sum(1 for i in landed_for_resume
+                              if isinstance(i.payload.get("resume"), dict)
+                              and i.payload["resume"].get("staged")),
+                "timedOut": True,
+                "why": (f"the resume phase did not finish within {resume_budget:.0f}s - read "
+                        "each chat's own `resume` block, never trust this summary alone"),
+            }
+            _mark_unresumed_after_timeout(landed_for_resume, resume_budget)
     results = [i.payload for i in items]
     secs = time.time() - t0
 

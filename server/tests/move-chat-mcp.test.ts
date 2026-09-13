@@ -312,3 +312,84 @@ describe('targetNote confirms the resolved account by name AND email (item 4, fi
     expect(chats?.description).toContain('targetNote')
   })
 })
+
+// docs/todo/improvements/tooling/agenthydra-move-chats-resume-never-delivered-and-the-call-times-out.md
+// (2026-09-13): a one-chat move_chats call died on a bare MCP transport timeout with NO
+// operationId and no per-chat report - the batch's own declared length (330s+, even for one
+// chat: the 180s floor plus a 90s-per-chat settle/stamp allowance) was always longer than the
+// AUTO_DETACH_MS ceiling (120s), but `background` only went async when the caller explicitly
+// asked for it. These pin that move_chats now reads the SAME auto-detach rule orchestrator_run
+// already has: async unless a caller who knows their transport can wait says `background: false`.
+function moveChats() {
+  const t = TOOLS.find((x) => x.name === 'move_chats')
+  if (!t) throw new Error('no MCP tool named move_chats')
+  return t
+}
+
+describe('move_chats auto-detaches so a lost transport never loses the report (2026-09-13)', () => {
+  test('a bare one-chat call already declares itself past the ceiling, and goes async without being asked', async () => {
+    scriptStdout = JSON.stringify({ moved: ['x'], refused: [], results: [] })
+    const r = (await moveChats().run({ chats: ['x'], to: 36 })) as Record<string, unknown>
+    expect(runCall().body?.timeoutMs).toBeGreaterThan(120_000)
+    expect(runCall().body?.async).toBe(true)
+    expect(r.started).toBe(true)
+    expect(String(r.poll)).toContain('orchestrator_operation')
+    expect(String(r.note)).toContain('Detached automatically')
+    // the auto note names the batch's own declared length, not a generic excuse
+    expect(String(r.note)).toMatch(/\d+s\)/)
+  })
+
+  test('background: false is a person choosing to wait, and is honoured even past the ceiling', async () => {
+    scriptStdout = JSON.stringify({ landed: true, report: 'landed and VERIFIED' })
+    const r = (await moveChats().run({ chats: ['x'], to: 36, background: false })) as Record<
+      string,
+      unknown
+    >
+    expect(runCall().body?.timeoutMs).toBeGreaterThan(120_000)
+    expect(runCall().body?.async).toBe(false)
+    expect(r.started).toBeUndefined()
+    expect(r.poll).toBeUndefined()
+    // the blocking path still parses the script's own JSON off stdout
+    expect(r.landed).toBe(true)
+  })
+
+  test('background: true still answers with the id and how to poll it, in its own words', async () => {
+    scriptStdout = JSON.stringify({ moved: ['x'], refused: [], results: [] })
+    const r = (await moveChats().run({ chats: ['x'], to: 36, background: true })) as Record<
+      string,
+      unknown
+    >
+    expect(runCall().body?.async).toBe(true)
+    expect(String(r.note)).toContain('Poll the id above')
+    expect(String(r.note)).not.toContain('Detached automatically')
+  })
+})
+
+// The archive stopgap's caller half (2026-09-13): a COUNT travels with `--archived`, never a
+// bare boolean - see migrate_batch's own _archive_gate for why a boolean could not tell a
+// human's instruction from an agent's own initiative.
+describe('archived_count is the only way --archived reaches migrate_batch', () => {
+  test('a positive archived_count adds --archived --archived-count <n>', async () => {
+    scriptStdout = JSON.stringify({ moved: [], refused: [], results: [] })
+    await moveChats().run({ chats: ['x'], to: 36, archived_count: 3 })
+    const args = runCall().body?.args as string[]
+    expect(args).toContain('--archived')
+    expect(args[args.indexOf('--archived-count') + 1]).toBe('3')
+  })
+
+  test('archived_count is dropped for all_unarchived - it is unarchived by definition', async () => {
+    scriptStdout = JSON.stringify({ moved: [], refused: [], results: [] })
+    await moveChats().run({ all_unarchived: true, to: 36, archived_count: 5 })
+    const args = runCall().body?.args as string[]
+    expect(args).not.toContain('--archived')
+    expect(args).not.toContain('--archived-count')
+  })
+
+  test('omitting archived_count (or zero) never adds the flag', async () => {
+    scriptStdout = JSON.stringify({ moved: [], refused: [], results: [] })
+    await moveChats().run({ chats: ['x'], to: 36 })
+    expect(runCall().body?.args).not.toContain('--archived')
+    await moveChats().run({ chats: ['x'], to: 36, archived_count: 0 })
+    expect(runCall().body?.args).not.toContain('--archived')
+  })
+})

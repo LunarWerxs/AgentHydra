@@ -42,6 +42,8 @@ import contextlib
 import io
 import json
 import sys
+import threading
+import time
 import unittest
 import unittest.mock as mock
 from pathlib import Path
@@ -148,6 +150,17 @@ class _MigrateBatchTest(unittest.TestCase):
 
 
 class BatchDriverTest(_MigrateBatchTest):
+    def setUp(self):
+        """These cases name chats "one"/"two"/"three", and the archive stopgap resolves every
+        name against the fleet before the batch runs. Unstubbed it reads the REAL machine, where
+        "one" is a substring of plenty of archived titles and of none of the ~29 unarchived ones
+        - so the gate correctly called them archived and refused, and nine driver tests went red
+        against a live laptop. Empty rows = "none of these are archived", which is what every
+        case here has always assumed. The gate's own behaviour is pinned in ArchiveGateTest.
+        """
+        super().setUp()
+        self.patch(migrate_batch.hydralib, "sessions", lambda **k: [])
+
     def test_a_refused_chat_does_not_stop_the_batch_and_is_never_counted_as_moved(self):
         """The failure that would matter most: a partial batch reading as a success.
 
@@ -630,6 +643,236 @@ class DoctrineRestampTest(_MigrateBatchTest):
         got = _run_stamp()
         assert got["ultracode"] is False
         assert clock.total >= migrate_chat.DOCTRINE_RESTAMP_SECS, "the 4s ceiling must still be paid"
+
+
+class ArchiveGateTest(unittest.TestCase):
+    """THE ARCHIVE STOPGAP (added 2026-09-13).
+
+    migrate_chat has refused archived chats per chat since 2026-09-05, and it was not enough:
+    that gate only asks "was --archived set?", and on 2026-09-13 an agent asked to migrate an
+    account set it for itself and queued all 22 of that account's archived chats behind the 3
+    that were actually wanted. A boolean cannot distinguish the human's instruction from the
+    agent's own initiative. A COUNT can, because stating it requires having enumerated the
+    archive, and the number reaches the human before anything moves.
+
+    Three keys, each pinned below: the flag, a MATCHING count, and archived-only batches.
+    """
+
+    def setUp(self):
+        self.rows = [
+            {"session_id": "aaaa1111-0000-0000-0000-000000000000",
+             "title": "an archived one", "archived": True},
+            {"session_id": "bbbb2222-0000-0000-0000-000000000000",
+             "title": "a live one", "archived": False},
+        ]
+        patcher = mock.patch.object(migrate_batch.hydralib, "sessions",
+                                    lambda **k: list(self.rows))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _args(self, chats, passthrough=(), count=-1):
+        a = migrate_batch._BatchArgs()
+        a.chats = list(chats)
+        a.passthrough = list(passthrough)
+        a.archived_count = count
+        return a
+
+    def test_an_archived_chat_without_the_flag_is_refused_whole(self):
+        a = self._args(["aaaa1111-0000-0000-0000-000000000000"])
+        got = migrate_batch._archive_gate(a)
+        assert got is not None, "an archived chat must never move on a bare --chat"
+        code, report = got
+        assert code == migrate_batch.EXIT_REFUSED
+        assert "ARCHIVED" in report and "--archived-count 1" in report, report
+
+    def test_the_flag_alone_is_not_enough_the_count_must_match(self):
+        a = self._args(["aaaa1111-0000-0000-0000-000000000000"], ["--archived"])
+        code, report = migrate_batch._archive_gate(a)
+        assert code == migrate_batch.EXIT_REFUSED
+        assert "not stated" in report, report
+        b = self._args(["aaaa1111-0000-0000-0000-000000000000"], ["--archived"], count=7)
+        code, report = migrate_batch._archive_gate(b)
+        assert code == migrate_batch.EXIT_REFUSED
+        assert "was 7" in report, report
+
+    def test_a_matching_count_on_an_archived_only_batch_is_allowed(self):
+        a = self._args(["aaaa1111-0000-0000-0000-000000000000"], ["--archived"], count=1)
+        assert migrate_batch._archive_gate(a) is None, "the deliberate path must still work"
+
+    def test_archived_and_unarchived_may_not_ride_in_one_batch(self):
+        """The incident's exact shape: 3 wanted chats with 22 archived ones swept in behind."""
+        a = self._args(["aaaa1111-0000-0000-0000-000000000000",
+                        "bbbb2222-0000-0000-0000-000000000000"], ["--archived"], count=1)
+        code, report = migrate_batch._archive_gate(a)
+        assert code == migrate_batch.EXIT_REFUSED
+        assert "MIXES" in report, report
+
+    def test_an_ordinary_unarchived_batch_is_untouched_and_a_stray_flag_is_stripped(self):
+        """A flag that reaches a gate it did not have to is the shape that eventually opens
+        one, so an inert --archived is removed rather than forwarded to every per-chat move."""
+        a = self._args(["bbbb2222-0000-0000-0000-000000000000"], ["--now", "--archived"])
+        assert migrate_batch._archive_gate(a) is None
+        assert a.passthrough == ["--now"], a.passthrough
+
+    def test_a_fleet_that_cannot_be_read_refuses_rather_than_guessing(self):
+        with mock.patch.object(migrate_batch.hydralib, "sessions",
+                               side_effect=OSError("store unreadable")):
+            blind = self._args(["aaaa1111-0000-0000-0000-000000000000"], ["--archived"], count=1)
+            code, report = migrate_batch._archive_gate(blind)
+            assert code == migrate_batch.EXIT_REFUSED
+            assert "could not read the fleet" in report, report
+            # ...but an ordinary unarchived move must not be held hostage by that same failure.
+            plain = self._args(["bbbb2222-0000-0000-0000-000000000000"])
+            assert migrate_batch._archive_gate(plain) is None
+
+
+class _BoundedStubLanding:
+    """Like the module's own `_StubLanding` above, but also carries the two fields
+    `_mark_settle_timeout` / `_mark_stamp_timeout` read - `source_row` and `doctrine` -
+    defaulted to None exactly as a real `migrate_chat._Landing`'s `__init__` defaults every
+    slot to None. Without this, a stub that never got a settle/stamp verdict raises
+    AttributeError instead of reading as 'never got a verdict', which is the one case these
+    tests exist to exercise."""
+
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+        self.target = {"name": payload.get("to") or "target"}
+        self.session_id = payload.get("sessionId") or f"sid-{payload.get('title') or ''}"
+        self.chat_title = payload.get("title") or ""
+        self.source_row = None
+        self.settle_note = None
+        self.doctrine = None
+
+
+class BoundedPhaseTest(_MigrateBatchTest):
+    """docs/todo/improvements/tooling/agenthydra-move-chats-resume-never-delivered-and-the-
+    call-times-out.md (2026-09-13): a ONE-chat move_chats batch ran 15+ minutes past its
+    documented 15-25s budget and the MCP call died on a bare transport timeout with NO report
+    at all - no per-chat result, no bypassVerdict, no resume.delivered. The settle and stamp
+    phases (module-level SETTLE_PHASE_TIMEOUT_SECS / STAMP_PHASE_TIMEOUT_SECS, `_run_bounded`)
+    are the fix: a phase that blows its budget is ABANDONED rather than awaited forever, and
+    the chat it belongs to is named in the report instead of the whole run hanging. The
+    resume phase's own bound is pinned separately in test_migrate_batch_resume.py, next to
+    the rest of --resume's contract.
+    """
+
+    def test_run_bounded_returns_true_when_the_phase_finishes_inside_its_budget(self):
+        called = []
+        assert migrate_batch._run_bounded("t", 5.0, lambda: called.append(1)) is True
+        assert called == [1]
+
+    def test_run_bounded_gives_up_waiting_once_the_budget_is_spent_not_the_fns_own_pace(self):
+        release = threading.Event()
+
+        def slow():
+            release.wait(2.0)
+
+        started = time.time()
+        assert migrate_batch._run_bounded("t", 0.05, slow) is False
+        elapsed = time.time() - started
+        assert elapsed < 1.0, f"must give up at the BUDGET ({elapsed:.2f}s took too long)"
+        release.set()  # let the daemon thread finish before the process moves on
+
+    def test_run_bounded_reraises_a_failure_that_happened_inside_the_budget(self):
+        def boom():
+            raise ValueError("the phase itself failed")
+
+        with self.assertRaises(ValueError) as ctx:
+            migrate_batch._run_bounded("t", 5.0, boom)
+        assert "the phase itself failed" in str(ctx.exception)
+
+    def test_mark_settle_timeout_names_only_the_chats_still_unsettled(self):
+        done = migrate_batch._Item("done")
+        done.landing = _BoundedStubLanding(_payload("done", True))
+        done.landing.source_row = "settled"
+        stuck = migrate_batch._Item("stuck")
+        stuck.landing = _BoundedStubLanding(_payload("stuck", True))
+        migrate_batch._mark_settle_timeout([done, stuck], budget=42.0)
+        assert done.errors == []
+        assert len(stuck.errors) == 1
+        assert "settle phase timed out after 42s" in stuck.errors[0]
+        assert "do not re-move it" in stuck.errors[0]
+
+    def test_mark_stamp_timeout_names_only_the_chats_still_unadjudicated(self):
+        done = migrate_batch._Item("done")
+        done.landing = _BoundedStubLanding(_payload("done", True))
+        done.landing.doctrine = {"verdict": "bypassPermissions"}
+        stuck = migrate_batch._Item("stuck")
+        stuck.landing = _BoundedStubLanding(_payload("stuck", True, sessionId="sid-stuck"))
+        migrate_batch._mark_stamp_timeout([done, stuck], budget=77.0)
+        assert done.errors == []
+        assert len(stuck.errors) == 1
+        assert "stamp phase timed out after 77s" in stuck.errors[0]
+        assert "sid-stuck" in stuck.errors[0], "the remedy command must name the stuck chat"
+
+    def test_run_phases_reports_a_settle_phase_that_blows_its_budget_without_blocking(self):
+        self.patch(migrate_batch, "SETTLE_PHASE_TIMEOUT_SECS", 0.02)
+        self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        self.patch(migrate_chat, "watch_bypass_many", lambda paths, **k: {})
+        self.patch(migrate_chat, "phase_stamp", lambda land, watched=None: None)
+        self.patch(migrate_chat, "landed_meta_path", lambda land: "")
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                  lambda instance, extra_titles=None, **k: {
+                      "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+
+        release = threading.Event()
+
+        def slow_settle(land):
+            release.wait(2.0)
+            land.source_row = "settled"
+
+        self.patch(migrate_chat, "phase_settle", slow_settle)
+
+        item = migrate_batch._Item("one")
+        item.landing = _BoundedStubLanding(_payload("one", True))
+        started = time.time()
+        migrate_batch._run_phases([item])
+        elapsed = time.time() - started
+        release.set()
+        assert elapsed < 1.0, f"must give up at the budget, not the settle's own pace ({elapsed:.2f}s)"
+        assert any("settle phase timed out" in e for e in item.errors)
+        assert item.payload["ok"] is False
+        assert item.payload["landed"] is True, "still landed - never re-report as unmoved"
+        assert "settle phase timed out" in item.payload["report"]
+        assert any("settle phase timed out" in u for u in item.payload["unfinished"])
+
+    def test_run_phases_reports_a_stamp_phase_that_blows_its_budget_without_blocking(self):
+        self.patch(migrate_batch, "STAMP_PHASE_TIMEOUT_SECS", 0.02)
+        # stamp_budget also adds migrate_chat.BYPASS_WATCH_SECS (the shared watch's own real
+        # 8s floor) - pin that to 0 too, or this test would have to wait past 8s to prove
+        # anything and would be exactly the slow, flaky test this fix exists to avoid needing.
+        self.patch(migrate_chat, "BYPASS_WATCH_SECS", 0.0)
+        self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        self.patch(migrate_chat, "phase_settle",
+                  lambda land: setattr(land, "source_row", "settled"))
+        self.patch(migrate_chat, "landed_meta_path", lambda land: "")
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                  lambda instance, extra_titles=None, **k: {
+                      "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+
+        release = threading.Event()
+
+        def slow_watch(paths, **k):
+            release.wait(2.0)
+            return {}
+
+        self.patch(migrate_chat, "watch_bypass_many", slow_watch)
+        # phase_stamp itself never even runs - the shared watch it waits on first is what
+        # blows the budget - so it is left at the module's real implementation on purpose.
+
+        item = migrate_batch._Item("one")
+        item.landing = _BoundedStubLanding(_payload("one", True))
+        started = time.time()
+        migrate_batch._run_phases([item])
+        elapsed = time.time() - started
+        release.set()
+        assert elapsed < 1.0, f"must give up at the budget, not the watch's own pace ({elapsed:.2f}s)"
+        assert any("stamp phase timed out" in e for e in item.errors)
+        assert item.payload["ok"] is False
+        assert item.payload["landed"] is True, "still landed - never re-report as unmoved"
+        assert "stamp phase timed out" in item.payload["report"]
 
 
 if __name__ == "__main__":

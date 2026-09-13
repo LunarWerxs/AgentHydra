@@ -154,7 +154,9 @@ export function orchestratorBusy(): boolean {
 // deliberately is not - but a miss now says WHY it missed, so a caller can tell 'never existed'
 // from 'did not survive a restart' and knows to read the toolbox's ledger instead.
 
-export type OrchestratorOutcome = OrchestratorRun | { ok: false; error: string; busy?: boolean }
+export type OrchestratorOutcome =
+  | OrchestratorRun
+  | { ok: false; error: string; busy?: boolean; operationId?: string }
 
 export interface OrchestratorOperation {
   id: string
@@ -684,7 +686,7 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number, hook
 export async function runOrchestrator(
   input: { script?: unknown; args?: unknown; timeoutMs?: unknown },
   deps: SpawnDeps & { dir?: string; python?: string } = {},
-): Promise<OrchestratorRun | { ok: false; error: string; busy?: boolean }> {
+): Promise<OrchestratorOutcome> {
   const check = validateInvocation(input)
   if (!check.ok) return { ok: false, error: check.error }
   const { script, args, timeoutMs } = check.invocation
@@ -698,12 +700,24 @@ export async function runOrchestrator(
   const command = [deps.python ?? pythonBinary(), 'orch.py', script, ...args]
   const spawn = deps.spawn ?? realSpawn
   const running = liveRun(script)
-  if (running)
+  if (running) {
+    // Name the run that holds the lock AND the one call that releases it. A bare "wait for it"
+    // is what sent 2026-09-12 to taskkill and 2026-09-13 to a hand-killed migrate_batch: the
+    // remedy existed both times (cancelOrchestratorOperation) and the refusal never said so.
+    const holder = [...operations.values()].find(
+      (e) => e.op.status === 'running' && e.op.script === script,
+    )
+    const age = Math.round((Date.now() - running.started) / 1000)
+    const remedy = holder
+      ? `wait for it, or stop it with orchestrator_cancel { id: "${holder.op.id}" } and fire this call again`
+      : 'wait for it rather than starting a second one'
     return {
       ok: false,
       busy: true,
-      error: `${script} is already running through this route (started ${Math.round((Date.now() - running.started) / 1000)}s ago) - wait for it rather than starting a second one`,
+      ...(holder ? { operationId: holder.op.id } : {}),
+      error: `${script} is already running through this route (started ${age}s ago) - ${remedy}`,
     }
+  }
   const started = Date.now()
   const entry: InFlightRun = { started, deadline: started + timeoutMs + STALE_LOCK_GRACE_MS }
   inFlight.set(script, entry)

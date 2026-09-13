@@ -28,6 +28,8 @@ import contextlib
 import io
 import json
 import sys
+import threading
+import time
 import unittest
 import unittest.mock as mock
 from pathlib import Path
@@ -77,6 +79,19 @@ def _run(argv: list[str]) -> tuple[int, dict]:
 
 
 class _BatchTest(unittest.TestCase):
+    def setUp(self):
+        """Every case here names chats "one"/"two"/"three", and `_archive_gate` (added
+        2026-09-13, test_migrate_batch.py's own BatchDriverTest.setUp carries the same fix)
+        resolves every name against the REAL fleet before a batch runs. Unstubbed, this file
+        reads THIS machine's actual chat store, where those short names can match real
+        archived titles - the gate then correctly refuses the whole batch, and every test
+        below that expects `move_only`/the courier/the terminate path to run instead sees an
+        empty `results` and no `resume` key at all. Empty rows = "none of these are archived",
+        which is what every case here has always assumed.
+        """
+        super().setUp()
+        self.patch(migrate_batch.hydralib, "sessions", lambda **k: [])
+
     def patch(self, obj, name: str, value) -> None:
         patcher = mock.patch.object(obj, name, value)
         patcher.start()
@@ -425,6 +440,88 @@ class TerminateLiveTest(_BatchTest):
         self.assertEqual(terminated, [])
         self.assertEqual(len(calls), 1)
         self.assertIn("no live engine", out["results"][0]["terminated"]["why"])
+
+
+class ResumePhaseTimeoutTest(_BatchTest):
+    """docs/todo/improvements/tooling/agenthydra-move-chats-resume-never-delivered-and-the-
+    call-times-out.md (2026-09-13): a landed chat's resume reply was staged but the courier
+    call that would confirm delivery could hang - the courier can wait on an engine it
+    believes is mid-turn - and NOTHING bounded that wait, so the whole move_chats MCP call
+    died on a bare transport timeout with no report: no per-chat result, no resume.delivered,
+    nothing. RESUME_PHASE_TIMEOUT_SECS + `_run_bounded` now give up WAITING on the resume
+    phase (never kill it - Python cannot safely do that mid subprocess/UI-automation wait) and
+    `_mark_unresumed_after_timeout` names the timeout on every chat that never got a verdict,
+    so the batch still answers instead of holding the caller hostage.
+    """
+
+    def test_a_resume_phase_that_blows_its_budget_is_reported_per_chat_not_awaited_forever(self):
+        self.stub_phases({})
+        self.patch(migrate_batch, "RESUME_PHASE_TIMEOUT_SECS", 0.02)
+        release = threading.Event()
+
+        def slow_resume_landed(items, text):
+            release.wait(2.0)
+            return {"asked": len(items), "delivered": 0, "staged": 0}
+
+        self.patch(migrate_batch, "_resume_landed", slow_resume_landed)
+        started = time.time()
+        code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+        elapsed = time.time() - started
+        release.set()  # let the daemon thread finish before the test process moves on
+        self.assertLess(elapsed, 1.0,
+                        f"main() must give up at the budget, not the courier's own pace "
+                        f"({elapsed:.2f}s)")
+        self.assertTrue(out["resume"]["timedOut"])
+        self.assertIn("did not finish within", out["resume"]["why"])
+        by_chat = {r["chat"]: r for r in out["results"]}
+        verdict = by_chat["one"]["resume"]
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("resume phase timed out", verdict["why"])
+        self.assertIn("resume NOT delivered", verdict["why"])
+        # the move itself is unaffected by a resume that could not be confirmed in time
+        self.assertTrue(by_chat["one"]["landed"])
+        self.assertEqual(code, migrate_batch.EXIT_OK)
+
+    def test_mark_unresumed_names_a_chat_that_never_even_got_staged(self):
+        """The timeout tripped before `_resume_landed`'s first pass could stage anything -
+        there is no `resume` block on the payload at all yet."""
+        item = migrate_batch._Item("one")
+        item.payload = {"landed": True, "sessionId": "sid-one"}
+        migrate_batch._mark_unresumed_after_timeout([item], budget=12.0)
+        verdict = item.payload["resume"]
+        self.assertFalse(verdict["staged"])
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("timed out after 12s", verdict["why"])
+        self.assertIn("resume NOT delivered", verdict["why"])
+
+    def test_mark_unresumed_fills_in_why_for_a_staged_but_unconfirmed_reply(self):
+        """THE SILENT-DORMANT SHAPE this whole fix closes: `_resume_landed`'s first pass ran
+        (so `staged` is already True) before the courier call that would confirm delivery was
+        abandoned - `why` must read as 'known: not confirmed', never stay blank."""
+        item = migrate_batch._Item("one")
+        item.payload = {"landed": True, "sessionId": "sid-one",
+                        "resume": {"staged": True, "delivered": False, "why": ""}}
+        migrate_batch._mark_unresumed_after_timeout([item], budget=9.0)
+        verdict = item.payload["resume"]
+        self.assertIn("timed out after 9s", verdict["why"])
+        self.assertIn("delivery was never confirmed", verdict["why"])
+
+    def test_mark_unresumed_never_overwrites_a_verdict_that_already_delivered(self):
+        item = migrate_batch._Item("one")
+        item.payload = {"landed": True, "sessionId": "sid-one",
+                        "resume": {"staged": True, "delivered": True, "why": "delivered"}}
+        migrate_batch._mark_unresumed_after_timeout([item], budget=9.0)
+        self.assertEqual(item.payload["resume"]["why"], "delivered")
+
+    def test_mark_unresumed_never_overwrites_an_already_explained_non_delivery(self):
+        """A SKIP (the courier's own deliberate deferral, e.g. 'its turn is IN FLIGHT') already
+        carries a real reason - the timeout sweep must not clobber it with a generic one."""
+        item = migrate_batch._Item("one")
+        item.payload = {"landed": True, "sessionId": "sid-one",
+                        "resume": {"staged": False, "delivered": False,
+                                    "why": "its turn is IN FLIGHT"}}
+        migrate_batch._mark_unresumed_after_timeout([item], budget=9.0)
+        self.assertEqual(item.payload["resume"]["why"], "its turn is IN FLIGHT")
 
 
 if __name__ == "__main__":

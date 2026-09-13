@@ -165,3 +165,35 @@ describe('a run that will outlive the caller detaches instead of losing its repo
     expect(String(out.note)).toContain('Poll the id above')
   })
 })
+
+// orchestrator_cancel: the stop half of the pair whose read half is orchestrator_operation. Added
+// 2026-09-13 after a 25-chat migrate_batch launched with the wrong scope could only be stopped by
+// finding the pid by hand and killing it - the daemon has had cancelOrchestratorOperation and its
+// route all along, and only the MCP surface was missing.
+describe('orchestrator_cancel stops a run that is still going', () => {
+  test('it is registered, and says outright that it is not an undo', () => {
+    const t = tool('orchestrator_cancel')
+    expect((t.inputSchema as { type: string }).type).toBe('object')
+    expect((t.inputSchema as { required: string[] }).required).toEqual(['id'])
+    expect(t.description).toContain('MUTATES')
+    expect(t.description).toContain('NOT AN UNDO')
+  })
+
+  test('it POSTs the cancel route for that id, and encodes it', async () => {
+    await tool('orchestrator_cancel').run({ id: 'op 1/2' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.method).toBe('POST')
+    expect(calls[0]!.url).toMatch(/\/api\/orchestrator\/operations\/op%201%2F2\/cancel$/)
+  })
+
+  test('a blank id is refused here rather than POSTed as a cancel of nothing', async () => {
+    const out = (await tool('orchestrator_cancel').run({ id: '   ' })) as Record<string, unknown>
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('id is required')
+    expect(calls).toHaveLength(0)
+  })
+
+  test('orchestrator_operation no longer claims nothing can cancel a run', () => {
+    expect(tool('orchestrator_operation').description).toContain('orchestrator_cancel')
+  })
+})

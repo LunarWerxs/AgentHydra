@@ -1946,7 +1946,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'move_chats',
     description:
-      "MUTATES: MOVE MANY CHATS BETWEEN ACCOUNTS IN ONE CALL — move_chat's plural, and the one you should reach for whenever more than a single chat is being moved (owner, 2026-09-05, angry: 13 chats took ~15 minutes as 13 separate calls). Do NOT loop move_chat and do NOT fire it in parallel: the daemon keys its in-flight map by SCRIPT NAME, so concurrent move_chat calls do not overlap — all but one return `409 busy` and the rest time their sockets out. This runs the orchestrator's migrate_batch, which executes migrate_chat's OWN pipeline inside ONE interpreter and ONE route-lock acquisition, BY PHASE rather than by chat (owner, 2026-09-06: \"move them all, archive them all, then set all the permissions\"): every chat is moved and verified, THEN every source row is settled, THEN one shared bypass watch is followed by every chat's permission stamp. So the fleet, session and usage-survey reads are paid once for the whole batch, the 8s bypass watch is paid once instead of once per chat, and the chats are usable as soon as the first phase ends. EVERY RAIL IS UNCHANGED AND PER CHAT: each chat is re-resolved immediately before its own gates (a liveness read from batch start is not liveness), a live writer is still refused, the landing is still verified by read-back, the source row is still settled, and the bypass verdict is still ADJUDICATED — read each result's `bypassVerdict`, never `permissionMode`. Imports are deliberately NOT parallelised: /import-desktop takes no act lock and two at once into one store can create a duplicate row that makes a chat permanently unreachable. Pass `chats` (title fragments or session ids), or `all_unarchived: true` to take every unarchived desktop chat — with `from` to scope that to one account and `limit` to cap it. A REFUSED CHAT DOES NOT STOP THE BATCH: it is reported by name with its reason and the rest continue, so read `refused` and the per-chat `results`, never just `moved`. `dry_run: true` plans every chat and moves nothing. Expect roughly 15-25s per chat that actually lands (the import, the source settle and the app's own permission picker each drive one window under its own lock, so they are irreducibly serial); the saving is in what is no longer repeated and no longer waited for twice, not in doing several at once. `targetNote` CONFIRMS the WHOLE BATCH's resolved account by NAME AND EMAIL — resolved once, before the FIRST chat is imported, and identical whether `dry_run` is set or not, so a `dry_run: true` call reads the exact same confirmation a real batch would land under, with nothing yet moved. A stale identity signal landed three chats on the wrong account this way (2026-09-07) before anyone read it; when `to`/\"here\" is not obviously right for a batch this size, dry-run it first and check `targetNote` before moving anything.",
+      "MUTATES: MOVE MANY CHATS BETWEEN ACCOUNTS IN ONE CALL — move_chat's plural, and the one you should reach for whenever more than a single chat is being moved (owner, 2026-09-05, angry: 13 chats took ~15 minutes as 13 separate calls). Do NOT loop move_chat and do NOT fire it in parallel: the daemon keys its in-flight map by SCRIPT NAME, so concurrent move_chat calls do not overlap — all but one return `409 busy` and the rest time their sockets out. This runs the orchestrator's migrate_batch, which executes migrate_chat's OWN pipeline inside ONE interpreter and ONE route-lock acquisition, BY PHASE rather than by chat (owner, 2026-09-06: \"move them all, archive them all, then set all the permissions\"): every chat is moved and verified, THEN every source row is settled, THEN one shared bypass watch is followed by every chat's permission stamp. So the fleet, session and usage-survey reads are paid once for the whole batch, the 8s bypass watch is paid once instead of once per chat, and the chats are usable as soon as the first phase ends. EVERY RAIL IS UNCHANGED AND PER CHAT: each chat is re-resolved immediately before its own gates (a liveness read from batch start is not liveness), a live writer is still refused, the landing is still verified by read-back, the source row is still settled, and the bypass verdict is still ADJUDICATED — read each result's `bypassVerdict`, never `permissionMode`. Imports are deliberately NOT parallelised: /import-desktop takes no act lock and two at once into one store can create a duplicate row that makes a chat permanently unreachable. Pass `chats` (title fragments or session ids), or `all_unarchived: true` to take every unarchived desktop chat — with `from` to scope that to one account and `limit` to cap it. A REFUSED CHAT DOES NOT STOP THE BATCH: it is reported by name with its reason and the rest continue, so read `refused` and the per-chat `results`, never just `moved`. `dry_run: true` plans every chat and moves nothing. Expect roughly 15-25s per chat that actually lands (the import, the source settle and the app's own permission picker each drive one window under its own lock, so they are irreducibly serial); the saving is in what is no longer repeated and no longer waited for twice, not in doing several at once. `targetNote` CONFIRMS the WHOLE BATCH's resolved account by NAME AND EMAIL — resolved once, before the FIRST chat is imported, and identical whether `dry_run` is set or not, so a `dry_run: true` call reads the exact same confirmation a real batch would land under, with nothing yet moved. A stale identity signal landed three chats on the wrong account this way (2026-09-07) before anyone read it; when `to`/\"here\" is not obviously right for a batch this size, dry-run it first and check `targetNote` before moving anything. ⛔ ARCHIVED CHATS DO NOT MOVE HERE BY DEFAULT AND MUST NOT BE SWEPT ALONG (owner directive, Michael, 2026-09-05, restated angrily 2026-09-13): an account's archive is the overwhelming MAJORITY of its chats - 22 of 25 in the incident - so \"migrate this account\" means its UNARCHIVED chats unless the human said otherwise, and the engine refuses the WHOLE batch if archived chats are named without `archived_count`, if that count does not match, or if archived and unarchived chats are mixed in one batch.",
     inputSchema: S(
       {
         chats: {
@@ -1976,10 +1976,10 @@ export const TOOLS: McpEngineTool[] = [
           description:
             "A person's word, applied to EVERY chat in the batch: override a hold / superseded lineage. A live writer is never overridden. Only when the human asked.",
         },
-        archived: {
-          type: 'boolean',
+        archived_count: {
+          type: 'number',
           description:
-            'Allow ARCHIVED chats to move too. Default false. Ignored by all_unarchived, which is unarchived by definition.',
+            "⛔ ONLY WHEN THE HUMAN NAMED ARCHIVED CHATS. How many of the chats in this batch are ARCHIVED. Replaced the old `archived: true` boolean on 2026-09-13, because a boolean cannot tell the human's instruction from an agent's own initiative and an agent set it for itself while sweeping an account, queueing all 22 of its archived chats behind the 3 that were asked for. The engine REFUSES THE WHOLE BATCH unless this number EQUALS the archived chats it actually holds, and unless they are the WHOLE batch - archived chats never ride along with unarchived ones. Counting them first is the point. Omit it entirely for ordinary work; `all_unarchived` never needs it.",
         },
         limit: {
           type: 'number',
@@ -2005,7 +2005,7 @@ export const TOOLS: McpEngineTool[] = [
         background: {
           type: 'boolean',
           description:
-            "Answer AT ONCE with `operationId` instead of holding the connection open for the whole batch, then poll `orchestrator_operation {id}` for the full report. STRONGLY PREFERRED for more than two or three chats: this batch's own deadline runs to an hour, which is far longer than most MCP callers will wait, and a caller that gives up first loses the entire per-chat report - what landed, every bypassVerdict, whether each resume was delivered - for work that is still running and WILL finish.",
+            "ALREADY THE DEFAULT (2026-09-13) whenever this batch's own declared length exceeds 120s, which is nearly always - only a batch you declare SHORT (one chat, a small idle-wait, no resume) ever runs blocking. True answers AT ONCE with `operationId` instead of holding the connection open; poll `orchestrator_operation {id}` for the full report. `false` FORCES blocking even past 120s - only for a caller who knows their own transport can wait. Omit it to get the auto rule. This batch's own deadline runs to an hour, which is far longer than most MCP callers will wait, and a caller that gives up first loses the entire per-chat report - what landed, every bypassVerdict, whether each resume was delivered - for work that is still running and WILL finish.",
         },
       },
       [],
@@ -2032,7 +2032,13 @@ export const TOOLS: McpEngineTool[] = [
         args.push('--from', String(src.num))
       }
       if (a.force === true) args.push('--force')
-      if (a.archived === true) args.push('--archived')
+      // The archive stopgap's caller half: a COUNT, never a bare boolean, and the count travels
+      // with the override so the engine can refuse a number that does not match what it sees.
+      // `all_unarchived` is unarchived by definition, so a count against it is meaningless and
+      // is dropped rather than forwarded as a contradiction.
+      const archivedCount = Number(a.archived_count)
+      if (!all && Number.isFinite(archivedCount) && archivedCount > 0)
+        args.push('--archived', '--archived-count', String(Math.floor(archivedCount)))
       if (a.dry_run === true) args.push('--dry-run')
       const limit = Math.max(0, Math.floor(Number(a.limit ?? 0) || 0))
       if (limit > 0) args.push('--limit', String(limit))
@@ -2053,7 +2059,18 @@ export const TOOLS: McpEngineTool[] = [
       // the identical call now returns the ORIGINAL operation instead of moving anything twice,
       // which makes "I lost the answer, ask again" the safe move rather than a second act.
       const idempotencyKey = `move_chats:${JSON.stringify(args)}`
-      const background = a.background === true
+      // ⛔ THE SAME AUTO-DETACH orchestrator_run ALREADY EARNED FROM A NEARLY IDENTICAL INCIDENT
+      // (2026-09-11, that tool's own history above) - a caller that DECLARES a run longer than
+      // AUTO_DETACH_MS is detached automatically, because a batch is exactly the shape that
+      // outlives an MCP client's transport (found again 2026-09-13: a ONE-chat batch's own
+      // `timeoutMs` was already 330s+ - the default `background: a.background === true` waited
+      // for the connection to die anyway, `The operation timed out.` with NO operationId, and
+      // the finished report - including whether the resume was delivered - was unreachable).
+      // `timeoutMs` here is built from the batch's own per-chat budget, so it is ALWAYS the
+      // honest declared length of the run; an explicit `background: false` is still honoured
+      // for a caller who really does want to block (and knows their transport can wait).
+      const background =
+        a.background === true || (a.background == null && timeoutMs > AUTO_DETACH_MS)
       const run = (await api('/api/orchestrator/run', {
         method: 'POST',
         headers: JSON_HEADERS,
@@ -2072,7 +2089,10 @@ export const TOOLS: McpEngineTool[] = [
           started: true,
           targetNote,
           poll: `orchestrator_operation { id: "${str(run.operationId)}" }`,
-          note: 'The batch is running in the daemon. Poll the id above for the full per-chat report; re-calling move_chats with these exact arguments returns this same operation rather than moving anything twice.',
+          note:
+            a.background === true
+              ? 'The batch is running in the daemon. Poll the id above for the full per-chat report; re-calling move_chats with these exact arguments returns this same operation rather than moving anything twice.'
+              : `Detached automatically: this batch's own declared length (${Math.round(timeoutMs / 1000)}s) is longer than an MCP client will hold a connection open, and a call the client abandons loses the report - what landed, every bypassVerdict, whether each resume was delivered - for work that keeps running anyway. Poll the id above for the full per-chat report; pass background:false if you really do want to block (only worth it for a batch you know is short).`,
         }
       let payload: Record<string, unknown> | null = null
       try {
@@ -2439,7 +2459,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'orchestrator_operation',
     description:
-      "READ THE VERDICT OF A RUN WHOSE CALL YOU LOST - poll one orchestrator operation by id, or list the recent ones. A RUN'S FULL RESULT IS KEPT FOR AN HOUR BY THE DAEMON PROCESS THAT RAN IT, so a call that died on YOUR transport timeout is not lost work and need not be guessed at or re-run: the script kept going, finished, and its stdout/exit code/verdict are still here. Read them instead of re-firing the act. ⛔ THE ONE CASE WHERE THEY ARE NOT: these records live in memory, so a daemon RESTART loses them - and a detached child survives the restart and finishes anyway, so the work is usually done even though the record is gone. A miss says which case it is (`reason`: 'daemon-restarted' vs 'unknown-id') and names when this daemon started; on 'daemon-restarted' do NOT re-fire the act, read the toolbox's own ledger for what it did and check the effect. `id` polls one (`operationId` comes back from every orchestrator_run, INCLUDING the 409-busy refusal that names the run already in flight); omit it to list recent operations, which is how you find the id when the call that would have told you it never returned. `status` is 'running' or 'done'/'failed'; a running one can be polled again. Read-only - it starts nothing and cancels nothing.",
+      "READ THE VERDICT OF A RUN WHOSE CALL YOU LOST - poll one orchestrator operation by id, or list the recent ones. A RUN'S FULL RESULT IS KEPT FOR AN HOUR BY THE DAEMON PROCESS THAT RAN IT, so a call that died on YOUR transport timeout is not lost work and need not be guessed at or re-run: the script kept going, finished, and its stdout/exit code/verdict are still here. Read them instead of re-firing the act. ⛔ THE ONE CASE WHERE THEY ARE NOT: these records live in memory, so a daemon RESTART loses them - and a detached child survives the restart and finishes anyway, so the work is usually done even though the record is gone. A miss says which case it is (`reason`: 'daemon-restarted' vs 'unknown-id') and names when this daemon started; on 'daemon-restarted' do NOT re-fire the act, read the toolbox's own ledger for what it did and check the effect. `id` polls one (`operationId` comes back from every orchestrator_run, INCLUDING the 409-busy refusal that names the run already in flight); omit it to list recent operations, which is how you find the id when the call that would have told you it never returned. `status` is 'running' or 'done'/'failed'; a running one can be polled again. Read-only - it starts nothing and stops nothing: `orchestrator_cancel {id}` is what stops a run that is still going.",
     inputSchema: S({
       id: {
         type: 'string',
@@ -2453,6 +2473,29 @@ export const TOOLS: McpEngineTool[] = [
           ? `/api/orchestrator/operations/${encodeURIComponent(a.id.trim())}`
           : '/api/orchestrator/operations',
       ),
+  },
+  {
+    name: 'orchestrator_cancel',
+    description:
+      "MUTATES: STOP A RUN THAT IS STILL GOING - the counterpart to orchestrator_operation, which only reads. The operation's WHOLE PROCESS TREE is killed and its outcome then reads `cancelled`. This is the supported way out of a batch that was launched with the wrong scope or is sitting out a patient wait; before this existed the only route was to find the pid by hand and taskkill it, which is outside every rail the tools exist to provide. ⛔ CANCEL IS NOT AN UNDO: whatever the run already DID stays done - chats a migrate_batch already landed remain landed on the target, and nothing is moved back. It stops the REMAINDER. ⛔ AND THE PER-ITEM REPORT DIES WITH THE PROCESS: a cancelled batch never returns its per-chat results, so establish what actually happened by READING THE FLEET afterwards (`list_chats` on the source and the target), never by assuming the run had not got that far. A chat killed mid-move is the one real hazard - imports are deliberately serialised because two into one store can create a duplicate row that makes a chat permanently unreachable - so prefer cancelling a batch that is still waiting or between chats, and verify the in-flight chat by name afterwards. Cancelling also FREES THE ROUTE LOCK, which the daemon keys by SCRIPT NAME: that is what lets a corrected call (a narrower chat list, or the same move with `terminate_live`) run at once instead of being refused 409 busy. A finished operation is left exactly as it is and its recorded verdict still reads - cancelling one is a no-op that answers with the status it already had, so it is safe to call when you are unsure whether it is still running. An unknown id answers 404.",
+    inputSchema: S(
+      {
+        id: {
+          type: 'string',
+          description:
+            'The operationId to stop - the one every backgrounded orchestrator_run / move_chats answered with. Lost it? `orchestrator_operation {}` with no id lists the recent runs, newest first.',
+        },
+      },
+      ['id'],
+    ),
+    run: async (a) => {
+      const id = typeof a.id === 'string' ? a.id.trim() : ''
+      if (!id) return { ok: false, error: 'id is required (the operationId of the run to stop)' }
+      return api(`/api/orchestrator/operations/${encodeURIComponent(id)}/cancel`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+      })
+    },
   },
   {
     name: 'orchestrator_loop',
