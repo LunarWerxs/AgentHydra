@@ -189,12 +189,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   `migrate_chat.py`, which has refused archived chats per chat with exit 7 since 2026-09-05, and it
   remains the way to move one archived chat that a human named.
 
-  ⛔ **On the running 0.41.0 binary this combination currently refuses every archived batch.** The
-  python gate is live (python is read from disk) and demands the count; the compiled `move_chats`
-  still emits a bare `--archived`, so the gate answers `REFUSED: --archived needs --archived-count
-  to MATCH ... the count given was not stated`. That fails in the safe direction and is the
-  stopgap working, but until the next build the only route for a named archived chat is `move_chat`
-  one at a time.
+  ⚠ **A daemon whose two halves are different ages refuses every archived batch**, and that is the
+  stopgap working rather than a fault: python is read from disk, so the gate that demands the count
+  goes live immediately, while a `move_chats` older than 2026-09-13 still emits a bare `--archived`
+  and the gate answers `REFUSED: --archived needs --archived-count to MATCH ... the count given was
+  not stated`. A source daemon restarted after this commit has both halves and is fine. On a
+  compiled install still on 0.41.0, the route for a named archived chat is `move_chat`, one at a
+  time, until it is rebuilt.
 
 - **"Open the transcript file" is no longer offered for a session whose file is not prose**
   (`web/src/lib/session-labels.ts`, `web/src/components/SessionsView.vue`, `server/src/routes/
@@ -246,8 +247,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   .ps1` joins `RUNTIME_MISC_FILES` now, so the build embeds it or fails, and `runPs1` resolves it
   through `resolveMiscAsset` and returns a NON-ZERO code when there is no path. Three regression
   tests pin it at the source, because every other unit test here injects `run` and so none of them
-  could ever have caught it. ⛔ Takes effect at the next build; on the running 0.41.0 a green
-  `ok: true` from `chat_rename` is still not proof, the rendered sidebar row is.
+  could ever have caught it. ⚠ A SOURCE daemon was never affected, because it resolves a real
+  `misc\` folder; the defect and its false green belong to COMPILED builds, so a compiled install
+  still on 0.41.0 keeps answering `ok: true` over a script that never runs until it is rebuilt.
 
 - **A one-chat `move_chats` ran fifteen minutes past its documented 15-25s budget, died on a bare
   transport timeout, and returned no report at all** (`orchestrator/scripts/migrate_batch.py`,

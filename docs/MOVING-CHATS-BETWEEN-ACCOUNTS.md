@@ -256,9 +256,11 @@ asked for a path on a drive that does not exist; `powershell -File <missing>` pr
 and EXITS 0, so a `code === 0` check read that as success. Found by exactly the case above: a
 migrated chat landed with no title, `chat_rename` reported success three times, and the sidebar
 never changed. Fixed in `bd8bba2` (the script is embedded and resolved through `resolveMiscAsset`,
-and a missing path now returns non-zero), but ⛔ **that takes effect only at the next build.**
-Until the owner's 0.41.0 is rebuilt, treat a green `ok: true` from any of those three as no
-evidence at all; the rendered sidebar row is the proof.
+and a missing path now returns non-zero). ⚠ **A SOURCE daemon was never affected** and never is:
+it resolves a real `misc\` folder, so the `..` hop landed correctly there. The defect and its
+false green belong to COMPILED builds only, so on a compiled install still on 0.41.0 treat a green
+`ok: true` from any of those three as no evidence at all; the rendered sidebar row is the proof.
+Check which you are on before trusting either answer: `GET /api/health` reports `distribution`.
 
 ## Imports land on `acceptEdits`, which deadlocks an unattended chat
 
