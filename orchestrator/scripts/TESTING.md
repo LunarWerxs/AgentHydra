@@ -10,7 +10,13 @@ python -m unittest discover -s scripts/tests        # the whole suite
 python -m unittest scripts.tests.test_archive_chat  # one script's suite
 ```
 
-Every script has a dedicated test file. The daemon is a stub (`tests/stubdaemon.py`) serving
+Most scripts have a dedicated test file. Nine do not, and are only exercised indirectly or not at
+all: `remote.py`, `remote_tunnel.py`, `saturate.py`, `harvest_todos.py`, `undo.py`,
+`run_locked.py`, `audit_done_bar.py`, `dossier.py` and `attempts.py` (counted 2026-09-13). That
+list is the honest gap, and it matters because `tests/test_collection_guard.py` can only catch a
+test module that exists and collects zero cases, never one that was never written.
+
+The daemon is a stub (`tests/stubdaemon.py`) serving
 declared routes and RECORDING every POST, so tests assert not just exit codes but exactly what
 an act script sent - and, just as important, that a refused act sent NOTHING. Transcripts are
 real temp files with controlled mtimes, so the gate is tested over actual bytes, not mocks of

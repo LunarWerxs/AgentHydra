@@ -33,12 +33,16 @@ chat finishes → gate → "waiting" → an AI reads it and decides the reply
 
 Three things make it real work rather than a one-liner:
 
-1. **There is no API for it.** The desktop app has no "send message to chat X" endpoint. The
-   only way in is the same UI-Automation route the naming pass uses: find the chat's row, focus
-   its composer, set the text, post Enter. AgentHydra already has a proven actuator for this
-   (`misc/Deliver-DesktopChat.ps1`), and a hard-won lesson attached to it: *a window can show
-   two conversations at once, so the composer must be found by climbing from the proof element,
-   never by grabbing the first composer in the window.* Deliver into the wrong chat and you've
+1. **Delivery has a real route now, and the composer is the fallback.** ⚠ This section used to
+   say "there is no API for it", which stopped being true: `courier.py` posts to the daemon's
+   `POST /api/sessions/:id/message`, which picks the channel itself, preferring the native
+   peer-messaging pipe (the same way one session's SendMessage reaches another) and using the
+   composer only for a chat that is dormant. Only an OLDER daemon answering 404 drops it back to
+   driving `misc/Deliver-DesktopChat.ps1` directly.
+
+   The hard-won lesson stays attached to that actuator either way: *a window can show two
+   conversations at once, so the composer must be found by climbing from the proof element,
+   never by grabbing the first composer in the window.* Deliver into the wrong chat and you have
    put a stranger's instruction into live work.
 
 2. **Staging must be separate from sending.** v1 died partly because it delivered things it
@@ -53,13 +57,18 @@ Three things make it real work rather than a one-liner:
    and when it can't confirm, say so rather than mark it sent. Same rule as every other act
    here: never claim it landed without checking.
 
-## What it would be, concretely
+## What it IS, as built and shipping
+
+⚠ This document was written as a proposal and was never rewritten after the thing was built.
+Everything below exists today: `lib/deliverylib.py`, `stage_reply.py` and `courier.py` all ship,
+and `sweep.py --deliver` is a live lane. Read the future tense as a description, and the code as
+the authority.
 
 Two scripts plus one library, matching everything else in the toolbox:
 
 | piece | job |
 | --- | --- |
-| `deliverylib.py` | the staging ledger: a reply, its target chat, who wrote it, the evidence, and its state (staged → delivered → verified / failed). Sits beside the attempt ledger and the holds file. |
+| `deliverylib.py` | the staging ledger: a reply, its target chat, who wrote it, the evidence, and its state. The REAL states are `staged`, `delivered`, `failed`, `cancelled`, `expired` (`VALID_STATES`); there is no `verified` state, because verification is part of the delivery act rather than a resting place. A chat that cannot be typed into right now is `defer()`red, which keeps the row STAGED for the next attempt. Sits beside the attempt ledger and the holds file. |
 | `stage_reply.py` | write a reply into the ledger for one chat. Pure state, sends nothing. This is where an AI's judgment gets recorded. |
 | `courier.py` | deliver staged replies through the app's composer, one at a time: re-check the chat at T-0, drive the actuator, verify the chat started a turn, mark the ledger. Obeys holds, the breaker, and the live-writer rail like every other act. |
 

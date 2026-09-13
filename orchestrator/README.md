@@ -10,8 +10,11 @@ the AgentHydra repository - as this folder, unchanged in shape - so there is one
 explain and one MCP surface to use ("so I don't have to explain that you have to use both").
 The boundary survives the move: nothing in here imports the daemon, everything in here talks to
 it over HTTP, and the daemon drives this toolbox only by running `python orch.py <script>` on a
-caller's behalf (`server/src/orchestrator.ts`; MCP tools `orchestrator_menu`, `orchestrator_run`,
-`orchestrator_loop`, `orchestrator_switch`).
+caller's behalf (`server/src/orchestrator.ts`). Six MCP tools reach it: `orchestrator_menu`,
+`orchestrator_run`, `orchestrator_loop`, `orchestrator_switch`, `orchestrator_operation` (poll or
+list a detached run's verdict) and `orchestrator_cancel` (stop a run that is still going, added
+2026-09-13, which also frees the route lock the daemon keys by script name, so a `409 busy`
+refusal now names the operation holding it instead of leaving `taskkill` as the only way out).
 
 ## Why the rewrite
 
@@ -429,6 +432,7 @@ so the split is: judgment shared, actions individual.
 | `fan_out.py` | act | DISSEMINATE one task list into N visible desktop chats, ONE ACCOUNT EACH, and manage them as a group (owner ask, 2026-09-04: "lint six or seven planes from one chat, orchestrated into other accounts"). Ranks accounts by real room the way balance.py does (open first; unknown is never room), spawns through `spawn_chat.py` one window at a time, refuses a task whose prompt already runs in the fleet while letting one spec share a prompt across its own tasks, reports an unassigned task instead of dropping it, keeps the group in `state/fanouts.json`; `status` = every member's gate verdict + last words, `send` = one follow-up into all of them through the daemon's message route, holds respected. A person's act - no tray icon needed. MCP: `fan_out` / `fan_out_status` / `fan_out_send` |
 | `delete_chat.py` | act | DELETE one chat everywhere it exists, with an undo copy (owner rule, 2026-09-04: "all ping requests or account identification requests must be deleted after they are created and not left in the account" - archiving a probe still leaves it in the account). Rails in order: one chat (ambiguity refuses), hold (`--force` is a person's word), live writer (`--stop-idle` stops an IDLE engine through enginelib, never a working or stuck one), the undo copy into `state/trash/<sid>/` FIRST, then the running app's own Delete control (the actuator's `-Action Delete`: row menu Delete + the app's confirm button, both by label), then the meta record in every profile and the transcript; verified through the dossier and the disk, anything left named. `--undo <sid>` restores; `undo.py` knows the kind. `fan_out delete` runs it per member. `--released [--yes]` is THE SWEEP of what the app's own Delete leaves behind: deleting a chat in Claude Desktop removes its record and writes `<sid>.desktop-released.json`, but the TRANSCRIPT stays (12 of them, 8 MB, on the owner's machine 2026-09-04) - listed by default, deleted with `--yes` |
 | `chats.py` | observe (+`--move-to`) | every chat grouped by ACCOUNT (email, plan, app open?), filterable by account/instance/title/console-only, and the easy way to move chats between accounts - each move goes through migrate_chat's own rails, capped, plan-first. Reads each child's JSON payload rather than guessing from its exit code, so "already lives there" (a no-op that also exits 0) is never counted as a landing, and the headline counts what LANDED (it used to print the PLANNED count in the past tense, so a fully-refused run announced "3 chat(s) moved" above three refusals). Forwards `--idle-wait`; deliberately has NO `--force`, because that is a person's word for ONE act and would otherwise be spent on every chat a substring selected |
+| `migrate_batch.py` | act (batch) | MOVE MANY CHATS IN ONE RUN, the engine behind MCP `move_chats`: migrate_chat's own pipeline inside ONE interpreter and ONE route-lock acquisition, BY PHASE (move all, settle all, stamp all), so the fleet/session/usage reads and the 8s bypass watch are paid once for the batch instead of once per chat. Since 2026-09-13 each post-landing phase runs bounded on a worker thread (`_run_bounded`) and a phase over budget is ABANDONED with the timeout NAMED on every chat left without a verdict, rather than the whole call dying with no report. ⛔ ARCHIVED CHATS: `--archived` alone is REFUSED. It needs `--archived-count N` MATCHING the archived chats the batch actually holds, and they must be the WHOLE batch, never mixed with unarchived ones - a boolean an agent set for itself is how 22 archived chats were queued behind the 3 a human asked for (2026-09-13). `migrate_chat.py` remains the way to move ONE named archived chat |
 | `deliverylib.py` + `stage_reply.py` + `courier.py` | lib + act | THE COURIER, the last manual lane: an AI stages a decided reply (`stage_reply.py`), the courier types it into the chat through the app's own composer and proves the chat MOVED afterwards. Rails in order: held? breaker? resolves to one? never mid-turn? verify-snippet proves the right chat? then send, then confirm. Also `sweep.py --deliver` |
 | `schedule_jobs.py` | act (machine config) | run the recurring jobs on a timer via WINDOWS TASK SCHEDULER, registered from this repo, ALL EVERY 5 MINUTES (owner order) and windowless (VBS shim + pythonw): dashboard keepalive (starts it only if the port is dead), reconcile (observe only), to-do sweep (`odin discover` + `odin loki --file --apply`). Every tick logs to `state/logs/<job>.log` (rotated ~2MB). Dry-run by default; `--status` / `--pause` / `--resume` / `--remove` to inspect, silence or undo. **AgentHydra's own queue cannot host these** - headless runs are hard-refused (`headlessRunsAllowed()` returns literal false; owner law, "there is no setting for this"), and that queue launches chats, not scripts |
 | `holdlib.py` + `hold_chat.py` | lib + act | PER-CHAT AUTOMATION OPT-OUT: "leave this one to me". Demands a reason, outranks every gate verdict and the breaker, keeps the chat visible (held, not hidden), never blocks a deed a person asks for directly (`--force`). The safety valve the postmortems argue for - in place BEFORE anything runs unattended |
@@ -564,7 +568,15 @@ program needs:
 | `POST /api/sessions/:id/desktop-archive` | archive / unarchive a chat |
 | `POST /api/chats/:id/rename` | rename through the running app's own control |
 | `POST /api/sessions/:id/import-desktop` | land a chat in an instance |
+| `POST /api/sessions/:id/message` | deliver text into a chat: the daemon picks the channel, preferring the native peer pipe and using the composer only for a dormant chat. This is `courier.py`'s PRIMARY route; a 404 from an older daemon is what drops it back to driving the actuator itself |
 | `GET/POST /api/instances/:dir/{open,quit}` | start or stop an instance |
+
+⚠ The archive, rename and message routes all drive a PowerShell helper under `misc\`, so they
+work only when the daemon build actually ships it. A compiled build embeds
+`Deliver-DesktopChat.ps1` and `Manage-DesktopChat.ps1` (`RUNTIME_MISC_FILES` in
+`server/src/misc-assets.ts`) and writes them out of the binary; before 2026-09-13 both were
+located by hopping `..` off `import.meta.dir`, which inside a compiled exe points at the virtual
+embedded root, so all three routes were silently dead there and rename still answered `ok: true`.
 
 Everything else - gating, deciding, delivering, holding, the ledger - is gone from there and is
 this program's to rebuild.
@@ -577,6 +589,10 @@ python scripts/waiting_scan.py # the real waiting-on-a-person answer, over full 
 ```
 
 The acting half now exists as individual scripts (`archive_chat.py`, `migrate_chat.py`, ...) -
-each one act, fully rail-guarded, run deliberately by a person or an agent. There is no sweep
-loop yet, on purpose: nothing here acts on the whole fleet unattended, because shipping a
-half-built unattended actuator is exactly how the last two versions went wrong.
+each one act, fully rail-guarded, run deliberately by a person or an agent. **The sweep loop now
+exists**: `sweep.py --all --yes`, which `python orch.py loop --live` is identical to, executes the
+whole mechanical plan across the fleet within its caps and through each act script's own rails,
+and `schedule_jobs.py` runs it on a timer. What has NOT changed is the reason this paragraph used
+to say there was none: nothing acts unattended without the tray icon up, every act keeps its own
+refusals, and the loop is dry by default. Shipping a half-built unattended actuator is how the
+last two versions went wrong; the rails are the answer to that, not the absence of a loop.
