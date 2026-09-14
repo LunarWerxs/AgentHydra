@@ -266,6 +266,60 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
 
+- **A migrated chat is no longer read as "mid-turn" because it just landed, so the resume phase
+  stops hanging** (`orchestrator/scripts/migrate_batch.py`'s new `_resume_window`, `courier.py`'s
+  per-row `idle_after`, `lib/deliverylib.py`'s `reuse_identical`, three suites). Pinned live on
+  2026-09-14 draining #63 to #13: all five chats landed, #63 was left with 0 unarchived, and the
+  operation still sat `running` for nine minutes and had to be cancelled - taking the per-chat
+  report with it. Only one of five resumes arrived.
+
+  LANDING IS ACTIVITY. The import stamps the chat's `lastActivityAt` with the landing time, so for
+  the gate's standing 180s quiet window a freshly landed chat reads `running` no matter what its
+  transcript says. The courier therefore marked each delivery `peer_only`, the peer channel
+  dead-lettered on a chat that was not actually taking turns, and the row was deferred as
+  "mid-turn". The clock proved it: the chat couriered 194s after landing was DELIVERED, and the
+  four couriered under 180s were all deferred - while every transcript ended on a finished turn
+  and the app's own `list_sessions` reported `isRunning:false` for each.
+
+  A landed chat's finishing is already settled by the move, so the resume now gates it the way
+  `--now` gates a move (`migrate_chat.quiet_window`): the fast window when the transcript was
+  scanned and no background job is outstanding, the standing window otherwise, and the standing
+  window whenever the scan itself could not be read - unreadable is not proof. This shortens only
+  how long the gate WAITS before reading the tail; the tail must still show a finished turn, so a
+  chat genuinely working after it lands is still gated as working.
+
+  ⛔ AND THE WINDOW WAS ONLY HALF OF IT - the second reproduction, hours past 180s, deferred all
+  four again, so it was never a timing question alone (`lib/gatelib.py`'s new `_judgeable_tail`,
+  the `meta` field on a parsed record, and a usage-wall rail in `courier.deliverable`). Booting
+  the landed chat through `claude://resume` APPENDS a user-role record of its own, and every test
+  in `_idle_verdict` then fails on that record instead of on the turn: `completed` is false (it is
+  user-role), `walled` is false (the limit banner is no longer last), `resumed_silent` is false
+  (the new record does not predate the engine). The gate now sees past the trailing records the
+  APP ITSELF marks `isMeta` - a boot hook, an injected cross-session message, the local-command
+  caveat - which is the same idea `strip_local_tail` already applies to the families it can
+  recognise by text, keyed on the app's own flag so it catches a record shape this toolbox has not
+  seen before. An ordinary user record still ends a transcript mid-turn, whatever it says.
+
+  The courier gained the rail that had this right all along: `enginelib.idle_report` judged the
+  same four chats idle because it consults the DAEMON's `limit_stop.pending` (set from the CLI's
+  own error record, never from prose), and `deliverable` never did. A chat that cannot write until
+  its account resets is not a turn in flight - and after a move to a fresh account, waking it is
+  the entire point. Both halves proven red-then-green against the shapes above.
+
+  Also closed, from the same incident: a batch cancelled with its resumes still staged and then
+  fired again left TWO staged copies of one resume (two rows each for two chats). The first
+  staging now asks for `reuse_identical` - the same words already staged for that chat come back
+  as the row that is there, while a staged row with different text is left alone rather than
+  being delivered in the resume's name, which is what the broader `dedupe` would have done.
+
+- **The batch mover's resume suite was reading the OWNER'S REAL CHAT LIST**
+  (`orchestrator/scripts/tests/test_migrate_batch_resume.py`). Its isolation stubbed
+  `hydralib.sessions`, but the archive gate moved onto `hydralib.chats()` (the per-store scan) on
+  2026-09-13 - so with a daemon running on the machine, every case in the file gated its fake
+  chats against the real ones. The moment a real title contained "one", "two" or "three" as a
+  fragment the gate refused every batch and thirteen cases failed at once, in a file none of them
+  is about; it also made a 0.05s suite take 141s. Stubbed the way the sibling suite already does.
+
 - **A test file's parked route lock no longer poisons whichever file runs next, and the guardrail
   now catches it** (`server/src/orchestrator.ts`'s test seam, `server/tests/orchestrator-stale-lock.test.ts`,
   `orchestrator-preempt.test.ts`, `orchestrator-operations.test.ts`, a third rule in

@@ -90,6 +90,31 @@ class _BatchTest(unittest.TestCase):
         """
         super().setUp()
         self.patch(migrate_batch.hydralib, "sessions", lambda **k: [])
+        # ⛔ AND `chats`, WHICH IS WHAT THE GATE ACTUALLY READS NOW (2026-09-14). The gate moved
+        # off the collapsed session view onto hydralib.chats() - the per-store scan - so stubbing
+        # `sessions` alone stopped isolating this suite, and with a daemon running on the machine
+        # every case here read the OWNER'S REAL CHAT LIST. The moment one of his titles contained
+        # "one", "two" or "three" as a fragment, the gate refused every batch and thirteen cases
+        # failed at once, in a file none of them is about. A unit test must not be able to see the
+        # machine: test_migrate_batch.py's own driver stubs it the same way.
+        self.patch(migrate_batch.hydralib, "chats", lambda **k: [])
+
+    def stub_scan(self, outstanding: bool = False, raises: bool = False) -> None:
+        """The resume window reads the landed chat's transcript for background jobs
+        (migrate_chat.quiet_window). Stubbed, so no case here reads a real transcript or asks
+        the live daemon where one is; the default is the common shape - scanned, nothing out."""
+        from lib import enginelib
+
+        def fake_quiet_window(match, now):
+            if raises:
+                raise OSError("transcript unreadable")
+            if outstanding:
+                return enginelib.IDLE_STOP_SECS, migrate_chat.gatelib_idle_after(), {
+                    "scanned": True, "outstanding": ["bg-1"]}
+            return enginelib.NOW_QUIET_SECS, enginelib.NOW_QUIET_SECS, {
+                "scanned": True, "outstanding": []}
+
+        self.patch(migrate_chat, "quiet_window", fake_quiet_window)
 
     def patch(self, obj, name: str, value) -> None:
         patcher = mock.patch.object(obj, name, value)
@@ -144,9 +169,9 @@ class ResumeTest(_BatchTest):
             return entry
 
         def fake_run(max_deliveries, only, act, running_now=None, cap_exempt=False,
-                     hand_run=False):
+                     hand_run=False, idle_after=None):
             courier_calls.append({"max": max_deliveries, "only": set(only), "act": act,
-                                  "hand_run": hand_run})
+                                  "hand_run": hand_run, "idle_after": dict(idle_after or {})})
             results, skipped = [], []
             for did in sorted(only):
                 ok, why = courier_results.get(did, (True, "delivered"))
@@ -161,6 +186,7 @@ class ResumeTest(_BatchTest):
         self.patch(stage_reply, "gather_evidence", lambda match, sid: "the chat's own last words")
         self.patch(migrate_batch.deliverylib, "stage", fake_stage)
         self.patch(courier, "run", fake_run)
+        self.stub_scan()
         return staged, courier_calls
 
     def test_one_reply_per_landed_chat_delivered_by_hand_and_each_result_says_so(self):
@@ -208,6 +234,48 @@ class ResumeTest(_BatchTest):
         self.assertEqual(code, migrate_batch.EXIT_PARTIAL)
         for argv in calls:
             self.assertNotIn("--resume", argv, "--resume is the batch's flag, not the move's")
+
+    def test_a_finished_landing_is_couriered_in_the_fast_window_not_the_standing_180s(self):
+        """THE RESUME HANG (2026-09-14, #63 -> #13): landing counts as activity, so under the
+        standing window every chat couriered within 180s of landing read as mid-turn and was
+        deferred, and the operation sat nine minutes before it was cancelled. A landed chat with
+        no background job outstanding is gated with the --now window instead."""
+        from lib import enginelib
+
+        self.stub_phases({})
+        staged, courier_calls = self.stub_resume({})
+        _run(["--chat", "one", "--chat", "two", "--to", "55", "--resume", "carry on"])
+        self.assertEqual(courier_calls[0]["idle_after"],
+                         {"d-sid-one": enginelib.NOW_QUIET_SECS,
+                          "d-sid-two": enginelib.NOW_QUIET_SECS})
+
+    def test_a_landing_with_a_background_job_outstanding_keeps_the_standing_window(self):
+        self.stub_phases({})
+        staged, courier_calls = self.stub_resume({})
+        self.stub_scan(outstanding=True)
+        _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+        self.assertEqual(courier_calls[0]["idle_after"],
+                         {"d-sid-one": migrate_chat.gatelib_idle_after()})
+
+    def test_an_unreadable_scan_is_no_proof_and_keeps_the_standing_window(self):
+        self.stub_phases({})
+        staged, courier_calls = self.stub_resume({})
+        self.stub_scan(raises=True)
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+        self.assertEqual(courier_calls[0]["idle_after"],
+                         {"d-sid-one": migrate_chat.gatelib_idle_after()})
+        self.assertTrue(out["results"][0]["resume"]["staged"], "a scan failure never costs the resume")
+
+    def test_the_resume_reuses_an_identical_copy_and_never_folds_into_other_words(self):
+        """A batch cancelled with its resume still staged, then fired again, used to leave two
+        staged copies of one resume behind (2026-09-14). The first staging now asks for the
+        narrow reuse: same words for the same chat come back as the row already there."""
+        self.stub_phases({})
+        staged, _calls = self.stub_resume({})
+        _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+        self.assertTrue(staged[0].get("reuse_identical"))
+        self.assertFalse(staged[0].get("dedupe"),
+                         "broad dedupe would deliver a person's staged reply in the resume's name")
 
     def test_no_resume_flag_means_no_staging_and_no_courier(self):
         self.stub_phases({})
@@ -266,8 +334,9 @@ class ResumeRetryTest(_BatchTest):
             return entry
 
         def fake_run(max_deliveries, only, act, running_now=None, cap_exempt=False,
-                     hand_run=False):
-            courier_calls.append({"only": set(only), "hand_run": hand_run})
+                     hand_run=False, idle_after=None):
+            courier_calls.append({"only": set(only), "hand_run": hand_run,
+                                  "idle_after": dict(idle_after or {})})
             results, skipped = [], []
             for did in sorted(only):
                 queue = pending.get(did) or [("ok", "delivered")]
@@ -289,6 +358,7 @@ class ResumeRetryTest(_BatchTest):
         self.patch(stage_reply, "gather_evidence", lambda match, sid: "its own last words")
         self.patch(migrate_batch.deliverylib, "stage", fake_stage)
         self.patch(courier, "run", fake_run)
+        self.stub_scan()
         return staged, courier_calls
 
     def test_a_hard_failure_is_re_staged_and_retried_once_and_then_reads_delivered(self):
@@ -306,6 +376,9 @@ class ResumeRetryTest(_BatchTest):
                         "never write a second wake")
         self.assertEqual(len(calls), 2, "one first attempt, one retry")
         self.assertTrue(all(c["hand_run"] for c in calls))
+        from lib import enginelib
+        self.assertEqual(calls[1]["idle_after"], {"d-sid-one": enginelib.NOW_QUIET_SECS},
+                         "the retry gates the landing with the same window as the first go")
 
         verdict = out["results"][0]["resume"]
         self.assertTrue(verdict["delivered"])

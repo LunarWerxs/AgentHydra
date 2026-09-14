@@ -256,13 +256,19 @@ def _is_transient(err: "hydralib.DaemonError") -> bool:
 
 
 def deliverable(entry: dict, session_lookup=None, _holds=None, _ledger_rows=None,
-                _bands=None, _per_instance=None, _share=None) -> tuple[bool, str, dict | None]:
+                _bands=None, _per_instance=None, _share=None,
+                idle_after_secs: int | None = None) -> tuple[bool, str, dict | None]:
     """Can this staged reply go RIGHT NOW? Returns (ok, why_not, match).
 
     The three snapshot params exist for run()'s planning loop, which gates many entries
     against ONE read of the sessions table / holds file / attempt ledger taken at the top of
     that same call (efficiency pass, 2026-08-31; ledgerlib's own suppressed() already works
-    this way). Scoped to one planning loop only - deliver_one's at-send checks stay fresh."""
+    this way). Scoped to one planning loop only - deliver_one's at-send checks stay fresh.
+
+    `idle_after_secs` shortens the gate's quiet window for THIS row only (None keeps the
+    standing gatelib.IDLE_AFTER_SECS). It is for a caller that has already PROVED the chat's
+    turn is over - migrate_batch's resume phase, see its `_resume_window`. It shortens how long
+    the gate waits before reading the tail; it never changes what the tail must show."""
     sid = entry["session"]
     why_held = holdlib.why_blocked(sid, _holds=_holds)
     if why_held:
@@ -314,7 +320,9 @@ def deliverable(entry: dict, session_lookup=None, _holds=None, _ledger_rows=None
     if not ok_band:
         return False, f"{why_band} - staged, not lost; move it or wait for the reset", match
 
-    verdict = gatelib.gate_match(match, session_lookup or hydralib.session_row)
+    verdict = gatelib.gate_match(
+        match, session_lookup or hydralib.session_row,
+        idle_after_secs=gatelib.IDLE_AFTER_SECS if idle_after_secs is None else idle_after_secs)
     if verdict is None:
         return False, "the chat cannot be gated (no readable transcript), so its state is unknown", match
     # THE LIVE RAIL, APPLIED TO THE CHANNEL RATHER THAN TO THE CHAT (fixed 2026-09-10).
@@ -329,6 +337,25 @@ def deliverable(entry: dict, session_lookup=None, _holds=None, _ledger_rows=None
     # match to the send and forbids EVERY composer path for this delivery - the endpoint's own
     # dormant fallback, the peer dead-letter fallback, and the old-daemon actuator route.
     mid_turn = verdict["state"] == "running" and not verdict.get("idle")
+    # ⛔ A CHAT PARKED AT A USAGE WALL IS NOT MID-TURN, WHATEVER THE TAIL LOOKS LIKE (2026-09-14).
+    # The gate's own `walled` test needs the limit record to be the transcript's LAST record, and
+    # after a migrate re-lands a chat it is not: booting the engine through claude://resume
+    # appends a record of its own, so `completed` is false (that record is user-role), `walled` is
+    # false (the banner is no longer last) and `resumed_silent` is false (the new record does not
+    # predate the engine). The verdict is then "running, not idle" for as long as the landed engine
+    # lives, and every wake is refused - four resumes were deferred that way at 3-8 minutes past
+    # landing, two of them on transcripts last written three HOURS earlier.
+    #
+    # enginelib.idle_report got the same four right, and this is the rail it uses: the DAEMON's
+    # own `limit_stop.pending`, set from the CLI's own error record and never from prose. A chat
+    # that cannot write until its account resets is not a turn in flight, so the composer is not
+    # forbidden for it - and after a move to a fresh account, waking it is the entire point.
+    if mid_turn:
+        from lib import enginelib  # local: only this branch needs it, and it pulls in clilib
+
+        wall = enginelib.usage_wall_notice(match)
+        if wall:
+            mid_turn = False
     if mid_turn and not match.get("live"):
         # Liveness disagrees with the gate: no pipe to enqueue into, so the only route left is
         # the composer, and that one is still never pointed at a turn in flight.
@@ -686,7 +713,7 @@ def _not_staged_entry(delivery_id: str) -> dict:
 
 def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
         running_now: int | None = None, cap_exempt: bool = False,
-        hand_run: bool = False) -> dict:
+        hand_run: bool = False, idle_after: "dict[str, int] | None" = None) -> dict:
     """Plan (and with `act`, deliver) the staged replies.
 
     `only` names the rows: one id, or a set of them. `hand_run` says a PERSON named them
@@ -694,7 +721,10 @@ def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
     stretches to fit them, and the two machinery caps - the machine-wide running cap and the
     per-account share - are off. Those exist so the UNATTENDED lanes cannot hog an account,
     and a person naming a row is not the machinery (owner, 2026-09-06). The usage-band gate
-    in deliverable() is NOT a machinery cap and stays on for everyone."""
+    in deliverable() is NOT a machinery cap and stays on for everyone.
+
+    `idle_after` maps a delivery id to the gate's quiet window for that row (see
+    deliverable()); a row it does not name keeps the standing window."""
     _sweep_dead_claims()
     queue = deliverylib.pending()
     not_staged: list[dict] = []
@@ -787,7 +817,8 @@ def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
             ok, why, match = deliverable(entry, session_lookup=by_id.get,
                                          _holds=holds_snapshot, _ledger_rows=ledger_snapshot,
                                          _bands=bands_snapshot, _per_instance=would_run,
-                                         _share=share)
+                                         _share=share,
+                                         idle_after_secs=(idle_after or {}).get(entry["id"]))
             if not ok:
                 skipped.append({**entry, "why": why})
                 continue

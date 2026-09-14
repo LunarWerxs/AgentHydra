@@ -330,9 +330,39 @@ def parse_tail_records(text: str, whole_file: bool) -> list[dict]:
                     isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks
                 ),
                 "local_command": local_kind(ev, txt),
+                # The APP's own marker for a user-role record that is NOT a prompt anyone is
+                # expected to answer: the local-command caveat, an injected cross-session
+                # message, a session-start hook. Kept verbatim so a caller can see past such a
+                # record without having to recognise its text - see _judgeable_tail.
+                "meta": ev.get("isMeta") is True,
             }
         )
     return strip_local_tail(out)
+
+
+def _judgeable_tail(records: list[dict]) -> list[dict]:
+    """`records` without the trailing user-role records the app marked `isMeta`.
+
+    ⛔ WHY, AND IT COST FOUR UNDELIVERED RESUMES (2026-09-14). A migrate re-lands a chat and
+    boots its engine through `claude://resume`, and that boot APPENDS a user-role record of its
+    own. Every test in _idle_verdict then fails on the newest record rather than on the turn:
+    `completed` is false (it is user-role), `walled` is false (the limit banner is no longer
+    last), and `resumed_silent` is false (the new record does NOT predate the engine). So the
+    verdict was "running, not idle" for as long as the landed engine lived, and every courier
+    wake was refused - four of them 3-8 minutes after landing, two on transcripts last written
+    three HOURS earlier, all deferred as "a turn in flight" when nothing was in flight at all.
+
+    strip_local_tail already drops the families it can recognise by TEXT (`<local-command-*>`,
+    the caveat, a compaction summary, an answered slash command). This is the same idea keyed on
+    the app's own flag instead, which is what catches a record shape this toolbox has never seen
+    before. Deliberately NOT folded into strip_local_tail: that feeds the archive lanes and the
+    stall detector too, and the question here is narrower - "has the turn ended" - so the wider
+    blast radius has to be earned separately.
+    """
+    end = len(records)
+    while end > 0 and records[end - 1]["type"] == "user" and records[end - 1].get("meta"):
+        end -= 1
+    return records[:end]
 
 
 def first_user_prompt(path: str, max_bytes: int = 256 * 1024) -> str:
@@ -652,7 +682,9 @@ def _idle_verdict(
     gate() alongside _stall_verdict; the caller only calls this when not already stalled."""
     if quiet < idle_after_secs:
         return None
-    records = read_records(transcript_path)
+    # The tail the turn actually ended on: a boot hook or an injected message written AFTER it
+    # is not the turn (see _judgeable_tail).
+    records = _judgeable_tail(read_records(transcript_path))
     last = records[-1] if records else None
     completed = (
         last

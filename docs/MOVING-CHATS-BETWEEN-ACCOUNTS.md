@@ -99,6 +99,29 @@ tray icon and the fair share first), then reading two working chats' pids out of
   mid-turn keeps its reply staged; its result carries `resume.retry`, the exact command. Read
   each result's `resume` - a landed chat with `resume.delivered: false` is moved but has not
   been told to carry on.
+  - ⛔ **LANDING IS ACTIVITY, so the resume gates each chat with the `--now` window, not the
+    standing 180s** (2026-09-14). The import stamps `lastActivityAt` with the landing time, so
+    under the standing quiet window every chat couriered within 180s of landing read as
+    `running`: the delivery went `peer_only`, the peer channel dead-lettered on a chat that was
+    not taking turns, and the row was deferred as "mid-turn". Draining #63 to #13 that morning,
+    four of five resumes went that way, the one couriered 194s after landing was delivered, and
+    the operation sat nine minutes before it had to be cancelled. Phase four now uses
+    `migrate_chat.quiet_window`'s fast window when the transcript was scanned and no background
+    job is outstanding, and the standing window otherwise (including when the scan cannot be
+    read). Only the WAIT is shortened - the tail must still show a finished turn, so a chat that
+    really is working after it lands is still left alone.
+  - ⛔ **AND THE BOOT ITSELF USED TO LOOK LIKE A TURN.** `claude://resume` appends a user-role
+    record when it boots the landed chat, so the gate's "has the turn ended" tests all failed on
+    THAT record rather than on the turn - the state stuck at `running, not idle` for as long as
+    the landed engine lived, and wakes were refused hours after landing (so this was never only a
+    timing window). The gate now sees past trailing records the app marks `isMeta` (a boot hook,
+    an injected cross-session message, the local-command caveat); an ordinary user record still
+    ends a transcript mid-turn. Separately, the courier now consults the daemon's own
+    `limit_stop.pending`: a chat parked at a usage wall cannot be writing, so it is never treated
+    as mid-turn - which is exactly the population a drain moves.
+  - Re-firing a batch whose resumes are still staged **re-uses those rows** rather than staging a
+    second copy of the same words (2026-09-14: a cancelled batch left two rows each for two
+    chats). A staged reply with DIFFERENT text - a person's - is never folded into the resume.
   - A delivery that was ATTEMPTED and FAILED is **retried once automatically** (2026-09-12).
     The retry RE-STAGES first, and that is the whole point: a failed row is no longer
     `staged`, so the retry a person reaches for - `courier --yes --only <id>` - answers

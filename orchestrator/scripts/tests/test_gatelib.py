@@ -170,6 +170,37 @@ class GateTest(TranscriptCase):
         self.assertIsNotNone(v["idle"])
         self.assertEqual(v["idle"]["done_claim"], "yes")
 
+    def test_a_boot_hook_written_after_the_turn_does_not_make_a_finished_chat_mid_turn(self):
+        """FOUR UNDELIVERED RESUMES, 2026-09-14. Landing a chat boots its engine through
+        claude://resume, and that boot appends a user-role record the app marks `isMeta`. Judged
+        as the tail, it fails every test here - `completed` (user-role), `walled` (the banner is
+        no longer last), `resumed_silent` (it does not predate the engine) - so the chat read
+        "running, not idle" for as long as the landed engine lived and every courier wake was
+        refused as "a turn in flight", on transcripts last written hours earlier."""
+        boot = {**user("<session-start-hook>resumed</session-start-hook>"), "isMeta": True}
+        p = self.transcript([assistant(DONE_RECAP), boot], age_secs=600)
+        v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
+        self.assertEqual(v["state"], "running")
+        self.assertIsNotNone(v["idle"], "the turn before the hook is what ended this transcript")
+        self.assertEqual(v["idle"]["done_claim"], "yes")
+
+    def test_a_wall_still_reads_as_walled_behind_a_boot_hook(self):
+        """The same shape for the population that actually hit it: chats moved BECAUSE they were
+        parked at a usage wall. The wall is the last real record; the boot hook sits after it."""
+        boot = {**user("<session-start-hook>resumed</session-start-hook>"), "isMeta": True}
+        p = self.transcript(
+            [assistant("You've hit your session limit", api_error=True), boot], age_secs=600)
+        v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
+        self.assertIsNotNone(v["idle"])
+
+    def test_a_REAL_user_prompt_at_the_tail_is_still_a_turn_in_flight(self):
+        """The rail: only records the APP marked isMeta are seen past. A person's prompt (or any
+        ordinary user record) still ends the transcript mid-turn, whatever it says."""
+        p = self.transcript([assistant(DONE_RECAP), user("and now do the next thing")],
+                            age_secs=600)
+        v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
+        self.assertIsNone(v["idle"], "an unanswered prompt is work in flight")
+
     def test_live_empty_dict_still_counts_as_a_writer(self):
         # Rule 2 hangs on this: {} must not be truthiness'd into "no writer".
         p = self.transcript([assistant(DONE_RECAP)], age_secs=600)

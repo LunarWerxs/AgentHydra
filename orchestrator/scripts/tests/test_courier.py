@@ -291,6 +291,72 @@ class CourierRailTest(unittest.TestCase):
         self.assertTrue(ok, why)
         self.assertFalse(match["peer_only"])
 
+    def test_a_chat_landed_under_180s_ago_on_a_FINISHED_turn_is_not_peer_only_in_the_fast_window(self):
+        """THE RESUME HANG, PINNED LIVE 2026-09-14 (#63 -> #13). Landing stamps the chat's activity,
+        so a chat couriered under IDLE_AFTER_SECS after it landed read as `running` whatever its
+        transcript said: peer_only, a dead-lettered peer write, deferred as "mid-turn". Four of
+        five resumes went that way while every transcript ended on a finished turn. The one
+        couriered 194s after landing was delivered. The caller that has proved the turn is over
+        passes a short window, and the same tail then reads idle."""
+        self._write_tail(DONE_WAITING, age=60)          # finished turn, quiet 60s: < 180
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        ok, why, standing = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertTrue(standing["peer_only"], "the standing window is what made this hang")
+        ok, why, fast = courier.deliverable(e, idle_after_secs=15)
+        self.assertTrue(ok, why)
+        self.assertFalse(fast["peer_only"])
+
+    def test_a_chat_the_daemon_says_is_parked_at_a_usage_wall_is_never_mid_turn(self):
+        """THE SHARPER HALF OF THE RESUME HANG (2026-09-14, reproduced past the 180s window and so
+        NOT a timing question). Landing boots the engine through claude://resume, which appends a
+        record of its own - so the limit banner is no longer the LAST record and gatelib's `walled`
+        test stops firing, while `completed` and `resumed_silent` cannot fire either. Four wakes
+        were refused at 3-8 minutes past landing, on transcripts last written three hours earlier.
+        enginelib.idle_report had them right off the daemon's own limit_stop, and this is that
+        rail: a chat that cannot write until its account resets is not a turn in flight."""
+        self._write_tail("working on it", age=5, tool_use=True)   # the tail says "mid-turn"
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        ok, why, match = courier.deliverable(e)
+        self.assertTrue(match["peer_only"], "without the wall this really is a turn in flight")
+
+        self.stub.routes[f"/api/sessions/{SID}"] = {
+            "session_id": SID, "transcript_path": str(self.tp),
+            "limit_stop": {"pending": True, "notice": "You've hit your session limit"}}
+        ok, why, match = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertFalse(match["peer_only"],
+                         "parked at a wall, it cannot be writing - the composer is allowed")
+
+    def test_the_fast_window_never_makes_a_WORKING_tail_idle(self):
+        """The window only shortens how long the gate waits before reading the tail. A tail that
+        still owes a tool result is a turn in flight, and a short window must not wave it past."""
+        self._write_tail("working on it", age=60, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        ok, why, match = courier.deliverable(e, idle_after_secs=15)
+        self.assertTrue(ok, why)
+        self.assertTrue(match["peer_only"])
+
+    def test_run_hands_each_rows_window_to_the_gate_and_a_fresh_landing_is_not_deferred(self):
+        """End to end through run(): the shape that hung, with the peer channel dead-lettering as
+        it did live. Without a window the row is deferred as mid-turn (the composer forbidden);
+        with the resume's window it is not peer_only, so the dead letter falls through to the
+        composer - which is how the one 194s landing was delivered."""
+        self._write_tail(DONE_WAITING, age=60)
+        self.live = {"pid": 99, "name": "w"}
+        self.stub.routes[f"/api/sessions/{SID}/message"] = (
+            422, {"error": "peer wrote-but-no-transcript-growth",
+                  "detail": "peer channel did not confirm (wrote-but-no-transcript-growth)"})
+        e = self._stage()
+        with mock.patch.object(courier, "_run_actuator") as act:
+            report = courier.run(5, {e["id"]}, act=True, hand_run=True, idle_after={e["id"]: 15})
+        self.assertFalse(any(r.get("deferred") for r in report["results"]),
+                         f"a finished landing must not be deferred as mid-turn: {report['results']}")
+        act.assert_called()   # not peer_only: the composer is a legitimate fallback here
+
     def test_an_idle_live_chat_is_the_normal_target(self):
         self.live = {"pid": 99, "name": "w"}   # alive but quiet, turn completed
         e = self._stage()

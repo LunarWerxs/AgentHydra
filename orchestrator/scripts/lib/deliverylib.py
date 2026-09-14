@@ -109,7 +109,8 @@ def _save(rows: list[dict]) -> None:
 
 def stage(session_id: str, text: str, *, title: str = "", instance: str = "",
           verify_text: str = "", evidence: str = "", by: str = "ai",
-          now_ms: int | None = None, dedupe: bool = False) -> dict:
+          now_ms: int | None = None, dedupe: bool = False,
+          reuse_identical: bool = False) -> dict:
     """Write a reply down for one chat. Sends nothing.
 
     `verify_text` is the safety rail, not decoration: the actuator refuses to type until it
@@ -122,6 +123,15 @@ def stage(session_id: str, text: str, *, title: str = "", instance: str = "",
     being written, so two lanes planning from their own reads in the same window cannot each
     inject a wake into one chat. A person's reply is never folded into someone else's row -
     stage_reply and interview leave this off.
+
+    `reuse_identical=True` is the narrow form, for a caller that may simply be RE-FIRED: an
+    already-staged row for this chat carrying exactly this text is returned (flagged `reused`)
+    instead of a second copy, and a staged row with DIFFERENT text is left alone and a new row
+    written. migrate_batch's resume phase uses it (2026-09-14): a batch that was cancelled with
+    its resumes deferred, then fired again, staged every resume a second time - two rows each
+    for two chats, two wakes queued for one fact. `dedupe` would have closed that too, but by
+    folding the resume into whatever else happened to be staged for the chat, a person's reply
+    included, and reporting that row's delivery as the resume's.
 
     The lookup and the append happen against ONE locked snapshot (audit AH-06, reproduced
     2026-09-05): checked before the lock, two synchronized lanes both saw no pending row and
@@ -150,9 +160,10 @@ def stage(session_id: str, text: str, *, title: str = "", instance: str = "",
     }
     with ledgerlib.locked("deliveries"):
         rows = _load()
-        if dedupe:
+        if dedupe or reuse_identical:
             already = sorted(
-                (r for r in rows if r.get("state") == "staged" and r.get("session") == session_id),
+                (r for r in rows if r.get("state") == "staged" and r.get("session") == session_id
+                 and (dedupe or r.get("text") == entry["text"])),
                 key=lambda r: r.get("stagedAt", 0),
             )
             if already:
