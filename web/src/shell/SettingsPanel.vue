@@ -3,8 +3,10 @@ export default { inheritAttrs: false };
 </script>
 
 <script setup lang="ts">
-// Back-compat shim. The shared slide-in sidebar now lives in Sidebar.vue, this
-// forwards every prop/emit/slot so existing Settings call sites keep working.
+// arkitect-allow: no-bandaids SettingsPanel is the public name every kit app imports; Sidebar.vue is the
+// implementation. Removing this forwarder means repointing each app's Settings call sites in ONE kit sync
+// (tracked in docs/todo/TODO.md, 'Retire the SettingsPanel forwarder'). Until then it forwards every
+// prop/emit/slot so those call sites keep working.
 import Sidebar from "./Sidebar.vue";
 </script>
 

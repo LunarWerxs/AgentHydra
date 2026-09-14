@@ -94,7 +94,7 @@ function handleToolsList(id, ctx) {
  *  result (not a JSON-RPC protocol error) so the agent can read and react to it like any other
  *  tool output. `signal` (an AbortSignal, present when called from `runMcpStdio`) is passed through
  *  to `tool.run` as a second argument; a tool that doesn't declare that parameter simply ignores
- *  it, so this is backward-compatible with every existing tool. */
+ *  it, so no tool has to change to keep working. */
 async function handleToolsCall(id, msg, ctx, signal) {
   const params = msg.params && typeof msg.params === "object" ? msg.params : {};
   const name = typeof params.name === "string" ? params.name : "";
