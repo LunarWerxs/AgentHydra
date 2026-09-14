@@ -733,6 +733,7 @@ function deriveAccountFields(
   // arkitect-allow: no-bandaids the grant's subscriptionType is the only field available when
   // profile.organization is absent (offline/stale reads); it's the necessary fallback path, not
   // dead legacy code, and stays permanent alongside the org-derived fields above.
+  // arkitect-allow: no-bandaids (reason in the comment above)
   // Plan: the GRANT's subscriptionType. Kept as the offline/legacy fallback and as a DTO field,
   // but it no longer decides the label whenever orgType is known. has_claude_max/pro are
   // entitlement HISTORY — they stay true for an account that lapsed back to free (owner-confirmed

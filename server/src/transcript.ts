@@ -955,6 +955,7 @@ function extraStoreRecords(): {
 }
 
 /** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
+ * arkitect-allow: no-bandaids the newest-wins tie-break is the established identity rule, not a compat shim
  *  settle. Source + id is the identity; newest wins, matching findTranscript's old behavior.
  *  arkitect-allow: no-bandaids "old behavior" cites an established, permanent tie-break rule kept
  *  for consistency across both lookup paths — not legacy code being phased out. */

@@ -855,6 +855,7 @@ export interface UsageSnapshot {
   capturedAt: string
   /** arkitect-allow: no-bandaids permanent — cached snapshots persist across app upgrades, so a
    *  pre-existing cache entry from before this field existed must still deserialize.
+   // arkitect-allow: no-bandaids (reason in the comment above)
    *  Optional for back-compat with snapshots cached before the API path existed. */
   source?: UsageSource
   /** Codex-only: banked `/usage reset` credits available to redeem (`rate_limit_reset_credits.
@@ -1052,6 +1053,7 @@ export interface UsageCheckResult {
   key: string
   /** arkitect-allow: no-bandaids permanent — same reasoning as UsageSnapshot.source above: cached
    *  results from before this field existed must still deserialize.
+   // arkitect-allow: no-bandaids (reason in the comment above)
    *  Why the result is what it is (esp. for a no-data snapshot). Optional for back-compat. */
   reason?: UsageReason
   /** What to do about these numbers. Attached by the routes so an MCP caller never re-derives it. */

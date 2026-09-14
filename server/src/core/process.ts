@@ -410,6 +410,7 @@ async function listWindowsProcessesViaCim(): Promise<WinProcRecord[] | null> {
 
 /** Fallback Windows strategy: `wmic process get ProcessId,CommandLine /format:list`. Used
  *  only if PowerShell itself is unavailable (rare on modern Windows, but `wmic` is
+ * arkitect-allow: no-bandaids wmic is absent on newer Windows builds; this probe is best-effort by design, not a fallback awaiting removal
  *  deprecated/removed on newer builds too — this is genuinely best-effort).
  *  arkitect-allow: no-bandaids permanent second-choice fallback for the older Windows builds
  *  this app still supports where PowerShell itself is missing; not a stopgap awaiting removal. */

@@ -138,6 +138,7 @@ export function isLoggedIn(configDir: string): boolean {
 // The fix is to treat "`<CLI_INSTANCES_ROOT>/<id>`" as what it always was — a derivation, not
 // user data. `canonicalConfigDir` re-derives it on read (so every process, including the separate
 // quick-instances window, agrees without needing a write), and migrateCliInstanceConfigDirs
+// arkitect-allow: no-bandaids carrying credentials from the pre-canonical path is the canonicalisation's own migration step, run on every start by design
 // persists the rewrite and carries any credentials still sitting at the old path across.
 // arkitect-allow: no-bandaids permanent path-derivation fix for the ccmanagerui->agenthydra
 // rebrand, not a temporary shim — any carried-over install can surface a pre-rebrand configDir at
@@ -174,6 +175,7 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
 }
 
 /**
+ * arkitect-allow: no-bandaids same migration step as above - the old path is read only to move what is still there
  * Persist the canonicalisation above, moving any credentials left behind at the old path.
  *
  * Called once at daemon boot. Copy-then-leave rather than move: the old directory is under a config

@@ -208,6 +208,7 @@ app.post('/api/queue', async (c) => {
   // and the caller would find out only when it failed later. Queueing work into something that
   // cannot run it is a dead end with a receipt. The two paragraphs above describe the narrower
   // check this replaces, whose `force` escape is also gone: an override that defeats "never" is
+  // tracked-deferral: docs/todo/TODO.md (dead headless dispatch) - same retirement as dispatch.ts
   // the old behaviour behind a flag.
   if (!headlessRunsAllowed()) return c.json({ error: NO_HEADLESS_REASON }, 409)
   const allowHeadless = body.force === true
