@@ -117,6 +117,140 @@ function liveRun(script: string): InFlightRun | null {
   return null
 }
 
+/** The chats an invocation names: every `--chat <query>`, normalized, plus whether it sweeps a
+ *  whole account. Parsing is literal on purpose - resolving a fragment to a chat is the Python
+ *  side's job, and a daemon that guessed would be a second, disagreeing resolver. */
+export function chatScopeOf(args: string[]): { chats: Set<string>; sweeps: boolean } {
+  const chats = new Set<string>()
+  let sweeps = false
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--all-unarchived') sweeps = true
+    else if (args[i] === '--chat' && i + 1 < args.length)
+      chats.add(
+        String(args[i + 1] ?? '')
+          .trim()
+          .toLowerCase(),
+      )
+  }
+  chats.delete('')
+  return { chats, sweeps }
+}
+
+/**
+ * May the incoming call take the route from the run that holds it?
+ *
+ * ⛔ ONLY WHEN A PERSON SAID SO, AND ONLY WHEN NOTHING IS STRANDED. Found live 2026-09-12,
+ * draining #8: a patient `move_chats` sat in stop-idle for its 300s while the owner said "kill
+ * it and move it", and the correct call - the same move with `terminate_live` - was refused 409
+ * because the route is keyed by SCRIPT NAME. The only way through was to find the engine's pid
+ * and `taskkill` it by hand, which is outside every rail these tools exist to provide, and the
+ * refused call's resume text was lost with it.
+ *
+ * Two conditions, both necessary. `--terminate-live` is the person's word: it is the same act
+ * with the waiting overridden, and queueing it behind the very wait it overrides is backwards.
+ * And the incoming call's chats must COVER the holder's, so no chat is left half-moved by the
+ * kill: whatever the preempted run had started, the incoming run is about to do itself, and
+ * migrate_chat re-resolves and re-gates every chat from scratch. A holder that names chats this
+ * call does not is never preempted - that is what orchestrator_cancel is for, deliberately, by
+ * a person who can see what they are abandoning (and migrate_reconcile.py to find it after).
+ */
+export function mayPreempt(incoming: string[], holder: string[]): boolean {
+  if (!incoming.includes('--terminate-live')) return false
+  const want = chatScopeOf(incoming)
+  const held = chatScopeOf(holder)
+  if (held.sweeps) return want.sweeps // only a sweep covers a sweep
+  if (held.chats.size === 0) return false // an unreadable scope is never preempted
+  for (const chat of held.chats) if (!want.chats.has(chat)) return false
+  return true
+}
+
+/** The resume text a migrate_batch invocation carries, and the chats it names. */
+function resumeOf(args: string[]): { resume: string; chats: string[] } {
+  const i = args.indexOf('--resume')
+  const resume = i >= 0 && i + 1 < args.length ? String(args[i + 1] ?? '').trim() : ''
+  return { resume, chats: [...chatScopeOf(args).chats] }
+}
+
+/**
+ * A REFUSED MOVE MUST NOT EAT ITS RESUME: stage it against every chat the call named.
+ *
+ * ⛔ WHY IT LIVES HERE AND NOT IN THE MCP TOOL (review finding, 2026-09-14). The first cut
+ * staged from `move_chats` after catching the 409 - but `move_chats` detaches by default (any
+ * batch carrying a resume declares more than two minutes), so the route answered 202 with an
+ * operation id and the refusal happened later, inside that operation, where no MCP code ever saw
+ * it. The fix covered the rare blocking call and missed the path nearly every real call takes.
+ * This is the one place both paths go through.
+ *
+ * WHY AT ALL (found live 2026-09-12): a `move_chats` carrying a resume was refused busy; the
+ * refusal was right, but the words died with the call, and the landed chat had to be told by
+ * hand that four background jobs had been orphaned. Staged through `stage_reply` - the script
+ * that owns the delivery ledger - with `--dedupe`, so a re-fired call re-uses the row instead of
+ * leaving two wakes. Staged, never sent: the courier types it later, with its own rails.
+ */
+async function stageRefusedResume(
+  args: string[],
+  deps: SpawnDeps & { dir?: string; python?: string },
+): Promise<Array<Record<string, unknown>>> {
+  const { resume, chats } = resumeOf(args)
+  if (!resume) return []
+  const out: Array<Record<string, unknown>> = []
+  for (const chat of chats) {
+    const run = await runOrchestrator(
+      {
+        script: 'stage_reply',
+        args: [chat, '--text', resume, '--by', 'move_chats (refused)', '--dedupe', '--json'],
+        timeoutMs: 60_000,
+      },
+      deps,
+    )
+    let payload: Record<string, unknown> | null = null
+    try {
+      const parsed: unknown = JSON.parse('stdout' in run ? run.stdout : '')
+      if (parsed && typeof parsed === 'object') payload = parsed as Record<string, unknown>
+    } catch {
+      payload = null
+    }
+    out.push(
+      payload?.id
+        ? { chat, staged: true, id: payload.id, reused: payload.reused === true }
+        : {
+            chat,
+            staged: false,
+            why:
+              'error' in run
+                ? run.error
+                : run.stderr.trim() || run.exitMeaning || `exit ${String(run.exitCode)}`,
+          },
+    )
+  }
+  return out
+}
+
+/** How long to wait for a preempted run's lock to clear before giving up and refusing as usual.
+ *  realSpawn's kill settles its promise in milliseconds; this is the bound, not the expectation. */
+let PREEMPT_WAIT_MS = 5_000
+
+/** Test seam: shorten the preempt wait, so the "did not clear in time" branch is testable without
+ *  a five-second sleep. Returns the previous value. */
+export function setPreemptWaitMsForTests(ms: number): number {
+  const was = PREEMPT_WAIT_MS
+  PREEMPT_WAIT_MS = ms
+  return was
+}
+
+/** Poll until `script` holds no live run, or the bound elapses. Returns whether it cleared. */
+async function waitForLockToClear(
+  script: string,
+  budgetMs: number = PREEMPT_WAIT_MS,
+): Promise<boolean> {
+  const until = Date.now() + budgetMs
+  while (Date.now() < until) {
+    if (!liveRun(script)) return true
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  return !liveRun(script)
+}
+
 /** Is any toolbox script running through this daemon right now? The compiled updater asks
  *  before it replaces orchestrator/ (audit AH-08). Reaps stale entries first - an immortal lock
  *  must not block an update forever either. */
@@ -156,7 +290,14 @@ export function orchestratorBusy(): boolean {
 
 export type OrchestratorOutcome =
   | OrchestratorRun
-  | { ok: false; error: string; busy?: boolean; operationId?: string }
+  | {
+      ok: false
+      error: string
+      busy?: boolean
+      operationId?: string
+      /** A refused migrate_batch's resume text, staged per named chat (see stageRefusedResume). */
+      resumeStaged?: Array<Record<string, unknown>>
+    }
 
 export interface OrchestratorOperation {
   id: string
@@ -436,6 +577,10 @@ export interface OrchestratorRun {
   durationMs: number
   stdout: string
   stderr: string
+  /** The operation this run took the route from, when a person's `--terminate-live` preempted a
+   *  patient move of the same chats (see mayPreempt). Absent on an ordinary run, so a caller
+   *  that does not know about preemption reads exactly what it always did. */
+  preempted?: string
 }
 
 /** One row of `lib/actionlib.CATALOG`, as `orch.py --catalog` prints it. Deliberately loose: the
@@ -699,6 +844,7 @@ export async function runOrchestrator(
     }
   const command = [deps.python ?? pythonBinary(), 'orch.py', script, ...args]
   const spawn = deps.spawn ?? realSpawn
+  let preempted: string | undefined
   const running = liveRun(script)
   if (running) {
     // Name the run that holds the lock AND the one call that releases it. A bare "wait for it"
@@ -707,15 +853,42 @@ export async function runOrchestrator(
     const holder = [...operations.values()].find(
       (e) => e.op.status === 'running' && e.op.script === script,
     )
-    const age = Math.round((Date.now() - running.started) / 1000)
-    const remedy = holder
-      ? `wait for it, or stop it with orchestrator_cancel { id: "${holder.op.id}" } and fire this call again`
-      : 'wait for it rather than starting a second one'
-    return {
-      ok: false,
-      busy: true,
-      ...(holder ? { operationId: holder.op.id } : {}),
-      error: `${script} is already running through this route (started ${age}s ago) - ${remedy}`,
+    // Every refusal below carries the call's resume, staged, when it had one.
+    const refuse = async (error: string): Promise<OrchestratorOutcome> => {
+      const resumeStaged =
+        script === 'migrate_batch' && resumeOf(args).resume
+          ? await stageRefusedResume(args, deps)
+          : undefined
+      return {
+        ok: false,
+        busy: true,
+        ...(holder ? { operationId: holder.op.id } : {}),
+        ...(resumeStaged ? { resumeStaged } : {}),
+        error,
+      }
+    }
+    // ...and when the incoming call is the SAME act with a person's word added, take the route
+    // instead of naming a remedy the person then has to run by hand. See mayPreempt.
+    if (holder && mayPreempt(args, holder.op.args)) {
+      const stop = cancelOrchestratorOperation(holder.op.id)
+      if (stop.ok && (await waitForLockToClear(script))) preempted = holder.op.id
+      // ⛔ THE HOLDER IS ALREADY DYING, SO DO NOT SAY "WAIT FOR IT" (review finding, 2026-09-14).
+      // A tree whose grandchild holds a pipe open can outlast the wait, and falling through to
+      // the ordinary refusal told the caller to wait for a healthy run, or to cancel one this
+      // very call had just cancelled - while nothing was moving the chats at all.
+      else if (stop.ok)
+        return refuse(
+          `${script} (operation ${holder.op.id}) was preempted by this call and is still being torn down after ${Math.round(PREEMPT_WAIT_MS / 1000)}s - it needs no orchestrator_cancel. Fire this same call again in a few seconds; nothing is moving these chats until you do.`,
+        )
+    }
+    if (!preempted) {
+      const age = Math.round((Date.now() - running.started) / 1000)
+      const remedy = holder
+        ? `wait for it, or stop it with orchestrator_cancel { id: "${holder.op.id}" } and fire this call again`
+        : 'wait for it rather than starting a second one'
+      return refuse(
+        `${script} is already running through this route (started ${age}s ago) - ${remedy}`,
+      )
     }
   }
   const started = Date.now()
@@ -736,6 +909,7 @@ export async function runOrchestrator(
       args,
       command,
       cwd: dir,
+      ...(preempted ? { preempted } : {}),
       exitCode: r.code,
       exitMeaning: exitMeaning(script, r.code),
       timedOut: r.timedOut,

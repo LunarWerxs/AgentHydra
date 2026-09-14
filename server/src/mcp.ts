@@ -699,6 +699,29 @@ async function runFanOut(args: string[], timeoutMs: number): Promise<Record<stri
   }
 }
 
+/** The daemon's own refusal payload when it answers 409 busy, or null for any other failure.
+ *
+ *  ⛔ A REFUSAL ARRIVES AS A THROW, NOT AS A RESULT. `api` rejects on every non-2xx, so a 409
+ *  reached the caller as the bare string `AgentHydra 409: {…}` - which is why the busy case read
+ *  as "the tool blew up" rather than "the route is held, here is the operation holding it", and
+ *  why the resume text had nowhere to be caught. Parsed back into the object the daemon sent so
+ *  both are possible. Anything that is not a busy 409 is re-thrown untouched. */
+function busyRefusal(err: unknown): Record<string, unknown> | null {
+  const message = err instanceof Error ? err.message : String(err)
+  const body = message.startsWith('AgentHydra 409: ')
+    ? message.slice('AgentHydra 409: '.length)
+    : ''
+  if (!body) return null
+  try {
+    const parsed: unknown = JSON.parse(body)
+    if (parsed && typeof parsed === 'object' && (parsed as Record<string, unknown>).busy === true)
+      return parsed as Record<string, unknown>
+  } catch {
+    /* a 409 whose body is not the refusal shape belongs to the caller, unaltered */
+  }
+  return null
+}
+
 export const TOOLS: McpEngineTool[] = [
   // --- sessions (read-only) ---------------------------------------------------
   {
@@ -1994,12 +2017,12 @@ export const TOOLS: McpEngineTool[] = [
         resume: {
           type: 'string',
           description:
-            "After EVERY landed chat is moved, settled and stamped, stage this text as a reply to each one and deliver it by hand - the courier's NAMED-delivery path: no tray icon, no fair-share cap, because a person is managing (owner, 2026-09-06). This is what makes a migrated chat CONTINUE WORKING: a landed chat is otherwise DORMANT until someone types into it. A chat whose engine booted on landing and is mid-turn keeps the reply staged (the courier never interrupts a live turn); its result carries `resume.retry`, the exact command. Read each result's `resume` ({delivered, why, retry}) - a landed chat with resume.delivered false is moved but has not been told to carry on. Say in the text that the chat was moved and why, and if terminate_live is on, that any in-flight tool result was lost.",
+            "After EVERY landed chat is moved, settled and stamped, stage this text as a reply to each one and deliver it by hand - the courier's NAMED-delivery path: no tray icon, no fair-share cap, because a person is managing (owner, 2026-09-06). This is what makes a migrated chat CONTINUE WORKING: a landed chat is otherwise DORMANT until someone types into it. A chat whose engine booted on landing and is mid-turn keeps the reply staged (the courier never interrupts a live turn); its result carries `resume.retry`, the exact command. Read each result's `resume` ({delivered, why, retry}) - a landed chat with resume.delivered false is moved but has not been told to carry on. Say in the text that the chat was moved and why, and if terminate_live is on, that any in-flight tool result was lost. If the whole call is REFUSED because another batch holds the route, the resume is not lost: it is staged against each named chat and listed in `resumeStaged` (deliver with courier --yes --only <id>).",
         },
         terminate_live: {
           type: 'boolean',
           description:
-            "A PERSON'S WORD: a chat refused for a live engine (working, or quiet but not yet past its window) has that engine KILLED - the whole process tree - and is then moved. For draining an account about to hit its limit, where letting the turn finish would spend the last of its quota and the turn would die on the wall anyway. The transcript survives; a tool result still in flight is lost, so pair it with `resume` text that says so. Never implied by `force` (which only overrides a hold); never applied to a hold, the breaker, or an archived chat; an unconfirmed kill leaves the refusal in place and says why.",
+            "A PERSON'S WORD: a chat refused for a live engine (working, or quiet but not yet past its window) has that engine KILLED - the whole process tree - and is then moved. For draining an account about to hit its limit, where letting the turn finish would spend the last of its quota and the turn would die on the wall anyway. The transcript survives; a tool result still in flight is lost, so pair it with `resume` text that says so. Never implied by `force` (which only overrides a hold); never applied to a hold, the breaker, or an archived chat; an unconfirmed kill leaves the refusal in place and says why. It also PREEMPTS a patient move_chats already running for the SAME chats (the answer carries `preempted: <operation id>`), so 'kill it and move it' is this one call, never a taskkill; a running batch that names chats this call does not is still refused, and stopping it is orchestrator_cancel's job.",
         },
         dry_run: { type: 'boolean', description: 'Plan every chat, move nothing.' },
         background: {
@@ -2071,17 +2094,41 @@ export const TOOLS: McpEngineTool[] = [
       // for a caller who really does want to block (and knows their transport can wait).
       const background =
         a.background === true || (a.background == null && timeoutMs > AUTO_DETACH_MS)
-      const run = (await api('/api/orchestrator/run', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          script: 'migrate_batch',
+      let run: Record<string, unknown>
+      try {
+        run = (await api('/api/orchestrator/run', {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            script: 'migrate_batch',
+            args,
+            timeoutMs,
+            async: background,
+            idempotencyKey,
+          }),
+        })) as Record<string, unknown>
+      } catch (err) {
+        // The route said no - another batch holds it and this call does not cover its chats (see
+        // mayPreempt). Hand back the daemon's refusal as an object, not a thrown string. Its
+        // `resumeStaged` was written by the DAEMON (orchestrator.ts stageRefusedResume), which is
+        // the one place a refusal is seen on both the blocking and the detached path.
+        const refusal = busyRefusal(err)
+        if (!refusal) throw err
+        const staged = Array.isArray(refusal.resumeStaged) ? refusal.resumeStaged : null
+        return {
+          ...refusal,
+          ok: false,
           args,
-          timeoutMs,
-          async: background,
-          idempotencyKey,
-        }),
-      })) as Record<string, unknown>
+          targetNote,
+          ...(resume === ''
+            ? {}
+            : {
+                note: staged?.length
+                  ? 'The move was refused, but its resume text is STAGED against each named chat (see resumeStaged) - deliver it with courier.py --yes --only <id>, or leave it for the next successful move. Re-firing this call re-uses the same staged row rather than writing a second one.'
+                  : 'The move was refused and its resume text was NOT kept: there was no named chat to stage it against (a whole-account sweep names none). Re-send it with the retry.',
+              }),
+        }
+      }
       // `background` answers with the id and nothing else yet - there is no report to parse.
       if (background)
         return {
