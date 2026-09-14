@@ -148,6 +148,12 @@ EXIT_REFUSED = 3
 #: the run: `_run_bounded` gives up WAITING (Python cannot safely kill a thread mid syscall)
 #: and the phase's own marker function names exactly which chat, and which phase, did not
 #: finish - never a silent hang, never a report lost to the caller's transport.
+# The naming pass takes the instance lock with wait_secs=0, so a sibling lane driving the same
+# app loses it outright. Retrying costs seconds; not retrying costs the chat its name, and a
+# nameless chat cannot be aimed at by anything downstream.
+NAMING_ATTEMPTS = 3
+NAMING_RETRY_WAIT_SECS = 4.0
+
 SETTLE_PHASE_TIMEOUT_SECS = 90.0
 STAMP_PHASE_TIMEOUT_SECS = 240.0
 RESUME_PHASE_TIMEOUT_SECS = 300.0
@@ -862,20 +868,60 @@ def _name_landings(live: list) -> None:
         if inst and sid and title:
             by_instance.setdefault(inst, {})[sid] = title
     for inst, titles in by_instance.items():
+        def _on_instance(msg: str) -> None:
+            for item in live:
+                if str((item.landing.target or {}).get("name") or "") == inst:
+                    item.errors.append(msg)
+
+        got = None
+        # ⛔ `remaining: None` IS "THE PASS NEVER RAN", NOT "NOTHING NAMELESS" (false green found
+        # 2026-09-13). name_pass returns that shape when it finds no store, and when another lane
+        # already holds the instance lock - and it takes that lock with wait_secs=0, so a sibling
+        # phase driving the same app loses the whole naming pass. The old test below was
+        # `if got.get("needsJudgment") or got.get("remaining")`, and None is falsy, so the batch
+        # read "never ran" as "clean" and reported OK. name_chats.main() has always drawn this
+        # distinction ("this is NOT 'nothing nameless' - exit 1, not a false 0"); the batch path
+        # simply never did. Measured cost: a 4-chat move reported 4/4 OK with two chats left
+        # nameless, which then rendered as identical 'General coding session' rows, and a
+        # nameless row cannot be aimed at - so their bypass stamp failed too, and the remedy the
+        # move printed failed for the same reason. Retry, because the lock is usually transient.
+        for attempt in range(1, NAMING_ATTEMPTS + 1):
+            try:
+                got = name_chats.name_pass(inst, extra_titles=titles)
+            except Exception as err:  # a name is a courtesy; a landed chat is the deliverable
+                _on_instance(f"naming raised {type(err).__name__}: {str(err)[:150]}")
+                got = None
+                break
+            if got.get("remaining") is not None:
+                break  # the pass actually ran; its own verdict stands
+            if attempt < NAMING_ATTEMPTS:
+                time.sleep(NAMING_RETRY_WAIT_SECS)
+        if got is not None and got.get("remaining") is None:
+            _on_instance(f"naming pass on '{inst}' NEVER RAN after {NAMING_ATTEMPTS} attempts"
+                         + (f": {got['why']}" if got.get("why") else ""))
+        elif got is not None and (got.get("needsJudgment") or got.get("remaining")):
+            _on_instance(
+                f"naming pass on '{inst}' left {len(got.get('remaining') or [])} nameless / "
+                f"{len(got.get('needsJudgment') or [])} needing an AI-written name"
+                + (f": {got['why']}" if got.get("why") else ""))
+
+    # THE VERDICT THAT DOES NOT TRUST THE PASS. Whatever the pass believed, a nameless landing is
+    # the condition that breaks the stamp phase next, so it is read back per chat from the record
+    # on disk. This catches every cause, including the one no verdict can see: the running app
+    # re-saving a title away AFTER the pass verified it (`titleDurable: false`).
+    for item in live:
         try:
-            got = name_chats.name_pass(inst, extra_titles=titles)
-        except Exception as err:  # a name is a courtesy; a landed chat is the deliverable
-            for item in live:
-                item.errors.append(f"naming raised {type(err).__name__}: {str(err)[:150]}")
-            continue
-        if got.get("needsJudgment") or got.get("remaining"):
-            for item in live:
-                if str((item.landing.target or {}).get("name") or "") != inst:
-                    continue
-                item.errors.append(
-                    f"naming pass on '{inst}' left {len(got.get('remaining') or [])} nameless / "
-                    f"{len(got.get('needsJudgment') or [])} needing an AI-written name"
-                    + (f": {got['why']}" if got.get("why") else ""))
+            with open(str(migrate_chat.landed_meta_path(item.landing)), encoding="utf-8") as fh:
+                meta = json.load(fh)
+        except (OSError, ValueError):
+            continue  # the landing itself is verified elsewhere; do not invent a naming failure
+        if name_chats._needs_probe(meta.get("title")):
+            item.errors.append(
+                f"landed NAMELESS (title={meta.get('title')!r}): it renders as a generic row, so "
+                "nothing can aim at it by name - its bypass stamp will fail for the same reason. "
+                f"Fix with: manage_desktop_chat.ps1 -Instance <dir> -Title 'General coding "
+                f"session' -Action Rename -NewTitle '{item.landing.chat_title}' -Ordinal 1 "
+                "(then verify by dossier which chat took the name)")
 
 
 def _report(results: list[dict], note: str, secs: float) -> str:

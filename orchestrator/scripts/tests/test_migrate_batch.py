@@ -875,5 +875,120 @@ class BoundedPhaseTest(_MigrateBatchTest):
         assert "stamp phase timed out" in item.payload["report"]
 
 
+class NamingPassVerdictTest(_MigrateBatchTest):
+    """THE FALSE GREEN THAT COST TWO CHATS THEIR NAMES (found 2026-09-13, in the wild).
+
+    A 4-chat drain reported `4/4 landed` with every chat `ok: true`, and two of them had landed
+    NAMELESS. name_pass returns `remaining: None` for "the pass never ran" - no store found, or
+    another lane already holds the instance lock, which it asks for with wait_secs=0 - and the
+    batch's test was `if got.get("needsJudgment") or got.get("remaining")`. None is falsy, so
+    "never ran" was read as "clean". name_chats.main() had always drawn the distinction in so
+    many words ("this is NOT 'nothing nameless' - exit 1, not a false 0"); this path never did.
+
+    It does not stop at a name. A nameless chat renders as a generic row, several land
+    identical, and every actuator that takes a -Title refuses to guess between them - so the
+    bypass stamp failed on the same two chats, and the `disk-only` remedy the move itself
+    printed failed for the same reason. One silent None, four broken outcomes.
+    """
+
+    def _live(self, title: str = "Real name", instance: str = "target") -> list:
+        item = migrate_batch._Item(title)
+        item.landing = _BoundedStubLanding(_payload(title, True, to=instance))
+        return [item]
+
+    def _no_readback(self) -> None:
+        # The read-back is exercised on its own below; here the pass verdict is the subject.
+        self.patch(migrate_chat, "landed_meta_path", lambda land: "")
+
+    def test_a_pass_that_never_ran_is_reported_not_read_as_clean(self):
+        import name_chats
+        self._no_readback()
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": None,
+                       "why": "another lane is already driving 'target'"})
+        live = self._live()
+        migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1, "a pass that never ran must not pass silently"
+        assert "NEVER RAN" in live[0].errors[0]
+        assert "another lane" in live[0].errors[0], "the pass's own reason must survive"
+
+    def test_a_pass_that_never_ran_is_retried_before_it_is_called_a_failure(self):
+        import name_chats
+        self._no_readback()
+        self.patch(migrate_batch, "NAMING_RETRY_WAIT_SECS", 0.0)
+        calls = []
+
+        def flaky(instance, extra_titles=None, **k):
+            calls.append(instance)
+            if len(calls) < 2:  # the lock is usually transient
+                return {"named": [], "needsJudgment": [], "flakes": [], "remaining": None,
+                        "why": "locked"}
+            return {"named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""}
+
+        self.patch(name_chats, "name_pass", flaky)
+        live = self._live()
+        migrate_batch._name_landings(live)
+        assert len(calls) == 2, f"must retry a never-ran pass, called {len(calls)}x"
+        assert live[0].errors == [], "a retry that succeeded is not a failure"
+
+    def test_a_pass_that_really_ran_and_found_nothing_stays_silent(self):
+        import name_chats
+        self._no_readback()
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+        live = self._live()
+        migrate_batch._name_landings(live)
+        assert live[0].errors == []
+
+    def test_a_landing_still_nameless_on_disk_is_reported_whatever_the_pass_believed(self):
+        """The verdict that does not trust the pass. The running app can re-save a title away
+        AFTER the pass verified it (`titleDurable: false`), so the record is read back."""
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+        with self.tmp_meta({"title": None}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1, "a nameless landing must be reported by read-back"
+        assert "landed NAMELESS" in live[0].errors[0]
+        assert "Real name" in live[0].errors[0], "the remedy must carry the intended title"
+
+    def test_the_app_s_own_generic_fallback_counts_as_nameless(self):
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+        # This is the literal name the app rendered for both broken chats.
+        with self.tmp_meta({"title": "General coding session"}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1
+        assert "landed NAMELESS" in live[0].errors[0]
+
+    def test_a_properly_named_landing_is_not_reported(self):
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+        with self.tmp_meta({"title": "Michael todo burndown"}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert live[0].errors == []
+
+    @contextlib.contextmanager
+    def tmp_meta(self, meta: dict):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "local_x.json"
+            p.write_text(json.dumps(meta), encoding="utf-8")
+            yield str(p)
+
+
 if __name__ == "__main__":
     unittest.main()

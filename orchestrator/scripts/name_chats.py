@@ -77,9 +77,18 @@ def is_generic_title(title: object) -> bool:
     return not t or bool(_GENERIC.match(t))
 
 
-def _needs_probe(title: object) -> bool:
+def needs_a_real_name(title: object) -> bool:
+    """Is this stored title absent or one of the app's generic fallbacks? A row wearing one of
+    those cannot be aimed at by name: several land identical, and every actuator that takes a
+    -Title then refuses to guess. Public because callers OUTSIDE the pass need the same test to
+    verify their own landings (migrate_batch reads it back per chat rather than trusting any
+    pass's self-report)."""
     t = str(title or "").strip()
     return not t or bool(_PROBE_TARGETS.match(t))
+
+
+# The pass's own long-standing internal name for it.
+_needs_probe = needs_a_real_name
 
 
 def store_dir_for(instance: str) -> Path | None:
