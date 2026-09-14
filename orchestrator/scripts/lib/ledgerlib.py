@@ -35,6 +35,7 @@ import contextlib
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 
 ATTEMPT_CAP = 4
@@ -267,8 +268,9 @@ def note(
     note: str = "",
     now_ms: int | None = None,
     error: str | None = None,
-) -> None:
-    """Record that an act went ahead (or was refused deterministically). One row per attempt,
+) -> str:
+    """Record that an act went ahead (or was refused deterministically). Returns the attempt's
+    own id, which discount() takes so it removes THIS row and no other. One row per attempt,
     always - v2 once keyed on (kind, session, timestamp) and merged same-millisecond attempts,
     under-counting exactly the tight loop the counter exists to catch.
 
@@ -296,6 +298,7 @@ def note(
             for r in _load()
             if r.get("at", 0) >= now_ms - ATTEMPT_WINDOW_MS or r.get("deterministic")
         ]
+        attempt_id = uuid.uuid4().hex[:12]
         rows.append(
             {
                 "kind": kind,
@@ -304,9 +307,11 @@ def note(
                 "deterministic": bool(deterministic),
                 "note": note,
                 "incident": incident_id,
+                "attempt": attempt_id,
             }
         )
         _save(rows)
+    return attempt_id
 
 
 def annotate(kind: str, session_id: str, outcome: str, now_ms: int | None = None, *,
@@ -444,6 +449,45 @@ def clear(kind: str, session_id: str) -> None:
             r for r in _load() if not (r.get("kind") == kind and r.get("session") == session_id)
         ]
         _save(rows)
+
+
+def discount(kind: str, session_id: str, attempt: str | None = None) -> None:
+    """THE ACT NEVER HAPPENED: take back the single most recent attempt row for this chat.
+
+    The counter is "one row per attempt" (see note), and a caller that is about to act writes
+    its row BEFORE the outcome is known - it has to, or a crash mid-send would leave an
+    unrecorded attempt. That is right for an act that was TRIED. It is wrong for one the world
+    refused to let start: the courier's peer route on a chat mid-turn, or a target app that is
+    closed (deliverylib.defer's own class). Found live 2026-09-12: a correct mid-turn refusal
+    still burned a breaker attempt and filed an incident, so four honest deferrals in a row
+    would suppress the very chat the courier was being careful with - the brake tripping on
+    restraint rather than on futility, which is the opposite of what it is for.
+
+    Not clear(): a deferral says nothing about the attempts that came before it, and wiping
+    them would forgive a genuine futile loop. Exactly one row goes, the newest matching one.
+
+    ⛔ NEVER a `deterministic` row. Those are the "same inputs can never succeed" verdicts and
+    they deliberately outlive the window (see _mine); a deferral must not be able to resurrect
+    an ambiguous chat that was already stopped for good.
+
+    ⛔ PASS `attempt` - the id note() returned (review finding, 2026-09-14). Without it this takes
+    the NEWEST matching row, and two passes delivering to one chat at once (an overlapping sweep,
+    a hand run beside the scheduled one) interleave their note() calls: the deferring pass then
+    forgives the OTHER pass's attempt and keeps its own, so a genuine futile try goes uncounted.
+    With it, only that attempt's row can go, and a row already pruned is simply a no-op.
+    """
+    if kind not in VALID_KINDS:
+        raise ValueError(f"unknown breaker kind {kind!r} - new acts must opt in deliberately")
+    with locked("attempts"):
+        rows = _load()
+        for i in range(len(rows) - 1, -1, -1):
+            r = rows[i]
+            if (r.get("kind") == kind and r.get("session") == session_id
+                    and not r.get("deterministic")
+                    and (attempt is None or r.get("attempt") == attempt)):
+                del rows[i]
+                _save(rows)
+                return
 
 
 def suppressed(now_ms: int | None = None) -> list[dict]:

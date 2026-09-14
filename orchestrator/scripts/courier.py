@@ -46,7 +46,11 @@ Usage: python courier.py                      # plan only: what would be deliver
         row is not the machinery (owner, 2026-09-06: "the fair share rule is just when
         you're orchestrating, aka auto managing; I'm manually managing, it does not apply").
         The usage-band gate stays: an account past its limit is not made affordable by a
-        person being in a hurry. --cap-exempt is kept as a spelling of the same thing.)
+        person being in a hurry. --cap-exempt is kept as a spelling of the same thing.
+        A named row that is NOT staged - already delivered, burned to `failed`, cancelled,
+        expired, or simply a typo'd id - is reported BY NAME with the state it is really in,
+        and exits 2. It is never folded into the generic "nothing staged" line, which reads
+        as "already delivered" and cost a message a re-stage by hand on 2026-09-12.)
 Exit:  0 everything attempted was delivered and confirmed (or nothing to do) - 2 something was
        skipped or did not land (each named) - 1 daemon failure before acting.
 """
@@ -432,7 +436,7 @@ def _capture_before_state(sid: str) -> _BeforeState:
 
 
 def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
-                     doctrine_note: str) -> dict | None:
+                     doctrine_note: str, attempt: str | None = None) -> dict | None:
     """THE ROUTE: the daemon's message endpoint (POST /api/sessions/:id/message), which picks
     the right channel by itself - and prefers THE OFFICIAL PEER CHANNEL (owner, 2026-09-01:
     "why don't we use the old method"). For a LIVE session it injects into the chat's own
@@ -511,11 +515,23 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
                 # MID-TURN: the composer is not an alternative, it is the thing rail 4 forbids.
                 # An unconfirmed peer write on a working chat stays staged and is re-judged
                 # next cycle, when the turn has ended and every route is open again.
-                deliverylib.mark_failed(
+                #
+                # ⛔ AND THE ROW HAS TO SURVIVE TO THAT NEXT CYCLE (found live 2026-09-12).
+                # The refusal above is correct and the comment already said "stays staged" -
+                # but the call under it was mark_failed(), which BURNS the row on one attempt.
+                # So `courier --yes --only <id>` refused honestly, and the same command a
+                # minute later answered "nothing staged - the courier has nothing to deliver",
+                # which reads as "already delivered" and is the exact opposite of the truth;
+                # the message had to be re-staged under a new id by hand. This is the same
+                # NOT-YET class as the _is_transient branch below and now takes the same door:
+                # defer() keeps it staged, counts the deferral, and expires it at the ceiling
+                # so a chat that never leaves its turn still stops eventually.
+                deliverylib.defer(
                     entry["id"],
                     f"peer channel did not confirm on a chat mid-turn ({err.detail or err}) - "
                     "not typing into a turn in flight")
-                return {"id": entry["id"], "ok": False,
+                ledgerlib.discount("deliver", sid, attempt)
+                return {"id": entry["id"], "ok": False, "deferred": True,
                         "outcome": "peer did not confirm and the turn is in flight - not typing",
                         "detail": (err.detail or str(err))[:200]}
             ledgerlib.note("deliver", sid,
@@ -529,7 +545,8 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
             deliverylib.defer(entry["id"],
                               f"daemon message endpoint: {err}"
                               + (f" | {err.detail}" if err.detail else ""))
-            return {"id": entry["id"], "ok": False,
+            ledgerlib.discount("deliver", sid, attempt)
+            return {"id": entry["id"], "ok": False, "deferred": True,
                     "outcome": "not now - staged, and retried next cycle",
                     "detail": (err.detail or str(err))[:200]}
         if err.status not in (404,):
@@ -601,11 +618,16 @@ def deliver_one(entry: dict, match: dict) -> dict:
     if rejected is not None:
         return rejected
     before = _capture_before_state(sid)
-    ledgerlib.note("deliver", sid, note=f"deliver {entry['id']} to '{title}'")
+    # THE ATTEMPT IS RECORDED BEFORE THE OUTCOME IS KNOWN, deliberately: a crash mid-send must
+    # not leave an unrecorded attempt. The cost is that a refusal which never got to ACT still
+    # holds a row here, so every path that defer()s takes it back with ledgerlib.discount() -
+    # the breaker counts futility, not restraint (2026-09-12; see the peer_only branch above).
+    # The id is what lets a deferral take back THIS attempt and not a concurrent pass's.
+    attempt = ledgerlib.note("deliver", sid, note=f"deliver {entry['id']} to '{title}'")
     deliverylib.note_attempt(entry["id"])
     # THE LAST DURABLE MOMENT (_ensure_doctrine): stamp the chat before the send boots it.
     doctrine_note = _ensure_doctrine(sid, match)
-    settled = _send_via_daemon(entry, match, sid, before, doctrine_note)
+    settled = _send_via_daemon(entry, match, sid, before, doctrine_note, attempt)
     if settled is not None:
         return settled
     if match.get("peer_only"):
@@ -630,6 +652,38 @@ def _verify_of(report: dict, delivery_id: str) -> str:
     return ""
 
 
+def _not_staged_entry(delivery_id: str) -> dict:
+    """A row a PERSON named that the queue could not include - with the state it is really in.
+
+    ⛔ A NAMED ID MUST NEVER VANISH (found live 2026-09-12). run()'s queue comes from
+    deliverylib.pending(), which is STAGED rows only, and --only filtered it down; anything in
+    any other state simply fell out of the list and the report printed the generic "nothing
+    staged - the courier has nothing to deliver". Over a row that had just been burned to
+    `failed` on a single refusal, that line reads as "already delivered" - it is the same
+    sentence a genuinely empty queue prints - and it is the opposite of the truth. A
+    `delivered` row and a typo'd id printed it too, and those three need three different
+    answers, so the state each row is really in is named outright.
+    """
+    row = deliverylib.get(delivery_id)
+    if row is None:
+        return {"id": delivery_id, "title": None, "state": None,
+                "why": "no such delivery id"}
+    state = str(row.get("state") or "unknown")
+    reason = str(row.get("lastError") or "")
+    if state == "failed":
+        why = (f"failed after {int(row.get('attempts') or 0)} attempt(s): "
+               + (reason or "no reason recorded"))
+    elif state == "delivered":
+        why = "already delivered - nothing left to send"
+    elif state == "cancelled":
+        why = "cancelled by a person before it went"
+    elif state == "expired":
+        why = "expired without being sent" + (f": {reason}" if reason else "")
+    else:
+        why = f"in state '{state}', which is not deliverable"
+    return {"id": delivery_id, "title": row.get("title"), "state": state, "why": why[:300]}
+
+
 def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
         running_now: int | None = None, cap_exempt: bool = False,
         hand_run: bool = False) -> dict:
@@ -643,9 +697,14 @@ def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
     in deliverable() is NOT a machinery cap and stays on for everyone."""
     _sweep_dead_claims()
     queue = deliverylib.pending()
+    not_staged: list[dict] = []
     if only:
         wanted = {only} if isinstance(only, str) else set(only)
         queue = [e for e in queue if e["id"] in wanted]
+        # THE NAMED ROWS THAT DID NOT MAKE THE QUEUE, LOOKED UP AND NAMED (_not_staged_entry).
+        # Sorted so the report is stable between runs rather than set-ordered.
+        not_staged = [_not_staged_entry(i)
+                      for i in sorted(wanted - {e["id"] for e in queue})]
         if hand_run:
             max_deliveries = max(max_deliveries, len(wanted))
     planned, skipped, results = [], [], []
@@ -808,7 +867,16 @@ def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
                             # reasonless. One place, after the fact, so no return path can forget
                             # it - and an annotate, never a second note, so the attempt count
                             # stays honest.
-                            if not res.get("ok"):
+                            #
+                            # ⛔ EXCEPT FOR A DEFERRAL, which is not a failure at all: the row
+                            # is still staged and the next cycle will try it (deliverylib.defer).
+                            # failure=True also FILES AN INCIDENT, so before this guard a chat
+                            # the courier was correctly declining to interrupt collected one
+                            # incident per cycle - a queue of alarms raised by the machinery
+                            # behaving properly. deliver_one has already taken its attempt row
+                            # back (ledgerlib.discount); annotating a row that no longer exists
+                            # would land the outcome on some OTHER, older attempt.
+                            if not res.get("ok") and not res.get("deferred"):
                                 ledgerlib.annotate(
                                     "deliver", entry["session"],
                                     f"{res.get('outcome') or 'failed'}: {res.get('detail') or ''}",
@@ -829,6 +897,10 @@ def run(max_deliveries: int, only: "str | set[str] | None", act: bool,
                      "instance": m.get("instance"), "text": e["text"][:120]}
                     for e, m in planned],
         "skipped": [{"id": s["id"], "title": s.get("title"), "why": s["why"]} for s in skipped],
+        # NAMED, BUT NOT IN A STATE THAT CAN BE DELIVERED - never silently absent. Distinct
+        # from `skipped` (a staged row this run chose to defer) because the answer a reader
+        # needs is different: skipped comes back next cycle, notStaged never will.
+        "notStaged": not_staged,
         "results": results,
         "overCap": max(0, len(queue) - len(planned) - len(skipped)),
     }
@@ -917,8 +989,14 @@ def _print_placeholder_warning(report: dict) -> None:
 def _print_report(report: dict, act: bool) -> None:
     """The human-readable rendering of a run() report. Kept apart from main() so the CLI
     plumbing (arg parsing, exit codes) is not tangled with what gets printed."""
-    if not report["staged"]:
+    not_staged = report.get("notStaged") or []
+    # ⛔ "nothing staged" IS ONLY TRUE WHEN NOTHING WAS NAMED THAT WE CAN EXPLAIN (2026-09-12).
+    # Printing it over a named row that is `failed`/`delivered`/absent told the reader the
+    # queue was empty when the honest answer was "that one row is in a state you need to see".
+    if not report["staged"] and not not_staged:
         print("nothing staged - the courier has nothing to deliver.")
+    for n in not_staged:
+        print(f"  NOT STAGED {n.get('title') or n['id']}: {n['why']}")
     # ⛔ COUNT WHAT LANDED, NOT WHAT WAS ATTEMPTED (2026-09-01). This printed
     # len(planned) under the word "delivered" - but `planned` is the INTENT, formed
     # before a single send. A run where the composer refused one of two replies still
@@ -965,6 +1043,12 @@ def main(argv: list[str]) -> int:
         print(json.dumps(report, indent=2))
     else:
         _print_report(report, parsed.act)
+    # A NAMED ROW THAT COULD NOT BE DELIVERED IS AN EXIT-2 ANSWER, plan-only or not (the
+    # docstring's "2 something was skipped or did not land"). It is the one outcome a script
+    # calling `courier --yes --only <id>` most needs to tell apart from success, and it used
+    # to exit 0 with the words "nothing staged" - success, in the CLI's own contract.
+    if report.get("notStaged"):
+        return 2
     if not parsed.act:
         return 0
     failed = [r for r in report["results"] if not r["ok"]]

@@ -194,6 +194,10 @@ class RunActuatorTest(unittest.TestCase):
 class CourierRailTest(unittest.TestCase):
     def setUp(self):
         self.stub = StubDaemon()
+        # RESTORED in tearDown. It was not, so every later class in the same process that
+        # reached the daemon got this class's CLOSED stub URL - or, run alone, the LIVE daemon
+        # on 7787 - and failed for a reason that had nothing to do with it (found 2026-09-14).
+        self._base = hydralib.BASE
         hydralib.BASE = self.stub.url
         self._tmp = tempfile.TemporaryDirectory()
         self._state = tempfile.TemporaryDirectory()
@@ -223,6 +227,7 @@ class CourierRailTest(unittest.TestCase):
 
     def tearDown(self):
         self.stub.close()
+        hydralib.BASE = self._base
         os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
         self._tmp.cleanup()
         self._state.cleanup()
@@ -381,6 +386,113 @@ class CourierRailTest(unittest.TestCase):
         act.assert_not_called()
         self.assertFalse(report["results"][0]["ok"])
         self.assertEqual(deliverylib.get(e["id"])["state"], "failed")
+
+    # --- A DEFERRAL MUST SURVIVE TO ITS NEXT ATTEMPT -------------------------------------
+    # Found live 2026-09-12. `courier --yes --only <id>` refused, correctly, to type into a
+    # chat mid-turn ("peer did not confirm and the turn is in flight - not typing") - and then
+    # marked the row FAILED on that one attempt, so the same command a minute later answered
+    # "nothing staged - the courier has nothing to deliver". The refusal was right and its
+    # bookkeeping said the opposite of the truth; the message had to be re-staged by hand.
+
+    PEER_DEAD = (422, {"error": "peer wrote-but-no-transcript-growth",
+                       "detail": "peer channel did not confirm (wrote-but-no-transcript-growth)"})
+
+    def _mid_turn_peer_refusal(self):
+        """Stage a reply for a chat that is MID-TURN (so rail 4 makes it peer_only) and answer
+        its send with the daemon's dead-peer 422. Returns (entry, report)."""
+        self._write_tail("working on it", age=5, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        self.stub.routes[f"/api/sessions/{SID}/message"] = self.PEER_DEAD
+        with mock.patch.object(courier, "_run_actuator") as act:
+            report = courier.run(5, None, act=True)
+        act.assert_not_called()   # rail 4: the composer is never the fallback for a live turn
+        return e, report
+
+    def test_a_mid_turn_peer_refusal_stays_STAGED_and_is_counted_as_a_deferral(self):
+        e, report = self._mid_turn_peer_refusal()
+        self.assertFalse(report["results"][0]["ok"])
+        self.assertIn("turn is in flight", report["results"][0]["outcome"])
+        row = deliverylib.get(e["id"])
+        self.assertEqual(row["state"], "staged",
+                         "a refusal to interrupt a turn is NOT-YET, never a burned row")
+        self.assertEqual(row["deferrals"], 1)
+        self.assertIn("mid-turn", row["lastError"])
+
+    def test_the_same_command_a_minute_later_still_finds_the_row(self):
+        """The whole point: re-running `--only <id>` must not answer 'nothing staged'."""
+        e, _ = self._mid_turn_peer_refusal()
+        self.assertIn(e["id"], [r["id"] for r in deliverylib.pending()])
+        report = courier.run(5, {e["id"]}, act=False, hand_run=True)
+        self.assertEqual(report["notStaged"], [])
+        self.assertEqual([p["id"] for p in report["planned"]], [e["id"]])
+
+    def test_a_mid_turn_deferral_still_ENDS_at_the_ceiling(self):
+        """NOT-YET IS NOT FOREVER. A chat that never leaves its turn must stop being retried
+        (deliverylib.MAX_DEFERRALS) - and end readable, with the reason, never as a row that
+        quietly disappeared. This is the guard that makes defer() safe to use here at all."""
+        self._write_tail("working on it", age=5, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        deliverylib._update(e["id"], deferrals=deliverylib.MAX_DEFERRALS - 1)
+        self.stub.routes[f"/api/sessions/{SID}/message"] = self.PEER_DEAD
+        with mock.patch.object(courier, "_run_actuator"):
+            courier.run(5, None, act=True)
+        row = deliverylib.get(e["id"])
+        self.assertEqual(row["state"], "expired")
+        self.assertIn("deferred", row["lastError"])
+        named = courier.run(5, {e["id"]}, act=False, hand_run=True)["notStaged"][0]
+        self.assertEqual(named["state"], "expired",
+                         "and the CLI can still say which state the row ended in")
+
+    def test_a_deferral_is_tagged_so_the_caller_can_tell_it_from_a_failure(self):
+        _, report = self._mid_turn_peer_refusal()
+        self.assertTrue(report["results"][0]["deferred"])
+
+    def test_a_deferral_burns_no_breaker_attempt_and_files_no_incident(self):
+        """The breaker counts futility, not restraint. Before this, four correct mid-turn
+        refusals would suppress the very chat the courier was being careful with, and file
+        an incident each time - a queue of alarms raised by the machinery behaving properly."""
+        from lib import incidentlib
+
+        self._mid_turn_peer_refusal()
+        self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 0)
+        self.assertEqual(incidentlib.list_incidents(), [])
+
+    def test_a_deferral_forgives_only_its_own_attempt(self):
+        """discount(), not clear(): a real failure that came BEFORE must still be counted."""
+        ledgerlib.note("deliver", SID, note="an earlier attempt that really did fail")
+        self._mid_turn_peer_refusal()
+        self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 1)
+
+    def test_a_transient_refusal_is_tagged_deferred_the_same_way(self):
+        """The sibling NOT-YET branch (a closed target app) already defer()ed; the rule is
+        uniform now, so its result carries the same tag and takes back its attempt too."""
+        e = self._stage()
+        self.stub.routes[f"/api/sessions/{SID}/message"] = (
+            409, {"error": "instance temp1 is not running - open it first"})
+        with mock.patch.object(courier, "_run_actuator") as act:
+            report = courier.run(5, None, act=True)
+        act.assert_not_called()
+        self.assertTrue(report["results"][0]["deferred"])
+        self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
+        self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 0)
+
+    def test_a_REAL_refusal_is_still_a_failure_with_an_incident(self):
+        """The rail that must NOT have moved: a 422 that is not the dead-peer shape is a
+        delivery that went wrong, and it still burns the row and raises the alarm."""
+        from lib import incidentlib
+
+        e = self._stage()
+        self.stub.routes[f"/api/sessions/{SID}/message"] = (
+            422, {"error": "not rendered in any searched running instance"})
+        with mock.patch.object(courier, "_run_actuator") as act:
+            report = courier.run(5, None, act=True)
+        act.assert_not_called()
+        self.assertFalse(report["results"][0].get("deferred"))
+        self.assertEqual(deliverylib.get(e["id"])["state"], "failed")
+        self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 1)
+        self.assertTrue(incidentlib.list_incidents())
 
     def test_the_courier_never_posts_migrate(self):
         # 2026-09-01, the hard way: /migrate delivers NO prompt - it kills and reimports the
