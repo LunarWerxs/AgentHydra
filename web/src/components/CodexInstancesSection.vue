@@ -22,6 +22,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
+import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
@@ -773,13 +774,14 @@ onUnmounted(() => {
               <span v-else class="text-muted-foreground" :title="usageFor(instance)?.sessionLimitUnavailable ? $t('codexInstances.noSessionLimit') : undefined">{{ usageFor(instance)?.sessionLimitUnavailable ? 'N/A' : '—' }}</span>
             </TableCell>
             <TableCell class="text-xs">
-              <UsageBar
-                v-if="weeklyResetFor(instance)"
-                :fill-pct="weeklyRemaining(instance)"
-                :variant="weeklyWait(instance)"
-                :label="weeklyResetFor(instance) ?? ''"
-                :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(instance) })"
-              />
+              <CopyResetDate v-if="weeklyResetFor(instance)" :limit="usageFor(instance)?.weekAll">
+                <UsageBar
+                  :fill-pct="weeklyRemaining(instance)"
+                  :variant="weeklyWait(instance)"
+                  :label="weeklyResetFor(instance) ?? ''"
+                  :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(instance) })"
+                />
+              </CopyResetDate>
               <span v-else class="text-muted-foreground">—</span>
             </TableCell>
           </template>

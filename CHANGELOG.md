@@ -9,6 +9,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **Clicking a Weekly cell copies the date that window resets, as `09/18/2026`**
+  (`web/src/components/CopyResetDate.vue`, the three instance tables, `web/src/lib/usage-reset.ts`,
+  `web/tests/usage-reset.test.ts`). The bar says `4d 9h`, which is the right thing to READ and the
+  wrong thing to paste into a calendar or a message; working the date out of a countdown is
+  arithmetic nobody should do by hand. Owner request, 2026-09-14. A cell with no ISO reset instant
+  (the `claude -p "/usage"` fallback prints a YEARLESS "Sep 18, 9:59am") is not a button at all,
+  rather than copying a date whose year was guessed.
+
 - **`orchestrator_cancel { id }` - a run that is still going can be stopped, without finding a pid**
   (`server/src/mcp.ts`, `server/tests/orchestrator-mcp.test.ts`). The daemon has had
   `cancelOrchestratorOperation` and `POST /api/orchestrator/operations/:id/cancel` all along; only

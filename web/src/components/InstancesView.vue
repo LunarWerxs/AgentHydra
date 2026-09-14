@@ -33,6 +33,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstancesSection from '@/components/CliInstancesSection.vue'
 import CodexInstancesSection from '@/components/CodexInstancesSection.vue'
+import CopyResetDate from '@/components/CopyResetDate.vue'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import DshInstancesSection from '@/components/DshInstancesSection.vue'
@@ -1496,13 +1497,14 @@ onUnmounted(() => {
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
               <TableCell class="text-xs">
-                <UsageBar
-                  v-if="weeklyResetFor(inst)"
-                  :fill-pct="weeklyRemaining(inst)"
-                  :variant="weeklyWait(inst)"
-                  :label="weeklyResetFor(inst) ?? ''"
-                  :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
-                />
+                <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
+                  <UsageBar
+                    :fill-pct="weeklyRemaining(inst)"
+                    :variant="weeklyWait(inst)"
+                    :label="weeklyResetFor(inst) ?? ''"
+                    :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
+                  />
+                </CopyResetDate>
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
             </template>

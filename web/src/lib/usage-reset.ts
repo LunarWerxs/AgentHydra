@@ -91,6 +91,22 @@ export function resetLabel(
   return limit.resets ? limit.resets : null
 }
 
+/**
+ * The reset instant as a numeric local date, "09/18/2026" (MM/DD/YYYY) - what clicking the Weekly
+ * column copies.
+ *
+ * Null without a real `resetsAt`: the CLI fallback's yearless "Sep 18, 9:59am" would need its year
+ * guessed, and a pasted date that is a year off is worse than no copy at all (same rule as
+ * resetLabel above).
+ */
+export function resetDateNumeric(limit: UsageLimit | null | undefined): string | null {
+  if (!limit?.resetsAt) return null
+  const at = new Date(limit.resetsAt)
+  if (!Number.isFinite(at.getTime())) return null
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(at.getMonth() + 1)}/${pad(at.getDate())}/${at.getFullYear()}`
+}
+
 // --- the WAIT, as a bar -------------------------------------------------------
 //
 // The usage-mode bars encode ONE thing: how much of this window is still to run. Length and colour

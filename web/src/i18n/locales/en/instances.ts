@@ -27,6 +27,12 @@ export default {
   colSession: 'Session (5h)',
   colWeekly: 'Weekly',
   resetsIn: 'in {when}',
+  // The Weekly cell copies its reset DATE on click (the bar shows a countdown, a calendar wants a date).
+  resetDateCopyHint: 'Resets {date}. Click to copy the date.',
+  toastResetDateCopied: 'Copied {date}, the date this weekly limit resets.',
+  // Said only when the write actually failed (no secure context, or permission refused): the date is
+  // in the message so it can still be read off the screen and typed.
+  toastResetDateCopyFailed: 'Could not reach the clipboard. This limit resets {date}.',
   colPlan: 'Plan',
   colActions: 'Actions',
   running: 'Running',

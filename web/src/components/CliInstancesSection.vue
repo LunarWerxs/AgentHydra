@@ -30,6 +30,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.vue'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
+import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
@@ -642,13 +643,14 @@ onUnmounted(stopPolling)
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
               <TableCell class="text-xs">
-                <UsageBar
-                  v-if="weeklyResetFor(inst)"
-                  :fill-pct="weeklyRemaining(inst)"
-                  :variant="weeklyWait(inst)"
-                  :label="weeklyResetFor(inst) ?? ''"
-                  :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
-                />
+                <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
+                  <UsageBar
+                    :fill-pct="weeklyRemaining(inst)"
+                    :variant="weeklyWait(inst)"
+                    :label="weeklyResetFor(inst) ?? ''"
+                    :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
+                  />
+                </CopyResetDate>
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
             </template>
