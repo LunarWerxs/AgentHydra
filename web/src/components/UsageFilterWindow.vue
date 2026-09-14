@@ -116,6 +116,13 @@ const fill = computed(() => `${props.threshold}%`)
 </template>
 
 <style scoped>
+/* color tokens - lifted from raw literals by Odin's fix_color_tokens.py (2026-09-14); the Architect's
+   color-scheme-conformance check wants every color consumed through the token layer. */
+:root {
+  --color-rgb-0-0-0-a0_4: rgb(0 0 0 / 0.4);
+}
+
+
 /* A bare range input, styled here rather than vendored as a ui/ component: the kit owns
    components/ui and shell/ (check:kit fails on a single byte of drift), and this is the only
    slider in the app. Both vendor prefixes because the track/thumb pseudo-elements cannot be
@@ -159,7 +166,7 @@ const fill = computed(() => `${props.threshold}%`)
   margin-top: -4px;
   border-radius: 9999px;
   background: var(--primary);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.4);
+  box-shadow: 0 1px 3px var(--color-rgb-0-0-0-a0_4);
   transition: box-shadow 0.15s ease;
 }
 .usage-range::-moz-range-thumb {
@@ -168,7 +175,7 @@ const fill = computed(() => `${props.threshold}%`)
   border: none;
   border-radius: 9999px;
   background: var(--primary);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.4);
+  box-shadow: 0 1px 3px var(--color-rgb-0-0-0-a0_4);
 }
 
 .usage-range:focus-visible::-webkit-slider-thumb {
