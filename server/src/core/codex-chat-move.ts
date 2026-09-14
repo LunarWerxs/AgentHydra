@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  type Stats,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 import { CONFIG_DIR } from '../config'
 import type { CodexInstance } from '../types'
@@ -226,6 +234,183 @@ function saveReceipt(file: string, key: string, receipt: Receipt) {
   if (!result.ok) throw new Error(describeStoreRefusal('Codex move history', file, result))
 }
 
+function assertAccountsMatch(
+  from: CodexInstance,
+  to: CodexInstance,
+  request: CodexMoveRequest,
+): void {
+  if (
+    (from.account?.accountId ?? null) !== request.sourceAccountId ||
+    (to.account?.accountId ?? null) !== request.targetAccountId
+  ) {
+    throw new Error('An account changed since this move was prepared. Review a fresh move list.')
+  }
+}
+
+async function assertSourceReady(from: CodexInstance, deps: MoveDependencies): Promise<void> {
+  const state = await deps.runState(from)
+  if (state.state !== 'stopped')
+    throw new Error(
+      state.state === 'running'
+        ? 'Close the source Codex desktop and its CLI sessions before moving chats.'
+        : 'Could not verify whether the source Codex desktop is stopped. Try again.',
+    )
+}
+
+function moveKey(from: CodexInstance, request: CodexMoveRequest): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        normalizeInstancePath(realpathSync(from.codexHome)),
+        request.sourceAccountId,
+        request.threadId,
+      ]),
+    )
+    .digest('hex')
+}
+
+function destinationKey(to: CodexInstance, request: CodexMoveRequest): string {
+  return JSON.stringify([
+    normalizeInstancePath(realpathSync(to.codexHome)),
+    request.targetAccountId,
+  ])
+}
+
+function alreadyMovedResult(
+  journalPath: string,
+  key: string,
+  destination: string,
+  updatedAt: number,
+): CodexMoveResult | null {
+  const saved = readJsonStore(receiptStore(journalPath))
+  if (saved.status !== 'ok') return null
+  const old = saved.value[key]
+  if (old?.phase === 'done' && old.destination === destination && old.updatedAt === updatedAt) {
+    return { ok: true, destinationThreadId: old.destinationThreadId }
+  }
+  return null
+}
+
+// Find only among active chats. Never import an archived chat via a forged/stale request.
+async function findMovableThread(
+  source: CodexRpc,
+  from: CodexInstance,
+  request: CodexMoveRequest,
+): Promise<Thread> {
+  const thread = (await activeThreads(source)).find((row) => row.id === request.threadId)
+  if (!thread) throw new Error('The source chat is no longer active. Refresh the move list.')
+  if (thread.updatedAt !== request.updatedAt)
+    throw new Error('The source chat changed. Review a fresh move list.')
+  if (
+    !thread.path ||
+    !existsSync(thread.path) ||
+    !isPathInside(realpathSync(join(from.codexHome, 'sessions')), realpathSync(thread.path))
+  ) {
+    throw new Error('This chat has no local transcript in the source instance.')
+  }
+  return thread
+}
+
+function assertNoUnfinishedTurn(transcript: Buffer): void {
+  if (hasUnfinishedTurn(transcript.toString('utf8'))) {
+    throw new Error(
+      'This chat has an unfinished turn. Stop or finish it in Codex before moving it.',
+    )
+  }
+}
+
+async function ensureCopied(
+  receipt: Receipt,
+  deps: MoveDependencies,
+  key: string,
+  to: CodexInstance,
+  thread: Thread,
+  transcript: Buffer,
+): Promise<Receipt> {
+  if (receipt.destinationThreadId) return receipt
+  const destinationThreadId = randomUUID()
+  const stamp = new Date().toISOString()
+  const transcriptPath = join(
+    to.codexHome,
+    'sessions',
+    ...stamp.slice(0, 10).split('-'),
+    `rollout-${stamp.slice(0, 19).replaceAll(':', '-')}-${destinationThreadId}.jsonl`,
+  )
+  const content = copyCodexTranscript(transcript.toString('utf8'), thread.id, destinationThreadId)
+  mkdirSync(dirname(transcriptPath), { recursive: true })
+  if (!isPathInside(realpathSync(to.codexHome), realpathSync(dirname(transcriptPath)))) {
+    throw new Error('The destination session directory points outside this instance.')
+  }
+  writeFileSync(transcriptPath, content, { flag: 'wx', mode: 0o600 })
+  const updated: Receipt = { ...receipt, phase: 'copied', destinationThreadId, transcriptPath }
+  saveReceipt(deps.journalPath, key, updated)
+  return updated
+}
+
+// Resume only the NEW local copy. This lets Codex build both its thread index and paginated
+// history database without consulting a source id that only exists in another CODEX_HOME.
+// A new id has no goal/queue to auto-continue, and we never issue turn/start.
+async function resumeAndVerifyDestination(
+  target: CodexRpc,
+  to: CodexInstance,
+  thread: Thread,
+  receipt: Receipt,
+): Promise<string> {
+  const destinationThreadId = receipt.destinationThreadId!
+  await target.call('thread/resume', {
+    threadId: destinationThreadId,
+    path: receipt.transcriptPath,
+    cwd: thread.cwd,
+    excludeTurns: true,
+    ...(thread.model ? { model: thread.model } : {}),
+    ...(thread.modelProvider ? { modelProvider: thread.modelProvider } : {}),
+    ...(thread.reasoningEffort
+      ? { config: { model_reasoning_effort: thread.reasoningEffort } }
+      : {}),
+  })
+  await target.call('thread/name/set', {
+    threadId: destinationThreadId,
+    name: chatRow(thread).title,
+  })
+  const copied = await target.call<{ thread: Thread }>('thread/read', {
+    threadId: destinationThreadId,
+    includeTurns: false,
+  })
+  if (
+    copied.thread.id !== destinationThreadId ||
+    !copied.thread.path ||
+    !isPathInside(realpathSync(to.codexHome), realpathSync(copied.thread.path))
+  ) {
+    throw new Error('The destination copy could not be verified. The source was kept.')
+  }
+  // Unload the new task so app-server does not leave a live session behind when it exits.
+  await target.call('thread/unsubscribe', { threadId: destinationThreadId })
+  return destinationThreadId
+}
+
+async function assertSourceUnchanged(
+  source: CodexRpc,
+  from: CodexInstance,
+  deps: MoveDependencies,
+  thread: Thread,
+  before: Stats,
+): Promise<void> {
+  const after = statSync(thread.path!)
+  const latest = (await activeThreads(source)).find((row) => row.id === thread.id)
+  const stopped = await deps.runState(from)
+  if (
+    stopped.state !== 'stopped' ||
+    !latest ||
+    latest.updatedAt !== thread.updatedAt ||
+    after.size !== before.size ||
+    after.mtimeMs !== before.mtimeMs
+  ) {
+    throw new Error(
+      'The source changed during the copy. Both chats were kept; review them before continuing.',
+    )
+  }
+}
+
 /** Import into the destination's own home, verify it, then archive the source. No turn is started,
  * credentials are never copied, and an archive failure resumes from the saved destination id. */
 export async function moveCodexChat(
@@ -240,134 +425,25 @@ export async function moveCodexChat(
   let key = ''
   try {
     const [from, to] = pair(fromId, request.targetId, deps)
-    if (
-      (from.account?.accountId ?? null) !== request.sourceAccountId ||
-      (to.account?.accountId ?? null) !== request.targetAccountId
-    ) {
-      throw new Error('An account changed since this move was prepared. Review a fresh move list.')
-    }
-    const state = await deps.runState(from)
-    if (state.state !== 'stopped')
-      throw new Error(
-        state.state === 'running'
-          ? 'Close the source Codex desktop and its CLI sessions before moving chats.'
-          : 'Could not verify whether the source Codex desktop is stopped. Try again.',
-      )
+    assertAccountsMatch(from, to, request)
+    await assertSourceReady(from, deps)
     source = await deps.connect(from.codexHome)
-    key = createHash('sha256')
-      .update(
-        JSON.stringify([
-          normalizeInstancePath(realpathSync(from.codexHome)),
-          request.sourceAccountId,
-          request.threadId,
-        ]),
-      )
-      .digest('hex')
-    const destination = JSON.stringify([
-      normalizeInstancePath(realpathSync(to.codexHome)),
-      request.targetAccountId,
-    ])
-    const saved = readJsonStore(receiptStore(deps.journalPath))
-    if (saved.status === 'ok') {
-      const old = saved.value[key]
-      if (
-        old?.phase === 'done' &&
-        old.destination === destination &&
-        old.updatedAt === request.updatedAt
-      ) {
-        return { ok: true, destinationThreadId: old.destinationThreadId }
-      }
-    }
-    // Find only among active chats. Never import an archived chat via a forged/stale request.
-    const thread = (await activeThreads(source)).find((row) => row.id === request.threadId)
-    if (!thread) throw new Error('The source chat is no longer active. Refresh the move list.')
-    if (thread.updatedAt !== request.updatedAt)
-      throw new Error('The source chat changed. Review a fresh move list.')
-    if (
-      !thread.path ||
-      !existsSync(thread.path) ||
-      !isPathInside(realpathSync(join(from.codexHome, 'sessions')), realpathSync(thread.path))
-    ) {
-      throw new Error('This chat has no local transcript in the source instance.')
-    }
-    const before = statSync(thread.path)
+    key = moveKey(from, request)
+    const destination = destinationKey(to, request)
+    const already = alreadyMovedResult(deps.journalPath, key, destination, request.updatedAt)
+    if (already) return already
+
+    const thread = await findMovableThread(source, from, request)
+    const before = statSync(thread.path!)
     target = await deps.connect(to.codexHome)
-    const transcript = readFileSync(thread.path)
-    if (hasUnfinishedTurn(transcript.toString('utf8'))) {
-      throw new Error(
-        'This chat has an unfinished turn. Stop or finish it in Codex before moving it.',
-      )
-    }
+    const transcript = readFileSync(thread.path!)
+    assertNoUnfinishedTurn(transcript)
     const fingerprint = createHash('sha256').update(transcript).digest('hex')
     receipt = claimReceipt(deps.journalPath, key, thread.updatedAt, destination, fingerprint)
-    if (!receipt.destinationThreadId) {
-      const destinationThreadId = randomUUID()
-      const stamp = new Date().toISOString()
-      const transcriptPath = join(
-        to.codexHome,
-        'sessions',
-        ...stamp.slice(0, 10).split('-'),
-        `rollout-${stamp.slice(0, 19).replaceAll(':', '-')}-${destinationThreadId}.jsonl`,
-      )
-      const content = copyCodexTranscript(
-        transcript.toString('utf8'),
-        thread.id,
-        destinationThreadId,
-      )
-      mkdirSync(dirname(transcriptPath), { recursive: true })
-      if (!isPathInside(realpathSync(to.codexHome), realpathSync(dirname(transcriptPath)))) {
-        throw new Error('The destination session directory points outside this instance.')
-      }
-      writeFileSync(transcriptPath, content, { flag: 'wx', mode: 0o600 })
-      receipt = { ...receipt, phase: 'copied', destinationThreadId, transcriptPath }
-      saveReceipt(deps.journalPath, key, receipt)
-    }
-    const destinationThreadId = receipt.destinationThreadId!
-    // Resume only the NEW local copy. This lets Codex build both its thread index and paginated
-    // history database without consulting a source id that only exists in another CODEX_HOME.
-    // A new id has no goal/queue to auto-continue, and we never issue turn/start.
-    await target.call('thread/resume', {
-      threadId: destinationThreadId,
-      path: receipt.transcriptPath,
-      cwd: thread.cwd,
-      excludeTurns: true,
-      ...(thread.model ? { model: thread.model } : {}),
-      ...(thread.modelProvider ? { modelProvider: thread.modelProvider } : {}),
-      ...(thread.reasoningEffort
-        ? { config: { model_reasoning_effort: thread.reasoningEffort } }
-        : {}),
-    })
-    await target.call('thread/name/set', {
-      threadId: destinationThreadId,
-      name: chatRow(thread).title,
-    })
-    const copied = await target.call<{ thread: Thread }>('thread/read', {
-      threadId: destinationThreadId,
-      includeTurns: false,
-    })
-    if (
-      copied.thread.id !== destinationThreadId ||
-      !copied.thread.path ||
-      !isPathInside(realpathSync(to.codexHome), realpathSync(copied.thread.path))
-    ) {
-      throw new Error('The destination copy could not be verified. The source was kept.')
-    }
-    // Unload the new task so app-server does not leave a live session behind when it exits.
-    await target.call('thread/unsubscribe', { threadId: destinationThreadId })
-    const after = statSync(thread.path)
-    const latest = (await activeThreads(source)).find((row) => row.id === thread.id)
-    const stopped = await deps.runState(from)
-    if (
-      stopped.state !== 'stopped' ||
-      !latest ||
-      latest.updatedAt !== thread.updatedAt ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs
-    ) {
-      throw new Error(
-        'The source changed during the copy. Both chats were kept; review them before continuing.',
-      )
-    }
+    receipt = await ensureCopied(receipt, deps, key, to, thread, transcript)
+
+    const destinationThreadId = await resumeAndVerifyDestination(target, to, thread, receipt)
+    await assertSourceUnchanged(source, from, deps, thread, before)
     await source.call('thread/archive', { threadId: thread.id })
     receipt = { ...receipt, phase: 'done' }
     saveReceipt(deps.journalPath, key, receipt)
