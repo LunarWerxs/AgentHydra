@@ -70,7 +70,18 @@ auto-detaches whenever its own declared length exceeds 120s, which a one-chat ba
 `orchestrator_operation {id}`. Before that, a long batch could die on a bare transport timeout
 and return nothing at all about work it had in fact done. If a batch is stuck or was launched
 with the wrong scope, `orchestrator_cancel {id}` stops it and frees the route lock; that is not
-an undo, so read the fleet afterwards to see what had already landed.
+an undo, so read the fleet afterwards to see what had already landed - and since 2026-09-14,
+`python migrate_reconcile.py` is how you see it, because a killed batch leaves half-moves that no
+fleet read names (below).
+
+**"Kill it and move it" is now one call, and a refused call keeps its resume** (2026-09-14). A
+patient move sitting out its `wait_secs` used to refuse the SAME move with `terminate_live` as
+`409 busy` - the route is keyed by script name - and the only way through was `taskkill` by hand.
+Now a call carrying `terminate_live` PREEMPTS a run whose chats it covers: the holder is
+cancelled, and this call does that work itself. A holder naming chats the new call does not is
+still refused (cancelling it abandons those chats, which is a person's decision), and that
+refusal now STAGES the call's `resume` text against each named chat instead of losing it with the
+call - deduped, so re-firing cannot leave two wakes. Read `resumeStaged` in the answer.
 
 What it replaced (2026-09-06, Carlos at 95% of its window and Martin at 88% of its week,
 seven chats to Eduardo): ~25 round trips and most of an hour. The four moves were fine; the
@@ -115,7 +126,18 @@ tray icon and the fair share first), then reading two working chats' pids out of
 - **Check the account first with `list_chats`**, not `list_sessions` (which missed one of
   Martin's four chats behind its 7-day default) and not a dry-run move. If `list_chats` answers
   with an HTML-instead-of-JSON error, the running daemon is older than the tool: rebuild and
-  restart it.
+  restart it. Since 2026-09-14 `--all-unarchived` reads that SAME endpoint: the two used to
+  disagree, and the one that said "0 unarchived" on an account holding three is the reading that
+  silently does nothing. `/api/sessions` resolves a chat to ONE owning account, so a half-moved
+  chat - which is on two at once - was invisible to the account it was still sitting on.
+- **A KILLED BATCH LEAVES HALF-MOVES, and `python migrate_reconcile.py` is what finds them.**
+  Killing the 25-chat batch of 2026-09-13 left 14 chats imported onto the target and still
+  unarchived on the source; the fleet read taken straight after showed all 25 on the source, so
+  the run read as "nothing landed" and the truth surfaced twenty minutes later by eye. Every
+  migrate now journals its phase, and the reconciler re-checks each unfinished one against the
+  chat's current state: `unsettled` is that duplicate, `not-landed` means the ledger and the
+  machine disagree. `--finish <id>` completes it through the mover's own phases, `--reverse <id>`
+  undoes it. Run it after any cancel.
 - By hand, the same thing is `courier --yes --only <id> --only <id>` for the replies (several
   ids, one run, no icon needed) and `migrate_batch ... --terminate-live --resume "..."`.
 

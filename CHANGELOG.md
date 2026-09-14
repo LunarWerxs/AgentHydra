@@ -9,6 +9,35 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **`migrate_reconcile.py` - the half-moves a killed batch leaves, found and repairable**
+  (`orchestrator/scripts/migrate_reconcile.py`, `lib/mutationlib.py`'s `advance_phase`,
+  `migrate_chat.py`'s three phases, and two suites). A move is FOUR acts - import, verify, settle
+  the source row, stamp the mode - and only the first pair was ever written down. So when the
+  25-chat batch of 2026-09-13 was killed mid-flight, 14 archived chats sat imported onto the
+  target and still unarchived on the source (duplicates, not moves) with nothing on the machine
+  saying which of the 25 were which; the fleet read taken right after even showed all 25 still on
+  the source, so the run was honestly reported as "nothing landed" and the truth surfaced twenty
+  minutes later, by eye.
+
+  Every migrate mutation now carries a PHASE, advanced by the phases themselves, and the new
+  script re-checks each unfinished row against the chat's CURRENT state rather than trusting the
+  journal: `unsettled` (the half-move), `not-landed` (the ledger and the machine disagree - the
+  loudest row here), `settled` (the journal is advanced so it is never re-read), `gone`, and
+  `unknown` for a failed read, which is counted WITH the unsettled ones because ignorance is not
+  a pass. `--finish` re-drives `migrate_chat`'s own `phase_settle`/`phase_stamp`; `--reverse`
+  hands the row to `undo.py`. It owns no actuator of its own.
+
+- **"Kill it and move it" no longer needs a `taskkill`: a `terminate_live` move preempts a patient
+  move of the same chats** (`server/src/orchestrator.ts`, `server/tests/orchestrator-preempt.test.ts`).
+  The route lock is keyed by SCRIPT NAME, so on 2026-09-12 a patient `move_chats` sitting out its
+  300s wait refused the same move with `terminate_live` as `409 busy`, and the only way through
+  was to find the engine's pid by hand and kill its tree - outside every rail these tools exist to
+  provide. Two conditions, both necessary: the incoming call carries `--terminate-live` (a
+  person's word, overriding the very wait it is queued behind), and its chats COVER the holder's,
+  so nothing the kill strands is left un-redone. A holder naming chats the new call does not is
+  still refused, with `orchestrator_cancel` named - that abandonment is a person's decision, and
+  `migrate_reconcile.py` now exists to find what it leaves.
+
 - **Clicking a Weekly cell copies the date that window resets, as `09/18/2026`**
   (`web/src/components/CopyResetDate.vue`, the three instance tables, `web/src/lib/usage-reset.ts`,
   `web/tests/usage-reset.test.ts`). The bar says `4d 9h`, which is the right thing to READ and the
@@ -236,6 +265,69 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   on IconTooltip); the CLI and Codex tables, which have no such tooltip, use a native `title` that
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
+
+- **A delivery deferred for a live turn is no longer burned as a failure, and `courier --only <id>`
+  says what state a named row is in** (`orchestrator/scripts/courier.py`, `lib/ledgerlib.py`'s new
+  `discount`, `stage_reply.py`, `migrate_batch.py`, four suites). Found live 2026-09-12:
+  `courier --yes --only <id>` correctly refused to type into a chat mid-turn ("peer did not
+  confirm and the turn is in flight - not typing"), but marked the row FAILED on that one attempt,
+  so the same command a minute later answered "nothing staged - the courier has nothing to
+  deliver" - which reads as "already sent" and was the opposite of the truth. The reply had to be
+  re-staged under a new id.
+
+  - A mid-turn refusal now DEFERS: the row stays staged, the result is tagged `deferred`, and the
+    attempt is taken back off the breaker (`ledgerlib.discount`, which never removes a
+    deterministic row) with no incident filed. The breaker counts futility, not restraint.
+  - `--only <id>` on a row that is not staged names it: `failed after 1 attempt: <lastError>`,
+    delivered, cancelled, expired, or "no such delivery id", and exits 2. "nothing staged" is now
+    only said when it is true.
+  - `migrate_batch` read a deferred result as attempted-and-failed, re-staged a SECOND copy of the
+    resume and fired the courier into the same live turn. A deferral is a skip there now, and its
+    automatic retry stages with `dedupe` so a still-staged row is re-used, never doubled.
+  - `stage_reply.py`: a value-taking flag with no value used to swallow the NEXT flag
+    (`--state --limit 200` ate `--limit`, which silently fell back to the default), and
+    `--state All` matched nothing because only the list filter case-folded. Both are usage errors
+    or fixed. New `--dedupe` for the automatic lanes, off by default for a person's reply. The
+    queue's third symptom - `--list --state all --limit 200` answering `rows: []` beside
+    `matched: 120` - could NOT be reproduced against this code, so no fix was invented for it; a
+    CLI-level test now pins that the three counts agree across states and limits.
+
+- **A refused `move_chats` no longer eats the resume text it was carrying, and says what holds the
+  route instead of throwing a string** (`server/src/mcp.ts`,
+  `server/tests/move-chats-refused-resume.test.ts`). Found live 2026-09-12, minutes after the
+  hand-kill above: the refusal was correct, but the message the caller wanted delivered died with
+  the call, and the landed chat had to be told by hand that four background jobs had been
+  orphaned. The resume is now STAGED against each named chat through `stage_reply` (deduped, so a
+  re-fired call cannot leave two wakes), and the refusal itself comes back as the daemon's own
+  object - `busy`, the `operationId` holding the route, the remedy - rather than as the bare
+  string `AgentHydra 409: {…}` a rejected fetch used to throw. A whole-account sweep names no
+  chat, so it says plainly that the resume was NOT kept rather than implying it was.
+
+  ⛔ The staging lives in the DAEMON (`runOrchestrator`'s refusal path), not in the MCP tool. The
+  first cut staged from `move_chats` after catching the 409, and an adversarial review caught
+  that `move_chats` detaches by default: the route answers 202 with an operation id and the
+  refusal happens later, inside the operation, where no MCP code sees it. That cut covered the
+  rare blocking call and missed nearly every real one. The same review caught that a preempted
+  holder slow to die fell through to the ordinary "wait for it, or cancel it" refusal about a
+  run the call had just cancelled; that case now says the holder is being torn down and to fire
+  the same call again.
+
+- **The two enumerators of "what does this account hold" disagreed, and the one that said ZERO
+  silently did nothing** (`orchestrator/scripts/migrate_batch.py`, `lib/hydralib.py`'s new
+  `chats()`, `test_migrate_batch.py`). Minutes after the killed batch, `--all-unarchived` reported
+  "0 unarchived desktop chat(s)" on an account `list_chats` showed THREE on; naming those three
+  ids by hand then moved them cleanly. `/api/sessions` resolves a session id to ONE owning profile
+  (live beats archived, else newest mtime), which is the right answer to "where is this chat now"
+  and the wrong one to "what is still sitting on this account" - a half-moved chat exists on two
+  accounts at once, and the collapse hides it from the account it is on. Both the batch's movable
+  list and its archive gate now read `/api/chats`, the same per-store scan `list_chats` serves, so
+  this file asks that question once, in one voice.
+
+  ⛔ `hydralib.chats()` is a CENSUS: `archived=include`, paged to the end. Its first cut took the
+  endpoint's UI defaults (`archived=hide`, 200 rows), and the review that caught it named the
+  consequence exactly: the archive gate asks that list "is the chat you named archived?", so a
+  list with every archived chat removed switched the gate OFF - the one protection the owner has
+  been angriest about. It never shipped; the regression test pins both the scope and the paging.
 
 - **A signed-in, working account read as "rate limited" for a week, because the only credential
   ever tried was a revoked one** (`server/src/core/accounts.ts`, `server/src/usage.ts`,
