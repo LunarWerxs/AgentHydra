@@ -58,6 +58,28 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _session_alive(rec: dict, pid: int) -> bool:
+    """Is THIS RECORD's session alive - not merely "some process owns that pid"?
+
+    The registry is written on start and never cleaned on crash, so a session that died
+    un-gracefully leaves its `<pid>.json` behind and the OS is free to hand that number to
+    something else. Measured 2026-09-13: a dead session's pid had been recycled by an unrelated
+    instance's Electron renderer, so the chat read as live, its move was gated on that, and
+    --terminate-live would have killed a STRANGER'S process tree.
+
+    `messagingSocketPath` is that session's own named pipe (Windows) / unix socket (POSIX) and a
+    recycled pid cannot answer for it. It is an ADDITIONAL requirement, never a substitute: on
+    POSIX a crash can leave the socket file on disk, so the pid check still carries the verdict
+    there and this only narrows it. A record too old to carry one falls back to the pid alone.
+    """
+    if not _pid_alive(pid):
+        return False
+    sock = rec.get("messagingSocketPath")
+    if not isinstance(sock, str) or not sock:
+        return True
+    return os.path.exists(sock)
+
+
 def live_sessions(config_dir: str | Path, check_alive: bool = True) -> list[dict]:
     """Every session registered under one account's config dir, newest first.
 
@@ -80,7 +102,7 @@ def live_sessions(config_dir: str | Path, check_alive: bool = True) -> list[dict
             pid = 0
         if not pid:
             continue
-        if check_alive and not _pid_alive(pid):
+        if check_alive and not _session_alive(rec, pid):
             continue
         token = None
         token_path = None
