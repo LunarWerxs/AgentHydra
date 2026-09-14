@@ -13,8 +13,8 @@
 // that behaviour rests on: an excluded profile is genuinely untouched, and the failure rollback
 // restores only what this call flipped.
 
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -27,8 +27,17 @@ import {
 const notRunning = async () => false
 const SID = 'sess-move-target'
 
+const SHARED_ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-move-'))
+afterAll(() => rmSync(SHARED_ROOT, { recursive: true, force: true }))
+let scratchSeq = 0
+function scratchProfile(): string {
+  const dir = join(SHARED_ROOT, `p${scratchSeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
 function profileHolding(sessionId: string, archived: boolean): string {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-move-'))
+  const profile = scratchProfile()
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   writeFileSync(
@@ -117,7 +126,7 @@ test('desktopProfileRoots lists real profile dirs, so the route can filter one o
 test('desktopChatCarriers names every profile holding the session, so an unscoped archive can refuse', () => {
   const source = profileHolding(SID, false)
   const target = profileHolding(SID, false)
-  const stranger = mkdtempSync(join(tmpdir(), 'agenthydra-move-')) // no store at all
+  const stranger = scratchProfile() // no store at all
 
   const carriers = desktopChatCarriers(SID, [source, target, stranger])
   expect(carriers.sort()).toEqual([source, target].sort())

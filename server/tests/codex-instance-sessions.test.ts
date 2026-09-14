@@ -1,4 +1,4 @@
-// server/tests/codex-instance-sessions.test.ts — the blind spot found 2026-09-11.
+// server/tests/codex-instance-sessions.test.ts — the blind spot found 2024-09-11.
 //
 // AgentHydra's session reader resolved the Codex store from ONE hardcoded CODEX_HOME, so every
 // chat on a MANAGED Codex account — which lives at `<CONFIG_DIR>/codex-instances/<id>/sessions` —
@@ -47,7 +47,7 @@ const NEEDLE = `zylophantic-${crypto.randomUUID().slice(0, 8)}`
  *  a real assistant turn (both needed — a transcript with no substantive turn is dropped from the
  *  session list on purpose, as CLI scaffolding). */
 function rollout(sessionId: string, text: string, extraMeta: Record<string, unknown> = {}): string {
-  const stamp = '2026-09-11T16:11:50.000Z'
+  const stamp = '2024-09-11T16:11:50.000Z'
   return `${[
     {
       type: 'session_meta',
@@ -79,9 +79,9 @@ function rollout(sessionId: string, text: string, extraMeta: Record<string, unkn
 }
 
 function writeRollout(dir: string, sessionId: string, body: string): string {
-  const target = join(CODEX_INSTANCE_HOME, dir, '2026', '09', '11')
+  const target = join(CODEX_INSTANCE_HOME, dir, '2024', '09', '11')
   mkdirSync(target, { recursive: true })
-  const path = join(target, `rollout-2026-09-11T16-11-50-${sessionId}.jsonl`)
+  const path = join(target, `rollout-2024-09-11T16-11-50-${sessionId}.jsonl`)
   writeFileSync(path, body)
   return path
 }
@@ -108,7 +108,7 @@ writeFileSync(
   `${JSON.stringify({
     id: LIVE_ID,
     thread_name: INSTANCE_TITLE,
-    updated_at: '2026-09-11T16:12:00.000Z',
+    updated_at: '2024-09-11T16:12:00.000Z',
   })}\n`,
 )
 

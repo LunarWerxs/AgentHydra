@@ -8,7 +8,7 @@
 //   3. Two PROCESSES mutating the same store both land: the interprocess lock is exercised by two
 //      real `bun` children hammering one file, not by two promises in one thread (which JS's
 //      single thread would serialize on its own and prove nothing).
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -36,8 +36,15 @@ function specFor(path: string): JsonStoreSpec<Store> {
   }
 }
 
+const scratchDirs: string[] = []
+afterAll(() => {
+  for (const d of scratchDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
 function scratch(): string {
-  return mkdtempSync(join(tmpdir(), 'ah-json-store-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ah-json-store-'))
+  scratchDirs.push(dir)
+  return dir
 }
 
 test('missing, corrupt, wrong-shape and empty files are told apart', () => {

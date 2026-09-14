@@ -15,7 +15,7 @@
 // 4. Defensive/synthetic tests using throwaway instance dirs — proving every fallback path
 //    returns a well-formed CMAccount and never throws, independent of any real machine state.
 
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path, { join } from 'node:path'
@@ -275,6 +275,11 @@ describe('resolveAccount — defensive synthetic instance dirs (no real machine 
       }
     }
   }
+
+  // Outcome-independent backstop: the try/finally in each test below already calls cleanup(), but
+  // that try/finally lives in the caller, not around makeInstanceDir()'s own mkdtempSync — this
+  // afterEach guarantees the reap even if a future test forgets its own finally.
+  afterEach(cleanup)
 
   test("missing instanceDir (empty string) -> status 'unknown', never throws", async () => {
     const account = await resolveAccount('')

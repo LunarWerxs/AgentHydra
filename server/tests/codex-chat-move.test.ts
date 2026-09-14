@@ -30,22 +30,22 @@ afterEach(() => {
 function rollout(threadId: string, cwd: string): string {
   return `${[
     {
-      timestamp: '2026-09-11T21:00:00.000Z',
+      timestamp: '2024-09-11T21:00:00.000Z',
       type: 'session_meta',
       payload: { id: threadId, session_id: threadId, cwd, originator: 'Codex Desktop' },
     },
     {
-      timestamp: '2026-09-11T21:00:01.000Z',
+      timestamp: '2024-09-11T21:00:01.000Z',
       type: 'event_msg',
       payload: { type: 'task_started', thread_id: threadId, turn_id: 'turn-1' },
     },
     {
-      timestamp: '2026-09-11T21:00:02.000Z',
+      timestamp: '2024-09-11T21:00:02.000Z',
       type: 'response_item',
       payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'First' }] },
     },
     {
-      timestamp: '2026-09-11T21:00:03.000Z',
+      timestamp: '2024-09-11T21:00:03.000Z',
       type: 'event_msg',
       payload: { type: 'task_complete', thread_id: threadId, turn_id: 'turn-1' },
     },
@@ -122,7 +122,7 @@ function fixture() {
             appendFileSync(
               thread.path,
               `${JSON.stringify({
-                timestamp: '2026-09-11T21:05:00.000Z',
+                timestamp: '2024-09-11T21:05:00.000Z',
                 type: 'response_item',
                 payload: { type: 'message', role: 'user', content: [] },
               })}\n`,

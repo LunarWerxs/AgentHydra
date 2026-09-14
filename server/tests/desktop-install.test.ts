@@ -16,7 +16,8 @@ const isWin = process.platform === 'win32'
 
 /** Fake %LOCALAPPDATA% builder — returns the root; callers add Packages/WindowsApps bits. */
 function fakeLocalAppData(): string {
-  return mkdtempSync(join(os.tmpdir(), 'ccmui-desktop-install-'))
+  const dir = mkdtempSync(join(os.tmpdir(), 'ccmui-desktop-install-'))
+  return dir
 }
 
 /** No live Claude process found — the deterministic default for every test below that resolves

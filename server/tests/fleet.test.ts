@@ -2,12 +2,21 @@
 // reports is deterministic, so every fact gets a fixture: each ending class, the torn-first-line
 // rule, the adaptive window growing past a giant record, unreadable files, the usage-probe
 // filter, and the quietest-first ordering.
-import { expect, test } from 'bun:test'
-import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { classifyTranscriptTail, endingFromTailText, fleetStatus } from '../src/fleet'
 import type { LiveSession } from '../src/live-registry'
+
+const FLEET_ROOT = mkdtempSync(join(tmpdir(), 'fleet-'))
+afterAll(() => rmSync(FLEET_ROOT, { recursive: true, force: true }))
+let fleetScratchSeq = 0
+function fleetScratchDir(): string {
+  const d = join(FLEET_ROOT, `d${fleetScratchSeq++}`)
+  mkdirSync(d, { recursive: true })
+  return d
+}
 
 const line = (o: unknown) => `${JSON.stringify(o)}\n`
 const userTurn = (text: string) => ({ type: 'user', message: { role: 'user', content: text } })
@@ -57,7 +66,7 @@ test('a windowed read drops its torn first line instead of parsing garbage', () 
 })
 
 test('classifyTranscriptTail reads a real file and reports quiet time', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-'))
+  const dir = fleetScratchDir()
   const p = join(dir, 't.jsonl')
   writeFileSync(p, line(userTurn('hi')) + line(assistantTurn('all done')))
   const r = classifyTranscriptTail(p, Date.now() + 5000)
@@ -70,7 +79,7 @@ test('classifyTranscriptTail reads a real file and reports quiet time', () => {
 test('the adaptive window grows past a record larger than the starting window', () => {
   // One 100KB single-line record AFTER the meaningful turn: a fixed 64KB window would land
   // inside the giant line and see nothing classifiable; the growth pass must find the turn.
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-big-'))
+  const dir = fleetScratchDir()
   const p = join(dir, 'big.jsonl')
   const giant = { type: 'tool_result', blob: 'x'.repeat(100 * 1024) }
   writeFileSync(p, line(userTurn('[Request interrupted by user]')) + line(giant))
@@ -97,7 +106,7 @@ function reg(over: Partial<LiveSession> & { pid: number }): LiveSession {
 }
 
 test('fleetStatus joins the registry to transcript state and sorts quietest first', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-join-'))
+  const dir = fleetScratchDir()
   const oldPath = join(dir, 'old.jsonl')
   const newPath = join(dir, 'new.jsonl')
   writeFileSync(oldPath, line(assistantTurn('finished long ago')))

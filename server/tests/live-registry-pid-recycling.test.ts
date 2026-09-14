@@ -10,14 +10,20 @@
 // it names that one session, so a recycled pid cannot answer for it. These tests use THIS process's
 // own pid — genuinely alive — so the pid leg is never what decides the verdict.
 
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readLiveRegistry, readOrphanedRegistry } from '../src/live-registry'
 
+const scratchDirs: string[] = []
+afterAll(() => {
+  for (const d of scratchDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
 function home(records: Record<string, unknown>[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'ah-live-registry-'))
+  scratchDirs.push(dir)
   mkdirSync(join(dir, 'sessions'), { recursive: true })
   for (const r of records) {
     writeFileSync(join(dir, 'sessions', `${r.pid}.json`), JSON.stringify(r))

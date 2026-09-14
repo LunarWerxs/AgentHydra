@@ -6,8 +6,8 @@
 // pointing at a directory nobody has cannot cost anything or leak into the three stores that were
 // here first.
 
-import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -21,6 +21,7 @@ import {
 } from '../src/agent-catalog'
 
 const home = mkdtempSync(join(tmpdir(), 'agenthydra-catalog-'))
+afterAll(() => rmSync(home, { recursive: true, force: true }))
 
 describe('the catalog as data', () => {
   test('ids are unique — they key the API, settings and i18n', () => {

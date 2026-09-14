@@ -1,14 +1,20 @@
 // server/tests/context-size.test.ts - context-pressure detection pinned: it measures the same
 // thing the owner's own ctxsize tool measures, treats "unknown" as unknown (never zero), and
 // only warns about chats that are actually full.
-import { expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HANDOFF_WARN_TOKENS, handoffCandidates, readContextSize } from '../src/context-size'
 
+const scratchDirs: string[] = []
+afterAll(() => {
+  for (const d of scratchDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
 function transcript(lines: object[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'agenthydra-ctx-'))
+  scratchDirs.push(dir)
   const p = join(dir, 'session.jsonl')
   writeFileSync(p, `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`)
   return p

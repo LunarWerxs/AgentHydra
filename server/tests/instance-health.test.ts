@@ -1,8 +1,8 @@
 // server/tests/instance-health.test.ts - the one answer to "can this instance be used, and if not
 // why not?" pinned: closed is never a fault, unknown is never fine, a damaged profile is told
 // apart from a signed-out one, and a wedged app is caught at all (it had no signal before).
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readLoginState } from '../src/core/instances'
@@ -15,9 +15,15 @@ import {
   unusableInstances,
 } from '../src/instance-health'
 
+const scratchDirs: string[] = []
+afterAll(() => {
+  for (const d of scratchDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
 /** An instance dir whose config.json holds exactly the given text (or none at all). */
 function dir(config: string | null): string {
   const d = mkdtempSync(join(tmpdir(), 'agenthydra-health-'))
+  scratchDirs.push(d)
   mkdirSync(d, { recursive: true })
   if (config !== null) writeFileSync(join(d, 'config.json'), config)
   return d

@@ -8,8 +8,8 @@
 // The event vocabulary used below is the harness's own (dsh-session/lib/types/known-event-types.js
 // carries all 56), narrowed to the records that decide what a transcript shows.
 
-import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'
@@ -17,8 +17,15 @@ import { scanSessionAnalytics } from '../src/analytics'
 import { listDshSessions, readDshLog, readDshSession, readDshUsage } from '../src/dsh-sessions'
 import { priceTokens } from '../src/pricing'
 
+const homes: string[] = []
+afterAll(() => {
+  for (const h of homes.splice(0)) rmSync(h, { recursive: true, force: true })
+})
+
 function newHome(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-home-'))
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-home-'))
+  homes.push(dir)
+  return dir
 }
 
 /** One record per zstd FRAME, concatenated — the harness flushes in batches, so a reader that only

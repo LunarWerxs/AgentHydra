@@ -4,7 +4,7 @@
 // the JWT claim decode, and the rate-limit mapping onto the shared UsageSnapshot. Everything here
 // runs off synthetic auth files and hand-built responses, so none of it needs a real ChatGPT login.
 
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
@@ -39,6 +39,10 @@ function cleanup(): void {
   }
 }
 
+// Outcome-independent backstop alongside each test's own try/finally cleanup(): that try/finally
+// lives in the test body, not around makeCodexHome()'s own mkdtempSync.
+afterEach(cleanup)
+
 /** A JWT with the given payload. Unsigned — decodeJwtClaims never verifies, by design. */
 function jwt(payload: Record<string, unknown>): string {
   const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
@@ -62,7 +66,7 @@ function chatgptAuth(
           chatgpt_plan_type: over.planType ?? 'plus',
           chatgpt_account_id: accountId,
           chatgpt_user_id: 'user-1',
-          chatgpt_subscription_active_until: '2026-09-01T00:00:00+00:00',
+          chatgpt_subscription_active_until: '2024-09-01T00:00:00+00:00',
           organizations: [{ id: 'org-1', is_default: true, title: 'Personal' }],
         },
       }),
@@ -271,7 +275,7 @@ describe('readCodexAuth / localCodexAccount', () => {
       expect(account.accountId).toBe('acct-1')
       expect(account.userId).toBe('user-1')
       expect(account.orgTitle).toBe('Personal')
-      expect(account.subscriptionActiveUntil).toBe('2026-09-01T00:00:00+00:00')
+      expect(account.subscriptionActiveUntil).toBe('2024-09-01T00:00:00+00:00')
       expect(account.label).toBe('Me <me@example.com> · Pro')
     } finally {
       cleanup()

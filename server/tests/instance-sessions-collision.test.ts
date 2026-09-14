@@ -15,12 +15,13 @@
 // The property pinned below is the one worth breaking a build over: a LIVE entry must beat an
 // ARCHIVED one no matter what order the directories are scanned in. The fixture names are chosen
 // so the archived copy sorts LAST, which is exactly the order that produced the bug.
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const home = mkdtempSync(join(tmpdir(), 'agenthydra-collision-'))
+afterAll(() => rmSync(home, { recursive: true, force: true }))
 const env = {
   ...process.env,
   USERPROFILE: home,

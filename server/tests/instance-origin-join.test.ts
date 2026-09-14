@@ -17,12 +17,13 @@
 // where the answer is not unique, it must be null. Attributing a session to the wrong account is
 // worse than admitting we do not know, since the whole point of the chip is whose quota paid.
 
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const home = mkdtempSync(join(tmpdir(), 'agenthydra-origin-'))
+afterAll(() => rmSync(home, { recursive: true, force: true }))
 const env = {
   ...process.env,
   USERPROFILE: home,
