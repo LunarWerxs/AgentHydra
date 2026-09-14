@@ -342,6 +342,56 @@ def sessions_all(archived: str = "include", page_size: int = CENSUS_PAGE) -> lis
         offset += len(page)
 
 
+CHATS_PAGE = 1000  # the endpoint's own ceiling per request
+
+
+def chats(instance: str | None = None, archived: str = "include",
+          page_size: int = CHATS_PAGE) -> list[dict]:
+    """GET /api/chats - what a desktop account HOLDS, read off the stores themselves.
+
+    ⛔ WHY THIS EXISTS BESIDE sessions() (the archive sweep, 2026-09-13). Minutes after a
+    killed batch, `migrate_batch --from 56 --all-unarchived` reported "0 unarchived desktop
+    chat(s)" while `list_chats` showed THREE on that same account, and naming the three ids
+    by hand then moved them cleanly. Two enumerators disagreed about what one account held,
+    and the one that said zero is the reading that silently does nothing.
+
+    The difference is not a filter, it is the QUESTION each endpoint answers. /api/sessions
+    resolves a session id to ONE owning profile (instance-sessions.ts's setPreferred: live
+    beats archived, else newest mtime), which is right for "where is this chat now" and wrong
+    for "what does this account hold" - a half-moved chat exists on two accounts at once, and
+    collapsing it hides it from the account it is still sitting on. /api/chats is a fresh
+    per-instance store scan with no collapsing, which is the same read `list_chats` serves.
+
+    Rows carry: instance, sessionId, chatId, title, archived, isArchived, lastActivityAt (ISO),
+    live, done. A 200 whose body does not carry `rows` RAISES rather than returning [] - an
+    enumerator that answers "empty" on a degraded payload is the failure this docstring opens
+    with.
+
+    ⛔ A CENSUS BY DEFAULT: EVERY ROW, ARCHIVED INCLUDED, EVERY PAGE (review finding, 2026-09-14).
+    The endpoint's own defaults are a UI's - `archived=hide` and `limit=200` - and the first cut
+    of this function took them. That silently DISABLED migrate_batch's archive gate, which asks
+    this list "is the chat you named archived?" and was being handed a list with every archived
+    chat removed; and it capped the answer at 200 rows, on a fleet whose archive alone is
+    thousands. Callers filter locally, exactly as sessions_all's contract already says.
+    """
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        params = {"archived": archived, "limit": page_size, "offset": offset}
+        if instance:
+            params["instance"] = str(instance)
+        path = "/api/chats?" + urllib.parse.urlencode(params)
+        got = api_get(path)
+        if not (isinstance(got, dict) and isinstance(got.get("rows"), list)):
+            raise DaemonError(path, None, f"unexpected response shape: {str(got)[:200]!r}")
+        page = got["rows"]
+        rows.extend(page)
+        offset += len(page)
+        total = got.get("total")
+        if not page or len(page) < page_size or (isinstance(total, int) and offset >= total):
+            return rows
+
+
 def dossier(query: str) -> list[dict]:
     """GET /api/chats/dossier?q= - the one query for 'what is the state of chat X'.
 

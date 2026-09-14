@@ -1551,7 +1551,7 @@ class _Landing:
 
     __slots__ = ("parsed", "sw", "notes", "match", "fleet", "target", "session_id",
                  "chat_title", "src_instance", "result", "after", "settle_note",
-                 "source_row", "doctrine")
+                 "source_row", "doctrine", "mutation_id")
 
     def __init__(self, **kw) -> None:
         for slot in _Landing.__slots__:
@@ -1648,15 +1648,22 @@ def move_only(argv: list[str]) -> _MoveOutcome:
     # ⛔ AND IT IS RECORDED HERE, IN PHASE ONE, NOT WHEN THE MOVE IS "FINISHED". The chat has
     # already moved by this line. A batch that dies between phases must leave a ledger that
     # says so, or the undo path has no record of a mutation that really happened.
+    #
+    # The row also carries HOW FAR the move got, starting at "imported": the phases below
+    # advance it. A batch killed between phases leaves a per-chat record of exactly which
+    # ones were left half-moved, which is what migrate_reconcile.py reads (see the archive
+    # sweep of 2026-09-13, where 14 chats sat imported-and-unsettled with nothing to say so).
     src_instance = str(match.get("instance") or "")
-    mutationlib.record("migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
-                       before={"instance": src_instance}, after={"instance": target.get("name")},
-                       undoable=True)
+    mutation_id = mutationlib.record(
+        "migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
+        before={"instance": src_instance}, after={"instance": target.get("name")},
+        undoable=True, phase="imported")
 
     return _MoveOutcome(
         landing=_Landing(parsed=parsed, sw=sw, notes=notes, match=match, fleet=fleet,
                          target=target, session_id=session_id, chat_title=chat_title,
-                         src_instance=src_instance, result=result, after=after),
+                         src_instance=src_instance, result=result, after=after,
+                         mutation_id=mutation_id),
         as_json=parsed.as_json)
 
 
@@ -1685,6 +1692,10 @@ def phase_settle(land: _Landing) -> None:
     # number could not say which half a slow settle was spending (2026-09-06: ~7.5s per chat
     # and no way to tell the window drive from the confirm poll).
     land.sw.lap("settle-confirm")
+    # The journal takes the SETTLE'S OWN VERDICT, not the word "settled": 'visible' means the
+    # twin is still on screen, which is a half-move that reconcile must still see as one.
+    if land.mutation_id:
+        mutationlib.advance_phase(land.mutation_id, f"settle-{land.source_row}")
     if land.source_row != "visible":
         ledgerlib.clear("migrate", land.session_id)  # a clean move: the brake is for futility
 
@@ -1700,6 +1711,14 @@ def phase_stamp(land: _Landing, watched: dict | None = None) -> None:
         land.session_id, land.target, land.after, land.fleet, land.chat_title, watched=watched,
         sw=land.sw)
     land.sw.lap("stamp")  # whatever is left after the two laps the doctrine records itself
+    if land.mutation_id:
+        # ⛔ NOT "stamped" WHILE THE SOURCE TWIN IS STILL VISIBLE (review finding, 2026-09-14). The
+        # stamp runs whatever the settle said, so writing the finished phase here unconditionally
+        # overwrote 'settle-visible' - a real half-move - with the one phase migrate_reconcile
+        # treats as owing nothing, and the duplicate became invisible to the tool built to find it.
+        mutationlib.advance_phase(
+            land.mutation_id,
+            "stamped" if land.source_row != "visible" else "stamped-settle-visible")
     # The verdict outlives the tool call. This incident had to be reconstructed from file
     # mtimes because nothing about the stamp was ever persisted (2026-09-05).
     mutationlib.record("setmode", land.session_id, instance=land.target.get("name") or "",

@@ -50,6 +50,36 @@ class MutationLibTest(unittest.TestCase):
         rows = mutationlib.list_mutations()
         self.assertEqual([r["id"] for r in rows], [mid])
 
+    def test_a_staged_act_records_its_first_phase_and_advances_through_the_rest(self):
+        """THE ARCHIVE SWEEP, 2026-09-13. A migrate is four acts, and only the first pair was
+        ever written down, so a batch killed mid-flight left 14 chats imported-but-unsettled
+        with nothing on the machine saying which. The row carries how far it got now."""
+        mid = mutationlib.record("migrate", "s1", before={"instance": "a"},
+                                 after={"instance": "b"}, phase="imported", now_ms=T0)
+        self.assertEqual(mutationlib.get(mid)["phase"], "imported")
+        self.assertTrue(mutationlib.advance_phase(mid, "settle-settled", now_ms=T0 + 5))
+        self.assertTrue(mutationlib.advance_phase(mid, "stamped", now_ms=T0 + 9))
+        row = mutationlib.get(mid)
+        self.assertEqual(row["phase"], "stamped")
+        self.assertEqual(row["phaseAt"], T0 + 9)
+        self.assertEqual([h["phase"] for h in row["phaseHistory"]],
+                         ["imported", "settle-settled", "stamped"],
+                         "every step keeps its timestamp: 'settled at 21:04' is the evidence")
+
+    def test_advancing_an_unknown_id_answers_false_rather_than_inventing_a_row(self):
+        self.assertFalse(mutationlib.advance_phase("nosuchid", "stamped"))
+        self.assertEqual(mutationlib.list_mutations(), [])
+
+    def test_a_row_recorded_without_a_phase_carries_none_at_all(self):
+        """Every other act is ONE act. A phase field on those would be noise, and a reader
+        must not mistake its absence for 'finished' - see migrate_reconcile."""
+        mid = mutationlib.record("archive", "s1", before={}, after={}, now_ms=T0)
+        self.assertNotIn("phase", mutationlib.get(mid))
+        # ...and it can still be given one later without losing the history it never had.
+        self.assertTrue(mutationlib.advance_phase(mid, "settled-verified", now_ms=T0 + 1))
+        self.assertEqual([h["phase"] for h in mutationlib.get(mid)["phaseHistory"]],
+                         ["settled-verified"])
+
     def test_list_is_newest_first_and_filters_by_session_and_kind(self):
         mutationlib.record("archive", "s1", before={}, after={}, now_ms=T0)
         mutationlib.record("rename", "s1", before={}, after={}, now_ms=T0 + 1)

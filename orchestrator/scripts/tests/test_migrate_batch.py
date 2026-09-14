@@ -159,7 +159,7 @@ class BatchDriverTest(_MigrateBatchTest):
         case here has always assumed. The gate's own behaviour is pinned in ArchiveGateTest.
         """
         super().setUp()
-        self.patch(migrate_batch.hydralib, "sessions", lambda **k: [])
+        self.patch(migrate_batch.hydralib, "chats", lambda **k: [])
 
     def test_a_refused_chat_does_not_stop_the_batch_and_is_never_counted_as_moved(self):
         """The failure that would matter most: a partial batch reading as a success.
@@ -372,43 +372,66 @@ class AllUnarchivedTest(_MigrateBatchTest):
     def two_accounts(self) -> list[list[str]]:
         self.patch(migrate_batch.hydralib, "fleet", lambda: self._FLEET)
         self.patch(
-            migrate_batch.hydralib, "sessions",
-            lambda period="7d", archived=None: [
-                {"session_id": "aaa", "instance": "anothuh1", "archived": False,
-                 "last_activity_at": 3},
-                {"session_id": "ddd", "instance": "work", "archived": False,
-                 "last_activity_at": 2},
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [
+                {"sessionId": "aaa", "instance": "anothuh1", "archived": False,
+                 "lastActivityAt": "2026-09-13T03:00:00Z"},
+                {"sessionId": "ddd", "instance": "work", "archived": False,
+                 "lastActivityAt": "2026-09-13T02:00:00Z"},
             ],
         )
         return self.stub_phases()
 
-    def test_all_unarchived_takes_only_movable_chats_and_resolves_them_by_session_id(self):
-        """--all-unarchived must ask for the CENSUS (period=all, archived=include) and then
-        filter locally; the windowed default hid six unarchived chats the day it was measured.
-        It must also hand migrate_chat SESSION IDS, never titles: two accounts can share a
-        title."""
-        asked: dict = {}
+    def test_all_unarchived_reads_the_same_endpoint_list_chats_does(self):
+        """⛔ THE TWO ENUMERATORS MUST NOT DISAGREE (2026-09-13). Minutes after a killed batch,
+        --all-unarchived reported "0 unarchived desktop chat(s)" on an account list_chats showed
+        THREE on, and naming those three ids by hand moved them cleanly. /api/sessions resolves a
+        session id to ONE owning profile, so a half-moved chat - which exists on two accounts at
+        once - is hidden from the account it is still sitting on. /api/chats scans each store, so
+        this batch must read that, and it must hand migrate_chat SESSION IDS, never titles: two
+        accounts can share a title."""
+        asked: list = []
 
-        def fake_sessions(period="7d", archived=None):
-            asked.update(period=period, archived=archived)
+        def fake_chats(instance=None):
+            asked.append(instance)
             return [
-                {"session_id": "aaa", "instance": "pap3r", "archived": False,
-                 "last_activity_at": 30},
-                {"session_id": "bbb", "instance": "pap3r", "archived": True,
-                 "last_activity_at": 40},
-                {"session_id": "ccc", "instance": "", "archived": False, "last_activity_at": 50},
-                {"session_id": "ddd", "instance": "anutha", "archived": False,
-                 "last_activity_at": 20},
+                {"sessionId": "aaa", "instance": "pap3r", "archived": False,
+                 "lastActivityAt": "2026-09-13T00:30:00Z"},
+                {"sessionId": "bbb", "instance": "pap3r", "archived": True,
+                 "lastActivityAt": "2026-09-13T00:40:00Z"},
+                {"sessionId": "ccc", "instance": "", "archived": False,
+                 "lastActivityAt": "2026-09-13T00:50:00Z"},
+                {"sessionId": "ddd", "instance": "anutha", "archived": False,
+                 "lastActivityAt": "2026-09-13T00:20:00Z"},
             ]
 
-        self.patch(migrate_batch.hydralib, "sessions", fake_sessions)
+        self.patch(migrate_batch.hydralib, "chats", fake_chats)
         calls = self.stub_phases()
         _run(["--all-unarchived", "--to", "8"])
 
-        assert asked == {"period": "all", "archived": "include"}, "an enumerator must ask for all"
+        # The archive gate reads the same endpoint again (it asks a different question of the
+        # same rows), so what matters is that every read went to /api/chats unscoped here.
+        assert asked and all(a is None for a in asked), \
+            "unscoped by --from, so the whole fleet's stores are read"
         moved = [c[0] for c in calls]
         assert moved == ["aaa", "ddd"], "archived and non-desktop rows are not movable"
         assert "bbb" not in moved and "ccc" not in moved
+
+    def test_a_chat_with_no_session_id_is_not_offered_as_movable(self):
+        """/api/chats reports a store row that has no CLI session id yet; migrate resolves BY
+        session id, so offering one would queue a chat nothing can then resolve."""
+        self.patch(
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [
+                {"sessionId": None, "instance": "pap3r", "archived": False,
+                 "lastActivityAt": "2026-09-13T05:00:00Z"},
+                {"sessionId": "aaa", "instance": "pap3r", "archived": False,
+                 "lastActivityAt": "2026-09-13T04:00:00Z"},
+            ],
+        )
+        calls = self.stub_phases()
+        _run(["--all-unarchived", "--to", "8"])
+        assert [c[0] for c in calls] == ["aaa"]
 
     def test_from_scopes_all_unarchived_to_one_account(self):
         self.patch(
@@ -417,12 +440,12 @@ class AllUnarchivedTest(_MigrateBatchTest):
                                    {"num": 2, "name": "anutha", "dir": "c:/x/anutha"}]},
         )
         self.patch(
-            migrate_batch.hydralib, "sessions",
-            lambda period="7d", archived=None: [
-                {"session_id": "aaa", "instance": "pap3r", "archived": False,
-                 "last_activity_at": 3},
-                {"session_id": "ddd", "instance": "anutha", "archived": False,
-                 "last_activity_at": 2},
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [
+                {"sessionId": "aaa", "instance": "pap3r", "archived": False,
+                 "lastActivityAt": "2026-09-13T03:00:00Z"},
+                {"sessionId": "ddd", "instance": "anutha", "archived": False,
+                 "lastActivityAt": "2026-09-13T02:00:00Z"},
             ],
         )
         calls = self.stub_phases()
@@ -443,12 +466,12 @@ class AllUnarchivedTest(_MigrateBatchTest):
                 # Each spelling gets its own stubs, since addCleanup only fires between TESTS.
                 with mock.patch.object(migrate_batch.hydralib, "fleet", lambda: self._FLEET), \
                      mock.patch.object(
-                         migrate_batch.hydralib, "sessions",
-                         lambda period="7d", archived=None: [
-                             {"session_id": "aaa", "instance": "anothuh1", "archived": False,
-                              "last_activity_at": 3},
-                             {"session_id": "ddd", "instance": "work", "archived": False,
-                              "last_activity_at": 2},
+                         migrate_batch.hydralib, "chats",
+                         lambda instance=None: [
+                             {"sessionId": "aaa", "instance": "anothuh1", "archived": False,
+                              "lastActivityAt": "2026-09-13T03:00:00Z"},
+                             {"sessionId": "ddd", "instance": "work", "archived": False,
+                              "lastActivityAt": "2026-09-13T02:00:00Z"},
                          ]):
                     calls = self.stub_phases()
                     _run(["--all-unarchived", "--from", spelling, "--to", "15"])
@@ -474,7 +497,7 @@ class AllUnarchivedTest(_MigrateBatchTest):
         """"0 unarchived desktop chat(s) on anothuh1" is an ANSWER; "name chats with --chat" is a
         complaint that the caller did the thing it just did."""
         self.patch(migrate_batch.hydralib, "fleet", lambda: self._FLEET)
-        self.patch(migrate_batch.hydralib, "sessions", lambda period="7d", archived=None: [])
+        self.patch(migrate_batch.hydralib, "chats", lambda instance=None: [])
         code, out = _run(["--all-unarchived", "--from", "27", "--to", "15"])
         assert code == migrate_batch.EXIT_NONE
         assert "0 unarchived desktop chat(s) on anothuh1" in out["report"]
@@ -482,10 +505,12 @@ class AllUnarchivedTest(_MigrateBatchTest):
 
     def test_limit_takes_the_most_recent_and_says_so(self):
         self.patch(
-            migrate_batch.hydralib, "sessions",
-            lambda period="7d", archived=None: [
-                {"session_id": "old", "instance": "p", "archived": False, "last_activity_at": 1},
-                {"session_id": "new", "instance": "p", "archived": False, "last_activity_at": 9},
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [
+                {"sessionId": "old", "instance": "p", "archived": False,
+                 "lastActivityAt": "2026-09-13T01:00:00Z"},
+                {"sessionId": "new", "instance": "p", "archived": False,
+                 "lastActivityAt": "2026-09-13T09:00:00Z"},
             ],
         )
         calls = self.stub_phases()
@@ -660,12 +685,12 @@ class ArchiveGateTest(unittest.TestCase):
 
     def setUp(self):
         self.rows = [
-            {"session_id": "aaaa1111-0000-0000-0000-000000000000",
+            {"sessionId": "aaaa1111-0000-0000-0000-000000000000",
              "title": "an archived one", "archived": True},
-            {"session_id": "bbbb2222-0000-0000-0000-000000000000",
+            {"sessionId": "bbbb2222-0000-0000-0000-000000000000",
              "title": "a live one", "archived": False},
         ]
-        patcher = mock.patch.object(migrate_batch.hydralib, "sessions",
+        patcher = mock.patch.object(migrate_batch.hydralib, "chats",
                                     lambda **k: list(self.rows))
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -715,7 +740,7 @@ class ArchiveGateTest(unittest.TestCase):
         assert a.passthrough == ["--now"], a.passthrough
 
     def test_a_fleet_that_cannot_be_read_refuses_rather_than_guessing(self):
-        with mock.patch.object(migrate_batch.hydralib, "sessions",
+        with mock.patch.object(migrate_batch.hydralib, "chats",
                                side_effect=OSError("store unreadable")):
             blind = self._args(["aaaa1111-0000-0000-0000-000000000000"], ["--archived"], count=1)
             code, report = migrate_batch._archive_gate(blind)

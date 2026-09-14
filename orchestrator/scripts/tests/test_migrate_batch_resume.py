@@ -29,7 +29,6 @@ import io
 import json
 import sys
 import threading
-import time
 import unittest
 import unittest.mock as mock
 from pathlib import Path
@@ -277,6 +276,10 @@ class ResumeRetryTest(_BatchTest):
                     results.append({"id": did, "ok": True, "outcome": why, "detail": ""})
                 elif kind == "fail":
                     results.append({"id": did, "ok": False, "outcome": why, "detail": why})
+                elif kind == "deferred":
+                    # The courier's NOT-YET: the row stays staged, and the result says so.
+                    results.append({"id": did, "ok": False, "outcome": why, "detail": why,
+                                    "deferred": True})
                 else:
                     skipped.append({"id": did, "title": did, "why": why})
             return {"planned": [], "skipped": skipped, "results": results, "staged": len(only)}
@@ -298,6 +301,9 @@ class ResumeRetryTest(_BatchTest):
         self.assertEqual(len(staged), 2, "the retry must stage the reply again")
         self.assertEqual(staged[1]["by"], "migrate-resume-retry")
         self.assertEqual(staged[1]["text"], "carry on", "the retry says the same thing")
+        self.assertTrue(staged[1].get("dedupe"),
+                        "the automatic retry must re-use a row still staged for the chat, "
+                        "never write a second wake")
         self.assertEqual(len(calls), 2, "one first attempt, one retry")
         self.assertTrue(all(c["hand_run"] for c in calls))
 
@@ -319,6 +325,23 @@ class ResumeRetryTest(_BatchTest):
 
         self.assertEqual(len(staged), 1, "a skip keeps its staged row - nothing to re-stage")
         self.assertEqual(len(calls), 1, "no second courier run for a deliberate deferral")
+
+    def test_a_deferred_result_is_a_skip_not_a_hard_failure(self):
+        """FOUND WHILE FIXING THE COURIER (2026-09-14). A mid-turn chat's delivery is now kept
+        STAGED and its result tagged `deferred` - but it arrives in `results`, not `skipped`, so
+        the batch read it as attempted-and-failed, staged a SECOND copy of the resume and fired
+        the courier into the same live turn again. Two copies of one resume are two wakes."""
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": ("deferred", "peer did not confirm and the turn is in flight")})
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(len(staged), 1, "the deferred row is still staged - nothing to re-stage")
+        self.assertEqual(len(calls), 1, "no retry into a live turn")
+        verdict = out["results"][0]["resume"]
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("in flight", verdict["why"])
+        self.assertIn("courier --yes --only d-sid-one", verdict["retry"])
 
     def test_a_retry_that_also_fails_says_so_and_still_hands_over_a_working_command(self):
         self.stub_phases({})
@@ -458,19 +481,25 @@ class ResumePhaseTimeoutTest(_BatchTest):
         self.stub_phases({})
         self.patch(migrate_batch, "RESUME_PHASE_TIMEOUT_SECS", 0.02)
         release = threading.Event()
+        entered, finished = threading.Event(), threading.Event()
 
         def slow_resume_landed(items, text):
-            release.wait(2.0)
+            entered.set()
+            release.wait(10.0)
+            finished.set()
             return {"asked": len(items), "delivered": 0, "staged": 0}
 
         self.patch(migrate_batch, "_resume_landed", slow_resume_landed)
-        started = time.time()
         code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
-        elapsed = time.time() - started
+        # ⛔ THE PROPERTY IS "IT DID NOT WAIT", NOT "IT FINISHED IN UNDER A SECOND". This used to
+        # assert a wall clock of 1.0s against a 0.02s budget, so it measured the WHOLE run - and
+        # went red on a loaded machine while the behaviour it pins was perfectly correct
+        # (2026-09-14, under a parallel suite). Whether main() gave up is a fact about the
+        # resume phase still being blocked when the report came back, and that is load-proof.
+        self.assertTrue(entered.is_set(), "the resume phase must actually have started")
+        self.assertFalse(finished.is_set(),
+                         "main() must give up at the budget, not await the courier's own pace")
         release.set()  # let the daemon thread finish before the test process moves on
-        self.assertLess(elapsed, 1.0,
-                        f"main() must give up at the budget, not the courier's own pace "
-                        f"({elapsed:.2f}s)")
         self.assertTrue(out["resume"]["timedOut"])
         self.assertIn("did not finish within", out["resume"]["why"])
         by_chat = {r["chat"]: r for r in out["results"]}

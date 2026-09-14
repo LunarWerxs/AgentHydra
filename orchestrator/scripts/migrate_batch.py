@@ -288,9 +288,14 @@ def _archived_named(queries: list[str]) -> list[str] | None:
     A fragment that matches both is left to migrate_chat's own per-chat --archived refusal,
     which resolves the one chat it really picked and gates THAT. Two gates, each precise about
     what it can actually see, rather than one that guesses.
+
+    Reads hydralib.chats, the same per-store scan _movable_chats reads: this file asks "what is
+    on these accounts" exactly once, in one voice. The collapsed session view would answer for
+    a half-moved chat with ONE of its two copies, and this gate's whole job is to notice the
+    archived one.
     """
     try:
-        rows = hydralib.sessions(period="all", archived="include")
+        rows = hydralib.chats()
     except Exception:  # noqa: BLE001 - any read failure means "cannot tell", handled by the gate
         return None
     named: list[str] = []
@@ -300,7 +305,7 @@ def _archived_named(queries: list[str]) -> list[str] | None:
             continue
         exact = fuzzy_archived = fuzzy_unarchived = False
         for r in rows:
-            sid = str(r.get("session_id") or "").lower()
+            sid = str(r.get("sessionId") or r.get("session_id") or "").lower()
             title = str(r.get("title") or "").lower()
             is_arch = bool(r.get("archived"))
             if ql == sid or (title and ql == title):
@@ -373,14 +378,18 @@ def _archive_gate(parsed: "_BatchArgs") -> tuple[int, str] | None:
 def _movable_chats(source: str | None, limit: int) -> tuple[list[dict], str]:
     """Every UNARCHIVED desktop chat, newest first, optionally scoped to one source account.
 
-    Deliberately reads the same rows migrate_chat resolves against rather than inventing a
-    second notion of what a chat is. Archived rows are excluded here because --all-unarchived
-    means what it says; a specific archived chat still moves by name with --archived.
+    Reads the SAME endpoint `list_chats` serves (hydralib.chats -> /api/chats), which is the
+    whole point: two enumerators that disagree about what an account holds is how a batch
+    reported "0 unarchived desktop chat(s)" on an account list_chats showed three on, minutes
+    after a killed move (2026-09-13). Naming those three ids by hand then moved them cleanly.
+    Archived rows are excluded here because --all-unarchived means what it says; a specific
+    archived chat still moves by name with --archived.
     """
-    # period="all", archived="include" is the ENUMERATOR contract hydralib.sessions spells
-    # out: the windowed default hid six unarchived chats the day it was measured, one of them
-    # active that morning. Archived rows are filtered here, locally, so the read stays a
-    # census and only the choosing is ours.
+    # ⛔ NOT hydralib.sessions(). That endpoint resolves each session id to ONE owning profile
+    # (live beats archived, else newest mtime), which is right for "where is this chat now"
+    # and wrong for "what does this account still hold": a half-moved chat exists on two
+    # accounts at once, and the collapse hides it from the account it is sitting on - exactly
+    # the state a killed batch leaves. See hydralib.chats for the measurement.
     # --from arrives as whatever the caller typed, and the MCP ALWAYS sends a NUMBER ("27").
     # A session row carries only the instance FOLDER name ("anothuh1"), so comparing the raw
     # argument against it matched nothing for every spelling but one - and the miss was
@@ -396,20 +405,25 @@ def _movable_chats(source: str | None, limit: int) -> tuple[list[dict], str]:
                               for i in fleet.get("instances", []))
             raise _UnknownSource(f"--from names no instance ({source!r}). Known: {known}")
         source_name = str(src.get("name") or "")
-    rows = hydralib.sessions(period="all", archived="include")
+    # Scoped server-side when we know the account (one store scan instead of the fleet's), and
+    # filtered locally again anyway: the endpoint passes an unknown label through rather than
+    # 404ing, so trusting the scope alone could read another account's rows as this one's.
+    rows = hydralib.chats(source_name or None)
     picked = []
     for row in rows:
-        if row.get("archived"):
+        if row.get("isArchived", row.get("archived")):
             continue
-        if str(row.get("source") or "claude") != "claude":
-            continue  # only Claude desktop chats have an account to move between
         inst = str(row.get("instance") or "")
         if not inst:
             continue  # not a desktop chat: nothing to move it off
         if source_name and inst.lower() != source_name.lower():
             continue
-        picked.append(row)
-    picked.sort(key=lambda r: -(r.get("last_activity_at") or 0))
+        if not str(row.get("sessionId") or ""):
+            continue  # a chat with no CLI session id cannot be resolved, so it cannot be moved
+        # One shape downstream, whichever endpoint fed it: the batch resolves by session id.
+        picked.append({**row, "session_id": row.get("sessionId"),
+                       "last_activity_at": str(row.get("lastActivityAt") or "")})
+    picked.sort(key=lambda r: r.get("last_activity_at") or "", reverse=True)
     note = (f"{len(picked)} unarchived desktop chat(s)"
             + (f" on {source_name}" if source_name else ""))
     if limit and len(picked) > limit:
@@ -530,6 +544,9 @@ def _restage(item: _Item, sid: str, text: str) -> dict | None:
     obvious retry (`courier --yes --only <id>`) answers "nothing staged - the courier has
     nothing to deliver" and looks like success. That is exactly what happened by hand on
     2026-09-12 before this existed."""
+    # dedupe=True: this is the batch's own AUTOMATIC retry, not a person's reply, and a row
+    # still staged for this chat (a deferral the courier kept) is the one to deliver - writing a
+    # second is a second wake. See deliverylib.stage.
     try:
         match = hydralib.resolve_one(sid)
         evidence = stage_reply.gather_evidence(match, sid)
@@ -537,7 +554,7 @@ def _restage(item: _Item, sid: str, text: str) -> dict | None:
             sid, text,
             title=str(match.get("title") or item.payload.get("title") or ""),
             instance=str(match.get("instance") or item.payload.get("to") or ""),
-            evidence=evidence, by="migrate-resume-retry")
+            evidence=evidence, by="migrate-resume-retry", dedupe=True)
     except Exception as err:
         item.payload["resume"]["why"] += (
             f" | retry could not re-stage: {type(err).__name__}: {str(err)[:120]}")
@@ -661,7 +678,12 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
             verdict["why"] = str(skipped.get(did) or (res or {}).get("detail")
                                or (res or {}).get("outcome") or "not delivered - still staged")
             tally["staged"] += 1
-            if did not in skipped and res is not None:
+            # ⛔ A DEFERRED RESULT IS NOT A HARD FAILURE (2026-09-14). The courier now keeps a
+            # row STAGED when the chat is mid-turn and tags its result `deferred` - but it still
+            # arrives in `results`, not `skipped`, so this test read it as "attempted and
+            # failed", re-staged a SECOND copy of the resume and fired the courier into the same
+            # live turn again. Two copies of one resume are two wakes. A not-yet is a skip.
+            if did not in skipped and res is not None and not res.get("deferred"):
                 hard[did] = item
     if hard:
         _retry_hard_failures(hard, text, tally)

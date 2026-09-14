@@ -103,9 +103,14 @@ def record(
     why_not: str | None = None,
     ledger_attempt_id: str | None = None,
     undoes: str | None = None,
+    phase: str | None = None,
     now_ms: int | None = None,
 ) -> str:
     """Write down one mutation. Returns its id.
+
+    `phase` is for an act that finishes in STAGES (migrate: import, then settle the source,
+    then stamp the mode). The row carries how far it got, and advance_phase moves it on. Old
+    rows simply have no phase field; readers must treat that as "unknown", never as "done".
 
     `before` should be captured by the CALLER immediately before the mutating call, and
     `after` immediately after it - this function only writes what it is handed, it does not
@@ -138,11 +143,48 @@ def record(
         "undoneAt": None,
         "undoneBy": None,
     }
+    if phase:
+        entry["phase"] = phase
+        entry["phaseAt"] = now_ms
+        entry["phaseHistory"] = [{"phase": phase, "at": now_ms}]
     with ledgerlib.locked("mutations"):
         rows = _load()
         rows.append(entry)
         _save(rows)
     return entry["id"]
+
+
+def advance_phase(mutation_id: str, phase: str, *, now_ms: int | None = None) -> bool:
+    """Record that a staged act got one step further. Returns False for an unknown id.
+
+    ⛔ WHY A LEDGER ROW LEARNED TO MOVE (the archive sweep, 2026-09-13). A migrate is FOUR
+    acts: import, verify, settle the source row, stamp the mode. The ledger recorded the
+    first pair and nothing else, so a batch killed mid-flight left 14 chats imported onto the
+    target and STILL unarchived on the source - duplicates, not moves - and no file on the
+    machine said which of the 25 were which. The fleet read right after the kill even showed
+    all 25 still on the source, so the agent reported "nothing landed" in good faith and
+    caught it twenty minutes later, by eye.
+
+    Written to the row the act ALREADY records (migrate_chat records it the moment the
+    landing verifies) rather than to a parallel journal: a second file is a second thing to
+    keep in sync, and this one already has the lock, the atomic write and the undo path.
+    `phaseHistory` keeps every step with its timestamp, because "settled at 21:04" and
+    "settled, some time" are different evidence when reconstructing an incident.
+    """
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    with ledgerlib.locked("mutations"):
+        rows = _load()
+        for row in rows:
+            if row.get("id") != mutation_id:
+                continue
+            row["phase"] = phase
+            row["phaseAt"] = now_ms
+            history = row.get("phaseHistory")
+            row["phaseHistory"] = ([h for h in history if isinstance(h, dict)] if isinstance(history, list) else [])
+            row["phaseHistory"].append({"phase": phase, "at": now_ms})
+            _save(rows)
+            return True
+    return False
 
 
 def list_mutations(session_id: str | None = None, kind: str | None = None) -> list[dict]:

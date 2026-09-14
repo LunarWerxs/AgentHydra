@@ -382,6 +382,16 @@ CATALOG: dict[str, dict] = {
         "availability": "available",
         "summary": "ACT: land MANY chats in a desktop instance, by phase, sharing every read.",
     },
+    "migrate_reconcile": {
+        "kind": "observe",
+        "invocation": "direct",
+        "platforms": "any",
+        "guards": ("force",),
+        "result": "0 nothing half-moved - 2 half-moves found, or a repair did not land - 3 usage or an unknown mutation id - 1 daemon failure",
+        "availability": "available",
+        "summary": "OBSERVE (+`--finish`/`--reverse`): which moves stopped half-way?",
+        "notes": "the --finish branch re-drives migrate_chat's own phase functions (a windows-only actuator owner) and --reverse hands the row to undo.py; the base read drives nothing, so this is marked platform=any like reconcile.py beside it - flagged rather than guessed.",
+    },
     "migrate_chat": {
         "kind": "mutate",
         "invocation": "direct",
