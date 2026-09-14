@@ -5,8 +5,8 @@
 // timeout gave the client ECONNRESET, a retry answered "busy", and the original finished with
 // nobody to tell. The registry here lets a retry with the same idempotency key get THE SAME
 // operation (no second act), lets a caller poll by id, and lets a running operation be cancelled.
-import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, afterEach, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -22,8 +22,12 @@ import {
 
 afterEach(() => resetOrchestratorOperationsForTests())
 
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-orch-ops-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
 function fakeToolbox(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-ops-'))
+  const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-ops-'))
   writeFileSync(join(dir, 'orch.py'), '# fake driver\n')
   return dir
 }
@@ -184,7 +188,7 @@ const hasPython = (() => {
 test.skipIf(!hasPython)(
   'cancelling a real running script kills it well before its deadline',
   async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-ops-real-'))
+    const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-ops-real-'))
     writeFileSync(
       join(dir, 'orch.py'),
       'import time\nprint("started", flush=True)\ntime.sleep(120)\n',

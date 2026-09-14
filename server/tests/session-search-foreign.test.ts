@@ -11,14 +11,15 @@
 // A confident zero is the worst answer a search can give, because the caller stops looking. So:
 // ask the adapter, exactly as the transcript view and the exporter already do.
 
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { searchOneFile } from '../src/session-search'
 import type { TranscriptFile } from '../src/transcript'
 
 const root = mkdtempSync(join(tmpdir(), 'agenthydra-foreign-search-'))
+afterAll(() => rmSync(root, { recursive: true, force: true }))
 const write = (path: string, body: string) => {
   mkdirSync(join(path, '..'), { recursive: true })
   writeFileSync(path, body)

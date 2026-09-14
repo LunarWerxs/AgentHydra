@@ -11,8 +11,8 @@
 // chats it covers. Both halves are load-bearing and pinned here: without the person's word this
 // is a race between two callers, and without the coverage rule a kill strands chats nobody is
 // about to re-do (that is what orchestrator_cancel is for, deliberately).
-import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -24,8 +24,12 @@ import {
   startOrchestratorOperation,
 } from '../src/orchestrator'
 
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'orch-preempt-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
 function fakeOrchestratorDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'orch-preempt-'))
+  const dir = mkdtempSync(join(ROOT, 'orch-preempt-'))
   writeFileSync(join(dir, 'orch.py'), '# stub\n')
   return dir
 }

@@ -27,7 +27,7 @@ const res200 = (): Response =>
   new Response(
     JSON.stringify({
       limits: [
-        { kind: 'weekly_all', percent: 42, severity: 'normal', resets_at: '2026-09-18T15:00:00Z' },
+        { kind: 'weekly_all', percent: 42, severity: 'normal', resets_at: '2024-09-18T15:00:00Z' },
       ],
     }),
     { status: 200, headers: { 'content-type': 'application/json' } },

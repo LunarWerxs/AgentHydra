@@ -62,25 +62,25 @@ describe('runOutcome', () => {
     expect(
       runOutcome(
         item({
-          started_at: '2026-08-13T10:00:00.000Z',
-          finished_at: '2026-08-13T10:02:30.000Z',
+          started_at: '2024-08-13T10:00:00.000Z',
+          finished_at: '2024-08-13T10:02:30.000Z',
         }),
       ).duration_ms,
     ).toBe(150_000)
-    expect(runOutcome(item({ started_at: '2026-08-13T10:00:00.000Z' })).duration_ms).toBeNull()
+    expect(runOutcome(item({ started_at: '2024-08-13T10:00:00.000Z' })).duration_ms).toBeNull()
     expect(runOutcome(item()).duration_ms).toBeNull()
   })
 
   test('a clock that went backwards reports zero rather than a negative duration', () => {
     const o = runOutcome(
-      item({ started_at: '2026-08-13T10:02:00.000Z', finished_at: '2026-08-13T10:00:00.000Z' }),
+      item({ started_at: '2024-08-13T10:02:00.000Z', finished_at: '2024-08-13T10:00:00.000Z' }),
     )
     expect(o.duration_ms).toBe(0)
   })
 
   test('an unparseable timestamp degrades to no duration, not NaN', () => {
     expect(
-      runOutcome(item({ started_at: 'not a date', finished_at: '2026-08-13T10:00:00.000Z' }))
+      runOutcome(item({ started_at: 'not a date', finished_at: '2024-08-13T10:00:00.000Z' }))
         .duration_ms,
     ).toBeNull()
   })

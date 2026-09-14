@@ -6,8 +6,8 @@
 // exercised through an injected fake so the suite never needs python or a fleet, plus one real run
 // of the interpreter (skipped where none is installed) proving the argv actually lands unquoted.
 
-import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -24,6 +24,10 @@ import {
   runOriginAllowed,
   validateInvocation,
 } from '../src/orchestrator'
+
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-orch-test-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
 
 describe('validateInvocation - the only grammar that reaches orch.py', () => {
   test('a menu name with string args and the default deadline', () => {
@@ -101,7 +105,7 @@ describe('resolution', () => {
     // 2026-09-06: `bun run dist`, then dist/AgentHydra.exe launched as the daemon. APP_ROOT
     // became dist/ and every orchestrator-backed tool died with "no orch.py under
     // app\dist\orchestrator" while the tree sat one level up.
-    const root = mkdtempSync(join(tmpdir(), 'ah-orch-'))
+    const root = mkdtempSync(join(ROOT, 'ah-orch-'))
     const dist = join(root, 'dist')
     mkdirSync(dist)
     // No toolbox anywhere: the sibling is still reported, so the error names where it looked.
@@ -137,7 +141,7 @@ describe('resolution', () => {
 
 /** A toolbox with a driver that can be spawned - or not - depending on the test. */
 function fakeToolbox(withDriver = true): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-'))
+  const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-'))
   if (withDriver) writeFileSync(join(dir, 'orch.py'), '# fake driver\n')
   return dir
 }
@@ -376,7 +380,7 @@ const hasPython = (() => {
 test.skipIf(!hasPython)(
   'a real python sees each arg intact, spaces and all',
   async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-real-'))
+    const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-real-'))
     writeFileSync(join(dir, 'orch.py'), 'import sys, json\nprint(json.dumps(sys.argv[1:]))\n')
     const r = await runOrchestrator(
       { script: 'chats', args: ['--instance', 'pap3r rotate'], timeoutMs: 15_000 },

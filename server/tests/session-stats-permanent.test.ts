@@ -57,9 +57,9 @@ describe('what a scan captures for the permanent record', () => {
     // there is no way to work it out again — so it is captured now or never.
     const a = await scanSessionAnalytics(
       transcript([
-        assistant('2026-09-01T10:00:00.000Z', U),
-        edit('2026-09-01T10:01:00.000Z', 'a.ts', 'one\ntwo', 'one\ntwo\nthree\nfour'),
-        edit('2026-09-01T10:02:00.000Z', 'b.ts', '', 'only one line'),
+        assistant('2024-09-01T10:00:00.000Z', U),
+        edit('2024-09-01T10:01:00.000Z', 'a.ts', 'one\ntwo', 'one\ntwo\nthree\nfour'),
+        edit('2024-09-01T10:02:00.000Z', 'b.ts', '', 'only one line'),
       ]),
       'claude',
     )
@@ -73,9 +73,9 @@ describe('what a scan captures for the permanent record', () => {
   test('the same file edited twice is one file touched, not two', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        assistant('2026-09-01T10:00:00.000Z', U),
-        edit('2026-09-01T10:01:00.000Z', 'a.ts', 'x', 'y'),
-        edit('2026-09-01T10:02:00.000Z', 'a.ts', 'y', 'z'),
+        assistant('2024-09-01T10:00:00.000Z', U),
+        edit('2024-09-01T10:01:00.000Z', 'a.ts', 'x', 'y'),
+        edit('2024-09-01T10:02:00.000Z', 'a.ts', 'y', 'z'),
       ]),
       'claude',
     )
@@ -85,7 +85,7 @@ describe('what a scan captures for the permanent record', () => {
 
   test('a session that only read reports zero churn, not a missing number', async () => {
     const a = await scanSessionAnalytics(
-      transcript([assistant('2026-09-01T10:00:00.000Z', U)]),
+      transcript([assistant('2024-09-01T10:00:00.000Z', U)]),
       'claude',
     )
     expect(a.editCount).toBe(0)

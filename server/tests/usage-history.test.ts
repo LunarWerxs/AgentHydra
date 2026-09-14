@@ -26,34 +26,34 @@ const mkSample = (at: string, weekAllPct: number): UsageSample => ({
 describe('burnRatePctPerHour', () => {
   test('null with fewer than 2 samples', () => {
     expect(burnRatePctPerHour([])).toBeNull()
-    expect(burnRatePctPerHour([mkSample('2026-07-14T00:00:00.000Z', 10)])).toBeNull()
+    expect(burnRatePctPerHour([mkSample('2024-07-14T00:00:00.000Z', 10)])).toBeNull()
   })
 
   test('null when the measured span is under 45 minutes (MIN_SPAN_MIN)', () => {
-    const now = new Date('2026-07-14T02:00:00.000Z')
+    const now = new Date('2024-07-14T02:00:00.000Z')
     const samples = [
-      mkSample('2026-07-14T01:15:00.000Z', 10),
-      mkSample('2026-07-14T01:59:00.000Z', 12), // 44 minutes apart - just under the 45-min floor
+      mkSample('2024-07-14T01:15:00.000Z', 10),
+      mkSample('2024-07-14T01:59:00.000Z', 12), // 44 minutes apart - just under the 45-min floor
     ]
     expect(burnRatePctPerHour(samples, now)).toBeNull()
   })
 
   test('happy path: plain (last-first)/hours over a clean 2-sample window', () => {
-    const now = new Date('2026-07-14T02:00:00.000Z')
+    const now = new Date('2024-07-14T02:00:00.000Z')
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 10),
-      mkSample('2026-07-14T02:00:00.000Z', 14),
+      mkSample('2024-07-14T00:00:00.000Z', 10),
+      mkSample('2024-07-14T02:00:00.000Z', 14),
     ]
     expect(burnRatePctPerHour(samples, now)).toBe(2) // (14-10)/2h
   })
 
   test('reset-crossing guard: 90 -> 95 -> 5 -> 15 only measures the post-reset leg', () => {
-    const now = new Date('2026-07-14T03:00:00.000Z')
+    const now = new Date('2024-07-14T03:00:00.000Z')
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 90),
-      mkSample('2026-07-14T01:00:00.000Z', 95),
-      mkSample('2026-07-14T02:00:00.000Z', 5), // reset happened between 01:00 and 02:00
-      mkSample('2026-07-14T03:00:00.000Z', 15), // 1h post-reset leg (>= 45min floor)
+      mkSample('2024-07-14T00:00:00.000Z', 90),
+      mkSample('2024-07-14T01:00:00.000Z', 95),
+      mkSample('2024-07-14T02:00:00.000Z', 5), // reset happened between 01:00 and 02:00
+      mkSample('2024-07-14T03:00:00.000Z', 15), // 1h post-reset leg (>= 45min floor)
     ]
     // Must NOT be (15 - 90) / 3h = -25 (a large bogus negative). Must be (15-5)/1h = 10, and in
     // particular must be positive.
@@ -63,10 +63,10 @@ describe('burnRatePctPerHour', () => {
   })
 
   test('a flat (idle) window measures exactly 0, not null and not negative', () => {
-    const now = new Date('2026-07-14T02:00:00.000Z')
+    const now = new Date('2024-07-14T02:00:00.000Z')
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 30),
-      mkSample('2026-07-14T01:00:00.000Z', 30),
+      mkSample('2024-07-14T00:00:00.000Z', 30),
+      mkSample('2024-07-14T01:00:00.000Z', 30),
     ]
     expect(burnRatePctPerHour(samples, now)).toBe(0)
   })
@@ -76,7 +76,7 @@ describe('burnRatePctPerHour', () => {
     // lookback is 6h, so the measured leg should be roughly the last 6-7h, not the full 10h —
     // and since the underlying rate is a constant 1%/hour, the truncated measurement should still
     // read 1, which confirms it kept a contiguous, correctly-ordered sub-window.
-    const now = new Date('2026-07-14T10:00:00.000Z')
+    const now = new Date('2024-07-14T10:00:00.000Z')
     const samples: UsageSample[] = []
     for (let h = 0; h <= 10; h++) {
       const t = new Date(now.getTime() - (10 - h) * 3600_000).toISOString()
@@ -86,11 +86,11 @@ describe('burnRatePctPerHour', () => {
   })
 
   test('respects an explicit lookbackHours override', () => {
-    const now = new Date('2026-07-14T04:00:00.000Z')
+    const now = new Date('2024-07-14T04:00:00.000Z')
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 0),
-      mkSample('2026-07-14T02:00:00.000Z', 10),
-      mkSample('2026-07-14T04:00:00.000Z', 20),
+      mkSample('2024-07-14T00:00:00.000Z', 0),
+      mkSample('2024-07-14T02:00:00.000Z', 10),
+      mkSample('2024-07-14T04:00:00.000Z', 20),
     ]
     // lookback 1h: cutoff is 03:00, so only the last two samples (02:00->04:00) qualify... but the
     // walk includes "the first sample past the edge" too, which here is 02:00 itself (< cutoff),
@@ -102,20 +102,20 @@ describe('burnRatePctPerHour', () => {
 describe('burnRateBounds', () => {
   test('null under the same conditions as burnRatePctPerHour: <2 samples, or span < 45min', () => {
     expect(burnRateBounds([])).toBeNull()
-    expect(burnRateBounds([mkSample('2026-07-14T00:00:00.000Z', 10)])).toBeNull()
-    const now = new Date('2026-07-14T02:00:00.000Z')
+    expect(burnRateBounds([mkSample('2024-07-14T00:00:00.000Z', 10)])).toBeNull()
+    const now = new Date('2024-07-14T02:00:00.000Z')
     const tooShort = [
-      mkSample('2026-07-14T01:15:00.000Z', 10),
-      mkSample('2026-07-14T01:59:00.000Z', 12), // 44 minutes
+      mkSample('2024-07-14T01:15:00.000Z', 10),
+      mkSample('2024-07-14T01:59:00.000Z', 12), // 44 minutes
     ]
     expect(burnRateBounds(tooShort, now)).toBeNull()
   })
 
   test('upper stays > 0 even when the point estimate is exactly 0 (the quantization guard)', () => {
-    const now = new Date('2026-07-14T02:00:00.000Z')
+    const now = new Date('2024-07-14T02:00:00.000Z')
     const idle = [
-      mkSample('2026-07-14T00:00:00.000Z', 30),
-      mkSample('2026-07-14T01:00:00.000Z', 30), // 1 hour span, delta 0
+      mkSample('2024-07-14T00:00:00.000Z', 30),
+      mkSample('2024-07-14T01:00:00.000Z', 30), // 1 hour span, delta 0
     ]
     const bounds = burnRateBounds(idle, now)
     expect(bounds).not.toBeNull()
@@ -126,10 +126,10 @@ describe('burnRateBounds', () => {
   })
 
   test('upper exceeds point by exactly 1/spanHours, and spanHours matches the measured window', () => {
-    const now = new Date('2026-07-14T02:00:00.000Z')
+    const now = new Date('2024-07-14T02:00:00.000Z')
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 10),
-      mkSample('2026-07-14T02:00:00.000Z', 20), // 2 hours, delta 10
+      mkSample('2024-07-14T00:00:00.000Z', 10),
+      mkSample('2024-07-14T02:00:00.000Z', 20), // 2 hours, delta 10
     ]
     const bounds = burnRateBounds(samples, now)
     expect(bounds).toEqual({ point: 5, upper: 5.5, spanHours: 2 })
@@ -137,10 +137,10 @@ describe('burnRateBounds', () => {
   })
 
   test('burnRatePctPerHour is exactly burnRateBounds(...)?.point', () => {
-    const now = new Date('2026-07-14T02:00:00.000Z')
+    const now = new Date('2024-07-14T02:00:00.000Z')
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 10),
-      mkSample('2026-07-14T02:00:00.000Z', 20),
+      mkSample('2024-07-14T00:00:00.000Z', 10),
+      mkSample('2024-07-14T02:00:00.000Z', 20),
     ]
     expect(burnRatePctPerHour(samples, now)).toBe(burnRateBounds(samples, now)!.point)
   })
@@ -151,12 +151,12 @@ const baseSnap = (weekAll: UsageSnapshot['weekAll']): UsageSnapshot => ({
   session: null,
   weekAll,
   weekModel: null,
-  capturedAt: '2026-07-14T02:00:00.000Z',
+  capturedAt: '2024-07-14T02:00:00.000Z',
   source: 'api',
 })
 
 describe('forecastUsage', () => {
-  const NOW = new Date('2026-07-14T02:00:00.000Z')
+  const NOW = new Date('2024-07-14T02:00:00.000Z')
 
   test('pct null (no weekAll) -> everything derived stays null', () => {
     const snap = baseSnap(null)
@@ -174,7 +174,7 @@ describe('forecastUsage', () => {
   })
 
   test('burn null (insufficient samples) -> remainingPct/hoursToReset still computed, rest null', () => {
-    const snap = baseSnap({ pct: 50, resets: '', resetsAt: '2026-07-19T00:00:00.000Z' })
+    const snap = baseSnap({ pct: 50, resets: '', resetsAt: '2024-07-19T00:00:00.000Z' })
     const forecast = forecastUsage(snap, [], NOW)
     expect(forecast.burnPctPerHour).toBeNull()
     expect(forecast.burnPctPerHourUpper).toBeNull()
@@ -183,7 +183,7 @@ describe('forecastUsage', () => {
     expect(forecast.exhaustsAt).toBeNull()
     expect(forecast.exhaustsBeforeReset).toBeNull()
     expect(forecast.samples).toBe(0)
-    const expectedHoursToReset = (Date.parse('2026-07-19T00:00:00.000Z') - NOW.getTime()) / 3600_000
+    const expectedHoursToReset = (Date.parse('2024-07-19T00:00:00.000Z') - NOW.getTime()) / 3600_000
     expect(forecast.hoursToReset).toBeCloseTo(expectedHoursToReset, 10)
   })
 
@@ -191,10 +191,10 @@ describe('forecastUsage', () => {
     // Same fixture as the old "idle" test, but the whole point of the fix is that a measured-flat
     // window no longer means "infinite headroom, never exhausts" — it means "at most `upper`", and
     // headroom is computed from that, so it stays a real (large but finite) number.
-    const snap = baseSnap({ pct: 30, resets: '', resetsAt: '2026-07-19T00:00:00.000Z' }) // +118h
+    const snap = baseSnap({ pct: 30, resets: '', resetsAt: '2024-07-19T00:00:00.000Z' }) // +118h
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 30),
-      mkSample('2026-07-14T01:00:00.000Z', 30),
+      mkSample('2024-07-14T00:00:00.000Z', 30),
+      mkSample('2024-07-14T01:00:00.000Z', 30),
     ]
     const forecast = forecastUsage(snap, samples, NOW)
     expect(forecast.burnPctPerHour).toBe(0)
@@ -215,9 +215,9 @@ describe('forecastUsage', () => {
       resetsAt: new Date(NOW.getTime() + 100 * 3600_000).toISOString(), // reset far away: 100h
     })
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 98),
-      mkSample('2026-07-14T01:00:00.000Z', 98),
-      mkSample('2026-07-14T02:00:00.000Z', 98),
+      mkSample('2024-07-14T00:00:00.000Z', 98),
+      mkSample('2024-07-14T01:00:00.000Z', 98),
+      mkSample('2024-07-14T02:00:00.000Z', 98),
     ]
     const forecast = forecastUsage(snap, samples, NOW)
     expect(forecast.samples).toBe(3)
@@ -241,9 +241,9 @@ describe('forecastUsage', () => {
       resetsAt: new Date(NOW.getTime() + 2 * 3600_000).toISOString(), // reset in 2h
     })
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 98),
-      mkSample('2026-07-14T01:00:00.000Z', 98),
-      mkSample('2026-07-14T02:00:00.000Z', 98),
+      mkSample('2024-07-14T00:00:00.000Z', 98),
+      mkSample('2024-07-14T01:00:00.000Z', 98),
+      mkSample('2024-07-14T02:00:00.000Z', 98),
     ]
     const forecast = forecastUsage(snap, samples, NOW)
     expect(forecast.burnPctPerHour).toBe(0)
@@ -255,10 +255,10 @@ describe('forecastUsage', () => {
   test('exhaustsBeforeReset === true: cap is hit before the weekly reset', () => {
     // Measured delta 10 over 2h -> point 5%/hour, upper (10+1)/2 = 5.5%/hour. Every downstream figure
     // is derived from `upper`, so headroom = 10% remaining / 5.5%/hour = 20/11 h, not the naive 2h.
-    const snap = baseSnap({ pct: 90, resets: '', resetsAt: '2026-07-14T07:00:00.000Z' }) // +5h
+    const snap = baseSnap({ pct: 90, resets: '', resetsAt: '2024-07-14T07:00:00.000Z' }) // +5h
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 10),
-      mkSample('2026-07-14T02:00:00.000Z', 20),
+      mkSample('2024-07-14T00:00:00.000Z', 10),
+      mkSample('2024-07-14T02:00:00.000Z', 20),
     ]
     const forecast = forecastUsage(snap, samples, NOW)
     expect(forecast.burnPctPerHour).toBe(5)
@@ -276,10 +276,10 @@ describe('forecastUsage', () => {
   test('exhaustsBeforeReset === false: the weekly reset arrives before the cap would be hit', () => {
     // Same burn fixture as above (point 5, upper 5.5, headroom 20/11h ~= 1.82h), but the reset is
     // only 1h away, so the reset wins even against the pessimistic upper-bound headroom.
-    const snap = baseSnap({ pct: 90, resets: '', resetsAt: '2026-07-14T03:00:00.000Z' }) // +1h
+    const snap = baseSnap({ pct: 90, resets: '', resetsAt: '2024-07-14T03:00:00.000Z' }) // +1h
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 10),
-      mkSample('2026-07-14T02:00:00.000Z', 20),
+      mkSample('2024-07-14T00:00:00.000Z', 10),
+      mkSample('2024-07-14T02:00:00.000Z', 20),
     ]
     const forecast = forecastUsage(snap, samples, NOW)
     expect(forecast.burnPctPerHour).toBe(5)
@@ -292,8 +292,8 @@ describe('forecastUsage', () => {
   test('burn > 0 but no resetsAt -> exhaustsBeforeReset is null (unknown, not false)', () => {
     const snap = baseSnap({ pct: 90, resets: '', resetsAt: null })
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 10),
-      mkSample('2026-07-14T02:00:00.000Z', 20),
+      mkSample('2024-07-14T00:00:00.000Z', 10),
+      mkSample('2024-07-14T02:00:00.000Z', 20),
     ]
     const forecast = forecastUsage(snap, samples, NOW)
     expect(forecast.burnPctPerHour).toBe(5)
@@ -311,11 +311,11 @@ describe('forecastUsage', () => {
     const snap = baseSnap({
       pct: 98,
       resets: '',
-      resetsAt: '2026-07-13T00:00:00.000Z', // a full day BEFORE NOW
+      resetsAt: '2024-07-13T00:00:00.000Z', // a full day BEFORE NOW
     })
     const samples = [
-      mkSample('2026-07-14T00:00:00.000Z', 98),
-      mkSample('2026-07-14T02:00:00.000Z', 98),
+      mkSample('2024-07-14T00:00:00.000Z', 98),
+      mkSample('2024-07-14T02:00:00.000Z', 98),
     ]
     const forecast = forecastUsage(snap, samples, NOW)
     expect(forecast.hoursToReset).toBeNull() // NOT 0

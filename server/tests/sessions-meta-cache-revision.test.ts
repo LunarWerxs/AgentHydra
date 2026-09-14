@@ -24,7 +24,7 @@ test('a same-mtime, different-size revision is re-parsed, not served from the ol
   const dir = mkdtempSync(join(tmpdir(), 'ah-meta-rev-'))
   try {
     const path = join(dir, 'same-mtime.jsonl')
-    writeFileSync(path, record('user', 'first title', '2026-09-05T12:00:00Z'))
+    writeFileSync(path, record('user', 'first title', '2024-09-05T12:00:00Z'))
     const before = statSync(path)
     const tf: TranscriptFile = {
       session_id: 'same-mtime',
@@ -38,7 +38,7 @@ test('a same-mtime, different-size revision is re-parsed, not served from the ol
     const first = await scanMeta(tf)
     expect(first?.title).toBe('first title')
 
-    appendFileSync(path, record('assistant', 'new answer', '2026-09-05T12:01:00Z'))
+    appendFileSync(path, record('assistant', 'new answer', '2024-09-05T12:01:00Z'))
     // Put the mtime back exactly where it was: the file changed, its timestamp did not.
     utimesSync(path, before.atime, before.mtime)
     const after = statSync(path)

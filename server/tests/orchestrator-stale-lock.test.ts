@@ -9,8 +9,8 @@
 // realSpawn enforces by killing the child, so a lock outliving its own timeout cannot have a
 // live run behind it. These tests pin both halves - a genuinely live run still blocks, and an
 // orphaned one is reaped - plus the ABA hazard the reaping introduces.
-import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, afterEach, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -19,9 +19,13 @@ import {
   runOrchestrator,
 } from '../src/orchestrator'
 
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'orch-stale-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
 /** A directory that looks enough like the orchestrator for runOrchestrator to proceed. */
 function fakeOrchestratorDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'orch-stale-'))
+  const dir = mkdtempSync(join(ROOT, 'orch-stale-'))
   writeFileSync(join(dir, 'orch.py'), '# stub\n')
   return dir
 }

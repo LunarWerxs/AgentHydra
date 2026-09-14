@@ -15,7 +15,7 @@ const FIXTURE = {
   },
   seven_day: {
     utilization: 98.0,
-    resets_at: '2026-07-19T08:59:59.574959+00:00',
+    resets_at: '2024-07-19T08:59:59.574959+00:00',
     limit_dollars: null,
     used_dollars: null,
     remaining_dollars: null,
@@ -38,7 +38,7 @@ const FIXTURE = {
       group: 'weekly',
       percent: 98,
       severity: 'critical',
-      resets_at: '2026-07-19T08:59:59.574959+00:00',
+      resets_at: '2024-07-19T08:59:59.574959+00:00',
       scope: null,
       is_active: false,
     },
@@ -47,7 +47,7 @@ const FIXTURE = {
       group: 'weekly',
       percent: 100,
       severity: 'critical',
-      resets_at: '2026-07-19T08:59:59.575426+00:00',
+      resets_at: '2024-07-19T08:59:59.575426+00:00',
       scope: { model: { id: null, display_name: 'Fable' }, surface: null },
       is_active: true,
     },
@@ -61,7 +61,7 @@ describe('mapUsageApiResponse', () => {
     const snap = mapUsageApiResponse(
       FIXTURE,
       'lunarwerx@example.com',
-      new Date('2026-07-14T02:00:00Z'),
+      new Date('2024-07-14T02:00:00Z'),
     )
 
     expect(snap.session).toEqual({
@@ -75,20 +75,20 @@ describe('mapUsageApiResponse', () => {
     // UTC fixture string — that would only pass in UTC.
     expect(snap.weekAll).toEqual({
       pct: 98,
-      resets: formatResetLocal('2026-07-19T08:59:59.574959+00:00'),
-      resetsAt: '2026-07-19T08:59:59.574959+00:00',
+      resets: formatResetLocal('2024-07-19T08:59:59.574959+00:00'),
+      resetsAt: '2024-07-19T08:59:59.574959+00:00',
       severity: 'critical',
     })
     expect(snap.weekModel).toEqual({
       label: 'Fable',
       pct: 100,
-      resets: formatResetLocal('2026-07-19T08:59:59.575426+00:00'),
-      resetsAt: '2026-07-19T08:59:59.575426+00:00',
+      resets: formatResetLocal('2024-07-19T08:59:59.575426+00:00'),
+      resetsAt: '2024-07-19T08:59:59.575426+00:00',
       severity: 'critical',
     })
     expect(snap.source).toBe('api')
     expect(snap.account).toBe('lunarwerx@example.com')
-    expect(snap.capturedAt).toBe('2026-07-14T02:00:00.000Z')
+    expect(snap.capturedAt).toBe('2024-07-14T02:00:00.000Z')
   })
 
   test('stamps a null account label through unchanged', () => {
@@ -98,20 +98,20 @@ describe('mapUsageApiResponse', () => {
 
   test('falls back to five_hour/seven_day utilization floats when limits[] is absent', () => {
     const raw = {
-      five_hour: { utilization: 12.4, resets_at: '2026-07-14T10:00:00+00:00' },
-      seven_day: { utilization: 55.6, resets_at: '2026-07-19T08:59:59+00:00' },
+      five_hour: { utilization: 12.4, resets_at: '2024-07-14T10:00:00+00:00' },
+      seven_day: { utilization: 55.6, resets_at: '2024-07-19T08:59:59+00:00' },
     }
     const snap = mapUsageApiResponse(raw, 'acct@example.com')
     expect(snap.session).toEqual({
       pct: 12,
-      resets: formatResetLocal('2026-07-14T10:00:00+00:00'),
-      resetsAt: '2026-07-14T10:00:00+00:00',
+      resets: formatResetLocal('2024-07-14T10:00:00+00:00'),
+      resetsAt: '2024-07-14T10:00:00+00:00',
       severity: undefined,
     })
     expect(snap.weekAll).toEqual({
       pct: 56,
-      resets: formatResetLocal('2026-07-19T08:59:59+00:00'),
-      resetsAt: '2026-07-19T08:59:59+00:00',
+      resets: formatResetLocal('2024-07-19T08:59:59+00:00'),
+      resetsAt: '2024-07-19T08:59:59+00:00',
       severity: undefined,
     })
     expect(snap.weekModel).toBeNull()

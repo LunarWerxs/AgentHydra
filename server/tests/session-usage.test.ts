@@ -32,7 +32,7 @@ function fixture(lines: string[], source: SessionSource = 'claude'): TranscriptF
   }
 }
 
-const turn = (model: string, usage: Record<string, unknown>, when = '2026-08-10T12:00:00.000Z') =>
+const turn = (model: string, usage: Record<string, unknown>, when = '2024-08-10T12:00:00.000Z') =>
   JSON.stringify({ type: 'assistant', timestamp: when, message: { model, usage } })
 
 describe('sessionUsage', () => {
@@ -93,8 +93,11 @@ describe('sessionUsage', () => {
     // Sonnet 5's introductory rate ran to 2026-08-31. A session from after that date must not be
     // repriced at the intro rate just because the table still lists it.
     const during = fixture([
-      turn('claude-sonnet-5', { output_tokens: 1_000_000 }, '2026-08-10T12:00:00.000Z'),
+      turn('claude-sonnet-5', { output_tokens: 1_000_000 }, '2024-08-10T12:00:00.000Z'),
     ])
+    // Must stay past the real, fixed introductory-rate cutover in server/src/pricing.ts
+    // (2026-09-01T00:00:00.000Z) — not "now"-relative, so deliberately not shifted with the rest
+    // of this file's fixture dates.
     const after = fixture([
       turn('claude-sonnet-5', { output_tokens: 1_000_000 }, '2026-10-10T12:00:00.000Z'),
     ])
@@ -109,7 +112,7 @@ describe('sessionUsage', () => {
       // a user turn echoing a usage block: counting it would double-count the same spend
       JSON.stringify({
         type: 'user',
-        timestamp: '2026-08-10T12:00:00.000Z',
+        timestamp: '2024-08-10T12:00:00.000Z',
         message: { model: 'claude-opus-5', usage: { input_tokens: 9999 } },
       }),
       turn('claude-opus-5', { input_tokens: 7 }),
@@ -156,7 +159,7 @@ describe('sessionUsage', () => {
     // unchanged. A cache miss would report 99.
     // Stamped explicitly on both writes: restoring a filesystem-generated mtime does not round-trip
     // exactly (sub-millisecond precision), which would look like a changed file.
-    const stamp = new Date('2026-08-10T12:00:00.000Z')
+    const stamp = new Date('2024-08-10T12:00:00.000Z')
     const tf = fixture([turn('claude-opus-5', { input_tokens: 10 })])
     utimesSync(tf.path, stamp, stamp)
     const before = statSync(tf.path)

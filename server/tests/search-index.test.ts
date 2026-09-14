@@ -47,14 +47,14 @@ afterAll(() => {
 const turn = (role: 'user' | 'assistant', text: string) =>
   JSON.stringify({
     type: role,
-    timestamp: '2026-08-13T10:00:00.000Z',
+    timestamp: '2024-08-13T10:00:00.000Z',
     message: { role, content: [{ type: 'text', text }] },
   })
 
 const toolResult = (text: string) =>
   JSON.stringify({
     type: 'user',
-    timestamp: '2026-08-13T10:00:00.000Z',
+    timestamp: '2024-08-13T10:00:00.000Z',
     message: { role: 'user', content: [{ type: 'tool_result', content: text }] },
   })
 

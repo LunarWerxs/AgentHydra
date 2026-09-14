@@ -20,7 +20,7 @@ import {
   setFetchedPrices,
 } from '../src/pricing'
 
-const NOW = Date.parse('2026-08-13T00:00:00.000Z')
+const NOW = Date.parse('2024-08-13T00:00:00.000Z')
 
 const tokens = (t: Partial<PriceableTokens>): PriceableTokens => ({
   input: 0,
@@ -71,6 +71,9 @@ describe('priceFor', () => {
   })
 
   test('introductory rate applies before its expiry and the standard rate after', () => {
+    // These bracket the real, fixed introductory-rate cutover in server/src/pricing.ts
+    // (2026-09-01T00:00:00.000Z) and must stay on their respective sides of it — they are not
+    // "now"-relative, so they are deliberately NOT part of the file-wide date shift below.
     const during = Date.parse('2026-08-13T00:00:00.000Z')
     const after = Date.parse('2026-09-02T00:00:00.000Z')
     expect(priceFor('claude-sonnet-5', during)).toMatchObject({ input: 2, output: 10 })
@@ -194,22 +197,22 @@ describe('a downloaded catalog takes precedence over the bundled table', () => {
   test('a fetched price overrides a bundled one, and reports its own date', () => {
     setFetchedPrices(
       { 'claude-opus-5': { input: 4, output: 20 } },
-      Date.parse('2026-08-12T09:30:00.000Z'),
+      Date.parse('2024-08-12T09:30:00.000Z'),
     )
     expect(priceFor('claude-opus-5', NOW)).toMatchObject({ input: 4, output: 20 })
     expect(priceSource()).toBe('catalog')
-    expect(pricesAsOf()).toBe('2026-08-12')
+    expect(pricesAsOf()).toBe('2024-08-12')
   })
 
   test('a model the catalog does not carry still prices from the bundled table', () => {
     // Adopting a catalog can only ever price MORE models, never fewer — otherwise a catalog that
     // dropped one id would turn a previously-priced session into an unpriced one.
-    setFetchedPrices({ 'gpt-5.6-sol': { input: 4, output: 20 } }, Date.parse('2026-08-12'))
+    setFetchedPrices({ 'gpt-5.6-sol': { input: 4, output: 20 } }, Date.parse('2024-08-12'))
     expect(priceFor('claude-opus-5', NOW)).toMatchObject({ input: 5, output: 25 })
   })
 
   test('clearing it falls back, so an install can refuse downloaded prices', () => {
-    setFetchedPrices({ 'claude-opus-5': { input: 4, output: 20 } }, Date.parse('2026-08-12'))
+    setFetchedPrices({ 'claude-opus-5': { input: 4, output: 20 } }, Date.parse('2024-08-12'))
     clearFetchedPrices()
     expect(priceFor('claude-opus-5', NOW)).toMatchObject({ input: 5, output: 25 })
     expect(priceSource()).toBe('bundled')
@@ -219,7 +222,7 @@ describe('a downloaded catalog takes precedence over the bundled table', () => {
     // DeepSeek's cache read is under a hundredth of its input rate, not Anthropic's tenth.
     setFetchedPrices(
       { 'deepseek-v4-pro': { input: 0.435, output: 0.87, cacheReadUsd: 0.003625 } },
-      Date.parse('2026-08-12'),
+      Date.parse('2024-08-12'),
     )
     expect(priceFor('deepseek-v4-pro', NOW)?.cacheRead).toBeCloseTo(0.003625, 10)
   })
@@ -238,7 +241,7 @@ describe('a router’s provider/model id', () => {
         'someproxy/gpt-5': { input: 9, output: 9 },
         'gpt-5': { input: 1.25, output: 10 },
       },
-      Date.parse('2026-08-12'),
+      Date.parse('2024-08-12'),
     )
     expect(priceFor('someproxy/gpt-5', NOW)).toMatchObject({ input: 9 })
     clearFetchedPrices()

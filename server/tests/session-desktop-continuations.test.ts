@@ -12,14 +12,15 @@
 // the surviving row, the survivor keeps its account, a retired id whose successor is gone stays on
 // screen, and — the migration case — a claim made only by an ARCHIVED tombstone still counts,
 // because after a move the tombstone is the only record that remembers the lineage.
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { withDesktopContinuations } from '../src/sessions'
 import type { TranscriptFile } from '../src/transcript'
 
 const home = mkdtempSync(join(tmpdir(), 'agenthydra-desktop-cont-'))
+afterAll(() => rmSync(home, { recursive: true, force: true }))
 const projectDir = join(home, '.claude', 'projects', 'D--demo')
 mkdirSync(projectDir, { recursive: true })
 mkdirSync(join(home, '.codex', 'sessions'), { recursive: true })
@@ -58,8 +59,8 @@ function transcript(sessionId: string, uuid: string, text: string, mtimeSec: num
   const path = join(projectDir, `${sessionId}.jsonl`)
   writeFileSync(
     path,
-    turn(uuid, 'user', text, '2026-09-03T16:00:00.000Z') +
-      turn(`${uuid}-a`, 'assistant', 'on it', '2026-09-03T16:00:05.000Z'),
+    turn(uuid, 'user', text, '2024-09-03T16:00:00.000Z') +
+      turn(`${uuid}-a`, 'assistant', 'on it', '2024-09-03T16:00:05.000Z'),
   )
   utimesSync(path, mtimeSec, mtimeSec)
 }
