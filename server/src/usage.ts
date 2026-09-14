@@ -12,6 +12,7 @@
 // dispatch-runner.ts uses (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY), so any account already
 // registered for queue dispatch is pollable with no extra login; CLAUDE_CONFIG_DIR is the fallback.
 
+import { createHash } from 'node:crypto'
 import { mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -436,14 +437,29 @@ export function lastUsageApiFailure(
  *
  * Honored at the single chokepoint (checkUsage) so every caller backs off together, and it defers
  * to the SERVER's own number - we are not inventing a limit, we are obeying the one it stated.
+ *
+ * ⛔ KEYED BY LABEL *AND* TOKEN, NOT BY LABEL ALONE. One desktop profile holds several grants, and a
+ * REVOKED one answers this endpoint 429 with an hour's Retry-After while the live grant beside it
+ * answers 200 (measured 2026-09-14, instance #3). Keyed per label, the dead grant's window silenced
+ * the live one too, so a working account could not read its usage at all. The token part is a
+ * digest (tokenFingerprint), never the token.
  */
-const apiBackoffUntil = new Map<string, { until: number; error: string }>()
+const apiBackoffUntil = new Map<string, Map<string, { until: number; error: string }>>()
 
-/** Milliseconds until `label`'s usage API backoff lifts, or 0 if it may be called now. Exported so
- *  the rule is testable without a live endpoint - an untested backoff is how the mill comes back. */
+/** A token's identity inside this process: a short digest, so no map ever holds a credential. */
+function tokenFingerprint(token: string): string {
+  return createHash('sha256').update(token).digest('hex').slice(0, 16)
+}
+
+/** Milliseconds until `label`'s usage API backoff lifts, or 0 if it may be called now - the LONGEST
+ *  window across the label's tokens. Exported so the rule is testable without a live endpoint - an
+ *  untested backoff is how the mill comes back. */
 export function usageApiBackoffMsRemaining(label: string | null, now = Date.now()): number {
-  const entry = apiBackoffUntil.get(label ?? '(ambient)')
-  return entry && entry.until > now ? entry.until - now : 0
+  let remaining = 0
+  for (const entry of apiBackoffUntil.get(label ?? '(ambient)')?.values() ?? []) {
+    remaining = Math.max(remaining, entry.until - now)
+  }
+  return remaining
 }
 
 /** Test seam: forget every recorded API failure and server-issued backoff. */
@@ -479,7 +495,8 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
       // apiBackoffUntil). Re-assert the failure with the REMAINING seconds so the UI still reads
       // "rate_limited, retry in N min" and counts down, and hand back no-data (the caller serves
       // the last cached reading, never a fresh "0%"). Skipping the fetch here is the whole fix.
-      const backoff = apiBackoffUntil.get(label ?? '(ambient)')
+      const fingerprint = tokenFingerprint(token)
+      const backoff = apiBackoffUntil.get(label ?? '(ambient)')?.get(fingerprint)
       const nowMs = Date.now()
       if (backoff && backoff.until > nowMs) {
         lastApiFailure.set(label ?? '(ambient)', {
@@ -490,13 +507,13 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
         return parseUsageOutput('', label)
       }
       const res = await fetchUsageApi({ token, account: label, timeoutMs: opts.timeoutMs })
-      // A good read clears the backoff: the limit has lifted, resume normal polling immediately.
+      // A good read clears this token's backoff: the limit has lifted, resume normal polling.
       if (res.ok) {
-        apiBackoffUntil.delete(label ?? '(ambient)')
+        apiBackoffUntil.get(label ?? '(ambient)')?.delete(fingerprint)
         return res.snapshot
       }
-      // Not fatal: fall through to the CLI spawn (a 401 here just means "this token can't read
-      // usage" — the CLI may still succeed by refreshing, or via a configDir login).
+      // Not fatal for a CONFIG-DIR token: its CLI can still succeed by refreshing its own login (a
+      // 401 here just means "this token can't read usage"). An injected token stops below.
       //
       // ⛔ BUT RECORD WHY. Discarding this was the single thing that made every usage problem
       // undiagnosable: whatever the endpoint said - 401 rejected, 429 rate-limited, 0 no network -
@@ -518,14 +535,34 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
       // 30-second knocking that turns one 429 into a stuck one.
       if (res.status === 429) {
         const waitSec = res.retryAfterSec && res.retryAfterSec > 0 ? res.retryAfterSec : 60
-        apiBackoffUntil.set(label ?? '(ambient)', {
-          until: Date.now() + waitSec * 1000,
-          error: res.error,
-        })
+        const labelKey = label ?? '(ambient)'
+        const windows = apiBackoffUntil.get(labelKey) ?? new Map()
+        windows.set(fingerprint, { until: Date.now() + waitSec * 1000, error: res.error })
+        apiBackoffUntil.set(labelKey, windows)
         return parseUsageOutput('', label)
       }
+      // ⛔ AN *INJECTED* TOKEN NEVER FALLS BACK TO THE CLI, WHATEVER THE API SAID.
+      //
+      // The CLI's `/usage` screen is this same GET with this same token (see usage-api.ts), so it
+      // cannot succeed where the read above failed - and when the spawn DID print numbers, they were
+      // some other login's. Measured in usage-history.json: on 2026-09-11 at 20:00 ten desktop
+      // instances whose API reads had failed each "read" 86% weekly with no reset instant (what
+      // 5claude's and test9's own API reads said that hour), and at 21:00 seven of them "read" 20%
+      // resetting Sep 18 (another_meh's, which its own API read had reported all afternoon). Those
+      // seven were still showing that 20% as their own on 2026-09-14. No reading beats another
+      // account's reading. A config-dir token still falls through, because that CLI owns its login
+      // and can refresh it; so does an API key, which this endpoint refuses outright.
+      if (injected) return parseUsageOutput('', label)
     }
   }
+
+  // ⛔ AND THE INJECTED-TOKEN RULE IS CHECKED HERE TOO, WHERE NOTHING CAN GO ROUND IT. The return
+  // above sits inside `if (!opts.forceCli)`, so `{ forceCli: true, auth: <oauth token> }` - a
+  // combination the options type allows and no caller makes today - would skip it and land on the
+  // spawn, which is the exact path that printed another account's numbers on 2026-09-11. An
+  // invariant stated in capitals has to be enforced on every input the signature permits, not on
+  // the inputs the current callers happen to pass.
+  if (opts.auth?.authType === 'oauth_token') return parseUsageOutput('', label)
 
   // --- cooldown gate: a broken fast path must not turn a 30s poller into a CLI mill -------------
   // See CLI_PROBE_COOLDOWN_MS. Checked HERE, at the single chokepoint every caller goes through,

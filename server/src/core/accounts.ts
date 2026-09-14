@@ -11,13 +11,13 @@
 //
 //   1. Cheap pre-check: <instanceDir>/config.json -> lastKnownAccountUuid (logged in at all?).
 //   2. Decrypt oauth:tokenCacheV2 (fallback oauth:tokenCache) via ../crypto, parse the grants
-//      map (key "<acctUuid>:<orgUuid>:https://api.anthropic.com:<scopes>"), pick the grant
-//      with the max expiresAt, and pull the token/subscriptionType/rateLimitTier/uuids out.
+//      map (key "<acctUuid>:<orgUuid>:https://api.anthropic.com:<scopes>"), and order the grants
+//      app-session-first, then by expiresAt (compareGrantPreference - NOT max expiry alone).
 //   3. If noNetwork / expired / no token -> resolve from our own local identity cache
 //      (instances-cache.json under appDataDir()), overlaid with anything we did manage to
 //      decrypt locally (uuid/orgUuid/plan/tier) even without a network call.
-//   4. Otherwise call the profile endpoint, map the response, write identity ONLY (never the
-//      token) back to the cache, and return a 'live' result.
+//   4. Otherwise call the profile endpoint with each grant in turn until one is accepted, map the
+//      response, write identity ONLY (never the token) back to the cache, and return 'live'.
 //
 // Nothing in this file throws for expected failure conditions (missing/corrupt config.json,
 // locked files, decrypt failure, network/timeout/401, malformed profile JSON) — every path
@@ -235,6 +235,9 @@ function accountFromCache(
 interface Grant {
   token: string | null
   expiresAt: number
+  /** The grant key's scope list ("user:inference user:profile …"). Decides preference - see
+   *  compareGrantPreference. */
+  scopes: string
   subscriptionType: string | null
   rateLimitTier: string | null
   /** First segment of the grant key. NOT the account uuid — it is the OAuth CLIENT id, and it is
@@ -254,47 +257,69 @@ interface RawGrantValue {
   accessToken?: string
 }
 
-/** Picks the grant with the max expiresAt out of the decrypted token-cache JSON's grants map.
- *  Grant keys look like "<accountUuid>:<orgUuid>:https://api.anthropic.com:<scopes...>" — split
- *  into at most 4 pieces so scopes (which may contain further colons/spaces) stay intact as the
- *  last piece. Never throws — malformed entries are skipped. */
-function pickBestGrant(decryptedJson: string): Grant | null {
+/** The scope only the desktop app's OWN sign-in carries. */
+const APP_SESSION_SCOPE = 'user:sessions:claude_code'
+
+/** The scope list packed into a grant key ("<acct>:<org>:https://api.anthropic.com:<scopes>"). */
+function grantKeyScopes(grantKey: string): string {
+  return grantKey.split('https://api.anthropic.com:')[1]?.trim() ?? ''
+}
+
+/**
+ * Which of a profile's grants to present first: the app's own session grant, then the latest expiry.
+ *
+ * ⛔ THE LATEST EXPIRY IS NOT THE LIVE ONE. A signed-in profile holds up to three grants: the app's
+ * session sign-in (`user:sessions:claude_code`, refreshed every time the app runs), a profile-only
+ * grant, and a year-long `user:inference user:file_upload user:profile` token that is minted once
+ * and never refreshed. Picking by expiry alone always lands on that year-long token, and nothing
+ * stops it being revoked while its expiry still reads eleven months away.
+ *
+ * Measured 2026-09-14 on instance #3, a working account the owner had just opened: the year-long
+ * token answered the profile endpoint 401 and the usage endpoint 429 ("retry in 59 min"), while
+ * the session grant beside it answered 200 on both. So the row sat yellow on a
+ * cached identity and its usage had not updated since 2026-09-07. Across ten profiles that day, no
+ * session grant was dead where the year-long one lived; the reverse was the bug.
+ *
+ * Order, not filter: callers still fall through to the next grant when one is refused (see
+ * resolveAccount and usage-service), so an inverted case on some other machine degrades to one extra
+ * request rather than to a dead row.
+ */
+function compareGrantPreference(
+  a: { scopes: string; expiresAt: number },
+  b: { scopes: string; expiresAt: number },
+): number {
+  const rank = (g: { scopes: string }) => (g.scopes.includes(APP_SESSION_SCOPE) ? 0 : 1)
+  return rank(a) - rank(b) || b.expiresAt - a.expiresAt
+}
+
+/** Every grant in the decrypted token-cache JSON's grants map, most preferred first (see
+ *  compareGrantPreference). Never throws — malformed entries are skipped. */
+function orderGrants(decryptedJson: string): Grant[] {
   let parsed: unknown
   try {
     parsed = JSON.parse(decryptedJson)
   } catch {
-    return null
+    return []
   }
 
-  if (!parsed || typeof parsed !== 'object') return null
+  if (!parsed || typeof parsed !== 'object') return []
 
-  let best: Grant | null = null
-
+  const grants: Grant[] = []
   for (const [grantKey, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
     if (!rawValue || typeof rawValue !== 'object') continue
     const value = rawValue as RawGrantValue
-
-    let expiresAt = 0
-    try {
-      expiresAt =
-        typeof value.expiresAt === 'number'
-          ? value.expiresAt
-          : typeof value.expiresAt === 'string'
-            ? Number.parseInt(value.expiresAt, 10) || 0
-            : 0
-    } catch {
-      expiresAt = 0
-    }
-
-    if (!best || expiresAt > best.expiresAt) {
-      best = buildGrant(grantKey, value, expiresAt)
-    }
+    const expiresAt =
+      typeof value.expiresAt === 'number'
+        ? value.expiresAt
+        : typeof value.expiresAt === 'string'
+          ? Number.parseInt(value.expiresAt, 10) || 0
+          : 0
+    grants.push(buildGrant(grantKey, value, expiresAt))
   }
-
-  return best
+  return grants.sort(compareGrantPreference)
 }
 
-/** Builds a Grant from one decrypted grant-map entry. See pickBestGrant for the grantKey shape. */
+/** Builds a Grant from one decrypted grant-map entry. See grantKeyScopes for the grantKey shape. */
 function buildGrant(grantKey: string, value: RawGrantValue, expiresAt: number): Grant {
   const parts = grantKey.split(':')
   // parts[0] = OAuth client id (NOT the account — see Grant.clientId), parts[1] = orgUuid,
@@ -312,6 +337,7 @@ function buildGrant(grantKey: string, value: RawGrantValue, expiresAt: number): 
   return {
     token,
     expiresAt,
+    scopes: grantKeyScopes(grantKey),
     subscriptionType: typeof value.subscriptionType === 'string' ? value.subscriptionType : null,
     rateLimitTier: typeof value.rateLimitTier === 'string' ? value.rateLimitTier : null,
     clientId,
@@ -348,7 +374,11 @@ interface ProfileResponse {
   }
 }
 
-async function fetchProfile(token: string): Promise<ProfileResponse | null> {
+/** A profile, or why there is none. `refused` is true only when the server rejected THIS credential
+ *  (401/403) - the one failure another grant of the same profile can still get past. */
+type ProfileResult = { ok: true; profile: ProfileResponse } | { ok: false; refused: boolean }
+
+async function fetchProfile(token: string): Promise<ProfileResult> {
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10_000)
@@ -363,17 +393,16 @@ async function fetchProfile(token: string): Promise<ProfileResponse | null> {
       })
       if (!res.ok) {
         log('warn', `fetchProfile: profile API responded ${res.status}`)
-        return null
+        return { ok: false, refused: res.status === 401 || res.status === 403 }
       }
-      const json = (await res.json()) as ProfileResponse
-      return json
+      return { ok: true, profile: (await res.json()) as ProfileResponse }
     } finally {
       clearTimeout(timeout)
     }
   } catch (err) {
     // Covers network errors, DNS failure, timeout/abort, malformed JSON, etc.
     log('warn', `fetchProfile: request failed: ${String(err)}`)
-    return null
+    return { ok: false, refused: false }
   }
 }
 
@@ -387,40 +416,45 @@ export interface ResolveAccountOptions {
   noNetwork?: boolean
 }
 
-/**
- * Decrypt an isolated desktop instance's OWN OAuth access token from its safeStorage token cache.
- *
- * IN-PROCESS ONLY: the token is handed straight to the immediate caller (to inject into a
- * `claude -p "/usage"` probe) and is NEVER persisted, cached, logged, or sent to the browser — same
- * value-blind discipline resolveAccount keeps. Returns null when the instance is logged out, the
- * cache can't be decrypted, no token is present, or the token has expired; the caller then treats
- * usage as "not available", never "0%". Never throws.
- *
- * This is what lets a usage check work for ANY logged-in desktop instance with NO separate dispatch
- * account and NO CLI login: the desktop app's `sk-ant-oat…` OAuth token is a valid
- * CLAUDE_CODE_OAUTH_TOKEN (verified 2026-07-14 — it drives `claude -p "/usage"` directly).
- */
+/** A usage-capable credential decrypted out of a desktop profile. In-process only - see
+ *  resolveInstanceTokens. */
+export interface InstanceGrantToken {
+  token: string
+  /** Must ride along as CLAUDE_CODE_OAUTH_SCOPES or `/usage` silently degrades (see
+   *  DEFAULT_OAUTH_SCOPES in usage.ts). */
+  scopes: string
+}
 
-/** Of a decrypted token-cache's grants map, the max-expiresAt grant that carries `user:inference`
- *  scope — see resolveInstanceToken for why scope, not just expiry, decides the winner here. */
-function pickBestInferenceGrant(
+/**
+ * Of a decrypted token-cache's grants map, every unexpired grant carrying `user:inference`, most
+ * preferred first (compareGrantPreference), one entry per distinct token.
+ *
+ * Scope decides eligibility: the profile-only grant's token runs `claude -p "/usage"` with exit 0
+ * and returns NO percentage block (identity scope can't fetch usage; verified 2026-07-14). Among the
+ * eligible, preference decides the order and the caller falls through on a refusal. Exported so the
+ * choice is testable without a DPAPI-encrypted fixture.
+ */
+export function orderInferenceGrants(
   parsed: Record<string, unknown>,
-): { token: string; expiresAt: number; scopes: string } | null {
-  let best: { token: string; expiresAt: number; scopes: string } | null = null
+  nowMs = Date.now(),
+): InstanceGrantToken[] {
+  const candidates: { token: string; expiresAt: number; scopes: string }[] = []
   for (const [key, rawValue] of Object.entries(parsed)) {
-    if (!/user:inference/.test(key)) continue // only the usage-capable CLI grant
+    if (!/user:inference/.test(key)) continue // only the usage-capable grants
     if (!rawValue || typeof rawValue !== 'object') continue
     const v = rawValue as RawGrantValue
     const token = typeof v.token === 'string' ? v.token : (v.accessToken ?? null)
     if (typeof token !== 'string' || !token.trim()) continue
-    const exp = typeof v.expiresAt === 'number' ? v.expiresAt : Number(v.expiresAt) || 0
-    // The grant key is "<acctUuid>:<orgUuid>:https://api.anthropic.com:<scopes>" — the scope
-    // list must be passed to `claude` as CLAUDE_CODE_OAUTH_SCOPES or /usage silently degrades
-    // (see DEFAULT_OAUTH_SCOPES in usage.ts).
-    const scopes = key.split('https://api.anthropic.com:')[1]?.trim() ?? ''
-    if (!best || exp > best.expiresAt) best = { token, expiresAt: exp, scopes }
+    const expiresAt = typeof v.expiresAt === 'number' ? v.expiresAt : Number(v.expiresAt) || 0
+    // Skip an expired token rather than fire a doomed probe (expiresAt is epoch ms).
+    if (expiresAt > 0 && expiresAt < nowMs) continue
+    candidates.push({ token, expiresAt, scopes: grantKeyScopes(key) })
   }
-  return best
+  const seen = new Set<string>()
+  return candidates
+    .sort(compareGrantPreference)
+    .filter((c) => !seen.has(c.token) && seen.add(c.token))
+    .map(({ token, scopes }) => ({ token, scopes }))
 }
 
 /** Load and decrypt an instance's stored token cache blob, or null on any failure along the way
@@ -454,37 +488,40 @@ async function loadDecryptedTokenCache(instanceDir: string): Promise<string | nu
   }
 }
 
+/**
+ * Decrypt an isolated desktop instance's OWN OAuth access tokens from its safeStorage token cache,
+ * every usage-capable one, most preferred first (orderInferenceGrants).
+ *
+ * IN-PROCESS ONLY: the tokens are handed straight to the immediate caller (to call the usage API or
+ * inject into a `claude -p "/usage"` probe) and are NEVER persisted, cached, logged, or sent to the
+ * browser — same value-blind discipline resolveAccount keeps. Empty when the instance is logged out,
+ * the cache can't be decrypted, or no unexpired usage-capable token is present; the caller then
+ * treats usage as "not available", never "0%". Never throws.
+ *
+ * This is what lets a usage check work for ANY logged-in desktop instance with NO separate dispatch
+ * account and NO CLI login: the desktop app's `sk-ant-oat…` OAuth token is a valid
+ * CLAUDE_CODE_OAUTH_TOKEN (verified 2026-07-14 — it drives `claude -p "/usage"` directly).
+ */
+export async function resolveInstanceTokens(instanceDir: string): Promise<InstanceGrantToken[]> {
+  try {
+    if (!instanceDir?.trim()) return []
+    const decrypted = await loadDecryptedTokenCache(instanceDir)
+    if (!decrypted) return []
+    const parsed = JSON.parse(decrypted) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object') return []
+    return orderInferenceGrants(parsed)
+  } catch {
+    return []
+  }
+}
+
+/** The single most preferred usage-capable grant, for a caller that hands one token to a spawned
+ *  process and so cannot fall through (dispatch runs, terminal sessions). Everything that makes its
+ *  own request should take resolveInstanceTokens and try each. */
 export async function resolveInstanceToken(
   instanceDir: string,
-): Promise<{ token: string; scopes: string } | null> {
-  try {
-    if (!instanceDir?.trim()) return null
-    const decrypted = await loadDecryptedTokenCache(instanceDir)
-    if (!decrypted) return null
-
-    // Pick the grant that can actually read usage: the desktop app keeps TWO grants — a full CLI
-    // grant (scopes include `user:inference`) and a profile-only grant (`user:profile`). They have
-    // independent, rotating expiries, so picking by max-expiresAt (pickBestGrant, used for identity)
-    // often lands on the profile-only grant, whose token runs `claude -p "/usage"` with exit 0 but
-    // returns NO percentage block (identity scope can't fetch usage). So select by SCOPE here:
-    // require `user:inference`, then take the max-expiresAt among those. Verified 2026-07-14 — the
-    // profile grant yields no numbers; the inference grant yields the real weekly/session %.
-    let parsed: Record<string, unknown>
-    try {
-      parsed = JSON.parse(decrypted) as Record<string, unknown>
-    } catch {
-      return null
-    }
-    if (!parsed || typeof parsed !== 'object') return null
-
-    const best = pickBestInferenceGrant(parsed)
-    if (!best) return null
-    // Skip an expired token rather than fire a doomed probe (expiresAt is epoch ms).
-    if (best.expiresAt > 0 && best.expiresAt < Date.now()) return null
-    return { token: best.token, scopes: best.scopes }
-  } catch {
-    return null
-  }
+): Promise<InstanceGrantToken | null> {
+  return (await resolveInstanceTokens(instanceDir))[0] ?? null
 }
 
 /**
@@ -631,12 +668,12 @@ function loadAccountConfig(instanceDir: string): {
   return { config, lastKnownAccountUuid }
 }
 
-// resolveAccount's Step 2: decrypt the token cache (v2, falling back to v1) and pick the best
-// grant out of it. Pulled out, see loadAccountConfig above.
-async function resolveBestGrant(
+// resolveAccount's Step 2: decrypt the token cache (v2, falling back to v1) and order its grants,
+// most preferred first. Pulled out, see loadAccountConfig above.
+async function resolveGrants(
   config: Record<string, unknown>,
   instanceDir: string,
-): Promise<Grant | null> {
+): Promise<Grant[]> {
   let tokenCacheB64: string | null = null
   let usedV1 = false
   if (typeof config['oauth:tokenCacheV2'] === 'string' && config['oauth:tokenCacheV2']) {
@@ -650,7 +687,7 @@ async function resolveBestGrant(
       'info',
       `resolveAccount: no oauth token cache (v1 or v2) present in config.json for '${instanceDir}'.`,
     )
-    return null
+    return []
   }
   try {
     const decrypted = await decryptSafeStorage(tokenCacheB64, instanceDir)
@@ -659,19 +696,19 @@ async function resolveBestGrant(
         'warn',
         `resolveAccount: could not decrypt token cache (${usedV1 ? 'v1' : 'v2'}) for '${instanceDir}'.`,
       )
-      return null
+      return []
     }
-    return pickBestGrant(decrypted)
+    return orderGrants(decrypted)
   } catch (err) {
     log('warn', `resolveAccount: decryptSafeStorage threw for '${instanceDir}': ${String(err)}`)
-    return null
+    return []
   }
 }
 
 // resolveAccount's Step 4 field derivation: plan/tier/label from a successful profile call.
 // Pulled out, see loadAccountConfig above.
 function deriveAccountFields(
-  profile: NonNullable<Awaited<ReturnType<typeof fetchProfile>>>,
+  profile: ProfileResponse,
   bestGrant: Grant | null,
   lastKnownAccountUuid: string,
 ) {
@@ -789,31 +826,46 @@ export async function resolveAccount(
       return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, null)
     }
 
-    const bestGrant = await resolveBestGrant(config, instanceDir)
+    const grants = await resolveGrants(config, instanceDir)
 
     // ---- decide whether to go live or fall back ----------------------------------
     const nowMs = Date.now()
-    const expiresAt = bestGrant?.expiresAt ?? 0
-    const expired = expiresAt <= 0 || expiresAt < nowMs
-    const token = bestGrant?.token ?? null
-    const haveToken = Boolean(token?.trim())
+    const usable = grants.filter((g) => g.token?.trim() && g.expiresAt > 0 && g.expiresAt >= nowMs)
 
-    if (!haveToken || expired) {
-      const reason = !haveToken ? 'no usable access token decrypted' : 'access token expired'
+    if (usable.length === 0) {
+      const reason = grants.some((g) => g.token?.trim())
+        ? 'access token expired'
+        : 'no usable access token decrypted'
       log('info', `resolveAccount: resolving '${instanceDir}' from cache/offline (${reason}).`)
-      return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, bestGrant)
+      return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, grants[0] ?? null)
     }
 
     // ---- live profile call --------------------------------------------------------
-    const profile = await fetchProfile(token as string)
-    // Token was only ever held in this local `token`/`bestGrant` binding; nothing persists it.
-
-    if (!profile) {
-      log('warn', `resolveAccount: profile API call failed for '${instanceDir}'.`)
-      return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, bestGrant)
+    // Preferred grant first; the next one only when the server refused THIS credential. A network
+    // or server failure would fail every grant the same way, so it ends the attempt instead of
+    // multiplying a 10-second timeout by the number of grants. See compareGrantPreference for the
+    // account that sat yellow because the only grant ever tried was the revoked one.
+    // Tokens are only ever held in these local bindings; nothing persists them.
+    let answered: { grant: Grant; profile: ProfileResponse } | null = null
+    const tried = new Set<string>()
+    for (const grant of usable) {
+      const token = grant.token as string
+      if (tried.has(token)) continue
+      tried.add(token)
+      const result = await fetchProfile(token)
+      if (result.ok) {
+        answered = { grant, profile: result.profile }
+        break
+      }
+      if (!result.refused) break
     }
 
-    const fields = deriveAccountFields(profile, bestGrant, lastKnownAccountUuid)
+    if (!answered) {
+      log('warn', `resolveAccount: profile API call failed for '${instanceDir}'.`)
+      return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, usable[0] ?? null)
+    }
+
+    const fields = deriveAccountFields(answered.profile, answered.grant, lastKnownAccountUuid)
     maybeCacheAccountIdentity(instanceDir, lastKnownAccountUuid, fields)
     log('info', `resolveAccount: resolved '${instanceDir}' live -> ${fields.label}`)
 

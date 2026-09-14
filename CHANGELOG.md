@@ -229,6 +229,46 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
 
+- **A signed-in, working account read as "rate limited" for a week, because the only credential
+  ever tried was a revoked one** (`server/src/core/accounts.ts`, `server/src/usage.ts`,
+  `server/src/usage-service.ts`, `server/tests/accounts-grant-preference.test.ts`,
+  `usage-grant-fallthrough.test.ts`, `usage-backoff.test.ts`). Reported by the owner on 2026-09-14
+  about instance #3, which he had just opened and used: yellow account chip, usage frozen since
+  2026-09-07.
+
+  A signed-in desktop profile holds up to three OAuth grants: the app's own session sign-in
+  (`user:sessions:claude_code`, refreshed every time the app runs), a profile-only grant, and a
+  year-long `user:inference user:file_upload user:profile` token that is minted once and never
+  refreshed. Both readers picked by MAX EXPIRY, which is always that year-long token. ⛔ **The
+  latest expiry is not the live one.** On #3 it had been revoked while its expiry still read eleven
+  months out: profile endpoint 401 (so the identity fell back to cache, which is the yellow chip),
+  usage endpoint 429 with an hour of Retry-After (so the row read "rate limited"). The session grant
+  beside it answered 200 on both. Across ten profiles that afternoon, no session grant was dead
+  where the year-long one lived; the reverse was the bug.
+
+  Three changes, because each alone leaves the account stuck. Grants are ORDERED (app session
+  first, then by expiry) instead of max-expiry-picked. Both readers FALL THROUGH to the next grant
+  when the server refused that one, and stop early on a failure every grant would share, so a dead
+  connection costs one request rather than one per grant. And the 429 backoff is keyed by label AND
+  token digest: keyed by label alone, the revoked grant's hour-long window silenced the live grant
+  too, which is what made this survive every poll, every refresh and every restart.
+
+  The reported failure is the PREFERRED grant's, not the last one tried: a leftover's 429 must not
+  relabel a profile whose real problem is that its login needs refreshing.
+
+- **A failed usage check could file ANOTHER account's numbers under an instance, and did, for ten
+  of them** (`server/src/usage.ts`, `server/tests/usage-backoff.test.ts`). When the API read failed,
+  a desktop instance's check fell back to spawning `claude -p "/usage"` with the instance's own
+  token injected. The CLI's `/usage` screen is the same GET with the same token, so it cannot
+  succeed where the read failed; what it can do is authenticate as some OTHER login and print that
+  account's numbers, which are then cached and charted as this one's.
+
+  Measured in `usage-history.json`: on 2026-09-11 at 20:00, ten desktop instances each "read" 86%
+  weekly with no reset instant (what 5claude's and test9's own API reads said that hour); at 21:00,
+  seven of them "read" 20% resetting Sep 18 (another_meh's). Those seven were still showing that 20%
+  as their own three days later. An injected token now never falls back to a spawn, whatever the API
+  said. A config-dir token still does, because that CLI owns its login and can refresh it.
+
 - **A compiled daemon could not archive, unarchive or rename a chat, and said `ok: true` every
   time** (`server/src/ui-archive.ts`, `misc-assets.ts`, `server/tests/ui-archive.test.ts`). This is
   the misc-assets defect of 2026-09-12 again, on the SECOND actuator, and the entry below about the

@@ -6,7 +6,7 @@
 // "rate limited". checkUsage now records the server's Retry-After and SKIPS the endpoint until the
 // window lifts. These tests pin that behaviour with a mocked fetch, never a live call or a spawn.
 
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import {
   checkUsage,
   isNoData,
@@ -105,6 +105,28 @@ describe('usage API 429 backoff', () => {
     expect(lastUsageApiFailure('acct-d')).toBeNull()
   })
 
+  test("one token's 429 never silences another token for the same label", async () => {
+    // Instance #3, 2026-09-14: a revoked grant answered 429 with an hour's Retry-After while the
+    // live grant of the SAME profile answered 200. A per-label window blocked the live one too.
+    const LIVE = { authType: 'oauth_token', secret: 'sk-ant-oat-test-live' } as const
+    const fetchSpy = mock(async (_url: unknown, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization ?? ''
+      return auth.includes(LIVE.secret) ? res200() : res429('3600')
+    })
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    await checkUsage({ auth: AUTH, account: 'acct-f' })
+    expect(usageApiBackoffMsRemaining('acct-f')).toBeGreaterThan(0)
+
+    const snap = await checkUsage({ auth: LIVE, account: 'acct-f' })
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(snap.weekAll?.pct).toBe(42)
+
+    // …and the revoked token itself is still held off.
+    await checkUsage({ auth: AUTH, account: 'acct-f' })
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
   test('usageApiBackoffMsRemaining reports 0 from a vantage point past the window', async () => {
     const fetchSpy = mock(async () => res429('1800'))
     globalThis.fetch = fetchSpy as unknown as typeof fetch
@@ -112,5 +134,50 @@ describe('usage API 429 backoff', () => {
     // Same instant: still waiting. Two hours later: clear.
     expect(usageApiBackoffMsRemaining('acct-e')).toBeGreaterThan(0)
     expect(usageApiBackoffMsRemaining('acct-e', Date.now() + 2 * 60 * 60 * 1000)).toBe(0)
+  })
+})
+
+describe('an injected token never falls back to a CLI spawn', () => {
+  // 2026-09-11: desktop instances whose API reads failed were each handed a CLI probe, and the
+  // numbers it printed belonged to some other login (86% at 20:00, 20% at 21:00, identical across
+  // up to ten accounts). The CLI reads the same endpoint with the same token, so it adds nothing
+  // but that risk.
+  test.each([
+    ['refused (401)', async () => new Response('{}', { status: 401 })],
+    ['server error (503)', async () => new Response('{}', { status: 503 })],
+    [
+      'no network',
+      async () => {
+        throw new TypeError('fetch failed')
+      },
+    ],
+  ])('%s: no-data, and nothing is spawned', async (_name, respond) => {
+    globalThis.fetch = mock(respond) as unknown as typeof fetch
+    const spawnSpy = spyOn(Bun, 'spawn').mockImplementation(() => {
+      throw new Error('a CLI probe was spawned')
+    })
+    try {
+      const snap = await checkUsage({ auth: AUTH, account: 'acct-g' })
+      expect(isNoData(snap)).toBe(true)
+      expect(spawnSpy).not.toHaveBeenCalled()
+    } finally {
+      spawnSpy.mockRestore()
+    }
+  })
+
+  // forceCli means "skip the API read", and it must not also mean "spawn with a token the CLI
+  // cannot own". The options type allows the pair even though no caller passes it today.
+  test('forceCli does not open a back door for an injected token', async () => {
+    // Throws instead of spawning, so a regression fails fast rather than booting a real CLI.
+    const spawnSpy = spyOn(Bun, 'spawn').mockImplementation(() => {
+      throw new Error('a CLI probe was spawned')
+    })
+    try {
+      const snap = await checkUsage({ auth: AUTH, account: 'acct-h', forceCli: true })
+      expect(isNoData(snap)).toBe(true)
+      expect(spawnSpy).not.toHaveBeenCalled()
+    } finally {
+      spawnSpy.mockRestore()
+    }
   })
 })
