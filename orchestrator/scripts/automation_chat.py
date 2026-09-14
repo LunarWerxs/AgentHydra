@@ -609,6 +609,76 @@ def _run_fleet_pass(argv: list[str], as_json: bool) -> int:
     return enforce_all(act="--yes" in argv, as_json=as_json, ui_ok=ui_ok)
 
 
+def _stamp_missing_meta_refusal(title, as_json: bool) -> int:
+    return out(
+        {
+            "ok": False,
+            "report": (
+                f"REFUSED (deterministic): '{title}' has no desktop meta record to stamp "
+                "(console-only, or the dossier gave no metaPath). Land it with "
+                "migrate_chat.py - the landing stamps it."
+            ),
+        },
+        as_json,
+        3,
+    )
+
+
+def _stamp_app_running(match: dict, fleet: dict) -> bool:
+    return any(
+        str(i.get("name", "")).lower() == str(match.get("instance", "")).lower()
+        and i.get("isRunning")
+        for i in fleet.get("instances", [])
+    )
+
+
+def _stamp_drive_picker(match: dict, fleet: dict, session_id: str, title, meta_path,
+                         app_running: bool, force: bool) -> tuple[str, bool]:
+    """⛔ --force ON ONE CHAT DRIVES THE APP'S OWN PICKER, because for a RUNNING app nothing
+    else can set the mode (set_mode_via_app). Without this the single-target path could only
+    ever write disk and then print a caveat saying so, which made it useless as the remedy
+    migrate_chat points at - the caller ran it, got exit 0, and the chat still opened on a
+    prompting mode. Gated on --force for the same reason the fleet pass gates its picker on
+    the icon: -Select flips what the owner is looking at, so it takes a by-hand act."""
+    drove_picker = bool(app_running and force)
+    if not drove_picker:
+        return "", False
+    via_app = set_mode_via_app(
+        {"sessionId": session_id, "title": title,
+         "instance": match.get("instance") or "", "metaPath": meta_path},
+        fleet, force=True)
+    return via_app, True
+
+
+def _stamp_caveat(app_running: bool, app_confirmed: bool, via_app: str, force: bool) -> str:
+    if not app_running:
+        return ""
+    if app_confirmed:
+        return f" APP-CONFIRMED via its own picker ({via_app})."
+    if force:
+        return (f" ⚠ its app is RUNNING and the picker did not confirm ({via_app}) - disk is "
+                "stamped, the live chat may still open on a prompting mode.")
+    return (" CAVEAT: its app is RUNNING, so the in-memory record can re-save over these until "
+            "the app next re-reads its store - disk is stamped, the live chat may lag. Pass "
+            "--force to drive the app's own picker, the only thing that sets a live chat.")
+
+
+def _stamp_field_line(label: str, already: bool, ok: bool, err) -> str:
+    if already:
+        return f"{label} already set"
+    if ok:
+        return f"{label} stamped"
+    return f"{label} FAILED ({str(err)[:120]})"
+
+
+def _stamp_exit_code(ok: bool, bypass_ok: bool, uc_ok: bool) -> int:
+    if ok:
+        return 0
+    if bypass_ok or uc_ok:
+        return 2
+    return 1
+
+
 def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = False) -> int:
     """The single-chat doctrine stamp (both halves, one disk write) plus the daemon's own
     primitive as a best-effort extra - the same shape as the fleet pass's `_stamp_rows`, for
@@ -618,18 +688,7 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
 
     meta_path = match.get("metaPath")
     if not match.get("instance") or not meta_path:
-        return out(
-            {
-                "ok": False,
-                "report": (
-                    f"REFUSED (deterministic): '{title}' has no desktop meta record to stamp "
-                    "(console-only, or the dossier gave no metaPath). Land it with "
-                    "migrate_chat.py - the landing stamps it."
-                ),
-            },
-            as_json,
-            3,
-        )
+        return _stamp_missing_meta_refusal(title, as_json)
 
     # (No icon gate here either - see the --all path: configuration runs autonomously.)
 
@@ -638,11 +697,7 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
     # below are CONFIGURATION, so a hold is reported, never a reason to refuse the stamp.
     hold_why = holdlib.why_blocked(session_id)
 
-    app_running = any(
-        str(i.get("name", "")).lower() == str(match.get("instance", "")).lower()
-        and i.get("isRunning")
-        for i in fleet.get("instances", [])
-    )
+    app_running = _stamp_app_running(match, fleet)
 
     ledgerlib.note("automation", session_id, note=f"stamp '{title}'")
 
@@ -666,34 +721,14 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
         pass
     got = {"error": got_disk.get("error") or "disk stamp did not verify"}
 
-    # ⛔ --force ON ONE CHAT DRIVES THE APP'S OWN PICKER, because for a RUNNING app nothing
-    # else can set the mode (set_mode_via_app). Without this the single-target path could only
-    # ever write disk and then print a caveat saying so, which made it useless as the remedy
-    # migrate_chat points at - the caller ran it, got exit 0, and the chat still opened on a
-    # prompting mode. Gated on --force for the same reason the fleet pass gates its picker on
-    # the icon: -Select flips what the owner is looking at, so it takes a by-hand act.
-    via_app = ""
-    drove_picker = bool(app_running and force)
-    if drove_picker:
-        via_app = set_mode_via_app(
-            {"sessionId": session_id, "title": title,
-             "instance": match.get("instance") or "", "metaPath": meta_path},
-            fleet, force=True)
+    via_app, drove_picker = _stamp_drive_picker(
+        match, fleet, session_id, title, meta_path, app_running, force)
     # If the picker ran, THIS run's line is the verdict (see picker_line_ok). Only fall back
     # to the ledger when no picker ran this time - there, "has it ever been confirmed" really
     # is the question, and the caveat below says the app is running and may have drifted.
     app_confirmed = picker_line_ok(via_app) if drove_picker else (session_id in load_confirmed())
 
-    caveat = (
-        (f" APP-CONFIRMED via its own picker ({via_app})." if app_confirmed else
-         (f" ⚠ its app is RUNNING and the picker did not confirm ({via_app}) - disk is "
-          "stamped, the live chat may still open on a prompting mode." if force else
-          " CAVEAT: its app is RUNNING, so the in-memory record can re-save over these until "
-          "the app next re-reads its store - disk is stamped, the live chat may lag. Pass "
-          "--force to drive the app's own picker, the only thing that sets a live chat."))
-        if app_running
-        else ""
-    )
+    caveat = _stamp_caveat(app_running, app_confirmed, via_app, force)
     held_note = (
         f" [HELD: {hold_why} - stamped anyway, a hold covers the chat's work, not its "
         "permission mode]"
@@ -704,9 +739,8 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
     # before we looked was not "stamped" by us (live smoke, 2026-09-01: the report claimed a
     # change the disk never saw).
     parts = [
-        "bypassPermissions " + ("already set" if uc["already"] else "stamped" if bypass_ok
-                                else f"FAILED ({str(got)[:120]})"),
-        "ultracode " + ("already set" if uc["already"] else "stamped" if uc_ok else f"FAILED ({uc['error']})"),
+        _stamp_field_line("bypassPermissions", uc["already"], bypass_ok, got),
+        _stamp_field_line("ultracode", uc["already"], uc_ok, uc["error"]),
     ]
     ok = bypass_ok and uc_ok
     if ok:
@@ -722,7 +756,7 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
             "report": f"'{title}'{held_note}: {'; '.join(parts)}.{caveat}",
         },
         as_json,
-        0 if ok else 2 if (bypass_ok or uc_ok) else 1,
+        _stamp_exit_code(ok, bypass_ok, uc_ok),
     )
 
 

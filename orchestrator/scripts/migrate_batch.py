@@ -535,6 +535,33 @@ def _move_one(query: str, passthrough: list[str], terminate_live: bool = False) 
     return item
 
 
+def _resume_window(match: dict) -> int:
+    """The gate's quiet window for delivering a landed chat's resume, in seconds.
+
+    ⛔ LANDING IS ACTIVITY, SO THE STANDING WINDOW CALLS EVERY FRESH LANDING MID-TURN (pinned
+    live 2026-09-14, #63 -> #13). The import stamps the chat's activity with the landing time,
+    so for IDLE_AFTER_SECS (180s) after landing the gate reads a live engine as `running`, not
+    idle, whatever the transcript says. The courier then marks the delivery `peer_only`, the peer
+    channel dead-letters on a chat that is not actually taking turns, and the row is deferred as
+    "mid-turn". The timings proved it: the one chat couriered 194s after landing was delivered,
+    the four couriered under 180s were all deferred, and the operation then sat for nine minutes
+    and was cancelled. None of the five was mid-turn - every transcript ended on a finished turn
+    and the app itself reported `isRunning:false` for each.
+
+    The quiet window exists to tell a finished turn from a working one, and a landed chat's
+    finishing is already settled by the move itself, so the resume gates it the way `--now`
+    gates a move: migrate_chat.quiet_window's fast window, but ONLY when the transcript was
+    scanned and no background job is outstanding - otherwise the standing window, unchanged.
+    This shortens only how long the gate waits before reading the tail. The tail must still show
+    a finished turn, so a chat genuinely working after it landed is still gated as working.
+    """
+    try:
+        _, idle_after, _ = migrate_chat.quiet_window(match, now=True)
+    except Exception:  # an unreadable scan is no proof of anything: keep the standing window
+        return migrate_chat.gatelib_idle_after()
+    return idle_after
+
+
 def _restage(item: _Item, sid: str, text: str) -> dict | None:
     """Stage `text` against one landed chat again. Returns the new row, or None if it could
     not be staged (the reason is written onto the item's verdict).
@@ -550,11 +577,12 @@ def _restage(item: _Item, sid: str, text: str) -> dict | None:
     try:
         match = hydralib.resolve_one(sid)
         evidence = stage_reply.gather_evidence(match, sid)
-        return deliverylib.stage(
+        entry = deliverylib.stage(
             sid, text,
             title=str(match.get("title") or item.payload.get("title") or ""),
             instance=str(match.get("instance") or item.payload.get("to") or ""),
             evidence=evidence, by="migrate-resume-retry", dedupe=True)
+        return {**entry, "idleAfterSecs": _resume_window(match)}
     except Exception as err:
         item.payload["resume"]["why"] += (
             f" | retry could not re-stage: {type(err).__name__}: {str(err)[:120]}")
@@ -578,18 +606,21 @@ def _retry_hard_failures(hard: dict[str, _Item], text: str, tally: dict) -> None
     import courier
 
     restaged: dict[str, _Item] = {}
+    windows: dict[str, int] = {}
     for item in hard.values():
         sid = str(item.payload["sessionId"])
         entry = _restage(item, sid, text)
         if entry is None:
             continue
         restaged[entry["id"]] = item
+        windows[entry["id"]] = int(entry["idleAfterSecs"])
         item.payload["resume"]["deliveryId"] = entry["id"]
         item.payload["resume"]["retry"] = f"python orch.py courier --yes --only {entry['id']}"
     if not restaged:
         return
     try:
-        report = courier.run(len(restaged), set(restaged), act=True, hand_run=True)
+        report = courier.run(len(restaged), set(restaged), act=True, hand_run=True,
+                             idle_after=windows)
     except Exception as err:
         for item in restaged.values():
             item.payload["resume"]["why"] += (
@@ -630,16 +661,21 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
     if not landed:
         return tally
     by_delivery: dict[str, _Item] = {}
+    windows: dict[str, int] = {}
     for item in landed:
         sid = str(item.payload["sessionId"])
         try:
             match = hydralib.resolve_one(sid)
             evidence = stage_reply.gather_evidence(match, sid)
+            # reuse_identical: a batch that was cancelled with this resume still staged and is
+            # then fired again must not queue a SECOND copy of the same words (2026-09-14: two
+            # rows each for two chats). Different text staged for the chat is left alone.
             entry = deliverylib.stage(
                 sid, text,
                 title=str(match.get("title") or item.payload.get("title") or ""),
                 instance=str(match.get("instance") or item.payload.get("to") or ""),
-                evidence=evidence, by="migrate-resume")
+                evidence=evidence, by="migrate-resume", reuse_identical=True)
+            windows[entry["id"]] = _resume_window(match)
         except Exception as err:  # one chat's staging must not cost the others their resume
             item.payload["resume"] = {
                 "staged": False, "delivered": False,
@@ -649,12 +685,15 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
         item.payload["resume"] = {
             "deliveryId": entry["id"], "staged": True, "delivered": False, "why": "",
             "retry": f"python orch.py courier --yes --only {entry['id']}"}
+        if entry.get("reused"):
+            item.payload["resume"]["reused"] = True
     if not by_delivery:
         return tally
     import courier  # local: the actuator libs it pulls in are no concern of a batch without --resume
 
     try:
-        report = courier.run(len(by_delivery), set(by_delivery), act=True, hand_run=True)
+        report = courier.run(len(by_delivery), set(by_delivery), act=True, hand_run=True,
+                             idle_after=windows)
     except Exception as err:
         for item in by_delivery.values():
             item.payload["resume"]["why"] = (
@@ -946,23 +985,17 @@ def _name_landings(live: list) -> None:
                 "(then verify by dossier which chat took the name)")
 
 
-def _report(results: list[dict], note: str, secs: float) -> str:
-    # A DRY RUN IS NOT A REFUSAL. Reporting a plan as SKIP made a clean plan read like 13
-    # blocked chats, which is the same class of lie as calling a skipped step a pass.
-    if results and all(r.get("dryRun") for r in results):
-        lines = [f"DRY RUN: {len(results)} chat(s) planned in {secs:.0f}s"
-                 + (f" ({note})" if note else "")]
-        for r in results:
-            first = (r.get("report") or "").splitlines()
-            lines.append(f"  PLAN {(first[0] if first else r['chat'])[:170]}")
-        lines.append("Nothing was moved. Re-run without --dry-run to execute.")
-        return "\n".join(lines)
-    landed = [r for r in results if r.get("landed")]
-    clean = [r for r in landed if r.get("ok")]
-    # LANDED BUT NOT FINISHED is its own bucket: these chats ARE in the new account, and the
-    # "was NOT moved - re-run it" trailer below must never be printed about one of them.
-    unfinished = [r for r in landed if not r.get("ok")]
-    refused = [r for r in results if not r.get("landed")]
+def _report_dry_run(results: list[dict], note: str, secs: float) -> str:
+    lines = [f"DRY RUN: {len(results)} chat(s) planned in {secs:.0f}s"
+             + (f" ({note})" if note else "")]
+    for r in results:
+        first = (r.get("report") or "").splitlines()
+        lines.append(f"  PLAN {(first[0] if first else r['chat'])[:170]}")
+    lines.append("Nothing was moved. Re-run without --dry-run to execute.")
+    return "\n".join(lines)
+
+
+def _report_resume_tally(results: list[dict]) -> str:
     # ⛔ THE HEADLINE MUST NOT OVER-REPORT (found 2026-09-09, fixed 09-10). A landed chat is
     # DORMANT until something types into it, so when a caller asked for --resume, "3/3 landed"
     # described a migration in which zero chats had actually been told to carry on - and that
@@ -970,14 +1003,17 @@ def _report(results: list[dict], note: str, secs: float) -> str:
     # were scrolled past. Counted only when a resume was ASKED for; a plain move says nothing
     # about resumes, because there was nothing to say.
     asked_resume = [r for r in results if r.get("resume")]
-    resume_tally = ""
-    if asked_resume:
-        told = len([r for r in asked_resume if (r.get("resume") or {}).get("delivered")])
-        resume_tally = f", {told}/{len(asked_resume)} told to carry on"
-        if told < len(asked_resume):
-            resume_tally += " (the rest are moved but DORMANT)"
-    lines = [f"{len(landed)}/{len(results)} landed in {secs:.0f}s{resume_tally}"
-             + (f" ({note})" if note else "")]
+    if not asked_resume:
+        return ""
+    told = len([r for r in asked_resume if (r.get("resume") or {}).get("delivered")])
+    tally = f", {told}/{len(asked_resume)} told to carry on"
+    if told < len(asked_resume):
+        tally += " (the rest are moved but DORMANT)"
+    return tally
+
+
+def _report_landed_lines(clean: list[dict], unfinished: list[dict], refused: list[dict]) -> list[str]:
+    lines = []
     for r in clean:
         title = r.get("title") or r["chat"]
         verdict = r.get("bypassVerdict") or "?"
@@ -990,8 +1026,13 @@ def _report(results: list[dict], note: str, secs: float) -> str:
     for r in refused:
         why = (r.get("report") or "").splitlines()
         lines.append(f"  SKIP {r['chat']}: {(why[0] if why else 'refused')[:150]}")
+    return lines
+
+
+def _report_terminated_lines(results: list[dict]) -> list[str]:
     # WHAT --terminate-live DID, chat by chat. A kill is the one act in this script that is
     # not a move, so it is never folded into a move's line.
+    lines = []
     for r in results:
         t = r.get("terminated")
         if not t:
@@ -1002,8 +1043,13 @@ def _report(results: list[dict], note: str, secs: float) -> str:
                          "then moved again")
         else:
             lines.append(f"  TERMINATE FAILED for '{title}': {str(t.get('why') or '')[:140]}")
+    return lines
+
+
+def _report_resume_lines(results: list[dict]) -> list[str]:
     # WHAT --resume DID. "Moved" and "told to carry on" are different facts; a chat that was
     # moved and left dormant reads as done to anyone who only counts landings.
+    lines = []
     for r in results:
         rs = r.get("resume")
         if not rs:
@@ -1016,6 +1062,26 @@ def _report(results: list[dict], note: str, secs: float) -> str:
                          f"{str(rs.get('why') or '')[:120]} (retry: {rs.get('retry')})")
         else:
             lines.append(f"  RESUME NOT staged -> {title}: {str(rs.get('why') or '')[:140]}")
+    return lines
+
+
+def _report(results: list[dict], note: str, secs: float) -> str:
+    # A DRY RUN IS NOT A REFUSAL. Reporting a plan as SKIP made a clean plan read like 13
+    # blocked chats, which is the same class of lie as calling a skipped step a pass.
+    if results and all(r.get("dryRun") for r in results):
+        return _report_dry_run(results, note, secs)
+    landed = [r for r in results if r.get("landed")]
+    clean = [r for r in landed if r.get("ok")]
+    # LANDED BUT NOT FINISHED is its own bucket: these chats ARE in the new account, and the
+    # "was NOT moved - re-run it" trailer below must never be printed about one of them.
+    unfinished = [r for r in landed if not r.get("ok")]
+    refused = [r for r in results if not r.get("landed")]
+    resume_tally = _report_resume_tally(results)
+    lines = [f"{len(landed)}/{len(results)} landed in {secs:.0f}s{resume_tally}"
+             + (f" ({note})" if note else "")]
+    lines.extend(_report_landed_lines(clean, unfinished, refused))
+    lines.extend(_report_terminated_lines(results))
+    lines.extend(_report_resume_lines(results))
     if unfinished:
         lines.append("A LANDED-but-unfinished chat IS in its new account - do not re-move it; "
                      "finish its tidy-up (settle the source row / stamp the mode) by hand.")
@@ -1024,99 +1090,83 @@ def _report(results: list[dict], note: str, secs: float) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
+def _emit(payload: dict, as_json: bool, code: int) -> int:
+    print(json.dumps(payload, indent=2) if as_json else payload["report"])
+    return code
 
-    parsed = _parse(argv)
-    if isinstance(parsed, int):
-        return parsed
 
-    note = ""
-    if parsed.all_unarchived:
-        try:
-            rows, note = _movable_chats(parsed.source, parsed.limit)
-        except _UnknownSource as err:
-            # NOT EXIT_NONE. An empty batch and an account that does not exist look identical
-            # to a caller who only reads `moved`, and one of them means the work is still
-            # sitting there untouched.
-            payload = {"ok": False, "moved": 0, "results": [],
-                       "report": f"REFUSED (deterministic): {err}"}
-            print(json.dumps(payload, indent=2) if parsed.as_json else payload["report"])
-            return EXIT_REFUSED
-        # Resolve by SESSION ID, never by title: two accounts can hold the same title, and a
-        # fuzzy re-match at move time could pick the wrong one.
-        parsed.chats = [str(r.get("session_id") or "") for r in rows if r.get("session_id")]
+def _resolve_all_unarchived(parsed):
+    """Populate `parsed.chats` for --all-unarchived. Returns the batch `note` string on
+    success, or an int exit code the caller must return unchanged on refusal."""
+    try:
+        rows, note = _movable_chats(parsed.source, parsed.limit)
+    except _UnknownSource as err:
+        # NOT EXIT_NONE. An empty batch and an account that does not exist look identical
+        # to a caller who only reads `moved`, and one of them means the work is still
+        # sitting there untouched.
+        return _emit({"ok": False, "moved": 0, "results": [],
+                      "report": f"REFUSED (deterministic): {err}"}, parsed.as_json, EXIT_REFUSED)
+    # Resolve by SESSION ID, never by title: two accounts can hold the same title, and a
+    # fuzzy re-match at move time could pick the wrong one.
+    parsed.chats = [str(r.get("session_id") or "") for r in rows if r.get("session_id")]
+    return note
 
-    if not parsed.chats:
-        # An account that RESOLVED and is genuinely empty is a different fact from a caller
-        # who named nothing, and telling the first one to "use --all-unarchived" when that is
-        # exactly what it did is how a real answer gets mistaken for a usage error.
-        report = (f"nothing to move: {note}" if parsed.all_unarchived and note
-                  else ("nothing to move: name chats with --chat, or use "
-                        "--all-unarchived (optionally with --from)"))
-        payload = {"ok": False, "moved": 0, "results": [], "report": report}
-        print(json.dumps(payload, indent=2) if parsed.as_json else payload["report"])
-        return EXIT_NONE
 
+def _refuse_if_no_chats(parsed, note: str):
+    if parsed.chats:
+        return None
+    # An account that RESOLVED and is genuinely empty is a different fact from a caller
+    # who named nothing, and telling the first one to "use --all-unarchived" when that is
+    # exactly what it did is how a real answer gets mistaken for a usage error.
+    report = (f"nothing to move: {note}" if parsed.all_unarchived and note
+              else ("nothing to move: name chats with --chat, or use "
+                    "--all-unarchived (optionally with --from)"))
+    return _emit({"ok": False, "moved": 0, "results": [], "report": report}, parsed.as_json, EXIT_NONE)
+
+
+def _refuse_via_archive_gate(parsed):
     # THE ARCHIVE STOPGAP - after the chat list is final (so --all-unarchived is covered too),
     # and before a single chat is touched. Refuses the batch WHOLE; see _archive_gate.
     gate = _archive_gate(parsed)
-    if gate is not None:
-        code, report = gate
-        payload = {"ok": False, "moved": 0, "results": [], "report": report}
-        print(json.dumps(payload, indent=2) if parsed.as_json else report)
-        return code
+    if gate is None:
+        return None
+    code, report = gate
+    return _emit({"ok": False, "moved": 0, "results": [], "report": report}, parsed.as_json, code)
 
-    if len(parsed.chats) > 1 and "--title" in parsed.passthrough:
-        print("--title renames ONE chat; it cannot be right for a batch of several.",
-              file=sys.stderr)
-        return 2
 
-    t0 = time.time()
-    # PHASE ONE across every chat, then the finishing phases across every chat (_run_phases).
-    items = [_move_one(q, parsed.passthrough, terminate_live=parsed.terminate_live)
-             for q in parsed.chats]
-    _run_phases(items)
-    # A landed chat's payload was just rebuilt by the finishing phases; put the terminate
-    # verdict back on it. (A refused chat already carries its own.)
-    for item in items:
-        _attach_terminated(item)
+def _run_resume_phase(items: list, parsed) -> dict:
     # PHASE FOUR, only on a real run: a dry run lands nothing, so there is nothing to wake.
     # Bounded exactly like phases two and three (module-level RESUME_PHASE_TIMEOUT_SECS): the
     # courier can wait on an engine it believes is mid-turn, and that must never hold the
     # batch's report hostage - see `_mark_unresumed_after_timeout`.
-    resume = None
-    if parsed.resume_text and not parsed.dry_run:
-        landed_for_resume = [i for i in items if i.payload.get("landed") and i.payload.get("sessionId")]
-        resume_box: dict = {}
+    landed_for_resume = [i for i in items if i.payload.get("landed") and i.payload.get("sessionId")]
+    resume_box: dict = {}
 
-        def _do_resume() -> None:
-            resume_box["tally"] = _resume_landed(items, parsed.resume_text)
+    def _do_resume() -> None:
+        resume_box["tally"] = _resume_landed(items, parsed.resume_text)
 
-        resume_budget = RESUME_PHASE_TIMEOUT_SECS * max(1, len(landed_for_resume))
-        if _run_bounded("resume", resume_budget, _do_resume):
-            resume = resume_box.get("tally") or {"asked": len(landed_for_resume),
-                                                  "delivered": 0, "staged": 0}
-        else:
-            resume = {
-                "asked": len(landed_for_resume),
-                "delivered": sum(1 for i in landed_for_resume
-                                  if isinstance(i.payload.get("resume"), dict)
-                                  and i.payload["resume"].get("delivered")),
-                "staged": sum(1 for i in landed_for_resume
-                              if isinstance(i.payload.get("resume"), dict)
-                              and i.payload["resume"].get("staged")),
-                "timedOut": True,
-                "why": (f"the resume phase did not finish within {resume_budget:.0f}s - read "
-                        "each chat's own `resume` block, never trust this summary alone"),
-            }
-            _mark_unresumed_after_timeout(landed_for_resume, resume_budget)
+    resume_budget = RESUME_PHASE_TIMEOUT_SECS * max(1, len(landed_for_resume))
+    if _run_bounded("resume", resume_budget, _do_resume):
+        return resume_box.get("tally") or {"asked": len(landed_for_resume),
+                                            "delivered": 0, "staged": 0}
+    resume = {
+        "asked": len(landed_for_resume),
+        "delivered": sum(1 for i in landed_for_resume
+                          if isinstance(i.payload.get("resume"), dict)
+                          and i.payload["resume"].get("delivered")),
+        "staged": sum(1 for i in landed_for_resume
+                      if isinstance(i.payload.get("resume"), dict)
+                      and i.payload["resume"].get("staged")),
+        "timedOut": True,
+        "why": (f"the resume phase did not finish within {resume_budget:.0f}s - read "
+                "each chat's own `resume` block, never trust this summary alone"),
+    }
+    _mark_unresumed_after_timeout(landed_for_resume, resume_budget)
+    return resume
+
+
+def _build_batch_payload(items: list, parsed, note: str, secs: float, resume) -> dict:
     results = [i.payload for i in items]
-    secs = time.time() - t0
-
     landed = sum(1 for r in results if r.get("landed"))
     # `moved` counts LANDINGS (the chat is in its new account); `ok` demands that every chat
     # also FINISHED its tidy-up. A chat that landed and then crashed in a later phase is moved
@@ -1142,10 +1192,57 @@ def main(argv: list[str]) -> int:
         # The batch-level tally: `asked` landed chats were told to carry on, `delivered` of
         # them took it, `staged` still hold the reply. Present only when --resume ran.
         payload["resume"] = resume
+    return payload
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+
+    parsed = _parse(argv)
+    if isinstance(parsed, int):
+        return parsed
+
+    note = ""
+    if parsed.all_unarchived:
+        resolved = _resolve_all_unarchived(parsed)
+        if isinstance(resolved, int):
+            return resolved
+        note = resolved
+
+    refusal = _refuse_if_no_chats(parsed, note)
+    if refusal is not None:
+        return refusal
+
+    refusal = _refuse_via_archive_gate(parsed)
+    if refusal is not None:
+        return refusal
+
+    if len(parsed.chats) > 1 and "--title" in parsed.passthrough:
+        print("--title renames ONE chat; it cannot be right for a batch of several.",
+              file=sys.stderr)
+        return 2
+
+    t0 = time.time()
+    # PHASE ONE across every chat, then the finishing phases across every chat (_run_phases).
+    items = [_move_one(q, parsed.passthrough, terminate_live=parsed.terminate_live)
+             for q in parsed.chats]
+    _run_phases(items)
+    # A landed chat's payload was just rebuilt by the finishing phases; put the terminate
+    # verdict back on it. (A refused chat already carries its own.)
+    for item in items:
+        _attach_terminated(item)
+
+    resume = _run_resume_phase(items, parsed) if parsed.resume_text and not parsed.dry_run else None
+    secs = time.time() - t0
+
+    payload = _build_batch_payload(items, parsed, note, secs, resume)
     print(json.dumps(payload, indent=2) if parsed.as_json else payload["report"])
-    if all_ok:
+    if payload["ok"]:
         return EXIT_OK
-    return EXIT_PARTIAL if landed else EXIT_NONE
+    return EXIT_PARTIAL if payload["moved"] else EXIT_NONE
 
 
 if __name__ == "__main__":

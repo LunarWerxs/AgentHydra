@@ -297,6 +297,61 @@ def _row_to_match(row: dict) -> dict:
     }
 
 
+def _refuse_if_only_elsewhere(query: str, all_matches: list[dict], matches: list[dict],
+                               source_name: str | None) -> None:
+    """Only a retired twin sits on the named account: the chat itself lives elsewhere. Say
+    where, rather than moving a chat off an account the caller did not name - and this is a
+    final answer, not a miss for the table fallback to second-guess."""
+    if not (source_name and matches and all(m.get("archived") for m in matches)):
+        return
+    elsewhere = sorted({str(m.get("instance")) for m in all_matches
+                        if not m.get("archived") and not _in_source(m.get("instance"), source_name)})
+    if elsewhere:
+        raise hydralib.ChatNotFound(
+            f"{query} - only an archived copy is on {source_name}; its live copy is on "
+            f"{', '.join(elsewhere)}")
+
+
+def _fallback_table_hits(query: str, source_name: str | None) -> list[dict]:
+    # RESOLUTION ASKS THE COMPLETE QUESTION (2026-09-05). The default 7d window measured
+    # 21 rows against 500 for all+archived and hid six unarchived chats, one of them live
+    # that morning - so a windowed scan here answers "no such chat" for a chat that
+    # plainly exists, which is the most misleading refusal this script can produce. Find
+    # everything; let _check_archived_or_raise decide whether it may MOVE. A guard that
+    # names the real reason always beats a lookup that pretends the chat is not there.
+    rows = [r for r in hydralib.sessions(period="all", archived="include")
+            if _in_source(r.get("instance"), source_name)]
+    hits = [r for r in rows if r.get("session_id") == query]
+    if hits:
+        return hits
+    q = query.lower()
+    hits = [r for r in rows if q in str(r.get("title") or "").lower()]
+    if hits:
+        return hits
+    return _fuzzy_pick(query, rows)
+
+
+def _match_from_table_hits(query: str, source_name: str | None, hits: list[dict]) -> dict:
+    if len(hits) > 1:
+        raise hydralib.AmbiguousChat(
+            query,
+            [{"instance": h.get("instance"), "title": h.get("title"),
+              "cliSessionId": h.get("session_id")} for h in hits],
+        ) from None
+    row = hits[0]
+    sid = str(row.get("session_id") or "")
+    if sid and sid != query:
+        # Found by title: the dossier may well know this chat under its id even though
+        # the misspelled fragment found nothing - prefer its answer (live block, metaPath).
+        try:
+            by_id = [m for m in hydralib.dossier(sid) if _in_source(m.get("instance"), source_name)]
+            if by_id:
+                return hydralib.choose_match(sid, by_id)
+        except hydralib.DaemonError:
+            pass  # the table row is still a real answer; the daemon's import gates liveness
+    return _row_to_match(row)
+
+
 def resolve_for_migrate(query: str, source_name: str | None = None) -> dict:
     """Resolve the chat to migrate. The dossier only knows chats that ALREADY have a desktop
     record - which is exactly what a console-only session lacks, and landing those is this
@@ -317,53 +372,14 @@ def resolve_for_migrate(query: str, source_name: str | None = None) -> dict:
     neither, and moving on it would post an import against a possibly-live engine)."""
     all_matches = hydralib.dossier(query)
     matches = [m for m in all_matches if _in_source(m.get("instance"), source_name)]
-    if source_name and matches and all(m.get("archived") for m in matches):
-        # Only a retired twin sits on the named account: the chat itself lives elsewhere. Say
-        # where, rather than moving a chat off an account the caller did not name - and this
-        # is a final answer, not a miss for the table fallback to second-guess.
-        elsewhere = sorted({str(m.get("instance")) for m in all_matches
-                            if not m.get("archived") and not _in_source(m.get("instance"), source_name)})
-        if elsewhere:
-            raise hydralib.ChatNotFound(
-                f"{query} - only an archived copy is on {source_name}; its live copy is on "
-                f"{', '.join(elsewhere)}")
+    _refuse_if_only_elsewhere(query, all_matches, matches, source_name)
     try:
         return hydralib.choose_match(query, matches)
     except hydralib.ChatNotFound:
-        # RESOLUTION ASKS THE COMPLETE QUESTION (2026-09-05). The default 7d window measured
-        # 21 rows against 500 for all+archived and hid six unarchived chats, one of them live
-        # that morning - so a windowed scan here answers "no such chat" for a chat that
-        # plainly exists, which is the most misleading refusal this script can produce. Find
-        # everything; let _check_archived_or_raise decide whether it may MOVE. A guard that
-        # names the real reason always beats a lookup that pretends the chat is not there.
-        rows = [r for r in hydralib.sessions(period="all", archived="include")
-                if _in_source(r.get("instance"), source_name)]
-        hits = [r for r in rows if r.get("session_id") == query]
-        if not hits:
-            q = query.lower()
-            hits = [r for r in rows if q in str(r.get("title") or "").lower()]
-        if not hits:
-            hits = _fuzzy_pick(query, rows)
+        hits = _fallback_table_hits(query, source_name)
         if not hits:
             raise
-        if len(hits) > 1:
-            raise hydralib.AmbiguousChat(
-                query,
-                [{"instance": h.get("instance"), "title": h.get("title"),
-                  "cliSessionId": h.get("session_id")} for h in hits],
-            ) from None
-        row = hits[0]
-        sid = str(row.get("session_id") or "")
-        if sid and sid != query:
-            # Found by title: the dossier may well know this chat under its id even though
-            # the misspelled fragment found nothing - prefer its answer (live block, metaPath).
-            try:
-                by_id = [m for m in hydralib.dossier(sid) if _in_source(m.get("instance"), source_name)]
-                if by_id:
-                    return hydralib.choose_match(sid, by_id)
-            except hydralib.DaemonError:
-                pass  # the table row is still a real answer; the daemon's import gates liveness
-        return _row_to_match(row)
+        return _match_from_table_hits(query, source_name, hits)
 
 
 # The instance resolver lives in hydralib (shared judgment); this alias keeps migrate's own

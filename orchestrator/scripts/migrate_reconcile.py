@@ -117,6 +117,42 @@ def _candidates(limit: int = DEFAULT_LIMIT) -> list[dict]:
     return rows
 
 
+def _state_when_not_on_target(matches: list[dict], src: str, tgt: str,
+                               fleet_names: set[str] | None) -> dict:
+    holders = ", ".join(sorted({str(m.get("instance")) for m in matches}))
+    # NOT EVERY MISSING LANDING IS A FAULT (the first live run, 2026-09-14). Two shapes are
+    # the ledger being out of date rather than a move going wrong, and shouting them in the
+    # same voice as a real vanished move is how a report stops being read:
+    if fleet_names is not None and tgt.lower() not in fleet_names:
+        return {"state": "target-gone",
+                "why": (f"the account it moved to ({tgt!r}) no longer exists; the chat is on: "
+                        f"{holders}")}
+    live = [m for m in matches if not m.get("archived")]
+    if len(live) == 1:
+        return {"state": "moved-on",
+                "why": (f"not on {tgt}, but whole: exactly one live copy, on "
+                        f"{live[0].get('instance')}. A later move was not written down.")}
+    if not live:
+        # Archived is a resting state: the chat exists, nothing live can be lost or doubled.
+        return {"state": "archived-since",
+                "why": f"not on {tgt}; it has since been archived, on: {holders}"}
+    return {"state": "not-landed",
+            "why": (f"the ledger says this chat moved to {tgt!r}, but the target does not "
+                    f"hold it, and it has {len(live)} live cop{'y' if len(live) == 1 else 'ies'}. "
+                    f"It is on: {holders}")}
+
+
+def _state_when_on_target(on_src: list[dict], src: str, tgt: str) -> dict:
+    visible = [m for m in on_src if not m.get("archived")]
+    if visible:
+        return {"state": "unsettled",
+                "why": (f"it is on {tgt} AND still unarchived on {src}: a duplicate, not a move. "
+                        "The source-settle phase never ran.")}
+    return {"state": "settled",
+            "why": ("the source row is archived or gone" if on_src else
+                    "the source account no longer holds it")}
+
+
 def _state_of(row: dict, fleet_names: set[str] | None = None) -> dict:
     """Re-check ONE migrate row against the chat's current state on disk.
 
@@ -140,35 +176,8 @@ def _state_of(row: dict, fleet_names: set[str] | None = None) -> dict:
     on_src = [m for m in matches if str(m.get("instance") or "").lower() == src.lower()] if src else []
     on_tgt = [m for m in matches if str(m.get("instance") or "").lower() == tgt.lower()] if tgt else []
     if not on_tgt:
-        holders = ", ".join(sorted({str(m.get("instance")) for m in matches}))
-        # NOT EVERY MISSING LANDING IS A FAULT (the first live run, 2026-09-14). Two shapes are
-        # the ledger being out of date rather than a move going wrong, and shouting them in the
-        # same voice as a real vanished move is how a report stops being read:
-        if fleet_names is not None and tgt.lower() not in fleet_names:
-            return {**out, "state": "target-gone",
-                    "why": (f"the account it moved to ({tgt!r}) no longer exists; the chat is on: "
-                            f"{holders}")}
-        live = [m for m in matches if not m.get("archived")]
-        if len(live) == 1:
-            return {**out, "state": "moved-on",
-                    "why": (f"not on {tgt}, but whole: exactly one live copy, on "
-                            f"{live[0].get('instance')}. A later move was not written down.")}
-        if not live:
-            # Archived is a resting state: the chat exists, nothing live can be lost or doubled.
-            return {**out, "state": "archived-since",
-                    "why": f"not on {tgt}; it has since been archived, on: {holders}"}
-        return {**out, "state": "not-landed",
-                "why": (f"the ledger says this chat moved to {tgt!r}, but the target does not "
-                        f"hold it, and it has {len(live)} live cop{'y' if len(live) == 1 else 'ies'}. "
-                        f"It is on: {holders}")}
-    visible = [m for m in on_src if not m.get("archived")]
-    if visible:
-        return {**out, "state": "unsettled",
-                "why": (f"it is on {tgt} AND still unarchived on {src}: a duplicate, not a move. "
-                        "The source-settle phase never ran.")}
-    return {**out, "state": "settled",
-            "why": ("the source row is archived or gone" if on_src else
-                    "the source account no longer holds it")}
+        return {**out, **_state_when_not_on_target(matches, src, tgt, fleet_names)}
+    return {**out, **_state_when_on_target(on_src, src, tgt)}
 
 
 def reconcile(limit: int = DEFAULT_LIMIT) -> dict:
