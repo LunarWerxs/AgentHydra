@@ -250,6 +250,103 @@ const writeFailure = (configPath: string, e: unknown): string =>
  * NEVER THROWS. A daemon must boot whether or not another program's config file cooperates, so
  * every failure comes back as `action: 'failed'` with a reason a human can act on.
  */
+/** `config.mcpServers`, coerced to a plain record — an absent or malformed value reads as empty. */
+function mcpServersRecord(config: Record<string, unknown>): Record<string, unknown> {
+  return config.mcpServers &&
+    typeof config.mcpServers === 'object' &&
+    !Array.isArray(config.mcpServers)
+    ? (config.mcpServers as Record<string, unknown>)
+    : {}
+}
+
+type SyncBase = { enabled: boolean; configPath: string; desired: McpHttpEntry }
+
+/**
+ * A status for one of the two nothing-to-do cases, or `null` when a write is actually needed.
+ * Returned BEFORE any stamp check: not writing cannot lose anyone's work, so a concurrent writer
+ * is none of our business here.
+ */
+function nothingToDoStatus(base: SyncBase, current: unknown): McpRegisterStatus | null {
+  if (!base.enabled && current === undefined) {
+    return { ...base, registered: false, entry: null, action: 'absent', error: null }
+  }
+  if (base.enabled && sameEntry(current, base.desired)) {
+    return { ...base, registered: true, entry: current, action: 'unchanged', error: null }
+  }
+  return null
+}
+
+/** One write attempt's outcome: `done: true` is final (return it); `done: false` is a race that
+ *  the caller's retry loop should absorb and try again. */
+type McpWriteAttempt = { done: boolean; status: McpRegisterStatus }
+
+/**
+ * Apply the enable/disable change to `config.mcpServers` and try to persist it, re-checking the
+ * file's stamp immediately before writing so a concurrent writer is detected rather than clobbered
+ * (see the module-level note on the race window above `McpRegisterDeps`).
+ */
+function attemptMcpConfigWrite(
+  configPath: string,
+  before: string | null,
+  config: Record<string, unknown>,
+  servers: Record<string, unknown>,
+  current: unknown,
+  base: SyncBase,
+  writeConfig: (path: string, config: Record<string, unknown>) => void,
+): McpWriteAttempt {
+  // Turned off: take OUR entry out and leave every other server alone. Off has to mean gone, not
+  // merely "stops being refreshed" - a stale entry left behind would keep answering after the
+  // user asked for it not to.
+  const action: McpRegisterAction = !base.enabled
+    ? 'removed'
+    : current === undefined
+      ? 'added'
+      : 'updated'
+  if (base.enabled) servers[MCP_SERVER_KEY] = base.desired
+  else delete servers[MCP_SERVER_KEY]
+  config.mcpServers = servers
+
+  if (stamp(configPath) !== before) {
+    return {
+      done: false,
+      status: {
+        ...base,
+        registered: !base.enabled && current !== undefined,
+        entry: current ?? null,
+        action: 'failed',
+        error: `${configPath} was written by another process while this update was being prepared`,
+      },
+    }
+  }
+
+  try {
+    writeConfig(configPath, config)
+  } catch (e) {
+    lastWriteError = { configPath, error: writeFailure(configPath, e) }
+    return {
+      done: true,
+      status: {
+        ...base,
+        registered: !base.enabled && current !== undefined,
+        entry: current ?? null,
+        action: 'failed',
+        error: lastWriteError.error,
+      },
+    }
+  }
+  lastWriteError = null
+  return {
+    done: true,
+    status: {
+      ...base,
+      registered: base.enabled,
+      entry: base.enabled ? base.desired : null,
+      action,
+      error: null,
+    },
+  }
+}
+
 export function syncMcpRegistration(
   opts: {
     daemonUrl: string
@@ -261,7 +358,7 @@ export function syncMcpRegistration(
   const enabled = opts.enabled ?? mcpRegisterEnabled()
   const configPath = opts.configPath ?? claudeCodeConfigPath()
   const desired = desiredEntry(opts.daemonUrl)
-  const base = { enabled, configPath, desired }
+  const base: SyncBase = { enabled, configPath, desired }
   const writeConfig = deps.writeConfig ?? writeConfigAtomic
   let raced: McpRegisterStatus | null = null
 
@@ -273,62 +370,26 @@ export function syncMcpRegistration(
     deps.afterRead?.(configPath)
     if (!config) return { ...base, registered: false, entry: null, action: 'failed', error }
 
-    const servers =
-      config.mcpServers &&
-      typeof config.mcpServers === 'object' &&
-      !Array.isArray(config.mcpServers)
-        ? (config.mcpServers as Record<string, unknown>)
-        : {}
+    const servers = mcpServersRecord(config)
     const current = servers[MCP_SERVER_KEY]
 
-    // The two nothing-to-do paths return BEFORE any stamp check: not writing cannot lose anyone's
-    // work, so a concurrent writer is none of our business here.
-    if (!enabled && current === undefined) {
+    const noop = nothingToDoStatus(base, current)
+    if (noop) {
       lastWriteError = null
-      return { ...base, registered: false, entry: null, action: 'absent', error: null }
-    }
-    if (enabled && sameEntry(current, desired)) {
-      lastWriteError = null
-      return { ...base, registered: true, entry: current, action: 'unchanged', error: null }
+      return noop
     }
 
-    // Turned off: take OUR entry out and leave every other server alone. Off has to mean gone, not
-    // merely "stops being refreshed" - a stale entry left behind would keep answering after the
-    // user asked for it not to.
-    const action: McpRegisterAction = !enabled
-      ? 'removed'
-      : current === undefined
-        ? 'added'
-        : 'updated'
-    if (enabled) servers[MCP_SERVER_KEY] = desired
-    else delete servers[MCP_SERVER_KEY]
-    config.mcpServers = servers
-
-    if (stamp(configPath) !== before) {
-      raced = {
-        ...base,
-        registered: !enabled && current !== undefined,
-        entry: current ?? null,
-        action: 'failed',
-        error: `${configPath} was written by another process while this update was being prepared`,
-      }
-      continue
-    }
-
-    try {
-      writeConfig(configPath, config)
-    } catch (e) {
-      lastWriteError = { configPath, error: writeFailure(configPath, e) }
-      return {
-        ...base,
-        registered: !enabled && current !== undefined,
-        entry: current ?? null,
-        action: 'failed',
-        error: lastWriteError.error,
-      }
-    }
-    lastWriteError = null
-    return { ...base, registered: enabled, entry: enabled ? desired : null, action, error: null }
+    const result = attemptMcpConfigWrite(
+      configPath,
+      before,
+      config,
+      servers,
+      current,
+      base,
+      writeConfig,
+    )
+    if (result.done) return result.status
+    raced = result.status
   }
 
   return (

@@ -242,79 +242,83 @@ export interface DshSessionRecord {
  * (separators collapse, unsafe characters escape, the whole thing truncates at 251 characters), so
  * the only trustworthy cwd is the one the session itself recorded.
  */
+/** Sub-directory names inside `dir`, or `[]` if `dir` cannot be listed (removed mid-walk, etc). */
+function listSubdirNames(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+  } catch {
+    return []
+  }
+}
+
+/** One session's record, or `null` when its log has vanished or its size cannot be read. */
+function buildDshSessionRecord(
+  sessionsRoot: string,
+  root: string,
+  projectDir: string,
+  sessionId: string,
+  archived: Set<string>,
+): DshSessionRecord | null {
+  const log = currentLogFile(join(sessionsRoot, projectDir, sessionId))
+  if (!log) return null
+
+  let size = 0
+  let mtime = 0
+  try {
+    const st = statSync(log.path)
+    size = st.size
+    mtime = st.mtimeMs
+  } catch {
+    return null // the session was removed between the two reads; it is not a session any more
+  }
+
+  const proj = dshProjection(root, sessionId)
+  let cwd = typeof proj?.identity?.cwd === 'string' ? proj.identity.cwd : ''
+  const title = projRow<string>(proj, 'title') ?? ''
+  let created = typeof proj?.identity?.createdAt === 'number' ? proj.identity.createdAt : null
+  const lastPromptAt = projRow<{ lastPromptAt?: number }>(proj, 'sessionListMetadata')?.lastPromptAt
+
+  if (!cwd || !created) {
+    // No projection (or an incomplete one): the log's first record is the session header and
+    // carries both. One decode of a session that is usually small, and only for the sessions
+    // the cache does not already answer for.
+    const header = readDshLog(log.path)[0]
+    if (header?.type === 'session') {
+      if (!cwd && typeof header.cwd === 'string') cwd = header.cwd
+      if (!created && typeof header.createdAt === 'number') created = header.createdAt
+    }
+  }
+
+  return {
+    session_id: sessionId,
+    // The cwd is whatever the HARNESS recorded, so a home written on Windows carries
+    // backslashes wherever it is read; node's basename only splits on the host's separator,
+    // which is why the Linux CI leg listed `D:\work\scratch` as the whole project name.
+    project: cwd ? pathLeaf(cwd) || cwd : projectDir,
+    cwd,
+    title: compact(title),
+    created_at: created,
+    // The file's own mtime is the honest "last activity": the projection's lastPromptAt is when
+    // the HUMAN last spoke, which on a long agent run is minutes or hours behind the work.
+    last_activity_at: Math.max(mtime, typeof lastPromptAt === 'number' ? lastPromptAt : 0),
+    archived: archived.has(sessionId),
+    size_bytes: size,
+    path: log.path,
+  }
+}
+
 export function listDshSessions(root: string): DshSessionRecord[] {
   const sessionsRoot = join(root, SESSIONS_DIR)
   if (!existsSync(sessionsRoot)) return []
   const archived = archivedIds(root)
   const out: DshSessionRecord[] = []
 
-  let projectDirs: string[]
-  try {
-    projectDirs = readdirSync(sessionsRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-  } catch {
-    return []
-  }
-
-  for (const projectDir of projectDirs) {
-    let sessionDirs: string[]
-    try {
-      sessionDirs = readdirSync(join(sessionsRoot, projectDir), { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => e.name)
-    } catch {
-      continue
-    }
-    for (const sessionId of sessionDirs) {
-      const log = currentLogFile(join(sessionsRoot, projectDir, sessionId))
-      if (!log) continue
-      let size = 0
-      let mtime = 0
-      try {
-        const st = statSync(log.path)
-        size = st.size
-        mtime = st.mtimeMs
-      } catch {
-        continue // the session was removed between the two reads; it is not a session any more
-      }
-
-      const proj = dshProjection(root, sessionId)
-      let cwd = typeof proj?.identity?.cwd === 'string' ? proj.identity.cwd : ''
-      const title = projRow<string>(proj, 'title') ?? ''
-      let created = typeof proj?.identity?.createdAt === 'number' ? proj.identity.createdAt : null
-      const lastPromptAt = projRow<{ lastPromptAt?: number }>(
-        proj,
-        'sessionListMetadata',
-      )?.lastPromptAt
-
-      if (!cwd || !created) {
-        // No projection (or an incomplete one): the log's first record is the session header and
-        // carries both. One decode of a session that is usually small, and only for the sessions
-        // the cache does not already answer for.
-        const header = readDshLog(log.path)[0]
-        if (header?.type === 'session') {
-          if (!cwd && typeof header.cwd === 'string') cwd = header.cwd
-          if (!created && typeof header.createdAt === 'number') created = header.createdAt
-        }
-      }
-
-      out.push({
-        session_id: sessionId,
-        // The cwd is whatever the HARNESS recorded, so a home written on Windows carries
-        // backslashes wherever it is read; node's basename only splits on the host's separator,
-        // which is why the Linux CI leg listed `D:\work\scratch` as the whole project name.
-        project: cwd ? pathLeaf(cwd) || cwd : projectDir,
-        cwd,
-        title: compact(title),
-        created_at: created,
-        // The file's own mtime is the honest "last activity": the projection's lastPromptAt is when
-        // the HUMAN last spoke, which on a long agent run is minutes or hours behind the work.
-        last_activity_at: Math.max(mtime, typeof lastPromptAt === 'number' ? lastPromptAt : 0),
-        archived: archived.has(sessionId),
-        size_bytes: size,
-        path: log.path,
-      })
+  for (const projectDir of listSubdirNames(sessionsRoot)) {
+    for (const sessionId of listSubdirNames(join(sessionsRoot, projectDir))) {
+      const record = buildDshSessionRecord(sessionsRoot, root, projectDir, sessionId, archived)
+      if (record) out.push(record)
     }
   }
   return out
@@ -370,6 +374,83 @@ export interface DshSessionContent {
  * system/message is excluded on purpose: it is the assembled system prompt (7.5 KB in a one-line
  * test session), it is regenerated every step, and no other source's transcript shows it.
  */
+/** A `user/message` record's event, or `null` for a non-human or empty one (see readDshSession). */
+function userMessageEvent(data: Record<string, any>, time: string | null): TailEvent | null {
+  if (data?.source?.kind !== 'user') return null
+  const text = blockText(data.content, 'text')
+  if (!text) return null
+  return {
+    role: 'user',
+    kind: 'text',
+    text: truncate(text, 6000),
+    tool_name: null,
+    timestamp: time,
+  }
+}
+
+/** An `assistant/message` record's events: an optional `thinking` block, then an optional reply. */
+function assistantMessageEvents(data: Record<string, any>, time: string | null): TailEvent[] {
+  const message = data.message ?? {}
+  const out: TailEvent[] = []
+  const thinking = blockText(message.content, 'reasoning')
+  if (thinking)
+    out.push({
+      role: 'assistant',
+      kind: 'thinking',
+      text: truncate(thinking, 6000),
+      tool_name: null,
+      timestamp: time,
+    })
+  const text = blockText(message.content, 'text')
+  if (text)
+    out.push({
+      role: 'assistant',
+      kind: 'text',
+      text: truncate(text, 6000),
+      tool_name: null,
+      timestamp: time,
+    })
+  return out
+}
+
+/** A `tool/call` record's event; also remembers the call's name for the matching `tool/result`. */
+function toolCallEvent(
+  data: Record<string, any>,
+  time: string | null,
+  toolNames: Map<string, string>,
+): TailEvent {
+  const name = typeof data.name === 'string' ? data.name : 'tool'
+  if (typeof data.callId === 'string') toolNames.set(data.callId, name)
+  return {
+    role: 'assistant',
+    kind: 'tool_use',
+    // `arguments` is the raw JSON string the model produced, unparsed by the harness itself.
+    text: truncate(compact(printable(data.arguments)), 1200),
+    tool_name: name,
+    timestamp: time,
+  }
+}
+
+/** A `tool/result` record's event, or `null` when it carries no text. */
+function toolResultEvent(
+  data: Record<string, any>,
+  time: string | null,
+  toolNames: Map<string, string>,
+): TailEvent | null {
+  const message = data.message ?? {}
+  const block = Array.isArray(message.content) ? message.content[0] : null
+  const callId = block?.callId ?? message.source?.callId
+  const text = compact(blockText(block?.content, 'text') || printable(block?.content))
+  if (!text) return null
+  return {
+    role: 'user',
+    kind: 'tool_result',
+    text: truncate(text, 2000),
+    tool_name: (typeof callId === 'string' ? toolNames.get(callId) : null) ?? null,
+    timestamp: time,
+  }
+}
+
 export function readDshSession(path: string): DshSessionContent | null {
   const records = readDshLog(path)
   if (records.length === 0) return null
@@ -384,69 +465,27 @@ export function readDshSession(path: string): DshSessionContent | null {
     const data = rec.data ?? {}
     switch (rec.type) {
       case 'user/message': {
-        if (data?.source?.kind !== 'user') continue
-        const text = blockText(data.content, 'text')
-        if (!text) continue
-        events.push({
-          role: 'user',
-          kind: 'text',
-          text: truncate(text, 6000),
-          tool_name: null,
-          timestamp: time,
-        })
-        messageCount++
-        continue
-      }
-      case 'assistant/message': {
-        const message = data.message ?? {}
-        const thinking = blockText(message.content, 'reasoning')
-        if (thinking)
-          events.push({
-            role: 'assistant',
-            kind: 'thinking',
-            text: truncate(thinking, 6000),
-            tool_name: null,
-            timestamp: time,
-          })
-        const text = blockText(message.content, 'text')
-        if (text) {
-          events.push({
-            role: 'assistant',
-            kind: 'text',
-            text: truncate(text, 6000),
-            tool_name: null,
-            timestamp: time,
-          })
+        const event = userMessageEvent(data, time)
+        if (event) {
+          events.push(event)
           messageCount++
         }
         continue
       }
+      case 'assistant/message': {
+        for (const event of assistantMessageEvents(data, time)) {
+          events.push(event)
+          if (event.kind === 'text') messageCount++
+        }
+        continue
+      }
       case 'tool/call': {
-        const name = typeof data.name === 'string' ? data.name : 'tool'
-        if (typeof data.callId === 'string') toolNames.set(data.callId, name)
-        events.push({
-          role: 'assistant',
-          kind: 'tool_use',
-          // `arguments` is the raw JSON string the model produced, unparsed by the harness itself.
-          text: truncate(compact(printable(data.arguments)), 1200),
-          tool_name: name,
-          timestamp: time,
-        })
+        events.push(toolCallEvent(data, time, toolNames))
         continue
       }
       case 'tool/result': {
-        const message = data.message ?? {}
-        const block = Array.isArray(message.content) ? message.content[0] : null
-        const callId = block?.callId ?? message.source?.callId
-        const text = compact(blockText(block?.content, 'text') || printable(block?.content))
-        if (!text) continue
-        events.push({
-          role: 'user',
-          kind: 'tool_result',
-          text: truncate(text, 2000),
-          tool_name: (typeof callId === 'string' ? toolNames.get(callId) : null) ?? null,
-          timestamp: time,
-        })
+        const event = toolResultEvent(data, time, toolNames)
+        if (event) events.push(event)
         continue
       }
       default:

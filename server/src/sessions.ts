@@ -855,6 +855,145 @@ export interface ListSessionsOptions {
   project?: string
 }
 
+/** Whether `f` belongs to `instance`. Split out of listSessions because it is one of several
+ *  filter predicates run over the whole index before the newest-N cap; see the call site. */
+function transcriptMatchesInstance(
+  f: TranscriptFile,
+  instance: string,
+  idsOf: (f: TranscriptFile) => string[],
+  mmap: Map<string, SessionMeta>,
+): boolean {
+  // A store that splits per ACCOUNT says so on the row itself, so no parse and no Desktop
+  // lookup is involved: Codex rows are settled here and never fall through to the Claude
+  // resolution below, which would answer "not this instance" for every one of them.
+  if (f.instance) return instance !== 'other' && instanceScopeMatches(f, instance)
+  if (f.source !== 'claude') return false
+  const known = idsOf(f)
+    .map((id) => mmap.get(id))
+    .find(Boolean)
+  if (!known) return true
+  return instance === 'other' ? false : known.instance === instance
+}
+
+/** Whether `f` (or a transcript it absorbed) is marked archived. */
+function transcriptArchivedFlag(
+  f: TranscriptFile,
+  idsOf: (f: TranscriptFile) => string[],
+  mmap: Map<string, SessionMeta>,
+): boolean {
+  return f.archived || idsOf(f).some((id) => !!mmap.get(id)?.archived)
+}
+
+/** Whether `f` (or a transcript it absorbed) has a queue row. */
+function transcriptDispatchedFlag(
+  f: TranscriptFile,
+  idsOf: (f: TranscriptFile) => string[],
+  qmap: Map<string, QueueStatus>,
+): boolean {
+  return f.source === 'claude' && idsOf(f).some((id) => qmap.has(id))
+}
+
+/** Case-insensitive substring match of `needle` against every project-ish field `f` carries. */
+function transcriptMatchesProject(f: TranscriptFile, needle: string): boolean {
+  return (
+    (f.cwd ?? '').toLowerCase().includes(needle) ||
+    decodeProjectKey(f.project).toLowerCase().includes(needle) ||
+    f.project.toLowerCase().includes(needle)
+  )
+}
+
+/** Whether `f` might be a rate-limited row: a proven hit, or not yet scanned (see the rateLimited
+ *  filter's own comment on why an unscanned row is always kept at this stage). */
+function transcriptRateLimitCandidate(
+  f: TranscriptFile,
+  limited: Set<string>,
+  scanned: Set<string>,
+): boolean {
+  const key = cacheKey(f)
+  return limited.has(key) || !scanned.has(key)
+}
+
+/** The reasons a PARSED row is dropped outright, independent of the `instance` scope (which needs
+ *  the resolved `desk` and is checked separately — see instanceExcludesRow). */
+function shouldDropParsedRow(
+  m: ScannedMeta,
+  sinceMs: number | null,
+  rateLimited: RateLimitScope,
+): boolean {
+  if (m.substantive_turns === 0) return true
+  // The mtime pass above is a cheap SUPERSET (writing a turn always touches the file, so mtime is
+  // never older than the last activity). It is not exact, though: a transcript can be touched
+  // without gaining a timestamped turn, which put rows reading "2d ago" inside a "Last 24 hours"
+  // window. Re-check against the timestamp the row actually DISPLAYS, now that it is parsed.
+  if (sinceMs !== null && m.last_activity_at < sinceMs) return true
+  // The exact half of the usage-wall scope. The pre-filter above only narrowed the candidates;
+  // this is the verdict, and it runs on the same parsed row the badge is rendered from, so the
+  // filter and the badge cannot disagree.
+  if (rateLimited !== 'all') {
+    if (!m.limit_stop) return true
+    if (rateLimited === 'pending' && !m.limit_stop.pending) return true
+  }
+  return false
+}
+
+/** Whether the `instance` scope excludes this row, now that `desk` is resolved. A row whose store
+ *  named its own account was already settled before the cap (transcriptMatchesInstance) and never
+ *  reaches here — deskMetaFor is Claude-only, so `desk` would be null for every one of them. */
+function instanceExcludesRow(
+  tf: TranscriptFile,
+  instance: string | undefined,
+  desk: SessionMeta | null,
+): boolean {
+  if (!instance || tf.instance) return false
+  if ((instance === 'other') !== (desk === null)) return true
+  if (desk && desk.instance !== instance) return true
+  return false
+}
+
+/** Assemble one row's DTO once it has cleared every filter. Split out of toSummary purely for
+ *  size — this is a single flat object literal, not a source of branching. */
+function buildSessionSummary(
+  tf: TranscriptFile,
+  m: ScannedMeta,
+  desk: SessionMeta | null,
+  qmap: Map<string, QueueStatus>,
+  dmap: Map<string, boolean>,
+  collapsed: { counts: Map<string, number> },
+): SessionSummary {
+  return {
+    session_id: tf.session_id,
+    source: tf.source,
+    tool: toolIdOf(tf),
+    locator: tf.locator ?? makeLocator(tf),
+    title: m.title,
+    cwd: m.cwd,
+    project: tf.project,
+    git_branch: m.git_branch,
+    message_count: m.message_count,
+    created_at: m.created_at,
+    last_activity_at: m.last_activity_at,
+    last_role: m.last_role,
+    last_text_preview: m.last_text_preview,
+    size_bytes: tf.size_bytes,
+    transcript_path: tf.path,
+    queue_status: tf.source === 'claude' ? (qmap.get(tf.session_id) ?? null) : null,
+    ...instanceFieldsFor(tf, desk),
+    archived: tf.archived || (desk?.archived ?? false),
+    done:
+      dmap.get(sessionMarkKey(tf.source, tf.session_id, tf)) ??
+      dmap.get(legacyMarkKey(tf.source, tf.session_id, tf.tool)) ??
+      false,
+    dispatched: tf.source === 'claude' && qmap.has(tf.session_id),
+    subagent_count: collapsed.counts.get(`${tf.source}:${storeKeyOf(tf)}:${tf.session_id}`) ?? 0,
+    limit_stop: m.limit_stop,
+    title_source: m.title_source,
+    title_tag: m.title_tag,
+    copy_index: 1,
+    copy_count: 1,
+    ended_because: m.ended_because,
+  }
+}
+
 export async function listSessions(opts: ListSessionsOptions = {}): Promise<SessionSummary[]> {
   const {
     limit = 200,
@@ -901,30 +1040,15 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   const collapsed = collapseSubagents(files)
   files = collapsed.rows
   if (source !== 'all') files = files.filter((file) => file.source === source)
-  if (instance) {
-    // A row whose id Desktop does not know is a CANDIDATE, not a miss: resolveInstanceByOrigin may
-    // still place it once the parse supplies its cwd and start time. So this pre-filter keeps those
-    // and toSummary settles them exactly, the same shape the usage-wall scope uses below and for
-    // the same reason — a scope that runs before the cap cannot see anything only a parse knows,
-    // and being conservative here costs a few parses where guessing would cost correctness.
-    files = files.filter((f) => {
-      // A store that splits per ACCOUNT says so on the row itself, so no parse and no Desktop
-      // lookup is involved: Codex rows are settled here and never fall through to the Claude
-      // resolution below, which would answer "not this instance" for every one of them.
-      if (f.instance) return instance !== 'other' && instanceScopeMatches(f, instance)
-      if (f.source !== 'claude') return false
-      const known = idsOf(f)
-        .map((id) => mmap.get(id))
-        .find(Boolean)
-      if (!known) return true
-      return instance === 'other' ? false : known.instance === instance
-    })
-  }
+  // A row whose id Desktop does not know is a CANDIDATE, not a miss: resolveInstanceByOrigin may
+  // still place it once the parse supplies its cwd and start time. So this pre-filter keeps those
+  // and toSummary settles them exactly, the same shape the usage-wall scope uses below and for
+  // the same reason — a scope that runs before the cap cannot see anything only a parse knows,
+  // and being conservative here costs a few parses where guessing would cost correctness.
+  if (instance) files = files.filter((f) => transcriptMatchesInstance(f, instance, idsOf, mmap))
   if (archived !== 'include') {
     const want = archived === 'only'
-    files = files.filter(
-      (f) => (f.archived || idsOf(f).some((id) => !!mmap.get(id)?.archived)) === want,
-    )
+    files = files.filter((f) => transcriptArchivedFlag(f, idsOf, mmap) === want)
   }
   if (sinceMs !== null) files = files.filter((f) => f.mtime_ms >= sinceMs)
   // No re-check after the parse, unlike sinceMs below: mtime is an UPPER bound on real activity
@@ -936,9 +1060,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   // afterwards would answer "you have never queued anything" on a machine that queues nightly.
   if (dispatched !== 'all') {
     const want = dispatched === 'queued'
-    files = files.filter(
-      (f) => (f.source === 'claude' && idsOf(f).some((id) => qmap.has(id))) === want,
-    )
+    files = files.filter((f) => transcriptDispatchedFlag(f, idsOf, qmap) === want)
   }
   // A folder scope, for a caller that wants one repository's history rather than one instance's.
   // Matched against BOTH the working directory and the provider's project key, because the two
@@ -946,12 +1068,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   // foreign adapters often have only one of them.
   if (project) {
     const needle = project.toLowerCase()
-    files = files.filter(
-      (f) =>
-        (f.cwd ?? '').toLowerCase().includes(needle) ||
-        decodeProjectKey(f.project).toLowerCase().includes(needle) ||
-        f.project.toLowerCase().includes(needle),
-    )
+    files = files.filter((f) => transcriptMatchesProject(f, needle))
   }
   // Same before-the-cap rule again, and this one needs a trick to obey it: the verdict comes from a
   // PARSE, not from the mtime index, so it cannot simply be a filter here. What it can be is a
@@ -963,10 +1080,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   if (rateLimited !== 'all') {
     const limited = new Set(selectLimitedKeys.all(SCAN_VERSION).map((r) => r.cache_key))
     const scanned = new Set(selectScannedKeys.all(SCAN_VERSION).map((r) => r.cache_key))
-    files = files.filter((f) => {
-      const key = cacheKey(f)
-      return limited.has(key) || !scanned.has(key)
-    })
+    files = files.filter((f) => transcriptRateLimitCandidate(f, limited, scanned))
   }
   files = files.sort((a, b) => b.mtime_ms - a.mtime_ms)
   const dmap = doneMarkMap()
@@ -976,61 +1090,12 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
     // Gone between the listing and the read, so there is no row to show. This is the path that
     // used to take the daemon down with it.
     if (!m) return null
-    if (m.substantive_turns === 0) return null
-    // The mtime pass above is a cheap SUPERSET (writing a turn always touches the file, so mtime is
-    // never older than the last activity). It is not exact, though: a transcript can be touched
-    // without gaining a timestamped turn, which put rows reading "2d ago" inside a "Last 24 hours"
-    // window. Re-check against the timestamp the row actually DISPLAYS, now that it is parsed.
-    if (sinceMs !== null && m.last_activity_at < sinceMs) return null
-    // The exact half of the usage-wall scope. The pre-filter above only narrowed the candidates;
-    // this is the verdict, and it runs on the same parsed row the badge is rendered from, so the
-    // filter and the badge cannot disagree.
-    if (rateLimited !== 'all') {
-      if (!m.limit_stop) return null
-      if (rateLimited === 'pending' && !m.limit_stop.pending) return null
-    }
+    if (shouldDropParsedRow(m, sinceMs, rateLimited)) return null
     // Desktop's own id link first; the origin join only for rows it has never heard of. Resolved
     // ONCE here and used for both the chip and the filter below, so the two cannot disagree.
     const desk = deskMetaFor(tf, m, idsOf(tf), mmap)
-    // A row whose store named its own account was settled exactly before the cap — there is no
-    // parse that could change the answer, and running the Desktop checks below on it would drop
-    // every Codex row (deskMetaFor is Claude-only, so `desk` is always null for them).
-    if (instance && !tf.instance) {
-      if ((instance === 'other') !== (desk === null)) return null
-      if (desk && desk.instance !== instance) return null
-    }
-    return {
-      session_id: tf.session_id,
-      source: tf.source,
-      tool: toolIdOf(tf),
-      locator: tf.locator ?? makeLocator(tf),
-      title: m.title,
-      cwd: m.cwd,
-      project: tf.project,
-      git_branch: m.git_branch,
-      message_count: m.message_count,
-      created_at: m.created_at,
-      last_activity_at: m.last_activity_at,
-      last_role: m.last_role,
-      last_text_preview: m.last_text_preview,
-      size_bytes: tf.size_bytes,
-      transcript_path: tf.path,
-      queue_status: tf.source === 'claude' ? (qmap.get(tf.session_id) ?? null) : null,
-      ...instanceFieldsFor(tf, desk),
-      archived: tf.archived || (desk?.archived ?? false),
-      done:
-        dmap.get(sessionMarkKey(tf.source, tf.session_id, tf)) ??
-        dmap.get(legacyMarkKey(tf.source, tf.session_id, tf.tool)) ??
-        false,
-      dispatched: tf.source === 'claude' && qmap.has(tf.session_id),
-      subagent_count: collapsed.counts.get(`${tf.source}:${storeKeyOf(tf)}:${tf.session_id}`) ?? 0,
-      limit_stop: m.limit_stop,
-      title_source: m.title_source,
-      title_tag: m.title_tag,
-      copy_index: 1,
-      copy_count: 1,
-      ended_because: m.ended_because,
-    }
+    if (instanceExcludesRow(tf, instance, desk)) return null
+    return buildSessionSummary(tf, m, desk, qmap, dmap, collapsed)
   }
 
   // Batched so a run of stubs costs extra parses only when it actually occurs: a store with no

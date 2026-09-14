@@ -468,139 +468,119 @@ export function resetUsageApiBackoff(): void {
   apiBackoffUntil.clear()
 }
 
-export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapshot> {
-  const label = opts.account ?? null
+/**
+ * The fast path: a direct OAuth-token API read, whenever we can lay hands on a token. Returns a
+ * snapshot when this path has a final answer (success, an obeyed backoff, or an injected token
+ * whose failure must not fall back to the CLI); returns `undefined` when `checkUsage` should
+ * continue on to the CLI spawn (no token, `forceCli`, or a config-dir token that failed but may
+ * still succeed by refreshing its own login).
+ */
+async function fastApiUsageRead(
+  opts: UsageCheckOpts,
+  label: string | null,
+): Promise<UsageSnapshot | undefined> {
+  // See CLI_PROBE_COOLDOWN_MS / forceCli: this flag means "skip the API read", checked here at the
+  // single chokepoint so no caller can spawn around it by accident.
+  if (opts.forceCli) return undefined
 
-  // ⛔ THE RECORD DESCRIBES *THIS* ATTEMPT, SO CLEAR IT FIRST.
-  //
-  // It used to be cleared only on success, which made it a permanent verdict: one 429 recorded for
-  // a label stuck to that label forever, and every LATER no-data result - including "this instance
-  // has no login at all", which never even reaches the network - was reported as a rate limit.
-  // The owner caught exactly that (2026-09-07): an account he had never signed in was being
-  // described as rate-limited, and the rate limit outranked the truth. A stale diagnosis is worse
-  // than none, because it is confidently specific and sends you to fix the wrong thing.
-  lastApiFailure.delete(label ?? '(ambient)')
+  // An API key is not accepted by the OAuth usage endpoint, so only an oauth_token qualifies. A
+  // CLI config dir keeps its token in PLAIN JSON, so a `/login`'d dir is usable directly.
+  const injected = opts.auth && opts.auth.authType === 'oauth_token' ? opts.auth.secret : null
+  const fromDir = !injected && opts.configDir ? resolveCliConfigDirToken(opts.configDir) : null
+  const token = injected ?? fromDir?.token ?? null
+  if (!token) return undefined
 
-  // --- fast path: the direct API read, whenever we can lay hands on an OAuth token ---------------
-  if (!opts.forceCli) {
-    // An API key is not accepted by the OAuth usage endpoint, so only an oauth_token qualifies.
-    const injected = opts.auth && opts.auth.authType === 'oauth_token' ? opts.auth.secret : null
-    // A CLI config dir keeps its token in PLAIN JSON, so a `/login`'d dir is usable directly.
-    const fromDir = !injected && opts.configDir ? resolveCliConfigDirToken(opts.configDir) : null
-    const token = injected ?? fromDir?.token ?? null
-    if (token) {
-      // ⛔ OBEY A 429 WE ALREADY HAVE. If the server told this label to come back later and that
-      // window has not lifted, do NOT call the endpoint again - it cannot succeed, and re-hitting a
-      // rolling limiter is what keeps the account stuck at "rate limited" forever (see
-      // apiBackoffUntil). Re-assert the failure with the REMAINING seconds so the UI still reads
-      // "rate_limited, retry in N min" and counts down, and hand back no-data (the caller serves
-      // the last cached reading, never a fresh "0%"). Skipping the fetch here is the whole fix.
-      const fingerprint = tokenFingerprint(token)
-      const backoff = apiBackoffUntil.get(label ?? '(ambient)')?.get(fingerprint)
-      const nowMs = Date.now()
-      if (backoff && backoff.until > nowMs) {
-        lastApiFailure.set(label ?? '(ambient)', {
-          status: 429,
-          error: backoff.error,
-          retryAfterSec: Math.max(1, Math.ceil((backoff.until - nowMs) / 1000)),
-        })
-        return parseUsageOutput('', label)
-      }
-      const res = await fetchUsageApi({ token, account: label, timeoutMs: opts.timeoutMs })
-      // A good read clears this token's backoff: the limit has lifted, resume normal polling.
-      if (res.ok) {
-        apiBackoffUntil.get(label ?? '(ambient)')?.delete(fingerprint)
-        return res.snapshot
-      }
-      // Not fatal for a CONFIG-DIR token: its CLI can still succeed by refreshing its own login (a
-      // 401 here just means "this token can't read usage"). An injected token stops below.
-      //
-      // ⛔ BUT RECORD WHY. Discarding this was the single thing that made every usage problem
-      // undiagnosable: whatever the endpoint said - 401 rejected, 429 rate-limited, 0 no network -
-      // the user saw the same "Claude returned no usage numbers for this instance", and so did
-      // anyone reading the code. Kept per label (not returned) so the snapshot type and every
-      // caller stay unchanged; usage-service reads it when it builds the no-data result.
-      lastApiFailure.set(label ?? '(ambient)', {
-        status: res.status,
-        error: res.error,
-        ...(res.retryAfterSec === undefined ? {} : { retryAfterSec: res.retryAfterSec }),
-      })
-      // ⛔ A 429 IS NOT A REASON TO SPAWN. The CLI would present the same credential to the same
-      // rate-limited endpoint and fail identically, ~9s and a process later - and on a fleet that
-      // turns one rate limit into a burst of doomed processes. Answer no-data now; the caller
-      // reports it as rate-limited (usage-service) instead of pretending the account is broken.
-      //
-      // AND ARM THE BACKOFF so the NEXT poll skips this endpoint until the window lifts. The server
-      // usually names the delay; when it does not, wait a conservative minute rather than resume the
-      // 30-second knocking that turns one 429 into a stuck one.
-      if (res.status === 429) {
-        const waitSec = res.retryAfterSec && res.retryAfterSec > 0 ? res.retryAfterSec : 60
-        const labelKey = label ?? '(ambient)'
-        const windows = apiBackoffUntil.get(labelKey) ?? new Map()
-        windows.set(fingerprint, { until: Date.now() + waitSec * 1000, error: res.error })
-        apiBackoffUntil.set(labelKey, windows)
-        return parseUsageOutput('', label)
-      }
-      // ⛔ AN *INJECTED* TOKEN NEVER FALLS BACK TO THE CLI, WHATEVER THE API SAID.
-      //
-      // The CLI's `/usage` screen is this same GET with this same token (see usage-api.ts), so it
-      // cannot succeed where the read above failed - and when the spawn DID print numbers, they were
-      // some other login's. Measured in usage-history.json: on 2026-09-11 at 20:00 ten desktop
-      // instances whose API reads had failed each "read" 86% weekly with no reset instant (what
-      // 5claude's and test9's own API reads said that hour), and at 21:00 seven of them "read" 20%
-      // resetting Sep 18 (another_meh's, which its own API read had reported all afternoon). Those
-      // seven were still showing that 20% as their own on 2026-09-14. No reading beats another
-      // account's reading. A config-dir token still falls through, because that CLI owns its login
-      // and can refresh it; so does an API key, which this endpoint refuses outright.
-      if (injected) return parseUsageOutput('', label)
-    }
-  }
+  const labelKey = label ?? '(ambient)'
+  const fingerprint = tokenFingerprint(token)
 
-  // ⛔ AND THE INJECTED-TOKEN RULE IS CHECKED HERE TOO, WHERE NOTHING CAN GO ROUND IT. The return
-  // above sits inside `if (!opts.forceCli)`, so `{ forceCli: true, auth: <oauth token> }` - a
-  // combination the options type allows and no caller makes today - would skip it and land on the
-  // spawn, which is the exact path that printed another account's numbers on 2026-09-11. An
-  // invariant stated in capitals has to be enforced on every input the signature permits, not on
-  // the inputs the current callers happen to pass.
-  if (opts.auth?.authType === 'oauth_token') return parseUsageOutput('', label)
-
-  // --- cooldown gate: a broken fast path must not turn a 30s poller into a CLI mill -------------
-  // See CLI_PROBE_COOLDOWN_MS. Checked HERE, at the single chokepoint every caller goes through,
-  // so no future caller can spawn around it by accident. `forceCli` alone does NOT bypass it -
-  // that flag means "skip the API read", not "spawn no matter how recently we already did".
-  // --- futility gate: never spawn a probe that cannot possibly authenticate -------------------
-  // Cheaper and more honest than rate-limiting it. A config dir whose access AND refresh tokens are
-  // both expired gives the CLI nothing to work with, so the spawn burns ~9s and a process to return
-  // the same all-null snapshot forever. See cliConfigDirCredentialState for the incident behind it:
-  // a leftover ambient login did exactly this, every 30 seconds, for weeks. An injected credential
-  // bypasses the check - that is a token we brought ourselves, not one the dir has to supply.
-  if (!opts.auth && opts.configDir && cliConfigDirCredentialState(opts.configDir) === 'dead') {
+  // ⛔ OBEY A 429 WE ALREADY HAVE. If the server told this label to come back later and that
+  // window has not lifted, do NOT call the endpoint again - it cannot succeed, and re-hitting a
+  // rolling limiter is what keeps the account stuck at "rate limited" forever (see
+  // apiBackoffUntil). Re-assert the failure with the REMAINING seconds so the UI still reads
+  // "rate_limited, retry in N min" and counts down, and hand back no-data (the caller serves
+  // the last cached reading, never a fresh "0%"). Skipping the fetch here is the whole fix.
+  const backoff = apiBackoffUntil.get(labelKey)?.get(fingerprint)
+  const nowMs = Date.now()
+  if (backoff && backoff.until > nowMs) {
+    lastApiFailure.set(labelKey, {
+      status: 429,
+      error: backoff.error,
+      retryAfterSec: Math.max(1, Math.ceil((backoff.until - nowMs) / 1000)),
+    })
     return parseUsageOutput('', label)
   }
 
-  // ⛔ THE COOLDOWN IS FOR THE CREDENTIAL-LESS PATH ONLY. An `auth` here is a token WE resolved for
-  // a specific account - a desktop instance's decrypted grant, a dispatch account's secret - so the
-  // spawn has a real credential and a real chance of returning numbers. Rate-limiting those turns a
-  // human pressing "check usage" twice into "Claude returned no usage numbers for this instance",
-  // which is a lie about the account rather than a message about the button (reported by the owner,
-  // 2026-09-07, and caused by the first cut of this cooldown). The mill it exists to stop was the
-  // AMBIENT probe - no injected credential, nothing to authenticate with, spawning every 30s
-  // forever - and that is exactly the case this still covers.
-  const cooldownKey = label ?? opts.configDir ?? '(ambient)'
-  if (!opts.bypassCooldown && !opts.auth) {
-    const gate = cliProbeGate(cooldownKey, Date.now())
-    if (!gate.allow) {
-      // The last real reading, not a fresh no-data: callers are told never to read no-data as 0%,
-      // and a stale-but-true number is strictly better information than none.
-      return gate.cached ?? parseUsageOutput('', label)
-    }
+  const res = await fetchUsageApi({ token, account: label, timeoutMs: opts.timeoutMs })
+  // A good read clears this token's backoff: the limit has lifted, resume normal polling.
+  if (res.ok) {
+    apiBackoffUntil.get(labelKey)?.delete(fingerprint)
+    return res.snapshot
   }
-  if (!opts.auth) rememberCliProbe(cooldownKey, Date.now())
 
-  // --- fallback: spawn `claude -p "/usage"` and parse the text screen ----------------------------
+  // Not fatal for a CONFIG-DIR token: its CLI can still succeed by refreshing its own login (a
+  // 401 here just means "this token can't read usage"). An injected token stops below.
+  //
+  // ⛔ BUT RECORD WHY. Discarding this was the single thing that made every usage problem
+  // undiagnosable: whatever the endpoint said - 401 rejected, 429 rate-limited, 0 no network -
+  // the user saw the same "Claude returned no usage numbers for this instance", and so did
+  // anyone reading the code. Kept per label (not returned) so the snapshot type and every
+  // caller stay unchanged; usage-service reads it when it builds the no-data result.
+  lastApiFailure.set(labelKey, {
+    status: res.status,
+    error: res.error,
+    ...(res.retryAfterSec === undefined ? {} : { retryAfterSec: res.retryAfterSec }),
+  })
+
+  // ⛔ A 429 IS NOT A REASON TO SPAWN. The CLI would present the same credential to the same
+  // rate-limited endpoint and fail identically, ~9s and a process later - and on a fleet that
+  // turns one rate limit into a burst of doomed processes. Answer no-data now; the caller
+  // reports it as rate-limited (usage-service) instead of pretending the account is broken.
+  //
+  // AND ARM THE BACKOFF so the NEXT poll skips this endpoint until the window lifts. The server
+  // usually names the delay; when it does not, wait a conservative minute rather than resume the
+  // 30-second knocking that turns one 429 into a stuck one.
+  if (res.status === 429) {
+    const waitSec = res.retryAfterSec && res.retryAfterSec > 0 ? res.retryAfterSec : 60
+    const windows = apiBackoffUntil.get(labelKey) ?? new Map()
+    windows.set(fingerprint, { until: Date.now() + waitSec * 1000, error: res.error })
+    apiBackoffUntil.set(labelKey, windows)
+    return parseUsageOutput('', label)
+  }
+
+  // ⛔ AN *INJECTED* TOKEN NEVER FALLS BACK TO THE CLI, WHATEVER THE API SAID.
+  //
+  // The CLI's `/usage` screen is this same GET with this same token (see usage-api.ts), so it
+  // cannot succeed where the read above failed - and when the spawn DID print numbers, they were
+  // some other login's. Measured in usage-history.json: on 2026-09-11 at 20:00 ten desktop
+  // instances whose API reads had failed each "read" 86% weekly with no reset instant (what
+  // 5claude's and test9's own API reads said that hour), and at 21:00 seven of them "read" 20%
+  // resetting Sep 18 (another_meh's, which its own API read had reported all afternoon). Those
+  // seven were still showing that 20% as their own on 2026-09-14. No reading beats another
+  // account's reading. A config-dir token still falls through, because that CLI owns its login
+  // and can refresh it; so does an API key, which this endpoint refuses outright.
+  if (injected) return parseUsageOutput('', label)
+  return undefined
+}
+
+/** A snapshot the cooldown gate wants returned immediately, or `undefined` to let the probe run. */
+function cooldownGateResult(
+  opts: UsageCheckOpts,
+  cooldownKey: string,
+  label: string | null,
+): UsageSnapshot | undefined {
+  if (opts.bypassCooldown || opts.auth) return undefined
+  const gate = cliProbeGate(cooldownKey, Date.now())
+  if (gate.allow) return undefined
+  // The last real reading, not a fresh no-data: callers are told never to read no-data as 0%,
+  // and a stale-but-true number is strictly better information than none.
+  return gate.cached ?? parseUsageOutput('', label)
+}
+
+/** The spawn environment for the `/usage` probe: ambient env, minus any auth we override. Only
+ *  overrides the ambient auth when we actually have a credential to inject (mirrors
+ *  dispatch-runner: clear all three inherited auth vars, then set the one for this account). */
+function usageProbeEnv(opts: UsageCheckOpts): Record<string, string> {
   const env: Record<string, string> = { ...(process.env as Record<string, string>) }
-  // Only override the ambient auth when we actually have a credential to inject (mirrors
-  // dispatch-runner: clear all three inherited auth vars, then set the one for this account).
   if (opts.auth) {
     delete env.ANTHROPIC_API_KEY
     delete env.ANTHROPIC_AUTH_TOKEN
@@ -616,18 +596,25 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
     }
   }
   if (opts.configDir) env.CLAUDE_CONFIG_DIR = opts.configDir
+  return env
+}
 
-  // Run the probe in a scratch directory of our own.
-  //
-  // `claude -p` opens a real session and writes a real transcript, keyed by the CWD it ran in. With
-  // the probe inheriting the daemon's cwd, every quota check filed a ~3 KB stub into whatever
-  // project folder that mapped to — a caveat, a `<command-name>/usage</command-name>` line, and
-  // nothing else. Measured 2026-07-18: 279 such stubs, 33 of them in the previous day, sitting in
-  // the middle of the user's real sessions.
-  //
-  // Quota is account-scoped, not directory-scoped, so where this runs makes no difference to what
-  // it reads. Pointing it here keeps every stub in one folder we own and can sweep (see
-  // pruneUsageProbeTranscripts), instead of scattering them through real work.
+/**
+ * The fallback: spawn `claude -p "/usage"` and parse the text screen.
+ *
+ * Run in a scratch directory of our own: `claude -p` opens a real session and writes a real
+ * transcript keyed by the CWD it ran in, and with the probe inheriting the daemon's cwd, every
+ * quota check filed a ~3 KB stub into whatever project folder that mapped to. Quota is
+ * account-scoped, not directory-scoped, so where this runs makes no difference to what it reads;
+ * pointing it here keeps every stub in one folder we own and can sweep (pruneUsageProbeTranscripts)
+ * instead of scattering them through real work.
+ */
+async function spawnUsageProbe(
+  opts: UsageCheckOpts,
+  label: string | null,
+  cooldownKey: string,
+): Promise<UsageSnapshot> {
+  const env = usageProbeEnv(opts)
   const probeCwd = usageProbeCwd()
   if (probeCwd) env.PWD = probeCwd
 
@@ -679,6 +666,58 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
   // account rather than a skipped probe.
   rememberCliProbe(cooldownKey, Date.now(), snapshot)
   return snapshot
+}
+
+export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapshot> {
+  const label = opts.account ?? null
+
+  // ⛔ THE RECORD DESCRIBES *THIS* ATTEMPT, SO CLEAR IT FIRST.
+  //
+  // It used to be cleared only on success, which made it a permanent verdict: one 429 recorded for
+  // a label stuck to that label forever, and every LATER no-data result - including "this instance
+  // has no login at all", which never even reaches the network - was reported as a rate limit.
+  // The owner caught exactly that (2026-09-07): an account he had never signed in was being
+  // described as rate-limited, and the rate limit outranked the truth. A stale diagnosis is worse
+  // than none, because it is confidently specific and sends you to fix the wrong thing.
+  lastApiFailure.delete(label ?? '(ambient)')
+
+  // --- fast path: the direct API read, whenever we can lay hands on an OAuth token ---------------
+  const fastResult = await fastApiUsageRead(opts, label)
+  if (fastResult !== undefined) return fastResult
+
+  // ⛔ AND THE INJECTED-TOKEN RULE IS CHECKED HERE TOO, WHERE NOTHING CAN GO ROUND IT. The fast
+  // path above skips its own read when `forceCli` is set, so `{ forceCli: true, auth: <oauth
+  // token> }` - a combination the options type allows and no caller makes today - would land on
+  // the spawn, which is the exact path that printed another account's numbers on 2026-09-11. An
+  // invariant stated in capitals has to be enforced on every input the signature permits, not on
+  // the inputs the current callers happen to pass.
+  if (opts.auth?.authType === 'oauth_token') return parseUsageOutput('', label)
+
+  // --- futility gate: never spawn a probe that cannot possibly authenticate ----------------------
+  // Cheaper and more honest than rate-limiting it. A config dir whose access AND refresh tokens are
+  // both expired gives the CLI nothing to work with, so the spawn burns ~9s and a process to return
+  // the same all-null snapshot forever. See cliConfigDirCredentialState for the incident behind it:
+  // a leftover ambient login did exactly this, every 30 seconds, for weeks. An injected credential
+  // bypasses the check - that is a token we brought ourselves, not one the dir has to supply.
+  if (!opts.auth && opts.configDir && cliConfigDirCredentialState(opts.configDir) === 'dead') {
+    return parseUsageOutput('', label)
+  }
+
+  // --- cooldown gate: a broken fast path must not turn a 30s poller into a CLI mill ---------------
+  // ⛔ THE COOLDOWN IS FOR THE CREDENTIAL-LESS PATH ONLY. An `auth` here is a token WE resolved for
+  // a specific account - a desktop instance's decrypted grant, a dispatch account's secret - so the
+  // spawn has a real credential and a real chance of returning numbers. Rate-limiting those turns a
+  // human pressing "check usage" twice into "Claude returned no usage numbers for this instance",
+  // which is a lie about the account rather than a message about the button (reported by the owner,
+  // 2026-09-07, and caused by the first cut of this cooldown). The mill it exists to stop was the
+  // AMBIENT probe - no injected credential, nothing to authenticate with, spawning every 30s
+  // forever - and that is exactly the case this still covers.
+  const cooldownKey = label ?? opts.configDir ?? '(ambient)'
+  const cooldownResult = cooldownGateResult(opts, cooldownKey, label)
+  if (cooldownResult !== undefined) return cooldownResult
+  if (!opts.auth) rememberCliProbe(cooldownKey, Date.now())
+
+  return spawnUsageProbe(opts, label, cooldownKey)
 }
 
 // Re-export the small cache API so existing imports keep working. Its implementation lives in a

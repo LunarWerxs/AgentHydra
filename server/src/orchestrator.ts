@@ -840,6 +840,79 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number, hook
   }
 }
 
+/** Outcome of checking whether a script is already running through this route: either the caller
+ *  is free to proceed (optionally because it just preempted the holder), or must stop and return
+ *  the given refusal. */
+type LiveRunConflict =
+  | { blocked: false; preempted?: string }
+  | { blocked: true; outcome: OrchestratorOutcome }
+
+/**
+ * `script` already has `running` in flight; decide whether this call may preempt it or must be
+ * refused. Split out of runOrchestrator so its nested preempt/refuse branches don't compound with
+ * the spawn/try/catch below them. Callers check `liveRun` themselves and only call this — and only
+ * `await` its result — when it is non-null, so a caller with nothing in flight reaches its spawn in
+ * the same synchronous tick it always did.
+ *
+ * Name the run that holds the lock AND the one call that releases it. A bare "wait for it" is
+ * what sent 2026-09-12 to taskkill and 2026-09-13 to a hand-killed migrate_batch: the remedy
+ * existed both times (cancelOrchestratorOperation) and the refusal never said so.
+ */
+async function resolveLiveRunConflict(
+  script: string,
+  args: string[],
+  deps: SpawnDeps & { dir?: string; python?: string },
+  running: InFlightRun,
+): Promise<LiveRunConflict> {
+  const holder = [...operations.values()].find(
+    (e) => e.op.status === 'running' && e.op.script === script,
+  )
+  // Every refusal below carries the call's resume, staged, when it had one.
+  const refuse = async (error: string): Promise<OrchestratorOutcome> => {
+    const resumeStaged =
+      script === 'migrate_batch' && resumeOf(args).resume
+        ? await stageRefusedResume(args, deps)
+        : undefined
+    return {
+      ok: false,
+      busy: true,
+      ...(holder ? { operationId: holder.op.id } : {}),
+      ...(resumeStaged ? { resumeStaged } : {}),
+      error,
+    }
+  }
+
+  // ...and when the incoming call is the SAME act with a person's word added, take the route
+  // instead of naming a remedy the person then has to run by hand. See mayPreempt.
+  if (holder && mayPreempt(args, holder.op.args)) {
+    const stop = cancelOrchestratorOperation(holder.op.id)
+    if (stop.ok && (await waitForLockToClear(script)))
+      return { blocked: false, preempted: holder.op.id }
+    // ⛔ THE HOLDER IS ALREADY DYING, SO DO NOT SAY "WAIT FOR IT" (review finding, 2026-09-14).
+    // A tree whose grandchild holds a pipe open can outlast the wait, and falling through to
+    // the ordinary refusal told the caller to wait for a healthy run, or to cancel one this
+    // very call had just cancelled - while nothing was moving the chats at all.
+    if (stop.ok)
+      return {
+        blocked: true,
+        outcome: await refuse(
+          `${script} (operation ${holder.op.id}) was preempted by this call and is still being torn down after ${Math.round(PREEMPT_WAIT_MS / 1000)}s - it needs no orchestrator_cancel. Fire this same call again in a few seconds; nothing is moving these chats until you do.`,
+        ),
+      }
+  }
+
+  const age = Math.round((Date.now() - running.started) / 1000)
+  const remedy = holder
+    ? `wait for it, or stop it with orchestrator_cancel { id: "${holder.op.id}" } and fire this call again`
+    : 'wait for it rather than starting a second one'
+  return {
+    blocked: true,
+    outcome: await refuse(
+      `${script} is already running through this route (started ${age}s ago) - ${remedy}`,
+    ),
+  }
+}
+
 /** Run one script by its menu name. The driver's cwd is the toolbox root, exactly as a person
  *  typing `python orch.py <script>` there, so state/, the tray heartbeat and the ledgers resolve
  *  to the same files a hand-run would use. */
@@ -859,53 +932,20 @@ export async function runOrchestrator(
     }
   const command = [deps.python ?? pythonBinary(), 'orch.py', script, ...args]
   const spawn = deps.spawn ?? realSpawn
+
+  // ⛔ ONLY AWAIT WHEN THERE IS SOMETHING TO RESOLVE. A caller that finds no live run must reach
+  // the spawn below in the SAME synchronous tick as before — tests rely on that to observe a
+  // spawn's side effect (e.g. an increment) immediately after firing two calls back to back with
+  // no await between them. Introducing an `await` here unconditionally would push that spawn a
+  // microtask later even when `liveRun` says there is nothing to wait for.
   let preempted: string | undefined
   const running = liveRun(script)
   if (running) {
-    // Name the run that holds the lock AND the one call that releases it. A bare "wait for it"
-    // is what sent 2026-09-12 to taskkill and 2026-09-13 to a hand-killed migrate_batch: the
-    // remedy existed both times (cancelOrchestratorOperation) and the refusal never said so.
-    const holder = [...operations.values()].find(
-      (e) => e.op.status === 'running' && e.op.script === script,
-    )
-    // Every refusal below carries the call's resume, staged, when it had one.
-    const refuse = async (error: string): Promise<OrchestratorOutcome> => {
-      const resumeStaged =
-        script === 'migrate_batch' && resumeOf(args).resume
-          ? await stageRefusedResume(args, deps)
-          : undefined
-      return {
-        ok: false,
-        busy: true,
-        ...(holder ? { operationId: holder.op.id } : {}),
-        ...(resumeStaged ? { resumeStaged } : {}),
-        error,
-      }
-    }
-    // ...and when the incoming call is the SAME act with a person's word added, take the route
-    // instead of naming a remedy the person then has to run by hand. See mayPreempt.
-    if (holder && mayPreempt(args, holder.op.args)) {
-      const stop = cancelOrchestratorOperation(holder.op.id)
-      if (stop.ok && (await waitForLockToClear(script))) preempted = holder.op.id
-      // ⛔ THE HOLDER IS ALREADY DYING, SO DO NOT SAY "WAIT FOR IT" (review finding, 2026-09-14).
-      // A tree whose grandchild holds a pipe open can outlast the wait, and falling through to
-      // the ordinary refusal told the caller to wait for a healthy run, or to cancel one this
-      // very call had just cancelled - while nothing was moving the chats at all.
-      else if (stop.ok)
-        return refuse(
-          `${script} (operation ${holder.op.id}) was preempted by this call and is still being torn down after ${Math.round(PREEMPT_WAIT_MS / 1000)}s - it needs no orchestrator_cancel. Fire this same call again in a few seconds; nothing is moving these chats until you do.`,
-        )
-    }
-    if (!preempted) {
-      const age = Math.round((Date.now() - running.started) / 1000)
-      const remedy = holder
-        ? `wait for it, or stop it with orchestrator_cancel { id: "${holder.op.id}" } and fire this call again`
-        : 'wait for it rather than starting a second one'
-      return refuse(
-        `${script} is already running through this route (started ${age}s ago) - ${remedy}`,
-      )
-    }
+    const conflict = await resolveLiveRunConflict(script, args, deps, running)
+    if (conflict.blocked) return conflict.outcome
+    preempted = conflict.preempted
   }
+
   const started = Date.now()
   const entry: InFlightRun = { started, deadline: started + timeoutMs + STALE_LOCK_GRACE_MS }
   inFlight.set(script, entry)
