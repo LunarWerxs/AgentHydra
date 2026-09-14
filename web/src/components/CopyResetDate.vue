@@ -39,7 +39,7 @@ async function copy() {
   <button
     v-if="date"
     type="button"
-    class="block w-full cursor-pointer text-left transition-[filter] hover:brightness-125"
+    class="block w-full cursor-pointer text-start transition-[filter] hover:brightness-125"
     :title="t('instances.resetDateCopyHint', { date })"
     @click.stop="copy"
   >

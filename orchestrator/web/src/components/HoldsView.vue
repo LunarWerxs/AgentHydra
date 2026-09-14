@@ -54,7 +54,7 @@ defineProps<{ data: SuppressedData }>()
               <TableRow>
                 <TableHead>Act</TableHead>
                 <TableHead>Chat / target id</TableHead>
-                <TableHead class="text-right">Attempts</TableHead>
+                <TableHead class="text-end">Attempts</TableHead>
                 <TableHead>Why</TableHead>
               </TableRow>
             </TableHeader>
@@ -62,7 +62,7 @@ defineProps<{ data: SuppressedData }>()
               <TableRow v-for="(s, i) in data.suppressed" :key="`${s.session}-${i}`">
                 <TableCell>{{ s.kind }}</TableCell>
                 <TableCell class="whitespace-normal font-mono">{{ s.session }}</TableCell>
-                <TableCell class="text-right">{{ s.attempts ?? '?' }}</TableCell>
+                <TableCell class="text-end">{{ s.attempts ?? '?' }}</TableCell>
                 <TableCell class="whitespace-normal text-xs">{{ s.why }}</TableCell>
               </TableRow>
             </TableBody>

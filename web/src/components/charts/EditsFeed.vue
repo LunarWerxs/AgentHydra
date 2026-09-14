@@ -91,7 +91,7 @@ const rows = computed<Row[]>(() => {
       >{{ r.ext || '·' }}</span>
       <span class="min-w-0 flex-1 truncate">
         <span class="text-xs font-medium">{{ r.name }}</span>
-        <span v-if="r.where" class="ml-1.5 text-[11px] text-muted-foreground">{{ r.where }}</span>
+        <span v-if="r.where" class="ms-1.5 text-[11px] text-muted-foreground">{{ r.where }}</span>
       </span>
       <span
         v-if="r.count > 1"

@@ -113,7 +113,7 @@ const triggerLabel = computed(() => {
             v-for="s in filtered"
             :key="s.session_id"
             type="button"
-            class="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent"
+            class="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-start hover:bg-accent"
             @click="toggle(s.session_id)"
           >
             <Check

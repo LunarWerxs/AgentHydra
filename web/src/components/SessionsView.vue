@@ -463,7 +463,7 @@ function onComposerSent(mode: 'now' | 'queued') {
          its own surface every region painted --background and the whole app read as one flat sheet,
          separated only by the hairline border. -->
     <aside
-      class="relative min-h-0 shrink-0 overflow-hidden border-r border-border bg-sidebar"
+      class="relative min-h-0 shrink-0 overflow-hidden border-e border-border bg-sidebar"
       :class="resizing ? '' : 'transition-[width] duration-300 ease-in-out'"
       :style="asideStyle"
     >
@@ -485,14 +485,14 @@ function onComposerSent(mode: 'now' | 'queued') {
         :class="collapsed ? 'pointer-events-none opacity-0' : 'opacity-100'"
         :style="{ width: `min(${sidebarWidth}px, calc(100vw - 56px))` }"
       >
-        <div class="flex shrink-0 items-center gap-2 p-3 pr-11">
+        <div class="flex shrink-0 items-center gap-2 p-3 pe-11">
           <div class="relative flex-1">
             <Search class="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref="searchInput"
               v-model="search"
               :placeholder="$t('sessions.searchPlaceholder')"
-              class="pl-8 pr-8"
+              class="ps-8 pe-8"
             />
             <!-- Same popper-anchor rule as the instance filter below: the Popover root lives
                  INSIDE IconTooltip, so PopoverTrigger's PopperAnchor finds the popover's own
@@ -599,7 +599,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <MessagesSquare />
                       {{ $t('sessions.filterSource') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ sourceFilterLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -626,7 +626,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <Boxes />
                       {{ $t('sessions.filterInstance') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ instanceFilterLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -653,7 +653,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <ListTodo />
                       {{ $t('sessions.dispatched') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ dispatchedScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -673,7 +673,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <CircleAlert />
                       {{ $t('sessions.rateLimited') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ rateLimitScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -696,7 +696,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <Hourglass />
                       {{ $t('sessions.shape') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ shapeScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -721,7 +721,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <Archive />
                       {{ $t('sessions.archived') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ archivedScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -741,7 +741,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <CalendarRange />
                       {{ $t('sessions.period') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ periodLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -760,7 +760,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuItem @select="clearDoneMarks">
                       <CircleSlash />
                       {{ $t('sessions.clearDoneMarks') }}
-                      <span class="ml-auto pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto ps-2 text-[11px] text-muted-foreground">
                         {{ $t('sessions.doneMarkCount', { n: doneCount }) }}
                       </span>
                     </DropdownMenuItem>
@@ -838,7 +838,7 @@ function onComposerSent(mode: 'now' | 'queued') {
             <button
               v-for="r in bodyResults"
               :key="`${r.source}:${r.session_id}`"
-              class="mb-1.5 w-full rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-accent/50"
+              class="mb-1.5 w-full rounded-lg border border-transparent px-3 py-2.5 text-start transition-colors hover:border-border hover:bg-accent/50"
               @click="selectFromBodyResult(r)"
             >
               <div class="flex items-start justify-between gap-2">
@@ -917,7 +917,7 @@ function onComposerSent(mode: 'now' | 'queued') {
             <ContextMenu v-for="s in filtered" :key="`${s.source}:${s.session_id}`">
               <ContextMenuTrigger as-child>
                 <button
-                  class="mb-1.5 w-full rounded-lg border px-3 py-2.5 text-left transition-colors"
+                  class="mb-1.5 w-full rounded-lg border px-3 py-2.5 text-start transition-colors"
                   :class="[
                     // Selected is a RAISED GREY, not an accent tint. bg-primary/10 composited to a
                     // maroon (#352626) against the dark ground, which read as a colour wash rather
@@ -959,7 +959,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                       wrapper around the first message, so it may match nothing the user has named.
                       --><span
                         v-if="titleIsUnattributed(s)"
-                        class="ml-1 align-middle text-[10px] font-normal text-muted-foreground/70"
+                        class="ms-1 align-middle text-[10px] font-normal text-muted-foreground/70"
                       >&lt;{{ s.title_tag }}&gt;</span></span>
                     <!-- the wall this conversation died at. `pending` is the actionable half —
                          nothing followed the notice, so it is still sitting there — and it is the
@@ -1646,7 +1646,7 @@ function onComposerSent(mode: 'now' | 'queued') {
           <Button
             variant="ghost"
             size="icon-sm"
-            class="ml-auto"
+            class="ms-auto"
             :aria-label="$t('sessions.findClose')"
             @click="closeFind"
           >
@@ -1702,7 +1702,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                 <!-- tool activity and reasoning: a compact log line, not a bubble -->
                 <div
                   v-if="ev.kind !== 'text'"
-                  class="w-full min-w-0 rounded-md border-l-2 border-border bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground"
+                  class="w-full min-w-0 rounded-md border-s-2 border-border bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground"
                   :class="ev.kind === 'thinking' ? 'italic' : 'font-mono'"
                 >
                   <div class="mb-0.5 flex items-center gap-1 font-semibold not-italic">
@@ -1712,7 +1712,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      class="ml-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-60"
+                      class="ms-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-60"
                       :title="$t('sessions.copyMessage')"
                       @click="copyMessage(i, ev.text)"
                     >
@@ -1746,7 +1746,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                 <div
                   v-else
                   class="min-w-0 max-w-[85%] rounded-2xl px-3.5 py-2 text-sm"
-                  :class="ev.role === 'user' ? 'rounded-br-md bg-accent' : 'rounded-bl-md bg-muted/50'"
+                  :class="ev.role === 'user' ? 'rounded-ee-md bg-accent' : 'rounded-es-md bg-muted/50'"
                 >
                   <!-- eslint-disable-next-line vue/no-v-html -- see the note above -->
                   <div
@@ -1829,7 +1829,7 @@ function onComposerSent(mode: 'now' | 'queued') {
               <li v-for="s in g.sessions" :key="s.session_id">
                 <button
                   type="button"
-                  class="w-full truncate rounded border border-border px-2 py-1 text-left hover:bg-accent"
+                  class="w-full truncate rounded border border-border px-2 py-1 text-start hover:bg-accent"
                   @click="openFromBulkDialog(s)"
                 >
                   {{ s.title }}

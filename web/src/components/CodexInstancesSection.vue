@@ -547,7 +547,7 @@ onUnmounted(() => {
         >
           <Plus class="shrink-0" />
           <span
-            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ml-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ml-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
+            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
           >{{ $t('codexInstances.createInstance') }}</span>
         </Button>
       </div>
@@ -645,7 +645,7 @@ onUnmounted(() => {
               <ArrowDown v-else-if="indicatorFor('plan') === 'desc'" class="size-3" />
             </span>
           </TableHead>
-          <TableHead class="text-right">{{ $t('codexInstances.colActions') }}</TableHead>
+          <TableHead class="text-end">{{ $t('codexInstances.colActions') }}</TableHead>
         </TableRow>
       </TableHeader>
       <!-- visibleRows, not instances: with the filter set to hide, this table can be emptied while
@@ -719,7 +719,7 @@ onUnmounted(() => {
               <component
                 :is="instance.account.email ? 'button' : 'div'"
                 :type="instance.account.email ? 'button' : undefined"
-                class="block w-full truncate text-left font-medium"
+                class="block w-full truncate text-start font-medium"
                 :class="
                   instance.account.email
                     ? 'cursor-pointer transition-colors hover:text-primary'

@@ -23,8 +23,8 @@ defineProps<{ data: InstancesData }>()
           <TableHead>Open</TableHead>
           <TableHead>Account</TableHead>
           <TableHead>Plan</TableHead>
-          <TableHead class="text-right">Weekly %</TableHead>
-          <TableHead class="text-right">Visible chats</TableHead>
+          <TableHead class="text-end">Weekly %</TableHead>
+          <TableHead class="text-end">Visible chats</TableHead>
           <TableHead>Signed in</TableHead>
         </TableRow>
       </TableHeader>
@@ -38,8 +38,8 @@ defineProps<{ data: InstancesData }>()
           <TableCell>{{ i.isRunning ? '🟢 open' : '◦ closed' }}</TableCell>
           <TableCell class="text-xs">{{ i.email ?? '?' }}</TableCell>
           <TableCell class="text-xs">{{ i.plan ?? '?' }}</TableCell>
-          <TableCell class="text-right">{{ i.weeklyPct ?? '—' }}</TableCell>
-          <TableCell class="text-right">{{ i.visibleChats }}</TableCell>
+          <TableCell class="text-end">{{ i.weeklyPct ?? '—' }}</TableCell>
+          <TableCell class="text-end">{{ i.visibleChats }}</TableCell>
           <TableCell>{{ i.signedIn ? 'yes' : '⚠ SIGNED OUT' }}</TableCell>
         </TableRow>
       </TableBody>

@@ -395,7 +395,7 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
     <div class="mx-auto w-full max-w-5xl space-y-4 p-4">
       <!-- filters in one row above the charts -->
       <div class="flex flex-wrap items-center gap-2">
-        <h2 class="mr-auto flex items-center gap-2 text-sm font-semibold">
+        <h2 class="me-auto flex items-center gap-2 text-sm font-semibold">
           <BarChart3 class="size-4" />{{ $t('analytics.title') }}
         </h2>
         <DropdownMenu>
@@ -550,7 +550,7 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
                   : $t('analytics.costByDay')
             }}
             <!-- Pushed right and quiet: a grain switch is a preference, not a headline. -->
-            <span class="ml-auto flex items-center gap-0.5">
+            <span class="ms-auto flex items-center gap-0.5">
               <button
                 v-for="g in (['day', 'month'] as const)"
                 :key="g"
@@ -644,7 +644,7 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
         <section class="rounded-lg border border-border p-3">
           <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
             <Hourglass class="size-3.5" />{{ $t('analytics.whenYouWork') }}
-            <span class="ml-auto flex items-center gap-1 font-normal">
+            <span class="ms-auto flex items-center gap-1 font-normal">
               <button
                 v-for="g in (['calendar', 'hour'] as const)"
                 :key="g"
@@ -768,7 +768,7 @@ const agentHours = computed(() => Math.round((activity.value?.agentMinutes ?? 0)
             >
               <span class="min-w-0 flex-1 truncate">
                 {{ tool.name }}
-                <span class="ml-1 text-[10px] text-muted-foreground">{{ tool.vendor }}</span>
+                <span class="ms-1 text-[10px] text-muted-foreground">{{ tool.vendor }}</span>
               </span>
               <span class="shrink-0 tabular-nums text-muted-foreground">
                 {{ formatCompact(tool.files) }}<span v-if="tool.truncated">+</span>

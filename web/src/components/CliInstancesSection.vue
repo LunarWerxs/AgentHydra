@@ -463,7 +463,7 @@ onUnmounted(stopPolling)
         >
           <Plus class="shrink-0" />
           <span
-            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ml-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ml-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
+            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
           >{{ $t('cliInstances.createInstance') }}</span>
         </Button>
       </div>
@@ -543,7 +543,7 @@ onUnmounted(stopPolling)
                 <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="text-right">{{ $t('cliInstances.colActions') }}</TableHead>
+            <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
           </TableRow>
         </TableHeader>
         <!-- visibleRows, not unlinkedCliInstances: with the usage filter set to hide, this table can

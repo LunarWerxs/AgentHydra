@@ -119,7 +119,7 @@ if (import.meta.env.DEV) {
           'bg-background text-foreground fixed z-50 flex flex-col shadow-xl outline-none ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-300 data-[state=closed]:duration-300',
           isBottom
             ? 'inset-x-0 bottom-0 max-h-[92vh] rounded-t-2xl border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom'
-            : 'inset-y-0 right-0 h-full border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
+            : 'inset-y-0 right-0 h-full border-s data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
           props.class,
         )"
         @pointer-down-outside="guardOutside"
@@ -129,7 +129,7 @@ if (import.meta.env.DEV) {
              underneath it (-mt/pt pair) so scrolled content shimmers through. Custom
              bodyClass consumers keep the plain in-flow header (no overlap surprises). -->
         <header
-          class="relative z-10 flex h-12 shrink-0 items-center gap-2 bg-background/70 px-4 pr-12 backdrop-blur-md"
+          class="relative z-10 flex h-12 shrink-0 items-center gap-2 bg-background/70 px-4 pe-12 backdrop-blur-md"
         >
           <slot name="header">
             <slot name="title-icon" />

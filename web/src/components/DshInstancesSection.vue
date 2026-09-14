@@ -195,7 +195,7 @@ onUnmounted(() => window.clearInterval(timer))
         {{ $t('dshInstances.title') }}
         <span class="text-muted-foreground text-xs">({{ instances.length }})</span>
       </button>
-      <div class="ml-auto flex items-center gap-1">
+      <div class="ms-auto flex items-center gap-1">
         <Button variant="ghost" size="sm" :aria-label="$t('dshInstances.refresh')" @click="refresh">
           <RefreshCw class="size-3.5" />
         </Button>
@@ -214,7 +214,7 @@ onUnmounted(() => window.clearInterval(timer))
             <TableHead class="w-40">{{ $t('dshInstances.colStatus') }}</TableHead>
             <TableHead class="w-24">{{ $t('dshInstances.colSessions') }}</TableHead>
             <TableHead>{{ $t('dshInstances.colHome') }}</TableHead>
-            <TableHead class="text-right">{{ $t('dshInstances.colActions') }}</TableHead>
+            <TableHead class="text-end">{{ $t('dshInstances.colActions') }}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody v-if="instances.length === 0">

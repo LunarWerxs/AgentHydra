@@ -74,7 +74,7 @@ const fill = computed(() => `${props.threshold}%`)
                  group — so the unprefixed size alone loses above the md breakpoint. Spinners off
                  because this reads as a value, and they cost a third of the box's width. -->
             <Input
-              class="h-6 w-11 rounded px-1.5 text-right text-[13px] font-medium tabular-nums md:text-[13px] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              class="h-6 w-11 rounded px-1.5 text-end text-[13px] font-medium tabular-nums md:text-[13px] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
               type="number"
               min="0"
               max="100"

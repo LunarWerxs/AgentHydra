@@ -156,8 +156,8 @@ const { side, containerStyle, widthPx } = usePushPanel(anyPanelOpen, {
 // The header shares the panel shift but must keep its own 16px (px-4) of breathing room
 // on top of it; a bare containerStyle would put the buttons flush against the panel edge.
 const headerStyle = computed(() =>
-  containerStyle.value.paddingRight
-    ? { paddingRight: `calc(${containerStyle.value.paddingRight} + 1rem)` }
+  containerStyle.value.paddingInlineEnd
+    ? { paddingInlineEnd: `calc(${containerStyle.value.paddingInlineEnd} + 1rem)` }
     : {},
 )
 
@@ -281,7 +281,7 @@ onUnmounted(stopAvailabilityPolling)
       </div>
 
       <!-- view tabs -->
-      <nav class="ml-2 flex items-center gap-1">
+      <nav class="ms-2 flex items-center gap-1">
         <Button
           v-for="n in nav"
           :key="n.id"
@@ -295,7 +295,7 @@ onUnmounted(stopAvailabilityPolling)
         </Button>
       </nav>
 
-      <div class="ml-auto flex items-center gap-2">
+      <div class="ms-auto flex items-center gap-2">
         <!-- always-on "is it working?" indicator: scheduler state + live run / next-run -->
         <SchedulerStatus />
         <!-- New run lives inside the queue drawer's toolbar (QueueView) now, so the header
@@ -314,7 +314,7 @@ onUnmounted(stopAvailabilityPolling)
           <span class="hidden sm:inline">{{ $t('app.queue') }}</span>
           <span
             v-if="runningCount > 0"
-            class="ml-0.5 inline-flex size-4 items-center justify-center rounded-full text-[0.625rem] font-semibold"
+            class="ms-0.5 inline-flex size-4 items-center justify-center rounded-full text-[0.625rem] font-semibold"
             :class="queueOpen ? 'bg-info/15 text-info' : 'bg-primary-foreground/25 text-primary-foreground'"
           >
             {{ runningCount }}
@@ -375,7 +375,7 @@ onUnmounted(stopAvailabilityPolling)
     <SettingsPanel v-model:open="settingsOpen" :side="side" :title="$t('app.settings')" :width-px="widthPx">
       <template #header>
         <span class="text-xs font-semibold">{{ $t('app.settings') }}</span>
-        <div class="ml-auto flex items-center gap-0.5">
+        <div class="ms-auto flex items-center gap-0.5">
           <!-- theme picker (moved out of the Appearance section) -->
           <DropdownMenu>
             <DropdownMenuTrigger as-child>

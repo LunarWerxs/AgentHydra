@@ -1109,7 +1109,7 @@ onUnmounted(() => {
         >
           <Plus class="shrink-0" />
           <span
-            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ml-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ml-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
+            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
           >{{ $t('instances.createInstance') }}</span>
         </Button>
       </div>
@@ -1261,7 +1261,7 @@ onUnmounted(() => {
                 <ArrowDown v-else-if="indicatorFor('plan') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="text-right">{{ $t('instances.colActions') }}</TableHead>
+            <TableHead class="text-end">{{ $t('instances.colActions') }}</TableHead>
           </TableRow>
         </TableHeader>
         <!-- visibleRows, not instances: with "hide" on, the filter can empty a table that still has
@@ -1371,7 +1371,7 @@ onUnmounted(() => {
                   <button
                     v-if="inst.isRunning"
                     type="button"
-                    class="cursor-pointer text-left hover:underline"
+                    class="cursor-pointer text-start hover:underline"
                     :disabled="isBusy(inst)"
                     @click="onFocus(inst)"
                   >
@@ -1841,7 +1841,7 @@ onUnmounted(() => {
             </div>
             <div class="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
               <span v-if="row.cwd" class="truncate" :title="row.cwd">{{ baseName(row.cwd) }}</span>
-              <span class="ml-auto shrink-0">
+              <span class="ms-auto shrink-0">
                 {{ row.lastActivityAt ? timeAgo(row.lastActivityAt) : $t('instances.chatsNeverActive') }}
               </span>
             </div>
@@ -1889,7 +1889,7 @@ onUnmounted(() => {
               <li v-for="s in g.sessions" :key="s.sessionId">
                 <button
                   type="button"
-                  class="w-full truncate rounded border border-border px-2 py-1 text-left hover:bg-accent"
+                  class="w-full truncate rounded border border-border px-2 py-1 text-start hover:bg-accent"
                   @click="openChatFromMoveDialog(s)"
                 >
                   {{ s.title || $t('instances.chatsNoTitle') }}
