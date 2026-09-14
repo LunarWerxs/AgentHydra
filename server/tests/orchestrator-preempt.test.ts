@@ -11,7 +11,7 @@
 // chats it covers. Both halves are load-bearing and pinned here: without the person's word this
 // is a race between two callers, and without the coverage rule a kill strands chats nobody is
 // about to re-do (that is what orchestrator_cancel is for, deliberately).
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -58,6 +58,14 @@ function patientRun(dir: string, args: string[]) {
   releases.push(() => void promise)
   return { op, state, promise }
 }
+
+// ⛔ START FROM AN EMPTY ROUTE, WHOEVER RAN BEFORE US. Every test below needs its own holder to
+// actually START, and the route lock is module state shared by every file in the `bun test`
+// process: an earlier file that left a live `migrate_batch` lock (the stale-lock suite pins a
+// spawn that never settles) meant the holder here was refused busy, so there was no operation to
+// preempt and three tests read the ordinary refusal instead. Exactly that, on GitHub's Linux
+// runner, 2026-09-14 - and green on Windows, which listed this file first.
+beforeEach(() => resetOrchestratorOperationsForTests())
 
 afterEach(async () => {
   for (const release of releases.splice(0)) release()

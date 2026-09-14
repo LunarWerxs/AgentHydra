@@ -9,11 +9,15 @@
 // realSpawn enforces by killing the child, so a lock outliving its own timeout cannot have a
 // live run behind it. These tests pin both halves - a genuinely live run still blocks, and an
 // orphaned one is reaped - plus the ABA hazard the reaping introduces.
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { orchestratorBusy, runOrchestrator } from '../src/orchestrator'
+import {
+  orchestratorBusy,
+  resetOrchestratorOperationsForTests,
+  runOrchestrator,
+} from '../src/orchestrator'
 
 /** A directory that looks enough like the orchestrator for runOrchestrator to proceed. */
 function fakeOrchestratorDir(): string {
@@ -23,6 +27,13 @@ function fakeOrchestratorDir(): string {
 }
 
 const never = () => new Promise<never>(() => {})
+
+// ⛔ THE POINT OF THIS FILE IS A LOCK THAT NEVER CLEARS, SO IT MUST HAND THE LOCK BACK ITSELF.
+// `bun test` runs every file in ONE process: an immortal `migrate_batch` lock left here is a
+// lock every LATER file inherits, and a migrate_batch run in one of them is then refused busy by
+// a run that does not exist. That is not hypothetical - it took the preempt suite red on GitHub's
+// Linux runner on 2026-09-14 (green on Windows, on nothing but which file readdir listed first).
+afterEach(() => resetOrchestratorOperationsForTests())
 
 test('a run whose spawn promise never settles still blocks a second caller while it is young', async () => {
   const dir = fakeOrchestratorDir()

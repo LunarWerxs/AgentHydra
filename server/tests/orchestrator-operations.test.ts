@@ -13,8 +13,10 @@ import {
   cancelOrchestratorOperation,
   getOrchestratorOperation,
   listOrchestratorOperations,
+  orchestratorBusy,
   pythonBinary,
   resetOrchestratorOperationsForTests,
+  runOrchestrator,
   startOrchestratorOperation,
 } from '../src/orchestrator'
 
@@ -33,6 +35,38 @@ function deferred() {
   })
   return { gate, release }
 }
+
+test('the test seam releases the ROUTE LOCK too, not just the operation records', async () => {
+  // ⛔ Both halves, or a file leaks a lock into the next one. `bun test` runs every file in one
+  // process, so a spawn stubbed never to settle leaves an immortal lock behind; clearing only the
+  // operation records left the route held by a run that no longer exists, and the next file's
+  // migrate_batch was refused busy by it (GitHub CI, Linux, 2026-09-14 - green on Windows purely
+  // because readdir listed the files the other way round).
+  const dir = fakeToolbox()
+  void runOrchestrator(
+    { script: 'migrate_batch', timeoutMs: 600_000 },
+    { dir, spawn: () => new Promise<never>(() => {}) },
+  )
+  await Bun.sleep(10)
+  expect(orchestratorBusy()).toBe(true)
+
+  resetOrchestratorOperationsForTests()
+
+  expect(orchestratorBusy()).toBe(false)
+  let ran = false
+  const after = await runOrchestrator(
+    { script: 'migrate_batch', timeoutMs: 600_000 },
+    {
+      dir,
+      spawn: async () => {
+        ran = true
+        return { code: 0, stdout: '', stderr: '', timedOut: false }
+      },
+    },
+  )
+  expect('busy' in after && after.busy).toBeFalsy()
+  expect(ran).toBe(true)
+})
 
 test('a retry with the same idempotency key joins the running operation and spawns nothing', async () => {
   const dir = fakeToolbox()

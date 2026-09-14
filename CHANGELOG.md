@@ -266,6 +266,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
 
+- **A test file's parked route lock no longer poisons whichever file runs next, and the guardrail
+  now catches it** (`server/src/orchestrator.ts`'s test seam, `server/tests/orchestrator-stale-lock.test.ts`,
+  `orchestrator-preempt.test.ts`, `orchestrator-operations.test.ts`, a third rule in
+  `scripts/checks/test-stub-outlives-its-file.mjs` with its fixtures). GitHub's Linux runner took
+  the three preemption tests RED on 2026-09-14 while Windows stayed green on the same commit, off
+  nothing but which file `readdir` listed first. `bun test` runs every file in ONE process, and
+  the orchestrator's route lock is a module-level Map: `orchestrator-stale-lock.test.ts` pins "a
+  young lock still blocks a second caller" with a spawn stubbed never to settle, so that run can
+  never reach the `finally` that releases its lock, and it left `migrate_batch` held FOREVER. Every
+  later file's `migrate_batch` was then refused `409 busy` by a run that does not exist - so the
+  preempt suite's own holder could not start, there was no operation to preempt, and the red named
+  a file nobody had touched. The test seam now clears the locks as well as the operation records
+  (it had cleared exactly half the module state), the stale-lock suite hands its lock back in an
+  `afterEach`, the preempt suite starts from an empty route whoever ran before it, and the
+  guardrail that already catches an unrestored global or an un-re-mocked module now also reports a
+  never-settling orchestrator run with no reset in an after hook. Proven red-then-green against a
+  probe file that reproduced the Linux order.
+
 - **A delivery deferred for a live turn is no longer burned as a failure, and `courier --only <id>`
   says what state a named row is in** (`orchestrator/scripts/courier.py`, `lib/ledgerlib.py`'s new
   `discount`, `stage_reply.py`, `migrate_batch.py`, four suites). Found live 2026-09-12:

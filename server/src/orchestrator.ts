@@ -467,9 +467,24 @@ export function cancelOrchestratorOperation(
   return { ok: true, status: 'running' }
 }
 
-/** Tests only: forget every operation (the registry is module state). */
+/**
+ * Tests only: forget every operation AND release every route lock.
+ *
+ * ⛔ THE LOCK HALF IS LOAD-BEARING, AND IT WAS MISSING (GitHub CI, Linux, 2026-09-14). `bun test`
+ * runs every file in ONE process, so `inFlight` outlives the file that filled it. A file that
+ * stubs a spawn which never settles - which is exactly how orchestrator-stale-lock.test.ts pins
+ * "a young lock still blocks" - leaves an IMMORTAL `migrate_batch` lock behind, and every later
+ * file's migrate_batch run is then refused busy by a run that does not exist. The preempt suite
+ * went red on Linux and green on Windows off nothing but readdir order deciding which file ran
+ * first: its holder could not start, so there was no operation to preempt. Clearing the
+ * operations without the locks left exactly half the module state behind.
+ *
+ * Clears rather than kills: a stub's kill switch is the test's own business, and a real run's
+ * lock is never reached by this seam because production never calls it.
+ */
 export function resetOrchestratorOperationsForTests(): void {
   operations.clear()
+  inFlight.clear()
 }
 /** Output kept per stream. The dry loop over a full fleet is a few thousand lines; a runaway is
  *  truncated from the FRONT so the verdict lines at the end survive. */
