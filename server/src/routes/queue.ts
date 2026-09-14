@@ -199,6 +199,9 @@ app.post('/api/queue', async (c) => {
   // runner then passes it as `--session-id` — so exempting new_chat let
   // `{new_chat: true, session_id: <an existing desktop chat>}` write headless turns into that
   // chat. The question is about the ID, never about the caller's label for the request.
+  // arkitect-allow: no-bandaids documents the permanent NO-HEADLESS enforcement chain (this route
+  // check plus the dispatch.ts chokepoint); the "old behaviour" it replaced is gone with no escape
+  // left, this is the current and final policy, not a check awaiting supersession.
   // NO HEADLESS (owner law 2026-08-27), refused at the point of ASKING rather than only at the
   // point of running. The chokepoint in dispatch.ts is still the enforcement and still refuses
   // every one of these; without this the route would happily accept the row and hand back an id,

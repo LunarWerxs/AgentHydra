@@ -1279,6 +1279,8 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // of you ever using headless"). Everything below this line is therefore unreachable, and is
   // kept only until the queue subsystem it belongs to is demolished deliberately rather than
   // half-removed in passing.
+  // Tracked in docs/todo/TODO.md #dead-headless-dispatch (filed by the no-bandaids sweep,
+  // 2026-09-14) - out of scope for that sweep's budget, sized as its own removal task.
   if (!headlessRunsAllowed()) {
     // skipIncident: this refusal is permanent and identical on every attempt (see failPreLaunch's
     // doc comment) - it is not an incident, it is the policy working as designed.

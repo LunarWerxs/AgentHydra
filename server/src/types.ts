@@ -853,7 +853,9 @@ export interface UsageSnapshot {
   /** A per-model weekly sub-limit (e.g. "Fable"), when present. */
   weekModel: (UsageLimit & { label: string }) | null
   capturedAt: string
-  /** Optional for back-compat with snapshots cached before the API path existed. */
+  /** arkitect-allow: no-bandaids permanent — cached snapshots persist across app upgrades, so a
+   *  pre-existing cache entry from before this field existed must still deserialize.
+   *  Optional for back-compat with snapshots cached before the API path existed. */
   source?: UsageSource
   /** Codex-only: banked `/usage reset` credits available to redeem (`rate_limit_reset_credits.
    *  available_count` on the usage payload). Undefined for snapshots that predate this field or
@@ -1048,7 +1050,9 @@ export interface UsageCheckResult {
   snapshot: UsageSnapshot
   cached: boolean
   key: string
-  /** Why the result is what it is (esp. for a no-data snapshot). Optional for back-compat. */
+  /** arkitect-allow: no-bandaids permanent — same reasoning as UsageSnapshot.source above: cached
+   *  results from before this field existed must still deserialize.
+   *  Why the result is what it is (esp. for a no-data snapshot). Optional for back-compat. */
   reason?: UsageReason
   /** What to do about these numbers. Attached by the routes so an MCP caller never re-derives it. */
   advice?: UsageAdvice

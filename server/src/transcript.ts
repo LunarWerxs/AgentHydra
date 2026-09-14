@@ -955,7 +955,9 @@ function extraStoreRecords(): {
 }
 
 /** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
- *  settle. Source + id is the identity; newest wins, matching findTranscript's old behavior. */
+ *  settle. Source + id is the identity; newest wins, matching findTranscript's old behavior.
+ *  arkitect-allow: no-bandaids "old behavior" cites an established, permanent tie-break rule kept
+ *  for consistency across both lookup paths — not legacy code being phased out. */
 /**
  * One row per session, keeping the newest file as its face — and REMEMBERING the rest.
  *

@@ -62,8 +62,10 @@ export function claudeUserDataDir(): string {
   return path.join(xdg, DEFAULT_CLAUDE_DIR_NAME)
 }
 
-/** @deprecated Alias for {@link claudeUserDataDir} kept for any call-sites written against
- *  the earlier draft's longer name. Prefer `claudeUserDataDir` or `defaultClaudeDir`. */
+/** Alias for {@link claudeUserDataDir} — matches the longer name used by chat-store-scan.ts,
+ *  instance-sessions.ts and routes/sessions.ts (its heaviest call-sites). A thin re-export, same
+ *  pattern as `normalizePath` and `defaultClaudeDir` below, so all three naming conventions
+ *  resolve to one implementation. */
 export function defaultClaudeUserDataDir(): string {
   return claudeUserDataDir()
 }

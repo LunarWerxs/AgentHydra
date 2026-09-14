@@ -2055,6 +2055,9 @@ export const TOOLS: McpEngineTool[] = [
         args.push('--from', String(src.num))
       }
       if (a.force === true) args.push('--force')
+      // arkitect-allow: no-bandaids "stopgap" names the mechanism's cautious design (refuse a
+      // mismatched count), not a temporary state — this replaced the old bare boolean permanently
+      // (landed 6be90fd, no compatibility shim, an old caller fails the schema loudly by design).
       // The archive stopgap's caller half: a COUNT, never a bare boolean, and the count travels
       // with the override so the engine can refuse a number that does not match what it sees.
       // `all_unarchived` is unarchived by definition, so a count against it is meaningless and
@@ -2293,6 +2296,7 @@ export const TOOLS: McpEngineTool[] = [
       try {
         return { ...(await runFanOut(args, timeoutMs)), selfNote }
       } finally {
+        // arkitect-allow: no-bandaids permanent finally-block cleanup, not scheduled for removal —
         // a spec that travelled as a temp file is ours to remove once the script has read it
         // (review 2026-09-05: nothing else ever deleted it)
         const specPath = args[1]

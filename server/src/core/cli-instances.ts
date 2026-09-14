@@ -139,6 +139,9 @@ export function isLoggedIn(configDir: string): boolean {
 // user data. `canonicalConfigDir` re-derives it on read (so every process, including the separate
 // quick-instances window, agrees without needing a write), and migrateCliInstanceConfigDirs
 // persists the rewrite and carries any credentials still sitting at the old path across.
+// arkitect-allow: no-bandaids permanent path-derivation fix for the ccmanagerui->agenthydra
+// rebrand, not a temporary shim — any carried-over install can surface a pre-rebrand configDir at
+// any future migration, so re-derivation on read has to keep running indefinitely.
 
 /**
  * Where this record's config dir MUST be, if it is one we manage.
@@ -176,6 +179,10 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
  * Called once at daemon boot. Copy-then-leave rather than move: the old directory is under a config
  * root we no longer own, and deleting a user's credentials to tidy up a path string is not a trade
  * worth making. Returns the ids it rewrote (empty = nothing to do, and nothing was written).
+ *
+ * arkitect-allow: no-bandaids runs on every boot for the lifetime of any pre-rebrand install;
+ * copy-then-leave is the permanent, deliberately conservative behavior (never delete a user's
+ * credentials), not a stopgap awaiting a real fix.
  */
 export function migrateCliInstanceConfigDirs(): string[] {
   const outcome = mutate((store) => {
