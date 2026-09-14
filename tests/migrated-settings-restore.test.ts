@@ -6,8 +6,8 @@
 // merges them; a re-save that drops them is repaired by restoreMigratedSettings; a record that
 // already matches is left alone (no churn); rows for OTHER profiles are ignored; the prune runs.
 
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CarriedSettings } from '../server/src/chat-settings-carry'
@@ -24,9 +24,22 @@ const carried: CarriedSettings = {
   sessionSettings: { ultracode: true },
 }
 
+// A single root for every scratch dir this file creates: at most one mkdtempSync may root
+// directly in the OS temp dir per file.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-carry-'))
+let carrySeq = 0
+function carryDir(name: string) {
+  const dir = join(ROOT, `${name}-${carrySeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true })
+})
+
 /** A profile whose app has just created the import record for `id` (bare, as the app makes it). */
 function profileWithImport(id: string, extra: Record<string, unknown> = {}) {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-carry-'))
+  const profile = carryDir('profile')
   const leaf = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(leaf, { recursive: true })
   const path = join(leaf, `local_${id}.json`)
@@ -94,7 +107,7 @@ test('restoreMigratedSettings repairs a re-save that dropped the carried values,
 
 test('restoreMigratedSettings leaves other profiles and vanished records alone', () => {
   const { profile, path } = profileWithImport('sess-carry-3')
-  const other = mkdtempSync(join(tmpdir(), 'agenthydra-carry-other-'))
+  const other = carryDir('other')
   const rows = [
     // a row for a different target: not ours to touch
     { session_id: 'sess-carry-3', target_dir: other, settings: carried, updated_at: 1 },

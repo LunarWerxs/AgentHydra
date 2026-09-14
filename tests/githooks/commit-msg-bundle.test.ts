@@ -83,7 +83,8 @@ describe('.githooks/commit-msg: a bundle commit names what it swept', () => {
     // realpathSync.native: GitHub's Windows runner hands out an 8.3 temp path (RUNNER~1) while git
     // reports the worktree by its long name; save-bundle.ts canonicalises too, this keeps the
     // sandbox honest on its own.
-    sandbox = realpathSync.native(mkdtempSync(join(tmpdir(), 'ah-bundle-')))
+    const rawSandbox = mkdtempSync(join(tmpdir(), 'ah-bundle-'))
+    sandbox = realpathSync.native(rawSandbox)
     repo = join(sandbox, 'repo')
     mkdirSync(join(repo, '.githooks'), { recursive: true })
     writeFileSync(join(repo, '.githooks', 'commit-msg'), readFileSync(REAL_HOOK))

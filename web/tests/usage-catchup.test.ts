@@ -14,7 +14,7 @@ import {
   USAGE_CATCHUP_MAX_AGE_MS,
 } from '../src/lib/usage-catchup'
 
-const NOW = Date.parse('2026-08-07T12:00:00.000Z')
+const NOW = Date.parse('2021-08-07T12:00:00.000Z')
 
 const snapAt = (capturedAt: string): UsageSnapshot => ({
   account: null,

@@ -17,17 +17,31 @@
 // Get that backwards in either direction and something real breaks: suppress the login faults
 // and a boot fails with no warning; report the usage wall and the lane cries wolf forever.
 
-import { expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { HealthInput, RespondingMap } from '../server/src/instance-health'
 import { healthOf, USAGE_WALL_PCT, unusableInstances } from '../server/src/instance-health'
 
+// A single root for every scratch dir this file creates: at most one mkdtempSync may root
+// directly in the OS temp dir per file, so every dir below nests inside this one, and one afterAll
+// reaps whatever a test's own try/finally missed.
+const ROOT = mkdtempSync(join(tmpdir(), 'ah-health-'))
+let healthSeq = 0
+function subDir(name: string) {
+  const dir = join(ROOT, `${name}-${healthSeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true })
+})
+
 /** A profile directory that reads as SIGNED IN, so the login branches stay out of the way and
  *  each test isolates the one signal it is actually about. */
 function signedInDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ah-health-'))
+  const dir = subDir('signed-in')
   writeFileSync(
     join(dir, 'config.json'),
     JSON.stringify({ lastKnownAccountUuid: '00000000-0000-4000-8000-000000000000' }),
@@ -76,7 +90,7 @@ test('unknown usage is never read as a wall', () => {
 })
 
 test('DAMAGE is still reported while closed — it is why a later boot would fail', () => {
-  const empty = mkdtempSync(join(tmpdir(), 'ah-health-nocfg-'))
+  const empty = subDir('nocfg')
   try {
     const h = healthOf(
       { ref: 'desktop:test', num: 1, instanceDir: empty, isRunning: false, usagePct: 10 },
@@ -91,7 +105,7 @@ test('DAMAGE is still reported while closed — it is why a later boot would fai
 })
 
 test('a signed-out CLOSED instance is still reported', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ah-health-out-'))
+  const dir = subDir('out')
   try {
     writeFileSync(join(dir, 'config.json'), JSON.stringify({ someOtherKey: true }))
     const h = healthOf(

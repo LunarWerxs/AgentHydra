@@ -113,7 +113,7 @@ test('a second wall after a resume re-opens the stop', () => {
 })
 
 test('the stop remembers when it happened', () => {
-  const at = Date.parse('2026-08-19T04:10:00.000Z')
+  const at = Date.parse('2020-08-19T04:10:00.000Z')
   expect(verdictOf([wall(REAL_WEEKLY_LIMIT)], [at])?.at).toBe(at)
 })
 

@@ -104,30 +104,32 @@ test('the key keeps its desktop: prefix so it cannot collide with cli:/acct: key
 // A vanished transcript is simply not a session now, so it is omitted rather than fatal.
 test('a transcript deleted mid-scan yields no row instead of throwing', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ah-swept-'))
-  const path = join(dir, 'cc54bf76-78c4-4524-883b-37aa23b866d7.jsonl')
-  writeFileSync(path, '{"type":"user","message":{"role":"user","content":"hi"}}\n')
-  const stat = statSync(path)
-  const tf: TranscriptFile = {
-    session_id: 'cc54bf76-78c4-4524-883b-37aa23b866d7',
-    source: 'claude',
-    path,
-    project: 'usage-probe',
-    mtime_ms: stat.mtimeMs,
-    size_bytes: stat.size,
-    archived: false,
+  try {
+    const path = join(dir, 'cc54bf76-78c4-4524-883b-37aa23b866d7.jsonl')
+    writeFileSync(path, '{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    const stat = statSync(path)
+    const tf: TranscriptFile = {
+      session_id: 'cc54bf76-78c4-4524-883b-37aa23b866d7',
+      source: 'claude',
+      path,
+      project: 'usage-probe',
+      mtime_ms: stat.mtimeMs,
+      size_bytes: stat.size,
+      archived: false,
+    }
+
+    // Control first, so a null below cannot be explained by the row being unreadable all along.
+    expect(await scanMeta(tf)).not.toBeNull()
+
+    // Now the sweep gets it, exactly as pruneUsageProbeTranscripts() does.
+    rmSync(path)
+
+    // Both cache layers key on mtime AND size, so a changed pair is a genuine re-parse rather than a
+    // hit on the control above. That is also the production shape: the file is enumerated, and only
+    // then deleted, so the scanner is always working from a row it read a moment earlier.
+    const rescan = await scanMeta({ ...tf, mtime_ms: stat.mtimeMs + 1, size_bytes: stat.size + 1 })
+    expect(rescan).toBeNull()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
-
-  // Control first, so a null below cannot be explained by the row being unreadable all along.
-  expect(await scanMeta(tf)).not.toBeNull()
-
-  // Now the sweep gets it, exactly as pruneUsageProbeTranscripts() does.
-  rmSync(path)
-
-  // Both cache layers key on mtime AND size, so a changed pair is a genuine re-parse rather than a
-  // hit on the control above. That is also the production shape: the file is enumerated, and only
-  // then deleted, so the scanner is always working from a row it read a moment earlier.
-  const rescan = await scanMeta({ ...tf, mtime_ms: stat.mtimeMs + 1, size_bytes: stat.size + 1 })
-  expect(rescan).toBeNull()
-
-  rmSync(dir, { recursive: true, force: true })
 })

@@ -6,7 +6,7 @@
 // DEEPER directory, and refusing to answer at all when there is no repo above.
 
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { findRepoRoot, REPO_ROOT } from './repo-root'
@@ -46,7 +46,11 @@ describe('repo root binding', () => {
   // what lets a relocated suite scan nothing and report success.
   test('throws rather than guessing when there is no repo above', () => {
     const outside = mkdtempSync(join(tmpdir(), 'agenthydra-rootguard-'))
-    expect(() => findRepoRoot(outside)).toThrow(/no AgentHydra repo root/)
+    try {
+      expect(() => findRepoRoot(outside)).toThrow(/no AgentHydra repo root/)
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
   })
 
   // The swap that adopted this helper must not have moved any path. Identical value today is what

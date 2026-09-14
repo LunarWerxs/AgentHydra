@@ -127,6 +127,11 @@ if (
   console.error(
     `[agenthydra] NODE_ENV=test with no AGENTHYDRA_HOME/DB/DATA_DIR override — using throwaway state at ${scratch}`,
   )
+  // Outcome-independent reap: this module-scope block runs once per test process (bun caches the
+  // module), so process exit is the only hook that always fires, matching setup.ts's own pattern.
+  process.on('exit', () => {
+    rmSync(scratch, { recursive: true, force: true })
+  })
 }
 
 /** Canonical Claude Code CLI transcript store: <home>/.claude/projects/<encoded-cwd>/<session-id>.jsonl */

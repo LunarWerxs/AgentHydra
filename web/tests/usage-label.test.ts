@@ -8,7 +8,7 @@ const snap = (over: Partial<UsageSnapshot> = {}): UsageSnapshot => ({
   session: { pct: 13, resets: 'Aug 5, 4:59pm' },
   weekAll: { pct: 92, resets: 'Aug 6, 4:59am' },
   weekModel: { pct: 4, resets: 'Aug 6, 4:59am', label: 'Fable' },
-  capturedAt: '2026-08-05T12:00:00.000Z',
+  capturedAt: '2021-08-05T12:00:00.000Z',
   ...over,
 })
 

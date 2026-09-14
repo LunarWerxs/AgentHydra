@@ -12,8 +12,8 @@
 // findViolations, prove it actually fires on the broken shape it claims to catch and stays quiet on
 // the fixed one. A guardrail that cannot fail is not a guardrail.
 
-import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -661,11 +661,17 @@ for (const file of CHECK_FILES) {
 describe('spawn-test-without-timeout.mjs — repo-wide timeout stand-down', () => {
   const load = () => import(pathToFileURL(join(CHECKS_DIR, 'spawn-test-without-timeout.mjs')).href)
 
+  const guardrailRoots: string[] = []
   const withRoot = (files: Record<string, string>): string => {
     const dir = mkdtempSync(join(tmpdir(), 'agenthydra-guardrail-'))
+    guardrailRoots.push(dir)
     for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body)
     return dir
   }
+
+  afterEach(() => {
+    for (const dir of guardrailRoots.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
 
   test('a --timeout in the test script stands the check down', async () => {
     const { audit, globalTimeoutMs } = await load()

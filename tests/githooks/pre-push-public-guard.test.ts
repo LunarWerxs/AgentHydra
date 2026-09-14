@@ -15,7 +15,7 @@
 // Revert check: delete the `if (verdict !== "private")` block in check-public-push.mjs and the
 // first four tests fail; delete the release-tag block and the tag tests fail.
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { execFileSync, spawnSync } from 'node:child_process'
 import {
   chmodSync,
@@ -36,6 +36,20 @@ import {
 import { REPO_ROOT } from '../repo-root'
 
 const HOOK_TEST_TIMEOUT = 20_000 // real git init/commit/push + a node subprocess; ~1s locally
+
+// A single root for every scratch dir this file creates: at most one mkdtempSync may root
+// directly in the OS temp dir per file. realpathSync.native up front resolves the 8.3-short-path
+// issue once, so every nested mkdirSync below it is already long-path.
+const FILE_ROOT = realpathSync.native(mkdtempSync(join(tmpdir(), 'ah-prepush-')))
+let prepushSeq = 0
+function prepushRoot(name: string) {
+  const dir = join(FILE_ROOT, `${name}-${prepushSeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+afterAll(() => {
+  rmSync(FILE_ROOT, { recursive: true, force: true })
+})
 const HEADING = '# WARNING: THIS REPOSITORY IS **PUBLIC**'
 
 const REAL_PREPUSH = join(REPO_ROOT, '.githooks', 'pre-push')
@@ -93,7 +107,7 @@ describe('.githooks/pre-push: a public remote is announced and refused', () => {
   beforeEach(() => {
     // realpathSync.native: GitHub's Windows runner hands out an 8.3 temp path (RUNNER~1) while git
     // reports the worktree by its long name, and every path comparison in a hook test then misses.
-    sandbox = realpathSync.native(mkdtempSync(join(tmpdir(), 'ah-prepush-')))
+    sandbox = prepushRoot('sandbox')
     repo = join(sandbox, 'repo')
     origin = join(sandbox, 'origin')
     mkdirSync(join(repo, '.githooks'), { recursive: true })
@@ -264,7 +278,7 @@ describe('check-public-push.mjs: the parsers', () => {
   })
 
   test('openTodoSections counts headings after Contents, or all but the state of play without it', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ah-todo-'))
+    const dir = prepushRoot('todo')
     try {
       const file = join(dir, 'TODO.md')
       writeFileSync(file, '# t\n\n## ⭐ STATE OF PLAY\n\n## Contents\n\n## 1. A\n\n## 2. B\n')

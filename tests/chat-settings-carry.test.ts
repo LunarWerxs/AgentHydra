@@ -6,8 +6,8 @@
 // connector ids never cross accounts; a cold record is the source minus its account and its moment,
 // re-identified as an import; and the store leaf chosen is the account signed in NOW.
 
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -17,6 +17,20 @@ import {
   chooseStoreLeaf,
   pickCarriedSettings,
 } from '../server/src/chat-settings-carry'
+
+// A single root for every scratch dir this file creates: at most one mkdtempSync may root
+// directly in the OS temp dir per file, so every other scratch dir nests inside this one, and one
+// afterAll reaps all of them regardless of how a test ends.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-'))
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true })
+})
+let leafSeq = 0
+function leafRoot(name: string) {
+  const dir = join(ROOT, `${name}-${leafSeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
 
 const source = {
   sessionId: 'app-own-id-123',
@@ -128,7 +142,7 @@ test('buildColdImportRecord: the source minus its account and its moment, re-ide
 })
 
 test('chooseStoreLeaf picks the account signed in NOW, i.e. the leaf touched last', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-'))
+  const profile = leafRoot('now')
   const old = join(profile, 'claude-code-sessions', 'org-old', 'user-old')
   const cur = join(profile, 'claude-code-sessions', 'org-cur', 'user-cur')
   mkdirSync(old, { recursive: true })
@@ -145,21 +159,21 @@ test('chooseStoreLeaf picks the account signed in NOW, i.e. the leaf touched las
 })
 
 test('chooseStoreLeaf: an empty leaf still counts (a freshly signed-in profile has exactly that)', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-empty-'))
+  const profile = leafRoot('empty')
   const leaf = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(leaf, { recursive: true })
   expect(chooseStoreLeaf(profile)).toBe(leaf)
 })
 
 test('chooseStoreLeaf: a profile that never signed in has nowhere the app would look', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-none-'))
+  const profile = leafRoot('none')
   expect(chooseStoreLeaf(profile)).toBeNull()
   mkdirSync(join(profile, 'claude-code-sessions'), { recursive: true })
   expect(chooseStoreLeaf(profile)).toBeNull()
 })
 
 test('chooseStoreLeaf: records without lastActivityAt rank by file time', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-mtime-'))
+  const profile = leafRoot('mtime')
   const a = join(profile, 'claude-code-sessions', 'org-1', 'user-a')
   const b = join(profile, 'claude-code-sessions', 'org-1', 'user-b')
   mkdirSync(a, { recursive: true })

@@ -108,7 +108,8 @@ describe('.githooks/pre-commit: the kit-sync guard covers both vendored targets 
     // and git runs the hook from the worktree's LONG path, so the stub kit's "differs" line and
     // the guard's staged paths never matched and the drift passed the commit. First seen the day
     // this suite first ran in CI at all (2026-09-12).
-    sandbox = realpathSync.native(mkdtempSync(join(tmpdir(), 'ah24-hook-')))
+    const rawSandbox = mkdtempSync(join(tmpdir(), 'ah24-hook-'))
+    sandbox = realpathSync.native(rawSandbox)
     repo = join(sandbox, 'repo')
     kit = join(sandbox, 'lunarwerx-ui')
     mkdirSync(join(repo, '.githooks'), { recursive: true })
