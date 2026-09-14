@@ -9,11 +9,11 @@
     "test": "bun test"
   },
   "dependencies": {
-    "hono": "^4.7.0",
-    "jose": "^6.0.0"
+    "hono": "^4.13.7",
+    "jose": "^6.2.12"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.7.0"
+    "@types/bun": "1.4.0",
+    "typescript": "^5.9.3"
   }
 }
