@@ -28,7 +28,7 @@
     "@vue/compiler-sfc": "^3.5.42",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
-    "vite": "^6.4.3",
+    "vite": "^8.3.0",
     "vue-tsc": "^2.2.12"
   }
 }
