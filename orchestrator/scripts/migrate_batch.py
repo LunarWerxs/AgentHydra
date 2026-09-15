@@ -923,7 +923,7 @@ def _mark_stamp_timeout(live: list[_Item], budget: float) -> None:
         if land is not None and land.doctrine is None:
             item.errors.append(
                 f"stamp phase timed out after {budget:.0f}s - permission mode NOT adjudicated; "
-                f"remedy: {migrate_chat._bypass_remedy_cmd(land.session_id, land.chat_title)}")
+                f"remedy: {migrate_chat.BYPASS_REMEDY_CMD.format(sid=land.session_id)}")
 
 
 
