@@ -162,12 +162,36 @@ test('rename refuses a generic name - renaming Untitled to Untitled fixes nothin
   expect(r.detail).toContain('generic')
 })
 
-test('rename names the CURRENT on-screen row and the new title, in the app it lives in', async () => {
+test('ONE CHAT DRAWN TWICE: the rename may act on duplicate rows only when disk says the name is unique', async () => {
+  // Measured 2026-09-15 proving the 0.42.0 build: a chat seconds old rendered two kebabs with
+  // the identical name and the actuator refused "2 rendered chats end with ... refusing to
+  // guess". Identical names are one chat; only the store can say so.
   let args: string[] = []
-  const r = await uiRenameChat('C:inst', 'Untitled', 'Courier ledger rebuild', async (a) => {
+  const run = async (a: string[]) => {
     args = a
     return { code: 0, out: 'renamed' }
-  })
+  }
+  await uiRenameChat('C:inst', 'Real Chat Name', 'A new name', run, () => 1)
+  expect(args).toContain('-AllowDuplicateRows')
+  // Two live chats share it, or the disk does not carry it at all: the refusal stands.
+  await uiRenameChat('C:inst', 'Real Chat Name', 'A new name', run, () => 2)
+  expect(args).not.toContain('-AllowDuplicateRows')
+  await uiRenameChat('C:inst', 'Real Chat Name', 'A new name', run, () => 0)
+  expect(args).not.toContain('-AllowDuplicateRows')
+})
+
+test('rename names the CURRENT on-screen row and the new title, in the app it lives in', async () => {
+  let args: string[] = []
+  const r = await uiRenameChat(
+    'C:inst',
+    'Untitled',
+    'Courier ledger rebuild',
+    async (a) => {
+      args = a
+      return { code: 0, out: 'renamed' }
+    },
+    () => 0,
+  )
   expect(r.ok).toBe(true)
   expect(args).toEqual([
     '-Title',

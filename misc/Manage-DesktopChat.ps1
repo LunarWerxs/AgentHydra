@@ -61,7 +61,11 @@ param(
   [string]$Instance = '',
   [ValidateSet('Archive', 'Unarchive', 'Rename')][string]$Action = 'Archive',
   [string]$NewTitle = '',
-  [switch]$List
+  [switch]$List,
+  # The CALLER has established on disk that exactly one live chat in this instance carries
+  # $Title, so rows rendering that identical name are one chat drawn twice, not two chats to
+  # choose between. Only then may a duplicate-name ambiguity be acted on. See KebabFor.
+  [switch]$AllowDuplicateRows
 )
 $ErrorActionPreference = 'Stop'
 # ⛔ UTF-8 ON THE WAY OUT, OR A NON-ASCII TITLE COMES BACK AS QUESTION MARKS (2026-09-10).
@@ -173,6 +177,14 @@ function KebabFor($scope, $title) {
   $clean = @($hits | Where-Object { $_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title })
   $others = @($hits | Where-Object { -not ($_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title) })
   if ($clean.Count -eq 1 -and $others.Count -eq 0) { return $clean[0] }
+  # ONE CHAT DRAWN TWICE IS NOT AN AMBIGUITY (measured 2026-09-15 proving the 0.42.0 build: a
+  # chat spawned seconds earlier rendered two kebabs with the IDENTICAL name, and the rename
+  # refused a chat there was never any doubt about; ui-archive.ts has documented the same
+  # double-render since 2026-08). Identical names cannot name two different chats to choose
+  # between - only the DISK can say whether the title is unique, so this acts only when the
+  # caller passed -AllowDuplicateRows, having counted exactly one live chat with it.
+  $distinct = @($hits | ForEach-Object { $_.Current.Name } | Sort-Object -Unique)
+  if ($AllowDuplicateRows -and $distinct.Count -eq 1) { return $hits[0] }
   # THE REFUSAL MESSAGE MUST NOT GO TO THE OUTPUT STREAM. A PowerShell function returns
   # EVERYTHING written to stdout, so a Write-Output here made KebabFor return the two-element
   # array @('AMBIGUOUS: ...', $null). The caller's `if (-not $kebab)` then saw a non-empty

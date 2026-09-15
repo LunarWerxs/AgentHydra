@@ -308,6 +308,39 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
 
+- **A COMPILED BUILD RAN THE PREVIOUS BUILD'S SCRIPTS: the version is a label, not a content hash**
+  (`server/src/misc-assets.ts`, `server/tests/misc-assets.test.ts`). A single-file build writes the
+  `misc\` actuators it needs out of itself into `<data>\misc\<version>\`, and reused whatever was
+  already there. Every rebuild of the SAME version therefore kept running the copy the first build
+  had written: found 2026-09-15 while proving this release, when an actuator fix sat in the binary,
+  in the repo and in the changelog, and the compiled daemon went on refusing the very thing it
+  allowed - silently, and with a plausible-looking refusal from the stale script that sent the
+  reader hunting somewhere else entirely. The materialized copy is now compared BYTE FOR BYTE with
+  the embedded one and replaced when they differ (`reason: 'refreshed'`); an unreadable comparison
+  keeps the old copy rather than churning it.
+
+- **One chat drawn twice is no longer an ambiguity that blocks a rename or an archive**
+  (`misc/Manage-DesktopChat.ps1`'s `-AllowDuplicateRows`, `server/src/ui-archive.ts`,
+  `orchestrator/scripts/rename_chat.py`, `server/tests/ui-archive.test.ts`). The app can render one
+  chat's row in two places at once - documented here since 2026-08 for archive, and measured again
+  2026-09-15 on a chat seconds old - and the actuator refused both actions with "2 rendered chats
+  end with '<title>' - refusing to guess". Identical rendered names cannot be two different chats
+  to choose between, but only the STORE can say a title is unique, so the actuator now acts on
+  duplicate rows only when the caller passed `-AllowDuplicateRows`, having counted exactly one
+  UNARCHIVED chat with that title. Two live chats sharing a title, or a title the store does not
+  carry at all, keep the old refusal exactly.
+
+  Found underneath it: those counts were read by walking a path built from the caller's argument,
+  which is an instance LABEL (`temp1`) as often as a directory - so the walk read an empty store
+  and answered 0, which is indistinguishable from a real miss. The count now comes from the same
+  store scan the dossier answers from, and the label/dir reads resolve either form.
+
+- **The release smoke test no longer fails a good build while cleaning up** (`scripts/smoke-release.ts`).
+  Every check printed its tick and the run still exited 1: on Windows a killed child keeps its cwd
+  for a moment after `exited` resolves, so removing the scratch directory threw EBUSY - reported as
+  "this release build is broken". Cleanup retries briefly, then says what it left behind, and the
+  verdict stands on the checks.
+
 - **`migrate_batch`/`move_chats` no longer refuses a move when a chat's daemon session title and
   desktop meta title disagree, and `move_chats` can now name a chat's own title per-chat**
   (`server/src/routes/desktop-sessions.ts`'s `/api/sessions/:id/import-desktop`, `orchestrator/

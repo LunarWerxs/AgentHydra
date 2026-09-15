@@ -46,23 +46,44 @@ def out(payload: dict, as_json: bool, code: int) -> int:
     return code
 
 
+def _one_live_chat_named(instance: str, title: str) -> bool:
+    """Does exactly ONE unarchived chat in `instance` carry this exact title? Answered from the
+    daemon's dossier, never from the render tree - see _drive_rename's -AllowDuplicateRows.
+    A failed read answers False, which only leaves the actuator's own refusal in place."""
+    try:
+        rows = hydralib.dossier(title)
+    except Exception:
+        return False
+    inst = str(instance).lower()
+    live = [r for r in rows
+            if str(r.get("title") or "") == title
+            and not r.get("archived")
+            and str(r.get("instance") or "").lower().endswith(inst.rsplit("\\", 1)[-1])]
+    return len(live) == 1
+
+
 def _drive_rename(instance: str, old_title: str, new_title: str) -> tuple[int, str]:
     """Rename through the app's own sidebar control. Exits: 0 renamed and rendered under the
     new name - 1 error or ambiguity - 2 invoked but the new name did not render - 3 the row
     is not rendered in that instance - 7 the window is busy (another lane is driving it)."""
     if not ACTUATOR.exists():
         return 1, f"the UIA actuator is missing at {ACTUATOR}"
+    args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR),
+            "-Title", str(old_title), "-Instance", str(instance),
+            "-Action", "Rename", "-NewTitle", str(new_title)]
+    # ONE CHAT DRAWN TWICE IS NOT AN AMBIGUITY. The app can render one chat's row in two places
+    # (measured 2026-09-15 on a chat seconds old: two kebabs with the IDENTICAL name, and the
+    # rename refused something there was no doubt about). Identical names cannot be two chats to
+    # choose between, but only the STORE can say the title is unique, so the actuator acts on a
+    # duplicate only when this says so.
+    if _one_live_chat_named(instance, old_title):
+        args.append("-AllowDuplicateRows")
     with windowlib.instance_lock(instance, wait_secs=60) as mine:
         if not mine:
             return 7, ("REFUSED: that instance's window is busy - another lane is driving it "
                        "right now; retry next pass")
         with windowlib.keep_placement(instance):
-            r = clilib.run_text(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR),
-                 "-Title", str(old_title), "-Instance", str(instance),
-                 "-Action", "Rename", "-NewTitle", str(new_title)],
-                timeout=240,
-            )
+            r = clilib.run_text(args, timeout=240)
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 

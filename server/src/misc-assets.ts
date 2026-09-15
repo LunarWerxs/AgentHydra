@@ -63,7 +63,8 @@ export function embeddedMiscFiles(): Readonly<Record<string, string>> | null {
 export type MiscAssetReason =
   | 'on-disk' // found under APP_ROOT\misc - a source checkout or a sidecar install
   | 'materialized' // written out of the compiled binary just now
-  | 'already-materialized' // written out of the binary by an earlier run
+  | 'already-materialized' // written out of the binary by an earlier run, byte-identical
+  | 'refreshed' // an earlier run's copy differed from this binary's, and was replaced
   | 'not-embedded' // compiled, but this build carries no copy: a build defect
   | 'missing' // not compiled and not on disk: a broken checkout
 
@@ -84,6 +85,22 @@ export type MiscAssetDeps = {
   exists?: (path: string) => boolean
   mkdir?: (path: string) => void
   copy?: (from: string, to: string) => Promise<void>
+  /** Are the embedded copy and the materialized one byte-identical? See resolveMiscAsset. */
+  same?: (from: string, to: string) => Promise<boolean>
+}
+
+/**
+ * ⛔ THE VERSION IS NOT A CONTENT HASH (measured 2026-09-15, proving the 0.42.0 build). The
+ * materialized copy is scoped by version and was reused whenever it existed, so every rebuild of
+ * the SAME version kept running the script the first build had written: an actuator fix was in
+ * the binary, in the repo, and in the changelog, and the compiled daemon went on running the old
+ * one. It failed the way this file's own header hates - silently, and with a plausible refusal
+ * from the stale script to send the reader hunting elsewhere. Bytes decide now, not the label.
+ */
+async function sameBytes(from: string, to: string): Promise<boolean> {
+  const [a, b] = await Promise.all([Bun.file(from).arrayBuffer(), Bun.file(to).arrayBuffer()])
+  if (a.byteLength !== b.byteLength) return false
+  return Buffer.from(a).equals(Buffer.from(b))
 }
 
 /**
@@ -128,7 +145,13 @@ export async function resolveMiscAsset(
 
   const dir = join(deps.stateDir ?? DATA_DIR, 'misc', deps.version ?? VERSION)
   const to = join(dir, name)
-  if (exists(to)) return { path: to, reason: 'already-materialized' }
+  let refreshing = false
+  if (exists(to)) {
+    // Same version, possibly a different build: compare the bytes rather than trusting the label.
+    const identical = await (deps.same ?? sameBytes)(source, to).catch(() => true)
+    if (identical) return { path: to, reason: 'already-materialized' }
+    refreshing = true
+  }
   try {
     ;(deps.mkdir ?? ((p: string) => void mkdirSync(p, { recursive: true })))(dir)
     await (
@@ -145,5 +168,5 @@ export async function resolveMiscAsset(
       error: `could not write ${to} out of the binary: ${String(error)}`,
     }
   }
-  return { path: to, reason: 'materialized' }
+  return { path: to, reason: refreshing ? 'refreshed' : 'materialized' }
 }

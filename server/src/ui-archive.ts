@@ -18,10 +18,54 @@
 //     row is reported as settled, not as a failure.
 
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { isGenericChatTitle } from './chat-title'
+import { collectChats } from './core/chat-store-scan'
+import { instanceDirForLabel } from './instance-sessions'
 import { CHAT_MANAGER_FILE, resolveMiscAsset } from './misc-assets'
 import { findChatMetaPath } from './session-launch'
+
+/**
+ * Callers pass either an instance LABEL ('temp1' - what a chat record and the dossier carry) or
+ * an absolute profile dir. The actuator resolves both, and the disk reads below did NOT.
+ *
+ * ⛔ A label therefore read no store at all and every count came back 0 - indistinguishable from
+ * a real miss, and silently: measured 2026-09-15, chat_rename refused a chat whose row the app
+ * had drawn twice, because its live-title count was 0 for a store that plainly held it.
+ */
+function profileDirOf(instanceOrDir: string): string {
+  return isAbsolute(instanceOrDir) ? instanceOrDir : instanceDirForLabel(instanceOrDir)
+}
+
+/** That instance's own leaf name, whichever form the caller used ('temp1', or a path to it). */
+function instanceLabelOf(instanceOrDir: string): string {
+  return (
+    instanceOrDir
+      .replace(/[\\/]+$/, '')
+      .split(/[\\/]/)
+      .pop() ?? instanceOrDir
+  ).toLowerCase()
+}
+
+/**
+ * How many UNARCHIVED chats in this instance carry exactly this title, counted from the SAME
+ * store scan the dossier answers from rather than by walking a path built here.
+ *
+ * That is the point: this question decides whether duplicate rendered rows may be acted on, and
+ * a count that is wrong in the SAFE direction still blocks a legitimate act (measured 2026-09-15:
+ * a path built from an instance label read an empty store and a rename refused a chat the
+ * dossier could see perfectly well).
+ */
+function liveChatsNamed(instanceOrDir: string, title: string): number {
+  const label = instanceLabelOf(instanceOrDir)
+  try {
+    return collectChats().filter(
+      (c) => c.title === title && !c.archived && String(c.instance ?? '').toLowerCase() === label,
+    ).length
+  } catch {
+    return 0
+  }
+}
 
 const SPAWN_TIMEOUT_MS = 90_000
 
@@ -84,7 +128,7 @@ export async function listRenderedTitles(profileDir: string): Promise<string[]> 
 }
 
 function diskTitleOf(profileDir: string, sessionId: string): string | null {
-  const p = findChatMetaPath(profileDir, sessionId)
+  const p = findChatMetaPath(profileDirOf(profileDir), sessionId)
   if (!p) return null
   try {
     const meta = JSON.parse(readFileSync(p, 'utf8'))
@@ -97,7 +141,7 @@ function diskTitleOf(profileDir: string, sessionId: string): string | null {
 }
 
 function diskArchivedOf(profileDir: string, sessionId: string): boolean | null {
-  const p = findChatMetaPath(profileDir, sessionId)
+  const p = findChatMetaPath(profileDirOf(profileDir), sessionId)
   if (!p) return null
   try {
     return JSON.parse(readFileSync(p, 'utf8')).isArchived === true
@@ -129,7 +173,7 @@ function dirTitleCountOf(dir: string, title: string, liveOnly: boolean): number 
 function diskTitleCountOf(profileDir: string, title: string, liveOnly = false): number {
   let n = 0
   try {
-    const storeDir = join(profileDir, 'claude-code-sessions')
+    const storeDir = join(profileDirOf(profileDir), 'claude-code-sessions')
     for (const org of readdirSync(storeDir, { withFileTypes: true })) {
       if (!org.isDirectory()) continue
       for (const user of readdirSync(join(storeDir, org.name), { withFileTypes: true })) {
@@ -156,10 +200,18 @@ export async function uiRenameChat(
   renderedTitle: string,
   newTitle: string,
   run: (args: string[]) => Promise<{ code: number; out: string }> = runPs1,
+  countLiveTitles: (dir: string, title: string) => number = liveChatsNamed,
 ): Promise<{ ok: boolean; detail: string }> {
   if (isGenericChatTitle(newTitle))
     return { ok: false, detail: `refusing to rename to a generic name ('${newTitle}')` }
-  const { code, out } = await run([
+  // ONE CHAT DRAWN TWICE IS NOT AN AMBIGUITY, and only disk can say so (measured 2026-09-15
+  // proving the 0.42.0 build: a chat spawned seconds earlier rendered two kebabs with the
+  // identical name and the actuator refused "2 rendered chats end with ... - refusing to
+  // guess"). The count is of LIVE chats, the same question uiArchiveChat asks below: if exactly
+  // one unarchived chat here carries this name, every row rendering it is that chat. A 0 (a
+  // rendered name the disk does not carry - an import whose title the app erased) leaves the
+  // refusal exactly as it was.
+  const args = [
     '-Title',
     renderedTitle,
     '-Instance',
@@ -168,7 +220,9 @@ export async function uiRenameChat(
     'Rename',
     '-NewTitle',
     newTitle,
-  ])
+  ]
+  if (countLiveTitles(profileDir, renderedTitle) === 1) args.push('-AllowDuplicateRows')
+  const { code, out } = await run(args)
   return { ok: code === 0, detail: out.trim() || `exit ${code}` }
 }
 
@@ -327,7 +381,10 @@ export async function uiArchiveChat(
   const invoke =
     deps.invoke ??
     ((dir: string, title: string) =>
-      runPs1(['-Title', title, '-Instance', dir, '-Action', 'Archive']))
+      // -AllowDuplicateRows: the live-count check below has already established that exactly one
+      // unarchived chat here carries this title, so identical rendered rows are one chat drawn
+      // twice (the case this file has documented since 2026-08) and not a choice to guess at.
+      runPs1(['-Title', title, '-Instance', dir, '-Action', 'Archive', '-AllowDuplicateRows']))
   const readTitle = deps.readTitle ?? diskTitleOf
   const readArchived = deps.readArchived ?? diskArchivedOf
   const readTitleCount = deps.readTitleCount ?? diskTitleCountOf

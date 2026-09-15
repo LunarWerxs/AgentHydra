@@ -78,10 +78,22 @@ describe('resolving a misc file a compiled build needs', () => {
 
   test('a copy already written by an earlier run is reused, not rewritten', async () => {
     const already = join(STATE, 'misc', '1.2.3', DELIVERY_ACTUATOR_FILE)
-    const { promise, copied } = run({ exists: (p) => p === already })
+    const { promise, copied } = run({ exists: (p) => p === already, same: async () => true })
     const got = await promise
     expect(got.reason).toBe('already-materialized')
     expect(copied).toHaveLength(0)
+  })
+
+  test('SAME version, DIFFERENT bytes: the stale copy is replaced, not reused', async () => {
+    // Measured 2026-09-15 proving the 0.42.0 build: an actuator fix was in the binary and the
+    // compiled daemon kept running the copy the previous build of that same version had written,
+    // refusing the very thing the fix allowed. The version is a label, not a content hash.
+    const already = join(STATE, 'misc', '1.2.3', DELIVERY_ACTUATOR_FILE)
+    const { promise, copied } = run({ exists: (p) => p === already, same: async () => false })
+    const got = await promise
+    expect(got.reason).toBe('refreshed')
+    expect(got.path).toBe(already)
+    expect(copied).toEqual([['/$bunfs/deliver.ps1', already]])
   })
 
   test('two daemons racing the first delivery: a failed write over a present file is survivable', async () => {
