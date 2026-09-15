@@ -13,7 +13,7 @@
     "jose": "^6.2.12"
   },
   "devDependencies": {
-    "@types/bun": "1.4.0",
+    "@types/bun": "1.4.2",
     "typescript": "^5.9.3"
   }
 }
