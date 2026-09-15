@@ -87,13 +87,17 @@ of its window, Martin at 88% of its week) took ~25 round trips by hand:
                      tree, enginelib.terminate_engine) and is then moved. The transcript
                      survives; a tool result still in flight is lost, so say so in --resume.
                      --force never implies this: --force overrides a hold, nothing more.
-  --resume TEXT      PHASE FOUR. After every landed chat is moved, settled and stamped, TEXT
+  --resume [TEXT]    PHASE FOUR. After every landed chat is moved, settled and stamped, TEXT
                      is staged as a reply to each one (stage_reply's own evidence rule) and
                      delivered through the courier's named-delivery path - by hand, so no
                      tray icon and no fair-share cap. That is what makes a migrated chat
                      CONTINUE WORKING instead of sitting dormant in its new account. A chat
                      whose engine booted on landing and is mid-turn keeps the reply STAGED;
-                     its result names the exact retry. Read each result's `resume`.
+                     its result names the exact retry. Read each result's `resume`. TEXT is
+                     optional - a bare --resume stages _DEFAULT_RESUME_TEXT, which tells the
+                     chat to read journal.jsonl in its own transcript directory and resume with
+                     Workflow({ scriptPath, resumeFromRunId }), so a person moving a chat off
+                     an account that just hit its usage wall does not have to remember the words.
 
 Exit: 0 every named chat landed (or, under --dry-run, every plan resolved) - 2 the flags do
   not make sense - 4 nothing landed - 5 a PARTIAL batch: some landed, some were refused.
@@ -116,6 +120,21 @@ from lib import clilib, deliverylib, enginelib, hydralib, ledgerlib
 #: Flags this driver consumes itself; everything else is forwarded to each chat's own move.
 _BATCH_ONLY = {"--chat", "--all-unarchived", "--json", "--limit", "--resume", "--terminate-live",
                "--archived-count"}
+
+#: The DEFAULT `--resume` text when the flag is given with no TEXT of its own (2026-09-15,
+#: closing the filed defect docs/todo/improvements/tooling/workflow-runs-die-on-account-limits-
+#: and-leave-half-written-files.md item 3, Connections repo). "Already done by hand overnight -
+#: every resume message carried this - it should be the default text migrate_batch --resume
+#: stages, so a person does not have to remember it." A Workflow fan-out killed mid-run by its
+#: account's usage wall journals every completed agent; the resumed chat's whole job is to read
+#: that journal and hand the SAME script back to the engine by run id, never re-author the work.
+_DEFAULT_RESUME_TEXT = (
+    "MIGRATION NOTICE: you were moved to a fresh account mid-run. Read journal.jsonl in this "
+    "run's own transcript directory to see which agents already completed, then resume the "
+    "workflow with Workflow({ scriptPath, resumeFromRunId }) - completed agents replay from the "
+    "journal at zero cost; only the first edited/unstarted agent and everything after it runs "
+    "live."
+)
 
 #: The law this batch enforces, quoted at the caller in every refusal so the reason arrives
 #: WITH the refusal rather than in a doc nobody opens at that moment.
@@ -224,9 +243,17 @@ def _parse(argv: list[str]) -> _BatchArgs | int:
             a.chats.append(argv[i + 1])
             i += 2
             continue
-        if tok == "--resume" and i + 1 < len(argv):
-            a.resume_text = argv[i + 1]
-            i += 2
+        if tok == "--resume":
+            # TEXT is optional (2026-09-15): a bare --resume, or one immediately followed by
+            # another flag, stages _DEFAULT_RESUME_TEXT rather than doing nothing - the prior
+            # shape silently swallowed a trailing bare --resume (it is in _BATCH_ONLY, so it
+            # never even reached the passthrough) and would misread the NEXT flag as the text.
+            if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                a.resume_text = argv[i + 1]
+                i += 2
+            else:
+                a.resume_text = _DEFAULT_RESUME_TEXT
+                i += 1
             continue
         if tok == "--terminate-live":
             a.terminate_live = True
@@ -896,7 +923,7 @@ def _mark_stamp_timeout(live: list[_Item], budget: float) -> None:
         if land is not None and land.doctrine is None:
             item.errors.append(
                 f"stamp phase timed out after {budget:.0f}s - permission mode NOT adjudicated; "
-                f"remedy: {migrate_chat.BYPASS_REMEDY_CMD.format(sid=land.session_id)}")
+                f"remedy: {migrate_chat._bypass_remedy_cmd(land.session_id, land.chat_title)}")
 
 
 
