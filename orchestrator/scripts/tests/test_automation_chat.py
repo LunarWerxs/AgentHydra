@@ -175,6 +175,42 @@ class AutomationChatTest(unittest.TestCase):
         self.assertTrue(payload["bypassStamped"])
         self.assertTrue(payload["ultracodeStamped"])
 
+    def test_title_flag_lets_the_remedy_aim_the_picker_when_the_dossier_has_gone_stale(self):
+        """⛔ THE 2026-09-15 BUG: a RUNNING app can erase a chat's disk title in the gap between
+        when a batch VERIFIES the rendered name and when a human runs the printed remedy by
+        hand - and the remedy's own title lookup (the dossier) is a disk read no fresher than
+        the one that just went stale (title_for_row's daemon fallback hits the same dossier).
+        Without --title the remedy failed with "no name to aim at" on the exact chat it exists
+        to fix; with it, the caller's own verified name reaches the picker directly."""
+        stub = self.stub
+
+        def stale_dossier(method, path, query, body):
+            if dossier_query(query) != SID:
+                return {"matches": []}
+            return {"matches": [{"instance": "cold", "chatId": "local_x", "cliSessionId": SID,
+                                 "lineageIds": [SID], "title": None, "archived": False,
+                                 "lastActivityAt": "T1", "live": None, "metaPath": str(self.meta)}]}
+
+        stub.routes["/api/chats/dossier"] = stale_dossier
+        stub.routes["/api/fleet"] = {"instances": [
+            {"num": 1, "name": "cold", "dir": "c:\\i\\cold", "isRunning": True, "signedIn": True}]}
+
+        code, out, _ = run_cli(automation_chat.main, [SID, "--force"])
+        self.assertIn("no name to aim at", out)
+
+        with mock.patch.object(automation_chat.clilib, "run_text",
+                               return_value=mock.Mock(returncode=0,
+                                                       stdout="MODE SET 'Bypass permissions'\n",
+                                                       stderr="")) as run_mock:
+            code, out, _ = run_cli(
+                automation_chat.main,
+                [SID, "--force", "--title", "Sub-brand logo set integration"])
+        self.assertEqual(code, 0)
+        pickers = [c.args[0] for c in run_mock.call_args_list if "approve_prompt.ps1" in c.args[0][5]]
+        self.assertEqual(len(pickers), 1)
+        self.assertIn("Sub-brand logo set integration", pickers[0])
+        self.assertIn("APP-CONFIRMED", out)
+
 
 class FleetEnforceTest(unittest.TestCase):
     """--all: the fleet-wide doctrine sweep, against a fake disk store."""

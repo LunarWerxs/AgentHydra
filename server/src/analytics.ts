@@ -435,6 +435,12 @@ export async function scanSessionAnalytics(
   if (source === 'hermes') return scanHermesAnalytics(sessionId, path, out)
   // DSH's `path` is the session's own log, and unlike the two above it records a cost per turn.
   if (source === 'dsh') return scanDshAnalytics(path, out)
+  // The zswarm's dollars are real, but they are not THIS account's tokens: a job is paid straight out
+  // of the DeepSeek balance, never against a Claude/Codex weekly cap, so it does not belong in the
+  // per-account token spend this scan builds. Its cost lives in its own source (server/src/zswarm-
+  // cost.ts, summing the ledger by day/model/backend) rather than being folded in here - same
+  // "listed and readable, contributes nothing to THIS chart" posture as foreign below.
+  if (source === 'zswarm') return out
   // Not one of these stores records what a turn cost — Copilot bills credits and never writes a
   // token count, and Grok, Kimi and Zed simply do not persist one. So a foreign session is listed
   // and readable and contributes nothing to the spend charts. A zero would claim it was free.

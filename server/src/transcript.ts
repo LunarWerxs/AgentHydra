@@ -2,7 +2,7 @@ import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { stat as statAsync } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { extraRootsWithFormat } from './agent-catalog'
-import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH } from './config'
+import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH, ZSWARM_HOME } from './config'
 import { codexInstanceStores } from './core/codex-instances'
 import { dshInstanceStores } from './core/dsh-instances'
 import { listDshSessions, readDshSession } from './dsh-sessions'
@@ -28,6 +28,7 @@ import {
 } from './session-continuations'
 import { dedupeKey, makeLocator, matchesLocator, parseLocator } from './session-locator'
 import type { SessionSource, TailEvent, TailResult } from './types'
+import { listZswarmSessions, readZswarmSession } from './zswarm-sessions'
 
 // --- cwd folder-name encoding (forward only; reverse is lossy) --------------
 
@@ -843,6 +844,28 @@ function dshRecords(root: string, tool = 'deepseek-harness'): TranscriptFile[] {
   }))
 }
 
+/** The DeepSeek zswarm's jobs, as index rows.
+ *
+ *  Unlike dshRecords above, there is only ONE root: the zswarm is not a login product with a home per
+ *  account, so ZSWARM_HOME is read directly here the same way OPENCODE_DB_PATH is, rather than through
+ *  an instance-store list. `path` is the job's own job.json, so - same as DSH - every row already
+ *  names the exact bytes to read. */
+function zswarmRecords(root: string = ZSWARM_HOME, tool = 'zswarm'): TranscriptFile[] {
+  return listZswarmSessions(root).map((session) => ({
+    session_id: session.session_id,
+    source: 'zswarm' as const,
+    path: session.path,
+    project: session.project,
+    mtime_ms: session.last_activity_at,
+    size_bytes: session.size_bytes,
+    archived: session.archived,
+    title: session.title,
+    cwd: session.cwd,
+    created_at: session.created_at,
+    tool,
+  }))
+}
+
 /**
  * The stores from the catalog that are NOT one of the three built-ins.
  *
@@ -1109,6 +1132,7 @@ function buildTranscriptIndex(): TranscriptFile[] {
   files.push(...extra.openCodeFiles)
   files.push(...extra.hermesFiles)
   files.push(...extra.dshFiles)
+  files.push(...zswarmRecords())
   files.push(...foreignRecords())
   return finishIndex(files, claudeChildren)
 }
@@ -1209,6 +1233,7 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
   files.push(...extra.openCodeFiles)
   files.push(...extra.hermesFiles)
   files.push(...extra.dshFiles)
+  files.push(...zswarmRecords())
   // The async listing, which yields while it parses. Everything above this line already yields;
   // this was the last synchronous block in the sweep, and the largest.
   files.push(...(await foreignRecordsAsync()))
@@ -1769,6 +1794,18 @@ function tailDshLog(
   return tailResult(sessionId, tf, opts, content.events.filter(keep).slice(-limit))
 }
 
+function tailZswarmJob(
+  sessionId: string,
+  tf: TranscriptFile,
+  opts: TailOptions,
+  keep: (e: TailEvent) => boolean,
+  limit: number,
+): TailResult {
+  const content = readZswarmSession(tf.path)
+  if (!content) return tailResult(sessionId, tf, opts, [], 'transcript not found')
+  return tailResult(sessionId, tf, opts, content.events.filter(keep).slice(-limit))
+}
+
 /** Read the last `limit` real turns of a session's transcript, thinking filtered out.
  *
  *  One branch per STORE KIND, each in its own helper above: the stores answer the same question in
@@ -1804,6 +1841,7 @@ export async function tailTranscript(
   if (tf.source === 'hermes') return tailHermesStore(sessionId, tf, opts, keep, limit)
   if (tf.source === 'opencode') return tailOpenCodeStore(sessionId, tf, opts, keep, limit)
   if (tf.source === 'dsh') return tailDshLog(sessionId, tf, opts, keep, limit)
+  if (tf.source === 'zswarm') return tailZswarmJob(sessionId, tf, opts, keep, limit)
 
   // Claude and Codex: a real .jsonl on disk, read from the END rather than parsed whole.
   const raw = await readTailBytes(tf.path, 6 * 1024 * 1024)

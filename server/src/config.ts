@@ -168,6 +168,18 @@ export const CODEX_HOME = appEnv('CODEX_HOME')?.trim() || join(HOME, '.codex')
 export const DSH_HOME =
   appEnv('DSH_HOME')?.trim() || process.env.DSH_HOME?.trim() || join(HOME, '.dsh')
 
+/**
+ * The DeepSeek zswarm's home (`Lunarwerx/zswarm`'s `config.py`: `Path(os.environ.get("ZSWARM_HOME") or
+ * (Path.home() / ".zswarm"))`), read with AgentHydra's own prefixed override ahead of the zswarm's own
+ * variable, same precedence DSH_HOME gives above.
+ *
+ * UNLIKE DSH_HOME, this is the only root there is - the zswarm is not a login product with a home per
+ * account, so there is no per-instance store list a reader must ask for instead (server/src/zswarm-
+ * sessions.ts and server/src/zswarm-cost.ts both take this as their default).
+ */
+export const ZSWARM_HOME =
+  appEnv('ZSWARM_HOME')?.trim() || process.env.ZSWARM_HOME?.trim() || join(HOME, '.zswarm')
+
 /** OpenCode CLI and Desktop share this SQLite session store. */
 export const OPENCODE_DB_PATH =
   appEnv('OPENCODE_DB')?.trim() ||

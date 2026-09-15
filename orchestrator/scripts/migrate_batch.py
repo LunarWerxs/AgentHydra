@@ -66,10 +66,16 @@ Usage:
   python migrate_batch.py --to here --from 15 --all-unarchived --terminate-live \
       --resume "MIGRATION NOTICE: you were moved to a fresh account; carry on."
 
+  python migrate_batch.py --to here --chat "7e1fa278" --chat-title "Logos for Connections products"
+
 Flags other than --chat/--all-unarchived are passed through to every chat's own move, so
 --now, --force, --archived, --title, --idle-wait and --stop-idle mean exactly what they mean
 for a single move. --title is refused for a multi-chat batch: one new name cannot be right
-for several different chats.
+for several different chats. --chat-title is the per-chat door that --title cannot be: it
+binds to the --chat named right before it and names THAT chat's real title, which the naming
+door always accepts outright - useful when the daemon's session title and the desktop
+record's title disagree (2026-09-15) and neither restated alone is guaranteed to clear the
+door's confirm_title check.
 
 ⛔ ARCHIVED CHATS ARE GATED HERE AS WELL AS PER CHAT (_archive_gate, added 2026-09-13 after an
 agent set --archived for itself and queued an account's 22 archived chats behind its 3 live
@@ -118,8 +124,8 @@ from lib import clilib, deliverylib, enginelib, hydralib, ledgerlib
 
 
 #: Flags this driver consumes itself; everything else is forwarded to each chat's own move.
-_BATCH_ONLY = {"--chat", "--all-unarchived", "--json", "--limit", "--resume", "--terminate-live",
-               "--archived-count"}
+_BATCH_ONLY = {"--chat", "--chat-title", "--all-unarchived", "--json", "--limit", "--resume",
+               "--terminate-live", "--archived-count"}
 
 #: The DEFAULT `--resume` text when the flag is given with no TEXT of its own (2026-09-15,
 #: closing the filed defect docs/todo/improvements/tooling/workflow-runs-die-on-account-limits-
@@ -214,11 +220,21 @@ class _UnknownSource(Exception):
 
 
 class _BatchArgs:
-    __slots__ = ("chats", "passthrough", "as_json", "all_unarchived", "source", "limit",
-                 "dry_run", "resume_text", "terminate_live", "archived_count")
+    __slots__ = ("chats", "chat_titles", "passthrough", "as_json", "all_unarchived", "source",
+                 "limit", "dry_run", "resume_text", "terminate_live", "archived_count")
 
     def __init__(self) -> None:
         self.chats: list[str] = []
+        # Parallel to `chats`, same length and order (2026-09-15, TODO item 1): the per-chat
+        # `--title` a caller names alongside a `--chat`, or None. `--title` on the batch itself
+        # is refused for more than one chat (one new name cannot be right for several chats,
+        # below) - this is the door MCP callers had no way through: `move_chats` could not name
+        # a chat's own real title, so the naming door's confirm_title check (restating the
+        # CURRENT title exactly) was the only path in, and a caller who could not read the
+        # daemon's own title for that chat had no way past a mismatch between it and the
+        # dossier's. A per-chat --title sidesteps confirm_title entirely: it is a real new name,
+        # which the naming door always accepts outright (chat-title.ts's `title` door).
+        self.chat_titles: list[str | None] = []
         self.passthrough: list[str] = []
         self.as_json = False
         self.all_unarchived = False
@@ -241,6 +257,18 @@ def _parse(argv: list[str]) -> _BatchArgs | int:
         tok = argv[i]
         if tok == "--chat" and i + 1 < len(argv):
             a.chats.append(argv[i + 1])
+            a.chat_titles.append(None)
+            i += 2
+            continue
+        if tok == "--chat-title" and i + 1 < len(argv):
+            # Binds to the MOST RECENTLY named --chat, same convention as pairing a value with
+            # the flag right before it (--chat "query" --chat-title "real name"). A --chat-title
+            # with no --chat before it names nothing, so it is a usage error, not a silent no-op.
+            if not a.chat_titles:
+                print("--chat-title must come right after the --chat it names",
+                      file=sys.stderr)
+                return 2
+            a.chat_titles[-1] = argv[i + 1]
             i += 2
             continue
         if tok == "--resume":
@@ -522,7 +550,8 @@ def _attach_terminated(item: _Item) -> None:
         item.payload["terminated"] = dict(item.terminated)
 
 
-def _move_one(query: str, passthrough: list[str], terminate_live: bool = False) -> _Item:
+def _move_one(query: str, passthrough: list[str], terminate_live: bool = False,
+              chat_title: str | None = None) -> _Item:
     """PHASE ONE for ONE chat: migrate_chat's own move_only() - resolve, gate, import, verify.
 
     Calls the same function main() calls, so this driver still cannot drift from the
@@ -533,16 +562,25 @@ def _move_one(query: str, passthrough: list[str], terminate_live: bool = False) 
     `terminate_live` (a person's word) answers exactly one refusal - a live engine, code 4 -
     by killing that engine and running THE SAME MOVE AGAIN, every gate included, against a
     chat that now has no writer. An unconfirmed kill leaves the refusal in place.
+
+    `chat_title` (2026-09-15, TODO item 1) is THIS chat's own --chat-title, appended AFTER
+    `passthrough` so it wins over any batch-wide --title migrate_chat's own parser would
+    otherwise see first (last --title in argv wins, same rule _parse_migrate_argv always used).
+    Without --title (or an accepted confirm_title), migrate_chat falls back to restating a
+    current name for the naming door - which is exactly the path that could 400 when the
+    daemon's session title and the desktop record's title disagree. A caller who names the
+    chat's real title here skips that restatement entirely.
     """
     item = _Item(query)
     started = time.time()
+    argv = [query, *passthrough, *(["--title", chat_title] if chat_title else [])]
     try:
-        outcome = migrate_chat.move_only([query, *passthrough])
+        outcome = migrate_chat.move_only(argv)
         if (outcome.landing is None and terminate_live
                 and outcome.code == _EXIT_LIVE_ENGINE):
             item.terminated = _terminate_for(query)
             if item.terminated.get("stopped"):
-                outcome = migrate_chat.move_only([query, *passthrough])
+                outcome = migrate_chat.move_only(argv)
     except Exception as err:  # a crash in one chat must not take the batch with it
         item.payload = _crash(query, err, started, "migrate")
         _attach_terminated(item)
@@ -923,7 +961,7 @@ def _mark_stamp_timeout(live: list[_Item], budget: float) -> None:
         if land is not None and land.doctrine is None:
             item.errors.append(
                 f"stamp phase timed out after {budget:.0f}s - permission mode NOT adjudicated; "
-                f"remedy: {migrate_chat.BYPASS_REMEDY_CMD.format(sid=land.session_id)}")
+                f"remedy: {migrate_chat._bypass_remedy_cmd(land.session_id, land.chat_title)}")
 
 
 
@@ -1161,6 +1199,9 @@ def _resolve_all_unarchived(parsed):
     # Resolve by SESSION ID, never by title: two accounts can hold the same title, and a
     # fuzzy re-match at move time could pick the wrong one.
     parsed.chats = [str(r.get("session_id") or "") for r in rows if r.get("session_id")]
+    # --all-unarchived names no per-chat title (nothing here read one new name per chat), so
+    # `chat_titles` is rebuilt in lockstep - all None, same length as the fresh `chats`.
+    parsed.chat_titles = [None] * len(parsed.chats)
     return note
 
 
@@ -1279,8 +1320,9 @@ def main(argv: list[str]) -> int:
 
     t0 = time.time()
     # PHASE ONE across every chat, then the finishing phases across every chat (_run_phases).
-    items = [_move_one(q, parsed.passthrough, terminate_live=parsed.terminate_live)
-             for q in parsed.chats]
+    items = [_move_one(q, parsed.passthrough, terminate_live=parsed.terminate_live,
+                        chat_title=parsed.chat_titles[idx] if idx < len(parsed.chat_titles) else None)
+             for idx, q in enumerate(parsed.chats)]
     _run_phases(items)
     # A landed chat's payload was just rebuilt by the finishing phases; put the terminate
     # verdict back on it. (A refused chat already carries its own.)

@@ -245,7 +245,6 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_PORT_FIXED` | unset | `1` = bind `PORT` exactly, skip the single-instance/port-hop |
 | `AGENTHYDRA_HOME` | `~/.agenthydra` | config dir (`runtime.json`, instance-identity cache) |
 | `AGENTHYDRA_SHUTDOWN_TOKEN` | unset | if set, `/api/shutdown` requires a matching `x-agenthydra-shutdown-token` header (the tray sets it) |
-| `AGENTHYDRA_FAKE` | unset | dispatch uses the harmless fake CLI |
 | `AGENTHYDRA_DATA_DIR` | `~/.agenthydra/data` | state directory (sqlite db, run logs, caches) |
 | `AGENTHYDRA_DB` | `~/.agenthydra/data/agenthydra.db` | sqlite path |
 | `AGENTHYDRA_RUN_LOG_DIR` | `~/.agenthydra/data/run-logs` | detached-run log and sidecar directory |

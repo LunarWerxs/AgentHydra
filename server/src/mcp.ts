@@ -610,7 +610,10 @@ function specArg(spec: string): string {
   return path
 }
 
-/** What fan_out.py's own exit codes mean (its docstring is the source). */
+/** What fan_out.py's own exit codes mean (its docstring is the source) - the FALLBACK verdict used
+ *  only when the payload carries no members/results to count for itself (no JSON on stdout, or an
+ *  empty group). Whenever there IS a per-member or per-result list, fanOutVerdict below reads it
+ *  instead of trusting the exit code alone. */
 const FAN_OUT_VERDICTS: Readonly<Record<number, string>> = Object.freeze({
   0: 'ok: every member spawned and confirmed / read / delivered / deleted and verified',
   4: 'partial: some members not confirmed, refused, unassigned, or not delivered - read each member',
@@ -618,6 +621,76 @@ const FAN_OUT_VERDICTS: Readonly<Record<number, string>> = Object.freeze({
   3: 'refused: bad spec, unknown group, or bad usage',
   1: 'daemon failure',
 })
+
+/** Member/result states that mean the work is NOT done, so a verdict built from these must never
+ *  read "ok" - whatever fan_out.py's own exit code said.
+ *
+ *  ⛔ FALSE GREEN, TWICE (found live 2026-09-15). `fan_out_status` answered `verdict: "ok: every
+ *  member spawned and confirmed..."` for a group whose counts were `finished 1, planned 1,
+ *  unassigned 1`, and `fan_out_delete` printed the identical sentence over `skipped: "no session"`
+ *  for two members that never spawned - because the verdict came ONLY from fan_out.py's exit code
+ *  (status always exits 0; delete's own exit code ignores a member with no session to delete at
+ *  all, see fan_out.py's `delete_exit_code`). A member that never spawned, was never assigned, or
+ *  was skipped is not ok, however the exit code reads. */
+const FAN_OUT_BAD_MEMBER_STATES = new Set([
+  'planned',
+  'unassigned',
+  'refused',
+  'refused-duplicate',
+  'open-failed',
+  'not-registered',
+  'spawned-unconfirmed',
+  'crashed',
+  'stalled',
+  'unknown',
+  'ungateable',
+])
+
+/** Tally `items` by `key(item)`, insertion order, as `"state N"` fragments joined for the verdict. */
+function stateCounts<T>(items: readonly T[], key: (item: T) => string): string {
+  const counts = new Map<string, number>()
+  for (const item of items) {
+    const k = key(item) || '?'
+    counts.set(k, (counts.get(k) ?? 0) + 1)
+  }
+  return [...counts.entries()].map(([k, v]) => `${k} ${v}`).join(', ')
+}
+
+/** A `send`/`delete` result's own state, for the same per-state counting `fan_out_status` gets
+ *  from a member's `state` field - these reports carry `delivered`/`deleted` booleans and a
+ *  `skipped` reason instead. */
+function fanOutResultState(r: Record<string, unknown>): string {
+  if (r.skipped) return 'skipped'
+  if ('delivered' in r) return r.delivered ? 'delivered' : 'not-delivered'
+  if ('deleted' in r) return r.deleted ? 'deleted' : 'not-deleted'
+  return '?'
+}
+
+/** The verdict text AND whether it is actually ok, read from the payload's own member/result
+ *  states when there are any - the exit-code table above is the fallback for a payload with
+ *  nothing to count (no JSON on stdout, or a group with no members yet). */
+function fanOutVerdict(
+  code: number | null,
+  payload: Record<string, unknown> | null,
+): { verdict: string; bad: boolean } {
+  const fallback = code == null ? 'no exit code' : (FAN_OUT_VERDICTS[code] ?? `exit ${code}`)
+  const members = payload && Array.isArray(payload.members) ? payload.members : null
+  if (members && members.length > 0) {
+    const rows = members as Record<string, unknown>[]
+    const bad = rows.some((m) => FAN_OUT_BAD_MEMBER_STATES.has(str(m.state)))
+    return { verdict: `${bad ? 'partial' : 'ok'}: ${stateCounts(rows, (m) => str(m.state))}`, bad }
+  }
+  const results = payload && Array.isArray(payload.results) ? payload.results : null
+  if (results && results.length > 0) {
+    const rows = results as Record<string, unknown>[]
+    const bad = rows.some((r) => !['delivered', 'deleted'].includes(fanOutResultState(r)))
+    return {
+      verdict: `${bad ? 'partial' : 'ok'}: ${stateCounts(rows, fanOutResultState)}`,
+      bad,
+    }
+  }
+  return { verdict: fallback, bad: false }
+}
 
 /** Run one fan_out.py invocation through the daemon and hand back its JSON report with the exit
  *  code translated. No JSON on stdout means the script never reached its own report (python
@@ -674,12 +747,21 @@ async function resolveMoveTarget(
   return { toRef: String(row.num), targetNote: targetConfirmation('to', row) }
 }
 
-async function runFanOut(args: string[], timeoutMs: number): Promise<Record<string, unknown>> {
+/** `background: true` posts `async: true` and hands back the daemon's 202 (`operationId`,
+ *  `status`) verbatim - there is no stdout to parse yet, exactly like move_chats' own detached
+ *  path (mcp.ts's orchestrator_run / move_chats). The caller decorates that with the group id it
+ *  already knows (see the `fan_out` tool) and how to poll it. */
+async function runFanOut(
+  args: string[],
+  timeoutMs: number,
+  opts: { background?: boolean } = {},
+): Promise<Record<string, unknown>> {
   const run = (await api('/api/orchestrator/run', {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ script: 'fan_out', args, timeoutMs }),
+    body: JSON.stringify({ script: 'fan_out', args, timeoutMs, async: opts.background === true }),
   })) as Record<string, unknown>
+  if (opts.background === true) return run
   let payload: Record<string, unknown> | null = null
   try {
     const parsed: unknown = JSON.parse(str(run.stdout))
@@ -688,10 +770,10 @@ async function runFanOut(args: string[], timeoutMs: number): Promise<Record<stri
     payload = null
   }
   const code = typeof run.exitCode === 'number' ? run.exitCode : null
-  const verdict = code == null ? 'no exit code' : (FAN_OUT_VERDICTS[code] ?? `exit ${code}`)
+  const { verdict, bad } = fanOutVerdict(code, payload)
   if (!payload) return { ...run, ok: false, args, verdict }
   return {
-    ok: code === 0,
+    ok: code === 0 && !bad,
     ...payload,
     exitCode: code,
     verdict,
@@ -774,7 +856,7 @@ export const TOOLS: McpEngineTool[] = [
       },
       source: {
         type: 'string',
-        enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+        enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
         description:
           'Optional provider filter. "foreign" is the shared reader for the other local agents ' +
           '(Cursor, Windsurf, Zed, Copilot CLI and the rest) — omit it to get every store at once.',
@@ -888,7 +970,7 @@ export const TOOLS: McpEngineTool[] = [
         id: { type: 'string' },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
         },
       },
       ['id'],
@@ -913,7 +995,7 @@ export const TOOLS: McpEngineTool[] = [
         caseSensitive: { type: 'boolean', description: 'Match case exactly (default false).' },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
           description:
             "Optional provider filter. 'foreign' is the shared reader for the other local agents " +
             '(Cursor, Windsurf, Zed, Copilot CLI and the rest); omit it to search every store.',
@@ -1051,7 +1133,7 @@ export const TOOLS: McpEngineTool[] = [
         },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
         },
       },
       ['id'],
@@ -1082,7 +1164,7 @@ export const TOOLS: McpEngineTool[] = [
         thinking: { type: 'boolean', description: "Include the model's reasoning blocks." },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
         },
       },
       ['id'],
@@ -1108,7 +1190,7 @@ export const TOOLS: McpEngineTool[] = [
         id: { type: 'string' },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'foreign'],
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
         },
       },
       ['id'],
@@ -1477,24 +1559,34 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'list_usage',
     description:
-      "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. Checks are concurrent and cost no quota.",
+      "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict, plus the DeepSeek zswarm's own account balance (`deepseek`) beside them. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. When every account is saturated, the mechanical/checkable work belongs on the zswarm (`zswarm_run`), not queued behind a Claude account's reset. Checks are concurrent and cost no quota.",
     inputSchema: S(),
     run: async () => {
       const survey = (await apiOrLocal('/api/usage/survey', async () => {
         const { surveyUsage } = await import('./usage-service')
         const { usageAdvice } = await import('./usage')
-        const rows = await surveyUsage()
+        const { deepseekBalance } = await import('./zswarm-cost')
+        const [rows, deepseek] = await Promise.all([surveyUsage(), deepseekBalance()])
         return {
           rows: rows.map((r) => ({ ...r, advice: usageAdvice(r.result.snapshot) })),
+          deepseek,
           daemon: 'offline (answered locally)',
         }
       })) as Record<string, unknown>
+      // Every row saturated (weekly binding % >= 90, and actually read — 'unknown' never counts as
+      // saturated, that would be guessing) is the trigger the TODO this landed from names: route
+      // mechanical, checkable batch work to the zswarm instead of waiting on a reset.
+      const rows = (survey.rows ?? []) as Array<{ advice?: { bindingPct?: number | null } }>
+      const allSaturated = rows.length > 0 && rows.every((r) => (r.advice?.bindingPct ?? -1) >= 90)
       return {
         ...survey,
         // A survey has no single advice to branch on, so the instruction is about what to DO with
         // a list: pick by the binding cap, and quote the number so the human can check the choice.
         nextStep:
-          'Route heavy work to the row with the lowest WEEKLY (all models) %, not the lowest session %, and name it by its `num` when you say where you sent it. A row whose advice.severity is "unknown" was not read successfully; that is not headroom.',
+          'Route heavy work to the row with the lowest WEEKLY (all models) %, not the lowest session %, and name it by its `num` when you say where you sent it. A row whose advice.severity is "unknown" was not read successfully; that is not headroom.' +
+          (allSaturated
+            ? ' EVERY account is at or above 90% weekly: do not fan out to any of them. Mechanical, checkable batch work (find/read/classify/extract-to-schema, not judgment) goes to the DeepSeek zswarm instead - zswarm_run, `deepseek` balance permitting.'
+            : ''),
       }
     },
   },
@@ -1975,9 +2067,30 @@ export const TOOLS: McpEngineTool[] = [
         chats: {
           type: 'array',
           minItems: 1,
-          items: { type: 'string' },
+          items: {
+            type: ['string', 'object'],
+            properties: {
+              chat: { type: 'string', description: 'A title fragment (fuzzy) or a session id.' },
+              title: {
+                type: 'string',
+                description:
+                  "THIS chat's own real title - the per-chat door added 2026-09-15 (TODO item 1). " +
+                  "Without it, a bare move restates one of the chat's two CURRENT names as " +
+                  "confirm_title (the daemon session's own title, or the desktop record's - they " +
+                  'can disagree, e.g. a chat titled by its first message on one side and renamed ' +
+                  'in the app on the other), and a caller with no way to read which one the door ' +
+                  "wants got a deterministic 400. Naming the chat's real title here is a NEW " +
+                  'name, which the naming door always accepts outright - no restatement, no ' +
+                  'guessing which store the door compares against. Ignored on a plain-string ' +
+                  'entry.',
+              },
+            },
+            required: ['chat'],
+          },
           description:
-            'The chats to move: each a title fragment (fuzzy) or a session id. Omit only when using all_unarchived.',
+            'The chats to move: each a title fragment (fuzzy) or a session id, OR ' +
+            '`{chat, title}` to also give that one chat its own real title (see `title` above). ' +
+            'Omit only when using all_unarchived.',
         },
         all_unarchived: {
           type: 'boolean',
@@ -2034,9 +2147,22 @@ export const TOOLS: McpEngineTool[] = [
       [],
     ),
     run: async (a) => {
-      const chats = Array.isArray(a.chats)
-        ? a.chats.map((c) => str(c).trim()).filter((c) => c !== '')
-        : []
+      // Each entry is a bare query string, or `{chat, title}` naming that one chat's own real
+      // title (2026-09-15, TODO item 1's per-chat door). Either shape reduces to a {chat, title}
+      // pair; a bare string just carries no title.
+      const chatSpecs = (Array.isArray(a.chats) ? a.chats : [])
+        .map((c) => {
+          if (c != null && typeof c === 'object') {
+            const o = c as Record<string, unknown>
+            return {
+              chat: str(o.chat).trim(),
+              title: typeof o.title === 'string' ? o.title.trim() : '',
+            }
+          }
+          return { chat: str(c).trim(), title: '' }
+        })
+        .filter((c) => c.chat !== '')
+      const chats = chatSpecs.map((c) => c.chat)
       const all = a.all_unarchived === true
       if (!all && chats.length === 0)
         throw new Error(
@@ -2048,7 +2174,10 @@ export const TOOLS: McpEngineTool[] = [
       const wait = Math.max(0, Math.min(360, Number(a.wait_secs ?? 60) || 0))
       const { toRef, targetNote } = await resolveMoveTarget(a.to)
       const args = ['--to', toRef, '--stop-idle', '--now', '--idle-wait', String(wait), '--json']
-      for (const c of chats) args.push('--chat', c)
+      for (const c of chatSpecs) {
+        args.push('--chat', c.chat)
+        if (c.title) args.push('--chat-title', c.title)
+      }
       if (all) args.push('--all-unarchived')
       if (a.from != null && str(a.from).trim() !== '') {
         const src = await resolveRef(str(a.from).trim())
@@ -2173,7 +2302,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'fan_out',
     description:
-      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). Then fan_out_status reads them and fan_out_send steers them. `dry_run: true` returns the plan and spawns nothing. This is a person's act and does not need the tray icon. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
+      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). ⛔ SPAWNING RUNS IN THE DAEMON, NOT ON THIS CONNECTION: a real fan-out (~30-90s per chat, sequential) is always DETACHED automatically past 120s declared - you get the group id and an operationId AT ONCE, and the daemon keeps spawning every chat regardless of whether this call's own connection is abandoned (a lost client can no longer cancel work mid-spawn). Poll fan_out_status { group } for each member's progress; pass `background: false` only for a one-or-two-chat call you know your transport can hold open. Then fan_out_status reads them and fan_out_send steers them. `dry_run: true` returns the plan and spawns nothing, and always blocks (it only ranks and plans). This is a person's act and does not need the tray icon. WRONG TOOL when every Claude account is at/above 90% weekly (check list_usage first): mechanical, checkable batch work belongs on the DeepSeek zswarm instead (zswarm_run) rather than queued behind N account resets; fan_out remains right for work that needs a real Claude Desktop chat. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
     inputSchema: S(
       {
         tasks: {
@@ -2227,6 +2356,11 @@ export const TOOLS: McpEngineTool[] = [
             "A person's word: start a task even though an identical chat already exists.",
         },
         dry_run: { type: 'boolean', description: 'Plan only: rank, assign, spawn nothing.' },
+        background: {
+          type: 'boolean',
+          description:
+            'ALREADY THE DEFAULT whenever this spawn declares itself longer than 120s, which is nearly every real fan-out (~30-90s per chat, sequential): answers AT ONCE with the group id and an operationId instead of holding the connection open for the whole spawn, which keeps running in the daemon regardless. Poll fan_out_status { group } for per-member progress. `false` forces blocking even past 120s - only for a caller whose own transport can wait that long. Omit it to get the auto rule; a dry_run never backgrounds (it only ranks and plans, in seconds).',
+        },
       },
       ['tasks'],
     ),
@@ -2244,7 +2378,16 @@ export const TOOLS: McpEngineTool[] = [
       })
       const groupName = str(a.group).trim()
       const spec = JSON.stringify({ ...(groupName ? { group: groupName } : {}), tasks })
-      const args = ['--spec', specArg(spec), '--json']
+      // ⛔ GENERATED HERE, NOT BY fan_out.py, SO IT CAN BE RETURNED BEFORE SPAWNING FINISHES
+      // (found live 2026-09-15, operation 2411fce7: the MCP call blocked on the WHOLE spawn -
+      // 30-90s per chat, sequential - and the client gave up long before the last chat landed,
+      // stranding it `planned` forever with no id anyone had ever seen). fan_out.py accepts this
+      // id verbatim via --group-id instead of minting its own, so the id handed back here is
+      // GUARANTEED to be the real group's id, not a guess - and the daemon keeps spawning
+      // server-side however this call is answered, so an abandoned client can no longer cancel
+      // work mid-spawn.
+      const groupId = `fo-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`
+      const args = ['--spec', specArg(spec), '--group-id', groupId, '--json']
       const perAccount = Number(a.per_account)
       if (Number.isFinite(perAccount) && perAccount > 1)
         args.push('--per-account', String(Math.floor(perAccount)))
@@ -2294,18 +2437,56 @@ export const TOOLS: McpEngineTool[] = [
       // only ranks and plans
       const timeoutMs =
         a.dry_run === true ? 180_000 : Math.min(60 * 60_000, 90_000 + tasks.length * 240_000)
+      // The SAME auto-detach rule orchestrator_run and move_chats already earned from nearly
+      // identical incidents: a caller that DECLARES a run longer than AUTO_DETACH_MS is detached
+      // automatically, because a real fan-out (30-90s PER CHAT, sequential) always outlives an
+      // MCP client's transport. A dry run never backgrounds - it only ranks and plans, in
+      // seconds, and the caller wants the plan back in the same call.
+      const background =
+        a.dry_run !== true &&
+        (a.background === true || (a.background == null && timeoutMs > AUTO_DETACH_MS))
       try {
-        return { ...(await runFanOut(args, timeoutMs)), selfNote }
+        const run = await runFanOut(args, timeoutMs, { background })
+        if (background)
+          return {
+            ...run,
+            groupId,
+            started: true,
+            selfNote,
+            poll: `fan_out_status { group: "${groupId}" }`,
+            note:
+              a.background === true
+                ? `Spawning is running in the daemon under group ${groupId}. Poll fan_out_status { group: "${groupId}" } for each member's progress; it does not block on the spawn.`
+                : `Detached automatically: this spawn's own declared length (${Math.round(timeoutMs / 1000)}s, ${tasks.length} chat(s) at ~30-90s each) is longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running anyway. Group ${groupId} is spawning in the daemon regardless of this call's connection; poll fan_out_status { group: "${groupId}" } for per-member progress, or pass background:false if you really do want to block (only worth it for one or two chats).`,
+          }
+        return { ...run, groupId, selfNote }
       } finally {
         // arkitect-allow: no-bandaids permanent finally-block cleanup, not scheduled for removal —
         // a spec that travelled as a temp file is ours to remove once the script has read it
         // (review 2026-09-05: nothing else ever deleted it)
         const specPath = args[1]
         if (specPath !== spec) {
-          try {
-            unlinkSync(specPath)
-          } catch {
-            /* already gone, or never written */
+          if (background) {
+            // ⛔ THE SCRIPT MAY NOT HAVE READ ITS OWN ARGV YET. Backgrounding answers as soon as
+            // the daemon has STARTED the child, not once fan_out.py has parsed --spec - Python
+            // interpreter startup (importing orch.py, fan_out.py and everything it pulls in) can
+            // take longer than this call's own round trip, and deleting the file the instant we
+            // are told the run started would delete it out from under a `parse_spec` that has not
+            // run yet. Cleanup here is best-effort already (see the comment above); a generous
+            // delayed unlink keeps it best-effort rather than a race.
+            setTimeout(() => {
+              try {
+                unlinkSync(specPath)
+              } catch {
+                /* already gone, or never written */
+              }
+            }, 120_000)
+          } else {
+            try {
+              unlinkSync(specPath)
+            } catch {
+              /* already gone, or never written */
+            }
           }
         }
       }
@@ -2644,7 +2825,7 @@ export function toolsForCaller(getCallerPid: () => Promise<number | null>): McpE
  * is rent. Rules only, no explanation, no API shapes (docs/AI_USAGE_SELFCHECK.md holds the
  * reasoning). If a line would not change what an agent DOES, it does not belong here.
  */
-export const SERVER_INSTRUCTIONS = `AgentHydra manages every Claude/Codex account on this machine and knows what each has left.
+export const SERVER_INSTRUCTIONS = `AgentHydra manages every Claude/Codex account here and knows what each has left.
 
 CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted: check_my_usage {} works out which account
 you are and reads it (~300ms, no quota, works with the app closed). Then act on the answer:
@@ -2652,26 +2833,28 @@ you are and reads it (~300ms, no quota, works with the app closed). Then act on 
   agent that runs out mid-task dies holding everything it had not saved.
 - advice.safeToFanOut false -> shrink or postpone the fan-out. Gate on CURRENT + PROJECTED cost:
   a fan-out cannot be recalled once launched, solo work can be stopped at any tool call.
-- A percentage decides nothing alone; usage_budget {} gives exhaustsBeforeReset, branch on that.
-- The weekly (all-models) % is the binding cap, except on Pro, where the 5-hour window usually
-  binds first. Switching model does not dodge the shared weekly bucket.
-- severity 'unknown' or a failed read is NOT "plenty left". Never fan out on an unverified read.
+- A percentage decides nothing alone; usage_budget {} gives exhaustsBeforeReset - branch on it.
+- Weekly (all-models) % is the binding cap; on Pro the 5-hour window usually binds first.
+  Switching model does not dodge the shared weekly bucket.
+- severity 'unknown' or a failed read is NOT "plenty left". Never fan out on an unverified one.
 
-NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance. If identity.warning is present, say
-so. A human who tells you your instance number OVERRULES the detection; the config files on this
-machine are exactly what lie about it.
+NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance, and say so when identity.warning is
+present. A human who tells you your instance number OVERRULES the detection - the config files
+are the thing that lies.
 
-list_usage {} surveys every account; route heavy work by instance number. Mutating tools say
-MUTATES:; never run /login for a human.
+list_usage {} surveys every account (\`deepseek\` = zswarm balance); route heavy work by instance
+number. With every account at/above 90% weekly, fan_out just spreads it over the same saturated
+accounts: send mechanical, checkable batches to the zswarm (zswarm_run). Mutating tools say
+MUTATES:; never /login for a human.
 
 THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); nothing there acts
-unless the tray icon is up: orchestrator_switch {action:"armed"} first. One-call paths needing
-no icon: move_chat {chat, from, to} moves a chat between accounts; fan_out {tasks:[{cwd, prompt}]}
-spreads a task list over OTHER accounts as VISIBLE desktop chats, one each, then fan_out_status {}
-reads every member's verdict and last words and fan_out_send {group, text} steers them all.
-add_queue_item and launch_terminal_session are REFUSED here (no chat nobody can see).
-ANY PROBE CHAT YOU CREATE (a ping, a which-account check, a drill) MUST BE DELETED AFTERWARDS,
-never left in the account: fan_out_delete {group}, or orchestrator_run delete_chat <chat>.`
+unless the tray icon is up: orchestrator_switch {action:"armed"} first. No icon needed for
+move_chat {chat, from, to}, or fan_out {tasks:[{cwd, prompt}]}, which spreads a task list over
+OTHER accounts as VISIBLE desktop chats (never one a person is working in); fan_out_status {}
+then reads every member's verdict and fan_out_send {group, text} steers them all.
+add_queue_item and launch_terminal_session are REFUSED (no chat nobody can see).
+ANY PROBE CHAT YOU CREATE (a ping, a drill) MUST BE DELETED AFTERWARDS, never left in the
+account: fan_out_delete {group}, or orchestrator_run delete_chat <chat>.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {

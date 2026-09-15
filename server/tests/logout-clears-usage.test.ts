@@ -22,7 +22,25 @@ const usageService = readFileSync(join(SRC, 'usage-service.ts'), 'utf8')
 const instancesRoute = readFileSync(join(SRC, 'routes', 'instances.ts'), 'utf8')
 
 test('a signed-out DESKTOP instance drops its cached usage', () => {
-  expect(usageService).toContain("if (reason === 'logged_out') dropCachedUsage(key)")
+  expect(usageService).toContain(
+    "if (reason === 'logged_out' || apiFail?.status === 401) dropCachedUsage(key)",
+  )
+})
+
+// ⛔ A REVOKED TOKEN'S STALE READING MUST NOT OUTLIVE THE REVOCATION (defect 4, 2026-09-15).
+//
+// Before this, only 'logged_out' dropped the cache - a 401 (the server itself saying a token is
+// expired or REVOKED, e.g. "OAuth access token has been revoked") left the account's LAST GOOD
+// reading sitting in the cache forever, because nothing else ever calls dropCachedUsage for it.
+// fan_out's own ranking reads that same cache as a fallback when the live survey is unavailable
+// (balance.py's usage_rows_with_fallback), and a fresh-looking stale reading there is exactly
+// "room" the account no longer has - it assigned a task to an account revoked the day before.
+test('a 401 (an expired or REVOKED token) also drops the cached usage, not just logged_out', () => {
+  expect(usageService).toContain('apiFail?.status === 401')
+  const drops = guardedDrops(usageService)
+  const revokedDrop = drops.find((d) => d.line.includes('401'))
+  expect(revokedDrop).toBeDefined()
+  expect(revokedDrop?.guarded).toBe(true)
 })
 
 test('a signed-out CLI instance drops its cached usage', () => {

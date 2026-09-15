@@ -5,7 +5,14 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CHAT_MANAGER_FILE, RUNTIME_MISC_FILES } from '../src/misc-assets'
-import { parseListOutput, type UiArchiveDeps, uiArchiveChat, uiRenameChat } from '../src/ui-archive'
+import {
+  bestRenderedAlias,
+  parseListOutput,
+  renameChatDiscoveringRenderedTitle,
+  type UiArchiveDeps,
+  uiArchiveChat,
+  uiRenameChat,
+} from '../src/ui-archive'
 
 function deps(over: {
   title?: string | null
@@ -183,6 +190,22 @@ test('a failed rename is reported as a failure, with whatever the tool said', as
   expect(r.detail).toContain('ambiguous')
 })
 
+// There is no PowerShell test harness in this repo (no Pester) to drive
+// misc/Manage-DesktopChat.ps1's rename write loop against a real UIA element, and a live
+// element is off-limits to a test anyway. This pins the contract that write loop depends on
+// at the layer that IS tested: when the app re-renders the row mid-write, the PS1 now
+// re-acquires the edit box and retries the write once, then exits non-zero with a FAIL line
+// if that retry also fails - uiRenameChat must still surface that as ok:false with the PS1's
+// own detail, never collapse a double-failure into a false ok.
+test('a stale rename editor that fails even after the PS1 re-acquires and retries once is a real failure, never a false ok', async () => {
+  const r = await uiRenameChat('C:inst', 'Untitled', 'Real name', async () => ({
+    code: 1,
+    out: 'FAIL: rename editor write failed again after re-acquiring - Element not available',
+  }))
+  expect(r.ok).toBe(false)
+  expect(r.detail).toContain('re-acquiring')
+})
+
 // ⛔ REFUSING ON THE COUNT ALONE STRANDED ROWS NOTHING COULD EVER CLEAR. Measured live: two
 // retired chats sharing one title sat in the sidebar permanently, because every pass
 // declined to click either on the grounds it might hit "the wrong one" - when both were already
@@ -194,6 +217,121 @@ test('two chats sharing the title, ALL already archived -> click, because none c
   expect(r.clicked).toBe(true)
   expect(r.verified).toBe(true)
   expect(calls).toContain('invoke:Real Chat Name')
+})
+
+// --- discovering the rendered name itself (chat_rename, 2026-09-15) ------------------------
+// ⛔ THE BUG: a fresh import's disk title can survive just long enough for a caller to read it,
+// then a RUNNING app re-saves its own in-memory record and erases it - so by the time a rename
+// is attempted, the sidebar renders the chat under a different name than the one on disk. A
+// caller with no current_title of its own used to get a flat refusal with no route to a
+// confirmed rename.
+
+test('DISK TITLE PRESENT, RENDERED NAME DIFFERS: bestRenderedAlias finds the one clear match', () => {
+  // Mirrors automation_chat.py's own proven fixture: a long real title on disk, a short
+  // auto-derived name on screen, one unrelated row beside it.
+  const alias = bestRenderedAlias('QuickDictate listening stops intermittently', [
+    'more options for QuickDictate',
+    'more options for Ask AI rollout',
+  ])
+  expect(alias).toBe('more options for QuickDictate')
+  // The real -List also carries menu names that are not chat rows; they neither hide the
+  // menu phrase nor count as candidates.
+  expect(
+    bestRenderedAlias('QuickDictate listening stops intermittently', [
+      'Filter',
+      'more options for QuickDictate',
+      'more options for Ask AI rollout',
+      'more navigation items',
+    ]),
+  ).toBe('more options for QuickDictate')
+  expect(
+    bestRenderedAlias('QuickDictate listening stops intermittently', [
+      'Weitere Navigationselemente',
+      'Weitere Optionen fur QuickDictate',
+      'Weitere Optionen fur Ask AI rollout',
+      'Weitere Optionen fur Courier ledger rebuild',
+      'Filter',
+    ]),
+  ).toBe('Weitere Optionen fur QuickDictate')
+})
+
+test('bestRenderedAlias refuses when nothing stands unambiguously clear', () => {
+  expect(bestRenderedAlias('QuickDictate listening stops intermittently', [])).toBeNull()
+  expect(
+    bestRenderedAlias('QuickDictate listening stops intermittently', ['Unrelated Other']),
+  ).toBeNull()
+  // Two rows that score identically: refuse rather than guess which one is right.
+  expect(
+    bestRenderedAlias('Resume Stackspire project', [
+      'more options for Stackspire',
+      'weitere optionen fur Stackspire',
+    ]),
+  ).toBeNull()
+})
+
+test('bestRenderedAlias never aims a rename at a DIFFERENT chat that only shares a last word', () => {
+  // The chat's own row is not rendered under anything like its title. Scoring each row's
+  // word-suffixes made "integration" a normalized substring of the title, a perfect 1.0, so the
+  // rename would have landed on the Google Maps chat. Whole names share one word of nine.
+  expect(
+    bestRenderedAlias('Sub-brand logo set integration', [
+      'more options for Google Maps SEO integration',
+      'more options for Untitled',
+      'more options for Ask AI rollout',
+    ]),
+  ).toBeNull()
+  // One row cannot show which leading words are the menu chrome, so nothing is discovered.
+  expect(
+    bestRenderedAlias('QuickDictate listening stops intermittently', [
+      'more options for QuickDictate',
+    ]),
+  ).toBeNull()
+})
+
+test('DISK TITLE PRESENT, RENDERED NAME DIFFERS: chat_rename discovers it and renames under it', async () => {
+  const calls: string[] = []
+  const r = await renameChatDiscoveringRenderedTitle(
+    'C:inst',
+    'QuickDictate listening stops intermittently',
+    'Real new name',
+    /* titleIsRendered */ false,
+    {
+      run: async (args) => {
+        const title = args[1]
+        calls.push(title)
+        if (title === 'more options for QuickDictate') return { code: 0, out: 'renamed' }
+        return { code: 3, out: "not rendered in this instance's window" }
+      },
+      list: async () => ['more options for QuickDictate', 'more options for Ask AI rollout'],
+    },
+  )
+  expect(r.ok).toBe(true)
+  expect(calls).toEqual([
+    'QuickDictate listening stops intermittently',
+    'more options for QuickDictate',
+  ])
+  expect(r.detail).toContain(
+    "discovered the app renders this chat as 'more options for QuickDictate'",
+  )
+})
+
+test('an EXPLICIT current_title is never overridden by a discovery guess, even when it fails', async () => {
+  let attempts = 0
+  const r = await renameChatDiscoveringRenderedTitle(
+    'C:inst',
+    'Wrong guess the caller asserted',
+    'Real new name',
+    /* titleIsRendered */ true,
+    {
+      run: async () => {
+        attempts++
+        return { code: 3, out: 'not rendered' }
+      },
+      list: async () => ['more options for Wrong guess the caller asserted, but longer'],
+    },
+  )
+  expect(r.ok).toBe(false)
+  expect(attempts).toBe(1)
 })
 
 // ⛔ THE ACTUATOR PATH, PINNED AT THE SOURCE. Until 2026-09-12 this module built its .ps1 path

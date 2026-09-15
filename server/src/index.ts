@@ -55,6 +55,7 @@ import { createChatGptContextPack } from './context-pack'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
+import { crashRecordLine, exitRecordLine } from './crash-record'
 import { getSetting, setSetting } from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import {
@@ -141,13 +142,46 @@ initFileLogging(CONFIG_DIR)
 // it; the console.error here is teed to daemon.log (above), so the reason is on disk even after
 // the process is gone. process.exit is safe here; the daemon already exits deliberately in its
 // own clean-shutdown paths below (unlike ReDesign, whose entry avoids it for undici's sake).
+//
+// ⛔ THIS ALONE WAS NOT ENOUGH (found 2026-09-15, docs/todo/TODO.md "Overnight orchestration run").
+// The daemon died silently three times overnight - 09:14:17Z, and 01:10Z / 04:23Z the same night,
+// pids 79360 -> 61040 on the last one - with NO line at all in daemon.log, not even one of the
+// two below: the file jumps straight from a routine INFO line to the next boot's banner. That
+// means neither handler ran; something outside the JS process model (a hard TerminateProcess, an
+// OOM kill, the machine itself) ended the process before either could fire. Nothing here can catch
+// an untrappable kill, but the gap in that log is itself hard to tell apart from "the handler ran
+// and the write was lost" without a positive record of every exit this process DOES see - so the
+// unconditional 'exit' listener below exists to make the two cases distinguishable after the fact:
+// its absence for a given death now means the kill, not a logging failure.
+//
+// The line format itself lives in ./crash-record.ts, not here - this file cannot be imported by a
+// test without booting the whole daemon (db open, port bind, the works), and the format is exactly
+// the part worth a regression test (pid/uptime present, a stack flattened to one line).
+function fatalExit(reason: string, detail: unknown, code: number): never {
+  console.error(crashRecordLine(reason, detail))
+  process.exit(code)
+}
+
 process.on('uncaughtException', (err) => {
-  console.error('[agenthydra] uncaught exception:', err)
-  process.exit(1)
+  fatalExit('uncaughtException', err, 1)
 })
 process.on('unhandledRejection', (reason) => {
-  console.error('[agenthydra] unhandled rejection:', reason)
-  process.exit(1)
+  fatalExit('unhandledRejection', reason, 1)
+})
+// SIGBREAK (Windows Ctrl+Break) and SIGHUP carry no clean-shutdown meaning for this daemon the way
+// SIGINT/SIGTERM do (see the graceful pair registered later, near the listen call) - nothing here
+// asked for a tidy stop, so receiving one is treated as fatal: record it, then go, the same as an
+// uncaught throw.
+for (const sig of ['SIGBREAK', 'SIGHUP'] as const)
+  process.on(sig, () => fatalExit(`signal:${sig}`, new Error(`process received ${sig}`), 1))
+
+// The unconditional record described above: one line for every way this process ends, including a
+// path none of the handlers above anticipated. Registered first (of this process's 'exit'
+// listeners - see clearInstanceInfo's below) so it still runs even if a later listener throws.
+// Synchronous only, per Node's 'exit' contract; log-file.mjs's writes are synchronous too, so this
+// reaches disk before the process actually leaves.
+process.on('exit', (code) => {
+  console.error(exitRecordLine(code))
 })
 
 // --- portable mode (server/src/db.ts settings table; see server/src/portable-window.mjs) ---

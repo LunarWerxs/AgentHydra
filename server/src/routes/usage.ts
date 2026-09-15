@@ -53,6 +53,7 @@ import {
   checkUsageForDesktop,
   surveyUsage,
 } from '../usage-service'
+import { deepseekBalance } from '../zswarm-cost'
 
 /** Resolve an `account` query param that may be an account id OR a free-text label. */
 function resolveAccountParam(param: string): { id: string; label: string } | null {
@@ -179,9 +180,16 @@ app.get('/api/usage/cache', (c) =>
 // ("which of my accounts has headroom?") and what the auto-refresh sweep exposes on demand. Each row
 // carries the advisory verdict too, so a caller never has to re-derive "is 98% bad".
 app.get('/api/usage/survey', async (c) => {
-  const rows = await surveyUsage()
+  // Concurrent, not sequential: the DeepSeek balance is a THIRD PARTY call with its own timeout
+  // (zswarm-cost.ts bounds it to 3s and never throws), and awaiting it after the Claude/Codex sweep
+  // would make a slow DeepSeek endpoint add straight to every survey's latency instead of hiding
+  // behind the same round trip.
+  const [rows, deepseek] = await Promise.all([surveyUsage(), deepseekBalance()])
   return c.json({
     rows: rows.map((r) => ({ ...r, advice: usageAdvice(r.result.snapshot) })),
+    // The DeepSeek zswarm's account balance, beside the Claude/Codex quotas above - see
+    // zswarm-cost.ts's deepseekBalance for why this can never fail the survey itself.
+    deepseek,
     lastAutoRefreshAt: lastAutoRefreshAt(),
   })
 })

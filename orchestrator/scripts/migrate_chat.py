@@ -90,6 +90,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
+import shlex
 import time
 import sys
 from dataclasses import dataclass
@@ -1344,7 +1345,23 @@ def watch_bypass_many(meta_paths: list[str], watch_secs: float = BYPASS_WATCH_SE
     return state
 
 
-BYPASS_REMEDY_CMD = "python scripts/automation_chat.py {sid} --force"
+def _bypass_remedy_cmd(session_id: str, chat_title) -> str:
+    """The printed remedy for a bypass verdict that needs a by-hand act - carries the TITLE
+    THIS RUN ALREADY VERIFIED, not just the id.
+
+    ⛔ RE-DERIVING THE TITLE IS THE BUG, NOT A WEAKER FIX (found 2026-09-15). automation_chat.py's
+    own title lookup for a bare session id goes through hydralib.resolve_one -> the dossier
+    endpoint, a fresh disk read exactly like list_chats' - so when a human runs the bare-sid
+    remedy MINUTES after this batch verified the title, a RUNNING app can have already re-saved
+    its in-memory record and erased it (titleDurable: false), and the remedy fails with "no name
+    to aim at" on the exact chat it exists to fix. This batch already knows the real title - hand
+    it over so the remedy never has to ask a source that can have gone stale in the meantime.
+    """
+    args = f"{session_id} --force"
+    title = str(chat_title or "").strip()
+    if title:
+        args += f" --title {shlex.quote(title)}"
+    return f"python scripts/automation_chat.py {args}"
 
 
 def confirm_bypass_in_app(row: dict, fleet: dict) -> str:
@@ -1408,7 +1425,7 @@ def _adjudicate_bypass(session_id: str, chat_title, target: dict, meta_path: str
       unknown         the record could not be read; claim nothing.
     """
     mode = watched["mode"]
-    remedy = BYPASS_REMEDY_CMD.format(sid=session_id)
+    remedy = _bypass_remedy_cmd(session_id, chat_title)
     if mode is None:
         return "unknown", "the landed record could not be read back", remedy
     if not watched["stable"]:
@@ -1540,7 +1557,7 @@ def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
         uc_ok = False
         mode = None
         verdict, evidence = "unknown", "the dossier gave no metaPath"
-        remedy = BYPASS_REMEDY_CMD.format(sid=session_id)
+        remedy = _bypass_remedy_cmd(session_id, chat_title)
         uc_note = "not stamped - the dossier gave no metaPath; run automation_chat.py on it"
     return {"stamped": stamped, "stampNote": stamp_note, "ultracode": uc_ok, "note": uc_note,
             "mode": mode, "verdict": verdict, "evidence": evidence, "remedy": remedy}
@@ -1770,7 +1787,7 @@ def landing_payload(land: _Landing) -> dict:
         "stamped": False, "stampNote": "the stamp phase did not run", "ultracode": False,
         "note": "the stamp phase did not run", "mode": None, "verdict": "unknown",
         "evidence": "the stamp phase did not run",
-        "remedy": BYPASS_REMEDY_CMD.format(sid=land.session_id),
+        "remedy": _bypass_remedy_cmd(land.session_id, land.chat_title),
     }
     source_row = land.source_row or "unknown"
     settle_note = land.settle_note if land.settle_note is not None else (

@@ -172,6 +172,130 @@ export async function uiRenameChat(
   return { ok: code === 0, detail: out.trim() || `exit ${code}` }
 }
 
+// --- discovering the rendered name itself (chat_rename, 2026-09-15) ------------------------
+//
+// ⛔ THE DISK TITLE IS A GUESS, NOT A GUARANTEE (found live 2026-09-15, same root cause as
+// name_chats.py's rendered_titles(): a RUNNING app holds a chat's record in memory and
+// re-saves over the importer's title at its own re-save, so the disk copy `chat.title` can
+// disagree with what the sidebar actually shows). The MCP tool's own doc told a caller to
+// "pass current_title" when it knows better, but nothing here EVER looked for the real
+// answer itself - a caller with no better guess than the disk title got a flat refusal on a
+// row the app renders under a name nobody had reason to type in by hand.
+//
+// Ported from the Python orchestrator's automation_chat.py (best_rendered_alias /
+// fuzzy_title_score): score every rendered row against the title we tried, and take the ONE
+// row that stands unambiguously clear of the rest - never a guess among near-ties. The
+// thresholds are the same numbers that script already proved live.
+const ALIAS_MIN_SCORE = 0.75
+const ALIAS_MIN_MARGIN = 0.15
+
+function normTitle(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+/** 0-1: how well `a` and `b` name the same chat, order-independent. 1.0 when one is a
+ *  normalized substring of the other (a short auto-title inside a long real one, or vice
+ *  versa); otherwise the word-overlap (Dice) ratio. */
+function pairScore(a: string, b: string): number {
+  if (!a || !b) return 0
+  if (a === b || a.includes(b) || b.includes(a)) return 1
+  const wa = new Set(a.split(' '))
+  const wb = new Set(b.split(' '))
+  let shared = 0
+  for (const w of wa) if (wb.has(w)) shared++
+  return (2 * shared) / (wa.size + wb.size)
+}
+
+/**
+ * The rendered rows with the actuator's localized '<more-options phrase> ' chrome taken off,
+ * as normalized names, index-aligned with `rendered`; null for a row that is not a chat row.
+ * The phrase is not known in advance (RenderedKebabNames refuses to guess it), but every chat
+ * row in one window opens with the SAME words, while the other menu names ('Filter', a
+ * navigation button) at most share a first word with it ('Weitere Navigationselemente' beside
+ * 'Weitere Optionen fur <title>'). So the phrase is grown one word at a time, each step keeping
+ * the largest group of rows that agree on the next word, and it stops when that group would fall
+ * below two rows or below half the rows it had: past the phrase, chat titles diverge. Every kept
+ * row keeps at least one word of name. No word shared by two rows means nothing is discovered.
+ *
+ * ⛔ Whole names only, never a row's word-suffixes: scoring every suffix let a one-word tail
+ * ("integration") read as a normalized substring of a long title and score a perfect 1.0, so a
+ * chat whose own row was not rendered could have its rename land on a DIFFERENT chat that merely
+ * ended in a word the title contains.
+ */
+function renderedNames(rendered: string[]): (string | null)[] | null {
+  const rows = rendered.map((row) => normTitle(row).split(' ').filter(Boolean))
+  let group = rows.map((_, i) => i)
+  let prefix = 0
+  for (;;) {
+    const byNext = new Map<string, number[]>()
+    for (const i of group) {
+      // The next word may only join the phrase if the row still has a name after it.
+      if (rows[i].length <= prefix + 1) continue
+      const next = rows[i][prefix]
+      byNext.set(next, [...(byNext.get(next) ?? []), i])
+    }
+    const largest = [...byNext.values()].sort((a, b) => b.length - a.length)[0] ?? []
+    if (largest.length < 2 || largest.length * 2 < group.length) break
+    group = largest
+    prefix++
+  }
+  if (prefix === 0) return null
+  const chatRows = new Set(group)
+  return rows.map((words, i) => (chatRows.has(i) ? words.slice(prefix).join(' ') : null))
+}
+
+/** The ONE rendered row that is this chat under a different name, or null. Ambiguity (no row
+ *  clears the bar, or two rows tie for best) is left exactly as it was - a rename target is a
+ *  near-certainty to recognise, never a guess to make. */
+export function bestRenderedAlias(title: string, rendered: string[]): string | null {
+  const nt = normTitle(title)
+  const names = renderedNames(rendered)
+  if (!nt || !names) return null
+  const scored = rendered
+    .map((row, i) => ({ row, score: pairScore(nt, names[i] ?? '') }))
+    .sort((a, b) => b.score - a.score)
+  if (scored.length === 0 || scored[0].score < ALIAS_MIN_SCORE) return null
+  if (scored.length > 1 && scored[0].score - scored[1].score < ALIAS_MIN_MARGIN) return null
+  return scored[0].row
+}
+
+export interface UiRenameDiscoveryDeps {
+  run?: (args: string[]) => Promise<{ code: number; out: string }>
+  list?: (profileDir: string) => Promise<string[]>
+}
+
+/**
+ * uiRenameChat, but able to find the row itself when the title we tried does not render.
+ *
+ * `titleIsRendered` is true when the CALLER asserted the title (chat_rename's `current_title`)
+ * - an explicit assertion's own refusal is never silently overridden by a guess, exactly the
+ * doctrine set_mode_via_app's rendered-name retry already follows on the Python side. It is
+ * false for a title read off disk, which is a hint the running app is free to have erased.
+ */
+export async function renameChatDiscoveringRenderedTitle(
+  profileDir: string,
+  title: string,
+  newTitle: string,
+  titleIsRendered: boolean,
+  deps: UiRenameDiscoveryDeps = {},
+): Promise<{ ok: boolean; detail: string }> {
+  const run = deps.run ?? runPs1
+  const list = deps.list ?? listRenderedTitles
+  const first = await uiRenameChat(profileDir, title, newTitle, run)
+  if (first.ok || titleIsRendered) return first
+  const rendered = await list(profileDir)
+  const alias = bestRenderedAlias(title, rendered)
+  if (!alias || alias === title) return first
+  const retry = await uiRenameChat(profileDir, alias, newTitle, run)
+  return {
+    ok: retry.ok,
+    detail: `${retry.detail} [discovered the app renders this chat as '${alias}', not '${title}']`,
+  }
+}
+
 export interface UiArchiveOutcome {
   /** The app's own Archive action fired and the tool saw the row leave the sidebar. */
   clicked: boolean

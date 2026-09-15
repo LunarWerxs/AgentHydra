@@ -23,6 +23,7 @@ import {
   type TranscriptFile,
 } from './transcript'
 import type { SessionSearchResponse, SessionSearchResult, SessionSource } from './types'
+import { readZswarmSession } from './zswarm-sessions'
 
 export type { SessionSearchResponse, SessionSearchResult }
 
@@ -222,6 +223,40 @@ function searchDshFile(
   return { hit, stoppedEarly: false }
 }
 
+/** The DeepSeek zswarm: same shape as the DSH branch above, and for the same reason - job.json's
+ *  tasks/results have to be turned into a transcript before there is any text to match (see
+ *  readZswarmSession). Unlike DSH the file is plain JSON, but it is still one decode-then-scan, not a
+ *  line stream, so it belongs beside dsh here rather than in the generic loop below. */
+function searchZswarmFile(
+  tf: TranscriptFile,
+  matcher: Matcher,
+  perFileLimit: number,
+): FileSearchOutcome {
+  let matchCount = 0
+  const snippets: string[] = []
+  const content = readZswarmSession(tf.path)
+  if (!content) return { hit: null, stoppedEarly: false }
+  for (const ev of content.events) {
+    const idx = matcher(ev.text)
+    if (idx === -1) continue
+    matchCount++
+    if (snippets.length < perFileLimit) snippets.push(snippetAround(ev.text, idx, SNIPPET_LEN))
+  }
+  if (matchCount === 0) return { hit: null, stoppedEarly: false }
+  const hit: SessionSearchResult = {
+    session_id: tf.session_id,
+    source: tf.source,
+    cwd: tf.cwd || tf.project,
+    project: tf.project,
+    match_count: matchCount,
+    truncated: snippets.length < matchCount,
+    snippets,
+  }
+  resultStoreKey.set(hit, dedupeKey(tf))
+  // Whole-conversation read, so there is no part-way point and nothing to under-report.
+  return { hit, stoppedEarly: false }
+}
+
 /** One line's contribution to a file search: the cwd it revealed (if any, first-hit-wins so the
  *  caller only adopts it when it doesn't already have one), how many matches it added, and the
  *  snippets worth keeping. Pulled out of searchOneFile so the per-line parse/match branching
@@ -270,6 +305,7 @@ export async function searchOneFile(
   // separate store pass — but the file is zstd, and streaming it as lines would fail every
   // JSON.parse and report the same confident zero the foreign branch above exists to prevent.
   if (tf.source === 'dsh') return searchDshFile(tf, matcher, perFileLimit)
+  if (tf.source === 'zswarm') return searchZswarmFile(tf, matcher, perFileLimit)
 
   let matchCount = 0
   const snippets: string[] = []

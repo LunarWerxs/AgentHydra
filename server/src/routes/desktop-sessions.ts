@@ -128,11 +128,36 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
   // THE NAMING REQUIREMENT (owner directive, 2026-08-29): a chat must not land with a generic
   // name. The caller supplies a real title, or restates the current one exactly (proof of a
   // programmatic review) - chat-title.ts is the one definition of both doors.
+  //
+  // A CHAT HAS TWO CURRENT NAMES here too, same as /migrate below: the session list's
+  // transcript-derived title (`imported.title`) and the desktop record's own on-disk title
+  // (the sidebar / Instances "Chats" name a caller who read the DOSSIER actually restates).
+  // Checking only the former meant a chat renamed in the app, or a migrate_chat run that
+  // restated the dossier's title as `confirm_title` (its documented, expected behaviour), was
+  // refused 400 "confirm_title does not match the current title" even though the caller had
+  // genuinely reviewed and restated a real, current name (2026-09-15 overnight run, session
+  // 7e1fa278: daemon title "Your market still looks like ..." vs desktop meta "Logos for
+  // Connections products"). Read the on-disk record the same way /migrate does, so either
+  // name restated exactly is accepted here too.
   const imported = await getSession(sessionId, 'claude')
+  const sourceRendered = findDesktopChatMeta(sessionId)
+  let recordTitle: string | null = null
+  try {
+    if (sourceRendered?.path) {
+      const sourceMeta = JSON.parse(readFileSync(sourceRendered.path, 'utf8')) as Record<
+        string,
+        unknown
+      >
+      if (typeof sourceMeta.title === 'string') recordTitle = sourceMeta.title
+    }
+  } catch {
+    // an unreadable source record just means no second name to check against
+  }
   const titled = resolveRequiredTitle({
     title: body.title,
     confirmTitle: body.confirm_title,
     currentTitle: imported?.title ?? null,
+    recordTitle,
   })
   if (!titled.ok) return c.json({ ok: false, error: titled.error }, 400)
   const result = await importSessionToDesktop({

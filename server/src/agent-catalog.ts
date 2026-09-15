@@ -247,6 +247,19 @@ export const AGENT_TOOLS: AgentTool[] = [
     verified:
       '@deepseek-ai/dsh 0.1.5-rc.1 dsh-home-paths/lib/index.js + dsh-session-persistence-jsonl/lib/index.js (2026-09-12)',
   },
+  {
+    id: 'zswarm',
+    name: 'zswarm',
+    vendor: 'DeepSeek',
+    // Lunarwerx/zswarm's own config.py: Path(os.environ.get("ZSWARM_HOME") or (Path.home() / ".zswarm")).
+    // One shared home, not one per account - see config.ts's ZSWARM_HOME and zswarm-sessions.ts's own
+    // note on why there is no per-instance store list here the way dsh-instances.ts has one.
+    envVar: 'ZSWARM_HOME',
+    dirs: ['.zswarm'],
+    detectSubdir: 'jobs',
+    format: 'zswarm',
+    verified: 'Lunarwerx/zswarm config.py HOME/JOBS_DIR/LEDGER (2026-09-15)',
+  },
 
   // --- detected only: found on disk, not yet parsed -------------------------------------------
   {
@@ -802,6 +815,11 @@ export const BUILT_IN_TOOL_IDS = new Set([
   // per account, and the set of them is core/dsh-instances.ts's dshInstanceStores(), which the
   // indexer asks directly. Leaving this row out of that set would index the default home twice.
   'deepseek-harness',
+  // Joined 2026-09-15: ZSWARM_HOME is a single fixed constant transcript.ts reads directly
+  // (zswarmRecords()), the same way it reads OPENCODE_DB_PATH - not through extraRootsWithFormat.
+  // Leaving this row out of BUILT_IN_TOOL_IDS would make the catalog walk index that one root a
+  // second time.
+  'zswarm',
 ])
 
 /** Catalog roots for a format, EXCLUDING the three the indexer already handles by constant. */

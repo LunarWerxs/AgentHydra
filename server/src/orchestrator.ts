@@ -117,6 +117,30 @@ function liveRun(script: string): InFlightRun | null {
   return null
 }
 
+/** fan_out.py's own read-only subcommands (its docstring: `status` and `list` never spawn, send
+ *  or delete anything) - the ONLY fan_out invocations this route must never queue behind a write. */
+const FAN_OUT_READ_SUBCOMMANDS = new Set(['status', 'list'])
+
+/**
+ * The in-flight/route-lock KEY for one invocation - `script` for every script, UNLESS it is one
+ * of fan_out's read-only subcommands, which take no lock at all.
+ *
+ * ⛔ A READ WAS REFUSED BY THE WRITE'S LOCK (found live 2026-09-15). The route locks by SCRIPT
+ * NAME, and `fan_out status`/`fan_out list` run the very same script name as a spawn that can
+ * take minutes (~30-90s per chat, sequential) - so `fan_out_status`, read-only by its own MCP
+ * description, answered `409 fan_out is already running through this route` three times while a
+ * spawn it had nothing to do with was still working. `null` means "no lock at all": two reads may
+ * run concurrently with each other and with a write, exactly as reading a file while it is being
+ * written is fine as long as the write is atomic (fan_out.py's `_upsert` already is - see
+ * `_save`'s write-then-`os.replace`). Every OTHER fan_out subcommand (a bare spawn, `send`,
+ * `delete`) keeps the single shared "fan_out" key they always had, so two spawns - or a spawn and
+ * a delete - still cannot overlap.
+ */
+export function routeLockKey(script: string, args: string[]): string | null {
+  if (script === 'fan_out' && FAN_OUT_READ_SUBCOMMANDS.has(args[0] ?? '')) return null
+  return script
+}
+
 /** The chats an invocation names: every `--chat <query>`, normalized, plus whether it sweeps a
  *  whole account. Parsing is literal on purpose - resolving a fragment to a chat is the Python
  *  side's job, and a daemon that guessed would be a second, disagreeing resolver. */
@@ -383,8 +407,17 @@ function snapshot(op: OrchestratorOperation): OrchestratorOperation {
 }
 
 /**
- * Start a run as an operation - or, with an idempotency key that names one already running or
- * recently finished (and which actually ran), return that one and start nothing.
+ * Start a run as an operation - or, with an idempotency key that names one already RUNNING or
+ * that SUCCEEDED, return that one and start nothing.
+ *
+ * A failed or cancelled run does NOT pin the key. `ran` alone used to be the test - true the
+ * moment a child process actually started - so a deterministic failure (title mismatch, a
+ * refused precondition, anything that fails the same way every time) got resurrected forever:
+ * the same key kept answering the old FAILED operation, and the only escape was perturbing an
+ * argument (see docs/todo/TODO.md, "Overnight orchestration run", item 3). A key still protects
+ * what it exists to protect - a dropped connection retried while the original is still running,
+ * or already succeeded, must not start a second act - but a failed or cancelled run leaves the
+ * key free for the very next call with that key to try again for real.
  */
 export function startOrchestratorOperation(
   input: { script?: unknown; args?: unknown; timeoutMs?: unknown },
@@ -397,7 +430,7 @@ export function startOrchestratorOperation(
   const key = opts.idempotencyKey?.trim() || null
   if (key) {
     for (const e of operations.values()) {
-      if (e.op.idempotencyKey === key && (e.op.status === 'running' || e.op.ran))
+      if (e.op.idempotencyKey === key && (e.op.status === 'running' || e.op.status === 'done'))
         return { op: snapshot(e.op), promise: e.promise, reused: true }
     }
   }
@@ -938,23 +971,27 @@ export async function runOrchestrator(
   // spawn's side effect (e.g. an increment) immediately after firing two calls back to back with
   // no await between them. Introducing an `await` here unconditionally would push that spawn a
   // microtask later even when `liveRun` says there is nothing to wait for.
+  const lockKey = routeLockKey(script, args)
   let preempted: string | undefined
-  const running = liveRun(script)
+  const running = lockKey !== null ? liveRun(lockKey) : null
   if (running) {
-    const conflict = await resolveLiveRunConflict(script, args, deps, running)
+    const conflict = await resolveLiveRunConflict(lockKey as string, args, deps, running)
     if (conflict.blocked) return conflict.outcome
     preempted = conflict.preempted
   }
 
   const started = Date.now()
-  const entry: InFlightRun = { started, deadline: started + timeoutMs + STALE_LOCK_GRACE_MS }
-  inFlight.set(script, entry)
+  const entry: InFlightRun | null =
+    lockKey !== null ? { started, deadline: started + timeoutMs + STALE_LOCK_GRACE_MS } : null
+  if (lockKey !== null && entry) inFlight.set(lockKey, entry)
   try {
     const r = await spawn(command, dir, timeoutMs, {
       // Keep this run's kill switch on its own lock entry, so a later caller that finds the
       // entry orphaned can put down a child that outlived its deadline before starting afresh.
+      // `entry` is null for an unlocked invocation (routeLockKey said so - see fan_out's
+      // status/list) - there is no lock entry to attach the kill switch to, and none is needed.
       onProcess: (kill) => {
-        entry.kill = kill
+        if (entry) entry.kill = kill
         deps.onProcess?.(kill)
       },
     })
@@ -982,7 +1019,7 @@ export async function runOrchestrator(
     // may already own the key by the time an abandoned promise finally settles, and an
     // unconditional delete would release ITS lock - handing a second caller a concurrent acting
     // pass, which is the one thing this map exists to prevent. Identity check, not a name check.
-    if (inFlight.get(script) === entry) inFlight.delete(script)
+    if (lockKey !== null && entry && inFlight.get(lockKey) === entry) inFlight.delete(lockKey)
   }
 }
 

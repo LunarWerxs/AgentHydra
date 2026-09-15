@@ -36,6 +36,7 @@ import type {
   TailEvent,
   TitleSource,
 } from './types'
+import { readZswarmSession } from './zswarm-sessions'
 
 /**
  * Bump whenever parseMeta learns to extract something new.
@@ -307,6 +308,9 @@ function parseSharedStoreMeta(tf: TranscriptFile, key: string): ScannedMeta {
   } else if (tf.source === 'dsh') {
     // tf.path is the session's own zstd log; there is no id lookup to do.
     content = readDshSession(tf.path) ?? { events: [], messageCount: 0 }
+  } else if (tf.source === 'zswarm') {
+    // tf.path is the job's own job.json; same reason as dsh above, no id lookup to do.
+    content = readZswarmSession(tf.path) ?? { events: [], messageCount: 0 }
   } else if (tf.source === 'hermes') {
     // tf.path, not a default: a Hermes profile is its own database, and this is the field that
     // says which one this row came from.
@@ -461,7 +465,8 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
     tf.source === 'opencode' ||
     tf.source === 'foreign' ||
     tf.source === 'hermes' ||
-    tf.source === 'dsh'
+    tf.source === 'dsh' ||
+    tf.source === 'zswarm'
   ) {
     return parseSharedStoreMeta(tf, key)
   }
@@ -1305,7 +1310,7 @@ export async function listProjects(): Promise<ProjectSummary[]> {
         cwd,
         project: f.project,
         sessions: 0,
-        by_source: { claude: 0, codex: 0, opencode: 0, hermes: 0, dsh: 0, foreign: 0 },
+        by_source: { claude: 0, codex: 0, opencode: 0, hermes: 0, dsh: 0, zswarm: 0, foreign: 0 },
         first_activity_at: f.mtime_ms,
         last_activity_at: f.mtime_ms,
       }

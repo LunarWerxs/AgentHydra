@@ -107,6 +107,75 @@ test('a retry with the same idempotency key joins the running operation and spaw
   expect(spawns).toBe(1)
 })
 
+test('a failed run does not pin its idempotency key: the retry starts a fresh operation', async () => {
+  // Regression for docs/todo/TODO.md "Overnight orchestration run" item 3: `move_chats` re-fired
+  // with the same key kept answering the OLD failed operation (`reused: true`), because the old
+  // check treated any run that had actually spawned - `ran` - as pinning, whether it succeeded or
+  // not. A deterministic failure (bad title, refused precondition, ...) can never be worked
+  // around by retrying with the same arguments, so the fix must free the key on failure.
+  const dir = fakeToolbox()
+  let spawns = 0
+  const deps = {
+    dir,
+    spawn: async () => {
+      spawns++
+      return { code: 1, stdout: '', stderr: 'deterministic refusal', timedOut: false }
+    },
+  }
+  const first = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k3', deps })
+  const firstDone = await first.promise
+  expect(firstDone.status).toBe('failed')
+  expect(firstDone.ran).toBe(true)
+  expect(spawns).toBe(1)
+
+  // Same key, same args, after the failure: a NEW operation, not the old failed one.
+  const retry = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k3', deps })
+  expect(retry.reused).toBe(false)
+  expect(retry.op.id).not.toBe(first.op.id)
+  const retryDone = await retry.promise
+  expect(retryDone.status).toBe('failed')
+  expect(spawns).toBe(2)
+})
+
+test('same key while the first run is still going is reused, not restarted', async () => {
+  const dir = fakeToolbox()
+  const { gate, release } = deferred()
+  let spawns = 0
+  const deps = {
+    dir,
+    spawn: async () => {
+      spawns++
+      await gate
+      return { code: 0, stdout: '', stderr: '', timedOut: false }
+    },
+  }
+  const first = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k4', deps })
+  const again = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k4', deps })
+  expect(again.reused).toBe(true)
+  expect(again.op.id).toBe(first.op.id)
+  expect(spawns).toBe(1)
+  release()
+  await first.promise
+})
+
+test('same key after a success is reused, not restarted', async () => {
+  const dir = fakeToolbox()
+  let spawns = 0
+  const deps = {
+    dir,
+    spawn: async () => {
+      spawns++
+      return { code: 0, stdout: 'VERDICT: fine\n', stderr: '', timedOut: false }
+    },
+  }
+  const first = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k5', deps })
+  expect((await first.promise).status).toBe('done')
+  const again = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k5', deps })
+  expect(again.reused).toBe(true)
+  expect(again.op.id).toBe(first.op.id)
+  expect(spawns).toBe(1)
+})
+
 test('different keys, and no key, each get their own operation', async () => {
   const dir = fakeToolbox()
   let spawns = 0

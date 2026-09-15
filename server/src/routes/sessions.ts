@@ -35,7 +35,7 @@ import {
   type SessionPeriod,
   type SessionSource,
 } from '../types'
-import { uiRenameChat } from '../ui-archive'
+import { renameChatDiscoveringRenderedTitle } from '../ui-archive'
 
 /**
  * A point in time from a query string: epoch milliseconds, or anything Date can parse (ISO-8601).
@@ -215,16 +215,30 @@ app.post('/api/chats/:id/rename', async (c) => {
     return c.json({ ok: false, detail: 'no desktop instance holds this chat' }, 404)
   // The app matches rows by what it RENDERS, which is not always the disk title (that mismatch
   // is the whole reason this route exists), so the caller may name the on-screen row itself.
-  const from =
+  const explicitCurrentTitle =
     typeof body.current_title === 'string' && body.current_title.trim()
       ? body.current_title.trim()
-      : chat.title
+      : null
+  const from = explicitCurrentTitle ?? chat.title
   if (!from)
     return c.json(
       { ok: false, detail: "this chat's current on-screen name is unknown - pass current_title" },
       400,
     )
-  return c.json(await uiRenameChat(chat.instance, from, newTitle))
+  // ⛔ THE DISK TITLE CAN BE STALE (found live 2026-09-15): a RUNNING app re-saves a chat's
+  // record from memory and can erase the title an import just wrote, so a rename aimed at the
+  // disk title alone refused chats the sidebar was rendering under a different name - with no
+  // route from that refusal to a confirmed rename. When the caller did not name the row itself,
+  // discover it from what the app actually renders rather than refusing on a guess that has
+  // already gone stale (see renameChatDiscoveringRenderedTitle).
+  return c.json(
+    await renameChatDiscoveringRenderedTitle(
+      chat.instance,
+      from,
+      newTitle,
+      explicitCurrentTitle !== null,
+    ),
+  )
 })
 
 app.get('/api/chats/dossier', (c) => {

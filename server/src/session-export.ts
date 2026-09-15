@@ -35,6 +35,7 @@ import { redactSecrets, scanSecrets } from './secrets'
 import { streamLines } from './session-search'
 import { eventToTailEventsForSource, findTranscriptAsync } from './transcript'
 import type { SessionSecretScan, SessionSource, TailEvent } from './types'
+import { readZswarmSession } from './zswarm-sessions'
 
 export type ExportFormat = 'markdown' | 'html'
 
@@ -89,6 +90,8 @@ async function readAllEvents(
   // DSH's `path` is the session's own compressed log rather than a store, so there is no id to look
   // up — but it still cannot fall through to the line reader below, which would find no lines.
   if (source === 'dsh') return readDshSession(path)?.events ?? []
+  // Zswarm's `path` is the job's own job.json rather than a store, same reason as dsh above.
+  if (source === 'zswarm') return readZswarmSession(path)?.events ?? []
   const events: TailEvent[] = []
   for await (const line of streamLines(path)) {
     const trimmed = line.trim()

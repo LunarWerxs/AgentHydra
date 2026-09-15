@@ -611,6 +611,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <DropdownMenuRadioItem value="opencode">{{ $t('sessions.sourceOpenCode') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="hermes">{{ $t('sessions.sourceHermes') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="dsh">{{ $t('sessions.sourceDsh') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="zswarm">{{ $t('sessions.sourceZswarm') }}</DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
@@ -620,7 +621,8 @@ function onComposerSent(mode: 'now' | 'queued') {
                       sessionSourceFilter === 'codex' ||
                       sessionSourceFilter === 'opencode' ||
                       sessionSourceFilter === 'hermes' ||
-                      sessionSourceFilter === 'dsh'
+                      sessionSourceFilter === 'dsh' ||
+                      sessionSourceFilter === 'zswarm'
                     "
                   >
                     <DropdownMenuSubTrigger>

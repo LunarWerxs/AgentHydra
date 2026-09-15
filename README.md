@@ -198,10 +198,10 @@ bun run build && bun run start
 
 Either way the UI is at <http://localhost:7787>.
 
-> **Just trying it?** Set `AGENTHYDRA_FAKE=1` and dispatch uses a harmless stand-in for the `claude`
-> CLI, so nothing touches your quota or your repos. The scheduler is off by default. Note that
-> instance actions (open / quit / create / delete) act on **real** Claude Desktop instances; delete
-> asks you to type the name.
+> **Just trying it?** Headless dispatch (queueing a run for `claude` to execute unattended) is
+> disabled outright, so nothing ever spends your quota without you watching it happen in an app.
+> The scheduler is off by default. Note that instance actions (open / quit / create / delete) act
+> on **real** Claude Desktop instances; delete asks you to type the name.
 
 There is no cloud service behind this and no account to sign up for. It reads the local stores
 your tools already write and talks to `localhost`; optional external handoffs open the provider
@@ -290,9 +290,9 @@ and OpenCode are read-only. Claude Desktop and Codex Desktop instances are manag
 the Instances view.
 
 **Can I try it without risking my Claude quota?**
-Yes. Set `AGENTHYDRA_FAKE=1` and dispatch uses a harmless stand-in for the `claude` CLI, so nothing
-touches your quota or your repos. The scheduler stays off by default either way. Note that instance
-actions (open, quit, create, delete) still act on real Claude Desktop instances.
+Yes. Headless dispatch is disabled outright - AgentHydra never spawns `claude` against your quota
+without you watching it happen in an app. The scheduler stays off by default either way. Note that
+instance actions (open, quit, create, delete) still act on real Claude Desktop instances.
 
 Made by [LunarWerx Studios](https://lunarwerx.com). Also see
 [RepoYeti](https://repoyeti.com), [DevWebUI](https://devwebui.lunarwerx.com), and

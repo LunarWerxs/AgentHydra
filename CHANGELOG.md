@@ -7,7 +7,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-09-15
+
 ### Added
+
+- **The DeepSeek zswarm is now a seventh session source, plus its own cost source and routing advice**
+  (`server/src/zswarm-sessions.ts`, `server/src/zswarm-cost.ts`, `server/src/config.ts`'s
+  `ZSWARM_HOME`, `'zswarm'` joining `SessionSource` in `server/src/types.ts`, and every non-compiler-
+  enforced site DSH's own addition documented needing one). `~/.zswarm/jobs/<id>/job.json` reads as a
+  session (a task's prompt/result standing in for a turn, since the zswarm has no back-and-forth
+  conversation of its own), listable, searchable, exportable and tailable exactly like every other
+  source - and unlike DSH's zstd log, job.json is plain JSON, so it opens in an editor same as a
+  Claude transcript would. `~/.zswarm/ledger.jsonl` is summed by day/model/backend
+  (`summarizeZswarmCost`), and the account's live DeepSeek balance (`deepseekBalance`, key read from
+  `~/.dsh/.credentials.yaml` at runtime, 3s timeout, 5-minute cache, degrades to `status: 'unknown'`
+  rather than ever throwing) now rides beside the per-account Claude/Codex quotas in `list_usage`'s
+  `deepseek` field. `list_usage` and `fan_out`'s own descriptions, and the MCP server's standing
+  instructions, now name `zswarm_run` as where mechanical/checkable batch work belongs once every
+  Claude account reads at or above 90% weekly, rather than queuing it behind N account resets.
 
 - **`migrate_reconcile.py` - the half-moves a killed batch leaves, found and repairable**
   (`orchestrator/scripts/migrate_reconcile.py`, `lib/mutationlib.py`'s `advance_phase`,
@@ -210,6 +227,29 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   Verified live: 53468 → 70080 on port 7787, hidden, healthy.
 ### Changed
 
+- **The unreachable headless-queue run path is deleted from `dispatchItem`** (`server/src/dispatch.ts`).
+  Everything after the `headlessRunsAllowed()` guard - the spec write, the detached-runner launch,
+  the log tail - could never execute, because that function is a hardcoded false and nothing overrides
+  it (owner, 2026-08-31: headless is never used). Behaviour is unchanged: every dispatch still ends in
+  the same refused `failed` row carrying the same `no-headless` event. The helpers and imports that
+  only that path used went with it - `buildArgv`, `launchDetachedRunner` and its
+  `AGENTHYDRA_RUNNER_LAUNCH` spawn methods.
+
+  Two more files were only reachable through that deleted spawn and are now gone too:
+  `server/src/dispatch-runner.ts` (the detached per-run supervisor, launched only by
+  `launchDetachedRunner`) and `server/src/fake-claude.ts` (the `AGENTHYDRA_FAKE` stand-in
+  `buildArgv` built its argv for). Their `server/src/main.ts` subcommands (`__dispatch_runner`,
+  `__fake_claude`) went with them, and so did every doc mentioning `AGENTHYDRA_FAKE` or
+  `AGENTHYDRA_RUNNER_LAUNCH` (`README.md`, `docs/REFERENCE.md`, `.env.example`) - trying AgentHydra
+  no longer needs a fake-CLI flag, since headless dispatch never spends real quota either way now.
+  `server/src/detached-spawn.mjs` stays: other callers (`core/instances.ts`, `core/codex-desktop.ts`,
+  `index.ts`, and others) still use it for real detached spawns unrelated to dispatch. `specPathFor`,
+  `tailRun`, `reattachRuns` and `finalize` stay too - a `queue_items` row already marked `running`
+  from before this ban can still be reattached and finished from its on-disk log, so that machinery
+  still has a live caller. `server/tests/dispatch.test.ts` is trimmed to match: its header and a
+  handful of comments that described the deleted pipeline are rewritten, and the tests that remain
+  are the refusal law plus the reattach/finalize machinery, both still reachable.
+
 - **⛔ BREAKING: `move_chats` no longer accepts an `archived` boolean at all. It takes
   `archived_count: number`, and there is no shim** (`server/src/mcp.ts`,
   `orchestrator/scripts/migrate_batch.py`, `server/tests/move-chat-mcp.test.ts`). A caller still
@@ -268,6 +308,89 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
 
+- **`migrate_batch`/`move_chats` no longer refuses a move when a chat's daemon session title and
+  desktop meta title disagree, and `move_chats` can now name a chat's own title per-chat**
+  (`server/src/routes/desktop-sessions.ts`'s `/api/sessions/:id/import-desktop`, `orchestrator/
+  scripts/migrate_batch.py`'s new `--chat-title`, `server/src/mcp.ts`'s `move_chats`). Found live
+  overnight 2026-09-15 (docs/todo/TODO.md, "Overnight orchestration run", item 1): without
+  `--title`, migrate_chat restates the chat's DOSSIER (desktop meta) title as `confirm_title`, but
+  the import route compared it only against the session list's transcript-derived title - a chat
+  titled by its first message on one side and renamed in the app on the other (session 7e1fa278,
+  "Your market still looks like ..." vs "Logos for Connections products") was refused 400
+  "confirm_title does not match the current title" deterministically, and the breaker then
+  suppressed every retry. The route now reads the desktop record's own title too and accepts
+  either current name restated exactly, same as `/migrate` already did - a title that is neither
+  current name is still refused. `move_chats`' `chats` entries can also be `{chat, title}`, a
+  per-chat door MCP callers had no way through before (`--title` on the batch itself is refused
+  for more than one chat): migrate_batch.py's new `--chat-title` binds to the `--chat` named right
+  before it and reaches migrate_chat as that one chat's own real title, which the naming door
+  always accepts outright.
+
+- **An idempotency key no longer resurrects a FAILED `move_chats`/`orchestrator/run` operation**
+  (`server/src/orchestrator.ts`'s `startOrchestratorOperation`, `server/tests/orchestrator-
+  operations.test.ts`). Found live overnight 2026-09-15 (docs/todo/TODO.md, "Overnight
+  orchestration run", item 3): the key was pinned by `status === 'running' || ran` - true the
+  moment a child process actually started, whether it went on to succeed or fail - so a
+  deterministic failure (a title mismatch, a refused precondition) kept re-answering the SAME
+  failed operation on retry, with no way past it except perturbing an argument
+  (`wait_secs 60 -> 90` was the workaround that night). The key now pins only a `running` or
+  `done` operation; a `failed` or `cancelled` one leaves it free, so the very next call with that
+  key starts for real. A dropped-connection retry against a still-running or already-succeeded
+  run is unaffected - that is the property the key exists to protect.
+
+- **The daemon writes a crash record before it exits, and one line for every exit it sees**
+  (`server/src/index.ts`'s crash handlers, new `server/src/crash-record.ts`, `server/tests/crash-
+  record.test.ts`). Also observed overnight 2026-09-15 (docs/todo/TODO.md, "Overnight
+  orchestration run"): the daemon died silently three times (09:14:17Z, and 01:10Z / 04:23Z the
+  same night, pids 79360 -> 61040 on the last one), restarted by its supervisor, with no error
+  line in daemon.log to say why - losing in-flight orchestrator operations and a `fan_out` spawn
+  each time. The existing `uncaughtException`/`unhandledRejection` handlers now write a single
+  flattened line (reason, pid, uptime, message, stack) instead of the bare error object, `SIGBREAK`
+  and `SIGHUP` (which carried no handler at all) are now treated as fatal the same way, and a new
+  unconditional `process.on('exit', ...)` records the exit code and uptime for every exit,
+  including a path none of the reason-specific handlers anticipated. Investigated read-only: no
+  Application-log crash entry (Application Error / Windows Error Reporting) names AgentHydra, bun,
+  or either pid at any of the three times, and the Task Scheduler operational log that would show
+  the supervisor task firing is disabled on this machine - so the cause of the three deaths
+  themselves is still not proven; this only guarantees a future one leaves a line.
+
+- **`fan_out` no longer reports a false "ok", cannot be cancelled by a client timeout mid-spawn,
+  no longer refuses a status read while a spawn is running, no longer treats a dead account's
+  stale reading as room, and no longer drops a chat into an app someone is working in**
+  (`orchestrator/scripts/fan_out.py`'s `--group-id` and `hands_on_secs_ago`, `server/src/mcp.ts`'s
+  `fanOutVerdict` and the `fan_out` tool's auto-detach, `server/src/orchestrator.ts`'s
+  `routeLockKey`, `server/src/usage-service.ts`'s `checkUsageForDesktop`, six suites). Found
+  live 2026-09-15 fanning three tasks: the verdict read "ok: every member spawned and confirmed"
+  over counts of `finished 1, planned 1, unassigned 1`, and `fan_out_delete` printed the same
+  sentence over two members skipped `"no session"` - the verdict came only from fan_out.py's exit
+  code, never the member states, so it now names the count per state and never says "ok" while
+  any member is planned, unassigned, refused, spawned-unconfirmed or skipped. The MCP `fan_out`
+  call blocked on the WHOLE spawn (~30-90s per chat, sequential); the client gave up ("The
+  operation timed out"), stranding a member `planned` forever with no id anyone had ever seen
+  (operation `2411fce7`) - it now mints the group id itself, hands it to fan_out.py via
+  `--group-id`, and auto-detaches past 120s declared, so the daemon keeps spawning regardless of
+  whether the calling connection is abandoned. `fan_out_status`, read-only by its own
+  description, was refused `409 fan_out is already running through this route` three times while
+  a spawn ran, because the route lock is keyed by script name and a status read runs the same
+  script; `status`/`list` now take no lock at all. A REVOKED token's last good reading also sat in
+  the usage cache forever (nothing dropped it but an explicit sign-out), so balance.py's
+  cache-fallback path could read a dead account's stale percentages as real room; a 401 (an
+  expired or revoked token - Anthropic's own "OAuth access token has been revoked") now drops the
+  cache the moment the daemon notices, same as a sign-out already did.
+
+  ⛔ **AND A PERSON AT THE KEYBOARD IS NOT ROOM**, which is what actually ended that run's one
+  spawned chat. It was NOT interrupted by anything this fleet did and NOT by a revoked login: #37
+  was signed in and answering, and its own `logs/main.log` shows the owner sending three messages
+  to his own chats there between 02:52 and 02:57 local, the spawn taking the window at 02:59:26,
+  and him returning at 03:00:22 to a chat he had not started - focusing it, stopping it
+  (`[Request interrupted by user]`, 55 s in) and deleting it through the app's own control at
+  03:00:33, before going back to his own work. Quota room was the only question the ranking asked.
+  It now also asks whether a hand has touched that app lately: the desktop app logs every message
+  sent to, and every click into, one of its chats, so an app with either inside ten minutes is
+  skipped with the reason and the minutes, and `--only` naming it is a person's word that still
+  reaches it. A lane's own UI acts log the same lines, so a just-spawned account reads as hands-on
+  for a while too, which only spreads the next fan-out wider - the direction this errs in.
+
 - **A move no longer reports a landed chat as named while the app shows it nameless**
   (`orchestrator/scripts/name_chats.py`'s `rendered_titles` / `renders` / `require`,
   `orchestrator/scripts/migrate_batch.py`'s `_name_landings`, two suites). Found live on
@@ -281,6 +404,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   sidebar once per instance afterwards, and names every landing the app is not showing under its
   real title, with the command that fixes it. An unreadable sidebar judges nothing rather than
   looping against a closed app.
+
+- **The bypass picker's own remedy could not fix the exact chat it named, and `chat_rename` had
+  no route from a stale disk title to a confirmed rename** (`orchestrator/scripts/automation_chat.py`'s
+  `--title` and `_extract_title_arg`, `migrate_chat.py`'s `_bypass_remedy_cmd`,
+  `server/src/ui-archive.ts`'s `bestRenderedAlias` and `renameChatDiscoveringRenderedTitle`,
+  `server/src/routes/sessions.ts`'s rename route, three suites). Found live 2026-09-15
+  reproducing a chat stuck `bypassVerdict: disk-only`: the printed remedy
+  (`python scripts/automation_chat.py <id> --force`) re-derives its title from the daemon's
+  dossier, a fresh disk read no fresher than `list_chats`' own - so by the time a human ran it by
+  hand, the running app had already re-saved the record and erased the title, and the remedy
+  refused with "no name to aim at" on the one chat it exists to fix. `chat_rename` had the same
+  hole from the other side: without `current_title` it fell back to the disk title alone and
+  refused (or mis-aimed) when the app rendered the chat under a different name. `automation_chat.py`
+  now accepts `--title`, and `migrate_chat`'s remedy hands it the title the batch already verified
+  instead of asking a source that can have gone stale in the meantime; `chat_rename`'s daemon route
+  now retries a failed rename by discovering the rendered row itself (fuzzy-scored against the
+  disk title, same thresholds as the Python actuator's own `best_rendered_alias`), never
+  overriding an explicit `current_title` with a guess.
 
 - **A migrated chat is no longer read as "mid-turn" because it just landed, so the resume phase
   stops hanging** (`orchestrator/scripts/migrate_batch.py`'s new `_resume_window`, `courier.py`'s
@@ -774,6 +915,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   something types into it, so `3/3 landed` described a run in which zero chats had actually been
   resumed. The per-chat `RESUME` lines were right the whole time and were scrolled past. When a
   resume was asked for, the first line now carries the tally and says the rest are DORMANT.
+
+- **`rename_chat` can now rename a freshly imported chat, on both sides of the fix**
+  (`orchestrator/scripts/rename_chat.py`, `misc/Manage-DesktopChat.ps1`'s Rename write loop,
+  `orchestrator/scripts/tests/test_rename_null_title.py`, `server/tests/ui-archive.test.ts`). A
+  fresh import lands with `title: null` on disk; `rename_chat.py` forwarded that straight through
+  as an empty `-Title`, and the actuator's mandatory parameter refused it before ever looking for
+  a row - it now falls back to `Untitled`, the same name the app itself renders for a titleless
+  import. The MCP `chat_rename` route already found the row under that fallback, but the write
+  itself could still fail: the app can re-render the sidebar mid-edit, which invalidates the UIA
+  edit-box element and threw `ElementNotAvailableException` straight out of `SetValue` uncaught,
+  crashing the script with the chat left `Untitled` and nothing reported. That write is now
+  caught; on that one exception the edit box is re-acquired and the write is retried exactly
+  once before the script gives up and reports FAIL - never a guessed name, never an ok over a
+  write that did not happen.
 
 ## [0.41.0] - 2026-09-08
 

@@ -305,6 +305,33 @@ describe('targetNote confirms the resolved account by name AND email (item 4, fi
     expect(resolveIdx).toBeLessThan(runIdx) // resolved before migrate_batch imports anything
   })
 
+  // TODO item 1 (2026-09-15): migrate_chat restates one of a chat's two CURRENT names as
+  // confirm_title, and the two can disagree (the daemon session's own title vs the desktop
+  // record's) - a caller with no way to tell which one the door wants had no way past a
+  // mismatch. `{chat, title}` names that one chat's own real title, which reaches
+  // migrate_batch.py as `--chat-title` and sidesteps the restatement entirely.
+  test('move_chats: a {chat, title} entry sends --chat-title for that chat only', async () => {
+    const t = TOOLS.find((x) => x.name === 'move_chats')
+    if (!t) throw new Error('no MCP tool named move_chats')
+    scriptStdout = JSON.stringify({ moved: ['x', 'y'], refused: [], results: [] })
+    await t.run({
+      chats: [{ chat: 'x', title: 'x real title' }, 'y'],
+      to: 42,
+    })
+    const run = runCall()
+    const args = (run.body?.args ?? []) as string[]
+    expect(args.slice(args.indexOf('--chat'), args.indexOf('--chat') + 4)).toEqual([
+      '--chat',
+      'x',
+      '--chat-title',
+      'x real title',
+    ])
+    // 'y' is a bare string: it carries no --chat-title of its own.
+    const yIdx = args.lastIndexOf('--chat')
+    expect(args[yIdx + 1]).toBe('y')
+    expect(args[yIdx + 2]).not.toBe('--chat-title')
+  })
+
   test('the descriptions point a caller at targetNote and dry_run as the pre-flight check', () => {
     const chats = TOOLS.find((x) => x.name === 'move_chats')
     expect(moveChat().description).toContain('targetNote')

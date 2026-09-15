@@ -347,17 +347,21 @@ foreach ($m in $mains) {
     # ⛔ The Wake above this block is load-bearing: Chromium materialises the editor lazily,
     # and without a fresh MSAA poke after the menu Invoke the element simply is not in the
     # tree yet - which is what made rename look permanently broken on non-English builds.
-    $edit = $null
-    foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
-      foreach ($e in $t.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
-        if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.Edit') { continue }
-        $v = TryPattern $e ([System.Windows.Automation.ValuePattern]::Pattern)
-        if (-not $v -or $v.Current.IsReadOnly) { continue }
-        $held = try { $v.Current.Value } catch { '' }
-        if ($held -eq $Title) { $edit = $e; break }
+    function Find-RenameEditBox {
+      # Factored out so a stale-element write below can re-run exactly this search, never a
+      # hand-kept copy of it.
+      foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+        foreach ($e in $t.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+          if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.Edit') { continue }
+          $v = TryPattern $e ([System.Windows.Automation.ValuePattern]::Pattern)
+          if (-not $v -or $v.Current.IsReadOnly) { continue }
+          $held = try { $v.Current.Value } catch { '' }
+          if ($held -eq $Title) { return $e }
+        }
       }
-      if ($edit) { break }
+      return $null
     }
+    $edit = Find-RenameEditBox
     if (-not $edit) {
       Write-Output "FAIL: rename editor did not open (no writable Edit holding '$Title')"
       exit 1
@@ -366,9 +370,32 @@ foreach ($m in $mains) {
     if (-not $vp) { Write-Output 'FAIL: rename editor exposes no ValuePattern'; exit 1 }
     # Commit loop: SetValue, verify the editor actually holds the new text, post Enter, check
     # the row; retry up to 3 times (a posted keystroke can race the editor's first paint).
+    # ⛔ A STALE ELEMENT MID-WRITE (2026-09-15): the app can re-render the row while this runs,
+    # which invalidates $edit/$vp and makes SetValue throw ElementNotAvailableException even
+    # though the editor is still open on screen, under a fresh element. Uncaught, that crashed
+    # the whole script ($ErrorActionPreference = 'Stop') and left the chat 'Untitled' with
+    # nothing reported. Catch it, re-acquire the edit box, retry the write ONCE - a second
+    # throw after re-acquiring is a real FAIL, reported, never swallowed into a false OK.
     $renamed = $false
     for ($try = 1; $try -le 3 -and -not $renamed; $try++) {
-      $vp.SetValue($NewTitle)
+      try {
+        $vp.SetValue($NewTitle)
+      } catch {
+        $edit = Find-RenameEditBox
+        if (-not $edit) {
+          Write-Output ("FAIL: rename editor went stale and did not re-render (no writable " +
+            "Edit holding '$Title') - $($_.Exception.Message)")
+          exit 1
+        }
+        $vp = TryPattern $edit ([System.Windows.Automation.ValuePattern]::Pattern)
+        if (-not $vp) { Write-Output 'FAIL: rename editor exposes no ValuePattern after re-acquiring'; exit 1 }
+        try {
+          $vp.SetValue($NewTitle)
+        } catch {
+          Write-Output "FAIL: rename editor write failed again after re-acquiring - $($_.Exception.Message)"
+          exit 1
+        }
+      }
       Start-Sleep -Milliseconds 500
       $held = try { $vp.Current.Value } catch { '' }
       if ($held -ne $NewTitle) { Start-Sleep -Milliseconds 500; continue }

@@ -20,6 +20,7 @@ import {
   orchestratorDir,
   orchestratorStatus,
   pythonBinary,
+  routeLockKey,
   runOrchestrator,
   runOriginAllowed,
   validateInvocation,
@@ -240,6 +241,59 @@ describe('runOrchestrator - argv in, verdict out', () => {
       { dir, spawn: async () => ({ code: 0, stdout: '', stderr: '', timedOut: false }) },
     )
     expect('ok' in third && third.ok).toBe(true)
+  })
+
+  test('routeLockKey: fan_out status/list take no lock; every other fan_out call keeps one', () => {
+    expect(routeLockKey('fan_out', ['status', '--json'])).toBeNull()
+    expect(routeLockKey('fan_out', ['status', 'g1', '--json'])).toBeNull()
+    expect(routeLockKey('fan_out', ['list', '--json'])).toBeNull()
+    expect(routeLockKey('fan_out', ['--spec', 'x.json', '--json'])).toBe('fan_out')
+    expect(routeLockKey('fan_out', ['send', 'g1', '--text', 'x'])).toBe('fan_out')
+    expect(routeLockKey('fan_out', ['delete', 'g1'])).toBe('fan_out')
+    expect(routeLockKey('migrate_batch', ['status'])).toBe('migrate_batch')
+  })
+
+  test('fan_out status/list are never refused by a fan_out spawn already in flight (2026-09-15)', async () => {
+    // Found live: `fan_out_status` (read-only by its own MCP description) answered `409 fan_out
+    // is already running through this route` three times while a spawn ran, because the route
+    // locked by SCRIPT NAME alone and a spawn and a status read share the name "fan_out".
+    const dir = fakeToolbox()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const patientSpawn = async () => {
+      await gate
+      return { code: 0, stdout: '{"members":[]}', stderr: '', timedOut: false }
+    }
+    const spawning = runOrchestrator(
+      { script: 'fan_out', args: ['--spec', 'x.json', '--json'] },
+      { dir, spawn: patientSpawn },
+    )
+    // The spawn is still in flight (the gate has not been released) - a status read must go
+    // straight through, never queued behind it.
+    const status = await runOrchestrator(
+      { script: 'fan_out', args: ['status', '--json'] },
+      {
+        dir,
+        spawn: async () => ({ code: 0, stdout: '{"members":[]}', stderr: '', timedOut: false }),
+      },
+    )
+    expect('busy' in status).toBe(false)
+    expect('ok' in status && status.ok).toBe(true)
+    // A SECOND spawn (a write, same as the first) is still refused - reads got their own lock,
+    // not NO lock for the whole script.
+    const secondSpawn = await runOrchestrator(
+      { script: 'fan_out', args: ['--spec', 'y.json', '--json'] },
+      {
+        dir,
+        spawn: async () => ({ code: 0, stdout: '{"members":[]}', stderr: '', timedOut: false }),
+      },
+    )
+    expect('busy' in secondSpawn && secondSpawn.busy).toBe(true)
+    release()
+    const done = await spawning
+    expect('ok' in done && done.ok).toBe(true)
   })
 
   test('a timed-out run is never ok, whatever the code says', async () => {

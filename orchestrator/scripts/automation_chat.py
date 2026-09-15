@@ -26,8 +26,14 @@ chats are stamped too (a hold blocks work on a chat, never its configuration), a
 chats are left alone, and every row reports which stamp it was missing and whether its
 app's re-save can lag the result. The single-target path below applies the same rule.
 
-Usage: python automation_chat.py <title fragment | session id> [--force] [--json]
+Usage: python automation_chat.py <title fragment | session id> [--force] [--title "name"] [--json]
        python automation_chat.py --all [--yes] [--json]     # fleet-wide: plan, then enforce
+
+--title supplies the name to aim the picker at directly, skipping this script's own title
+lookup (the dossier, a disk read no fresher than list_chats' own). Pass it when a CALLER already
+verified the rendered name - migrate_batch's own remedy does, for exactly the reason title_for_row
+documents: a RUNNING app can erase a disk title in the gap between that verification and a
+by-hand run of this remedy.
 
 --force on ONE chat drives the target app's OWN permission picker (set_mode_via_app), which
 is the only thing that can set the mode of a chat in a RUNNING app - a disk stamp is invisible
@@ -220,9 +226,15 @@ def title_for_row(row: dict) -> str:
     environment fault and is neither. The remedy `--force` prints for a `disk-only` landing
     could therefore never work on the one population it exists to serve.
 
-    The title is not really unknown: the daemon resolves it, because the APP knows it (that is
-    how the courier delivers to these same chats by rendered name). Ask it. A chat the daemon
-    cannot name either returns "" and the caller refuses honestly - never an empty argument.
+    ⛔ THE DAEMON FALLBACK BELOW IS NOT A STRONGER SOURCE, JUST A SECOND DISK READ (corrected
+    2026-09-15, after a remedy invocation hit BOTH this row's empty disk title and an equally
+    empty fallback on the exact chat 307125f's rendered-title check exists for). hydralib.
+    resolve_one queries /api/chats/dossier, a fresh scan of the SAME meta.json list_chats
+    reads via /api/chats - not the app's live render state (name_chats.rendered_titles is the
+    only thing that asks the app itself, via the actuator's passive -List). So this fallback
+    only helps when the two reads land on opposite sides of a re-save race; it cannot recover a
+    title a running app has already erased on disk. The reliable fix is a CALLER that already
+    verified the real name passing it explicitly - see main()'s --title.
     """
     title = str(row.get("title") or "").strip()
     if title:
@@ -760,12 +772,31 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
     )
 
 
+def _extract_title_arg(argv: list[str]) -> tuple[str | None, list[str]]:
+    """Pull `--title VALUE` out of argv before the plain `--`-prefix filter below runs - VALUE
+    itself never starts with `--` in practice, so left in place it would be misread as the
+    positional chat query. Returns (title or None, argv with the flag and its value removed)."""
+    title: str | None = None
+    rest: list[str] = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--title" and i + 1 < len(argv):
+            title = argv[i + 1]
+            i += 2
+            continue
+        rest.append(a)
+        i += 1
+    return title, rest
+
+
 def main(argv: list[str]) -> int:
     clilib.use_utf8_console()
     if "--help" in argv or "-h" in argv:
         print(__doc__.strip())
         return 0
     as_json = "--json" in argv
+    explicit_title, argv = _extract_title_arg(argv)
     if "--all" in argv:
         return _run_fleet_pass(argv, as_json)
     args = [a for a in argv if not a.startswith("--")]
@@ -780,6 +811,15 @@ def main(argv: list[str]) -> int:
         return out({"ok": False, "report": f"REFUSED (deterministic): {err}"}, as_json, 3)
     except hydralib.DaemonError as err:
         return out({"ok": False, "report": f"automation stamp FAILED: {err}"}, as_json, 1)
+
+    if explicit_title and explicit_title.strip():
+        # ⛔ NEVER RE-DERIVE A TITLE A CALLER ALREADY VERIFIED (found 2026-09-15). match["title"]
+        # came from the dossier - a disk read exactly like list_chats', taken fresh THIS call -
+        # and a RUNNING app can have re-saved its in-memory record over that disk title in the
+        # gap between when a caller (migrate_chat's own remedy) last verified it and now
+        # (titleDurable: false). title_for_row's daemon fallback re-reads the SAME kind of stale
+        # source, so without this a caller that already knows the real name still lost the race.
+        match = {**match, "title": explicit_title.strip()}
 
     return _stamp_single_target(match, fleet, as_json, force="--force" in argv)
 

@@ -25,6 +25,7 @@ export const SOURCE_LABEL: Record<SessionSourceScope, string> = {
   opencode: 'sessions.sourceOpenCode',
   hermes: 'sessions.sourceHermes',
   dsh: 'sessions.sourceDsh',
+  zswarm: 'sessions.sourceZswarm',
   foreign: 'sessions.sourceOther',
 }
 
@@ -72,6 +73,7 @@ export const TOOL_NAME: Record<string, string> = {
   icodemate: 'IcodeMate',
   hermes: 'Hermes',
   'deepseek-harness': 'DeepSeek',
+  zswarm: 'zswarm',
   grok: 'Grok',
   kimi: 'Kimi',
   zed: 'Zed',
@@ -101,6 +103,8 @@ export const SOURCE_HAS_FILE: Record<SessionSource, boolean> = {
   opencode: false,
   hermes: false,
   dsh: true,
+  // A zswarm job's `job.json` is a real file per job, same as DSH's log per session.
+  zswarm: true,
   foreign: true,
 }
 
@@ -123,6 +127,8 @@ export const SOURCE_FILE_IS_TEXT: Record<SessionSource, boolean> = {
   opencode: false,
   hermes: false,
   dsh: false,
+  // Unlike DSH's zstd log, job.json is plain JSON - an editor renders it fine.
+  zswarm: true,
   foreign: true,
 }
 
@@ -133,6 +139,8 @@ export const SOURCE_BADGE_CLASS: Record<SessionSource, string> = {
   hermes: 'border-[#F5A623]/40 bg-[#F5A623]/10 text-[#B4750E] dark:text-[#F5C067]',
   // DeepSeek's own blue, the same way each reader above wears its product's colour.
   dsh: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#3A51C7] dark:text-[#9DB0FF]',
+  // Same DeepSeek blue as dsh above - it is the same vendor, a different product.
+  zswarm: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#3A51C7] dark:text-[#9DB0FF]',
   // Neutral on purpose: five products share this reader, so a single hue would imply one identity.
   foreign: 'border-border bg-muted text-muted-foreground',
 }

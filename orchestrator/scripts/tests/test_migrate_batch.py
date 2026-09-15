@@ -528,6 +528,51 @@ class AllUnarchivedTest(_MigrateBatchTest):
         assert code == 2
 
 
+# --- --chat-title: move_chats' per-chat door around a confirm_title mismatch ----------------
+# TODO item 1 (2026-09-15): move_chats had no way to name ONE chat's own real title, so a
+# caller with no way to read the daemon's row directly had no way past a confirm_title refusal.
+# --chat-title binds to the --chat named right before it and reaches migrate_chat as that
+# chat's own --title, which the naming door always accepts (a real new name, never restated).
+
+class PerChatTitleTest(_MigrateBatchTest):
+    def setUp(self):
+        super().setUp()
+        self.patch(migrate_batch.hydralib, "chats", lambda **k: [])
+
+    def test_chat_title_becomes_that_chats_own_title_flag(self):
+        calls = self.stub_phases()
+        _run(["--chat", "a", "--chat-title", "Real name for a", "--chat", "b", "--to", "8"])
+        assert calls[0] == ["a", "--to", "8", "--title", "Real name for a"], calls[0]
+        assert calls[1] == ["b", "--to", "8"], "a chat with no --chat-title carries no --title"
+
+    def test_chat_title_wins_even_when_the_two_current_names_disagree(self):
+        """The exact overnight scenario: the daemon's row title and the desktop record's title
+        differ (session 7e1fa278, 'Your market still looks like ...' vs 'Logos for Connections
+        products'). --chat-title sidesteps the confirm_title comparison entirely - migrate_chat
+        never has to guess which of the two names the door wants."""
+        calls = self.stub_phases()
+        _run(["--chat", "7e1fa278", "--chat-title", "Logos for Connections products",
+              "--to", "8"])
+        assert calls[0][-2:] == ["--title", "Logos for Connections products"]
+
+    def test_a_chat_title_with_no_preceding_chat_is_a_usage_error(self):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = migrate_batch.main(["--chat-title", "orphaned", "--to", "8"])
+        assert code == 2
+
+    def test_all_unarchived_carries_no_per_chat_title(self):
+        """chat_titles is rebuilt in lockstep with the fresh chats list --all-unarchived
+        resolves, never left over from whatever --chat-title happened to precede it."""
+        self.patch(
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [{"sessionId": "s1", "instance": "p", "archived": False,
+                                     "lastActivityAt": "2026-09-13T09:00:00Z"}],
+        )
+        calls = self.stub_phases()
+        _run(["--all-unarchived", "--to", "8"])
+        assert "--title" not in calls[0]
+
+
 # --- the naming door restates the DAEMON'S title, never the record's -----------------------
 
 class NamingDoorTest(_MigrateBatchTest):

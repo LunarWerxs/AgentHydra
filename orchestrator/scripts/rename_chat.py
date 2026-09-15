@@ -246,7 +246,11 @@ def main(argv: list[str]) -> int:
 
     # chatId is the verify key: the dossier record we re-read after the act.
     chat_id = match.get("chatId") or ""
-    old_title = str(match.get("title") or "")
+    # A freshly imported chat lands with title: null on disk (the daemon's dossier passes that
+    # straight through), and the running app renders a titleless import as 'Untitled' - so that
+    # is the name the actuator must be asked for. Forwarding "" instead used to fail the
+    # actuator's mandatory -Title before it ever looked for a row ("-Title is required").
+    old_title = str(match.get("title") or "Untitled")
     if old_title == new_title:
         return out(
             {"renamed": False, "report": f"nothing to do: the chat is already titled '{new_title}'"},

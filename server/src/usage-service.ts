@@ -273,9 +273,18 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // indefinitely. Signed out means we no longer know this account's quota, and a number we no
   // longer know is worse than a dash: it is indistinguishable from a current one.
   //
-  // Only on 'logged_out'. A failed check is ignorance, not absence - keeping the last good reading
-  // through a network blip is the right behaviour and must not be swept up in this.
-  if (reason === 'logged_out') dropCachedUsage(key)
+  // Only on 'logged_out' OR A DEFINITIVE 401 (the token itself was rejected - expired or
+  // REVOKED, e.g. Anthropic's own "OAuth access token has been revoked"). A failed check is
+  // ordinarily ignorance, not absence - keeping the last good reading through a network blip is
+  // the right behaviour - but a 401 is not a blip, it is the server naming this exact credential
+  // dead, and the account's last GOOD reading (cached from before it died) would otherwise sit in
+  // the cache forever: nothing else ever drops it, so fan_out's ranking (balance.py's
+  // usage_rows_with_fallback, which reads this same cache when the live survey is unavailable)
+  // could go on reading a REVOKED account's stale percentages as real room indefinitely (found
+  // live 2026-09-15: fan_out assigned a task to an account revoked the day before). Dropping the
+  // stale entry the moment the daemon itself notices is what makes "an unknown or stale reading
+  // is never room" true rather than merely documented.
+  if (reason === 'logged_out' || apiFail?.status === 401) dropCachedUsage(key)
   const snapshot = parseUsageOutput('', label)
   // Say WHAT failed, not just that something did. See UsageCheckResult.detail.
   // The server's own words FIRST (see usage-api.ts), plus the retry window when it gave one. Both,
