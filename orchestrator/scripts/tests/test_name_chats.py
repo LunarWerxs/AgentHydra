@@ -155,6 +155,76 @@ class NamePassTest(unittest.TestCase):
         self.assertEqual(res["named"], [])
         self.assertEqual(len(res["remaining"]), 2)
 
+    def _screen_fakes(self, screen: list[str]):
+        """A fake sidebar: `screen` is what the app RENDERS, kept separate from the disk metas
+        on purpose - that gap is the bug this pair of tests exists for. -List emits each row as
+        '<localized phrase> <title>', which is why the pass matches by suffix."""
+        test = self
+
+        def list_runner(_instance):
+            return 0, "== inst (pid 1) rendered chats ==\n" + "\n".join(f"  more options {t}"
+                                                                         for t in screen)
+
+        def probe(_instance, name):
+            for i, t in enumerate(screen):
+                if name_chats.is_generic_title(t):
+                    screen[i] = name
+                    # the app re-saves the meta it just renamed; sid order mirrors the rows
+                    test._set_title(list(test.metas)[i], name)
+                    return 0, f"RENAMED first row -> '{name}'"
+            return 3, "NONE-RENDERED"
+
+        def rename(sid, title):
+            was = test._meta_title(sid)
+            for i, t in enumerate(screen):
+                if t == was:
+                    screen[i] = title
+            test._set_title(sid, title)
+            return 0, "renamed and VERIFIED"
+
+        return list_runner, probe, rename
+
+    def test_required_titles_are_judged_on_the_screen_not_the_disk(self):
+        """⛔ THE FALSE GREEN OF 2026-09-15: a fresh import's disk record carries the title the
+        importer wrote, and the RUNNING app is still rendering the row as 'Untitled' (it erases
+        that title at its own next re-save). The disk-only test saw two real titles and did
+        nothing, the batch reported OK, and both chats stayed unaimable."""
+        self._set_title(SID_A, "A real chat about X")
+        self._set_title(SID_B, "The B chat, properly named")
+        screen = ["Untitled", "Untitled"]
+        list_runner, probe, rename = self._screen_fakes(screen)
+        want = {SID_A: "A real chat about X", SID_B: "The B chat, properly named"}
+
+        res = name_chats.name_pass("t", extra_titles=want, require=want, probe_runner=probe,
+                                   daemon_rename=rename, store=self.store, poll_secs=2,
+                                   list_runner=list_runner)
+
+        self.assertEqual(res["unrendered"], [])
+        self.assertEqual(res["why"], "clean")
+        self.assertEqual(sorted(screen), sorted(want.values()))
+
+    def test_unreadable_sidebar_is_not_a_miss_and_does_not_loop(self):
+        """An app that is CLOSED (or a UIA read that failed) cannot prove a requirement either
+        way. Probing on an unprovable requirement would spin for MAX_PASSES against nothing."""
+        self._set_title(SID_A, "A real chat about X")
+        self._set_title(SID_B, "The B chat, properly named")
+        probes = []
+
+        def dead_list(_instance):
+            return 1, "FAIL: no window for that instance"
+
+        def probe(_instance, name):
+            probes.append(name)
+            return 0, "should never be reached"
+
+        res = name_chats.name_pass("t", require={SID_A: "A real chat about X"},
+                                   probe_runner=probe, daemon_rename=self.fake_daemon_rename(),
+                                   store=self.store, poll_secs=1, list_runner=dead_list)
+
+        self.assertEqual(probes, [])
+        self.assertEqual(res["unrendered"], [])
+        self.assertEqual(res["why"], "clean")
+
     def test_missing_store_is_a_stated_refusal(self):
         res = name_chats.name_pass("t", probe_runner=self.fake_probe(),
                                    daemon_rename=self.fake_daemon_rename(),

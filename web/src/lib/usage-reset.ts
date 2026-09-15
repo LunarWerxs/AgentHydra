@@ -92,19 +92,26 @@ export function resetLabel(
 }
 
 /**
- * The reset instant as a numeric local date, "09/18/2026" (MM/DD/YYYY) - what clicking the Weekly
- * column copies.
+ * The reset instant as a numeric local date and time, "09/18/2026 9:59 AM" (MM/DD/YYYY h:mm AM/PM) -
+ * what clicking the Weekly column copies.
+ *
+ * The time is part of the answer, not decoration: a weekly window resets at one instant, and "the
+ * 18th" alone leaves you guessing whether it is back at breakfast or at midnight. Minutes are
+ * truncated, never rounded, so a 9:59:59 reset reads 9:59 rather than claiming 10:00 on the dot.
  *
  * Null without a real `resetsAt`: the CLI fallback's yearless "Sep 18, 9:59am" would need its year
  * guessed, and a pasted date that is a year off is worse than no copy at all (same rule as
  * resetLabel above).
  */
-export function resetDateNumeric(limit: UsageLimit | null | undefined): string | null {
+export function resetDateTimeNumeric(limit: UsageLimit | null | undefined): string | null {
   if (!limit?.resetsAt) return null
   const at = new Date(limit.resetsAt)
   if (!Number.isFinite(at.getTime())) return null
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(at.getMonth() + 1)}/${pad(at.getDate())}/${at.getFullYear()}`
+  const hours = at.getHours()
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12
+  const meridiem = hours < 12 ? 'AM' : 'PM'
+  return `${pad(at.getMonth() + 1)}/${pad(at.getDate())}/${at.getFullYear()} ${hour12}:${pad(at.getMinutes())} ${meridiem}`
 }
 
 // --- the WAIT, as a bar -------------------------------------------------------

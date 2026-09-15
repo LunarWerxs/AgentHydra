@@ -935,6 +935,15 @@ def _name_landings(live: list) -> None:
                     item.errors.append(msg)
 
         got = None
+        # ⛔ AND THE PASS MUST BE TOLD WHAT WE LANDED, OR IT JUDGES THE WRONG SURFACE (second
+        # false green, found live 2026-09-15: a 4-chat move reported 4/4 OK with 3 chats left
+        # nameless on screen and their bypass stamps fallen back to disk-only). The importer
+        # writes a title into the landed record and the daemon says so honestly
+        # (`titled: true, titleDurable: false`); the RUNNING app then re-saves that record from
+        # its own memory and erases it. The pass's own "is anything nameless?" test reads the
+        # disk copy, so inside that window it saw four real titles and did nothing at all.
+        # `require` moves the question to what the app is RENDERING, which is the only surface
+        # the permission picker, the renamer and the courier can aim at.
         # ⛔ `remaining: None` IS "THE PASS NEVER RAN", NOT "NOTHING NAMELESS" (false green found
         # 2026-09-13). name_pass returns that shape when it finds no store, and when another lane
         # already holds the instance lock - and it takes that lock with wait_secs=0, so a sibling
@@ -948,7 +957,7 @@ def _name_landings(live: list) -> None:
         # move printed failed for the same reason. Retry, because the lock is usually transient.
         for attempt in range(1, NAMING_ATTEMPTS + 1):
             try:
-                got = name_chats.name_pass(inst, extra_titles=titles)
+                got = name_chats.name_pass(inst, extra_titles=titles, require=titles)
             except Exception as err:  # a name is a courtesy; a landed chat is the deliverable
                 _on_instance(f"naming raised {type(err).__name__}: {str(err)[:150]}")
                 got = None
@@ -960,17 +969,33 @@ def _name_landings(live: list) -> None:
         if got is not None and got.get("remaining") is None:
             _on_instance(f"naming pass on '{inst}' NEVER RAN after {NAMING_ATTEMPTS} attempts"
                          + (f": {got['why']}" if got.get("why") else ""))
-        elif got is not None and (got.get("needsJudgment") or got.get("remaining")):
+        elif got is not None and (got.get("needsJudgment") or got.get("remaining")
+                                  or got.get("unrendered")):
             _on_instance(
                 f"naming pass on '{inst}' left {len(got.get('remaining') or [])} nameless / "
-                f"{len(got.get('needsJudgment') or [])} needing an AI-written name"
+                f"{len(got.get('needsJudgment') or [])} needing an AI-written name / "
+                f"{len(got.get('unrendered') or [])} not rendered under their real name"
                 + (f": {got['why']}" if got.get("why") else ""))
 
     # THE VERDICT THAT DOES NOT TRUST THE PASS. Whatever the pass believed, a nameless landing is
     # the condition that breaks the stamp phase next, so it is read back per chat from the record
     # on disk. This catches every cause, including the one no verdict can see: the running app
     # re-saving a title away AFTER the pass verified it (`titleDurable: false`).
+    # ...and the disk copy cannot answer it alone, because the running app's memory outranks it
+    # for everything that aims by name. Read the sidebar ONCE per instance and hold it here.
+    screen: dict[str, list[str] | None] = {}
+    for inst in by_instance:
+        screen[inst] = name_chats.rendered_titles(inst)
     for item in live:
+        inst = str((item.landing.target or {}).get("name") or "")
+        title = str(item.landing.chat_title or "")
+        rows = screen.get(inst)
+        if rows is not None and title and not name_chats.renders(rows, title):
+            item.errors.append(
+                f"landed but the app is NOT rendering it as '{title}' - the sidebar shows it "
+                "under a generic name, so the permission picker, the renamer and the courier "
+                "all have nothing to aim at. Its bypass stamp is disk-only for the same reason. "
+                f"Fix with: python scripts/name_chats.py {inst}")
         try:
             with open(str(migrate_chat.landed_meta_path(item.landing)), encoding="utf-8") as fh:
                 meta = json.load(fh)

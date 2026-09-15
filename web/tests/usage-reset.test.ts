@@ -5,7 +5,7 @@ import {
   isWindowSuperseded,
   msUntilReset,
   RESET_GRACE_MS,
-  resetDateNumeric,
+  resetDateTimeNumeric,
   resetLabel,
   SESSION_WINDOW_MS,
   WEEK_WINDOW_MS,
@@ -21,24 +21,27 @@ const at = (ms: number) => ({
   resetsAt: new Date(T0 + ms).toISOString(),
 })
 
-test('resetDateNumeric copies the LOCAL reset date as MM/DD/YYYY, zero-padded', () => {
+test('resetDateTimeNumeric copies the LOCAL reset date and time as MM/DD/YYYY h:mm AM/PM', () => {
   // Built from local parts, so the expectation holds in every timezone the suite runs in.
   const local = (y: number, m: number, d: number, h = 9, min = 59) => ({
     pct: 20,
     resets: 'x',
     resetsAt: new Date(y, m, d, h, min, 59).toISOString(),
   })
-  expect(resetDateNumeric(local(2026, 8, 18))).toBe('09/18/2026')
-  expect(resetDateNumeric(local(2026, 0, 3, 0, 1))).toBe('01/03/2026')
-  expect(resetDateNumeric(local(2026, 11, 31, 23, 59))).toBe('12/31/2026')
+  // Every instant here carries :59 seconds, so these also prove seconds are dropped, never rounded up.
+  expect(resetDateTimeNumeric(local(2026, 8, 18))).toBe('09/18/2026 9:59 AM')
+  expect(resetDateTimeNumeric(local(2026, 0, 3, 0, 1))).toBe('01/03/2026 12:01 AM')
+  expect(resetDateTimeNumeric(local(2026, 11, 31, 23, 59))).toBe('12/31/2026 11:59 PM')
+  expect(resetDateTimeNumeric(local(2026, 5, 7, 12, 0))).toBe('06/07/2026 12:00 PM')
+  expect(resetDateTimeNumeric(local(2026, 5, 7, 13, 5))).toBe('06/07/2026 1:05 PM')
 })
 
-test('resetDateNumeric refuses to guess: no ISO instant, no date', () => {
+test('resetDateTimeNumeric refuses to guess: no ISO instant, no date', () => {
   // The CLI fallback's yearless "Sep 18, 9:59am" would need its year invented.
-  expect(resetDateNumeric({ pct: 20, resets: 'Sep 18, 9:59am' })).toBeNull()
-  expect(resetDateNumeric({ pct: 20, resets: '', resetsAt: 'not a date' })).toBeNull()
-  expect(resetDateNumeric(null)).toBeNull()
-  expect(resetDateNumeric(undefined)).toBeNull()
+  expect(resetDateTimeNumeric({ pct: 20, resets: 'Sep 18, 9:59am' })).toBeNull()
+  expect(resetDateTimeNumeric({ pct: 20, resets: '', resetsAt: 'not a date' })).toBeNull()
+  expect(resetDateTimeNumeric(null)).toBeNull()
+  expect(resetDateTimeNumeric(undefined)).toBeNull()
 })
 
 test('formatCountdown is coarse above an hour and precise below a minute', () => {

@@ -38,11 +38,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   still refused, with `orchestrator_cancel` named - that abandonment is a person's decision, and
   `migrate_reconcile.py` now exists to find what it leaves.
 
-- **Clicking a Weekly cell copies the date that window resets, as `09/18/2026`**
+- **Clicking a Weekly cell copies the date and time that window resets, as `09/18/2026 9:59 AM`**
   (`web/src/components/CopyResetDate.vue`, the three instance tables, `web/src/lib/usage-reset.ts`,
   `web/tests/usage-reset.test.ts`). The bar says `4d 9h`, which is the right thing to READ and the
   wrong thing to paste into a calendar or a message; working the date out of a countdown is
-  arithmetic nobody should do by hand. Owner request, 2026-09-14. A cell with no ISO reset instant
+  arithmetic nobody should do by hand. Owner request, 2026-09-14; the local time was added
+  2026-09-15, because "the 18th" alone does not say whether the quota is back at breakfast or at
+  midnight. A cell with no ISO reset instant
   (the `claude -p "/usage"` fallback prints a YEARLESS "Sep 18, 9:59am") is not a button at all,
   rather than copying a date whose year was guessed.
 
@@ -265,6 +267,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   on IconTooltip); the CLI and Codex tables, which have no such tooltip, use a native `title` that
   is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
+
+- **A move no longer reports a landed chat as named while the app shows it nameless**
+  (`orchestrator/scripts/name_chats.py`'s `rendered_titles` / `renders` / `require`,
+  `orchestrator/scripts/migrate_batch.py`'s `_name_landings`, two suites). Found live on
+  2026-09-15: a 4-chat move reported 4/4 OK with three chats rendering as identical no-name rows,
+  so the permission picker had nothing to aim at and their bypass stamps fell back to disk-only.
+  The importer writes a title into the landed record (`titled: true, titleDurable: false`) and the
+  running app re-saves that record from memory minutes later, erasing it; the naming pass asked
+  "is anything nameless?" of the DISK copy inside that window, saw four titles, and did nothing.
+  `name_pass` now takes `require` (the titles the caller just landed) and judges those on what the
+  app is RENDERING, through the actuator's passive `-List`; `migrate_batch` passes them, reads the
+  sidebar once per instance afterwards, and names every landing the app is not showing under its
+  real title, with the command that fixes it. An unreadable sidebar judges nothing rather than
+  looping against a closed app.
 
 - **A migrated chat is no longer read as "mid-turn" because it just landed, so the resume phase
   stops hanging** (`orchestrator/scripts/migrate_batch.py`'s new `_resume_window`, `courier.py`'s

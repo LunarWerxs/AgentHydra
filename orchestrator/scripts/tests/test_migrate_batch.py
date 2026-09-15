@@ -925,6 +925,76 @@ class NamingPassVerdictTest(_MigrateBatchTest):
         # The read-back is exercised on its own below; here the pass verdict is the subject.
         self.patch(migrate_chat, "landed_meta_path", lambda land: "")
 
+    def _screen(self, rows) -> None:
+        """What the app is rendering. None = unreadable, which is never read as a miss - and
+        which is also what keeps every DISK-subject test in this class off the real actuator."""
+        import name_chats
+        self.patch(name_chats, "rendered_titles", lambda instance, list_runner=None: rows)
+
+    def setUp(self):  # noqa: D102 - the base class does the real work
+        super().setUp()
+        self._screen(None)
+
+    def test_a_landing_the_app_does_not_render_by_name_is_reported(self):
+        """⛔ THE SECOND FALSE GREEN (found live 2026-09-15). Disk said 'Android gameplay
+        harness'; the sidebar said 'Untitled', because the importer's title is a hint a RUNNING
+        app erases. Disk-only read-back passed, the batch printed OK, and the permission picker
+        had nothing to aim at - `bypass: disk-only` on three of four chats."""
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                       "unrendered": [], "why": ""})
+        self._screen(["more options Untitled", "more options Something else"])
+        with self.tmp_meta({"title": "Real name"}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1, "a landing the app renders generically must be reported"
+        assert "NOT rendering it as 'Real name'" in live[0].errors[0]
+
+    def test_a_landing_the_app_renders_by_name_is_not_reported(self):
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                       "unrendered": [], "why": ""})
+        self._screen(["more options Real name"])
+        with self.tmp_meta({"title": "Real name"}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert live[0].errors == []
+
+    def test_the_pass_is_told_what_this_batch_landed(self):
+        """`require` is the whole fix: without it the pass asks the disk, which is exactly the
+        surface that lies right after an import."""
+        import name_chats
+        seen = {}
+
+        def spy(instance, extra_titles=None, **k):
+            seen.update(k)
+            return {"named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                    "unrendered": [], "why": ""}
+
+        self.patch(name_chats, "name_pass", spy)
+        self._no_readback()
+        migrate_batch._name_landings(self._live())
+        assert "Real name" in (seen.get("require") or {}).values(), \
+            "the batch must hand the pass the titles it just landed"
+
+    def test_an_unrendered_report_from_the_pass_is_not_read_as_clean(self):
+        import name_chats
+        self._no_readback()
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                       "unrendered": ["Real name"], "why": "1 required title(s) not rendered"})
+        live = self._live()
+        migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1
+        assert "not rendered under their real name" in live[0].errors[0]
+
     def test_a_pass_that_never_ran_is_reported_not_read_as_clean(self):
         import name_chats
         self._no_readback()
