@@ -75,7 +75,7 @@ THE PASS, in order:
 
 STANDING FACTS - do not re-derive or re-build these:
 - ⛔ NOTHING ACTS WITHOUT THE TRAY ICON (owner, 2026-09-01: "it can't be running without the
-  status bar icon, so I can terminate it if I want"). `scripts/tray.ps1` beats into
+  status bar icon, so I can terminate it if I want"). `orchestrator/scripts/tray.ps1` beats into
   `state/tray.json` while it is up, and every UNATTENDED lane asks `lib/armlib` for that beat
   before it moves, wakes, archives, presses or writes - observing is never gated, and the
   default on any machine is OFF. (A hand-run `migrate_chat` or `chats --move-to` is the

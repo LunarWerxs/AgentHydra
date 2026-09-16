@@ -294,8 +294,18 @@ describe('resolveAccount — defensive synthetic instance dirs (no real machine 
 
   // Outcome-independent backstop: the try/finally in each test below already calls cleanup(), but
   // that try/finally lives in the caller, not around makeInstanceDir()'s own mkdtempSync — this
-  // afterEach guarantees the reap even if a future test forgets its own finally.
-  afterEach(cleanup)
+  // afterEach guarantees the reap even if a future test forgets its own finally. The reap is
+  // spelled out in the hook itself rather than `afterEach(cleanup)` so the hook that owns the
+  // directory is the hook that removes it.
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+      } catch {
+        // best-effort
+      }
+    }
+  })
 
   test("missing instanceDir (empty string) -> status 'unknown', never throws", async () => {
     const account = await resolveAccount('')

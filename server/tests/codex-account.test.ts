@@ -40,8 +40,18 @@ function cleanup(): void {
 }
 
 // Outcome-independent backstop alongside each test's own try/finally cleanup(): that try/finally
-// lives in the test body, not around makeCodexHome()'s own mkdtempSync.
-afterEach(cleanup)
+// lives in the test body, not around makeCodexHome()'s own mkdtempSync. The reap is spelled out in
+// the hook itself rather than `afterEach(cleanup)` so the hook that owns the directory is the hook
+// that removes it - a named helper three lines up is not evidence that anything reaps.
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // best-effort
+    }
+  }
+})
 
 /** A JWT with the given payload. Unsigned — decodeJwtClaims never verifies, by design. */
 function jwt(payload: Record<string, unknown>): string {

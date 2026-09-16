@@ -132,8 +132,8 @@ interview protocol. The judgment queue only drains when (3) runs.
 
 ⛔ NOTHING ACTS WITHOUT THE TRAY ICON (owner order, 2026-09-01: "it should never just do
 whatever it wants without at least some occasional instruction... it can't be running without
-the status bar icon, so I can terminate it if I want"). The icon (`scripts/tray.ps1`; `python
-orch.py arm` starts it) comes up PAUSED and writes a heartbeat every 15 seconds; every
+the status bar icon, so I can terminate it if I want"). The icon (`orchestrator/scripts/tray.ps1`;
+`python orch.py arm` starts it) comes up PAUSED and writes a heartbeat every 15 seconds; every
 acting script asks `lib/armlib` for that heartbeat before it moves, wakes, archives, presses,
 stamps or writes, and prints DISARMED instead; observing is never gated. Exit the icon, kill
 it, or pick Pause in its menu and everything stops. The default on any machine is OFF.
@@ -220,7 +220,7 @@ THE CHIPS (owner, 2026-09-01: "always Start locally, never in a worktree"). The 
 a `Suggested task` card in a chat's pane - title, description, branch tags, `Dismiss
 suggestion`, `Start with worktree` and a `More start options` menu (`Start locally`, `Send to
 cloud`, `Fix in this session`). Starting one creates a NEW chat for that task, running at once,
-in the parent's folder and permission mode. `scripts/chips.py` (a gated 5-minute lane) does
+in the parent's folder and permission mode. `orchestrator/scripts/chips.py` (a gated 5-minute lane) does
 what the owner asked instead of driving that menu: it creates the chat through the toolbox's
 own spawner from the card's title and description, in the parent chat's folder, on the
 parent's instance - so the duplicate guard on that exact prompt, bypass from birth,
@@ -253,7 +253,7 @@ against the IdP's public JWKS), plus a
 **Vue 3 + Tailwind v4 + lunarwerx-ui** dashboard (`web/`) built on the shared kit (accent:
 amber; `bun run check:kit`).
 
-**What it can do, exactly:** everything `scripts/dashboard.py` answers (the plan, waiting-on-you,
+**What it can do, exactly:** everything `orchestrator/scripts/dashboard.py` answers (the plan, waiting-on-you,
 every chat, instances, holds and the breaker, the accounts strip and balancing plan, the rules,
 the scripts, the logic tree), and **THE SWITCH** - turn the tray icon on or off from the phone
 (`python orch.py arm` / `disarm`, run on the machine). Nothing else. The Python data layer is
@@ -273,7 +273,7 @@ bun run remote:test                     # the gateway's own tests (auth gate, CS
 ### The permanent addresses
 
 Each machine gets ONE named Cloudflare tunnel on `lunarwerx.com`, provisioned by
-`scripts/remote_tunnel.py`. Named, not quick: the hostname never rotates, it resolves on
+`orchestrator/scripts/remote_tunnel.py`. Named, not quick: the hostname never rotates, it resolves on
 networks that DNS-block `trycloudflare.com`, and sign-in completes on the daemon's own
 `/oauth/callback` with no relay hop.
 
@@ -340,7 +340,7 @@ was a false kill switch: the lane was ungated, so closing the icon stopped the l
 quietly restored remote access five minutes later - and this gateway can throw the arm switch
 from a phone, so that is a route to arming the machine with no kill switch on screen.
 
-`scripts/tray.ps1` starts the gateway when remote access is enabled, watchdogs it every 15
+`orchestrator/scripts/tray.ps1` starts the gateway when remote access is enabled, watchdogs it every 15
 seconds (stopping after three failed starts rather than hammering a broken one), and closes it
 on Exit. `python orch.py disarm` closes it too - it kills the icon with `/F`, which skips the
 tray's own shutdown path, so disarm stops the gateway itself.
@@ -444,7 +444,7 @@ so the split is: judgment shared, actions individual.
 
 Testing is three tiers - unit (stub daemon, every script covered), smoke (read-only against
 the live daemon), drill (reversible live acts) - and the whole UI/UX story is programmatic
-(the daemon's UI-Automation actuator, never screen-clicking). **`scripts/TESTING.md`** is the
+(the daemon's UI-Automation actuator, never screen-clicking). **`orchestrator/scripts/TESTING.md`** is the
 doctrine, including why CDP is a dead end and why disk flags are not UI.
 
 Every act script enforces the six rules below mechanically: gate first, count the attempt,
@@ -468,7 +468,7 @@ First live run of `waiting_scan.py` (2026-08-31): the preview census reported 0 
 the full-tail scan found 15 - the exact truncated-preview hole orchestrate.mjs documents.
 
 `orchestrate.mjs` stays until the Python census has run in anger for a while; it is superseded
-by `scripts/census.py` and adds nothing the port lacks.
+by `orchestrator/scripts/census.py` and adds nothing the port lacks.
 
 ### How this is meant to be run (the operating model, owner-set 2026-08-31)
 
