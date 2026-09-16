@@ -108,6 +108,8 @@ class _MigrateBatchTest(unittest.TestCase):
         import name_chats
         self.patch(name_chats, "_run_list",
                    lambda instance: (1, "unit test: the real sidebar is out of reach"))
+        # And the collateral watch, which would read every real chat store twice per batch.
+        self.patch(migrate_batch.archivewatchlib, "snapshot", lambda *a, **k: None)
 
     def patch(self, obj, name: str, value) -> None:
         patcher = mock.patch.object(obj, name, value)
@@ -191,6 +193,32 @@ class BatchDriverTest(_MigrateBatchTest):
         assert out["ok"] is False
         assert code == migrate_batch.EXIT_PARTIAL, "partial must not share an exit code with clean"
         assert "two" in out["report"] and "live engine" in out["report"]
+
+    def test_a_bystander_archived_while_the_batch_ran_is_named_and_fails_the_batch(self):
+        """⛔ The 2026-09-16 incident: every chat in the batch landed and settled, and chats
+        OUTSIDE it went archived in the same minutes - one in an account the batch never named.
+        The batch's own source rows going archived is its job; anything else is collateral."""
+        self.fake_move()
+
+        def rec(archived, sid, title, inst):
+            return {"archived": archived, "ids": {sid}, "sessionId": sid, "title": title,
+                    "instance": inst}
+
+        before = {"s1": rec(False, "sid-one", "one", "src"), "s2": rec(False, "sid-two", "two", "src"),
+                  "by": rec(False, "b0bcbaf3", "Odin production readiness scoring", "#55")}
+        after = {"s1": rec(True, "sid-one", "one", "src"), "s2": rec(True, "sid-two", "two", "src"),
+                 "by": rec(True, "b0bcbaf3", "Odin production readiness scoring", "#55")}
+        snaps = iter([before, after])
+        self.patch(migrate_batch.archivewatchlib, "snapshot", lambda *a, **k: next(snaps))
+        self.patch(migrate_batch.archivewatchlib, "file_incident", lambda rows, what: "inc-9")
+        code, out = _run(["--chat", "one", "--chat", "two", "--to", "8"])
+
+        assert out["moved"] == 2, "the batch's own chats still moved"
+        assert [r["title"] for r in out["collateral"]] == ["Odin production readiness scoring"]
+        assert out["ok"] is False
+        assert code == migrate_batch.EXIT_PARTIAL
+        assert out["report"].startswith("⛔ COLLATERAL")
+        assert "inc-9" in out["report"]
 
     def test_every_chat_runs_the_real_per_chat_path_with_the_shared_flags(self):
         """Rails are per chat, not per batch: each move gets the whole single-move argv."""

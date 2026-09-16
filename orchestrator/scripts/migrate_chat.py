@@ -65,7 +65,9 @@ Usage: python migrate_chat.py <title fragment | session id> --to <instance num|n
 Exit:  0 landed and verified - 3 deterministic refusal (chat/instance not resolvable,
        superseded, or a 400 the daemon will repeat) - 4 live writer (import rewrites the
        transcript; never overridden) - 5 breaker - 6 the chat is HELD (--force overrides) -
-       7 the chat is ARCHIVED (--archived includes it) - 1 daemon failure or verify failed.
+       7 the chat is ARCHIVED (--archived includes it) - 1 daemon failure or verify failed -
+       2 landed, but a chat OUTSIDE the move was archived while it ran (`collateral`, and
+       the report says which; lib/archivewatchlib).
 
 Without --title, the chat's CURRENT title (just read from the dossier) is restated as
 confirm_title - the daemon's naming door demands a real title or exactly that proof of a
@@ -96,6 +98,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path as _Path
 
+from lib import archivewatchlib
 from lib import clilib, holdlib
 from lib import hydralib
 from lib import windowlib
@@ -425,6 +428,15 @@ def _settle_source(instance: str, title: str) -> tuple[int, str]:
             timeout=240,
         )
         return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+
+
+def _acted_row(said: str) -> str:
+    """The row the actuator says it acted on, as a report fragment. Empty when it said nothing
+    (an older materialized copy of the script, or a settle that went down the disk-flag path)."""
+    for line in (said or "").splitlines():
+        if line.strip().startswith("acting on row:"):
+            return "; the app's own row read " + line.split(":", 1)[1].strip()
+    return ""
 
 
 def _source_still_visible(session_id: str, src_instance: str, fleet_data: dict | None = None) -> bool:
@@ -1221,8 +1233,12 @@ def _settle_source_row_core(match: dict, target: dict, fleet: dict, session_id: 
                        SETTLE_CONFIRM_SECS, step_secs=DOCTRINE_RESTAMP_POLL_SECS):
             time.sleep(0.5)
             if not _source_still_visible(session_id, src_name, fleet):
+                # The actuator names the row it actually acted on (re-read off the kebab at the
+                # last moment, 2026-09-17); carry that into the report rather than restating
+                # what was INTENDED, which is what a mis-aimed archive would also have said.
+                acted = _acted_row(out_s)
                 return (" Source row settled through its app's own control (verified on "
-                        f"disk).{dir_note}", "settled")
+                        f"disk{acted}).{dir_note}", "settled")
         # ⛔ NEVER LEAVE THE SOURCE VISIBLE (owner, 2026-09-01) - and this branch used to do
         # exactly that: it warned and stopped, so a window that renders no rows (minimized,
         # collapsed, virtualized) returned exit 3 and every move off it left a twin nobody
@@ -1830,13 +1846,43 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip())
         return 0
 
+    # THE COLLATERAL WATCH (lib/archivewatchlib, 2026-09-17): every chat record is read before
+    # the move and after it, and a chat outside the move that went archived meanwhile is named.
+    # Not for a usage error or a dry run, neither of which touches anything.
+    parsed = _parse_migrate_argv(argv)
+    if isinstance(parsed, int):
+        return parsed
+    before = None if parsed.dry_run else archivewatchlib.snapshot()
     outcome = move_only(argv)
     if outcome.landing is None:
         if outcome.payload is None:
             return outcome.code  # a usage error the parser already reported on stderr
         return out(outcome.payload, outcome.as_json, outcome.code)
     finish_move(outcome.landing)
-    return out(landing_payload(outcome.landing), outcome.as_json, 0)
+    payload = landing_payload(outcome.landing)
+    land = outcome.landing
+    if flag_collateral(payload, before,
+                       archivewatchlib.ids_for_match(land.match, land.session_id),
+                       f"migrate_chat {land.session_id}"):
+        return out(payload, outcome.as_json, 2)
+    return out(payload, outcome.as_json, 0)
+
+
+def flag_collateral(payload: dict, before: dict | None, moved_ids: set[str], what: str) -> bool:
+    """Read the stores again, and when a chat outside the move went archived while it ran,
+    put it on the payload and at the top of the report, file an incident, and mark the move
+    not-ok. Returns True when there was collateral. Shared with migrate_batch."""
+    if before is None:
+        return False
+    rows = archivewatchlib.collateral(before, archivewatchlib.snapshot(), moved_ids)
+    if not rows:
+        return False
+    incident = archivewatchlib.file_incident(rows, what)
+    payload["collateral"] = rows
+    payload["ok"] = False
+    payload["report"] = "\n".join(
+        archivewatchlib.report_lines(rows, incident) + [str(payload.get("report") or "")])
+    return True
 
 
 def _dry_run_plan(match: dict, target: dict, session_id: str, chat_title, now: bool,

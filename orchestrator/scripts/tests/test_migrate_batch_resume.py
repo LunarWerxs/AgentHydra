@@ -106,6 +106,8 @@ class _BatchTest(unittest.TestCase):
         import name_chats
         self.patch(name_chats, "_run_list",
                    lambda instance: (1, "unit test: the real sidebar is out of reach"))
+        # And the collateral watch, which would read every real chat store twice per batch.
+        self.patch(migrate_batch.archivewatchlib, "snapshot", lambda *a, **k: None)
 
     def stub_scan(self, outstanding: bool = False, raises: bool = False) -> None:
         """The resume window reads the landed chat's transcript for background jobs

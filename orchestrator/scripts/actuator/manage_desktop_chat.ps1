@@ -594,6 +594,22 @@ foreach ($m in $mains) {
   }
   $inv = TryPattern $item ([System.Windows.Automation.InvokePattern]::Pattern)
   if (-not $inv) { Write-Output "FAIL: '$Action' item does not expose Invoke"; exit 1 }
+  # ⛔ RE-AIM AT THE LAST MOMENT, AND SAY WHICH ROW (2026-09-17, after a move ran alongside three
+  # chats going archived that nobody asked for). The kebab was resolved, then a menu was opened
+  # and waited on - and a sidebar re-orders under its own app while a batch lands chat after
+  # chat. So the row this menu belongs to is read back HERE, immediately before the item fires:
+  # a name that no longer ends with the title means the tree moved, and the only safe answer is
+  # to refuse (the caller falls back to the disk flag) rather than archive a neighbour. The name
+  # is printed either way, so the report says what was acted on instead of what was intended.
+  $aimed = ''
+  try { $aimed = [string]$kebab.Current.Name } catch { $aimed = '' }
+  if (-not $aimed -or -not $aimed.EndsWith($Title)) {
+    try { $ec.Collapse() } catch { }
+    Write-Output ("FAIL: the row under this menu is no longer '$Title' (it reads '" + $aimed +
+      "') - the sidebar moved while the menu opened; refusing to $Action a neighbouring row")
+    exit 1
+  }
+  Write-Output "acting on row: '$aimed'"
   # DELETE: the confirm button is identified by DIFFERENCE, never by name alone (review
   # 2026-09-05: a Button called 'Delete …' can exist anywhere in a rendered conversation, and
   # a name match across the whole window could Invoke that one). Snapshot every Delete-labelled

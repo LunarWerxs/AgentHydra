@@ -514,9 +514,14 @@ def execute(plan: dict, do_evacuate: bool = True, do_archive: bool = True,
                                 "detail": "the reaper frees idle engines; the next pass retries"})
                 continue
             code, out = clilib.capture(migrate_chat.main, [row["sessionId"], "--to", row["to"]])
+            # Exit 2 is "it MOVED, and a chat outside the move went archived while it ran"
+            # (migrate_chat's collateral watch). Not ok - and never "did NOT move", which would
+            # send someone to re-run a move that already happened.
             results.append({**row, "duty": "evacuate", "exit": code, "ok": code == 0,
                             "outcome": (f"moved to {row['to']}" if code == 0
-                                        else "did NOT move"),
+                                        else f"moved to {row['to']}, but a chat OUTSIDE the move "
+                                             "was archived while it ran - see the report"
+                                        if code == 2 else "did NOT move"),
                             "detail": (out.splitlines()[-1][:160] if out else "")})
     if do_archive:
         for row in plan["archive"]:

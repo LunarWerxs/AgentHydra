@@ -136,6 +136,33 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   back reported as his word kept, not as a failure. Setting it back ON restores the old
   behaviour for anyone who wants it.
 
+- **A move now says so when a chat it was never given went archived while it ran**
+  (`orchestrator/scripts/lib/archivewatchlib.py`, used by `migrate_chat` and `migrate_batch`).
+  On 2026-09-16 a four-chat `move_chats` batch settled every chat it was given, and in the same
+  two minutes three chats outside it went archived - one in an account the batch never named.
+  Every rail verified the INTENDED rows, so the report, the exit code and the journal all read
+  clean, and the owner found out from his sidebar. The logs could not name the writer (the
+  daemon's archive paths do not log; the actuator's menu search is already scoped to the target
+  app's own process; the doctrine lane stamped other chats that minute; the other-account
+  archive fell inside the IMPORT phase, not the settle), so a move now proves it instead: every
+  chat record on the machine is read before the first chat moves and after the last phase, and
+  a record that went from visible to archived without sharing an id with the move is
+  **collateral** - named at the top of the report with the account to unarchive it from, filed
+  as an incident, `ok: false`, `migrate_chat` exit 2 (landed, not clean), and `move_chat` /
+  `move_chats` no longer answer `ok: true` for it. It catches the cause whatever it is, which is
+  why the report says "while it ran", never "by".
+
+  Two tightenings beside it. The desktop actuator re-reads the row under its open menu
+  immediately before Archive or Delete fires and refuses if the sidebar re-ordered under it (a
+  batch re-orders the source account's sidebar with every landing); it also prints the row it
+  acted on, and the settle note carries that instead of restating what was intended. And the
+  daemon's per-profile chat lookup (`findChatMetaPath`) accepted its cached answer on a bare
+  `startsWith(profileDir)`, so a lookup scoped to one account could be answered with a SIBLING
+  account's file whose name merely begins the same way (`pap3r rotate` / `pap3r rotate2`) -
+  and its callers archive, stamp and rename what they are handed. It now requires the path to
+  be inside the profile (`path-key.isInsideDir`). No current profile pair collides, so this was
+  latent; it is pinned by a test.
+
 - **A chat waiting on a person is explained by the signal that actually held it**
   (`dashboard.decide`). It read the raw fields in its own order, so a chat held back only by
   open recommendations was explained as "the recap does not claim done (yes)", and, now that

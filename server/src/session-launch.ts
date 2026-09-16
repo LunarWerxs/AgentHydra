@@ -49,7 +49,7 @@ import { getCliInstance } from './core/cli-instances'
 import { resolveLaunchBinary } from './core/paths'
 import { allMigratedSettings, db, pruneMigratedSettings } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
-import { samePathKey } from './path-key'
+import { isInsideDir, samePathKey } from './path-key'
 
 /**
  * One lineage, one continuation. A done-marked session (session_marks.done = 1) was handed off,
@@ -1448,8 +1448,13 @@ function findChatMetaPathInDir(dir: string, sessionId: string): string | null {
 export function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
   // Cached index first: it already knows this file's path under either naming shape, and the
   // walk below re-reads every metadata file in the store when the filename does not match.
+  //
+  // ⛔ CONTAINED, NOT startsWith (review, 2026-09-17). A bare prefix test also accepts a
+  // SIBLING profile whose name merely begins the same way - and twenty profiles here carry
+  // near-duplicate leaf names ('pap3r rotate' / 'pap3r rotate2'), so a lookup scoped to one
+  // account could answer with the other account's file, and the caller archives it.
   const hit = findDesktopChat(sessionId)
-  if (hit?.path?.startsWith(instanceDir)) return hit.path
+  if (hit?.path && isInsideDir(hit.path, instanceDir)) return hit.path
   const store = join(instanceDir, 'claude-code-sessions')
   try {
     for (const org of readdirSync(store, { withFileTypes: true })) {

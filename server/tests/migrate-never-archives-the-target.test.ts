@@ -17,6 +17,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isInsideDir } from '../src/path-key'
 import {
   archiveDesktopChat,
   archiveRootsForMove,
@@ -107,6 +108,21 @@ test('a failed landing restores only the rows this move flipped', async () => {
   await archiveDesktopChat(SID, false, flipped, notRunning)
   expect(isArchived(source, SID)).toBe(false)
   expect(isArchived(stranger, SID)).toBe(true)
+})
+
+test('a profile-scoped lookup never accepts a SIBLING profile whose name shares a prefix', () => {
+  // findChatMetaPath used to accept the cached index hit on `hit.path.startsWith(instanceDir)`.
+  // Twenty profiles here carry near-duplicate leaf names, so a lookup scoped to 'pap3r rotate'
+  // accepted 'pap3r rotate2''s file - and archive/stamp/rename act on the path they are handed.
+  const base = join(SHARED_ROOT, 'accounts')
+  const rotate = join(base, 'pap3r rotate')
+  const rotate2 = join(base, 'pap3r rotate2')
+  const theirs = join(rotate2, 'claude-code-sessions', 'org-1', 'user-1', 'local_x.json')
+  expect(isInsideDir(theirs, rotate)).toBe(false)
+  expect(isInsideDir(theirs, rotate2)).toBe(true)
+  expect(isInsideDir(join(rotate, 'x.json').replace(/\\/g, '/'), rotate)).toBe(true)
+  expect(isInsideDir(rotate, rotate)).toBe(true)
+  expect(isInsideDir(theirs, '')).toBe(false)
 })
 
 test('desktopProfileRoots lists real profile dirs, so the route can filter one out', () => {

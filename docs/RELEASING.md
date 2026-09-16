@@ -69,6 +69,16 @@ from the dirty tree. Both hooks have suites under `.githooks/tests/`.
 
    **If a tag does end up on a red commit,** do not move a published tag. Fix the failure, bump to
    the next patch version, and release that immutable version instead.
+7. **Once the Release run is green, tell the site.** The download buttons on
+   `agenthydra.github.io` link the versioned release FILES, and its static HTML (what crawlers,
+   AI answer engines and no-JS visitors read) only moves when its sync workflow runs. It runs
+   daily on its own; this makes it the same minute:
+   ```sh
+   gh workflow run sync-version.yml --repo AgentHydra/agenthydra.github.io
+   ```
+   The release job cannot do this itself - a cross-repo trigger from Actions needs a PAT the
+   default token does not carry - but whoever pushed the tag has a `gh` login that can, which is
+   how SageThumbs' `release.ps1` has always done it.
 
 ## The install script depends on SHA256SUMS.txt
 

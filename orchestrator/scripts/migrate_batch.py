@@ -120,6 +120,7 @@ import time
 
 import migrate_chat
 import stage_reply
+from lib import archivewatchlib
 from lib import clilib, deliverylib, enginelib, hydralib, ledgerlib
 
 
@@ -1329,6 +1330,20 @@ def _run_resume_phase(items: list, parsed) -> dict:
     return resume
 
 
+def _batch_ids(items: list) -> set[str]:
+    """Every id the batch was given, read right after phase one while each landing still
+    carries its dossier match: the records the batch is ALLOWED to archive (its own source rows
+    and twins). A refused chat counts too - it was named, so a change to it is not a bystander's."""
+    ids: set[str] = set()
+    for item in items:
+        land = item.landing
+        if land is not None:
+            ids |= archivewatchlib.ids_for_match(getattr(land, "match", None),
+                                                 getattr(land, "session_id", None))
+        ids |= archivewatchlib.ids_for_match(None, (item.payload or {}).get("sessionId"))
+    return ids
+
+
 def _build_batch_payload(items: list, parsed, note: str, secs: float, resume) -> dict:
     results = [i.payload for i in items]
     landed = sum(1 for r in results if r.get("landed"))
@@ -1390,10 +1405,14 @@ def main(argv: list[str]) -> int:
         return 2
 
     t0 = time.time()
+    # THE COLLATERAL WATCH (lib/archivewatchlib): read before the first chat moves - the
+    # 2026-09-16 bystander in another account went archived during PHASE ONE, not the settle.
+    before = None if parsed.dry_run else archivewatchlib.snapshot()
     # PHASE ONE across every chat, then the finishing phases across every chat (_run_phases).
     items = [_move_one(q, parsed.passthrough, terminate_live=parsed.terminate_live,
                         chat_title=parsed.chat_titles[idx] if idx < len(parsed.chat_titles) else None)
              for idx, q in enumerate(parsed.chats)]
+    moved_ids = _batch_ids(items)
     _run_phases(items)
     # A landed chat's payload was just rebuilt by the finishing phases; put the terminate
     # verdict back on it. (A refused chat already carries its own.)
@@ -1404,6 +1423,8 @@ def main(argv: list[str]) -> int:
     secs = time.time() - t0
 
     payload = _build_batch_payload(items, parsed, note, secs, resume)
+    migrate_chat.flag_collateral(payload, before, moved_ids,
+                                 f"migrate_batch {len(items)} chat(s)")
     print(json.dumps(payload, indent=2) if parsed.as_json else payload["report"])
     if payload["ok"]:
         return EXIT_OK
