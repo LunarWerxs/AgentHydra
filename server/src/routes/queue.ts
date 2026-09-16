@@ -208,8 +208,8 @@ app.post('/api/queue', async (c) => {
   // every one of these; without this the route would happily accept the row and hand back an id,
   // and the caller would find out only when it failed later. Queueing work into something that
   // cannot run it is a dead end with a receipt. The two paragraphs above describe the narrower
-  // check this replaces, whose `force` escape is also gone: an override that defeats "never" is
-  // the old behaviour behind a flag.
+  // check this replaces, whose `force` escape opens nothing any more: the refusal two lines down
+  // is unconditional, so an override that defeats "never" cannot get past it.
   if (!headlessRunsAllowed()) return c.json({ error: NO_HEADLESS_REASON }, 409)
   const allowHeadless = body.force === true
   if (!allowHeadless && (await desktopHomeFor(sessionId)))

@@ -98,6 +98,11 @@ function callsLog(kitDir: string): string[] {
 }
 
 describe('.githooks/pre-commit: the kit-sync guard covers both vendored targets (AH-24)', () => {
+  // The path mkdtempSync itself returned, captured before realpathSync.native resolves it:
+  // afterEach reaps THIS, so a throw between the two (or anywhere later in beforeEach) cannot
+  // leak the scratch dir - the old code only held the resolved path, which does not exist yet
+  // when realpathSync.native throws.
+  let root: string
   let sandbox: string
   let repo: string
   let kit: string
@@ -108,8 +113,8 @@ describe('.githooks/pre-commit: the kit-sync guard covers both vendored targets 
     // and git runs the hook from the worktree's LONG path, so the stub kit's "differs" line and
     // the guard's staged paths never matched and the drift passed the commit. First seen the day
     // this suite first ran in CI at all (2026-09-12).
-    const rawSandbox = mkdtempSync(join(tmpdir(), 'ah24-hook-'))
-    sandbox = realpathSync.native(rawSandbox)
+    root = mkdtempSync(join(tmpdir(), 'ah24-hook-'))
+    sandbox = realpathSync.native(root)
     repo = join(sandbox, 'repo')
     kit = join(sandbox, 'lunarwerx-ui')
     mkdirSync(join(repo, '.githooks'), { recursive: true })
@@ -131,7 +136,7 @@ describe('.githooks/pre-commit: the kit-sync guard covers both vendored targets 
   }, HOOK_TEST_TIMEOUT)
 
   afterEach(() => {
-    rmSync(sandbox, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
   })
 
   test(

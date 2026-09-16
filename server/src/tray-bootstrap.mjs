@@ -76,6 +76,64 @@ export function patchTrayConfig(raw, { appRoot, compiledExe }) {
   }
 }
 
+/** Every filesystem touch this module makes, resolved once from `deps` (a test injects all of
+ *  them). Split out so `materializeTrayToolkit` reads as the sequence of decisions it is. */
+function trayIo(deps) {
+  return {
+    joinPath: deps.joinPath ?? join,
+    dirOf: deps.dirOf ?? dirname,
+    baseOf: deps.baseOf ?? basename,
+    exists: deps.exists ?? ((p) => existsSync(p)),
+    sizeOf:
+      deps.sizeOf ??
+      ((p) => {
+        try {
+          return statSync(p).size
+        } catch {
+          return null
+        }
+      }),
+    readBytes: deps.readBytes ?? (async (p) => new Uint8Array(await Bun.file(p).arrayBuffer())),
+    readText: deps.readText ?? ((p) => Bun.file(p).text()),
+    writeBytes: deps.writeBytes ?? (async (p, b) => void (await Bun.write(p, b))),
+    writeText: deps.writeText ?? (async (p, t) => void (await Bun.write(p, t))),
+    mkdir: deps.mkdir ?? ((p) => void mkdirSync(p, { recursive: true })),
+  }
+}
+
+/**
+ * Place the toolkit into `dir`: host and icon first, then the config. Names it actually wrote are
+ * pushed onto the CALLER's `wrote`, so a throw part-way still reports what landed.
+ */
+async function writeTrayToolkit(dir, embedded, deps, io, wrote) {
+  const { joinPath, dirOf, baseOf, exists, sizeOf, readBytes, readText, writeBytes, writeText } = io
+  io.mkdir(dir)
+  for (const name of [TRAY_HOST_EXE, deps.iconFile]) {
+    const from = embedded[name]
+    if (!from) continue
+    const to = joinPath(dir, name)
+    const bytes = await readBytes(from)
+    // Same version, same size: already placed by an earlier run. Rewriting risks the lock on a
+    // host that is running right now, for no gain.
+    if (exists(to) && sizeOf(to) === bytes.byteLength) continue
+    await writeBytes(to, bytes)
+    wrote.push(name)
+  }
+  // The config is rewritten whenever its content would differ, because a single-file exe MOVES
+  // between runs - it lives wherever it was dropped - and appRoot has to follow it.
+  const configSource = embedded[deps.configFile]
+  if (!configSource) return
+  const to = joinPath(dir, deps.configFile)
+  const want = patchTrayConfig(await readText(configSource), {
+    appRoot: dirOf(deps.exePath),
+    compiledExe: baseOf(deps.exePath),
+  })
+  const have = exists(to) ? await readText(to).catch(() => null) : null
+  if (have === want) return
+  await writeText(to, want)
+  wrote.push(deps.configFile)
+}
+
 /**
  * Ensure a runnable tray host exists, and say where it is. Never throws: every failure is a reason
  * string, because a tray icon is worth a toast and never a daemon that will not start.
@@ -86,19 +144,8 @@ export async function materializeTrayToolkit(deps) {
   if (platform !== 'win32') return { dir: null, reason: 'not-windows', wrote: [] }
 
   const files = trayToolkitFiles({ configFile: deps.configFile, iconFile: deps.iconFile })
-  const joinPath = deps.joinPath ?? join
-  const dirOf = deps.dirOf ?? dirname
-  const baseOf = deps.baseOf ?? basename
-  const exists = deps.exists ?? ((p) => existsSync(p))
-  const sizeOf =
-    deps.sizeOf ??
-    ((p) => {
-      try {
-        return statSync(p).size
-      } catch {
-        return null
-      }
-    })
+  const io = trayIo(deps)
+  const { joinPath, exists } = io
 
   // 1. A real misc\ beside the app wins: the source checkout and the extracted zip, where the files
   //    are the ones the build shipped and rewriting them would be meddling.
@@ -111,44 +158,10 @@ export async function materializeTrayToolkit(deps) {
   if (!isCompleteTrayToolkit(deps.embedded, files))
     return { dir: null, reason: 'nothing-embedded', wrote: [] }
 
-  const embedded = deps.embedded
-  const readBytes =
-    deps.readBytes ?? (async (p) => new Uint8Array(await Bun.file(p).arrayBuffer()))
-  const readText = deps.readText ?? ((p) => Bun.file(p).text())
-  const writeBytes = deps.writeBytes ?? (async (p, b) => void (await Bun.write(p, b)))
-  const writeText = deps.writeText ?? (async (p, t) => void (await Bun.write(p, t)))
-  const mkdir = deps.mkdir ?? ((p) => void mkdirSync(p, { recursive: true }))
-
   const dir = joinPath(deps.stateDir, 'tray', deps.version)
   const wrote = []
   try {
-    mkdir(dir)
-    for (const name of [TRAY_HOST_EXE, deps.iconFile]) {
-      const from = embedded[name]
-      if (!from) continue
-      const to = joinPath(dir, name)
-      const bytes = await readBytes(from)
-      // Same version, same size: already placed by an earlier run. Rewriting risks the lock on a
-      // host that is running right now, for no gain.
-      if (exists(to) && sizeOf(to) === bytes.byteLength) continue
-      await writeBytes(to, bytes)
-      wrote.push(name)
-    }
-    // The config is rewritten whenever its content would differ, because a single-file exe MOVES
-    // between runs - it lives wherever it was dropped - and appRoot has to follow it.
-    const configSource = embedded[deps.configFile]
-    if (configSource) {
-      const to = joinPath(dir, deps.configFile)
-      const want = patchTrayConfig(await readText(configSource), {
-        appRoot: dirOf(deps.exePath),
-        compiledExe: baseOf(deps.exePath),
-      })
-      const have = exists(to) ? await readText(to).catch(() => null) : null
-      if (have !== want) {
-        await writeText(to, want)
-        wrote.push(deps.configFile)
-      }
-    }
+    await writeTrayToolkit(dir, deps.embedded, deps, io, wrote)
   } catch (error) {
     // A write that failed on a file already there is survivable - use what is on disk. Anything
     // else leaves no runnable host, and the caller says so out loud.

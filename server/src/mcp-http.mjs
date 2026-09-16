@@ -47,7 +47,7 @@ export async function handleMcpHttp(body, ctx, dispatch) {
   // null and drop out, so a batch of nothing but notifications answers 202 with no body - the
   // same rule as a single notification, applied elementwise.
   if (Array.isArray(body)) {
-    const out = (await Promise.all(body.map((m) => dispatch(m, ctx)))).filter((r) => r !== null && r !== undefined);
+    const out = (await Promise.all(body.map((m) => dispatch(m, ctx)))).filter((r) => r != null);
     return out.length === 0 ? { status: 202, json: null } : { status: 200, json: out };
   }
 

@@ -15,7 +15,9 @@ import {
   usageApiBackoffMsRemaining,
 } from '../src/usage'
 
-const AUTH = { authType: 'oauth_token', secret: 'sk-ant-oat-test-not-a-real-token' } as const
+// Not shaped like a real grant: the code under test only needs a non-empty token (it is hashed for
+// the backoff key and sent as a Bearer header), so nothing here should read as a credential.
+const AUTH = { authType: 'oauth_token', secret: 'test-oauth-secret' } as const
 
 const res429 = (retryAfter?: string): Response =>
   new Response(

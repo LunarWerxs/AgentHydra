@@ -44,6 +44,7 @@
 //    handed the old value straight back. Whatever is still pending goes out on `pagehide` as a
 //    beacon, which outlives the page.
 
+import { useEventListener } from '@vueuse/core'
 import type { Ref } from 'vue'
 import { watch } from 'vue'
 import * as api from '@/lib/api'
@@ -178,7 +179,12 @@ function flushPending(): void {
 function installUnloadFlush(): void {
   if (unloadFlushInstalled || typeof window === 'undefined') return
   unloadFlushInstalled = true
-  window.addEventListener('pagehide', () => {
+  // useEventListener (not a bare addEventListener), so the listener is torn down with whatever
+  // effect scope is active. In the ordinary case there is none — registration happens at module
+  // scope (see registerSharedPref) and the listener is meant to live as long as the window does —
+  // and useEventListener is silent about that; it simply has nothing to dispose. The `pagehide`
+  // handler below is window-lifetime by design, and @vueuse/core is already a dependency of web/.
+  useEventListener(window, 'pagehide', () => {
     if (pending.size === 0 || typeof navigator === 'undefined') return
     const body = JSON.stringify(Object.fromEntries(pending))
     navigator.sendBeacon?.(

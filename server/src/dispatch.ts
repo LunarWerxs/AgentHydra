@@ -1152,9 +1152,9 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // orphaned CLI thread or a scheduled run is just as unwatchable as a hijacked desktop chat.
   //
   // `allow_headless` no longer buys a way past. An override that defeats "never" is not an
-  // override, it is the old behaviour behind a flag. The column stays so existing queue rows still
-  // read back, it simply cannot authorise a run any more. See headless-policy.ts for the one
-  // remaining switch and why its default is off.
+  // override. The column stays so existing queue rows still read back, it simply cannot authorise
+  // a run any more: this refusal is reached first, on every call, whatever the row carries. See
+  // headless-policy.ts for the one remaining switch and why its default is off.
   // ⛔ EVERY headless dispatch stops here, unconditionally. There is no setting left to check -
   // headlessRunsAllowed() returns false as a constant (owner, 2026-08-31: "I have zero interest of
   // you ever using headless"). This refusal is therefore the LAST statement in the function: the

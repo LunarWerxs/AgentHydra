@@ -7,7 +7,7 @@
 // network or the real ~/.zswarm / ~/.dsh.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -35,6 +35,7 @@ function writeLedger(home: string, lines: unknown[]): void {
 
 const LEDGER_ROWS = [
   {
+    // arkitect-allow: spec-drifting-date-fixture - a ledger record's own timestamp: sliced to a UTC day for bucketing and echoed back as `day`, never compared with the real clock
     ts: '2026-09-15T05:15:33+00:00',
     job: 'a',
     task: 't1',
@@ -44,6 +45,7 @@ const LEDGER_ROWS = [
     cost_usd: 0.0003,
   },
   {
+    // arkitect-allow: spec-drifting-date-fixture - same fixed-record-timestamp reason as the first row: bucketed by day, never compared with the real clock
     ts: '2026-09-15T05:16:24+00:00',
     job: 'b',
     task: 't1',
@@ -54,6 +56,7 @@ const LEDGER_ROWS = [
   },
   // the `dsh` backend keeps no cost data at all
   {
+    // arkitect-allow: spec-drifting-date-fixture - same fixed-record-timestamp reason as the first row: bucketed by day, never compared with the real clock
     ts: '2026-09-15T05:16:40+00:00',
     job: 'c',
     task: 't1',
@@ -64,6 +67,7 @@ const LEDGER_ROWS = [
   },
   // a different day, different model
   {
+    // arkitect-allow: spec-drifting-date-fixture - same fixed-record-timestamp reason as the first row: this second day is compared only against the other fixture days
     ts: '2026-09-14T12:00:00+00:00',
     job: 'd',
     task: 't1',
@@ -220,7 +224,9 @@ describe('deepseekBalance', () => {
         { status: 200 },
       )
     }) as unknown as typeof fetch
-    const now = Date.parse('2026-09-15T00:00:00Z')
+    // The TTL check is `now - cachedAt < BALANCE_CACHE_MS`, so the base is only ever compared with
+    // itself: a real-clock start keeps this fixture from going stale as a fixed date would.
+    const now = Date.now()
     await deepseekBalance({ now })
     await deepseekBalance({ now: now + 1000 })
     expect(calls).toBe(1)

@@ -933,7 +933,10 @@ writeInstanceInfo(boundPort, {
 // A tick that fails is a tick skipped (timer-callback-can-kill-the-daemon.mjs): the process exits
 // on an unhandled rejection, so the chain ends in .catch and the next tick is a minute away.
 const POINTER_REASSERT_MS = 60_000
-setInterval(
+// The handle is held, not dropped, so the graceful shutdown below can clear the ticker. `.unref()`
+// on the next line is separate and still needed: it keeps this repeating timer from being a reason
+// for the process to stay alive, which it must never be.
+const pointerReassertTimer = setInterval(
   () =>
     reassertInstancePointer(boundPort, () => ({
       portableMode: portableModeEnabled(),
@@ -947,7 +950,8 @@ setInterval(
       })
       .catch(() => {}),
   POINTER_REASSERT_MS,
-).unref()
+)
+pointerReassertTimer.unref()
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
 // port, not the configured one, so a hop off a busy 7787 does not leave the Python side talking
 // to whatever answers there. See orchestratorChildEnv.
@@ -1063,6 +1067,9 @@ clearShutdownRequest()
 process.on('exit', () => clearInstanceInfo())
 for (const sig of ['SIGINT', 'SIGTERM'] as const)
   process.on(sig, async () => {
+    // Stop the pointer ticker first: the re-assert it performs is worth nothing once we are going
+    // away, and a tick landing after clearInstanceInfo() would write the pointer back.
+    clearInterval(pointerReassertTimer)
     await flushConnectionsBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()

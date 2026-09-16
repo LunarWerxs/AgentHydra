@@ -99,6 +99,7 @@ describe('sessionUsage', () => {
     // (2026-09-01T00:00:00.000Z) — not "now"-relative, so deliberately not shifted with the rest
     // of this file's fixture dates.
     const after = fixture([
+      // arkitect-allow: spec-drifting-date-fixture - a fixed session turn date, used only as the pricing instant sessionUsage derives from the transcript itself, never compared with the real clock
       turn('claude-sonnet-5', { output_tokens: 1_000_000 }, '2026-10-10T12:00:00.000Z'),
     ])
     expect((await sessionUsage(during)).costUsd).toBeCloseTo(10, 10)

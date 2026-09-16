@@ -57,6 +57,16 @@ function goldenTokenBlob(): string | null {
 
 const goldenAvailable = process.platform === 'win32' && goldenTokenBlob() !== null
 
+/** The `!goldenAvailable` skip branches exist so an unusable fixture reads as a SKIP rather than
+ *  as a silent pass. The one real assertion such a branch can make is the reason it was skipped,
+ *  so this re-reads the fixture at run time instead of trusting the module-load gate: off Windows
+ *  the platform alone stands the vector down, and on Windows the token blob really is missing
+ *  (instance absent, or present-but-signed-out — the case goldenTokenBlob() exists to catch). */
+function expectGoldenFixtureUnusable(): void {
+  const tokenBlobOnThisPlatform = process.platform === 'win32' ? goldenTokenBlob() : null
+  expect(tokenBlobOnThisPlatform).toBeNull()
+}
+
 describe('decryptSafeStorage — Windows golden vector', () => {
   test.if(goldenAvailable)(
     'decrypts the real lunarwerx oauth:tokenCacheV2 -> contains sk-ant-oat01',
@@ -78,7 +88,7 @@ describe('decryptSafeStorage — Windows golden vector', () => {
   test.if(!goldenAvailable)(
     'skipped: golden fixture not available on this platform/machine',
     () => {
-      expect(true).toBe(true)
+      expectGoldenFixtureUnusable()
     },
   )
 })
@@ -204,7 +214,7 @@ describe('resolveAccount — golden noNetwork vector (local decrypt/cache only, 
   test.if(!goldenAvailable)(
     'skipped: golden fixture not available on this platform/machine',
     () => {
-      expect(true).toBe(true)
+      expectGoldenFixtureUnusable()
     },
   )
 
@@ -252,7 +262,13 @@ describe('resolveAccount — golden LIVE network vector (gated: CM_TEST_LIVE_ACC
   test.if(!(goldenAvailable && liveFlagSet))(
     'skipped: set CM_TEST_LIVE_ACCOUNT=1 on a Windows machine with the lunarwerx fixture to run the live vector',
     () => {
-      expect(true).toBe(true)
+      // Two independent inputs can stand this vector down, and their remedies differ ("sign in" vs
+      // "set the flag"), so assert the one that actually fired rather than restating the gate.
+      if (goldenAvailable) {
+        expect(liveFlagSet).toBe(false)
+      } else {
+        expectGoldenFixtureUnusable()
+      }
     },
   )
 })

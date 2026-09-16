@@ -1,3 +1,4 @@
+// arkitect-allow: ime-composition-enter-guard - a server boot entry: no document, no key handlers to guard
 /**
  * The remote gateway. `bun run remote` from the repo root.
  *

@@ -76,6 +76,11 @@ function saveBundle(repo: string, ...args: string[]): Result {
 }
 
 describe('.githooks/commit-msg: a bundle commit names what it swept', () => {
+  // The path mkdtempSync itself returned, captured before realpathSync.native resolves it:
+  // afterEach reaps THIS, so a throw between the two (or anywhere later in beforeEach) cannot
+  // leak the scratch dir - the old code only held the resolved path, which does not exist yet
+  // when realpathSync.native throws.
+  let root: string
   let sandbox: string
   let repo: string
 
@@ -83,8 +88,8 @@ describe('.githooks/commit-msg: a bundle commit names what it swept', () => {
     // realpathSync.native: GitHub's Windows runner hands out an 8.3 temp path (RUNNER~1) while git
     // reports the worktree by its long name; save-bundle.ts canonicalises too, this keeps the
     // sandbox honest on its own.
-    const rawSandbox = mkdtempSync(join(tmpdir(), 'ah-bundle-'))
-    sandbox = realpathSync.native(rawSandbox)
+    root = mkdtempSync(join(tmpdir(), 'ah-bundle-'))
+    sandbox = realpathSync.native(root)
     repo = join(sandbox, 'repo')
     mkdirSync(join(repo, '.githooks'), { recursive: true })
     writeFileSync(join(repo, '.githooks', 'commit-msg'), readFileSync(REAL_HOOK))
@@ -103,7 +108,7 @@ describe('.githooks/commit-msg: a bundle commit names what it swept', () => {
   }, HOOK_TEST_TIMEOUT)
 
   afterEach(() => {
-    rmSync(sandbox, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
   })
 
   test(

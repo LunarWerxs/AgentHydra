@@ -74,7 +74,9 @@ describe('priceFor', () => {
     // These bracket the real, fixed introductory-rate cutover in server/src/pricing.ts
     // (2026-09-01T00:00:00.000Z) and must stay on their respective sides of it — they are not
     // "now"-relative, so they are deliberately NOT part of the file-wide date shift below.
+    // arkitect-allow: spec-drifting-date-fixture - one day before that fixed cutover and passed in as `at`, so it is an anchor rather than a "now": no real clock is read
     const during = Date.parse('2026-08-13T00:00:00.000Z')
+    // arkitect-allow: spec-drifting-date-fixture - one day after the same fixed cutover, likewise passed in as `at`; drifting past it in wall-clock time changes nothing here
     const after = Date.parse('2026-09-02T00:00:00.000Z')
     expect(priceFor('claude-sonnet-5', during)).toMatchObject({ input: 2, output: 10 })
     expect(priceFor('claude-sonnet-5', after)).toMatchObject({ input: 3, output: 15 })

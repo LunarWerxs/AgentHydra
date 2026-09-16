@@ -1722,9 +1722,10 @@ function onComposerSent(mode: 'now' | 'queued') {
                       <Copy v-else />
                     </Button>
                   </div>
-                  <!-- eslint-disable-next-line vue/no-v-html -- the text is HTML-escaped before
-                       anything reads it (lib/markdown.ts), and lib/find.ts only ever adds <mark>
-                       around already-escaped slices, so no tag here came from the transcript -->
+                  <!-- the text is HTML-escaped before anything reads it (lib/markdown.ts), and
+                       lib/find.ts only ever adds <mark> around already-escaped slices, so no tag
+                       here came from the transcript -->
+                  <!-- eslint-disable-next-line vue/no-v-html -- see the note above -->
                   <div
                     class="break-words"
                     :class="[

@@ -6,10 +6,13 @@
    (accent-<app>.css), imported right after this one.
    ===================================================================== */
 
-/* Inter is Mira's default type. Loaded from the Google Fonts CDN for zero
-   per-app setup; swap for a self-hosted @fontsource-variable/inter later if
-   offline/PWA fidelity matters. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+/* Inter is Mira's default type, self-hosted from the @fontsource-variable/inter
+   package every kit app declares (2026-09-15: the Google Fonts CDN @import was
+   render-blocking, silently dropped mid-bundle by PostCSS, and a blocked host meant
+   no styles at all - the Architect's render-blocking-external-stylesheet and
+   css-no-remote-import checks both flagged it). Vite inlines the package's own
+   @font-face rules and fingerprints the woff2 files into the build. */
+@import "@fontsource-variable/inter";
 
 @import "tailwindcss";
 @import "tw-animate-css";

@@ -104,6 +104,85 @@ export function lastAutoRefreshAt(): string | null {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/** Desktop profiles, checked one at a time. An uncheckable one is skipped WITHOUT the stagger: it
+ *  costs nothing, so there is nothing to space out. Returns how many probes actually ran. */
+async function sweepDesktopInstances(): Promise<number> {
+  let checked = 0
+  for (const inst of await listInstances()) {
+    try {
+      if (!(await desktopIsCheckable(inst.dir))) continue
+      await checkUsageForDesktop(inst.dir)
+      checked++
+    } catch (err) {
+      console.error(`[usage-refresh] desktop '${inst.dir}' failed:`, err)
+    }
+    await sleep(STAGGER_MS)
+  }
+  return checked
+}
+
+/** CLI logins, checked one at a time. */
+async function sweepCliInstances(): Promise<number> {
+  let checked = 0
+  for (const cli of listCliInstances()) {
+    // Nothing to check with → don't fire a doomed probe every 15 minutes.
+    if (!cli.loggedIn && !cli.associatedAccountId && !cli.associatedDesktopDir) continue
+    try {
+      await checkUsageForCliInstance(cli.id)
+      checked++
+    } catch (err) {
+      console.error(`[usage-refresh] cli '${cli.id}' failed:`, err)
+    }
+    await sleep(STAGGER_MS)
+  }
+  return checked
+}
+
+/** Codex homes, checked one at a time. Only a ChatGPT-auth account has quota to read. */
+async function sweepCodexInstances(): Promise<number> {
+  let checked = 0
+  for (const inst of await listCodexInstances()) {
+    if (inst.account?.authMode !== 'chatgpt') continue
+    try {
+      await checkUsageForCodex(inst.codexHome, inst.id)
+      checked++
+    } catch {
+      console.error(`[usage-refresh] codex '${inst.id}' failed`)
+    }
+    await sleep(STAGGER_MS)
+  }
+  return checked
+}
+
+/**
+ * The keepalive rides on the BACK of a sweep, deliberately: its decision is made from the quota
+ * readings the loops just refreshed, so it acts on numbers seconds old rather than on whatever was
+ * cached hours ago. It is a no-op unless switched on (see provider-settings), and it declines on
+ * its own terms besides — session-keepalive.ts.
+ *
+ * CLI logins only. The nudge is a `claude -p` spawn pointed at a CLAUDE_CONFIG_DIR, which is what a
+ * CLI instance IS; a desktop profile keeps its credential somewhere that spawn cannot read, so a
+ * desktop-only account is reached through its linked CLI login or not at all.
+ */
+async function runKeepaliveOnFreshQuota(): Promise<void> {
+  try {
+    const provider = getProviderSettings()
+    const result = await runKeepaliveSweep({
+      enabled: provider.keepaliveEnabled,
+      weeklyFloorPct: provider.keepaliveWeeklyFloorPct,
+      targets: listCliInstances()
+        .filter((c) => c.loggedIn)
+        .map((c) => ({ label: c.name, configDir: c.configDir, usageKey: `cli:${c.id}` })),
+    })
+    // Logged, not silent: this is the one loop here that SPENDS, so what it did (and what it
+    // declined to do, with the reason) has to be answerable after the fact.
+    if (result.nudged.length)
+      console.log(`[keepalive] started the 5-hour window on: ${result.nudged.join(', ')}`)
+  } catch (err) {
+    console.error('[keepalive] sweep failed:', err)
+  }
+}
+
 /**
  * One pass over every checkable instance. Sequential + staggered on purpose (see the header): the
  * point is to keep numbers warm quietly, not to win a race. Never throws; one bad instance is
@@ -112,72 +191,18 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export async function sweepUsage(): Promise<number> {
   if (sweeping) return 0 // a slow sweep must never overlap the next tick
   sweeping = true
-  let checked = 0
   try {
-    for (const inst of await listInstances()) {
-      try {
-        if (!(await desktopIsCheckable(inst.dir))) continue
-        await checkUsageForDesktop(inst.dir)
-        checked++
-      } catch (err) {
-        console.error(`[usage-refresh] desktop '${inst.dir}' failed:`, err)
-      }
-      await sleep(STAGGER_MS)
-    }
-    for (const cli of listCliInstances()) {
-      // Nothing to check with → don't fire a doomed probe every 15 minutes.
-      if (!cli.loggedIn && !cli.associatedAccountId && !cli.associatedDesktopDir) continue
-      try {
-        await checkUsageForCliInstance(cli.id)
-        checked++
-      } catch (err) {
-        console.error(`[usage-refresh] cli '${cli.id}' failed:`, err)
-      }
-      await sleep(STAGGER_MS)
-    }
+    let checked = await sweepDesktopInstances()
+    checked += await sweepCliInstances()
     const providers = getProviderSettings()
-    if (providers.codexDesktopEnabled || providers.codexCliEnabled) {
-      for (const inst of await listCodexInstances()) {
-        if (inst.account?.authMode !== 'chatgpt') continue
-        try {
-          await checkUsageForCodex(inst.codexHome, inst.id)
-          checked++
-        } catch {
-          console.error(`[usage-refresh] codex '${inst.id}' failed`)
-        }
-        await sleep(STAGGER_MS)
-      }
-    }
+    if (providers.codexDesktopEnabled || providers.codexCliEnabled)
+      checked += await sweepCodexInstances()
     lastSweepAt = new Date().toISOString()
-
-    // The keepalive rides on the BACK of this sweep, deliberately: its decision is made from the
-    // quota readings the loops above just refreshed, so it acts on numbers seconds old rather than
-    // on whatever was cached hours ago. It is a no-op unless switched on (see provider-settings),
-    // and it declines on its own terms besides — session-keepalive.ts.
-    //
-    // CLI logins only. The nudge is a `claude -p` spawn pointed at a CLAUDE_CONFIG_DIR, which is
-    // what a CLI instance IS; a desktop profile keeps its credential somewhere that spawn cannot
-    // read, so a desktop-only account is reached through its linked CLI login or not at all.
-    try {
-      const provider = getProviderSettings()
-      const result = await runKeepaliveSweep({
-        enabled: provider.keepaliveEnabled,
-        weeklyFloorPct: provider.keepaliveWeeklyFloorPct,
-        targets: listCliInstances()
-          .filter((c) => c.loggedIn)
-          .map((c) => ({ label: c.name, configDir: c.configDir, usageKey: `cli:${c.id}` })),
-      })
-      // Logged, not silent: this is the one loop here that SPENDS, so what it did (and what it
-      // declined to do, with the reason) has to be answerable after the fact.
-      if (result.nudged.length)
-        console.log(`[keepalive] started the 5-hour window on: ${result.nudged.join(', ')}`)
-    } catch (err) {
-      console.error('[keepalive] sweep failed:', err)
-    }
+    await runKeepaliveOnFreshQuota()
+    return checked
   } finally {
     sweeping = false
   }
-  return checked
 }
 
 function rearm(settings = getUsageSettings()): void {

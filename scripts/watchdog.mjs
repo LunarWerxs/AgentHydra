@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // scripts/watchdog.mjs - SUPERVISE THE DAEMON, because nothing else does.
 //
 // WHY THIS EXISTS. The standing sweep is the thing that keeps the fleet decided: it gates every
@@ -27,10 +27,15 @@
 // unsupervised-process problem one step along.
 //
 // Usage:
-//   node scripts/watchdog.mjs            # one check; exit 0 healthy, 1 unhealthy
-//   node scripts/watchdog.mjs --install  # register the scheduled task (every 2 minutes)
-//   node scripts/watchdog.mjs --status   # what the last checks saw
-//   node scripts/watchdog.mjs --no-restart   # alarm only, never restart
+//   bun scripts/watchdog.mjs             # one check; exit 0 healthy, 1 unhealthy
+//   bun scripts/watchdog.mjs --install   # register the scheduled task (every 2 minutes)
+//   bun scripts/watchdog.mjs --status    # what the last checks saw
+//   bun scripts/watchdog.mjs --no-restart   # alarm only, never restart
+//
+// RUN WITH BUN, NOT NODE. The import list below reaches server/src/watchdog-health.ts, and plain
+// Node cannot load a `.ts` module, so a `node scripts/watchdog.mjs` fails before the first check.
+// The scheduled task already runs it through bun - scripts/watchdog.vbs, added 2026-09-01, points
+// at bun.exe for the invisible run - so bun is the only runtime this file ever starts under.
 
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

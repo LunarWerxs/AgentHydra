@@ -709,6 +709,79 @@ def _retry_hard_failures(hard: dict[str, _Item], text: str, tally: dict) -> None
             verdict["why"] += f" | retried once: {why}"
 
 
+def _stage_resume_for(item: _Item, text: str) -> tuple[str, int] | None:
+    """Stage `text` as one landed chat's resume. Returns (delivery id, quiet window) on
+    success; on failure the reason is named on THAT item's own verdict and None comes back,
+    so one chat's staging failure never costs the others their resume."""
+    sid = str(item.payload["sessionId"])
+    try:
+        match = hydralib.resolve_one(sid)
+        evidence = stage_reply.gather_evidence(match, sid)
+        # reuse_identical: a batch that was cancelled with this resume still staged and is
+        # then fired again must not queue a SECOND copy of the same words (2026-09-14: two
+        # rows each for two chats). Different text staged for the chat is left alone.
+        entry = deliverylib.stage(
+            sid, text,
+            title=str(match.get("title") or item.payload.get("title") or ""),
+            instance=str(match.get("instance") or item.payload.get("to") or ""),
+            evidence=evidence, by="migrate-resume", reuse_identical=True)
+        window = _resume_window(match)
+    except Exception as err:  # one chat's staging must not cost the others their resume
+        item.payload["resume"] = {
+            "staged": False, "delivered": False,
+            "why": f"staging raised {type(err).__name__}: {str(err)[:160]}"}
+        return None
+    item.payload["resume"] = {
+        "deliveryId": entry["id"], "staged": True, "delivered": False, "why": "",
+        "retry": f"python orch.py courier --yes --only {entry['id']}"}
+    if entry.get("reused"):
+        item.payload["resume"]["reused"] = True
+    return entry["id"], window
+
+
+def _apply_resume_outcome(verdict: dict, res: dict | None, skip_why: str | None) -> bool:
+    """Write one chat's verdict from the courier's report. True when the reply went; otherwise
+    the row is STILL STAGED and `why` carries whatever the courier said about it."""
+    if res and res.get("ok"):
+        verdict["delivered"] = True
+        verdict["why"] = str(res.get("outcome") or "delivered")
+        verdict.pop("retry", None)
+        return True
+    verdict["why"] = str(skip_why or (res or {}).get("detail")
+                         or (res or {}).get("outcome") or "not delivered - still staged")
+    return False
+
+
+def _is_hard_failure(did: str, res: dict | None, skipped: dict) -> bool:
+    """A row the courier ATTEMPTED and FAILED is retried once by the caller; a row it SKIPPED is
+    a deliberate deferral and is left alone. See _retry_hard_failures.
+
+    ⛔ A DEFERRED RESULT IS NOT A HARD FAILURE (2026-09-14). The courier now keeps a row STAGED
+    when the chat is mid-turn and tags its result `deferred` - but it still arrives in
+    `results`, not `skipped`, so this test used to read it as "attempted and failed", re-staged
+    a SECOND copy of the resume and fired the courier into the same live turn again. Two copies
+    of one resume are two wakes. A not-yet is a skip."""
+    return did not in skipped and res is not None and not res.get("deferred")
+
+
+def _record_resume_outcomes(by_delivery: dict[str, _Item], report: dict,
+                            tally: dict) -> dict[str, _Item]:
+    """Write every chat's resume verdict from the ONE courier run, and return the rows whose
+    delivery was attempted and failed - the ones `_retry_hard_failures` gives one more go."""
+    outcome = {r.get("id"): r for r in report.get("results", [])}
+    skipped = {s.get("id"): s.get("why") for s in report.get("skipped", [])}
+    hard: dict[str, _Item] = {}
+    for did, item in by_delivery.items():
+        res = outcome.get(did)
+        if _apply_resume_outcome(item.payload["resume"], res, skipped.get(did)):
+            tally["delivered"] += 1
+        else:
+            tally["staged"] += 1
+            if _is_hard_failure(did, res, skipped):
+                hard[did] = item
+    return hard
+
+
 def _resume_landed(items: list[_Item], text: str) -> dict:
     """PHASE FOUR: tell every landed chat to carry on. Returns the batch-level tally.
 
@@ -728,30 +801,12 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
     by_delivery: dict[str, _Item] = {}
     windows: dict[str, int] = {}
     for item in landed:
-        sid = str(item.payload["sessionId"])
-        try:
-            match = hydralib.resolve_one(sid)
-            evidence = stage_reply.gather_evidence(match, sid)
-            # reuse_identical: a batch that was cancelled with this resume still staged and is
-            # then fired again must not queue a SECOND copy of the same words (2026-09-14: two
-            # rows each for two chats). Different text staged for the chat is left alone.
-            entry = deliverylib.stage(
-                sid, text,
-                title=str(match.get("title") or item.payload.get("title") or ""),
-                instance=str(match.get("instance") or item.payload.get("to") or ""),
-                evidence=evidence, by="migrate-resume", reuse_identical=True)
-            windows[entry["id"]] = _resume_window(match)
-        except Exception as err:  # one chat's staging must not cost the others their resume
-            item.payload["resume"] = {
-                "staged": False, "delivered": False,
-                "why": f"staging raised {type(err).__name__}: {str(err)[:160]}"}
+        staged = _stage_resume_for(item, text)
+        if staged is None:
             continue
-        by_delivery[entry["id"]] = item
-        item.payload["resume"] = {
-            "deliveryId": entry["id"], "staged": True, "delivered": False, "why": "",
-            "retry": f"python orch.py courier --yes --only {entry['id']}"}
-        if entry.get("reused"):
-            item.payload["resume"]["reused"] = True
+        did, window = staged
+        by_delivery[did] = item
+        windows[did] = window
     if not by_delivery:
         return tally
     import courier  # local: the actuator libs it pulls in are no concern of a batch without --resume
@@ -765,30 +820,7 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
                 f"the courier raised {type(err).__name__}: {str(err)[:160]}")
         tally["staged"] = len(by_delivery)
         return tally
-    outcome = {r.get("id"): r for r in report.get("results", [])}
-    skipped = {s.get("id"): s.get("why") for s in report.get("skipped", [])}
-    # A row the courier ATTEMPTED and failed is retried once below; a row it SKIPPED is a
-    # deliberate deferral and is left alone. See _retry_hard_failures.
-    hard: dict[str, _Item] = {}
-    for did, item in by_delivery.items():
-        verdict = item.payload["resume"]
-        res = outcome.get(did)
-        if res and res.get("ok"):
-            verdict["delivered"] = True
-            verdict["why"] = str(res.get("outcome") or "delivered")
-            verdict.pop("retry", None)
-            tally["delivered"] += 1
-        else:
-            verdict["why"] = str(skipped.get(did) or (res or {}).get("detail")
-                               or (res or {}).get("outcome") or "not delivered - still staged")
-            tally["staged"] += 1
-            # ⛔ A DEFERRED RESULT IS NOT A HARD FAILURE (2026-09-14). The courier now keeps a
-            # row STAGED when the chat is mid-turn and tags its result `deferred` - but it still
-            # arrives in `results`, not `skipped`, so this test read it as "attempted and
-            # failed", re-staged a SECOND copy of the resume and fired the courier into the same
-            # live turn again. Two copies of one resume are two wakes. A not-yet is a skip.
-            if did not in skipped and res is not None and not res.get("deferred"):
-                hard[did] = item
+    hard = _record_resume_outcomes(by_delivery, report, tally)
     if hard:
         _retry_hard_failures(hard, text, tally)
     return tally
@@ -964,28 +996,10 @@ def _mark_stamp_timeout(live: list[_Item], budget: float) -> None:
                 f"remedy: {migrate_chat._bypass_remedy_cmd(land.session_id, land.chat_title)}")
 
 
-
-
-def _name_landings(live: list) -> None:
-    """Give every nameless landing its real name BEFORE the stamp phase tries to aim at one.
-
-    ⛔ AN IMPORT LANDS NAMELESS, AND A NAMELESS CHAT CANNOT BE STAMPED (found 2026-09-09,
-    reproduced and fixed 09-10). `session-launch` reports `titleDurable: false` for a landing
-    into a RUNNING app and means it: the title is written to disk and the app re-saves over it
-    from memory, so the record comes back with `title: null` while the sidebar renders a name
-    derived from the transcript. Everything that aims BY NAME then breaks at once - the
-    permission picker is handed an empty `-Title` and dies inside PowerShell's parameter
-    validation (which reads like an environment fault and is not one), `chat_rename` cannot
-    find the row, and the `disk-only` remedy the move itself prints fails on the exact
-    population it exists to serve. The durable channel has always been the app's OWN rename;
-    that is what the naming pass drives, and the batch is the last place that still knows each
-    chat's intended title, so this is where the two have to meet.
-
-    Best-effort and never fatal: by this point every chat is moved and verified, and a name is
-    not worth failing a landing over. Reported on the item, never swallowed.
-    """
-    import name_chats
-
+def _landed_titles_by_instance(live: list) -> dict[str, dict[str, str]]:
+    """The intended title of every chat that landed, grouped by the account it landed in. A
+    chat with no instance, no session id or no intended title has nothing to name and is left
+    out - nothing of it landed to name."""
     by_instance: dict[str, dict[str, str]] = {}
     for item in live:
         inst = str((item.landing.target or {}).get("name") or "")
@@ -993,64 +1007,96 @@ def _name_landings(live: list) -> None:
         title = str(item.landing.chat_title or "")
         if inst and sid and title:
             by_instance.setdefault(inst, {})[sid] = title
-    for inst, titles in by_instance.items():
-        def _on_instance(msg: str) -> None:
-            for item in live:
-                if str((item.landing.target or {}).get("name") or "") == inst:
-                    item.errors.append(msg)
+    return by_instance
 
-        got = None
-        # ⛔ AND THE PASS MUST BE TOLD WHAT WE LANDED, OR IT JUDGES THE WRONG SURFACE (second
-        # false green, found live 2026-09-15: a 4-chat move reported 4/4 OK with 3 chats left
-        # nameless on screen and their bypass stamps fallen back to disk-only). The importer
-        # writes a title into the landed record and the daemon says so honestly
-        # (`titled: true, titleDurable: false`); the RUNNING app then re-saves that record from
-        # its own memory and erases it. The pass's own "is anything nameless?" test reads the
-        # disk copy, so inside that window it saw four real titles and did nothing at all.
-        # `require` moves the question to what the app is RENDERING, which is the only surface
-        # the permission picker, the renamer and the courier can aim at.
-        # ⛔ `remaining: None` IS "THE PASS NEVER RAN", NOT "NOTHING NAMELESS" (false green found
-        # 2026-09-13). name_pass returns that shape when it finds no store, and when another lane
-        # already holds the instance lock - and it takes that lock with wait_secs=0, so a sibling
-        # phase driving the same app loses the whole naming pass. The old test below was
-        # `if got.get("needsJudgment") or got.get("remaining")`, and None is falsy, so the batch
-        # read "never ran" as "clean" and reported OK. name_chats.main() has always drawn this
-        # distinction ("this is NOT 'nothing nameless' - exit 1, not a false 0"); the batch path
-        # simply never did. Measured cost: a 4-chat move reported 4/4 OK with two chats left
-        # nameless, which then rendered as identical 'General coding session' rows, and a
-        # nameless row cannot be aimed at - so their bypass stamp failed too, and the remedy the
-        # move printed failed for the same reason. Retry, because the lock is usually transient.
-        for attempt in range(1, NAMING_ATTEMPTS + 1):
-            try:
-                got = name_chats.name_pass(inst, extra_titles=titles, require=titles)
-            except Exception as err:  # a name is a courtesy; a landed chat is the deliverable
-                _on_instance(f"naming raised {type(err).__name__}: {str(err)[:150]}")
-                got = None
-                break
-            if got.get("remaining") is not None:
-                break  # the pass actually ran; its own verdict stands
-            if attempt < NAMING_ATTEMPTS:
-                time.sleep(NAMING_RETRY_WAIT_SECS)
-        if got is not None and got.get("remaining") is None:
-            _on_instance(f"naming pass on '{inst}' NEVER RAN after {NAMING_ATTEMPTS} attempts"
-                         + (f": {got['why']}" if got.get("why") else ""))
-        elif got is not None and (got.get("needsJudgment") or got.get("remaining")
-                                  or got.get("unrendered")):
-            _on_instance(
-                f"naming pass on '{inst}' left {len(got.get('remaining') or [])} nameless / "
-                f"{len(got.get('needsJudgment') or [])} needing an AI-written name / "
-                f"{len(got.get('unrendered') or [])} not rendered under their real name"
-                + (f": {got['why']}" if got.get("why") else ""))
 
-    # THE VERDICT THAT DOES NOT TRUST THE PASS. Whatever the pass believed, a nameless landing is
-    # the condition that breaks the stamp phase next, so it is read back per chat from the record
-    # on disk. This catches every cause, including the one no verdict can see: the running app
-    # re-saving a title away AFTER the pass verified it (`titleDurable: false`).
-    # ...and the disk copy cannot answer it alone, because the running app's memory outranks it
-    # for everything that aims by name. Read the sidebar ONCE per instance and hold it here.
-    screen: dict[str, list[str] | None] = {}
-    for inst in by_instance:
-        screen[inst] = name_chats.rendered_titles(inst)
+def _record_naming_error(live: list, inst: str, msg: str) -> None:
+    """A naming failure belongs to every chat that landed in that account."""
+    for item in live:
+        if str((item.landing.target or {}).get("name") or "") == inst:
+            item.errors.append(msg)
+
+
+def _run_name_pass(live: list, inst: str, titles: dict[str, str]) -> dict | None:
+    """Drive the naming pass for one account, retrying the shape that means it never ran.
+    Returns the pass's own verdict, or None when it raised (named on the items) - a name is a
+    courtesy, a landed chat is the deliverable.
+
+    ⛔ AND THE PASS MUST BE TOLD WHAT WE LANDED, OR IT JUDGES THE WRONG SURFACE (second false
+    green, found live 2026-09-15: a 4-chat move reported 4/4 OK with 3 chats left nameless on
+    screen and their bypass stamps fallen back to disk-only). The importer writes a title into
+    the landed record and the daemon says so honestly (`titled: true, titleDurable: false`);
+    the RUNNING app then re-saves that record from its own memory and erases it. The pass's own
+    "is anything nameless?" test reads the disk copy, so inside that window it saw four real
+    titles and did nothing at all. `require` moves the question to what the app is RENDERING,
+    which is the only surface the permission picker, the renamer and the courier can aim at.
+
+    ⛔ `remaining: None` IS "THE PASS NEVER RAN", NOT "NOTHING NAMELESS" (false green found
+    2026-09-13). name_pass returns that shape when it finds no store, and when another lane
+    already holds the instance lock - and it takes that lock with wait_secs=0, so a sibling
+    phase driving the same app loses the whole naming pass. The old test was `if
+    got.get("needsJudgment") or got.get("remaining")`, and None is falsy, so the batch read
+    "never ran" as "clean" and reported OK. name_chats.main() has always drawn this distinction
+    ("this is NOT 'nothing nameless' - exit 1, not a false 0"); the batch path simply never did.
+    Measured cost: a 4-chat move reported 4/4 OK with two chats left nameless, which then
+    rendered as identical 'General coding session' rows, and a nameless row cannot be aimed at -
+    so their bypass stamp failed too, and the remedy the move printed failed for the same
+    reason. Retry, because the lock is usually transient."""
+    import name_chats
+
+    got = None
+    for attempt in range(1, NAMING_ATTEMPTS + 1):
+        try:
+            got = name_chats.name_pass(inst, extra_titles=titles, require=titles)
+        except Exception as err:  # a name is a courtesy; a landed chat is the deliverable
+            _record_naming_error(live, inst,
+                                 f"naming raised {type(err).__name__}: {str(err)[:150]}")
+            return None
+        if got.get("remaining") is not None:
+            return got  # the pass actually ran; its own verdict stands
+        if attempt < NAMING_ATTEMPTS:
+            time.sleep(NAMING_RETRY_WAIT_SECS)
+    return got
+
+
+def _report_name_pass(got: dict | None, live: list, inst: str) -> None:
+    """Say what the pass itself reported, in the pass's own words. Silent only when the pass
+    ran and left nothing outstanding - never when it never ran, and never when it left a chat
+    unrendered under its real name."""
+    if got is None:
+        return
+    if got.get("remaining") is None:
+        _record_naming_error(
+            live, inst,
+            f"naming pass on '{inst}' NEVER RAN after {NAMING_ATTEMPTS} attempts"
+            + (f": {got['why']}" if got.get("why") else ""))
+    elif got.get("needsJudgment") or got.get("remaining") or got.get("unrendered"):
+        _record_naming_error(
+            live, inst,
+            f"naming pass on '{inst}' left {len(got.get('remaining') or [])} nameless / "
+            f"{len(got.get('needsJudgment') or [])} needing an AI-written name / "
+            f"{len(got.get('unrendered') or [])} not rendered under their real name"
+            + (f": {got['why']}" if got.get("why") else ""))
+
+
+def _screen_rendered_titles(by_instance: dict) -> dict[str, list[str] | None]:
+    """What each account's app is RENDERING, read ONCE per instance and held. None = the
+    sidebar could not be read, which is never read as a miss."""
+    import name_chats
+
+    return {inst: name_chats.rendered_titles(inst) for inst in by_instance}
+
+
+def _report_unnamed_landings(live: list, screen: dict[str, list[str] | None]) -> None:
+    """THE VERDICT THAT DOES NOT TRUST THE PASS. Whatever the pass believed, a nameless landing
+    is the condition that breaks the stamp phase next, so it is read back per chat from the
+    record on disk. This catches every cause, including the one no verdict can see: the running
+    app re-saving a title away AFTER the pass verified it (`titleDurable: false`).
+
+    ...and the disk copy cannot answer it alone, because the running app's memory outranks it
+    for everything that aims by name, so the sidebar was read above and is handed in here."""
+    import name_chats
+
     for item in live:
         inst = str((item.landing.target or {}).get("name") or "")
         title = str(item.landing.chat_title or "")
@@ -1073,6 +1119,31 @@ def _name_landings(live: list) -> None:
                 f"Fix with: manage_desktop_chat.ps1 -Instance <dir> -Title 'General coding "
                 f"session' -Action Rename -NewTitle '{item.landing.chat_title}' -Ordinal 1 "
                 "(then verify by dossier which chat took the name)")
+
+
+def _name_landings(live: list) -> None:
+    """Give every nameless landing its real name BEFORE the stamp phase tries to aim at one.
+
+    ⛔ AN IMPORT LANDS NAMELESS, AND A NAMELESS CHAT CANNOT BE STAMPED (found 2026-09-09,
+    reproduced and fixed 09-10). `session-launch` reports `titleDurable: false` for a landing
+    into a RUNNING app and means it: the title is written to disk and the app re-saves over it
+    from memory, so the record comes back with `title: null` while the sidebar renders a name
+    derived from the transcript. Everything that aims BY NAME then breaks at once - the
+    permission picker is handed an empty `-Title` and dies inside PowerShell's parameter
+    validation (which reads like an environment fault and is not one), `chat_rename` cannot
+    find the row, and the `disk-only` remedy the move itself prints fails on the exact
+    population it exists to serve. The durable channel has always been the app's OWN rename;
+    that is what the naming pass drives, and the batch is the last place that still knows each
+    chat's intended title, so this is where the two have to meet.
+
+    Best-effort and never fatal: by this point every chat is moved and verified, and a name is
+    not worth failing a landing over. Reported on the item, never swallowed.
+    """
+    by_instance = _landed_titles_by_instance(live)
+    for inst, titles in by_instance.items():
+        _report_name_pass(_run_name_pass(live, inst, titles), live, inst)
+
+    _report_unnamed_landings(live, _screen_rendered_titles(by_instance))
 
 
 def _report_dry_run(results: list[dict], note: str, secs: float) -> str:

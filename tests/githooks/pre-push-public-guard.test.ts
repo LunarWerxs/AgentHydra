@@ -40,7 +40,11 @@ const HOOK_TEST_TIMEOUT = 20_000 // real git init/commit/push + a node subproces
 // A single root for every scratch dir this file creates: at most one mkdtempSync may root
 // directly in the OS temp dir per file. realpathSync.native up front resolves the 8.3-short-path
 // issue once, so every nested mkdirSync below it is already long-path.
-const FILE_ROOT = realpathSync.native(mkdtempSync(join(tmpdir(), 'ah-prepush-')))
+//
+// ROOT holds what mkdtempSync returned and is what afterAll reaps: inline, a throw from
+// realpathSync.native would leave no reference to the directory at all, leaking it forever.
+const ROOT = mkdtempSync(join(tmpdir(), 'ah-prepush-'))
+const FILE_ROOT = realpathSync.native(ROOT)
 let prepushSeq = 0
 function prepushRoot(name: string) {
   const dir = join(FILE_ROOT, `${name}-${prepushSeq++}`)
@@ -48,7 +52,7 @@ function prepushRoot(name: string) {
   return dir
 }
 afterAll(() => {
-  rmSync(FILE_ROOT, { recursive: true, force: true })
+  rmSync(ROOT, { recursive: true, force: true })
 })
 const HEADING = '# WARNING: THIS REPOSITORY IS **PUBLIC**'
 
