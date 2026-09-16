@@ -40,6 +40,35 @@
  */
 
 /**
+ * Keep every user token, dropping the relaunch flag and the stale port pair so the caller can
+ * re-append both from the port actually being served. A value flag's next token is copied
+ * verbatim and never re-read as a flag.
+ * @param {readonly string[]} rest
+ * @param {object} flags
+ * @param {string} flags.portFlag
+ * @param {string} flags.relaunchFlag
+ * @param {readonly string[]} flags.valueFlags
+ * @returns {string[]}
+ */
+function filterRelaunchArgs(rest, { portFlag, relaunchFlag, valueFlags }) {
+  const kept = [];
+  for (let i = 0; i < rest.length; i++) {
+    const token = rest[i];
+    if (valueFlags.includes(token) && rest[i + 1] !== undefined) {
+      kept.push(token, rest[++i]);
+      continue;
+    }
+    if (token === portFlag && rest[i + 1] !== undefined) {
+      i++; // drop the stale pair; the bound port is appended below
+      continue;
+    }
+    if (token === relaunchFlag) continue; // re-appended below, never accumulated
+    kept.push(token);
+  }
+  return kept;
+}
+
+/**
  * @param {readonly string[]} argv    Normally `process.argv` (full, including argv[0..1]).
  * @param {object} options
  * @param {string} options.execPath   `process.execPath` — the real executable in both modes.
@@ -71,20 +100,7 @@ export function buildRelaunchArgv(argv, options) {
   const rest = hasVerb ? cli.slice(1) : cli;
   const verb = command === undefined ? null : hasVerb ? cli[0] : command;
 
-  const kept = [];
-  for (let i = 0; i < rest.length; i++) {
-    const token = rest[i];
-    if (valueFlags.includes(token) && rest[i + 1] !== undefined) {
-      kept.push(token, rest[++i]);
-      continue;
-    }
-    if (token === portFlag && rest[i + 1] !== undefined) {
-      i++; // drop the stale pair; the bound port is appended below
-      continue;
-    }
-    if (token === relaunchFlag) continue; // re-appended below, never accumulated
-    kept.push(token);
-  }
+  const kept = filterRelaunchArgs(rest, { portFlag, relaunchFlag, valueFlags });
 
   const tail = [...kept, portFlag, String(boundPort), relaunchFlag];
   const cliOut = verb === null ? tail : [verb, ...tail];
