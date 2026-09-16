@@ -33,7 +33,7 @@
 //   bun scripts/watchdog.mjs --no-restart   # alarm only, never restart
 //
 // RUN WITH BUN, NOT NODE. The import list below reaches server/src/watchdog-health.ts, and plain
-// Node cannot load a `.ts` module, so a `node scripts/watchdog.mjs` fails before the first check.
+// Node cannot load a `.ts` module, so running this script under plain Node fails before the first check.
 // The scheduled task already runs it through bun - scripts/watchdog.vbs, added 2026-09-01, points
 // at bun.exe for the invisible run - so bun is the only runtime this file ever starts under.
 

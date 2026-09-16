@@ -1,4 +1,3 @@
-// arkitect-allow: ime-composition-enter-guard - a server boot entry: no document, no key handlers to guard
 // server/src/main.ts — the ONE entrypoint for every process mode, source or compiled.
 //
 // A `bun build --compile` binary cannot spawn sibling .ts files by path (import.meta.dir is a

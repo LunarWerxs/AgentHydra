@@ -25,6 +25,8 @@
     "check:kit": "node ../../lunarwerx-ui/sync.mjs --check --app agenthydra && node ../../lunarwerx-ui/sync.mjs --check --app orchestrator",
     "//check:local": "Checks that CANNOT run on GitHub, so localci runs them on the host instead. check:kit compares this app's kit-managed copies against lunarwerx-ui, a PRIVATE sibling repo a public repo's CI can never check out. Without this its only enforcement is the pre-commit hook, which --no-verify skips and which silently no-ops on any machine without the sibling checkout.",
     "check:local": "bun run check:kit",
+    "//check:deep": "The everything lane, run before a release and by nobody in a hurry: check, every package typecheck, then test:full (25+ minutes of Python unittest included). It exists so the orchestrator suites are reachable from a gate lane by name, which is how the Architect decides a test script verifies anything.",
+    "check:deep": "bun run check && bun run typecheck && bun run test:full",
     "lint": "biome check .",
     "typecheck": "bun run --cwd web typecheck && bun run --cwd server typecheck && bun run --cwd orchestrator/web typecheck && bun run --cwd orchestrator/server typecheck",
     "format": "biome format --write .",
