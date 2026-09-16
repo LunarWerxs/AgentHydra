@@ -39,6 +39,17 @@ export const CARRIED_KEYS = [
   'sessionSettings',
   'alwaysAllowedReasons',
   'sessionPermissionUpdates',
+  // The chat's FOLDER. Measured 2026-09-16 ("Launchpad v0.2.0 development", #56 -> #7): the source
+  // record said `D:\NEWProjects\shared\launchpad`, and the landed record on the running target came
+  // back pointing at a scratch workspace inside the SOURCE profile - the folder the chat opened in
+  // hours earlier, before it was given a project. The app derives a resumed chat's folder from the
+  // transcript itself, and that transcript's first `cwd` is the scratch one (its last 545 records
+  // are the repo), so the app's guess loses to the record the person actually sees. The cold path
+  // has always carried it (it copies the source record wholesale); this is the running path saying
+  // the same thing. It lands in the record, so it takes effect at that app's next start, exactly
+  // like the bypass stamp - an engine that booted on landing keeps the folder it booted with.
+  'cwd',
+  'originCwd',
 ] as const
 export type CarriedKey = (typeof CARRIED_KEYS)[number]
 export type CarriedSettings = Partial<Record<CarriedKey, unknown>>

@@ -68,6 +68,8 @@ test("pickCarriedSettings takes the person's settings and nothing else", () => {
     sessionSettings: { ultracode: true },
     alwaysAllowedReasons: ['x'],
     sessionPermissionUpdates: [{ tool: 'Bash' }],
+    cwd: 'C:\\repo',
+    originCwd: 'C:\\repo',
   })
   // permissionMode is the bypass stamp's, not ours; connector ids are the source account's.
   expect('permissionMode' in carried).toBe(false)
@@ -96,6 +98,27 @@ test('applyCarriedSettings writes over the target without touching what it does 
   expect(out.enabledMcpTools).toEqual(['srv-b:tool9'])
   // never mutates its input
   expect(target.sessionSettings).toEqual({ ultracode: false, somethingTargetSide: 1 })
+})
+
+// The measured failure, 2026-09-16: a chat moved to a RUNNING target landed in a scratch workspace
+// inside the account it left, because the app derives a resumed chat's folder from the transcript's
+// first cwd and that chat had opened without a project hours before it was given the repo. The
+// folder a person reads on the source record is the one that must follow the chat.
+test("the landed record takes the chat's real folder, not the app's guess", () => {
+  const landed = {
+    cliSessionId: 'abc-123',
+    permissionMode: 'bypassPermissions',
+    cwd: 'c:\\users\\me\\.claude-instances\\test9\\scratch-workspaces\\de69a9aa\\scratch-2026-09-16',
+    originCwd:
+      'c:\\users\\me\\.claude-instances\\test9\\scratch-workspaces\\de69a9aa\\scratch-2026-09-16',
+  }
+  const carried = pickCarriedSettings(source)
+  const out = applyCarriedSettings(landed, carried)
+  expect(out.cwd).toBe('C:\\repo')
+  expect(out.originCwd).toBe('C:\\repo')
+  // and the sweep keeps it there when the running app re-saves its own guess over the record
+  expect(carriedSettingsMatch(landed, carried)).toBe(false)
+  expect(carriedSettingsMatch(out, carried)).toBe(true)
 })
 
 test('carriedSettingsMatch is the sweep\'s "nothing to do"', () => {
