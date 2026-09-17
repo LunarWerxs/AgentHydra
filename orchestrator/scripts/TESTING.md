@@ -106,12 +106,14 @@ human to click. The mechanics, banked from AgentHydra's own work:
   rename drill refuses archived subjects instead of failing confusingly inside the actuator.
 - **CDP (Chrome DevTools Protocol) is a dead end** - the app exits when started with a debug
   port, so browser-automation tooling cannot be the answer here. Do not rediscover this.
-- **Disk flags are NOT UI** - `desktop-archive` writes metadata; under a running app the app's
-  in-memory chat list wins until restart. That is why the archive drill demands a closed
-  instance, and why `archive_chat.py` reports exit 7 ("written, not claiming success") instead
-  of green when an app was running. AgentHydra's `misc/Manage-DesktopChat.ps1` is the UIA path
-  for immediate archive-in-a-running-app; if the daemon ever exposes it over HTTP, it slots
-  into `archive_chat.py` as the durable running-app path.
+- **A disk flag is not UI, so `desktop-archive` no longer stops at one** (2026-09-17) - it
+  writes the metadata and then drives the app's own Archive control for any profile whose app is
+  RUNNING, answering `stillOnScreen: false` once the row has left the sidebar. `archive_chat.py`
+  reads that: it still reports exit 7 ("written, not claiming success") when only the flag
+  landed, and now continues to normal verification when the daemon settled the click itself,
+  instead of sending the caller round again. The drill's closed-instance case is unchanged - the
+  flag alone is reliable there. The UIA path both routes share is
+  `misc/Manage-DesktopChat.ps1`, driven server-side by `server/src/ui-archive.ts`.
 
 ## What "confirmable by the AI" means here, concretely
 

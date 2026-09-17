@@ -643,7 +643,7 @@ program needs:
 | `GET /api/fleet` | instances, per-account usage, git hygiene |
 | `GET /api/sessions` | every chat, with `archived`, `instance`, `last_activity_at` |
 | `GET /api/chats/dossier?q=` | one chat: its instance, archive flag, lineage, live process |
-| `POST /api/sessions/:id/desktop-archive` | archive / unarchive a chat |
+| `POST /api/sessions/:id/desktop-archive` | archive / unarchive a chat - an archive under a RUNNING app also drives that app's own Archive control, so the row leaves the sidebar now; `stillOnScreen` says whether it did |
 | `POST /api/chats/:id/rename` | rename through the running app's own control |
 | `POST /api/sessions/:id/import-desktop` | land a chat in an instance |
 | `POST /api/sessions/:id/message` | deliver text into a chat: the daemon picks the channel, preferring the native peer pipe and using the composer only for a dormant chat. This is `courier.py`'s PRIMARY route; a 404 from an older daemon is what drops it back to driving the actuator itself |

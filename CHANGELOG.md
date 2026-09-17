@@ -5,6 +5,50 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Archiving a chat under a RUNNING app now retires the row instead of handing the caller a
+  script to run** (`server/src/routes/desktop-sessions.ts`, `orchestrator/scripts/archive_chat.py`).
+  `POST /api/sessions/:id/desktop-archive` - the route behind the `archive_desktop_chat` MCP tool -
+  wrote the metadata flag and then returned a paragraph explaining that the chat was still on
+  screen and that the caller should go run `misc/Manage-DesktopChat.ps1` themselves. Meanwhile
+  `server/src/ui-archive.ts`'s `uiArchiveChat`, the server-side version of exactly that click with
+  rails that refuse when a different LIVE chat shares the rendered title, had been in the codebase
+  since 2026-08-30 with **no caller at all**. Owner ruling, 2026-09-17, after archiving 17 chats by
+  hand: a built-in that does not do what it says gets FIXED; nobody should be writing a one-off
+  script to finish a basic operation.
+
+  The route now drives that click for every hit it changed under a running app. Bounded at 20s (a
+  measured click is 2-5s, while ui-archive's own spawn guard is 90s - long enough to outlive
+  hydralib's 30s POST default and turn a working endpoint into a caller-side timeout), never
+  throwing, timer always cleared. Losing that race is not hidden: the flag is written, the
+  re-assert watcher still runs, and the answer says the click did not settle and why.
+
+- ⛔ **Caller-visible: the archive response's `visibleNow` is renamed `stillOnScreen`.** The old
+  name shipped beside a note saying the chat WAS on screen, so it could be read either way - fatal
+  now that the route can genuinely retire the row. Nothing consumed it in logic; there is no shim.
+
+- **`archive_chat.py` honours the daemon's own click.** When the app opened in the race window
+  between the fleet read and the POST, it used to exit 7 and tell the caller to re-run; it now
+  continues to verification if the response says the row is already gone.
+
+- **The chat actuator re-pokes MSAA after opening a row menu** (`misc/Manage-DesktopChat.ps1` and
+  `orchestrator/scripts/actuator/manage_desktop_chat.ps1`). Chromium builds the popup's
+  accessibility subtree as lazily as the sidebar's, so every UIA query saw zero MenuItems and the
+  script reported `menu opened but no 'Archive' item matched a known label. Menu showed: ` with an
+  EMPTY list - which reads as a missing locale label when nothing had been rendered at all. An
+  empty `Menu showed:` list means NOT RENDERED; a populated one means a real label gap.
+
+### Added
+
+- **`-All` on `misc/Manage-DesktopChat.ps1`** archives EVERY row carrying one title, one pass at a
+  time, re-invoking itself and capped at 25 passes. That is a different claim from
+  `-AllowDuplicateRows` (which asserts one chat drawn twice): `-All` is several REAL chats sharing
+  a name, measured while cleaning up 17 fan-out judge chats of which three shared one title.
+  Archive only - a rename or unarchive of N same-named rows has no single sensible meaning.
+
 ## [0.43.0] - 2026-09-17
 
 ### Added

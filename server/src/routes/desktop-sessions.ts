@@ -190,9 +190,11 @@ app.post('/api/sessions/:id/automation', async (c) => {
   )
 })
 // Archive (or unarchive) a chat in the DESKTOP app by flipping its metadata flag across every
-// profile that carries it. Honest caveat in the response: for a profile whose app was running,
-// the change shows only after that instance next restarts (and could be re-saved away by the
-// running app; the AgentHydra done-mark is the immediate signal either way).
+// profile that carries it - and, for an ARCHIVE under a RUNNING app, by driving that app's own
+// Archive control so the row leaves the sidebar now (see uiArchiveWithinBudget below). The
+// response says which of those happened: `stillOnScreen` false means retired, true means the
+// flag is written and waiting for that instance's next restart, with the reason the click did
+// not settle. UNARCHIVE has no in-app control to drive and still waits for the restart.
 /** How long the archive route waits for the app's own Archive click before answering
  *  without it. Under hydralib's 30s POST default, with room for the answer itself. */
 const UI_ARCHIVE_BUDGET_MS = 20_000

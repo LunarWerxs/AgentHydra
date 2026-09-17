@@ -380,19 +380,26 @@ and repeating the test reproduced it exactly: the pointer reappeared within seco
   it starts). `POST /api/sessions/:id/automation` does the stamp; the dossier shows the mode.
 - After any delivery, verify **which account actually ran it**, not merely that the transcript grew.
 
-## Archiving a chat in the app you are running in
+## Archiving a chat in a RUNNING app
 
-Disk flags are invisible to a running app until it restarts, and the instance hosting the reviewer
-never reaches the zero-live-sessions condition that triggers the restart, because the reviewer is
-itself a live session.
+A disk flag alone is invisible to a running app until it restarts, and the instance hosting the
+reviewer never reaches the zero-live-sessions condition that triggers one, because the reviewer is
+itself a live session. **Since 2026-09-17 the endpoint closes that gap itself:**
+`POST /api/sessions/:id/desktop-archive` writes the flag and then drives the app's OWN Archive
+control through UI-Automation, focus-free, for any profile whose app is running - including the one
+you are sitting in. No prompt, no restart, and the app makes the write, so it cannot re-save it
+away.
 
-- **Other instances:** `POST /api/sessions/:id/desktop-archive` works programmatically, no prompt.
-- **Your own instance:** only the app's own archive updates the sidebar immediately, and that tool
-  always asks for confirmation. There is currently **no unattended path** for this case.
-
-That gap is worth closing: an endpoint that asks the running app to reload its chat list, or to
-archive by id, would make the whole flow scriptable. Until then, expect one confirmation per chat
-when tidying the app you are sitting in.
+- Read **`stillOnScreen`** in the response: `false` = the row is gone now; `true` = only the flag
+  landed, and `note` says why the click did not settle.
+- The rails that produce a `true` are deliberate: another LIVE chat in that profile renders the same
+  title (clicking by title could hit the wrong one), or the sidebar never rendered the row at all -
+  UIA reaches rendered rows only, so a chat scrolled out of the virtualized list or inside a
+  collapsed group has nothing to click. Both take effect at that instance's next restart.
+- **Unarchiving still waits for the restart.** The row menu can archive a chat, not restore one, so
+  there is no in-app control to drive and the endpoint does not pretend otherwise.
+- A chat whose ENGINE is running is refused outright unless you pass `force` - archiving it would
+  drop a working chat out of the sidebar.
 
 ## Checklist for a move
 
