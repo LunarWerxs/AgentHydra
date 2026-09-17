@@ -35,7 +35,6 @@ APP = SCRIPTS.parents[1]
 CAPTURED_ACTUATORS = [
     APP / "misc" / "Manage-DesktopChat.ps1",
     APP / "misc" / "Deliver-DesktopChat.ps1",
-    SCRIPTS / "actuator" / "manage_desktop_chat.ps1",
     SCRIPTS / "actuator" / "approve_prompt.ps1",
     SCRIPTS / "actuator" / "deliver_desktop_chat.ps1",
     SCRIPTS / "actuator" / "rename_first.ps1",

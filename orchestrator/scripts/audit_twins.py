@@ -373,7 +373,7 @@ def _user_data_dir(cmdline: str) -> str:
     return (rest[:cut] if cut >= 0 else rest).strip()
 
 
-_ACTUATOR = Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"
+_ACTUATOR = Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"
 
 
 def _app_running(instance: str) -> tuple[bool, str]:

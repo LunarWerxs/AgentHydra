@@ -1117,7 +1117,7 @@ def _report_unnamed_landings(live: list, screen: dict[str, list[str] | None]) ->
             item.errors.append(
                 f"landed NAMELESS (title={meta.get('title')!r}): it renders as a generic row, so "
                 "nothing can aim at it by name - its bypass stamp will fail for the same reason. "
-                f"Fix with: manage_desktop_chat.ps1 -Instance <dir> -Title 'General coding "
+                f"Fix with: misc/Manage-DesktopChat.ps1 -Instance <dir> -Title 'General coding "
                 f"session' -Action Rename -NewTitle '{item.landing.chat_title}' -Ordinal 1 "
                 "(then verify by dossier which chat took the name)")
 

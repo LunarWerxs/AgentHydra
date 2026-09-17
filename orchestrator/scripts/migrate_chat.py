@@ -390,7 +390,7 @@ def resolve_for_migrate(query: str, source_name: str | None = None) -> dict:
 # call sites readable without other scripts importing THIS module for it.
 resolve_instance = hydralib.resolve_instance
 
-_ACTUATOR = _Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"  # relocated 2026-09-01
+_ACTUATOR = _Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"  # one copy since 2026-09-17
 
 
 def _settle_source(instance: str, title: str) -> tuple[int, str]:

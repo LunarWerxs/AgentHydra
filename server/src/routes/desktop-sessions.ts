@@ -300,9 +300,19 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   // apps at once. /migrate already fired this watcher; this route did not, and this route is
   // what every archive and every account move actually goes through. Fire-and-forget: it must
   // not delay the response, and its own caps bound it.
-  for (const hit of result.hits ?? []) {
-    if (!hit.changed || !hit.wasRunning) continue
-    void reassertChatArchive(hit.profile, sessionId).catch(() => {})
+  //
+  // ⛔ ARCHIVE ONLY, AND THE `wantArchived` GUARD IS THE WHOLE POINT (measured live 2026-09-17).
+  // reassertChatArchive writes isArchived=TRUE - that is all it does, for ten minutes or eight
+  // restores. Fired after an UNARCHIVE it does not defend the caller's write, it DESTROYS it:
+  // the flag went to false, the watcher put it back within ~1.5s, and the route had just told
+  // the caller "the flag is written ... until that instance next restarts", which by then was
+  // false twice over. Observed by unarchiving a chat under a running app and reading the
+  // dossier back: archived was true again, and the next archive answered changed:false.
+  if (wantArchived) {
+    for (const hit of result.hits ?? []) {
+      if (!hit.changed || !hit.wasRunning) continue
+      void reassertChatArchive(hit.profile, sessionId).catch(() => {})
+    }
   }
   // ⛔ FINISH THE JOB HERE, rather than telling the caller to go run a script. Owner ruling,
   // 2026-09-17, after archiving 17 chats by hand: when a built-in does not do the thing it says
@@ -332,9 +342,17 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
       ...result,
       stillOnScreen: false,
       uiArchive: uiOutcomes,
-      note:
-        "the flag is written AND the app's own Archive control was driven, so the row has left " +
-        'the sidebar now - no restart needed.',
+      // ⛔ SAY WHICH OF THE TWO SETTLED IT (2026-09-17). `verified` is true down two different
+      // paths - the control was driven, or there was no rendered row left to drive because the
+      // chat was already retired - and this note claimed the first one for both. A caller
+      // reading "the control was driven" beside `clicked: false` is reading a contradiction,
+      // and the whole point of this route's rename to `stillOnScreen` was that a verdict must
+      // not be readable two ways.
+      note: uiOutcomes.some((o) => o.clicked)
+        ? "the flag is written AND the app's own Archive control was driven, so the row has left " +
+          'the sidebar now - no restart needed.'
+        : 'the flag is written and no rendered row is left to retire (the chat was already off ' +
+          'the sidebar), so nothing needed clicking - no restart needed.',
     })
   if (underRunningApp)
     return c.json({

@@ -69,9 +69,10 @@ def out(payload: dict, as_json: bool, code: int) -> int:
 
 from pathlib import Path as _Path
 
-# Relocated into this repo 2026-09-01 (owner: "I own both codebases") from AgentHydra's
-# public misc/ folder; same script, the orchestrator's copy.
-ACTUATOR = _Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"
+# THE ONE CHAT ACTUATOR (collapsed 2026-09-17). A second copy lived under
+# actuator/manage_desktop_chat.ps1 from 2026-09-01 and drifted away from the one the
+# daemon runs; the daemon's is now the only one, and its header says what the drift cost.
+ACTUATOR = _Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"
 
 # THE PRESERVATION STEP (owner rule, 2026-09-01). Brief on purpose - "doesn't need to be
 # comprehensive": just ask for the docs worth keeping.

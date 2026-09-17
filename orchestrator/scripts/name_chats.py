@@ -41,7 +41,7 @@ from lib import clilib, hydralib, windowlib
 PS1 = Path(__file__).resolve().parent / "actuator" / "rename_first.ps1"
 # The same actuator rename_chat.py drives, used here ONLY for its passive -List (what the app
 # is rendering right now). See rendered_titles().
-LIST_PS1 = Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"
+LIST_PS1 = Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"
 MAX_PASSES = 20
 PROBE_PREFIX = "naming pass probe"
 

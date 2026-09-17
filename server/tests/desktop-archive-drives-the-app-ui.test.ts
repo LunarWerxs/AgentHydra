@@ -123,3 +123,32 @@ test('the durable re-assert watcher still fires alongside the click', async () =
   await post()
   expect(reasserted).toEqual([PROFILE])
 })
+
+// ⛔ MEASURED LIVE 2026-09-17, on a real chat under a real running app. reassertChatArchive
+// writes isArchived=TRUE and nothing else, for ten minutes. The route fired it on BOTH paths, so
+// an unarchive was undone by the route's own watcher within ~1.5s: the dossier read archived
+// again, and the next archive answered changed:false. The route meanwhile told the caller the
+// flag was written and would land at the next restart - false twice over. An unarchive must
+// leave no watcher behind.
+test('unarchive does NOT arm the archive watcher, which would undo it', async () => {
+  await post({ archived: false })
+  expect(reasserted).toEqual([])
+})
+
+// `verified` is true down two paths - the control was driven, or there was no rendered row left
+// because the chat was already off the sidebar. The note claimed the first for both, so a caller
+// read "the control was driven" beside `clicked: false`. A verdict that reads two ways is the
+// exact fault the visibleNow -> stillOnScreen rename was for.
+test('a chat already off the sidebar is reported as settled, not as a click that happened', async () => {
+  outcome = {
+    clicked: false,
+    verified: true,
+    reason: 'already archived on disk and no rendered row remains',
+  }
+
+  const { body } = await post()
+
+  expect(body.stillOnScreen).toBe(false)
+  expect(String(body.note)).toContain('nothing needed clicking')
+  expect(String(body.note)).not.toContain('Archive control was driven')
+})

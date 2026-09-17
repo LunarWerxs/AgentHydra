@@ -55,7 +55,7 @@ from pathlib import Path
 from lib import clilib, enginelib, gatelib, holdlib, hydralib, ledgerlib, mutationlib
 from lib import stamplib, windowlib
 
-ACTUATOR = Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"
+ACTUATOR = Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"
 TRASH = "trash"
 # The daemon caches desktop meta for ~15 s; the verify polls that long before it calls a
 # lingering record real.

@@ -7,7 +7,60 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Changed
+
+- ⛔ **The chat actuator is ONE file again, and the copy the daemon was running was the WEAK one**
+  (`misc/Manage-DesktopChat.ps1`; `orchestrator/scripts/actuator/manage_desktop_chat.ps1` is
+  deleted and its six Python callers repointed). The two were forked on 2026-09-01 and drifted for
+  a fortnight. The drift was not cosmetic: the daemon's copy - and therefore **every**
+  `archive_desktop_chat` and `chat_rename` call - ran without window activation (a minimized app
+  reports "not rendered"), without the exact `-Instance` match and the refusal to act on a blank
+  one (a bare `-Instance` fanned the action out over every running account), without taking the
+  app's REAL window instead of whichever `FindFirst` returned first (a hidden helper window reads
+  as "no rows", which a settle reads as "already settled"), without the last-moment re-aim that
+  refuses when the sidebar re-orders under an open menu, without `InPrimaryPane` (the open chat
+  renders a second kebab, so every open chat read as AMBIGUOUS), without folding sidebar groups
+  back the way it found them, and without the locale-independent CSS-palette fallback (a
+  non-English app refused every archive). The one file now carries all of that plus the two flags
+  only the old copy had (`-AllowDuplicateRows`, `-All`) and its rename stale-element retry. It
+  lives under `misc\` because that is what a compiled build embeds (`RUNTIME_MISC_FILES`), so a
+  second copy anywhere is a copy the daemon cannot run.
+
 ### Fixed
+
+- **An UNARCHIVE under a running app was silently undone by the route's own watcher**
+  (`server/src/routes/desktop-sessions.ts`). `reassertChatArchive` writes `isArchived=true` and
+  nothing else, for ten minutes or eight restores - it exists to beat a running app's re-save
+  after an ARCHIVE. The route fired it on both paths, so an unarchive was reverted within about a
+  second and the next archive answered `changed:false`, while the response had just promised the
+  flag was written and would land at the next restart. Measured live 2026-09-17 by unarchiving a
+  chat under a running app and reading the dossier back. Now armed only when archiving.
+
+- **A cold app made the actuator report a chat that is plainly on screen as "not rendered"**
+  (`misc/Manage-DesktopChat.ps1`). The MSAA poke is aimed at each `Chrome_RenderWidgetHostHWND`
+  child, but Chromium creates that legacy window lazily, on demand: a freshly launched app has
+  none, so there was nothing to poke, the accessibility tree never switched on, and every query
+  came back empty. `-List` printed an empty chat list and an action exited 3 with "collapsed group
+  or virtualized out" - a confident wrong diagnosis that sends the reader to scroll a sidebar
+  already showing the row. Measured on a just-launched instance: 0 render widgets at launch, 1
+  after repeated requests. Wake now asks repeatedly (top-level MSAA request plus a tree read,
+  eight tries) and BOTH failure paths say when nothing was readable rather than blaming the
+  sidebar. Proven red-then-green against a real cold app. The top-level request is restricted to
+  the cold path on purpose: on a warm window it re-serves the tree and invalidates held elements,
+  which broke the re-aim rail ("the row ... reads ''") in testing.
+
+- **A row menu left open poisoned every later archive of that chat**
+  (`misc/Manage-DesktopChat.ps1`). `ExpandCollapsePattern.Expand()` throws on an already-expanded
+  element, and under `ErrorActionPreference='Stop'` the run died with a bare
+  `+ FullyQualifiedErrorId : InvalidOperationException` - no chat named, no cause - which is what
+  the daemon relayed to its caller. Reachable in normal use: any refusal after the menu opens can
+  leave the popup up. Already-open is now the state the line was trying to reach, not an error.
+
+- **The archive response claimed the app's control "was driven" when nothing was clicked**
+  (`server/src/routes/desktop-sessions.ts`). `verified` is true down two paths - the control fired,
+  or there was no rendered row left because the chat was already off the sidebar - and the note
+  claimed the first for both, so callers read "the control was driven" beside `clicked: false`. A
+  verdict readable two ways is the exact fault the `visibleNow` -> `stillOnScreen` rename was for.
 
 - **Archiving a chat under a RUNNING app now retires the row instead of handing the caller a
   script to run** (`server/src/routes/desktop-sessions.ts`, `orchestrator/scripts/archive_chat.py`).

@@ -38,7 +38,7 @@ from lib import windowlib
 # through the daemon's /rename route, i.e. AgentHydra's copy of the same actuator - which
 # counts the open chat's HEADER menu beside its sidebar menu and refuses every chat that is
 # currently open as ambiguous (3 of 3 renames failed). The copy here carries the fix.
-ACTUATOR = Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"
+ACTUATOR = Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"
 
 
 def out(payload: dict, as_json: bool, code: int) -> int:

@@ -477,7 +477,7 @@ def build_rules() -> dict:
          "value": "fresh dossier read immediately before every POST"},
         {"if": "the instance's app is RUNNING when an archive is due",
          "then": "drive the APP'S OWN archive control (focus-free UI Automation) - immediate and durable, because the app makes the write itself. NEVER write a disk flag under a running app, and NEVER wait for a restart (the owner does not restart the apps, ever)",
-         "value": "archive_chat.py routes by app state: running -> actuator/manage_desktop_chat.ps1 Archive; closed -> disk flags"},
+         "value": "archive_chat.py routes by app state: running -> misc/Manage-DesktopChat.ps1 Archive; closed -> disk flags"},
         {"if": "the daemon said ok",
          "then": "still VERIFY by re-reading the dossier before claiming anything landed",
          "value": "no verification, no success claim"},
