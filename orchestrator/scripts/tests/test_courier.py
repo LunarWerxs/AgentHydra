@@ -515,6 +515,43 @@ class CourierRailTest(unittest.TestCase):
         _, report = self._mid_turn_peer_refusal()
         self.assertTrue(report["results"][0]["deferred"])
 
+    def test_a_turn_that_ENDED_since_the_plan_is_delivered_not_deferred_again(self):
+        """⛔ THE STALE REFUSAL (found live 2026-09-17, operation b2576cf1). `peer_only` is
+        decided when the batch PLANS, and a batch's resume phase plans every chat and then
+        delivers them one at a time - so the dead-letter arrives minutes later. Chat 44b8262a
+        finished its own turn at 17:05:41 and was still being deferred as "the turn is in
+        flight" at 17:08:14, on a flag nothing re-read. The refusal is re-gated at the moment it
+        is made now: a chat that has since finished takes the composer, which is the whole
+        point of the fallback."""
+        self._write_tail("working on it", age=5, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+
+        self.stub.routes[f"/api/sessions/{SID}/message"] = self.PEER_DEAD
+        real_before = courier._capture_before_state
+
+        def turn_ends_before_the_send(session_id):
+            # The turn ends AFTER the plan and BEFORE the send, which is why the size captured
+            # here already includes it: the duplicate guard sees no growth, and the only thing
+            # still saying "mid-turn" is the stale flag from the plan.
+            self._write_tail(DONE_WAITING, age=400)
+            return real_before(session_id)
+
+        with mock.patch.object(courier, "_capture_before_state",
+                               side_effect=turn_ends_before_the_send), \
+                mock.patch.object(courier, "_run_actuator",
+                                  return_value=(0, "TYPED and verified")) as act:
+            report = courier.run(5, None, act=True)
+        act.assert_called_once()
+        self.assertNotIn("turn is in flight", report["results"][0]["outcome"])
+        self.assertNotEqual(deliverylib.get(e["id"])["state"], "staged",
+                            "a finished turn must not be deferred a second time")
+
+    def test_a_turn_still_in_flight_at_the_refusal_is_still_deferred(self):
+        """The other half: re-gating must not become a way around rail 4."""
+        _, report = self._mid_turn_peer_refusal()
+        self.assertIn("turn is in flight", report["results"][0]["outcome"])
+
     def test_a_deferral_burns_no_breaker_attempt_and_files_no_incident(self):
         """The breaker counts futility, not restraint. Before this, four correct mid-turn
         refusals would suppress the very chat the courier was being careful with, and file

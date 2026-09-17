@@ -383,6 +383,28 @@ def deliverable(entry: dict, session_lookup=None, _holds=None, _ledger_rows=None
     return True, "", {**match, "wakes": verdict["state"] != "running", "peer_only": mid_turn}
 
 
+def _still_mid_turn(sid: str, match: dict) -> bool:
+    """Is this chat STILL working, right now? `peer_only` is decided when the batch plans, and
+    the peer channel's dead-letter arrives minutes later - a batch's resume phase plans every
+    chat, then delivers them one at a time.
+
+    ⛔ THE STALE REFUSAL (found live 2026-09-17, operation b2576cf1): chat 44b8262a finished its
+    own turn at 17:05:41 and was still being deferred as "the turn is in flight" at 17:08:14,
+    because the flag had been true when the plan was built and nothing re-read it. Deferring a
+    chat that is now idle costs a whole cycle for a message the composer could have typed - and
+    a chat that keeps finishing and starting turns can lose every cycle that way. This repo's
+    own rail is the T-0 re-check, and this is it: re-gate at the moment of the refusal, and
+    defer ONLY while the turn is genuinely still in flight. A read that fails answers "still
+    mid-turn": unknown must never become a licence to type into a live chat."""
+    try:
+        verdict = gatelib.gate_match(match, hydralib.session_row)
+    except Exception:
+        return True
+    if verdict is None:
+        return True
+    return verdict["state"] == "running" and not verdict.get("idle")
+
+
 def _ensure_doctrine(sid: str, match: dict) -> str:
     """Stamp bypassPermissions + ultracode on a DORMANT chat, immediately before waking it.
 
@@ -539,7 +561,7 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
                 return {"id": entry["id"], "ok": False,
                         "outcome": "peer did not confirm, but the chat moved - not risking a duplicate",
                         "detail": (err.detail or str(err))[:200]}
-            if match.get("peer_only"):
+            if match.get("peer_only") and _still_mid_turn(sid, match):
                 # MID-TURN: the composer is not an alternative, it is the thing rail 4 forbids.
                 # An unconfirmed peer write on a working chat stays staged and is re-judged
                 # next cycle, when the turn has ended and every route is open again.
@@ -658,10 +680,11 @@ def deliver_one(entry: dict, match: dict) -> dict:
     settled = _send_via_daemon(entry, match, sid, before, doctrine_note, attempt)
     if settled is not None:
         return settled
-    if match.get("peer_only"):
+    if match.get("peer_only") and _still_mid_turn(sid, match):
         # The 404 route below is the OLD-DAEMON composer fallback, and rail 4 forbids typing
         # into a turn in flight whatever the reason the peer route was unavailable. Staged,
-        # not lost: the next cycle finds the chat idle and every route open.
+        # not lost: the next cycle finds the chat idle and every route open. Re-gated at this
+        # moment, not at plan time - see _still_mid_turn.
         deliverylib.mark_failed(
             entry["id"],
             "this daemon has no /message endpoint and the chat's turn is IN FLIGHT - the "

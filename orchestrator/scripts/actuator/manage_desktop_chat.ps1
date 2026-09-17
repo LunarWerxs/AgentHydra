@@ -467,7 +467,21 @@ if (-not $List -and $mains.Count -ne 1) {
 }
 foreach ($m in $mains) {
   $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$m.ProcId)
-  $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+  # ⛔ THE APP'S REAL WINDOW, NOT THE FIRST ONE (2026-09-17). An Electron process owns several
+  # top-level windows - a hidden helper, a zero-size utility window, the real one - and
+  # FindFirst answered with whichever came first in tree order. Reading a hidden one finds no
+  # rows and reports the chat as "not rendered", which a settle reads as "already settled" and
+  # leaves the twin on screen. Take the biggest window that is actually on screen, and fall
+  # back to first-found only when none of them is (a minimized app: the activation below
+  # restores it, and the row hunt then re-reads the tree).
+  $wins = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond))
+  $win = @($wins | Where-Object {
+      try { $r = $_.Current.BoundingRectangle
+            -not $_.Current.IsOffscreen -and -not $r.IsEmpty -and $r.Width -gt 0 -and $r.Height -gt 0 }
+      catch { $false }
+    } | Sort-Object { try { $_.Current.BoundingRectangle.Width * $_.Current.BoundingRectangle.Height } catch { 0 } } -Descending |
+    Select-Object -First 1)
+  if (-not $win) { $win = $wins | Select-Object -First 1 }
   if (-not $win) { continue }
   # Restore + activate BEFORE the first tree read (see Ax::Foreground). -List is exempt: it
   # only reports what happens to be rendered and must never yank a window onto the screen.
@@ -717,5 +731,13 @@ foreach ($m in $mains) {
 }
 } finally { RestoreGroups }
 if ($List) { exit 0 }
-Write-Output "FAIL: '$Title' not rendered in any searched running instance (collapsed group or virtualized out - scroll it into view, then retry)"
+# Name what was searched, so "not rendered" can be told from "read the wrong window" without a
+# second run (2026-09-17, the same fault the permission picker's refusal now names).
+$searched = ($mains | ForEach-Object {
+  $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$_.ProcId)
+  $n = @([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $c)).Count
+  "$($_.Dir) (pid $($_.ProcId), $n top-level window(s))"
+}) -join '; '
+Write-Output ("FAIL: '$Title' not rendered in any searched running instance (collapsed group or " +
+  "virtualized out - scroll it into view, then retry). Searched: $searched")
 exit 3

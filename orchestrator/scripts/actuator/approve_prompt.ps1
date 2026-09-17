@@ -197,8 +197,63 @@ if ($procs.Count -ne 1) {
   exit 1
 }
 $proc = $procs | Select-Object -First 1
+
+# ⛔ WHICH WINDOW DID WE READ? (2026-09-17, after three permission passes in a row refused with
+# "the sidebar rendered NO chat rows at all in 6s" against an app whose rows were plainly on
+# screen the whole time.) `MainWindowHandle` answers with the first top-level window Windows
+# associates with the process, and an Electron app owns SEVERAL - a hidden helper, a zero-size
+# utility window, the real one - so "no rows" can mean "read the wrong window" and says nothing
+# about the sidebar. This inventory is what turns that refusal into a diagnosis: every
+# top-level window this process has, its size, whether it is on screen, and which one was read.
+function Window-Inventory([int]$procId) {
+  $out = @()
+  try {
+    $cond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$procId)
+    foreach ($w in [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+                     [System.Windows.Automation.TreeScope]::Children, $cond)) {
+      try {
+        $r = $w.Current.BoundingRectangle
+        $empty = $r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0
+        $out += [pscustomobject]@{
+          Hwnd = [int]$w.Current.NativeWindowHandle
+          Name = [string]$w.Current.Name
+          Offscreen = [bool]$w.Current.IsOffscreen
+          Area = if ($empty) { 0 } else { [int]($r.Width * $r.Height) }
+          Rect = if ($empty) { 'no size' } else { "$([int]$r.Width)x$([int]$r.Height)" }
+        }
+      } catch { continue }
+    }
+  } catch { }
+  return $out
+}
+function Window-Report([int]$procId, [int]$used) {
+  $inv = @(Window-Inventory $procId)
+  if ($inv.Count -eq 0) {
+    return "UIA sees NO top-level window for pid $procId at all - the app is minimized to tray, still starting, or on another desktop"
+  }
+  return ("pid $procId has $($inv.Count) top-level window(s): " + (($inv | ForEach-Object {
+    "'" + $_.Name + "' " + $_.Rect + $(if ($_.Offscreen) { ' OFFSCREEN' } else { '' }) +
+    $(if ($_.Hwnd -eq $used) { ' <- the one read' } else { '' })
+  }) -join ' | '))
+}
+
 $hwnd = (Get-Process -Id $proc.ProcId -ErrorAction SilentlyContinue).MainWindowHandle
-if (-not $hwnd -or $hwnd -eq [IntPtr]::Zero) { Write-Output 'FAIL: that instance has no window'; exit 1 }
+if (-not $hwnd -or $hwnd -eq [IntPtr]::Zero) {
+  # MainWindowHandle is 0 whenever the process's first top-level window is hidden - which an
+  # Electron app's helper windows routinely are. Take the biggest window that IS on screen
+  # rather than refusing outright, and say which one that was.
+  $best = @(Window-Inventory $proc.ProcId | Where-Object { -not $_.Offscreen -and $_.Area -gt 0 } |
+            Sort-Object Area -Descending) | Select-Object -First 1
+  if ($best) {
+    $hwnd = [IntPtr]$best.Hwnd
+    Write-Output "NOTE: that instance reports no main window; read its largest on-screen window instead ('$($best.Name)' $($best.Rect))"
+  }
+}
+if (-not $hwnd -or $hwnd -eq [IntPtr]::Zero) {
+  Write-Output ("FAIL: that instance has no window - " + (Window-Report $proc.ProcId 0))
+  exit 1
+}
 
 # ⛔ RESTORE AND ACTIVATE ONCE, HERE, BEFORE ANY RAIL READS THE TREE (2026-09-07).
 # This started life inside Press-Space, which is too late: measured on a MINIMIZED window,
@@ -506,7 +561,28 @@ if (-not (OpenChatIs $el $Title)) {
       exit 4
     }
     if ($rendered.Count -eq 0) {
-      Write-Output "REFUSED: the sidebar in $($proc.Dir) rendered NO chat rows at all in 6s, so '$Title' could not be looked for - the window is still loading, or its sidebar is collapsed $lens"
+      # ⛔ AND SAY WHICH WINDOW WAS READ (2026-09-17). "No rows at all" has two very different
+      # causes and this message used to name only one of them: the sidebar really is empty
+      # (still loading, collapsed), or the window we read is not the app's real one - an
+      # Electron process owns several, and MainWindowHandle picks the first, not the visible.
+      # Three permission passes refused this way against an app whose rows were on screen, and
+      # nothing in the refusal could tell the two apart. The inventory does.
+      # THE FUNNEL, IN NUMBERS. "No rows" is the END of a four-stage scan (buttons in this
+      # window -> left of the sidebar boundary -> row-shaped -> named like the title), and
+      # which stage emptied is the whole diagnosis: zero buttons is a window/tree fault, zero
+      # left-of-boundary is a mis-read pane boundary, zero row-shaped is the sidebar genuinely
+      # empty or collapsed. Re-scanned here, on the refusal path only.
+      $mxNow = PaneMinX $el
+      $allNow = @(Read-Buttons $el $mxNow $true)
+      $leftNow = @($allNow | Where-Object { $_.Left -lt $mxNow })
+      $expNow = @($leftNow | Where-Object { $_.HasExpand })
+      $sample = (@($leftNow | Select-Object -First 6 | ForEach-Object { "'" + $_.Name + "'" }) -join ', ')
+      Write-Output ("REFUSED: the sidebar in $($proc.Dir) rendered NO chat rows at all in 6s, so " +
+        "'$Title' could not be looked for. " + (Window-Report $proc.ProcId ([int]$hwnd)) +
+        ". The scan saw $($allNow.Count) button(s) in that window, $($leftNow.Count) left of the " +
+        "sidebar boundary (x<$([int]$mxNow)), $($expNow.Count) of them row-shaped" +
+        $(if ($leftNow.Count -gt 0) { " - left-of-boundary names: $sample" } else { "" }) +
+        ". $lens")
       exit 4
     }
     Write-Output ("REFUSED: no sidebar row is named '$Title' in $($proc.Dir) - a MATCH failure, not a timing one: $($rendered.Count) rows are rendered right now $lens. Rows: " +

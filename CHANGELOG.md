@@ -5,7 +5,7 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.43.0] - 2026-09-17
 
 ### Added
 
@@ -162,6 +162,29 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   and its callers archive, stamp and rename what they are handed. It now requires the path to
   be inside the profile (`path-key.isInsideDir`). No current profile pair collides, so this was
   latent; it is pinned by a test.
+
+- **A reply is no longer deferred on a turn that has already ended** (`courier.py`). `peer_only`
+  - rail 4 travelling with a delivery, "this chat is mid-turn, never type into it" - is decided
+  when a batch PLANS, and a batch's resume phase plans every chat and then delivers them one at
+  a time, so the peer channel's dead-letter arrives minutes later. Measured 2026-09-17
+  (operation `b2576cf1`): chat `44b8262a` finished its own turn at 17:05:41 and was still being
+  deferred as "the turn is in flight" at 17:08:14, on a flag nothing re-read. The refusal is now
+  re-gated at the moment it is made (this repo's own T-0 rail): still mid-turn defers exactly as
+  before, a turn that has ended takes the composer, and a gate read that fails answers "still
+  mid-turn" - unknown never becomes a licence to type into a live chat.
+
+- **A sidebar pass that sees nothing now says which window it read and what its scan saw**
+  (`actuator/approve_prompt.ps1`, `actuator/manage_desktop_chat.ps1`). Three permission passes in
+  a row refused with "the sidebar rendered NO chat rows at all in 6s" against an app whose rows
+  were plainly on screen, and nothing in that refusal could tell the two causes apart. It now
+  carries the window inventory (every top-level window of that process, its size, whether it is
+  on screen, which one was read - an Electron app owns several and `MainWindowHandle` answers
+  with the first, not the visible) and the scan funnel (buttons seen, how many left of the
+  sidebar boundary, how many row-shaped, with a sample of names). The archive/rename actuator
+  picks the biggest on-screen window rather than whichever came first in tree order, and its
+  "not rendered" refusal names what it searched. The original failure could not be reproduced -
+  the state is gone, and by the time it was investigated that app's sidebar read 47 rows
+  normally - so this is the diagnosis the next occurrence needs, not a claimed fix.
 
 - **A chat waiting on a person is explained by the signal that actually held it**
   (`dashboard.decide`). It read the raw fields in its own order, so a chat held back only by
