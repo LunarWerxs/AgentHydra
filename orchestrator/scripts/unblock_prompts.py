@@ -48,6 +48,7 @@ import time
 from pathlib import Path
 
 from lib import approvallib
+from lib import configlib
 from lib import armlib, clilib
 from lib import deliverylib
 from lib import gatelib
@@ -58,11 +59,11 @@ from lib import stamplib
 from lib import windowlib
 
 ACTUATOR = Path(__file__).resolve().parent / "actuator" / "approve_prompt.ps1"
-DEFAULT_MAX = 6
+DEFAULT_MAX = configlib.get("unblock.max_presses")
 # Below this, an unanswered tool call is simply a command that is still running. A permission
 # prompt does not resolve itself, so waiting a little costs nothing and avoids clicking at a
 # healthy chat mid-command.
-MIN_WAIT_SECS = 4 * 60
+MIN_WAIT_SECS = configlib.get("unblock.min_wait_secs")
 
 
 def _pending_record(transcript: Path) -> dict | None:
@@ -162,10 +163,10 @@ def find_stuck() -> list[dict]:
 # Selecting a chat's sidebar row CHANGES WHICH CHAT THE OWNER IS LOOKING AT in that window.
 # Below this much waiting, an unanswered tool call is far more likely a long command than a
 # prompt, so the row is never selected for it - the pane is only checked as it stands.
-SELECT_AFTER_SECS = 15 * 60
+SELECT_AFTER_SECS = configlib.get("unblock.select_after_secs")
 # This many presses failing in a row for one chat stops being bad luck and becomes something a
 # person has to look at - it is raised as an incident rather than re-queued in silence.
-SURFACE_AFTER_FAILURES = 3
+SURFACE_AFTER_FAILURES = configlib.get("unblock.surface_after_failures")
 
 
 def _row_quiet_secs(row: dict) -> float:
@@ -378,6 +379,12 @@ def main(argv: list[str]) -> int:
         return 0
     as_json = "--json" in argv
     act = "--yes" in argv
+    if act and not configlib.get("unblock.enabled"):
+        # THE MASTER SWITCH (2026-09-17). Stuck prompts are still found and still reported -
+        # they are simply never pressed, so every one of them becomes yours to answer.
+        print("PLAN ONLY - answering permission prompts is switched OFF in your policy "
+              "(unblock.enabled).")
+        act = False
     # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
     # window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so.
     if act:

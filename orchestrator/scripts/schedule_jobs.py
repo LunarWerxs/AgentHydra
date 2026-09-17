@@ -111,6 +111,44 @@ EVERY_5_MIN = ["/SC", "MINUTE", "/MO", "5"]
 # and its own lock keeps ticks from stacking.
 EVERY_2_MIN = ["/SC", "MINUTE", "/MO", "2"]
 
+def job_key(job: str) -> str:
+    """'chat-journal' -> 'chat_journal': the policy file's key for one lane. Dashes are legal
+    in a Windows task name and illegal in a config key nobody wants to quote."""
+    return job.replace("-", "_")
+
+
+def job_spec(job: str) -> dict:
+    """One lane as the policy wants it registered: `jobs.<name>.every_minutes` is its cadence
+    (the defaults are the cadences hardcoded below)."""
+    from lib import configlib
+
+    spec = JOBS[job]
+    every = configlib.get(f"jobs.{job_key(job)}.every_minutes", None)
+    return {**spec, "schedule": ["/SC", "MINUTE", "/MO", str(every)]} if every else dict(spec)
+
+
+def _policy_on(job: str) -> bool:
+    from lib import configlib
+
+    return bool(configlib.get(f"jobs.{job_key(job)}.enabled", True))
+
+
+def configured_jobs() -> dict[str, dict]:
+    """THE LANES YOUR POLICY ACTUALLY WANTS (2026-09-17). Every lane below is now
+    `jobs.<name>.enabled` (default on = today's behaviour) with its own
+    `jobs.<name>.every_minutes`. A lane switched off is not registered, and `--apply` REMOVES
+    it if it was registered before - a config that only stopped NEW registrations would leave
+    the old task ticking, which is the worst of both worlds. Changing a cadence needs one
+    `orch.py schedule_jobs --apply` to re-register the task; the policy menu says so rather
+    than letting someone wonder why nothing changed."""
+    return {job: job_spec(job) for job in JOBS if _policy_on(job)}
+
+
+def switched_off_jobs() -> dict[str, dict]:
+    """The lanes the policy switched OFF - what a full `--apply` unregisters."""
+    return {job: JOBS[job] for job in JOBS if not _policy_on(job)}
+
+
 JOBS: dict[str, dict] = {
     "dashboard": {
         "what": "keep the read-only decision dashboard serving on 127.0.0.1:7799",
@@ -521,9 +559,16 @@ def _select_jobs(argv: list[str]) -> tuple[dict[str, dict], int | None]:
 
     Returns (jobs, None) on success, or ({}, exit_code) when argv is bad enough that main()
     should stop and return exit_code without doing anything else.
+
+    Without --only this is EVERY lane, switched on or not: --status, --pause and --remove act
+    on whatever may be registered, and a lane the policy switched off can still be sitting in
+    Task Scheduler until the next --apply. `orch.py disarm` is `--pause`, and a disarm that
+    skipped a switched-off lane would leave it firing (review, 2026-09-17). main() narrows
+    this to the policy's lanes for the commands that register (--apply and the dry run) and
+    for --resume, which must not wake a lane the policy switched off.
     """
     if "--only" not in argv:
-        return dict(JOBS), None
+        return {job: job_spec(job) for job in JOBS}, None
     i = argv.index("--only")
     if i + 1 >= len(argv):
         print(__doc__.strip(), file=sys.stderr)
@@ -532,7 +577,10 @@ def _select_jobs(argv: list[str]) -> tuple[dict[str, dict], int | None]:
     if only not in JOBS:
         print(f"unknown job {only!r} - known: {', '.join(JOBS)}", file=sys.stderr)
         return {}, 3
-    return {only: JOBS[only]}, None
+    # A job NAMED on the command line is a person's own word: it is acted on even if the
+    # policy switched it off (the same precedence the sweep's lane flags use), at the cadence
+    # the policy sets for it, and nothing else is touched.
+    return {only: job_spec(only)}, None
 
 
 def _cmd_status(jobs: dict[str, dict], as_json: bool) -> int:
@@ -586,8 +634,21 @@ def _cmd_remove(jobs: dict[str, dict]) -> int:
     return 0 if all(r["ok"] for r in results) else 2
 
 
-def _cmd_apply(jobs: dict[str, dict]) -> int:
+def _cmd_apply(jobs: dict[str, dict], off: dict[str, dict]) -> int:
     results = apply_jobs(jobs)
+    # ⛔ A LANE SWITCHED OFF IN POLICY MUST ALSO BE UNREGISTERED. Skipping its registration
+    # is not enough: a task registered by a previous --apply keeps ticking on Windows' own
+    # clock, so "I turned that off" would be false in the only place it matters. `off` is the
+    # policy's switched-off lanes on a full --apply, and EMPTY under --only: the first version
+    # computed it as "every lane this run did not ask for", so `--only reconcile --apply`
+    # unregistered the other ten (review, 2026-09-17).
+    if off:
+        print(f"  policy: {len(off)} lane(s) switched OFF - unregistering them: "
+              f"{', '.join(off)}")
+        for r in remove_jobs(off):
+            print(f"  {'removed   ' if r['ok'] else 'FAILED    '} {r['task']}")
+            if not r["ok"]:
+                print(f"      {r['detail']}")
     for r in results:
         print(f"  {'registered' if r['ok'] else 'FAILED    '} {r['task']}")
         if not r["ok"]:
@@ -630,15 +691,19 @@ def main(argv: list[str]) -> int:
     if error_code is not None:
         return error_code
 
+    named = "--only" in argv
     if "--status" in argv:
         return _cmd_status(jobs, as_json)
-    if "--pause" in argv or "--resume" in argv:
+    if "--resume" in argv:
+        return _cmd_pause_resume(jobs if named else configured_jobs(), argv)
+    if "--pause" in argv:
         return _cmd_pause_resume(jobs, argv)
     if "--remove" in argv:
         return _cmd_remove(jobs)
     if "--apply" in argv:
-        return _cmd_apply(jobs)
-    return _cmd_dry_run(jobs)
+        return _cmd_apply(jobs if named else configured_jobs(),
+                          {} if named else switched_off_jobs())
+    return _cmd_dry_run(jobs if named else configured_jobs())
 
 
 if __name__ == "__main__":

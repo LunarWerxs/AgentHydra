@@ -51,6 +51,7 @@ import json
 import sys
 
 from lib import clilib, gatelib
+from lib import configlib
 from lib import holdlib
 from lib import hydralib
 from lib import ledgerlib
@@ -82,7 +83,7 @@ PRESERVE_PROMPT = (
 )
 # How long to wait for a chat to run its preservation turn before archiving anyway (a dormant
 # chat that never took the turn must not wedge the archive forever).
-PRESERVE_GRACE_MIN = 20
+PRESERVE_GRACE_MIN = configlib.get("archive.preserve_grace_min")
 
 # The preserve POST asks the daemon's message endpoint to watch for up to confirm_secs before
 # answering - hydralib's generic TIMEOUT_SECS (30s) is sized for a plain read, not for that
@@ -446,6 +447,26 @@ def _pending_preserve_check(session_id: str, title, prev: dict, as_json: bool) -
             },
             as_json, 8,
         )
+    # THE GRACE HAS ELAPSED WITH NO PRESERVATION TURN, and what happens next is now the
+    # owner's call (2026-09-17). The default is unchanged - archive anyway, because a dormant
+    # chat that never ran cannot update docs and waiting for it forever wedges the lane. With
+    # archive.archive_anyway_after_grace OFF, that chat is NEVER archived unattended: it
+    # stays deferred, pass after pass, until a person archives it themselves. Slower sidebar,
+    # zero chance of filing a chat that still had something to say.
+    if not grew and not configlib.get("archive.archive_anyway_after_grace"):
+        return out(
+            {
+                "changed": False,
+                "preserving": True,
+                "report": (
+                    f"DEFERRED INDEFINITELY: '{title}' never ran its preservation turn and "
+                    f"the {PRESERVE_GRACE_MIN}m grace has elapsed, but your policy "
+                    "(archive.archive_anyway_after_grace = OFF) says never archive one of "
+                    "these unattended. Archive it by hand when you are ready."
+                ),
+            },
+            as_json, 8,
+        )
     # Either the turn ran (grew) or the grace elapsed with no preservation turn (a dormant
     # chat that never ran: a dead chat cannot update docs, so archive anyway rather than
     # wedge). THE PRESERVE ROW IS CLEARED ONLY WHEN THE ARCHIVE LANDS (below in the caller's
@@ -459,8 +480,12 @@ def _preserve_before_archive(session_id: str, title, desired: bool, no_preserve:
     """KNOWLEDGE PRESERVATION (owner rule, 2026-09-01): the final act before an archive is to
     ask the chat to update its docs. --force does NOT skip this (capturing knowledge is
     orthogonal to permission), only --no-preserve does, and only unarchive/no-preserve skip
-    it outright. Returns a stop exit code to defer, or None once the act may proceed."""
-    if not desired or no_preserve:
+    it outright. Returns a stop exit code to defer, or None once the act may proceed.
+
+    Since 2026-09-17 the whole step is also a policy knob (archive.preserve_knowledge,
+    default ON = today's behaviour). OFF archives immediately and loses whatever the chat
+    never wrote down, which is why the menu spells that out rather than calling it 'faster'."""
+    if not desired or no_preserve or not configlib.get("archive.preserve_knowledge"):
         return None
     prev = _newest_preserve(session_id)
     if prev is None:
@@ -683,6 +708,18 @@ def main(argv: list[str]) -> int:
     query = args[0]
     desired = not unarchive
     verb = "unarchive" if unarchive else "archive"
+
+    # ⛔ THE MASTER SWITCH (2026-09-17). archive.enabled OFF means NOTHING in this toolbox
+    # archives a chat - not the sweep lane, not the groundskeeper's duty 2, not an AI's
+    # answer in the judgment queue, not a --force. Candidates are still found and still
+    # reported; they are simply never filed. Unarchiving is untouched: the switch exists to
+    # stop work disappearing, so it must never block work coming back.
+    if desired and not configlib.get("archive.enabled"):
+        return out({"changed": False, "refused": "policy",
+                    "report": (f"REFUSED: archiving is switched OFF in your policy "
+                               f"(archive.enabled). '{query}' was left alone. Turn it back on "
+                               "with `orch.py policy --set archive.enabled=on`.")},
+                   as_json, 2)
 
     # -- resolve: zero or many matches is deterministic - record it so unattended callers
     #    stop after one, and say which chats collided.

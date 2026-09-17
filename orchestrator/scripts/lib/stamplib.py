@@ -29,8 +29,9 @@ import os
 from pathlib import Path
 
 from lib import ledgerlib
+from lib import configlib
 
-ULTRACODE_EFFORT = "xhigh"
+ULTRACODE_EFFORT = configlib.get("doctrine.stamp_effort")
 
 
 def store_roots(fleet_data: dict) -> list[dict]:
@@ -148,14 +149,26 @@ def stamp_doctrine(meta_path: str | Path) -> dict:
 
 
 def _apply_doctrine(meta: dict) -> bool:
-    """Both doctrine stamps onto one record; False when it already carries them."""
-    if is_bypass(meta) and is_stamped(meta):
+    """The doctrine stamps onto one record; False when nothing needed changing.
+
+    EACH STAMP IS ITS OWN SWITCH since 2026-09-17 (doctrine.stamp_bypass_permissions,
+    doctrine.stamp_ultracode, doctrine.stamp_effort), all defaulting to exactly what was
+    hardcoded here. Someone who wants the fleet on bypass but NOT on ultracode - or on a
+    different effort - no longer has to edit this function to get it."""
+    want_bypass = configlib.get("doctrine.stamp_bypass_permissions")
+    want_ultra = configlib.get("doctrine.stamp_ultracode")
+    # ONE effort value for the check and the write: is_stamped() compares against
+    # ULTRACODE_EFFORT, so writing a fresher read here would re-stamp the record every pass.
+    effort = ULTRACODE_EFFORT
+    if (not want_bypass or is_bypass(meta)) and (not want_ultra or is_stamped(meta)):
         return False
-    meta["permissionMode"] = BYPASS
-    settings = dict(meta.get("sessionSettings") or {})
-    settings["ultracode"] = True
-    meta["sessionSettings"] = settings
-    meta["effort"] = ULTRACODE_EFFORT
+    if want_bypass:
+        meta["permissionMode"] = BYPASS
+    if want_ultra:
+        settings = dict(meta.get("sessionSettings") or {})
+        settings["ultracode"] = True
+        meta["sessionSettings"] = settings
+        meta["effort"] = effort
     return True
 
 

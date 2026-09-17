@@ -7,6 +7,177 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **The orchestrator has a policy file: 86 knobs, one place, every default equal to what was
+  hardcoded** (`orchestrator/scripts/lib/configlib.py`, `orchestrator/scripts/policy.py`,
+  `orchestrator/state/config.json`). Owner ask, 2026-09-17: *"most of the orchestrator should
+  probably be configurable. Like, it should ask which variants or whatever, which toggles,
+  triggers, options the user wants on. And then when we decide that, it orchestrates."* An audit
+  the same day counted **138 user-facing policy knobs spread across 18 files** as module
+  constants and unswitchable `always-on` behaviours, with no config file, no env var and no
+  per-fleet policy anywhere - archive_chat.py's own line was *"the complete set of user-facing
+  knobs; there is no config file"*. Steering the fleet meant editing Python.
+
+  Three ways to set it, because three different things ask: `orch.py policy --wizard` walks a
+  person through every group and writes nothing until they confirm; `orch.py policy --ask` /
+  `--apply answers.json` is the same questionnaire in the ask/apply shape `interview.py`
+  already uses, so an AI can set policy with no terminal; `orch.py policy --set k=v` changes
+  one knob now. Plus `--list`, `--explain <key>`, `--doctor`, and four presets
+  (`default`, `observe-only`, `conservative`, `aggressive`).
+
+  **Installing it changes nothing.** Every default equals the value it replaced, enforced by
+  `test_configlib.test_every_default_matches_the_constant_it_replaced`, which reads the live
+  module values back and fails if any drifted. On a fresh machine `orch.py policy` prints
+  "nothing - every knob is at its default". Precedence is always: a flag a person typed >
+  config.json > the default. Turning a sweep lane off changes what `--all` does; naming that
+  lane on the command line still runs it.
+
+  Covered: the gate's timings and its **four archive signals, one switch each**; archiving
+  (master switch, quiet window, per-run cap, knowledge preservation, the grace window); the
+  sweep's four lanes plus its naming and doctrine passes; the doctrine stamps themselves
+  (bypass, ultracode, effort, held chats, and the global-settings rewrite); the groundskeeper's
+  five duties and every cap; the usage bands; waking (including the exact wake prompt);
+  permission-prompt pressing; delivery; the judgment queue; the standing manager; and all
+  eleven scheduled lanes (on/off and cadence - a lane switched off is now UNREGISTERED by
+  `--apply`, not merely skipped, because a task Windows still ticks is not "off").
+  Deliberately **not** knobs, and listed as such in the menu so their absence reads as a
+  decision: the live-writer rule, the hold rail, the T-0 re-check, post-act verification, the
+  DENY list, the tray-icon switch, and that the shared-cause breaker fires at all.
+
+  ⛔ **A policy file nobody can read stops unattended acting.** Unreadable JSON, a value that
+  fails its check, and an unknown key (`"archive.enable": false` is a typo that reads as
+  "archiving is off" and changes nothing) all fall back to a default, and a lane acting on a
+  default where the owner wrote the opposite undoes his decision. So `armlib.refuse_unless_armed`,
+  the guard every unattended act already calls, refuses while `configlib.problems()` is
+  non-empty, armed or not. `--force` by hand still runs one act; the dry loop names each
+  problem and exits 2; `policy --unset <key>` removes an unknown key. Writes are atomic
+  (per-process temp file, then a swap) and serialized across processes, so two `--set` runs
+  at once both land, and a note a person added by hand (`"_why": ...`) survives a rewrite.
+
+  Found by review before any of this was committed, and fixed with tests:
+  `schedule_jobs --only <lane> --apply` unregistered the other ten lanes; `--pause` (what
+  `orch.py disarm` runs) skipped a lane the policy had switched off, so a lane still
+  registered from before kept firing after a disarm (`--status`, `--pause` and `--remove` now
+  reach every lane, `--resume` skips switched-off ones, and a named lane is registered at its
+  policy cadence); with `archive.enabled` OFF the sweep still ran the archive lane, so three
+  identical refusals tripped the shared-cause breaker and filed a false incident (the sweep
+  and the groundskeeper now skip archiving up front); the wizard's confirm step crashed on
+  every run with a change, so it could never save; an on/off answer the wizard did not
+  understand counted as OFF, so a typed "yse" switched an archive signal off (it now keeps
+  the current value); a JSON `true` passed as the number 1; `--doctor` crashed on the broken
+  file it exists to diagnose; and `--apply` crashed on an answer that was not an object.
+
+- **`dryrun.py` - run the dry loop N times and prove it works** (`orchestrator/scripts/dryrun.py`).
+  Owner ask, same day: *"can we run like 50 dry runs to make sure it's all functioning?"* One
+  run proves it did not crash that time. N runs answer what one structurally cannot: the
+  intermittent-crash rate, whether the loop AGREES WITH ITSELF (it fingerprints every chat's
+  decision and reports **flaps** - a verdict that changed and changed back, which is a
+  timing-dependent bug, as distinct from a verdict that moved once because the fleet moved),
+  where the time goes per stage, and - with `--matrix` - whether flipping a policy knob
+  actually steers the plan. Every run is a fresh subprocess on purpose: looping in one process
+  would let the usage-survey cache and module constants carry over, so later runs would be
+  faster and more identical than reality.
+
+  The matrix judges each variant against **what it claims to change**, on evidence an inert
+  knob cannot fake. It took two rewrites the same day to get there. The first version asked
+  "did anything differ?", and the judgment-queue count drifting on a live fleet made all eight
+  variants pass. The second still compared counts with `>=` or "or unchanged", so a cap
+  nothing read passed whenever the lane was already full, and a switched-off signal passed
+  because "the same number of archive candidates" satisfies "the same or more". Now a cap is
+  checked inside the variant's own run (shown == min(cap, everything waiting)). A signal is
+  checked chat by chat: the plan records what all four archive signals say about every
+  finished chat (`dissent`, switched on or not), and every chat the baseline shows held back
+  ONLY by the switched-off signals must come out released. When the fleet has nothing that
+  could tell a wired knob from an inert one, the verdict is `INCONCLUSIVE`, printed as "not
+  proven", never counted as a pass. The slow-liveness variant names every decision it
+  disagrees with the fast index on. A knob that acts at ACT time and cannot be seen in a dry
+  loop reports `not-visible-here` and names the unit test that covers it.
+
+### Changed
+
+- **Liveness for the whole fleet is ONE daemon call, not one per chat** (`hydralib.live_index`
+  / `live_from_index`, used by `dashboard.build_plan`; `GET /api/sessions/live?lineage=1`).
+  Measured 2026-09-17: `live_for(sid)` cost **668ms per chat** and `build_plan` called it once
+  per row - 86 of the dry loop's 132 seconds, paid again by every consumer of the plan (the
+  sweep, the groundskeeper, the dashboard page, the courier's cap). The gate itself costs under
+  a millisecond per chat; the wait was entirely HTTP round trips against a registry
+  `/api/sessions/live` hands over in full for one request. Verified equivalent on the live
+  fleet: **128 chats, 0 decision differences, 0 state differences, the same 10 running chats,
+  101.2s -> 2.3s (44x) for `build_plan`.**
+
+  ⛔ **Every alias of every live engine is indexed, because that is the one way a fast
+  liveness read could call a chat with a writer "not live".** Identity rotates: a chat that
+  rolled its cli session id keeps a transcript row under the OLD id while its engine runs under
+  the NEW one. `?lineage=1` makes the daemon return, for each live engine, every id its chat
+  has answered to (`liveLineage` in `server/src/chat-dossier.ts`, the same rule the dossier's
+  own `live` field uses), with `lineage: true` on the answer so a caller can tell it from a
+  daemon that ignored the parameter. Against an older daemon the index does one dossier lookup
+  **per live engine, every one of them** - 13 engines, about 13s, still no walk over 165
+  chats. The first version of this skipped that lookup for any engine whose own id was
+  already a known row, which is exactly when the OLD row is the one at risk; on the live fleet
+  it skipped all 13 engines, so the correction never ran. Caught in review before it shipped.
+  A liveness read that cannot be completed returns `None`, which means "use the slow per-chat
+  path", never "nothing is live". `perf.bulk_liveness` turns it off entirely.
+
+- **The dry loop names the console strays the land lane left out** (`lanes.landNotClaude` in
+  `orch.py loop --json`, and a line under landConsole). It was only in a sweep's own print.
+
+### Fixed
+
+- **The orchestrator no longer force-archives over a HOLD you placed by hand.** Owner, the same
+  day: *"the orchestrator itself seems to have issues where it, like, forcibly archives or
+  whatever."* `interview.py`'s `_apply_archive` ran **every** AI 'archive' answer as
+  `archive_chat --force`, on the theory that an AI's answer in the judgment queue IS the
+  person-level word the gate wanted. It is not: `--force` is also the one flag that lifts the
+  owner's own hold rail, so a model answering a question could overrule him, silently, with no
+  switch anywhere. It is now `archive.ai_decision_uses_force`, **default OFF** - the one
+  default in the policy file that is deliberately not the old behaviour - and a held chat comes
+  back reported as his word kept, not as a failure. Setting it back ON restores the old
+  behaviour for anyone who wants it.
+
+- **A chat waiting on a person is explained by the signal that actually held it**
+  (`dashboard.decide`). It read the raw fields in its own order, so a chat held back only by
+  open recommendations was explained as "the recap does not claim done (yes)", and, now that
+  signals can be switched off, a switched-off signal could be named as the reason. It now reads
+  the same `gatelib.archive_dissent` list the gate decided on.
+
+- **The orchestrator suite's four standing reds were one isolation hole, not two bugs**
+  (`tests/test_migrate_batch.py`, `tests/test_migrate_batch_resume.py`). The batch's naming
+  verdict reads what each account's app is RENDERING (`name_chats.rendered_titles`), which is a
+  real PowerShell UI read of the live desktop, and neither file stubbed it. On a machine with
+  the app open that read came back without the fake chat's title, so two clean batches exited
+  PARTIAL; and the read itself took over a second, so the two bounded-phase cases failed their
+  1.0s budget and were written off as "load-flaky". Both test bases now stub the reader to
+  "could not read the sidebar", the neutral answer that is never read as a miss. 76 of 76 pass,
+  in 18 seconds.
+
+- **`_fmt` in policy.py treated `None` as "no argument"**, so rendering an uncapped knob
+  (`saturate.max_wakes`, `groundskeeper.evacuate_per_run`) crashed `--preset`. Caught by its
+  own test the hour it was written; the sentinel is now explicit.
+
+- **The land-console lane no longer queues sessions that are not Claude chats**
+  (`sweep.build_batch`). Since 0.42.0 the daemon surfaces zswarm jobs, OpenCode and DSH sessions
+  as sessions; measured 2026-09-17, 67 of the lane's 113 "console strays" were `job.json` /
+  `opencode.db` / `session.v3.jsonl.zstd` records no actuator can land, so the lane sat 99 over
+  its cap forever with 46 real chats behind them. It now excludes rows the gate refuses as
+  "unsupported transcript format" (a Claude chat with no transcript YET is still landed), and
+  reports the excluded count as `landNotClaude` instead of shrinking silently. Now +41 over cap.
+
+- **Four policy knobs were decoration and are now wired**: `saturate.max_wakes`,
+  `doctrine.stamp_held_chats`, `groundskeeper.duty_name_stuck`, `overlord.enabled`. Found by a
+  scan whose first version could not fail (it included configlib.py, which names every key);
+  `test_configlib.EveryKnobIsWiredTest` now fails on any knob nothing reads, with a canary that
+  fails if the spec file creeps back into the scanned source.
+
+- **dryrun.py classifies flaps**: a live chat crossing the idle threshold both ways
+  (`leave-alone` <-> `judgment`) is reported as expected, not a defect - both states mean a
+  writer is alive, so neither can archive or move anything. Any other flap fails the run. Found
+  on the first 50-run pass (one busy chat pausing past 180s twice).
+
+- **`policy --wizard` with no one to answer** (piped or tool-driven stdin that still reports a
+  tty on Windows) now says "nothing was written" and points at `--ask` / `--apply`.
+
 ## [0.42.0] - 2026-09-15
 
 ### Added

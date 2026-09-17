@@ -66,6 +66,7 @@ from pathlib import Path
 
 from lib import armlib, clilib
 from lib import bandlib
+from lib import configlib
 from lib import clilib
 from lib import gatelib
 from lib import holdlib
@@ -75,8 +76,8 @@ from lib import ledgerlib
 # NO CAP ON EVACUATIONS (owner, 2026-09-01: "chats at their limit should always move ALL
 # unarchived chats to a different account"). A per-run cap left some behind on an account that
 # cannot run them, which is the whole problem. --evacuate-max still exists for a careful run.
-EVACUATE_PER_RUN: int | None = None
-ARCHIVE_PER_RUN = 3
+EVACUATE_PER_RUN: int | None = configlib.get("groundskeeper.evacuate_per_run")
+ARCHIVE_PER_RUN = configlib.get("archive.per_run")
 # A chat whose configured mode is NOT bypassPermissions and whose newest record is a shell
 # call with no result is, after this long, a permission prompt nobody is present to click -
 # not a long build (2026-09-01: a deeplink-born chat is LIVE from birth, so the bypass stamp
@@ -85,23 +86,23 @@ ARCHIVE_PER_RUN = 3
 # violation whose prompt does not resolve itself, so it is NAMED sooner. unblock_prompts will
 # not press for it (mode not bypass = a person's call) and this lane never moves a live chat,
 # so naming it loudly, every pass, is the whole act.
-PROMPT_STALL_SECS = 10 * 60
+PROMPT_STALL_SECS = configlib.get("groundskeeper.prompt_stall_secs")
 # ⛔ OPENING AN ACCOUNT IS A LAST RESORT, NOT A BALANCING MOVE (owner, standing: "only ever
 # open an account if you absolutely have no more tokens"). This is reached only when EVERY
 # open account is past its usage target and a chat still has to go somewhere - one per run.
-OPEN_PER_RUN = 1
+OPEN_PER_RUN = configlib.get("groundskeeper.open_per_run")
 # Spreading only kicks in on a REAL imbalance, and moves a few at a time: shuffling chats
 # between healthy accounts costs a migration each and is not free.
 # Owner, 2026-09-01: "if any one account has more chats than others, when possible, it
 # should be disseminated." So the trigger is a real gap of 2, not a pile of 3, and a run
 # moves enough to actually converge instead of nibbling at it.
-REBALANCE_GAP = 2
-REBALANCE_PER_RUN = 5
+REBALANCE_GAP = configlib.get("groundskeeper.rebalance_gap")
+REBALANCE_PER_RUN = configlib.get("groundskeeper.rebalance_per_run")
 # A chat moved for balance stays put for this long (live soak, 2026-09-01: the same stopped
 # chats went 5claude -> work -> funzypops -> anutha23 in three passes as the "fullest"
 # account changed - each landing re-imports the chat and boots an engine, so the shuffle
 # burned quota and was exactly the "keeps load balancing" the owner complained about).
-REBALANCE_COOLDOWN_SECS = 6 * 3600
+REBALANCE_COOLDOWN_SECS = configlib.get("groundskeeper.rebalance_cooldown_secs")
 
 
 def _moved_recently(sid: str, ledger_rows: list[dict], now_ms: int | None = None) -> bool:
@@ -114,10 +115,10 @@ def _moved_recently(sid: str, ledger_rows: list[dict], now_ms: int | None = None
                for r in ledger_rows or [])
 # How long a chat must have been quiet before the unattended lane may put it away. The gate's
 # four signals say it thinks it is done; this gives it time to be wrong about that.
-ARCHIVE_QUIET_SECS = 45 * 60
+ARCHIVE_QUIET_SECS = configlib.get("archive.quiet_secs")
 # A visible chat untouched this long that no lane can act on gets NAMED, every run, so it
 # cannot quietly rot for days in a sidebar.
-STALE_HOURS = 12
+STALE_HOURS = configlib.get("groundskeeper.stale_hours")
 
 
 def _target_account(bands: dict, per_instance: dict[str, int], share: int,
@@ -295,6 +296,11 @@ def build_plan(evacuate_max: int | None = EVACUATE_PER_RUN,
             # the stuck chat is REPORTED every pass and never touched here. unblock_prompts
             # presses the prompt for a bypass chat; anything else is a person's call.
             if is_live:
+                if not configlib.get("groundskeeper.duty_name_stuck"):
+                    # DUTY 3 switched off: the chat is still never touched (it is live), it is
+                    # simply not REPORTED. A pass that keeps naming the same stuck chat every
+                    # five minutes is noise to someone who has decided to deal with it later.
+                    continue
                 # A chat NOT configured bypassPermissions stalls on a prompt much sooner than the
                 # generic window (PROMPT_STALL_SECS): its stall IS the missing stamp.
                 not_bypass = modes.get(sid) not in (None, "bypassPermissions")
@@ -364,7 +370,8 @@ def build_plan(evacuate_max: int | None = EVACUATE_PER_RUN,
                       key=lambda n: load.get(n, 0), default=None)
         thinnest = min(usable_names, key=lambda n: load.get(n, 0), default=None)
         gap = load.get(str(fullest), 0) - load.get(str(thinnest), 0)
-        if fullest and thinnest and fullest != thinnest and gap >= REBALANCE_GAP:
+        if (configlib.get("groundskeeper.duty_rebalance")
+                and fullest and thinnest and fullest != thinnest and gap >= REBALANCE_GAP):
             moved = 0
             for row in hydralib.visible_chats():
                 if moved >= REBALANCE_PER_RUN or moved >= gap // 2:
@@ -445,10 +452,22 @@ def build_plan(evacuate_max: int | None = EVACUATE_PER_RUN,
 
 def execute(plan: dict, do_evacuate: bool = True, do_archive: bool = True,
             do_reap: bool = True) -> list[dict]:
+    """The duties that ACT. Each is now a policy toggle as well as a parameter (2026-09-17):
+    the caller's own argument still wins when it says False, and the policy can switch a duty
+    off for every unattended pass without anyone editing a script. Duty 3 (name the stuck)
+    and the stale naming are reports, not acts, and live in the plan - so switching them off
+    only silences a line, which is why they are honoured where they are built, not here."""
     import archive_chat
     import migrate_chat
 
     import open_instance
+
+    do_evacuate = do_evacuate and configlib.get("groundskeeper.duty_evacuate")
+    # archive.enabled is checked here as well as inside archive_chat: with archiving switched
+    # off fleet-wide, every row would come back refused and be reported as "did NOT archive".
+    do_archive = (do_archive and configlib.get("groundskeeper.duty_archive")
+                  and configlib.get("archive.enabled"))
+    do_reap = do_reap and configlib.get("groundskeeper.duty_reap")
 
     results: list[dict] = []
     if do_evacuate:
@@ -523,7 +542,7 @@ def execute(plan: dict, do_evacuate: bool = True, do_archive: bool = True,
 # When the count is over the cap, the longest-idle engines are stopped (lib/enginelib: turn
 # finished, quiet REAP_IDLE_SECS, gate says idle, never stuck or mid-turn) until it is not.
 # A stopped chat is unchanged; its next instruction boots a fresh engine.
-REAP_IDLE_SECS = 10 * 60
+REAP_IDLE_SECS = configlib.get("groundskeeper.reap_idle_secs")
 
 
 def reap_idle_engines() -> list[dict]:

@@ -20,6 +20,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from lib import configlib
+
 DEFAULT_PORT = 7787
 
 
@@ -596,10 +598,10 @@ def usage_cache() -> dict:
 # hit that limit we just pause and come back - cycling round robin"). Anything that WAKES a
 # chat (a delivery, a native revive, a compact turn) checks running_count() first; a
 # deferred wake stays staged and the 5-minute cycle retries it - that IS the round robin.
-MAX_RUNNING_CHATS = 18
+MAX_RUNNING_CHATS = configlib.get("bands.max_running_chats")
 
 
-def _live_endpoint() -> dict | None:
+def _live_endpoint(lineage: bool = False) -> dict | None:
     """Raw GET /api/sessions/live, shape-checked: {count: int, sessions: list}.
 
     The validated lookup shared by running_count() and running_by_instance() (extracted
@@ -607,9 +609,13 @@ def _live_endpoint() -> dict | None:
     checking, so a malformed 200 would have silently answered with no live sessions at all -
     the exact 'unknown reads as room under the cap' failure this file forbids everywhere else).
     Returns None on a 404 (older daemon: caller falls back to _live_ids_via_walk()). Any other
-    failure, or a 200 missing either field, RAISES - unknown must never read as empty."""
+    failure, or a 200 missing either field, RAISES - unknown must never read as empty.
+
+    `lineage=True` asks for `?lineage=1`: every row then carries `lineageIds` and the answer
+    carries `lineage: true`. A daemon older than that parameter ignores it, and the missing
+    flag is how a caller tells - never the absence of aliases, which is also a real answer."""
     try:
-        got = api_get("/api/sessions/live")
+        got = api_get("/api/sessions/live" + ("?lineage=1" if lineage else ""))
         if isinstance(got, dict) and isinstance(got.get("count"), int) and isinstance(got.get("sessions"), list):
             return got
         raise DaemonError("/api/sessions/live", None,
@@ -806,6 +812,93 @@ def running_by_instance() -> tuple[set[str], dict[str, int]]:
         if row.get("session_id") in live and row.get("instance"):
             per[row["instance"]] = per.get(row["instance"], 0) + 1
     return live, per
+
+
+#: Key prefix for the transcript-path half of a live index. Two keyspaces in one dict beats
+#: two dicts every caller has to remember to check.
+LIVE_PATH_KEY = "path::"
+
+
+def live_index() -> dict[str, dict] | None:
+    """LIVENESS FOR THE WHOLE FLEET IN ONE CALL - the plan's 90%, measured 2026-09-17.
+
+    build_plan asked the daemon `live_for(sid)` once PER CHAT: 668ms each, 128 chats, 86 of
+    the dry loop's 132 seconds, and every consumer of the plan (the sweep, the groundskeeper,
+    the dashboard, the courier) paid it again. The gate itself costs under a millisecond per
+    chat; the wait was entirely one HTTP round trip per row against a registry the daemon
+    will hand over in full for one request.
+
+    Returns session_id -> that chat's live block ({pid,name,startedAt,cwd}), plus a
+    `LIVE_PATH_KEY + transcript_path` entry for each, so a caller can attribute a process by
+    transcript when the id has rotated. A chat ABSENT from the returned index is not live:
+    /api/sessions/live reads the same pid-checked registry the dossier's `live` field answers
+    from, so the two cannot disagree (that is running_count()'s standing claim, not a new
+    one). Returns None when the fleet's liveness cannot be established in full - an older
+    daemon with no endpoint, or a failed lineage read - and None means "use the slow
+    per-chat path", never "nothing is live".
+
+    ⛔ THE LINEAGE HOLE: EVERY ALIAS OF EVERY LIVE ENGINE IS INDEXED. Identity rotates: a
+    chat that rolled its cli session id keeps a transcript row under the OLD id while its
+    engine runs under the NEW one, and an index keyed on the engine's own id would read the
+    old row as 'not live' - the one mistake this file forbids everywhere. So the aliases of
+    every live engine (the chat's cliSessionId, lineageIds, priorCliSessionIds) all map to it:
+      - a daemon that answers `?lineage=1` hands them over in the same call;
+      - an older one gets one dossier lookup PER LIVE ENGINE, every one of them (13 engines,
+        about a second each, measured 2026-09-17) - slower, and still no walk over 165 chats.
+    The first version skipped that lookup for any engine whose own id or transcript was
+    already a known row. That is exactly the case where the OLD row is the one at risk, and
+    on the live fleet it skipped all 13 engines, so the correction never ran (review,
+    2026-09-17). Nothing is skipped now.
+    """
+    got = _live_endpoint(lineage=True)
+    if got is None:
+        return None  # older daemon: the caller keeps live_for() per chat
+    joined = got.get("lineage") is True and all(
+        isinstance(r.get("lineageIds"), list) for r in got["sessions"])
+    index: dict[str, dict] = {}
+    own: dict[str, dict] = {}
+    for r in got["sessions"]:
+        block = {"pid": r.get("pid"), "name": r.get("name"),
+                 "startedAt": r.get("startedAt"), "cwd": r.get("cwd")}
+        sid = str(r.get("sessionId") or "")
+        path = str(r.get("transcriptPath") or "")
+        if sid:
+            own[sid] = block
+        if path:
+            index[LIVE_PATH_KEY + path] = block
+        for alias in (r.get("lineageIds") or []) if joined else []:
+            if alias:
+                index[str(alias)] = block
+    if not joined:
+        for sid in own:
+            try:
+                matches = dossier(sid)
+            except DaemonError:
+                # Liveness we could not finish establishing is UNKNOWN, and unknown must never
+                # be served as 'not live'. Hand the caller back to the slow, per-chat path.
+                return None
+            for m in matches:
+                ids = ([m.get("cliSessionId")] + list(m.get("lineageIds") or [])
+                       + list(m.get("priorCliSessionIds") or []))
+                block = m.get("live") or (own[sid] if sid in ids else None)
+                if not block:
+                    continue
+                for alias in ids:
+                    if alias:
+                        index[str(alias)] = block
+    # An engine's own id always answers with its own block, whatever an alias said.
+    index.update(own)
+    return index
+
+
+def live_from_index(index: dict[str, dict], session_id: str,
+                    transcript_path: str = "") -> dict | None:
+    """One chat's live block out of a live_index(), by id then by transcript. The single
+    place that knows the index has two keyspaces."""
+    hit = index.get(session_id)
+    if hit is not None:
+        return hit
+    return index.get(LIVE_PATH_KEY + transcript_path) if transcript_path else None
 
 
 def live_for(session_id: str, matches: list[dict] | None = None) -> dict | None:

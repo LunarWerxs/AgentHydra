@@ -143,6 +143,36 @@ export interface ListChatsOptions {
   offset?: number
 }
 
+/**
+ * Every id each LIVE engine's chat answers to, keyed by the engine's own session id
+ * (2026-09-17). The orchestrator reads liveness for the whole fleet in one call, and a bare
+ * session id is not enough for that: a chat that rolled its cli id has an old transcript row
+ * under the OLD id while its engine runs under the NEW one, so the old row read as "not live"
+ * unless something walked the lineage. This is that walk, done once on the side that owns the
+ * chat store, with the same rule the dossier's `live` field uses - a chat is live when any id
+ * in its lineage is a registered engine - so the two answers cannot disagree.
+ *
+ * Archived chats are included on purpose: an extra alias can only make a row read MORE live,
+ * never less, and "not live" is the verdict that lets something act on a chat.
+ */
+export function liveLineage(
+  liveSessionIds: string[],
+  chats: DossierChat[] = collectChats(),
+): Map<string, string[]> {
+  const live = new Set(liveSessionIds)
+  const out = new Map<string, Set<string>>()
+  for (const id of live) out.set(id, new Set([id]))
+  for (const c of chats) {
+    const ids = lineageIdsOf(c)
+    for (const id of ids) {
+      if (!live.has(id)) continue
+      const aliases = out.get(id)
+      for (const alias of ids) aliases?.add(alias)
+    }
+  }
+  return new Map([...out].map(([id, aliases]) => [id, [...aliases]]))
+}
+
 /** Session ids with a live engine, read ONCE. The dossier's per-chat liveFor re-reads the
  *  registry for every chat it returns, which is right for one chat and quadratic for 206. */
 function liveIndex(): Map<string, number> {

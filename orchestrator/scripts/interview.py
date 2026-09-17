@@ -50,13 +50,14 @@ import sys
 from pathlib import Path
 
 from lib import approvallib
+from lib import configlib
 from lib import clilib
 from lib import deliverylib
 from lib import holdlib
 from lib import hydralib
 
-MAX_QUESTIONS = 20
-EVIDENCE_CHARS = 900
+MAX_QUESTIONS = configlib.get("interview.max_questions")
+EVIDENCE_CHARS = configlib.get("interview.evidence_chars")
 
 
 def build_questions(cap: int) -> dict:
@@ -163,16 +164,28 @@ def _apply_hold(sid: str, a: dict) -> dict:
 
 
 def _apply_archive(sid: str) -> dict:
-    """Archive a chat and classify the result, treating a deferred exit (8) as success."""
+    """Archive a chat and classify the result, treating a deferred exit (8) as success.
+
+    ⛔ THE FORCED ARCHIVE, FIXED (owner, 2026-09-17: "the orchestrator itself seems to have
+    issues where it, like, forcibly archives"). This path used to pass --force
+    unconditionally, on the theory that an AI's answer in the judgment queue IS the
+    person-level word the gate was waiting for. It is not: --force is also the ONE flag that
+    lifts a HOLD the owner placed by hand, so a model answering a question could overrule
+    him, silently, with no way to switch it off. It is now archive.ai_decision_uses_force,
+    default OFF - a held chat comes back refused-by-hold (exit 6) and stays where he put it.
+    Turning it back ON restores the old behaviour for anyone who wants it."""
     import archive_chat
 
-    code, said = clilib.capture(archive_chat.main, [sid, "--force"])
+    argv = [sid] + (["--force"] if configlib.get("archive.ai_decision_uses_force") else [])
+    code, said = clilib.capture(archive_chat.main, argv)
     # Exit 8 = DEFERRED: the chat was asked to update its docs first and archives
     # on a later pass. That IS the right thing happening, so it counts as ok.
     return {
         "ok": code in (0, 8), "exit": code,
         "outcome": "archived and verified" if code == 0
         else "asked to preserve its docs first; archives on a later pass" if code == 8
+        else "left alone: you put this chat on HOLD, and an AI's answer does not overrule "
+             "that (policy archive.ai_decision_uses_force is OFF)" if code == 6
         else f"archive refused/failed (exit {code}): "
              f"{said.splitlines()[0][:120] if said else ''}",
     }

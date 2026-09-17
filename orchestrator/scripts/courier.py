@@ -66,6 +66,7 @@ import time
 from pathlib import Path
 
 from lib import armlib, clilib
+from lib import configlib
 from lib import bandlib
 from lib import deliverylib
 from lib import gatelib
@@ -79,14 +80,14 @@ from lib import windowlib
 # where the script that types into the owner's chats sat inside another lane's rewrite. The
 # daemon's own /message endpoint still runs its copy; this one is the orchestrator's.
 ACTUATOR = Path(__file__).resolve().parent / "actuator" / "deliver_desktop_chat.ps1"
-DEFAULT_MAX = 5
+DEFAULT_MAX = configlib.get("courier.max_deliveries")
 # How long to watch for the chat to move after sending before giving up on confirming it.
 # A composer send into a DORMANT or CRASHED chat boots its engine first (that boot is the
 # revive), so the window covers an engine start, not just an append.
 # A DORMANT chat must BOOT before its first byte lands; 60s reported healthy wakes as
 # unconfirmed on a busy machine (measured 2026-09-01). The daemon endpoint watches for
 # this long on our behalf.
-CONFIRM_SECS = 150
+CONFIRM_SECS = configlib.get("courier.confirm_secs")
 # A per-delivery CLAIM older than this belongs to a dead courier run and is reclaimable
 # (send pipeline worst case: actuator timeout 300s + confirm 25s + margin).
 CLAIM_STALE_SECS = deliverylib.CLAIM_STALE_SECS

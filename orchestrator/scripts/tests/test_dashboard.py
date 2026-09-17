@@ -75,6 +75,25 @@ class DecideTest(unittest.TestCase):
         self.assertEqual(d["kind"], "wait-on-person")
         self.assertIn("OFFERS TO CARRY ON", d["detail"])
 
+    def test_the_waiting_reason_names_the_signal_that_actually_held_it(self):
+        """A chat held back only by open recommendations used to be explained as 'the recap
+        does not claim done (yes)', which contradicts itself (2026-09-17)."""
+        fin = {"lane": "needs-input-review", "recap_present": True, "done_claim": "yes",
+               "ends_with_question": False, "offers_to_continue": False, "interrupted": False,
+               "open_recommendations": ["ship it", "tell Michael"], "last_assistant_text": ""}
+        d = dashboard.decide(gate_verdict("finished", finished=fin), None, False)
+        self.assertIn("recommends 2 open thing(s)", d["detail"])
+        self.assertNotIn("does not claim done", d["detail"])
+
+    def test_the_plan_records_what_every_signal_said_even_one_switched_off(self):
+        fin = {"lane": "needs-input-review", "done_claim": "yes", "ends_with_question": True,
+               "offers_to_continue": True, "open_recommendations": [], "interrupted": False,
+               "last_assistant_text": ""}
+        entry = dashboard._plan_chat_entry({"title": "t"}, "s", None,
+                                           gate_verdict("finished", finished=fin), "",
+                                           {"kind": "wait-on-person"})
+        self.assertEqual(sorted(entry["dissent"]), ["offer", "question"])
+
     def test_archive_candidate_paths(self):
         fin = {"lane": "archive-candidate", "recap_present": True, "done_claim": "yes",
                "ends_with_question": False, "offers_to_continue": False, "interrupted": False,

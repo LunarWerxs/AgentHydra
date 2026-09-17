@@ -90,6 +90,78 @@ From an agent, the same three are `orchestrator_menu`, `orchestrator_loop` and
 `orchestrator_run { script, args: ["--help"] }` on the AgentHydra MCP server; `bun run
 orchestrator <script>` from the repo root is the shell equivalent.
 
+## Decide how it behaves: `orch.py policy`
+
+**Every knob is in one place with a default, and the default is what used to be hardcoded.**
+Before 2026-09-17 there were 138 user-facing policy knobs spread across 18 files as module
+constants and unswitchable `always-on` behaviours, and no config file at all - steering the
+fleet meant editing Python. Now:
+
+```sh
+python orch.py policy                     # what is set, what is not at default, and the rails
+python orch.py policy --wizard            # a person: every group, Enter keeps the current value
+python orch.py policy --ask > q.json      # an AI: the questionnaire...
+python orch.py policy --apply answers.json  # ...and its answers, applied atomically
+python orch.py policy --set archive.per_run=5 lanes.deliver=off
+python orch.py policy --preset conservative --yes
+python orch.py policy --explain gate.signal_no_open_recommendations
+```
+
+Your decisions live in `state/config.json` (gitignored, machine-local). Values equal to the
+default are not written, so a later default change still reaches a machine that never disagreed
+with it. **Precedence is always: a flag you typed > `config.json` > the default.** Turning a
+sweep lane off changes what `--all` does; naming that lane explicitly still runs it (the one
+exception is `archive.enabled`, the fleet-wide master switch: with it off, no lane archives,
+named or not).
+
+**A policy file with any problem stops unattended acting** - unreadable JSON, a value that
+fails its check, or a key the toolbox does not know (a typo like `archive.enable` would
+otherwise read as "archiving is off" and change nothing). Each of those falls back to a
+default, and a lane acting on a default where you wrote the opposite would undo your decision.
+`orch.py policy --doctor` names them; `policy --unset <key>` removes an unknown key; `--force`
+still runs a single act by hand. Writes are atomic and one at a time, and a note you add by
+hand (`"_why": "..."`) survives the next rewrite.
+
+**Groups:** the gate (timings, and its four archive signals with a switch each) · archiving
+(master switch, quiet window, caps, knowledge preservation, the grace window) · the sweep's
+lanes and its naming/doctrine passes · the doctrine stamps themselves · the groundskeeper's
+five duties · the usage bands · waking (including the exact wake prompt) · permission prompts ·
+delivery · the judgment queue · the standing manager · all eleven scheduled lanes (on/off and
+cadence) · speed.
+
+**⛔ What is deliberately NOT a knob**, and is listed in the menu so its absence reads as a
+decision rather than an oversight: the live-writer rule, the hold rail, the T-0 re-check,
+post-act verification, the DENY list, the tray-icon switch, and that the shared-cause breaker
+fires at all. Those are the reasons this toolbox is allowed to act unattended; a switch for one
+of them is a switch for losing work.
+
+## Prove it still works: `orch.py dryrun`
+
+```sh
+python orch.py dryrun --runs 50    # 50 dry loops, each a fresh process, all read-only
+python orch.py dryrun --matrix     # does flipping a policy knob actually steer the plan?
+```
+
+One dry loop tells you it did not crash *that* time. N of them answer what one structurally
+cannot: the intermittent-crash rate, where the time goes per stage, and whether the loop agrees
+with itself - it fingerprints every chat's decision and reports **flaps**, a verdict that
+changed *and changed back*. A flap is a timing-dependent verdict, and on an acting pass that is
+the difference between archiving a chat and waking it. (A verdict that moved once and stayed is
+just the fleet moving forward, and is reported as such.) A live chat that pauses past
+the idle window and resumes flips `leave-alone` <-> `judgment`; that is reported as expected
+(both states mean a writer is alive) and never fails the run - every other flap does.
+
+Every run is a fresh subprocess on purpose: looping inside one process would let the
+usage-survey cache and every module constant carry over, so runs 2..N would be faster and more
+identical than reality - a false green in exactly the place this harness exists to be honest
+about. `--matrix` judges each variant against **what it claims to change**, on evidence an inert
+knob cannot fake: a cap is checked inside its own run (shown == min(cap, waiting)), and a
+switched-off archive signal must release every chat the baseline shows held back by it alone.
+When the fleet has nothing that could tell a wired knob from an inert one, the variant says
+`INCONCLUSIVE` - not proven, and not a pass. A knob that acts at ACT time and cannot be seen in
+a dry loop says `not-visible-here` and names the unit test that covers it. Reports land in
+`state/dryruns/`.
+
 ## Moving a machine off the standalone checkout (once, per machine)
 
 A machine that ran the orchestrator from its own repo (`D:\PublicProjects\orchestrator` or

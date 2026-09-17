@@ -36,6 +36,7 @@ import json
 import sys
 
 from lib import armlib, clilib
+from lib import configlib
 from lib import bandlib
 from lib import clilib
 from lib import gatelib
@@ -45,11 +46,9 @@ from lib import ledgerlib
 
 # The owner's standing word for a chat that offered to carry on. Never invented work - it is
 # the continuation the chat itself proposed.
-WAKE_PROMPT = (
-    "Proceed with your recommendations - continue the work you proposed at the end of your "
-    "last turn. If something in it genuinely needs the owner (spend, live customers, public "
-    "exposure, another person's lane), do the rest and name that one thing in your recap."
-)
+# THE WORDS ARE THE OWNER'S NOW (2026-09-17): saturate.wake_prompt in the policy file, whose
+# default is this exact text. Change it there, not here, so an upgrade cannot overwrite it.
+WAKE_PROMPT = configlib.get("saturate.wake_prompt")
 
 
 def wake_reason(row: dict, staged_by_session: dict) -> tuple[str | None, dict | None]:
@@ -258,12 +257,20 @@ def main(argv: list[str]) -> int:
     act = "--yes" in argv
     # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
     # window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so.
+    if act and not configlib.get("saturate.enabled"):
+        # THE MASTER SWITCH (2026-09-17). Planning and reporting continue - you still see
+        # which chats COULD be woken - but nothing is woken. Turn it back on with
+        # `orch.py policy --set saturate.enabled=on`.
+        print("PLAN ONLY - waking is switched OFF in your policy (saturate.enabled).")
+        act = False
     if act:
         refusal = armlib.refuse_unless_armed(argv, "waking dormant chats")
         if refusal:
             print(refusal)
             act = False
-    cap = None
+    # PRECEDENCE: --max a person typed wins; otherwise the policy's cap (null = fill the
+    # whole deficit, which is the behaviour this always had).
+    cap = configlib.get("saturate.max_wakes")
     if "--max" in argv:
         cap = int(argv[argv.index("--max") + 1])
 

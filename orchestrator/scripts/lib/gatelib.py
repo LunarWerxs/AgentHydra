@@ -32,20 +32,21 @@ import re
 import time
 from pathlib import Path
 
+from lib import configlib
 from lib import joblocklib
 
 # How long a live chat must be quiet AFTER a completed turn before it counts as idle rather
 # than thinking. Three minutes: long enough that a model pausing between tool calls is never
 # mistaken for an idle chat, short enough that the fleet is worked while the owner watches.
-IDLE_AFTER_SECS = 180
+IDLE_AFTER_SECS = configlib.get("gate.idle_after_secs")
 
 # Below this a quiet unanswered shell call is just a command running. Thirty minutes, and the
 # threshold is the ENTIRE discriminator between busy and stuck: measured over 1,504 real
 # transcripts the shape alone matched 11, one of which was the healthy session doing the
 # measuring. (Banked in shared memory: a-stall-detector-is-only-as-good-as-its-quiet-threshold.)
-STALL_QUIET_SECS = 30 * 60
+STALL_QUIET_SECS = configlib.get("gate.stall_quiet_secs")
 
-EVIDENCE_CAP = 2000
+EVIDENCE_CAP = configlib.get("gate.evidence_cap")
 RECAP_HEADER = re.compile(r"##\s*Am I 100% done\?", re.IGNORECASE)
 # THE FOURTH SIGNAL (owner, 2026-09-01: "I strongly feel chats are being archived when they are
 # not completely done - I need some sort of guard in there"). A recap that still RECOMMENDS
@@ -805,28 +806,52 @@ def _gate_running(
     }
 
 
+# THE FOUR SIGNALS, EACH NOW SWITCHABLE (owner, 2026-09-17: "it should ask which ... toggles,
+# triggers, options the user wants on"). All four default ON, which is exactly the behaviour
+# the owner asked for on 2026-09-01 - this changes nothing until someone deliberately turns
+# one off, and turning one off can only make archiving MORE eager, never less. The policy
+# menu says that in those words rather than leaving it to be discovered.
+ARCHIVE_SIGNALS = (
+    ("done_claim", "gate.signal_done_claim", lambda fe: fe.get("done_claim") != "yes"),
+    ("question", "gate.signal_no_question", lambda fe: bool(fe.get("ends_with_question"))),
+    ("offer", "gate.signal_no_offer_to_continue", lambda fe: bool(fe.get("offers_to_continue"))),
+    ("recommendations", "gate.signal_no_open_recommendations",
+     lambda fe: bool(fe.get("open_recommendations"))),
+)
+
+
+def archive_dissent(fe: dict, include_disabled: bool = False) -> list[str]:
+    """Which ENABLED signals disagree that this chat is finished-and-done. Empty = every
+    signal the owner left switched on agrees, which is the only way a chat reaches the
+    archive lane. A disabled signal cannot dissent; it also cannot protect.
+
+    `include_disabled` answers what the signals would say with every one switched on - the
+    plan records that, so dryrun.py can predict which chats a switched-off signal must
+    release and fail a knob that releases none of them."""
+    return [name for name, key, dissents in ARCHIVE_SIGNALS
+            if (include_disabled or configlib.get(key)) and dissents(fe)]
+
+
 def _finished_turn_lane(fe: dict) -> str:
-    """archive-candidate when all four independent signals agree the chat is done and
-    dormant; needs-input-review otherwise. See gate()'s docstring for why all four must
-    agree."""
-    return (
-        "archive-candidate"
-        if (fe["done_claim"] == "yes" and not fe["ends_with_question"]
-            and not fe["offers_to_continue"] and not fe["open_recommendations"])
-        else "needs-input-review"
-    )
+    """archive-candidate when every enabled signal agrees the chat is done and dormant;
+    needs-input-review otherwise. See gate()'s docstring for why they must all agree."""
+    return "needs-input-review" if archive_dissent(fe) else "archive-candidate"
 
 
 def _finished_turn_cause(lane: str, fe: dict) -> str:
     """The human-readable explanation for a completed-turn verdict. Linear ifs rather than
     the nested ternary gate() used to build this inline - same strings, easier to scan."""
     if lane == "archive-candidate":
-        return "completed turn, recap says done, nothing asked, nothing recommended"
-    if fe["done_claim"] != "yes":
+        off = [name for name, key, _ in ARCHIVE_SIGNALS if not configlib.get(key)]
+        return ("completed turn, recap says done, nothing asked, nothing recommended"
+                + (f" (signal(s) {', '.join(off)} are switched OFF in your policy, so they "
+                   "were not checked)" if off else ""))
+    dissent = archive_dissent(fe)
+    if "done_claim" in dissent:
         detail = f"the recap does not claim done ({fe['done_claim']})"
-    elif fe["offers_to_continue"]:
+    elif "offer" in dissent:
         detail = "it OFFERS TO CARRY ON and is waiting to be told to - answer it, do not archive it"
-    elif fe["ends_with_question"]:
+    elif "question" in dissent:
         detail = "it ends on a question"
     else:
         detail = (f"it still RECOMMENDS {len(fe['open_recommendations'])} thing(s) - a chat with "

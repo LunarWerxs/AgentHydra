@@ -41,6 +41,25 @@ Verify with `chats --account <from> --all`: the answer you want is "holds NO cha
 
 THE PASS, in order:
 
+0. **`orchestrator_run {script:"policy"}`** - WHAT IS THIS FLEET SET TO? Since 2026-09-17 every
+   knob the toolbox has (86 of them, across the gate, archiving, the sweep's lanes, the doctrine
+   stamps, the groundskeeper's five duties, the bands, waking, prompts, delivery, the judgment
+   queue, the manager, all eleven scheduled lanes, and speed) lives in ONE policy file with a
+   default equal to what used to be hardcoded. Read it before you read the loop, so you know
+   whether a lane is quiet because there is no work or because the OWNER SWITCHED IT OFF. A
+   machine with no `state/config.json` is on every default and behaves exactly as it always did -
+   the loop says so in one line. If the owner asks for a behaviour change, do NOT edit Python:
+   `orchestrator_run {script:"policy", args:["--ask"]}` hands you the questionnaire, you write
+   `{"answers":[{"key":...,"value":...}]}`, and `--apply <file>` lands it atomically (a single
+   bad value refuses the WHOLE file - a half-applied policy is a fleet nobody can describe).
+   `--set k=v` for one knob, `--preset observe-only|conservative|aggressive --yes` for a starting
+   point. ⛔ The rails are NOT knobs and never will be: the live-writer rule, the hold rail, the
+   T-0 re-check, post-act verification, the DENY list, the tray-icon switch, and that the
+   shared-cause breaker fires at all. `policy` lists them so their absence reads as a decision.
+   If `policy` reports PROBLEMS, stop there: nothing acts unattended until the file reads
+   clean (`policy --doctor` names each one, `policy --unset <key>` removes an unknown key).
+
+
 1. **`orchestrator_loop {}`** - DRY: census, gate, accounts and usage bands, the four lanes,
    naming, reconcile, and the judgment queue; touches nothing. STOP AND INVESTIGATE if the
    census sanity rail fails (0-1 open instances means detection is broken, not a quiet

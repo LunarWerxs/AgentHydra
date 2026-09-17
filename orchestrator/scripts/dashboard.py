@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from lib import clilib, gatelib
+from lib import configlib
 from lib import holdlib
 from lib import hydralib
 from lib import ledgerlib
@@ -117,12 +118,19 @@ def decide(verdict: dict | None, breaker: dict | None, app_running: bool, why_un
             "command": None,
         }
     if fin["lane"] == "needs-input-review":
+        # The reason names a signal that is switched ON and dissenting - the same list the
+        # gate decided on. Reading the raw fields here named a signal the policy had switched
+        # off, and sent a chat held back only by open recommendations out as "the recap does
+        # not claim done (yes)" (2026-09-17).
+        dissent = gatelib.archive_dissent(fin)
         reason = (
             "it OFFERS TO CARRY ON and is waiting to be told to"
-            if fin["offers_to_continue"]
+            if "offer" in dissent
             else "it ends on a question"
-            if fin["ends_with_question"]
-            else f"the recap does not claim done ({fin['done_claim']})"
+            if "question" in dissent
+            else f"it still recommends {len(fin.get('open_recommendations') or [])} open thing(s)"
+            if "recommendations" in dissent and "done_claim" not in dissent
+            else f"the recap does not claim done ({fin.get('done_claim')})"
         )
         return {
             "action": "answer it - waiting on a person",
@@ -167,10 +175,16 @@ class _RowEvaluation:
     incomplete: bool
 
 
-def _gate_row(sid: str, row: dict) -> tuple[dict | None, str, bool]:
-    """Resolve one row's gate verdict. Returns (verdict, why_ungated, incomplete)."""
+def _gate_row(sid: str, row: dict, live_index: dict | None = None) -> tuple[dict | None, str, bool]:
+    """Resolve one row's gate verdict. Returns (verdict, why_ungated, incomplete).
+
+    `live_index` is one fleet-wide liveness read (hydralib.live_index) shared by the whole
+    plan. None keeps the original behaviour - one daemon round trip per chat - and that is
+    the path taken whenever liveness could not be established in full, because an index that
+    is missing a live process would answer 'not live' for a chat that has a writer."""
     try:
-        live = hydralib.live_for(sid)
+        live = (hydralib.live_from_index(live_index, sid, row.get("transcript_path") or "")
+                if live_index is not None else hydralib.live_for(sid))
         verdict = gatelib.gate(sid, row.get("transcript_path") or "", live)
         why_ungated = ""
         if verdict is None:
@@ -211,16 +225,21 @@ def _plan_chat_entry(row: dict, sid: str, inst: dict | None, verdict: dict | Non
         "lastActivityAt": row.get("last_activity_at"),
         "decision": decision,
         "evidence": _evidence_for(verdict),
+        # What all four archive signals say, switched on or not - how dryrun.py knows which
+        # chats a switched-off signal must release, so a knob that releases none of them fails.
+        "dissent": (gatelib.archive_dissent(verdict["finished"], include_disabled=True)
+                    if verdict and verdict.get("state") == "finished" else []),
     }
 
 
 def _evaluate_plan_row(row: dict, instances: dict, holds: dict,
-                       protected: set | frozenset = frozenset()) -> _RowEvaluation:
+                       protected: set | frozenset = frozenset(),
+                       live_index: dict | None = None) -> _RowEvaluation:
     """Gate one row, decide what the orchestrator would do about it, and shape the chat
     entry the page renders - the whole per-row pipeline build_plan loops over."""
     sid = row.get("session_id") or ""
     inst = instances.get(str(row.get("instance") or "").lower())
-    verdict, why_ungated, incomplete = _gate_row(sid, row)
+    verdict, why_ungated, incomplete = _gate_row(sid, row, live_index)
     breaker = _breaker_for(verdict, sid)
     decision = decide(verdict, breaker, bool(inst and inst["isRunning"]), why_ungated,
                       holdlib.why_blocked(sid, _holds=holds), manager=sid in protected)
@@ -253,11 +272,22 @@ def build_plan() -> dict:
     import overlord
 
     protected = overlord.protected_session_ids()
+    # ONE LIVENESS READ FOR THE WHOLE PLAN (2026-09-17). This was one daemon round trip per
+    # chat - 668ms each, measured, 86 of the dry loop's 132 seconds - and every consumer of
+    # build_plan (the sweep, the groundskeeper, the dashboard page, the courier's cap) paid
+    # it again. None here means liveness could not be established in full, and every row
+    # silently falls back to its own per-chat read: slow is the correct answer to unknown.
+    live_index = None
+    if configlib.get("perf.bulk_liveness"):
+        try:
+            live_index = hydralib.live_index()
+        except hydralib.DaemonError:
+            live_index = None
     chats = []
     counts: dict[str, int] = {}
     incomplete = 0
     for row in rows:
-        result = _evaluate_plan_row(row, instances, holds, protected)
+        result = _evaluate_plan_row(row, instances, holds, protected, live_index)
         if result.incomplete:
             incomplete += 1
         counts[result.decision_kind] = counts.get(result.decision_kind, 0) + 1

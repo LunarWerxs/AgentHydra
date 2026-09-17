@@ -58,6 +58,7 @@ import time
 from pathlib import Path
 
 from lib import clilib, holdlib
+from lib import configlib
 from lib import hydralib
 from lib import ledgerlib
 from lib import stamplib
@@ -452,7 +453,9 @@ def _maybe_ensure_allow_all(act: bool) -> dict:
     """THE ENGINE-SIDE HALF, programmatic and ungated (stamplib.ensure_allow_all): allow rules
     in the user settings pre-approve every tool in every mode, so a chat the app still runs
     as 'Accept edits' stops stalling on prompts without any window being touched."""
-    if act:
+    # THE ONE LANE THAT EDITS FILES OUTSIDE THE FLEET (your global Claude settings'
+    # allow-list and default mode). A knob since 2026-09-17, default ON = today's behaviour.
+    if act and configlib.get("doctrine.ensure_allow_all"):
         return stamplib.ensure_allow_all()
     return {"changed": False, "added": [], "rules": 0, "error": None}
 
@@ -574,7 +577,12 @@ def enforce_all(act: bool, as_json: bool, ui_ok: bool = False) -> int:
     # chats are precisely the ones he sits in and has to fix by hand. So they are stamped too,
     # and nothing else about them is touched.
     held = [r for r in rows if r["sessionId"] and holdlib.why_blocked(r["sessionId"])]
-    todo = list(rows)
+    # ...unless the owner says otherwise (doctrine.stamp_held_chats, default ON = the
+    # behaviour described just above). OFF means a HOLD puts a chat out of reach of EVERY
+    # lane including this one, which is what some people mean by "hold".
+    held_ids = {r["sessionId"] for r in held}
+    todo = (list(rows) if configlib.get("doctrine.stamp_held_chats")
+            else [r for r in rows if r["sessionId"] not in held_ids])
     settings = _maybe_ensure_allow_all(act)
     results = _stamp_rows(todo) if act else []
 
