@@ -63,6 +63,10 @@ counting how many times the same act had already failed or measuring whether it 
    beats any verdict computed 20 seconds earlier. Re-check immediately before acting, not only
    when deciding.
 6. **Report what changed, not what exists.** A status recital is a failed run.
+7. **Prove you changed nothing else.** An act that verifies only the row it INTENDED cannot see
+   what it also did: a move that settled its four chats correctly archived three others in the
+   same minutes and reported a clean run (2026-09-16). Every move now reads the whole machine's
+   chat records before and after itself and names anything it archived that it was not given.
 
 ## Layout
 
@@ -481,6 +485,7 @@ so the split is: judgment shared, actions individual.
 | `gatelib.py` | lib | THE GATE: running / crashed / finished + lanes, ported from v2's chat-gate |
 | `ledgerlib.py` | lib | THE ATTEMPT LEDGER: rule 3, the memory of failure v2 lacked (`state/attempts.json`) |
 | `clilib.py` | lib | `capture(fn, argv)` - the one way a lane script runs another script's main() as a step (was six identical lines pasted in seven scripts) |
+| `archivewatchlib.py` | lib | THE COLLATERAL WATCH: every chat record on the machine, read before a move and after it. A record that went from visible to ARCHIVED without sharing an id with the move is named in the move's report, filed as an incident, and makes the move not-ok. Built 2026-09-17, after a four-chat batch settled every chat it was given while three chats outside it went archived in the same two minutes - one in an account the batch never named - and every rail, exit code and journal read clean |
 | `stamplib.py` | lib | the on-disk AUTOMATION STAMP: sessionSettings.ultracode=true + effort=xhigh written into a desktop chat's meta record - the MECHANICAL half of the doctrine (prompt words cannot set harness parameters; owner correction 2026-08-31). Model never touched |
 | `census.py` | observe | fleet census, parity port of orchestrate.mjs (same fields, same exit codes) |
 | `waiting_scan.py` | observe | waiting-on-a-person over REAL transcript tails - the census's admitted blind spot |
@@ -490,7 +495,7 @@ so the split is: judgment shared, actions individual.
 | `attempts.py` | observe | what the breaker is holding back, and why; `--clear` on a person's word |
 | `smoke.py` | observe | READ-ONLY smoke against the live daemon - proves the whole observe chain |
 | `archive_chat.py` | act | archive/unarchive one chat - gated, breakered, re-checked, verified |
-| `migrate_chat.py` | act | land one chat in an instance - verified landing (the source row is re-read after the settle and must be gone), superseded = deterministic stop; `--stop-idle` stops an IDLE engine first through `lib/enginelib` (never a working or stuck one) so the desktop's never-exiting engines cannot pin a chat forever; every verified landing then stamps bypassPermissions via the daemon AND ultracode into the meta record (the automation doctrine, applied mechanically at the one moment it is durable - before first boot; a failed stamp is reported, never hidden) |
+| `migrate_chat.py` | act | land one chat in an instance - verified landing (the source row is re-read after the settle and must be gone), superseded = deterministic stop; `--stop-idle` stops an IDLE engine first through `lib/enginelib` (never a working or stuck one) so the desktop's never-exiting engines cannot pin a chat forever; every verified landing then stamps bypassPermissions via the daemon AND ultracode into the meta record (the automation doctrine, applied mechanically at the one moment it is durable - before first boot; a failed stamp is reported, never hidden). Every move also runs the COLLATERAL WATCH (`archivewatchlib`): exit **2** means the chat landed AND a chat outside the move went archived while it ran - `collateral` names each one and the account to unarchive it from, and the move is reported not-ok rather than clean |
 | `automation_chat.py` | act | enforce the automation doctrine on ONE existing chat, or FLEET-WIDE with `--all [--yes]` (enumerates the disk stores, lists every chat missing a stamp; held chats are stamped too - a hold covers a chat's work, not its permission mode): bypassPermissions (daemon primitive) + ultracode (stamplib), both verified on disk, with the honest running-app caveat. Proven live 2026-08-31 - single chat and a 26/26 fleet sweep |
 | `compact_chat.py` | act | COMPACT one console/CLI chat's context instead of abandoning it: there is no headless /compact, so it resumes the session with a small --autocompact window + a do-nothing prompt and the engine's own pass fires; verified from the transcript's own usage numbers (before/after + compact marker). Console-only - a desktop chat is refused (resuming it outside its app would fork behind the app's back); full rails (floor, quiet, hold, breaker) |
 | `rename_chat.py` | act | rename through the app's own control, driven from THIS repo's `scripts/actuator/manage_desktop_chat.ps1` (the daemon's copy counts the open chat's header menu beside its sidebar menu and refuses every open chat as ambiguous - found live 2026-09-01) - hold-aware, verified through the dossier |

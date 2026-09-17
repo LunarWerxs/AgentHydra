@@ -262,6 +262,35 @@ migrate route invalidates the 15-second metadata cache so the next read sees the
 the state before it. Pruning duplicates is still tidier, but the dashboard no longer lies while
 they exist.
 
+## A move proves it archived nothing else (`collateral`)
+
+Measured 2026-09-16, operation `98008cf6`: a four-chat `move_chats` batch landed and settled every
+chat it was given, and in the same two minutes **three chats that were not in it went archived** -
+one of them in an account the batch never named. Every rail on the move verifies the row it
+INTENDED, so the per-chat results, the exit code and the chat journal all read clean, and the owner
+found out by noticing chats missing from his sidebar.
+
+The writer could not be identified from the logs (the daemon's archive paths do not log, the
+actuator's menu search is already scoped to the target app's own process, the doctrine lane stamped
+two other chats that minute, and the cross-account archive fell inside the batch's IMPORT phase,
+not its settle). So the move proves it instead of assuming it:
+
+- Every chat record on the machine is read **before** the first chat moves and **after** the last
+  phase (`orchestrator/scripts/lib/archivewatchlib.py`).
+- A record that went from visible to archived **without sharing an id with the move** is
+  COLLATERAL. Archiving the move's own source rows and its twins in other profiles is the move
+  doing its job and is never counted.
+- It is named at the top of the report with the account it is in, filed as an incident, put on the
+  payload as `collateral`, and the move is **not ok**: `migrate_chat` exits **2** (landed, not
+  clean) and `move_chat` / `move_chats` stop answering `ok: true`.
+
+**If you see it:** unarchive each named chat from its own account's app (Archived view ->
+Unarchive). A disk write is undone by a running app, which is why the report points at the app.
+The move's own chats are unaffected and must not be re-moved.
+
+The wording is "archived **while it ran**", never "archived **by** it" - the watch detects the
+outcome whatever caused it, including another lane or another agent acting in the same minutes.
+
 ## A session with no Desktop entry can never be archived
 
 `archiveDesktopChat` finds nothing to flag and returns `no-desktop-chat-found` (HTTP 404). These are
@@ -375,3 +404,5 @@ when tidying the app you are sitting in.
 6. Write the title to both stores.
 7. Restart the target app so it picks up files added while it was running.
 8. Deliver only from within the target instance, and verify which account ran the turn.
+9. Read `collateral` on the result (and the top of the report). Empty is the normal answer; a
+   named chat there was archived while your move ran and needs unarchiving from its own app.

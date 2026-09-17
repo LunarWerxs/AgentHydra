@@ -43,6 +43,18 @@ naming lock). `python scripts/tests/probe_state_dir.py` finds any module that st
 `TestCase` is invisible to `unittest discover` - `test_chatwatch.py` was one until the same day -
 so a script-style check file must carry a wrapper class that runs it.
 
+⛔ **A STUBBED DAEMON MEANS A STUBBED MACHINE, and two reads escape that by default** (2026-09-17).
+`StubDaemon` now switches off the move scripts' collateral watch (`lib/archivewatchlib`) while it
+is up, because that watch reads every chat store ON THIS MACHINE - the real default app's included,
+whatever the stub's fleet says - twice per move, and a chat the owner archives while the suite runs
+would surface as collateral and turn a clean test red. The migrate test bases stub it directly (they
+use no stub daemon). The second is the SIDEBAR: `name_chats.rendered_titles` runs a real PowerShell
+UI read of the live desktop, and neither migrate test file stubbed it - which is what the suite's
+four "pre-existing" reds were (two batches reported unfinished because the real sidebar has no chat
+called "one"; two bounded-phase cases blamed on load when the time was the PowerShell spawn). Both
+bases now stub `name_chats._run_list`. If a new test drives a batch, a move or a naming pass, check
+what it reaches before trusting a red: green on CI and red here means the machine, not the code.
+
 The suite encodes the six inherited rules as regression tests - the Ghost "say the word" case,
 the pending-restart honesty, the breaker cap, the deterministic one-strike stop, the
 recheck-before-acting race, verify-before-claiming - so a change that re-opens a postmortem bug

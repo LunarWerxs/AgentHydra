@@ -68,7 +68,7 @@ Two scripts plus one library, matching everything else in the toolbox:
 
 | piece | job |
 | --- | --- |
-| `deliverylib.py` | the staging ledger: a reply, its target chat, who wrote it, the evidence, and its state. The REAL states are `staged`, `delivered`, `failed`, `cancelled`, `expired` (`VALID_STATES`); there is no `verified` state, because verification is part of the delivery act rather than a resting place. A chat that cannot be typed into right now is `defer()`red, which keeps the row STAGED for the next attempt. Sits beside the attempt ledger and the holds file. |
+| `deliverylib.py` | the staging ledger: a reply, its target chat, who wrote it, the evidence, and its state. The REAL states are `staged`, `delivered`, `failed`, `cancelled`, `expired` (`VALID_STATES`); there is no `verified` state, because verification is part of the delivery act rather than a resting place. A chat that cannot be typed into right now is `defer()`red, which keeps the row STAGED for the next attempt. ⛔ "Right now" is re-read at the moment of the refusal, never taken from the plan (2026-09-17): a batch plans every chat and then delivers them one at a time, so a chat that finished its turn in between was being deferred as "mid-turn" minutes after it went idle. Sits beside the attempt ledger and the holds file. |
 | `stage_reply.py` | write a reply into the ledger for one chat. Pure state, sends nothing. This is where an AI's judgment gets recorded. |
 | `courier.py` | deliver staged replies through the app's composer, one at a time: re-check the chat at T-0, drive the actuator, verify the chat started a turn, mark the ledger. Obeys holds, the breaker, and the live-writer rail like every other act. |
 
