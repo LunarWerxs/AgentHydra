@@ -98,6 +98,14 @@ class _BatchTest(unittest.TestCase):
         # failed at once, in a file none of them is about. A unit test must not be able to see the
         # machine: test_migrate_batch.py's own driver stubs it the same way.
         self.patch(migrate_batch.hydralib, "chats", lambda **k: [])
+        # ⛔ AND THE SIDEBAR (2026-09-17). The batch's naming verdict reads what the app is
+        # RENDERING - a real PowerShell UI read of the live desktop. Unstubbed, it came back
+        # without the fake chat "one", so two clean batches here exited PARTIAL ("landed but the
+        # app is NOT rendering it as 'one'") on any machine with the app open. "Could not read"
+        # is the neutral answer, never read as a miss.
+        import name_chats
+        self.patch(name_chats, "_run_list",
+                   lambda instance: (1, "unit test: the real sidebar is out of reach"))
 
     def stub_scan(self, outstanding: bool = False, raises: bool = False) -> None:
         """The resume window reads the landed chat's transcript for background jobs

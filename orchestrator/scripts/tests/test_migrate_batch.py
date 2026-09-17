@@ -95,6 +95,20 @@ class _MigrateBatchTest(unittest.TestCase):
     and stopped by addCleanup, so an attribute is restored even when the test raises, which is
     the property the fixtures relied on."""
 
+    def setUp(self):
+        """⛔ NO CASE HERE MAY READ THE REAL SIDEBAR (2026-09-17). The batch's naming verdict
+        reads what each account's app is RENDERING (name_chats.rendered_titles), and that is a
+        real PowerShell UI read of the live desktop. Unstubbed, the two bounded-phase cases below
+        spent over a second in it and failed their 1.0s budget - which read as "load-flaky" -
+        and on a machine with the app open the read came back without the fake chat's title,
+        so a clean batch was reported unfinished. "Could not read the sidebar" is the neutral
+        answer (never read as a miss); the naming-verdict cases patch rendered_titles
+        themselves to say what is on screen."""
+        super().setUp()
+        import name_chats
+        self.patch(name_chats, "_run_list",
+                   lambda instance: (1, "unit test: the real sidebar is out of reach"))
+
     def patch(self, obj, name: str, value) -> None:
         patcher = mock.patch.object(obj, name, value)
         patcher.start()
