@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "project": {
+    "name": "agenthydra"
+  },
+  "checks": {
+    "ime-composition-enter-guard": {
+      "$reason": "This repo has FOUR files matching the default `/src/main.ts` suffix and only two of them are browser entries. `server/src/main.ts` and `orchestrator/server/src/main.ts` are Bun process entries - an argv dispatcher and an HTTP daemon, no DOM in their reach at all - so asking them to install a keydown guard is asking for code that could never run. The two real browser entries, `web/src/main.ts` and `orchestrator/web/src/main.ts`, both call `installImeCompositionGuard()` already. Every browser entry in this repo lives under a `web/` directory, so the suffix is narrowed to that; the rule is unchanged and still gates.",
+      "bootFileSuffixes": [
+        "/web/src/main.ts",
+        "/web/src/main.tsx",
+        "/web/src/main.js",
+        "/web/src/main.jsx"
+      ]
+    }
+  }
+}
