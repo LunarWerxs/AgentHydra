@@ -39,6 +39,7 @@
 # USAGE
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "Exact chat title"
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Instance 5claude
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -All        # every row with that name
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Unarchive   # (only reaches
 #                                              a currently-rendered archived row)
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Rename -NewTitle "Real name"
@@ -65,7 +66,18 @@ param(
   # The CALLER has established on disk that exactly one live chat in this instance carries
   # $Title, so rows rendering that identical name are one chat drawn twice, not two chats to
   # choose between. Only then may a duplicate-name ambiguity be acted on. See KebabFor.
-  [switch]$AllowDuplicateRows
+  [switch]$AllowDuplicateRows,
+  # -All is the OTHER duplicate case, and it is the opposite claim: SEVERAL REAL CHATS share
+  # this title and EVERY one of them is to be actioned (measured 2026-09-17 cleaning up 17
+  # fan-out judge chats, of which three were titled 'Blogitech showcase design critique' and two
+  # 'Critic judge instructions batch b002'). -AllowDuplicateRows would be a lie there - it
+  # asserts one chat drawn twice - so the caller was left to loop outside the tool, which is
+  # exactly the one-off scripting this file exists to stop. Archive only: a rename or an
+  # unarchive of N same-named rows has no single sensible meaning.
+  [switch]$All,
+  # Internal: the recursion depth of an -All sweep, so a pass can archive the next row without
+  # re-deriving the loop. Never passed by a human.
+  [int]$AllPass = 0
 )
 $ErrorActionPreference = 'Stop'
 # ⛔ UTF-8 ON THE WAY OUT, OR A NON-ASCII TITLE COMES BACK AS QUESTION MARKS (2026-09-10).
@@ -185,6 +197,10 @@ function KebabFor($scope, $title) {
   # caller passed -AllowDuplicateRows, having counted exactly one live chat with it.
   $distinct = @($hits | ForEach-Object { $_.Current.Name } | Sort-Object -Unique)
   if ($AllowDuplicateRows -and $distinct.Count -eq 1) { return $hits[0] }
+  # -All: the caller means every one of them, so take them one at a time (the sweep below
+  # re-runs until no row carries the title). This is a DELIBERATE claim about several chats,
+  # not the one-chat-drawn-twice assumption above, which is why it is its own switch.
+  if ($All) { return $hits[0] }
   # THE REFUSAL MESSAGE MUST NOT GO TO THE OUTPUT STREAM. A PowerShell function returns
   # EVERYTHING written to stdout, so a Write-Output here made KebabFor return the two-element
   # array @('AMBIGUOUS: ...', $null). The caller's `if (-not $kebab)` then saw a non-empty
@@ -327,6 +343,16 @@ foreach ($m in $mains) {
   $ec.Expand()
   Start-Sleep -Milliseconds 800
 
+  # ⛔ RE-POKE THE ACCESSIBILITY TREE AFTER THE MENU OPENS - the popup is built LAZILY too
+  # (measured 2026-09-17, on a build whose row menu reads Open in / Pin / Mark as unread /
+  # Rename / Fork / Move to group / Archive / Delete). The Wake before KebabFor materializes
+  # the SIDEBAR; the menu Chromium renders after Expand() is a fresh subtree that no UIA query
+  # can see until MSAA is poked again, so the search below found ZERO MenuItems and the script
+  # reported `menu opened but no 'Archive' item matched a known label. Menu showed: ` with an
+  # EMPTY list - which reads as a locale gap (add a label!) when the labels were never the
+  # problem. An empty Seen list means NOT RENDERED; a non-empty one means a real label gap.
+  [void](Wake ([IntPtr]$win.Current.NativeWindowHandle))
+
   $found = MenuItemFor $cond $Action
   $item = $found.Item
   if (-not $item) {
@@ -423,8 +449,21 @@ foreach ($m in $mains) {
 
   $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
   $still = [bool](KebabFor $el $Title)
-  if ($Action -eq 'Archive' -and $still) { Write-Output 'INVOKED but row still present - report this, do not blind-retry'; exit 2 }
+  if ($Action -eq 'Archive' -and $still -and -not $All) { Write-Output 'INVOKED but row still present - report this, do not blind-retry'; exit 2 }
   Write-Output "$Action done for '$Title' (focus-free: no SetForegroundWindow, no cursor)"
+
+  # -All SWEEP: one pass archived one row; if another row still carries this title, do it again.
+  # Re-invoking this same script (rather than looping in place) keeps the single-action path the
+  # ONLY path that opens a menu and invokes an item - one code path to trust, one to maintain -
+  # and each pass re-reads the tree from scratch, which is what a virtualized sidebar needs
+  # anyway. The cap is a runaway guard: 25 same-named rows in one sidebar is already absurd.
+  if ($All -and $Action -eq 'Archive' -and $still) {
+    if ($AllPass -ge 25) { Write-Output "STOPPED: -All hit its 25-pass cap with rows still named '$Title'"; exit 2 }
+    $next = & powershell -NoProfile -File $PSCommandPath -Instance $Instance -Title $Title -Action Archive -All -AllPass ($AllPass + 1)
+    $code = $LASTEXITCODE
+    $next | ForEach-Object { Write-Output $_ }
+    exit $code
+  }
   exit 0
 }
 if ($List) { exit 0 }

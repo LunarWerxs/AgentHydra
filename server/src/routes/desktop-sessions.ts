@@ -29,6 +29,7 @@ import {
   unarchiveChatRecord,
 } from '../session-launch'
 import { getSession } from '../sessions'
+import { type UiArchiveOutcome, uiArchiveChat } from '../ui-archive'
 
 /** Screenshot capture, launching a visible terminal session, and the desktop-chat lifecycle
  *  operations (import, automation stamp, archive, migrate). See index.ts for the app-wide
@@ -192,6 +193,53 @@ app.post('/api/sessions/:id/automation', async (c) => {
 // profile that carries it. Honest caveat in the response: for a profile whose app was running,
 // the change shows only after that instance next restarts (and could be re-saved away by the
 // running app; the AgentHydra done-mark is the immediate signal either way).
+/** How long the archive route waits for the app's own Archive click before answering
+ *  without it. Under hydralib's 30s POST default, with room for the answer itself. */
+const UI_ARCHIVE_BUDGET_MS = 20_000
+
+/**
+ * Drive the app's own Archive control for one profile, bounded, and never throwing.
+ *
+ * Bounded because this route's callers are bounded: archive_chat.py posts here on hydralib's
+ * 30s default. A measured click is nowhere near that (listing 32 rendered rows took 1.6s on
+ * 2026-09-17, the click a few seconds more), but ui-archive's own spawn guard is 90s, and a UIA
+ * call that hangs on a closing window would turn a working endpoint into a caller-side timeout -
+ * the worst shape, because the caller then cannot tell what happened. Losing the race is not a
+ * failure to hide: the flag is written, the reassert watcher is already running, and the caller
+ * is told the click did not settle. The timer is cleared either way, so no archive leaves a
+ * 20s timer armed behind it.
+ */
+async function uiArchiveWithinBudget(
+  profile: string,
+  sessionId: string,
+): Promise<UiArchiveOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      uiArchiveChat(profile, sessionId),
+      new Promise<UiArchiveOutcome>((resolve) => {
+        timer = setTimeout(
+          () =>
+            resolve({
+              clicked: false,
+              verified: false,
+              reason: `the app's own Archive control did not finish within ${UI_ARCHIVE_BUDGET_MS / 1000}s`,
+            }),
+          UI_ARCHIVE_BUDGET_MS,
+        )
+      }),
+    ])
+  } catch (e) {
+    return {
+      clicked: false,
+      verified: false,
+      reason: `the app's own Archive control could not be driven: ${e instanceof Error ? e.message : String(e)}`,
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 app.post('/api/sessions/:id/desktop-archive', async (c) => {
   const body = await jsonBody(c)
   const sessionId = c.req.param('id')
@@ -254,15 +302,59 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
     if (!hit.changed || !hit.wasRunning) continue
     void reassertChatArchive(hit.profile, sessionId).catch(() => {})
   }
+  // ⛔ FINISH THE JOB HERE, rather than telling the caller to go run a script. Owner ruling,
+  // 2026-09-17, after archiving 17 chats by hand: when a built-in does not do the thing it says
+  // it does, the built-in gets fixed - nobody should be writing a one-off script to finish a
+  // basic operation. The server-side click has existed in ui-archive.ts since 2026-08-30 and
+  // NOTHING called it: every
+  // caller of this route got a flag, a paragraph explaining the flag was not enough, and a
+  // homework assignment. Its own rails decide whether clicking is safe (it refuses when another
+  // LIVE chat shares the rendered title), so the worst case here is the old behaviour plus a
+  // reason. Awaited on purpose: a fast answer that leaves the chat on screen is the bug.
+  const uiOutcomes: Array<{
+    profile: string
+    clicked: boolean
+    verified: boolean
+    reason?: string
+  }> = []
+  if (wantArchived) {
+    for (const hit of result.hits ?? []) {
+      if (!hit.changed || !hit.wasRunning) continue
+      const outcome = await uiArchiveWithinBudget(hit.profile, sessionId)
+      uiOutcomes.push({ profile: hit.profile, ...outcome })
+    }
+  }
+  const retiredInApp = uiOutcomes.length > 0 && uiOutcomes.every((o) => o.verified)
+  if (underRunningApp && retiredInApp)
+    return c.json({
+      ...result,
+      stillOnScreen: false,
+      uiArchive: uiOutcomes,
+      note:
+        "the flag is written AND the app's own Archive control was driven, so the row has left " +
+        'the sidebar now - no restart needed.',
+    })
   if (underRunningApp)
     return c.json({
       ...result,
-      visibleNow: false,
+      stillOnScreen: true,
+      ...(uiOutcomes.length ? { uiArchive: uiOutcomes } : {}),
       note:
-        'the flag is written, but that app is RUNNING and holds its chat list in memory, so ' +
-        'the chat is STILL ON SCREEN until that instance next restarts. To retire it ' +
-        "immediately, archive it through the app's own UI - misc/Manage-DesktopChat.ps1 " +
-        'automates exactly that click and verifies it landed.',
+        'the flag is written, but that app is RUNNING and holds its chat list in memory, so the ' +
+        `chat is STILL ${wantArchived ? 'ON SCREEN' : 'HIDDEN'} until that instance next ` +
+        'restarts. ' +
+        (wantArchived
+          ? `The in-app click was attempted and did not settle it: ${
+              uiOutcomes
+                .map((o) => o.reason)
+                .filter(Boolean)
+                .join(' | ') || 'no rendered row to click'
+            }.`
+          : // UNARCHIVE has no in-app control to drive: the app's row menu offers Archive, not a
+            // way to put a hidden chat back, so there is nothing to click and saying a click was
+            // attempted would be a lie. Only that instance's restart re-reads the store.
+            "unarchiving has no in-app control to drive - the app's row menu can archive a chat, " +
+            'not restore one, so only that restart brings it back.'),
     })
   return c.json(result, result.ok ? 200 : 404)
 })

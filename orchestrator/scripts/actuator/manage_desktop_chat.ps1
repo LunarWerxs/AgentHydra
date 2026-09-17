@@ -560,6 +560,16 @@ foreach ($m in $mains) {
   # not "ready"; the adversarial review said exactly this and was right. Do not poll here.
   Start-Sleep -Milliseconds 800
 
+  # ⛔ RE-POKE THE ACCESSIBILITY TREE AFTER THE MENU OPENS - the popup is built LAZILY too
+  # (measured 2026-09-17, on a build whose row menu reads Open in / Pin / Mark as unread /
+  # Rename / Fork / Move to group / Archive / Delete). The Wake before KebabFor materializes
+  # the SIDEBAR; the menu Chromium renders after Expand() is a fresh subtree that no UIA query
+  # can see until MSAA is poked again, so the search below found ZERO MenuItems and the script
+  # reported `menu opened but no 'Archive' item matched a known label. Menu showed: ` with an
+  # EMPTY list - which reads as a locale gap (add a label!) when the labels were never the
+  # problem. An empty Seen list means NOT RENDERED; a non-empty one means a real label gap.
+  [void](Wake ([IntPtr]$win.Current.NativeWindowHandle))
+
   # DIAGNOSTIC: print every rendered menu item with the properties that do NOT localize, so a
   # locale-independent selector can be found instead of adding yet another language's labels.
   # Invokes nothing and always exits.

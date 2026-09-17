@@ -533,14 +533,18 @@ def _archive_via_disk_flag(session_id: str, desired: bool, verb: str, as_json: b
             1,
         )
     if any(h.get("changed") and h.get("wasRunning") for h in result.get("hits", [])):
-        # The app opened in the race window between our check and the POST. The flag is
-        # now the un-durable kind - re-run immediately: the running-app path will take
-        # over and settle it through the app's own control.
-        return None, out(
-            {"changed": True, "durable": False, "daemon": result,
-             "report": (f"the app opened mid-act, so the flag write is not durable - "
-                        "re-run this command now and the app's own control will settle it.")},
-            as_json, 7)
+        # The app opened in the race window between our check and the POST, so the flag write
+        # alone is the un-durable kind. Since 2026-09-17 the daemon route drives the app's own
+        # Archive control itself in that case (server/src/routes/desktop-sessions.ts), and
+        # stillOnScreen is its verdict: False means the row has already left the sidebar, which
+        # is durable - fall through to the normal verification rather than sending the caller
+        # round again to redo work the daemon just did.
+        if result.get("stillOnScreen") is not False:
+            return None, out(
+                {"changed": True, "durable": False, "daemon": result,
+                 "report": (f"the app opened mid-act, so the flag write is not durable - "
+                            "re-run this command now and the app's own control will settle it.")},
+                as_json, 7)
     return result, None
 
 
