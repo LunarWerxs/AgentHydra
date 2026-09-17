@@ -331,9 +331,11 @@ app.get('/api/chats', async (c) => {
 app.get('/api/sessions/live', (c) => {
   const sessions = readLiveRegistry(join(homedir(), '.claude'))
   const seen = new Set<string>()
-  const rows = sessions.filter((s) =>
-    seen.has(s.sessionId) ? false : (seen.add(s.sessionId), true),
-  )
+  const rows = sessions.filter((s) => {
+    if (seen.has(s.sessionId)) return false
+    seen.add(s.sessionId)
+    return true
+  })
   if (c.req.query('lineage') !== '1') return c.json({ count: rows.length, sessions: rows })
   const lineage = liveLineage(rows.map((s) => s.sessionId))
   return c.json({
