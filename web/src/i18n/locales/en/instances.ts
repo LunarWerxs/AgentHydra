@@ -315,6 +315,12 @@ export default {
   // explains a refusal before it happens rather than after.
   chatsLive: 'Running',
   chatsArchivedBadge: 'Archived',
+  // A chat filed under an account this profile is no longer signed into: its record is on disk,
+  // but the app shows only the signed-in account's chats, so the owner cannot see it (2026-09-18).
+  chatsStaleLoginCount: '{n} hidden by a re-login',
+  chatsStaleLoginBadge: 'Hidden (old login)',
+  chatsStaleLoginHint:
+    'Filed under the account this app was signed into before. The app only shows the current account’s chats, so this one is invisible there. Move it to this same account to bring it back.',
   chatsNoTitle: '(untitled chat)',
   chatsNeverActive: 'No recorded activity',
   // Only a chat with a CLI transcript can be opened in Sessions; one without is a Desktop-only

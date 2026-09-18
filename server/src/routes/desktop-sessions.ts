@@ -585,6 +585,9 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     (i) => i.isRunning && samePathKey(i.dir, targetDir),
   )
   let landing: 'hot' | 'cold'
+  // Records of this chat under a PREVIOUS login of the target, moved into the backup dir so the
+  // landing is the only record there (session-launch.ts setAsideStaleLoginRecords).
+  let staleLoginSetAside: string[] = []
   if (targetRunning) {
     landing = 'hot'
     const imported = await importSessionToDesktop({
@@ -595,6 +598,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       carried,
     })
     if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
+    staleLoginSetAside = imported.staleLoginSetAside ?? []
     if (Object.keys(carried).length) rememberMigratedSettings(sessionId, targetDir, carried)
   } else {
     landing = 'cold'
@@ -606,6 +610,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       force: body.force === true,
     })
     if (!cold.ok) return c.json({ ok: false, error: cold.reason ?? 'cold import failed' }, 422)
+    staleLoginSetAside = cold.staleLoginSetAside ?? []
   }
   // The proof: the target's store holds the record. The hot import already waited up to 20s for
   // it; this grants the app another 25s (a bulk move keeps it busy) before the move is called
@@ -669,6 +674,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     verified: true,
     landedPath,
     targetUnarchived,
+    ...(staleLoginSetAside.length ? { staleLoginSetAside } : {}),
     sourceArchived: (archived0?.hits ?? []).filter((h) => h.changed).map((h) => h.profile),
     carried: Object.keys(carried),
     stoppedLive: !!live,

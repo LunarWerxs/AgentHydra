@@ -11,6 +11,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { readLoginUuid } from './login-state'
 import { defaultClaudeUserDataDir, instancesRoot } from './paths'
 
 /** One chat's full metadata row, read straight off disk (superset of SessionMeta: the cached
@@ -37,6 +38,21 @@ export interface DossierChat {
    *  the answer is also the name in the file, so a hand-check cannot silently invert. */
   isArchived: boolean
   permissionMode: string | null
+  /** The `<accountUuid>` folder this record is filed under (the first path segment below
+   *  `claude-code-sessions`). */
+  accountUuid: string | null
+  /** The account this profile is signed into RIGHT NOW (config.json `lastKnownAccountUuid`),
+   *  null when signed out or unreadable. */
+  loginUuid: string | null
+  /** ⛔ THE RECORD IS ON DISK BUT THE APP DOES NOT SHOW IT. True when the profile is signed into
+   *  a different account than the one this record is filed under: the desktop app renders only
+   *  the signed-in account's folder, so a re-login hides every chat filed under the previous one
+   *  while its record (and every tool that globbed the whole store) still said "unarchived, on
+   *  this instance". #12, 2026-09-18: four chats moved in at 22:16Z, the profile was re-logged
+   *  into another account at 22:50Z, and the chats vanished while list_chats, chat_dossier and
+   *  move_chats ("nothing to do: already lives here") all reported them present. Null when the
+   *  signed-in account is unknown, which is NOT the same as false. */
+  staleLogin: boolean | null
 }
 
 const iso = (ms: unknown): string | null =>
@@ -46,9 +62,14 @@ function scanStoreFull(userDataDir: string, label: string, out: DossierChat[]): 
   const dir = join(userDataDir, 'claude-code-sessions')
   if (!existsSync(dir)) return
   const glob = new Bun.Glob('*/*/local_*.json')
+  // Read once per profile, not per record: one config.json per store, and every record in the
+  // store is judged against the same answer.
+  const loginUuid = readLoginUuid(userDataDir)
   for (const rel of glob.scanSync({ cwd: dir, onlyFiles: true })) {
     try {
       const path = join(dir, rel)
+      // Bun's glob yields native separators on Windows, so split on both.
+      const accountUuid = rel.split(/[\\/]/)[0] || null
       const meta = JSON.parse(readFileSync(path, 'utf8'))
       const chatId = rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null
       out.push({
@@ -74,6 +95,10 @@ function scanStoreFull(userDataDir: string, label: string, out: DossierChat[]): 
         archived: !!meta?.isArchived,
         isArchived: !!meta?.isArchived,
         permissionMode: typeof meta?.permissionMode === 'string' ? meta.permissionMode : null,
+        accountUuid,
+        loginUuid,
+        staleLogin:
+          loginUuid && accountUuid ? accountUuid.toLowerCase() !== loginUuid.toLowerCase() : null,
       })
     } catch {
       /* unreadable metadata file: skip it */

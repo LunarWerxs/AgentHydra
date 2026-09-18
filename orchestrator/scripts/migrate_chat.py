@@ -756,12 +756,30 @@ def _resolve_target_or_raise(fleet: dict, to: str, match: dict, session_id: str,
             },
             3,
         )
-    if str(match.get("instance", "")).lower() == str(target.get("name", "")).lower():
+    # ⛔ "ALREADY LIVES HERE" MEANS ON SCREEN HERE (2026-09-18). A record filed under an account
+    # the target profile is no longer signed into (`staleLogin`) is on the target's disk and NOT in
+    # its app: #12 was re-logged into another account twenty minutes after four chats were moved
+    # in, and every move of them answered "nothing to do" while the owner could not see one. Such
+    # a chat is RE-HOMED instead - the import sets the stale record aside and lands the chat in the
+    # signed-in account's folder (session-launch.ts setAsideStaleLoginRecords).
+    if _same_instance(match, target) and match.get("staleLogin") is not True:
         raise _MigrateRefusal(
             {"landed": False, "report": f"nothing to do: '{chat_title}' already lives in {target.get('name')}"},
             0,
         )
     return target
+
+
+def _same_instance(m: dict, target: dict) -> bool:
+    return str(m.get("instance", "")).lower() == str((target or {}).get("name", "")).lower()
+
+
+def _on_screen_in(m: dict, target: dict) -> bool:
+    """A dossier row that puts the chat WHERE THE TARGET'S APP LOOKS: the target instance AND
+    not filed under a previous login of it. The landing check and the stamp's path both ask
+    this, never the bare instance name, or a stale-login twin already on disk would "verify" a
+    re-home that never happened and take the stamps meant for the real landing."""
+    return _same_instance(m, target) and m.get("staleLogin") is not True
 
 
 def _check_archived_or_raise(match: dict, include_archived: bool) -> None:
@@ -1127,9 +1145,7 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
             },
             1,
         ) from err
-    landed = any(
-        str(m.get("instance", "")).lower() == str(target.get("name", "")).lower() for m in after
-    )
+    landed = any(_on_screen_in(m, target) for m in after)
     if not landed:
         ledgerlib.verify(
             "migrate", session_id, False,
@@ -1537,11 +1553,7 @@ def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
         stamped = False
         stamp_note = f"automation stamp failed ({err}) - stamp bypassPermissions before it boots"
 
-    landed_match = next(
-        (m for m in after
-         if str(m.get("instance", "")).lower() == str(target.get("name", "")).lower()),
-        {},
-    )
+    landed_match = next((m for m in after if _on_screen_in(m, target)), {})
     meta_path = landed_match.get("metaPath")
     if meta_path:
         # ⛔ BOTH STAMPS ON DISK, AND STAMPED TWICE (owner, 2026-09-01: "I am getting sick of
@@ -1767,11 +1779,7 @@ def landed_meta_path(land: _Landing) -> str:
     the alternative - letting each chat's stamp find its own path and watch it alone - is the
     8s-times-N wait that made a batch feel slow.
     """
-    landed = next(
-        (m for m in (land.after or [])
-         if str(m.get("instance", "")).lower() == str((land.target or {}).get("name", "")).lower()),
-        {},
-    )
+    landed = next((m for m in (land.after or []) if _on_screen_in(m, land.target or {})), {})
     return str(landed.get("metaPath") or "")
 
 

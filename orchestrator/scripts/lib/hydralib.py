@@ -435,6 +435,14 @@ def choose_match(query: str, matches: list[dict]) -> dict:
         alive = [m for m in matches if not m.get("archived")]
         if len(alive) == 1:
             return alive[0]
+        # ⛔ ON DISK IS NOT ON SCREEN (2026-09-18). An un-archived record filed under an account
+        # its profile is no longer signed into (`staleLogin`) is invisible in the app, so when
+        # exactly one un-archived copy is the one the owner can actually see, that one IS the
+        # chat - picking the invisible twin by recency would move the chat away from where it
+        # shows. Unknown (None) counts as on screen, the same as before this flag existed.
+        on_screen = [m for m in alive if m.get("staleLogin") is not True]
+        if alive and len(on_screen) == 1:
+            return on_screen[0]
         # ONE LINEAGE, MANY RECORDS is the zombie-twin shape (a running app resurrects the
         # archived source row after every migrate/reimport), not ambiguity: every record IS
         # the same chat, so the newest one - current title, current metaPath - answers for

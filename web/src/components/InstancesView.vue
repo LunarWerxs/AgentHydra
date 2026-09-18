@@ -87,7 +87,13 @@ import { useSortable } from '@/composables/useSortable'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
-import type { ChatListRow, CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
+import type {
+  ChatListResult,
+  ChatListRow,
+  CliInstance,
+  CMDesktopInstall,
+  CMInstance,
+} from '@/lib/api'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
   DESKTOP_DOWNLOAD_PAGE_URL,
@@ -742,9 +748,7 @@ const chatsBusy = ref(false)
 const chatsError = ref<string | null>(null)
 const chatsRows = ref<ChatListRow[]>([])
 const chatsTotal = ref(0)
-const chatsCounts = ref<{ all: number; unarchived: number; archived: number; live: number } | null>(
-  null,
-)
+const chatsCounts = ref<ChatListResult['counts'] | null>(null)
 // Archived is the resting state of a Claude Desktop chat and therefore the majority of any
 // account, so the list opens on the active ones and says how many it is not showing.
 const chatsShowArchived = ref(false)
@@ -1791,6 +1795,11 @@ onUnmounted(() => {
               <template v-if="chatsCounts.live > 0">
                 · {{ $t('instances.chatsLiveCount', { n: chatsCounts.live }) }}
               </template>
+              <!-- On disk, not in the app: filed under an account this profile is no longer
+                   signed into (2026-09-18, #12). Loud, because nothing else on screen says so. -->
+              <span v-if="chatsCounts.staleLogin > 0" class="font-medium text-destructive">
+                · {{ $t('instances.chatsStaleLoginCount', { n: chatsCounts.staleLogin }) }}
+              </span>
             </template>
             <template v-else-if="chatsBusy">{{ $t('instances.chatsLoading') }}</template>
           </DialogDescription>
@@ -1826,6 +1835,14 @@ onUnmounted(() => {
               </Badge>
               <Badge v-if="row.isArchived" variant="secondary" class="shrink-0">
                 {{ $t('instances.chatsArchivedBadge') }}
+              </Badge>
+              <Badge
+                v-if="row.staleLogin"
+                variant="destructive"
+                class="shrink-0"
+                :title="$t('instances.chatsStaleLoginHint')"
+              >
+                {{ $t('instances.chatsStaleLoginBadge') }}
               </Badge>
               <!-- Absent, not disabled, for a Desktop-only chat: there is no session to open. -->
               <button

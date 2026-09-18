@@ -145,7 +145,7 @@ describe('listChats', () => {
     const included = listChats({ archived: 'include' }, opts)
     const only = listChats({ archived: 'only' }, opts)
     for (const got of [hidden, included, only])
-      expect(got.counts).toEqual({ all: 2, unarchived: 1, archived: 1, live: 0 })
+      expect(got.counts).toEqual({ all: 2, unarchived: 1, archived: 1, live: 0, staleLogin: 0 })
     expect(included.rows.length).toBe(2)
     expect(only.rows.map((r) => r.title)).toEqual(['Rolling thread'])
   })

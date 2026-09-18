@@ -120,6 +120,11 @@ export interface ChatListRow {
    *  migrated. The migrate route refuses a done chat as superseded, so a move planned from this
    *  list leaves these out rather than collecting a column of refusals. */
   done: boolean
+  /** ⛔ ON DISK, NOT IN THE APP: filed under an account this profile is no longer signed into,
+   *  so the desktop app does not show it (see DossierChat.staleLogin). Null = the signed-in
+   *  account is unknown. A move to this same instance RE-HOMES such a chat into the signed-in
+   *  account's folder instead of answering "already lives here". */
+  staleLogin: boolean | null
 }
 
 export interface ChatListResult {
@@ -127,7 +132,15 @@ export interface ChatListResult {
   /** Chats matching the filter BEFORE limit/offset — so a capped page never reads as the whole set. */
   total: number
   /** The whole account, unfiltered by archive scope: the "how big is this thing" answer. */
-  counts: { all: number; unarchived: number; archived: number; live: number }
+  counts: {
+    all: number
+    unarchived: number
+    archived: number
+    live: number
+    /** Unarchived chats filed under an account the profile is no longer signed into: present on
+     *  disk, INVISIBLE in the app. Anything above zero is chats the owner has lost sight of. */
+    staleLogin: number
+  }
   /** Every instance label the scan saw, so a mistyped `instance` is obvious rather than empty. */
   instances: string[]
 }
@@ -206,6 +219,7 @@ export function listChats(
     unarchived: scoped.filter((c) => !c.isArchived).length,
     archived: scoped.filter((c) => c.isArchived).length,
     live: scoped.filter((c) => lineageIdsOf(c).some((id) => live.has(id))).length,
+    staleLogin: scoped.filter((c) => !c.isArchived && c.staleLogin === true).length,
   }
 
   const matched = scoped
@@ -241,6 +255,7 @@ export function listChats(
       live: pid !== undefined,
       livePid: pid ?? null,
       done: markFor(lineage)?.done === true,
+      staleLogin: c.staleLogin,
     }
   })
 

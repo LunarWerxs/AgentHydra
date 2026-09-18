@@ -98,6 +98,14 @@ export function uiPrefsFile(): string {
   return path.join(appDataDir(), 'ui-prefs.json')
 }
 
+/** Where a chat record filed under a NO-LONGER-SIGNED-IN account is set aside when that chat is
+ *  re-homed into the signed-in account's folder (session-launch.ts setAsideStaleLoginRecords).
+ *  Kept, never deleted: the record is the chat's settings, and the move that set it aside can put
+ *  it back if the landing does not verify. */
+export function staleLoginBackupDir(): string {
+  return path.join(appDataDir(), 'backups', 'stale-login-records')
+}
+
 export function logFile(): string {
   return path.join(appDataDir(), 'agenthydra.log')
 }

@@ -14,12 +14,13 @@
 // Nothing here throws for expected failure conditions (missing dirs, no processes found, spawn
 // failures, permission errors); every public function returns a status-carrying result instead.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { existsSync, readdirSync, statSync } from 'node:fs'
+import { basename } from 'node:path'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { detectDesktopInstall } from './desktop-install'
 import { readInstanceMetaMap } from './instance-meta'
 import { instanceNumbers, instanceRef } from './instance-numbers'
+import { readLoginUuid } from './login-state'
 import {
   currentPlatform,
   defaultClaudeDir,
@@ -114,59 +115,7 @@ function dirSizeBytes(dir: string): number | undefined {
   }
 }
 
-/**
- * Which account an instance is signed into right now: `<dir>/config.json`'s `lastKnownAccountUuid`
- * (null when signed out, unreadable, or malformed).
- *
- * This is the ONLY part of account identity cheap enough to ship with every list response — the
- * rest needs a safeStorage decrypt and a profile call (core/accounts.ts). It exists so the UI can
- * notice that an instance was re-logged into a DIFFERENT account and re-resolve, instead of
- * showing the identity it resolved once forever.
- *
- * Deliberately un-memoized: these files run 3–9 KB, so re-reading one per instance per poll tick
- * is far cheaper than the staleness a stat-keyed cache would risk (an account switch rewrites
- * config.json to the SAME size, since one uuid is exactly as long as another). Identity only —
- * never reads or returns a token. Never throws.
- */
-export function readLoginUuid(instanceDir: string): string | null {
-  return readLoginState(instanceDir).uuid
-}
-
-/**
- * ⛔ 'SIGNED OUT' AND 'I COULD NOT READ THE PROFILE' ARE DIFFERENT PROBLEMS, and `readLoginUuid`
- * answers null to both. That single boolean is what the fleet reports, so a config.json that a
- * crash left half-written is announced to the owner as "instance #N is signed out - sign it in",
- * sending him to fix a login that was never broken while the real fault (a damaged profile) goes
- * unnamed. The uuid is unchanged for every existing caller; this just keeps the reason.
- *
- * `no-config` is separated from `unreadable` on purpose too: a directory with no config.json yet
- * is a NEW instance that has never been signed in, which is ordinary, while a config.json that
- * exists and will not parse is damage.
- */
-export type LoginState =
-  | { uuid: string; reason: 'signed-in' }
-  | { uuid: null; reason: 'signed-out' | 'no-config' | 'unreadable' }
-
-export function readLoginState(instanceDir: string): LoginState {
-  if (!instanceDir?.trim()) return { uuid: null, reason: 'unreadable' }
-  let raw: string
-  try {
-    raw = readFileSync(join(instanceDir, 'config.json'), 'utf8')
-  } catch (err) {
-    // Nothing there yet vs. something there we cannot read - only the second one is damage.
-    const missing = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
-    return { uuid: null, reason: missing ? 'no-config' : 'unreadable' }
-  }
-  if (!raw?.trim()) return { uuid: null, reason: 'unreadable' }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    return typeof parsed.lastKnownAccountUuid === 'string'
-      ? { uuid: parsed.lastKnownAccountUuid, reason: 'signed-in' }
-      : { uuid: null, reason: 'signed-out' }
-  } catch {
-    return { uuid: null, reason: 'unreadable' }
-  }
-}
+export { type LoginState, readLoginState, readLoginUuid } from './login-state'
 
 export interface ListInstancesOptions {
   /** Attach account identity (slow path: decrypt + one network call per instance). */

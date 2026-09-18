@@ -30,6 +30,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { readLoginUuid } from './core/login-state'
 
 /** The settings a person sets on a chat and expects to keep. Order is documentation, not code. */
 export const CARRIED_KEYS = [
@@ -149,20 +150,24 @@ export function buildColdImportRecord(
 }
 
 /**
- * The `<org>/<user>` leaf a new record belongs in, inside a profile's store: the leaf whose records
- * were touched most recently, which is the account that profile is signed into now (a profile that
- * has been signed into two accounts carries two leaves, and the stale one must not win). A profile
- * with no store at all, or a store with no leaf, returns null: the app has never signed in there,
- * and there is nowhere the app would look.
+ * The `<account>/<org>` leaf a new record belongs in, inside a profile's store. The account is the
+ * one the profile is signed into now - config.json `lastKnownAccountUuid`, the folder the app
+ * actually renders. This used to be GUESSED as "the leaf touched most recently", and the guess is
+ * wrong exactly when it matters: minutes after a re-login, the previous account's leaf still holds
+ * the newest activity, so a chat written there lands invisible (2026-09-18, #12). Within that
+ * account the most recently touched org leaf wins. Only when the signed-in account is unknown does
+ * recency across every leaf decide, as before. A profile with no store, no leaf, or no folder for
+ * its signed-in account returns null: there is nowhere the app would look.
  */
 export function chooseStoreLeaf(instanceDir: string): string | null {
   const store = join(instanceDir, 'claude-code-sessions')
   if (!existsSync(store)) return null
   let best: { dir: string; touched: number } | null = null
   let orgs: string[]
+  const login = readLoginUuid(instanceDir)?.toLowerCase() ?? null
   try {
     orgs = readdirSync(store, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
+      .filter((d) => d.isDirectory() && (!login || d.name.toLowerCase() === login))
       .map((d) => d.name)
   } catch {
     return null

@@ -13,6 +13,34 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A re-login hid every chat filed under the previous account, and every tool kept saying they
+  were there.** The desktop app files one record per chat under
+  `claude-code-sessions/<accountUuid>/<orgUuid>/` and shows ONLY the folder of the account the
+  profile is signed into (`config.json` `lastKnownAccountUuid`). On 2026-09-18 instance #12 was
+  re-logged into another account twenty minutes after four chats were moved in; the four vanished
+  from the app while `list_chats` and `chat_dossier` reported them unarchived on #12 and every move
+  of them answered "nothing to do: already lives in pap3r rotate2", because every scan globbed
+  `*/*/local_*.json` across all account folders.
+  - Every chat record now carries `accountUuid`, `loginUuid` and `staleLogin`
+    (`core/chat-store-scan.ts`); `list_chats` flags each row and counts the hidden ones in
+    `counts.staleLogin`, and the Instances "Chats" panel shows them in red as "hidden by a
+    re-login". The signed-in-account read moved to `core/login-state.ts` so the side-effect-free
+    scan can share it.
+  - "Already here" and "did it land" ask only the signed-in account's folder
+    (`findVisibleChatMetaPath`: `renderedInStore`, `awaitChatRecord`), so a stale record neither
+    skips an import nor verifies one.
+  - A move to the SAME instance re-homes such a chat: the import sets the old record aside to
+    `~/.agenthydra/backups/stale-login-records/` (never deleted), lands the chat where the app
+    looks, and puts the old record back if nothing lands within 45s. `migrate_chat` no longer
+    short-circuits, verifies, or stamps on a stale-login row, and `choose_match` prefers the copy
+    that is actually on screen.
+  - A cold landing goes into the signed-in account's folder instead of "whichever leaf was touched
+    last" (`chooseStoreLeaf`), which minutes after a re-login is the previous account's.
+- **`chats --console` listed ~220 zswarm and bench jobs as homeless chats.** Only a Claude Code
+  session with no desktop home is a console chat now; other sources are grouped as "headless
+  <source> runs - never a desktop chat". An agent asked for "orphaned chats" read the old list as
+  the orphans and moved 25 old chats nobody asked for.
+
 - **An in-app archive or rename was refused EVERY time, because the app rebuilds a row's menu
   button the first time its menu opens** (`misc/Manage-DesktopChat.ps1`). The actuator's
   last-moment re-aim re-read the Name of the kebab handle it took BEFORE opening the menu, to prove
