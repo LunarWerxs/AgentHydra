@@ -17,6 +17,11 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { spawnCaptured } from '../process.ts'
+
+/** DPAPI unprotect is a local, in-process CryptoAPI call - it answers in milliseconds or
+ *  something is wrong. Ten seconds is pure slack. */
+const DPAPI_TIMEOUT_MS = 10_000
 
 const DPAPI_PREFIX = Buffer.from('DPAPI', 'ascii') // 5 ASCII bytes stripped from encrypted_key.
 
@@ -143,17 +148,23 @@ async function unprotectViaPowerShell(blob: Uint8Array): Promise<Uint8Array | nu
       '[Console]::Out.Write([Convert]::ToBase64String($unprotected))',
     ].join('\n')
 
-    const proc = Bun.spawn(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-      windowsHide: true,
-    })
+    // ⛔ THIS WAS A DEADLOCK, NOT MERELY A MISSING TIMEOUT (swept 2026-09-18). It opened
+    // `stderr: 'pipe'` and NEVER READ IT, then awaited the stdout drain and proc.exited together.
+    // A DPAPI `Unprotect` failure throws a .NET exception whose traceback runs to kilobytes; past
+    // the pipe buffer PowerShell BLOCKS on that write, so it never exits, so stdout never closes
+    // and `proc.exited` never settles. The credential-decrypt path then hangs whatever asked for
+    // an account's token, with no deadline anywhere to break it. It is the same deadlock the
+    // orchestrator adapter's own comment warns about - "a child that fills one pipe while the
+    // other is unread" - reached in a different file. spawnCaptured drains BOTH streams and is
+    // bounded, so the failure mode is now a null return with the traceback available.
+    const r = await spawnCaptured(
+      ['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
+      { timeoutMs: DPAPI_TIMEOUT_MS },
+    )
 
-    const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+    if (r.timedOut || r.code !== 0) return null
 
-    if (exitCode !== 0) return null
-
-    const trimmed = stdout.trim()
+    const trimmed = r.stdout.trim()
     if (!trimmed) return null
 
     return new Uint8Array(Buffer.from(trimmed, 'base64'))

@@ -35,7 +35,16 @@ import {
   type ListClaudeProcessesOptions,
   listClaudeProcesses,
 } from './process'
+import { awaitExitBounded, spawnCaptured } from './process.ts'
 import type { CMActionResult, CMInstance } from './shared'
+
+/** `taskkill` signals and exits; it does not wait for the target to die. A run that has not
+ *  returned in ten seconds is wedged, and the caller's next step (a forced kill, a re-scan) is
+ *  strictly better than waiting on it forever. */
+const TASKKILL_TIMEOUT_MS = 10_000
+
+/** A window-focus poke is instant or the desktop is not answering. */
+const FOCUS_TIMEOUT_MS = 15_000
 
 // ----------------------------------------------------------------------------
 // Discovery
@@ -503,7 +512,9 @@ async function forceKillPid(pid: number): Promise<void> {
         stderr: 'ignore',
         windowsHide: true,
       })
-      await proc.exited
+      // Bounded (swept 2026-09-18): `await proc.exited` with nothing racing it hangs the caller
+      // forever if taskkill itself wedges, and this sits on the quit path.
+      await awaitExitBounded(proc, TASKKILL_TIMEOUT_MS)
     } catch {
       // Best-effort; process may have already exited between scan and kill.
     }
@@ -525,7 +536,9 @@ async function gracefulKillPid(pid: number): Promise<void> {
         stderr: 'ignore',
         windowsHide: true,
       })
-      await proc.exited
+      // Bounded (swept 2026-09-18): `await proc.exited` with nothing racing it hangs the caller
+      // forever if taskkill itself wedges, and this sits on the quit path.
+      await awaitExitBounded(proc, TASKKILL_TIMEOUT_MS)
     } catch {
       // Ignore; we'll force-kill on timeout regardless.
     }
@@ -685,34 +698,22 @@ async function focusWindowByPid(pid: number): Promise<'focused' | 'no-window' | 
     '}',
   ].join('\n')
 
-  type CaptureProc = Bun.Subprocess<'ignore', 'pipe', 'pipe'>
-  let proc: CaptureProc | null = null
-  try {
-    proc = Bun.spawn(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      windowsHide: true,
-    }) as CaptureProc
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err)
-  }
-
-  try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
-    const trimmed = stdout.trim()
-    if (trimmed.includes('FOCUSED')) return 'focused'
-    if (trimmed.includes('NO_WINDOW')) return 'no-window'
-    if (trimmed.includes('FOREGROUND_DENIED')) return 'foreground denied by Windows'
-    if (exitCode !== 0) return stderr.trim() || `powershell exited with code ${exitCode}`
-    return 'no-window'
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err)
-  }
+  // Bounded, and through the one bounded spawn (swept 2026-09-18). The hand-rolled version here
+  // awaited both drains AND proc.exited, which settles on the SLOWEST of the three - and this
+  // script's `Add-Type` makes powershell spawn the C# compiler, a grandchild that inherits these
+  // pipes and can hold them open after powershell itself is gone. A focus click is not worth a
+  // route that never answers.
+  const r = await spawnCaptured(
+    ['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
+    { timeoutMs: FOCUS_TIMEOUT_MS },
+  )
+  if (r.timedOut) return `focus timed out after ${FOCUS_TIMEOUT_MS / 1000}s`
+  const trimmed = r.stdout.trim()
+  if (trimmed.includes('FOCUSED')) return 'focused'
+  if (trimmed.includes('NO_WINDOW')) return 'no-window'
+  if (trimmed.includes('FOREGROUND_DENIED')) return 'foreground denied by Windows'
+  if (r.code !== 0) return r.stderr.trim() || `powershell exited with code ${r.code}`
+  return 'no-window'
 }
 
 /**

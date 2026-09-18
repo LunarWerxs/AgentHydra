@@ -5,6 +5,7 @@ import { chatDossier, listChats, liveLineage } from '../chat-dossier'
 import { CLIPBOARD_DIR } from '../config'
 import { resolveInstance } from '../core/instance-ref'
 import { defaultClaudeUserDataDir } from '../core/paths'
+import { awaitExitBounded } from '../core/process.ts'
 import { db, getSetting } from '../db'
 import { contentDispositionAttachment, safeTranscriptFilename } from '../filenames'
 import { app } from '../http-app'
@@ -36,6 +37,10 @@ import {
   type SessionSource,
 } from '../types'
 import { renameChatDiscoveringRenderedTitle } from '../ui-archive'
+
+/** Putting a staged file on the clipboard is instant or it is stuck on a session that cannot
+ *  take one. Ten seconds keeps the button honest without ever holding the route open. */
+const CLIPBOARD_TIMEOUT_MS = 10_000
 
 /**
  * A point in time from a query string: epoch milliseconds, or anything Date can parse (ISO-8601).
@@ -598,7 +603,11 @@ app.post('/api/sessions/:id/copy-file', async (c) => {
     })
     // Awaited, unlike open-file's fire-and-forget: the button reports whether the copy landed, and
     // "it's on your clipboard" is a claim we should only make once the exit code says so.
-    const code = await proc.exited
+    // ⛔ BUT BOUNDED (swept 2026-09-18). This is an HTTP ROUTE, and `await proc.exited` had
+    // nothing racing it: a `Set-Clipboard` that wedges - a locked session, an RDP clipboard
+    // channel that never answers - meant the route never replied at all, which is the exact
+    // failure just fixed in the orchestrator adapter. A null code answers 500 honestly instead.
+    const code = await awaitExitBounded(proc, CLIPBOARD_TIMEOUT_MS)
     return code === 0
       ? c.json({ ok: true, filename: basename(staged) })
       : c.json({ ok: false }, 500)

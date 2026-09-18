@@ -49,7 +49,11 @@ import {
   readJsonStore,
 } from './json-store'
 import { isPathInside } from './paths'
+import { spawnCaptured } from './process.ts'
 import type { CMActionResult } from './shared'
+
+/** Asking the OS who owns a port is a table read. Ten seconds is generous. */
+const PORT_LOOKUP_TIMEOUT_MS = 10_000
 
 /** Where homes created here live: `<CONFIG_DIR>/dsh-instances/<id>`. */
 const DSH_INSTANCES_ROOT = join(CONFIG_DIR, 'dsh-instances')
@@ -506,9 +510,13 @@ async function pidOnPort(port: number): Promise<number | null> {
         ]
       : ['lsof', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']
   try {
-    const proc = Bun.spawn(argv, { stdout: 'pipe', stderr: 'ignore', windowsHide: true })
-    const text = await new Response(proc.stdout).text()
-    await proc.exited
+    // Bounded (swept 2026-09-18): this drained stdout and then did a bare `await proc.exited`,
+    // with no deadline on either - so a `Get-NetTCPConnection` that wedges took the whole quit
+    // path down with it.
+    const { stdout: text, timedOut } = await spawnCaptured(argv, {
+      timeoutMs: PORT_LOOKUP_TIMEOUT_MS,
+    })
+    if (timedOut) return null
     const first = text.trim().split(/\r?\n/)[0]?.trim()
     const pid = first ? Number(first) : Number.NaN
     return Number.isInteger(pid) && pid > 0 ? pid : null

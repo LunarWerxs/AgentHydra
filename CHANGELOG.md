@@ -9,6 +9,36 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **ELEVEN more unbounded waits on a child process, swept out after the orchestrator one**
+  (`server/src/core/process.ts` and ten call sites). Every `.exited` await in `server/src` was
+  audited; sixteen sites, eleven with no deadline at all, failing in three distinct ways. There is
+  now ONE bounded spawn - `spawnCaptured` / `capturePipedProc` / `awaitExitBounded` in
+  `core/process.ts` - and every site goes through it. What it fixes:
+  - ⛔ **A DEADLOCK in the Windows credential path.** `core/crypto/keys.win.ts` opened
+    `stderr: 'pipe'` and never read it. A DPAPI `Unprotect` failure writes a multi-kilobyte .NET
+    traceback; past the pipe buffer PowerShell BLOCKS on that write, so it never exits, so stdout
+    never closes and `proc.exited` never settles - and nothing anywhere had a deadline to break it.
+    It is the same "child fills one pipe while the other is unread" deadlock the orchestrator
+    adapter's own comment warns about, reached in the file that decrypts account tokens. The helper
+    DRAINS every stream it opens, always, whether the caller wants the text or not.
+  - **An HTTP route that could never answer:** the clipboard copy in `routes/sessions.ts` awaited
+    `proc.exited` with nothing racing it, so a `Set-Clipboard` wedged on a locked or RDP session
+    meant the route simply never replied.
+  - **No deadline on the kill paths themselves:** the graceful and FORCED `taskkill` awaits in
+    `core/codex-desktop.ts` and `core/instances.ts`, so a wedged kill hung the quit it was meant to
+    guarantee. Also bounded: the keychain and `secret-tool` credential reads (both of which prompt
+    a human and can wait forever), the window-focus poke, both shortcut writers, the screen
+    capture, and the port-owner lookup.
+  - **The deadline now kills the TREE, not the pid**, because a grandchild holding the pipe is the
+    thing a bare `proc.kill()` cannot reach; and the drain reads INCREMENTALLY rather than through
+    `new Response(stream).text()`, which cannot be cancelled - so a timed-out run hands back what
+    it already read instead of nothing. (That last one was found by this change's own test, which
+    caught the first cut of the helper losing output on exactly the path it exists for.)
+  `dispatch.ts`'s probe had a killer bounding the process but not the read, so it too could sit
+  past its own timeout on a process that was already dead; the read is raced now as well. Proven by
+  `spawn-captured-bounded.test.ts`: a child that never exits, one that floods the previously-unread
+  stream, and one whose grandchild holds the pipe.
+
 - ⛔ **`reassertChatArchive` could not be called off, so for TEN MINUTES after any archive every
   unarchive of that chat was silently reverted** - while `archive_desktop_chat` still answered
   `ok: true, changed: true`. The route already refused to FIRE the watcher on an unarchive

@@ -21,6 +21,10 @@
 import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnCaptured } from './core/process.ts'
+
+/** A screen grab is a single GDI blit; past thirty seconds something is wrong. */
+const CAPTURE_SCREEN_TIMEOUT_MS = 30_000
 
 export interface ScreenshotResult {
   ok: boolean
@@ -76,17 +80,23 @@ export async function captureScreen(outPath?: string): Promise<ScreenshotResult>
   ].join('; ')
 
   try {
-    const proc = Bun.spawn(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-      stdin: 'ignore',
-      windowsHide: true,
+    // Bounded, through the one bounded spawn (swept 2026-09-18): the hand-rolled version awaited
+    // both drains and proc.exited with no deadline, so a powershell that never returned pinned
+    // the caller for good.
+    const {
+      stdout: out,
+      stderr: err,
+      code,
+      timedOut,
+    } = await spawnCaptured(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
+      timeoutMs: CAPTURE_SCREEN_TIMEOUT_MS,
     })
-    const [out, err, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
+    if (timedOut)
+      return {
+        ok: false,
+        reason: `screen capture timed out after ${CAPTURE_SCREEN_TIMEOUT_MS / 1000}s`,
+        note: NOTE,
+      }
     if (code !== 0 || !existsSync(target))
       return {
         ok: false,

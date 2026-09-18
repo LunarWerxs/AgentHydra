@@ -384,6 +384,9 @@ async function killTree(pid: number): Promise<void> {
  * a deadline; this one did not.
  */
 const PROBE_TIMEOUT_MS = 15_000
+/** After the probe's kill, how long its drain is given to hand back what it already read
+ *  before the answer comes back empty. A stranger holding the pipe must not extend the probe. */
+const PROBE_DRAIN_GRACE_MS = 2_000
 
 async function isRunnerAlive(id: string): Promise<boolean> {
   // Item ids are uuids/simple slugs (no WQL/regex metacharacters), so the needle needs no escaping.
@@ -392,18 +395,28 @@ async function isRunnerAlive(id: string): Promise<boolean> {
     proc: { exited: Promise<number>; kill: () => void },
     read: Promise<string>,
   ) => {
-    const killer = setTimeout(() => {
-      try {
-        proc.kill()
-      } catch {
-        /* already gone */
-      }
-    }, PROBE_TIMEOUT_MS)
+    // ⛔ THE KILLER BOUNDS THE PROCESS, NOT THE READ (tightened 2026-09-18). `proc.kill()` makes
+    // `proc.exited` settle, but the drain finishes only when the PIPE closes - and any grandchild
+    // that inherited this child's stdout holds it open for as long as IT lives, so `Promise.all`
+    // could sit past PROBE_TIMEOUT_MS on a process that was already dead. That is the exact shape
+    // that wedged the orchestrator route for a full hour. So the read is raced too, and an
+    // unfinished drain answers empty rather than waiting on a stranger.
+    let killer: ReturnType<typeof setTimeout> | undefined
+    const givenUp = new Promise<string>((resolve) => {
+      killer = setTimeout(() => {
+        try {
+          proc.kill()
+        } catch {
+          /* already gone */
+        }
+        // A beat for the drain to hand back what it already had, then answer regardless.
+        setTimeout(() => resolve(''), PROBE_DRAIN_GRACE_MS)
+      }, PROBE_TIMEOUT_MS)
+    })
     try {
-      const [out] = await Promise.all([read, proc.exited])
-      return out
+      return await Promise.race([Promise.all([read, proc.exited]).then(([out]) => out), givenUp])
     } finally {
-      clearTimeout(killer)
+      if (killer) clearTimeout(killer)
     }
   }
   try {

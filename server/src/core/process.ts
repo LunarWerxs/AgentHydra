@@ -266,52 +266,222 @@ function parseProcessRecord(
 // Shared spawn helper.
 // ----------------------------------------------------------------------------
 
-/** Runs a command via Bun.spawn and captures stdout as text. Never throws — returns `null`
- *  on spawn failure, non-zero exit, or timeout so callers can try the next strategy. */
-async function runCaptureStdout(
+/** What a bounded spawn came back with. `timedOut` true means the deadline fired and `code` is
+ *  whatever we knew at that moment — usually null, because the child never reported one. */
+export interface CapturedRun {
+  code: number | null
+  stdout: string
+  stderr: string
+  timedOut: boolean
+}
+
+/** Default deadline for a captured spawn. Every caller in this repo runs a short CLI — powershell,
+ *  taskkill, ps, security, secret-tool — so ten seconds is generous, not tight. */
+export const CAPTURE_TIMEOUT_MS = 10_000
+
+/**
+ * THE ONE BOUNDED SPAWN. Run a short command, capture what it said, and COME BACK — whatever the
+ * child or its descendants do.
+ *
+ * ⛔ WHY THIS IS CENTRAL AND NOT COPIED PER CALLER (swept 2026-09-18, after the orchestrator route
+ * wedged for the same reason). Sixteen sites in this server awaited a child's exit; eleven of them
+ * had no deadline at all, and they failed in three distinct ways that one helper closes for good:
+ *
+ *   1. NO DEADLINE. `await proc.exited` with nothing racing it hangs its caller forever if the
+ *      child never exits — and one of those sites was inside an HTTP route, so the route simply
+ *      never answered.
+ *   2. PIPE-AND-IGNORE, WHICH IS A DEADLOCK, NOT A LEAK. `keys.win.ts` opened `stderr: 'pipe'` and
+ *      never read it. A DPAPI `Unprotect` failure writes a multi-kilobyte .NET traceback; past the
+ *      pipe buffer the child BLOCKS on the write, so it never exits, so stdout never closes and
+ *      `proc.exited` never settles. That is the exact deadlock `realSpawn`'s own comment warns
+ *      about ("a child that fills one pipe while the other is unread"), in the credential-decrypt
+ *      path. So this helper DRAINS EVERY STREAM IT OPENS, always, whether the caller wants the
+ *      text or not.
+ *   3. THE CHILD'S EXIT IS NOT THE PIPE CLOSING. A grandchild that inherited the child's stdout
+ *      holds that pipe open for as long as IT lives, so a drain can outlive the process by
+ *      minutes. The deadline therefore kills the whole TREE (killProcessTree), not just the pid,
+ *      and the race settles even if a drain is still pending.
+ *
+ * Never throws: a spawn that cannot start, a non-zero exit and a timeout all come back as data, so
+ * a caller can try its next strategy without a try/catch of its own.
+ */
+export async function spawnCaptured(
   cmd: string[],
-  { timeoutMs = 10_000 }: { timeoutMs?: number } = {},
-): Promise<string | null> {
-  type CaptureProc = Bun.Subprocess<'ignore', 'pipe', 'ignore'>
-  let proc: CaptureProc | null = null
+  {
+    timeoutMs = CAPTURE_TIMEOUT_MS,
+    cwd,
+    env,
+    wantStderr = true,
+  }: {
+    timeoutMs?: number
+    cwd?: string
+    env?: Record<string, string | undefined>
+    /** false only when the caller genuinely does not want stderr text; it is still DRAINED. */
+    wantStderr?: boolean
+  } = {},
+): Promise<CapturedRun> {
+  let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   try {
     proc = Bun.spawn(cmd, {
       stdin: 'ignore',
       stdout: 'pipe',
-      stderr: 'ignore',
+      stderr: 'pipe',
       windowsHide: true,
-    }) as CaptureProc
+      ...(cwd ? { cwd } : {}),
+      ...(env ? { env } : {}),
+    }) as Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   } catch {
-    return null // command not found / spawn rejected outright
+    // Command not found / spawn rejected outright. Not a timeout: there was never a child.
+    return { code: null, stdout: '', stderr: '', timedOut: false }
   }
 
-  const activeProc = proc
+  return capturePipedProc(proc, { timeoutMs, wantStderr })
+}
+
+/**
+ * The same bound, applied to a child SOMEBODY ELSE spawned. Two call sites build their argv and
+ * env inside their own try/catch and carry their own failure messages (core/shortcut.ts,
+ * core/instance-mode-shortcut.ts); rewriting them to spawnCaptured would throw that away for no
+ * gain, so the bound is reachable on its own. One implementation, two doors.
+ *
+ * The child MUST have both streams piped — that is the whole thing being drained.
+ */
+export async function capturePipedProc(
+  proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>,
+  {
+    timeoutMs = CAPTURE_TIMEOUT_MS,
+    wantStderr = true,
+  }: { timeoutMs?: number; wantStderr?: boolean } = {},
+): Promise<CapturedRun> {
   let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs)
+  let timedOut = false
+  const deadline = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true
+      // The TREE, not the pid: a grandchild holding the pipes is exactly what makes a drain
+      // outlive the process, and it is the thing a bare proc.kill() cannot reach.
+      try {
+        if (proc.pid) killProcessTree(proc.pid)
+      } catch {
+        // already gone
+      }
+      resolve('timeout')
+    }, timeoutMs)
   })
 
+  // ⛔ READ INCREMENTALLY, NOT VIA `new Response(stream).text()`. That convenience cannot be
+  // CANCELLED, so on a timeout it keeps waiting for a pipe a grandchild is holding and hands back
+  // nothing — which loses exactly the diagnostic a killed run was about to give you. (Found by
+  // this file's own test: the pipe-holder case came back with empty stdout even though the child
+  // had printed and exited.) Accumulating as the bytes arrive means the text we already have is
+  // still ours the moment the deadline fires.
+  const held = { stdout: '', stderr: '' }
+  const drain = async (stream: ReadableStream<Uint8Array>, into: 'stdout' | 'stderr') => {
+    const reader = stream.getReader()
+    const decoder = new TextDecoder('utf-8')
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        held[into] += decoder.decode(value, { stream: true })
+      }
+      held[into] += decoder.decode()
+    } catch {
+      // Killed mid-write, or the pipe closed under us: what arrived is still the honest answer.
+    } finally {
+      try {
+        reader.releaseLock()
+      } catch {
+        // already released
+      }
+    }
+  }
+
+  // BOTH streams drained concurrently with the exit wait — never one at a time, or a child that
+  // fills the unread pipe deadlocks before either of them can finish.
+  const work = Promise.all([drain(proc.stdout, 'stdout'), drain(proc.stderr, 'stderr')])
+    .then(() => proc.exited)
+    .then((code) => ({ code }) as const)
+
+  try {
+    const settled = await Promise.race([work, deadline])
+    if (settled === 'timeout') {
+      // The kill above has fired; give the drains a moment to notice their pipe closed, then
+      // answer with whatever `held` accumulated. Waiting on them unconditionally is the bug this
+      // helper exists to close — but throwing away what they already read is the other one.
+      await Promise.race([work, new Promise<null>((r) => setTimeout(() => r(null), 2_000))])
+      return {
+        code: proc.exitCode,
+        stdout: held.stdout,
+        stderr: wantStderr ? held.stderr : '',
+        timedOut: true,
+      }
+    }
+    return {
+      code: settled.code,
+      stdout: held.stdout,
+      stderr: wantStderr ? held.stderr : '',
+      timedOut: false,
+    }
+  } catch {
+    return {
+      code: null,
+      stdout: held.stdout,
+      stderr: wantStderr ? held.stderr : '',
+      timedOut,
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
+    try {
+      if (proc.exitCode === null && !proc.killed && proc.pid) killProcessTree(proc.pid)
+    } catch {
+      // Already exited — ignore.
+    }
+  }
+}
+
+/**
+ * Wait for a child that has NO piped streams, bounded. For the `stdio: ['ignore','ignore','ignore']`
+ * spawns — taskkill, Set-Clipboard, osascript — where there is nothing to drain and the only defect
+ * is that `await proc.exited` has nothing racing it.
+ *
+ * Returns the exit code, or null when the deadline fired (in which case the tree has been killed).
+ */
+export async function awaitExitBounded(
+  proc: { exited: Promise<number>; pid?: number; exitCode: number | null; killed?: boolean },
+  timeoutMs = CAPTURE_TIMEOUT_MS,
+): Promise<number | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
-      (async () => {
-        const [stdout, exitCode] = await Promise.all([
-          new Response(activeProc.stdout).text(),
-          activeProc.exited,
-        ])
-        return exitCode === 0 ? stdout : null
-      })(),
-      timeout,
+      proc.exited,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => {
+          try {
+            if (proc.pid) killProcessTree(proc.pid)
+          } catch {
+            // already gone
+          }
+          resolve(null)
+        }, timeoutMs)
+      }),
     ])
   } catch {
     return null
   } finally {
     if (timer) clearTimeout(timer)
-    try {
-      activeProc.kill()
-    } catch {
-      // Already exited — ignore.
-    }
   }
+}
+
+/** Runs a command via Bun.spawn and captures stdout as text. Never throws — returns `null`
+ *  on spawn failure, non-zero exit, or timeout so callers can try the next strategy.
+ *  Thin wrapper over spawnCaptured so there is ONE bounded spawn in this file, not two. */
+async function runCaptureStdout(
+  cmd: string[],
+  { timeoutMs = CAPTURE_TIMEOUT_MS }: { timeoutMs?: number } = {},
+): Promise<string | null> {
+  const r = await spawnCaptured(cmd, { timeoutMs, wantStderr: false })
+  return r.code === 0 && !r.timedOut ? r.stdout : null
 }
 
 // ----------------------------------------------------------------------------

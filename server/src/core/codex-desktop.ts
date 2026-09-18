@@ -2,8 +2,14 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { join, normalize } from 'node:path'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { extractUserDataDir, linuxProcTable } from './process'
+import { awaitExitBounded } from './process.ts'
 import { createScanCache } from './scan-cache'
 import type { CMActionResult } from './shared'
+
+/** `taskkill` signals and exits; it does not wait for the target to die. A run that has not
+ *  returned in ten seconds is wedged, and the caller's next step (a forced kill, a re-scan) is
+ *  strictly better than waiting on it forever. */
+const TASKKILL_TIMEOUT_MS = 10_000
 
 export interface CodexDesktopTarget {
   id: string
@@ -597,7 +603,8 @@ export async function quitCodexDesktop(
         stderr: 'ignore',
         windowsHide: true,
       })
-      await graceful.exited
+      // Bounded (swept 2026-09-18): nothing raced this await, so a wedged taskkill hung the quit.
+      await awaitExitBounded(graceful, TASKKILL_TIMEOUT_MS)
     } else {
       process.kill(runtime.pid, 'SIGTERM')
     }
@@ -610,7 +617,9 @@ export async function quitCodexDesktop(
           stderr: 'ignore',
           windowsHide: true,
         })
-        await forced.exited
+        // Bounded for the same reason - and this is the FORCED kill, the last resort, so it is
+        // the one that must never be the thing that hangs.
+        await awaitExitBounded(forced, TASKKILL_TIMEOUT_MS)
       } else {
         process.kill(runtime.pid, 'SIGKILL')
       }

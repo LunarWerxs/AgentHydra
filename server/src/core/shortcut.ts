@@ -23,7 +23,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { detectDesktopInstall } from './desktop-install'
 import { currentPlatform, normalizePath, resolveLaunchBinary } from './paths'
+import { capturePipedProc } from './process.ts'
 import type { CMActionResult } from './shared'
+
+/** Writing a .lnk is a COM call against WScript.Shell - instant, or stalled on something that
+ *  will not resolve itself. Twenty seconds is far past any healthy run. */
+const SHORTCUT_TIMEOUT_MS = 20_000
 
 export interface CreateShortcutOptions {
   /** Override the destination directory (tests). Defaults to the user's Desktop. */
@@ -154,11 +159,16 @@ async function createWindowsShortcut(
   }
 
   try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
+    // Bounded (swept 2026-09-18): this awaited both drains and proc.exited, which settles on the
+    // SLOWEST of the three - and a powershell that inherits its pipes to a grandchild, or simply
+    // never returns, pinned the caller with no deadline anywhere.
+    const {
+      stdout,
+      stderr,
+      code: exitCode,
+    } = await capturePipedProc(proc, {
+      timeoutMs: SHORTCUT_TIMEOUT_MS,
+    })
     const lnkPath = stdout.trim()
     if (exitCode === 0 && lnkPath) {
       return {
