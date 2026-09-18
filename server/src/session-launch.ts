@@ -520,8 +520,9 @@ export async function archiveDesktopChat(
         // true, EVERY retry became a no-op that reported nothing running. That is precisely the
         // state a failed click leaves behind: flag written, row STILL ON SCREEN, and from then on
         // unfixable by the tool that is supposed to fix it. Measured on #13, where the first
-        // attempt's last-moment re-aim guard refused (the sidebar moved as the menu opened) and
-        // the next two calls could no longer even try.
+        // attempt's last-moment re-aim guard refused (a blank name off a kebab the app had just
+        // rebuilt, not a moved sidebar - see Manage-DesktopChat.ps1 ReAimVerdict) and the next
+        // two calls could no longer even try.
         //
         // The idempotence this branch exists for is about NOT REWRITING THE FILE, which it still
         // does not. Liveness is a fact about the machine, so report the fact.

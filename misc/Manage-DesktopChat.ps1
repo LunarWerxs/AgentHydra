@@ -215,7 +215,10 @@ public static class Ax{
   // every AutomationElement already held. Calling it on the warm path broke the archive's
   // last-moment re-aim: the cached kebab's Name came back as '' and the run refused a row that
   // had not moved at all ("the row under this menu is no longer '<title>' (it reads '')").
-  // So it is only ever called when there is nothing else to poke.
+  // So it is only ever called when there is nothing else to poke. (CORRECTED 2026-09-18: that
+  // blank name persisted after this was made cold-only. Its real cause is the app REBUILDING the
+  // kebab on its row's first menu open - measured, see ReAimVerdict - which is why the re-aim now
+  // goes by identity. The cold-only rule stays: a re-served tree still invalidates held elements.)
   public static void WakeTop(IntPtr top){
     Guid g = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
     object a = null;
@@ -277,6 +280,9 @@ function Wake([IntPtr]$hwnd) {
 }
 function ByName($scope, $name) { $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name); return $scope.FindFirst($TREE, $c) }
 function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch { return $null } }
+# An element's UIA RuntimeId as one string, '' when it cannot be read. This is how two elements are
+# told apart by IDENTITY rather than by name: the Delete confirm diff and the archive re-aim.
+function RuntimeKey($e) { try { return (($e.GetRuntimeId() | ForEach-Object { [string]$_ }) -join '.') } catch { return '' } }
 
 # THE KEBAB IS LOCALIZED (found live 2026-08-30 on a German-locale app: the row menu reads
 # 'Weitere Optionen für <title>', not 'More options for <title>'). Matching the English prefix
@@ -471,6 +477,146 @@ function RenderedKebabNames($scope) {
   return $out
 }
 
+# --- THE RE-AIM, BY IDENTITY (2026-09-18) --------------------------------------------------------
+# ⛔ THE KEBAB IS REBUILT THE FIRST TIME ITS MENU OPENS, SO A HANDLE TAKEN BEFORE THAT GOES BLANK
+# FOR GOOD. Measured on instance 13 (temp1), two rows, both on the first open of an app session:
+#   'GlimmerAC collector enablement'  kebab ...4.664 -> ...4.1452, its raw-view parent ...4.663 kept
+#   'SageThumbs'                      kebab ...4.693 -> ...4.1662, its raw-view parent ...4.692 kept
+# The old element answers Name = null and every pattern call throws. It is not a transient read
+# failure that a wait could outlast (three spaced reads all came back empty, four runs in a row),
+# and it is not the tree being "re-served" around the same elements: the kebab is a new element
+# with a new RuntimeId. Its wrapper, the row button beside it and the rest of the sidebar keep
+# theirs. Once rebuilt, the kebab keeps its new id through later opens (...4.1452 survived two
+# more rounds), so the rebuild happens once per row per app session - which is exactly the open
+# every real archive does, and why the re-aim refused every archive it ever saw.
+#
+# So the re-aim is by IDENTITY, the row's identity: the kebab's own RuntimeId, or failing that the
+# RuntimeId of the element the rebuilt kebab still hangs off. A NAME is never used to find it. A
+# name-only re-resolve while a menu is open is how you end up aimed at a NEIGHBOURING row, and
+# archiving the wrong chat is the one mistake this guard exists to prevent.
+
+$RAW = [System.Windows.Automation.TreeWalker]::RawViewWalker
+# The raw-view parent's identity: the per-row wrapper the kebab hangs off. The RAW view on purpose -
+# the control view skips these unnamed wrappers and hands back the whole sidebar as the parent,
+# which is shared by every row and so identifies none of them.
+function RowKeyOf($e) { try { $p = $RAW.GetParent($e); if ($p) { return (RuntimeKey $p) } } catch { } ; return '' }
+
+# Every ExpandCollapse button in $scope, as plain records the verdict below can judge. El is kept
+# only so a caller can collapse the one the verdict picked; the verdict never reads it.
+function ExpandableButtons($scope) {
+  $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
+  $out = @()
+  foreach ($b in $scope.FindAll($TREE, $c)) {
+    $p = TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    if (-not $p) { continue }
+    $st = ''; try { $st = [string]$p.Current.ExpandCollapseState } catch { }
+    $nm = ''; try { $nm = [string]$b.Current.Name } catch { }
+    $out += [pscustomobject]@{ Key = (RuntimeKey $b); ParentKey = (RowKeyOf $b); State = $st; Name = $nm; El = $b }
+  }
+  return $out
+}
+
+# Every Menu open in this process right now, with the identities of the items inside it.
+function OpenMenus($cond) {
+  $mc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Menu)
+  $mic = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $MENUITEM)
+  $out = @()
+  foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+    foreach ($mnu in $t.FindAll($TREE, $mc)) {
+      $keys = @()
+      try { foreach ($i in $mnu.FindAll($TREE, $mic)) { $keys += (RuntimeKey $i) } } catch { }
+      $out += [pscustomobject]@{ Key = (RuntimeKey $mnu); ItemKeys = $keys }
+    }
+  }
+  return $out
+}
+
+# THE DECISION, kept free of UI Automation so it can be tested on its own
+# (orchestrator/scripts/tests/test_actuator_reaim_identity.py runs THIS text, not a copy of it).
+# May the menu item about to be invoked act on the row titled $Title? Every rule below is a
+# refusal; only a menu that passes all of them is acted on.
+#   $AimKey / $RowKey  the kebab's RuntimeId and its raw-view parent's, both read BEFORE the menu
+#                      opened. Neither readable = nothing can prove which row the menu belongs to.
+#   $Kebabs            every ExpandCollapse button in the window NOW: Key, ParentKey, State, Name.
+#   $MenusBefore       the Menu ids that were open before this run opened one.
+#   $Menus             every Menu open NOW: Key, ItemKeys.
+#   $ItemKey           the menu item about to be invoked.
+# Retry = $true only where a short wait could change the answer (the tree still settling); a
+# readable wrong answer is final.
+function ReAimVerdict {
+  param(
+    [string]$Title,
+    [string]$AimKey,
+    [string]$RowKey,
+    [object[]]$Kebabs = @(),
+    [string[]]$MenusBefore = @(),
+    [object[]]$Menus = @(),
+    [string]$ItemKey = ''
+  )
+  if (-not $AimKey -and -not $RowKey) {
+    return @{ Ok = $false; Retry = $false; Aimed = ''; Kebab = $null
+      Why = "the row's identity could not be read before its menu opened" }
+  }
+  # IDENTITY ONLY. The same kebab, or the kebab the app rebuilt under the same parent. A kebab
+  # that merely carries the right NAME is not a candidate - that is the neighbour this guards.
+  $mine = @($Kebabs | Where-Object { $_ -and (($AimKey -and $_.Key -eq $AimKey) -or ($RowKey -and $_.ParentKey -eq $RowKey)) })
+  if ($mine.Count -eq 0) {
+    return @{ Ok = $false; Retry = $true; Aimed = ''; Kebab = $null
+      Why = "no kebab carries this row's identity any more (the row left the rendered sidebar, or was rebuilt whole)" }
+  }
+  # The menu belongs to the kebab the app marks Expanded, so this row's must be that one.
+  $open = @($mine | Where-Object { $_.State -eq 'Expanded' })
+  if ($open.Count -eq 0) {
+    return @{ Ok = $false; Retry = $true; Aimed = ''; Kebab = $null
+      Why = "this row's kebab is not the one holding the open menu" }
+  }
+  if ($open.Count -gt 1) {
+    return @{ Ok = $false; Retry = $false; Aimed = ''; Kebab = $null
+      Why = ("" + $open.Count + " expanded kebabs carry this row's identity, so which one owns the menu is unknown") }
+  }
+  $aimed = [string]$open[0].Name
+  if (-not $aimed) {
+    return @{ Ok = $false; Retry = $true; Aimed = ''; Kebab = $open[0]
+      Why = "this row's kebab was found by identity but its name could not be read" }
+  }
+  # The assertion the re-aim always made, now read from the element identity found.
+  if (-not $aimed.EndsWith($Title)) {
+    return @{ Ok = $false; Retry = $false; Aimed = $aimed; Kebab = $open[0]
+      Why = "the row this menu belongs to no longer reads that title - the sidebar moved while the menu opened" }
+  }
+  # And the item must come from the menu THIS run opened. MenuItemFor searches every menu in the
+  # process, so a menu an earlier run left open would otherwise offer ITS row's Archive first.
+  $new = @($Menus | Where-Object { $_ -and $MenusBefore -notcontains $_.Key })
+  if ($new.Count -ne 1) {
+    return @{ Ok = $false; Retry = $false; Aimed = $aimed; Kebab = $open[0]
+      Why = ("" + $new.Count + " new menus are open where exactly one, the row's own, is required - which menu the item came from cannot be proven") }
+  }
+  if (-not $ItemKey -or @($new[0].ItemKeys) -notcontains $ItemKey) {
+    return @{ Ok = $false; Retry = $false; Aimed = $aimed; Kebab = $open[0]
+      Why = "the item about to be invoked is not in the menu this run opened" }
+  }
+  return @{ Ok = $true; Retry = $false; Aimed = $aimed; Kebab = $open[0]; Why = '' }
+}
+
+# Close THIS row's menu. The handle taken before the menu opened cannot do it once the kebab has
+# been rebuilt (its Collapse throws), which is how every refusal of the old name re-aim left its
+# menu standing open. So collapse the Expanded kebab carrying the row's identity, and only that
+# one - never a neighbour's - falling back to the old handle for the kebab that was not rebuilt.
+function CloseRowMenu([IntPtr]$hwnd, [string]$rowKey, [string]$aimKey, $fallback) {
+  $closed = $false
+  try {
+    foreach ($k in (ExpandableButtons ([System.Windows.Automation.AutomationElement]::FromHandle($hwnd)))) {
+      if ($k.State -ne 'Expanded') { continue }
+      if (($aimKey -and $k.Key -eq $aimKey) -or ($rowKey -and $k.ParentKey -eq $rowKey)) {
+        $p = TryPattern $k.El ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+        if ($p) { try { $p.Collapse(); $closed = $true } catch { } }
+      }
+    }
+  } catch { }
+  if (-not $closed -and $fallback) { try { $fallback.Collapse(); $closed = $true } catch { } }
+  return $closed
+}
+
 # Running Claude desktop instances: a main process (no --type=) with --user-data-dir is a
 # managed instance; one WITHOUT the flag is the DEFAULT %APPDATA%\Claude install (piece-10
 # review: the default profile was structurally invisible here, so the most common app - the
@@ -650,6 +796,17 @@ foreach ($m in $mains) {
   Write-Output "found '$Title' in $($m.Dir)"
   $ec = TryPattern $kebab ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
   if (-not $ec) { Write-Output 'FAIL: kebab does not expose ExpandCollapse (app UI changed?)'; exit 1 }
+  # THE ROW'S IDENTITY, TAKEN BEFORE ITS MENU OPENS - the re-aim below proves the menu belongs to
+  # this row by these two ids and nothing else (see ReAimVerdict). Neither readable means no later
+  # step could prove it, so refuse now, before there is a menu to leave open.
+  $aimKey = RuntimeKey $kebab
+  $rowKey = RowKeyOf $kebab
+  if (-not $aimKey -and -not $rowKey) {
+    Write-Output ("FAIL: the identity of the row '$Title' could not be read, so nothing could prove " +
+      "afterwards which row its menu belongs to; refusing before opening it")
+    exit 1
+  }
+  $hwndWin = [IntPtr]$win.Current.NativeWindowHandle
   # ⛔ A MENU THIS SCRIPT ALREADY OPENED POISONS EVERY LATER RUN (measured 2026-09-17). Expand()
   # on an element that is ALREADY expanded throws InvalidOperationException, and under
   # $ErrorActionPreference='Stop' that ended the run with a bare
@@ -657,8 +814,16 @@ foreach ($m in $mains) {
   # what the daemon relayed to its caller. It is reachable in normal use: any refusal after the
   # menu opens (the re-aim rail, a label miss) can leave the popup up if its Collapse is itself
   # refused, and then the NEXT archive of that chat dies here rather than on anything real.
-  # Already open is not an error - it is the state this line was trying to reach.
+  # Already open is not an error - but it is not proof either (2026-09-18): the re-aim only acts
+  # on a menu THIS run opened, so a menu found standing open is closed and opened again. If it
+  # will not close, the re-aim refuses and says so rather than trusting a menu of unknown origin.
   $state = try { $ec.Current.ExpandCollapseState } catch { [System.Windows.Automation.ExpandCollapseState]::Collapsed }
+  if ($state -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+    try { $ec.Collapse() } catch { }
+    Start-Sleep -Milliseconds 500
+    $state = try { $ec.Current.ExpandCollapseState } catch { [System.Windows.Automation.ExpandCollapseState]::Collapsed }
+  }
+  $menusBefore = @(OpenMenus $cond | ForEach-Object { $_.Key })
   if ($state -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
     try {
       $ec.Expand()
@@ -710,7 +875,7 @@ foreach ($m in $mains) {
       }
     }
     if ($idx -eq 0) { Write-Output 'FAIL: menu opened but no MenuItem elements were rendered' }
-    try { $ec.Collapse() } catch { }
+    [void](CloseRowMenu $hwndWin $rowKey $aimKey $ec)
     exit 0
   }
 
@@ -727,7 +892,7 @@ foreach ($m in $mains) {
     }
   }
   if (-not $item) {
-    try { $ec.Collapse() } catch { }
+    [void](CloseRowMenu $hwndWin $rowKey $aimKey $ec)
     Write-Output ("FAIL: menu opened but no '$Action' item matched a known label, and the " +
       "locale-independent CSS-palette fallback could not identify it either. Menu showed: " +
       ($found.Seen -join ' | ') +
@@ -743,39 +908,35 @@ foreach ($m in $mains) {
   # a name that no longer ends with the title means the tree moved, and the only safe answer is
   # to refuse (the caller falls back to the disk flag) rather than archive a neighbour. The name
   # is printed either way, so the report says what was acted on instead of what was intended.
-  $aimed = ''
-  try { $aimed = [string]$kebab.Current.Name } catch { $aimed = '' }
-  # ⛔ AN EMPTY READ IS "COULD NOT READ", NOT "A DIFFERENT ROW" (2026-09-18). Opening the menu can
-  # re-serve the a11y tree, and a cached AutomationElement then answers Name = '' - the file's own
-  # Wake comment at the top already documents this exact symptom ("refused a row that had not moved
-  # at all"). Treating '' as a MISMATCH turned a transient read failure into a permanent refusal:
-  # reproduced three times in a row on instance 13, each with the row plainly rendered and the
-  # correct kebab open, so the archive could never settle in-app and the row stayed on screen.
   #
-  # Unknown is not a verdict anywhere else in this repo, and it is not one here. Re-read once after
-  # a short settle; only a name that is BOTH readable AND wrong is a moved sidebar. A second empty
-  # read still refuses - that is a tree we genuinely cannot see, and refusing is right for it.
-  if (-not $aimed) {
-    # Two further reads, spaced: a re-served tree settles in well under a second, and a cached
-    # element starts answering again once it does. No re-resolve here on purpose - finding the
-    # kebab afresh while its menu is open is how you end up aimed at something else, which is
-    # the very thing this guard exists to prevent.
-    foreach ($waitMs in 600, 900) {
-      Start-Sleep -Milliseconds $waitMs
-      try { $aimed = [string]$kebab.Current.Name } catch { $aimed = '' }
-      if ($aimed) { break }
-    }
+  # ⛔ BY IDENTITY, NEVER BY THE HANDLE'S NAME AND NEVER BY A NAME SEARCH (2026-09-18). This used to
+  # read $kebab.Current.Name - the handle taken before the menu opened - and that handle goes blank
+  # for good on a row's first open, because the app REBUILDS the kebab then (measured; see the
+  # block above ReAimVerdict). So every archive was refused: four runs in a row on instance 13,
+  # with three spaced re-reads each, all empty. The row is now found again by the ids taken before
+  # the menu opened, the title is read from THAT element, and the old name check is still the
+  # assertion. Retries re-run the whole identity proof, never a looser one.
+  $itemKey = RuntimeKey $item
+  $verdict = $null
+  foreach ($waitMs in 0, 600, 900) {
+    if ($waitMs) { Start-Sleep -Milliseconds $waitMs }
+    $verdict = ReAimVerdict -Title $Title -AimKey $aimKey -RowKey $rowKey `
+      -Kebabs @(ExpandableButtons ([System.Windows.Automation.AutomationElement]::FromHandle($hwndWin))) `
+      -MenusBefore $menusBefore -Menus @(OpenMenus $cond) -ItemKey $itemKey
+    if ($verdict.Ok -or -not $verdict.Retry) { break }
   }
-  if (-not $aimed -or -not $aimed.EndsWith($Title)) {
-    try { $ec.Collapse() } catch { }
-    $why = if (-not $aimed) {
-      "its name could not be read twice - the accessibility tree was re-served under us"
-    } else {
-      "the sidebar moved while the menu opened"
-    }
-    Write-Output ("FAIL: the row under this menu is no longer '$Title' (it reads '" + $aimed +
-      "') - $why; refusing to $Action a neighbouring row")
+  if (-not $verdict.Ok) {
+    $closed = CloseRowMenu $hwndWin $rowKey $aimKey $ec
+    $reads = if ($verdict.Aimed) { " (it reads '" + $verdict.Aimed + "')" } else { '' }
+    $left = if ($closed) { '' } else { ', and its menu could not be closed' }
+    Write-Output ("FAIL: could not prove the open menu belongs to the row '$Title'" + $reads + " - " +
+      $verdict.Why + $left + "; refusing to $Action rather than risk a neighbouring row")
     exit 1
+  }
+  $aimed = $verdict.Aimed
+  if ($verdict.Kebab.Key -ne $aimKey) {
+    Write-Output ("re-aimed by identity: the kebab was rebuilt as its menu opened (" + $aimKey + " -> " +
+      $verdict.Kebab.Key + "), under the same row element " + $rowKey)
   }
   Write-Output "acting on row: '$aimed'"
   # DELETE: the confirm button is identified by DIFFERENCE, never by name alone (review
@@ -799,7 +960,6 @@ foreach ($m in $mains) {
     }
     return $out
   }
-  function RuntimeKey($e) { try { return (($e.GetRuntimeId() | ForEach-Object { [string]$_ }) -join '.') } catch { return '' } }
   $beforeDelete = @{}
   if ($Action -eq 'Delete') { foreach ($b in (DeleteButtons $cond)) { $beforeDelete[(RuntimeKey $b)] = $true } }
   $inv.Invoke()

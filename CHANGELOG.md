@@ -9,6 +9,36 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **An in-app archive or rename was refused EVERY time, because the app rebuilds a row's menu
+  button the first time its menu opens** (`misc/Manage-DesktopChat.ps1`). The actuator's
+  last-moment re-aim re-read the Name of the kebab handle it took BEFORE opening the menu, to prove
+  it was still aimed at the right row. Measured on instance 13, on two rows, both on the first open
+  of an app session: the kebab is replaced by a NEW element with a new RuntimeId (`...4.664 ->
+  ...4.1452`, `...4.693 -> ...4.1662`), the old handle answers `Name = null` and every pattern call
+  on it throws, and the element it hangs off keeps its id (`...4.663`, `...4.692`). Every real
+  archive is a first open, so every one was refused ("it reads ''"), and because the stale
+  handle's `Collapse()` throws too, every refusal left its menu standing open. The earlier
+  diagnoses ("the sidebar moved", "the tree was re-served, re-read and it will answer") were both
+  wrong, and so was the proposed fix of matching the kebab's own RuntimeId: that id is exactly what
+  does not survive.
+  - The re-aim is by IDENTITY now (`ReAimVerdict`): the kebab's id or its raw-view parent's, both
+    taken before the menu opens, must find exactly one kebab, which must be the Expanded one
+    holding the menu; the title is read from THAT element and the old name check stays the
+    assertion; and the item about to be invoked must sit in the one menu THIS run opened, so a
+    menu an earlier run left open can no longer hand over its row's Archive. A kebab that merely
+    carries the right NAME is never a candidate. Anything unreadable or unfound refuses.
+  - Every exit after the menu opens closes it through the kebab that carries the row's identity
+    (`CloseRowMenu`), never a neighbour's, and a menu found already open is closed and reopened
+    rather than trusted.
+  - `orchestrator/scripts/tests/test_actuator_reaim_identity.py` runs the SHIPPED function's own
+    text (parsed out with PowerShell's parser) through 18 cases, including the measured rebuild
+    and an identically named neighbour holding the open menu, and asserts that nothing between
+    opening the menu and invoking the item looks a row up by name or reads the stale handle's
+    name. Proven against eleven mutants (the old script fails 22 of 23; a name-only re-resolve
+    fails 5; the kebab-id-only match fails 13); the UIA readers were checked read-only on a live
+    Chromium tree. ⛔ NOT YET PROVEN END TO END: the owner stopped all instance launches for the
+    night before one `archive_desktop_chat` could run on a rendered row.
+
 - **ELEVEN more unbounded waits on a child process, swept out after the orchestrator one**
   (`server/src/core/process.ts` and ten call sites). Every `.exited` await in `server/src` was
   audited; sixteen sites, eleven with no deadline at all, failing in three distinct ways. There is

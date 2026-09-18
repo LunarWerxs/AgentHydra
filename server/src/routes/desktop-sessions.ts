@@ -392,7 +392,9 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
       // the ROW, and a row can be on screen whether or not THIS call wrote the flag - in fact the
       // state that needs it most is "flag already true, row still rendered", which is exactly what
       // a failed click leaves behind. Gating on `changed` made the first attempt the only attempt:
-      // if its last-moment re-aim guard refused (the sidebar moved as the menu opened), every
+      // if its last-moment re-aim guard refused (it always did then: the app rebuilds a row's
+      // kebab on its first menu open, and the old guard re-read the stale handle's blank name -
+      // it re-aims by identity now, see Manage-DesktopChat.ps1 ReAimVerdict), every
       // retry answered `changed:false, wasRunning:false` and did nothing, forever. Measured on
       // #13. A running app is the whole precondition; `uiArchiveWithinBudget` is already bounded,
       // and a row the sidebar no longer renders is its own cheap no-op.
