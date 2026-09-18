@@ -1330,6 +1330,103 @@ def _run_resume_phase(items: list, parsed) -> dict:
     return resume
 
 
+#: PHASE FIVE's budget, per chat. It is one store scan and, at worst, one re-settle - the same
+#: work phase two already did - so it is bounded like every other phase rather than trusted.
+RECHECK_PHASE_TIMEOUT_SECS = 90.0
+
+
+def _recheck_one_settle(item, fleet: dict) -> dict:
+    """Re-read ONE provisionally-settled source row and repair it if the app undid the settle."""
+    land = item.landing
+    sid = str(land.session_id or "")
+    src = str(land.src_instance or (land.match or {}).get("instance") or "")
+    out = {"sessionId": sid, "source": src, "cameBack": False, "repaired": False}
+    visible = migrate_chat.source_still_visible(sid, src, fleet)
+    if visible:
+        # The app wrote its UN-ARCHIVED copy back over the settle. Re-drive the phase - the same
+        # call `migrate_reconcile --finish` makes, inventing no actuator of its own.
+        out["cameBack"] = True
+        try:
+            migrate_chat.phase_settle(land)
+            out["repaired"] = land.source_row in ("settled", "flagged", "none")
+            out["sourceRow"] = land.source_row
+        except Exception as err:
+            item.errors.append(f"the source row came back and re-settling it raised "
+                               f"{type(err).__name__}: {str(err)[:150]}")
+            out["why"] = f"{type(err).__name__}: {str(err)[:150]}"
+        return out
+    # Not visible - but an ARCHIVED resurrection is still a resurrection (the 2026-09-18 pair
+    # came back archived), and only the tombstone can see that one.
+    tomb = migrate_chat.clear_resurrected_source_record(sid, src, land.target, fleet)
+    if tomb:
+        out["cameBack"] = True
+        out["repaired"] = True
+        out["sourceRow"] = "settled"
+        out["detail"] = "the record was re-saved by the source app and tombstoned again"
+    return out
+
+
+def _recheck_provisional_settles(items: list) -> dict | None:
+    """PHASE FIVE: re-read every source row that was settled against a RUNNING app.
+
+    ⛔ WHY THIS PHASE EXISTS (2026-09-18, and the owner had to clean it up by hand). A two-chat
+    move off a running #15 settled both source rows and tombstoned both records; `list_chats`
+    read `all: 200, unarchived: 0` and the move was reported settled. Seventy-five minutes later
+    the same call read `all: 202` - the app had held both chats in memory and written them back.
+    A disk read taken seconds after a settle cannot answer what a running app will write NEXT,
+    so the only honest verdict at that moment is "provisional", and the only way to improve on it
+    is to look again later. This phase is the later look the batch can afford: it runs after the
+    resume phase, which is minutes of real time on any batch that has one.
+
+    It is not the whole guarantee and does not pretend to be - an app can write back after this
+    too. That is why `phase_stamp` also leaves the journal owed (`stamped-source-running`), so
+    `migrate_reconcile` keeps re-checking the row on its own clock long after this process is
+    gone. This phase catches the common case at once; reconcile catches the rest.
+    """
+    live = [i for i in items
+            if i.landing is not None and i.payload.get("sourceRowProvisional")]
+    if not live:
+        return None
+    try:
+        fleet = hydralib.fleet()
+    except hydralib.DaemonError as err:
+        for item in live:
+            item.payload["sourceRowRecheck"] = {
+                "checked": False,
+                "why": f"the fleet could not be re-read ({str(err)[:120]}) - the source rows are "
+                       "still PROVISIONAL; run `migrate_reconcile` before calling this move done",
+            }
+        return {"checked": 0, "cameBack": 0, "repaired": 0, "why": str(err)[:160]}
+
+    box: dict = {"rows": []}
+
+    def _all() -> None:
+        for item in live:
+            got = _recheck_one_settle(item, fleet)
+            item.payload["sourceRowRecheck"] = {"checked": True, **got}
+            if got["cameBack"]:
+                # The payload's own settle verdict must follow the repair, not the first attempt.
+                item.payload["sourceRow"] = got.get("sourceRow") or item.payload.get("sourceRow")
+                item.payload["sourceSettled"] = got["repaired"]
+            box["rows"].append(got)
+
+    budget = RECHECK_PHASE_TIMEOUT_SECS * len(live)
+    if not _run_bounded("recheck", budget, _all):
+        for item in live:
+            item.payload.setdefault("sourceRowRecheck", {
+                "checked": False,
+                "why": f"the re-check phase timed out after {budget:.0f}s - this source row is "
+                       "still PROVISIONAL; run `migrate_reconcile` before calling this move done",
+            })
+        return {"checked": len(box["rows"]), "cameBack": 0, "repaired": 0, "timedOut": True}
+    rows = box["rows"]
+    return {
+        "checked": len(rows),
+        "cameBack": sum(1 for r in rows if r["cameBack"]),
+        "repaired": sum(1 for r in rows if r["repaired"]),
+    }
+
+
 def _batch_ids(items: list) -> set[str]:
     """Every id the batch was given, read right after phase one while each landing still
     carries its dossier match: the records the batch is ALLOWED to archive (its own source rows
@@ -1371,6 +1468,31 @@ def _build_batch_payload(items: list, parsed, note: str, secs: float, resume) ->
         # The batch-level tally: `asked` landed chats were told to carry on, `delivered` of
         # them took it, `staged` still hold the reply. Present only when --resume ran.
         payload["resume"] = resume
+    # ⛔ THE SOURCE-SIDE WARNING LEADS, because the one time it mattered the owner found out by
+    # opening his own sidebar (2026-09-18). A row settled against a RUNNING app can come back;
+    # phase five looked once, and whatever it found has to be in the PROSE, not only the JSON.
+    provisional = [r for r in results if r.get("sourceRowProvisional")]
+    if provisional:
+        came_back = [r for r in provisional
+                     if (r.get("sourceRowRecheck") or {}).get("cameBack")]
+        unchecked = [r for r in provisional
+                     if not (r.get("sourceRowRecheck") or {}).get("checked")]
+        lines = []
+        if came_back:
+            lines.append(
+                f"⚠ {len(came_back)} source row(s) CAME BACK after the settle - the source app "
+                "re-saved them from memory; they were settled again here. Re-read the source "
+                "before calling this move done.")
+        if unchecked:
+            lines.append(
+                f"⚠ {len(unchecked)} source row(s) are still PROVISIONAL - not re-checked. Run "
+                "`migrate_reconcile` (and `--finish` anything it calls unsettled).")
+        if not came_back and not unchecked:
+            lines.append(
+                f"note: {len(provisional)} source row(s) were settled against a RUNNING app and "
+                "re-read afterwards - all still settled. The journal keeps them owed until "
+                "`migrate_reconcile` has seen them once more.")
+        payload["report"] = "\n".join(lines) + "\n" + payload["report"]
     return payload
 
 
@@ -1420,9 +1542,14 @@ def main(argv: list[str]) -> int:
         _attach_terminated(item)
 
     resume = _run_resume_phase(items, parsed) if parsed.resume_text and not parsed.dry_run else None
+    # PHASE FIVE, after the resume has spent real time: did a running source app write any
+    # settled row back? (_recheck_provisional_settles - the 2026-09-18 resurrection.)
+    recheck = None if parsed.dry_run else _recheck_provisional_settles(items)
     secs = time.time() - t0
 
     payload = _build_batch_payload(items, parsed, note, secs, resume)
+    if recheck is not None:
+        payload["sourceRecheck"] = recheck
     migrate_chat.flag_collateral(payload, before, moved_ids,
                                  f"migrate_batch {len(items)} chat(s)")
     print(json.dumps(payload, indent=2) if parsed.as_json else payload["report"])

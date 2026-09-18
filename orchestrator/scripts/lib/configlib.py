@@ -251,6 +251,11 @@ SPEC: list[dict] = [
        "Most staged replies one pass may deliver.", min=1, max=50),
     _k("courier.confirm_secs", 150, "secs", "courier",
        "How long to watch for proof a delivered reply actually landed.", min=10, max=900),
+    _k("courier.row_budget_secs", 420, "secs", "courier",
+       "Most wall-clock time ONE staged reply may spend before the run gives up on it and moves "
+       "to the next. Every step is bounded already; this bounds their sum, so one slow chat "
+       "cannot eat a whole run's deadline and leave the other rows untried.",
+       min=60, max=1800),
 
     # ---- THE JUDGMENT QUEUE ----------------------------------------------------------
     _k("interview.max_questions", 20, "int", "interview",

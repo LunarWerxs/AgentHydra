@@ -719,7 +719,7 @@ class CourierRailTest(unittest.TestCase):
         e = self._stage()
         activity = {"n": 0}
 
-        def fake_actuator(title, instance, message, verify):
+        def fake_actuator(title, instance, message, verify, deadline=None):
             self.activity = "T2"   # the chat moved
             activity["n"] += 1
             return 0, "delivered"
@@ -779,7 +779,7 @@ class CourierRailTest(unittest.TestCase):
 
         calls = {"n": 0}
 
-        def flaky_actuator(title, instance, message, verify):
+        def flaky_actuator(title, instance, message, verify, deadline=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("boom - a bug in the send path, not a refusal")
@@ -806,7 +806,7 @@ class CourierRailTest(unittest.TestCase):
         self.assertTrue(report["results"][0]["ok"])
 
     def _moving_actuator(self):
-        def fake(title, instance, message, verify):
+        def fake(title, instance, message, verify, deadline=None):
             self.activity = "T-moved"
             return 0, "delivered"
 

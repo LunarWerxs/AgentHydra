@@ -17,6 +17,19 @@ test('the bound daemon URL is pinned into the child, over anything the daemon in
   // The UTF-8 pipe pins ride along unchanged.
   expect(env.PYTHONUTF8).toBe('1')
   expect(env.PYTHONIOENCODING).toBe('utf-8')
+  // ⛔ AND THE BUFFERING PIN (2026-09-18). Python block-buffers stdout when it is a pipe, so a
+  // child that is KILLED — a cancel, a deadline — never flushes and the adapter records
+  // `stdout: ""`. Two cancelled runs read as a crash with no diagnostic that way, and the
+  // diagnostic had been written. A caller that cannot inherit this must not exist: the
+  // environment is built here, for every child, in one place.
+  expect(env.PYTHONUNBUFFERED).toBe('1')
+})
+
+test('an inherited PYTHONUNBUFFERED cannot be turned off under the daemon', () => {
+  // A daemon started from a shell that had set it to '' (Python treats empty as unset) must still
+  // hand its children an unbuffered pipe — the pin overrides, it does not merely default.
+  const env = orchestratorChildEnv({ PYTHONUNBUFFERED: '' }, null)
+  expect(env.PYTHONUNBUFFERED).toBe('1')
 })
 
 test('the URL index.ts records at boot is what every later child gets by default', () => {

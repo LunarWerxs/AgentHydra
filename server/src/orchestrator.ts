@@ -343,7 +343,28 @@ interface OperationEntry {
   promise: Promise<OrchestratorOperation>
   kill: (() => void) | null
   cancelRequested: boolean
+  /** The registry's own deadline timer (see OPERATION_WATCHDOG_GRACE_MS). Cleared the moment the
+   *  run settles, so a finished operation leaves no timer behind. */
+  watchdog: ReturnType<typeof setTimeout> | null
 }
+
+/**
+ * How long past a run's OWN declared deadline the registry waits before closing the record itself.
+ *
+ * ⛔ A DEADLINE THAT ONLY THE SPAWN ADAPTER ENFORCES IS A DEADLINE THAT CAN BE MISSED (2026-09-18).
+ * Two runs sat `status: 'running', result: null` long past their declared length - 3600 s for a
+ * `migrate_batch`, 300 s for a hand-run `courier` - and had to be killed by a person, because the
+ * ONLY thing that could ever close a record was `runOrchestrator` resolving. Any way that promise
+ * fails to settle (and one was found: a grandchild holding the child's pipe, see realSpawn) is the
+ * same outcome to a caller: an operation that polls alive forever, with the per-chat report it was
+ * launched for lost. This is the backstop that does not depend on the spawn behaving: it holds
+ * nothing but a timer and the record, and it fires on the wall clock.
+ *
+ * Generous on purpose - realSpawn's own hard stop is `timeoutMs + 30 s`, so in a healthy daemon
+ * this timer is always beaten to the record and never fires at all. When it does fire, something
+ * below it is broken, and that is exactly what it says.
+ */
+const OPERATION_WATCHDOG_GRACE_MS = 90_000
 
 const OPERATION_TTL_MS = 60 * 60_000
 const OPERATION_KEEP = 200
@@ -424,6 +445,9 @@ export function startOrchestratorOperation(
   opts: {
     idempotencyKey?: string | null
     deps?: SpawnDeps & { dir?: string; python?: string }
+    /** TESTS ONLY: shrink OPERATION_WATCHDOG_GRACE_MS so the backstop can be proven in a second
+     *  rather than in ninety. No route passes it; the default is the only value production uses. */
+    watchdogGraceMs?: number
   } = {},
 ): { op: OrchestratorOperation; promise: Promise<OrchestratorOperation>; reused: boolean } {
   pruneOperations()
@@ -451,6 +475,7 @@ export function startOrchestratorOperation(
     promise: Promise.resolve(op),
     kill: null,
     cancelRequested: false,
+    watchdog: null,
   }
   const deps = opts.deps ?? {}
   entry.promise = runOrchestrator(input, {
@@ -463,6 +488,13 @@ export function startOrchestratorOperation(
       if (entry.cancelRequested) kill()
     },
   }).then((result) => {
+    if (entry.watchdog) {
+      clearTimeout(entry.watchdog)
+      entry.watchdog = null
+    }
+    // THE WATCHDOG'S VERDICT STANDS. If it already closed this record, a caller has been told the
+    // run was abandoned; a late result arriving afterwards must not quietly reopen it as `done`.
+    if (op.finishedAt !== null) return snapshot(op)
     // An injected spawn never reports a process; if the run went far enough to have a script
     // record, it ran as far as this registry is concerned.
     if ('script' in result) op.ran = true
@@ -471,6 +503,35 @@ export function startOrchestratorOperation(
     op.status = entry.cancelRequested ? 'cancelled' : result.ok ? 'done' : 'failed'
     return snapshot(op)
   })
+  // THE REGISTRY'S OWN DEADLINE (OPERATION_WATCHDOG_GRACE_MS): whatever happens below this line,
+  // the record closes. `validateInvocation` failing means the run resolves immediately with a
+  // refusal, so the default deadline is only ever a placeholder for a timer that never fires.
+  const declared = check.ok ? check.invocation.timeoutMs : DEFAULT_TIMEOUT_MS
+  const graceMs = opts.watchdogGraceMs ?? OPERATION_WATCHDOG_GRACE_MS
+  entry.watchdog = setTimeout(() => {
+    entry.watchdog = null
+    if (op.finishedAt !== null) return
+    // Put the child down if one is somehow still there; then answer, regardless of whether it did.
+    try {
+      entry.kill?.()
+    } catch {
+      /* the kill is best-effort - the record closes either way, which is the point */
+    }
+    op.result = {
+      ok: false,
+      error:
+        `${op.script} passed its declared deadline of ${Math.round(declared / 1000)}s ` +
+        `(plus ${Math.round(graceMs / 1000)}s of grace) without its run ` +
+        'settling, so the daemon closed this operation and killed whatever was left of it. The ' +
+        'script may have done part or all of its work before that - read the toolbox’s own ' +
+        'ledger and verify the effect directly; do NOT re-fire the act blind.',
+    }
+    op.finishedAt = Date.now()
+    op.status = 'failed'
+  }, declared + graceMs)
+  // Node/Bun keep the process alive for a pending timer; a daemon is long-lived anyway, but an
+  // hour-long watchdog must never be the reason a CLI or a test run refuses to exit.
+  entry.watchdog.unref?.()
   operations.set(op.id, entry)
   return { op: snapshot(op), promise: entry.promise, reused: false }
 }
@@ -516,6 +577,12 @@ export function cancelOrchestratorOperation(
  * lock is never reached by this seam because production never calls it.
  */
 export function resetOrchestratorOperationsForTests(): void {
+  // The watchdog timers go with the records. A stub spawn that never settles leaves one armed for
+  // as long as its declared deadline, and `bun test` runs every file in ONE process.
+  for (const e of operations.values()) {
+    if (e.watchdog) clearTimeout(e.watchdog)
+    e.watchdog = null
+  }
   operations.clear()
   inFlight.clear()
 }
@@ -799,6 +866,14 @@ export function setOrchestratorDaemonUrl(url: string): void {
  *   * PYTHONUTF8 / PYTHONIOENCODING: Python writing to a PIPE on Windows encodes with the locale
  *     code page (cp1252) unless told otherwise, and the toolbox prints '×', '🟢' and account names
  *     - decoded as UTF-8 here that would be mojibake on a machine without UTF-8 mode.
+ *   * PYTHONUNBUFFERED: THIS IS WHY A DEAD RUN LOOKED SILENT (2026-09-18). Python block-buffers
+ *     stdout whenever it is a pipe rather than a console, so everything a script printed sat in
+ *     an 8 KB buffer inside the CHILD until it exited cleanly - and a child that is killed (a
+ *     cancel, a deadline) or that dies hard never flushes it. Two cancelled runs came back
+ *     `exitCode: 1, stdout: "", stderr: ""` and were read as a crash with no diagnostic anywhere;
+ *     the diagnostic had been written and thrown away with the process. Unbuffered, the adapter
+ *     already holds every line the child got out before it died, which is the whole value of
+ *     having a deadline that kills.
  *   * AGENTHYDRA_URL: THE DAEMON THAT SPAWNED THE CHILD (audit AH-04). hydralib's default is
  *     127.0.0.1:7787 and it only ever read AGENTHYDRA_URL, while this daemon auto-hops to another
  *     port when 7787 is taken and never told its child. Reproduced: AGENTHYDRA_PORT=17787 with no
@@ -815,15 +890,51 @@ export function orchestratorChildEnv(
     ...(base as Record<string, string>),
     PYTHONUTF8: '1',
     PYTHONIOENCODING: 'utf-8',
+    PYTHONUNBUFFERED: '1',
   }
   const own = url ?? readInstanceInfo()?.url ?? null
   if (own) env.AGENTHYDRA_URL = own
   return env
 }
 
-/** After a kill, how long an unclosed pipe is waited on before the drain is abandoned. */
+/** After a kill - or after the child has EXITED on its own - how long an unclosed pipe is waited
+ *  on before the drain is abandoned. */
 const DRAIN_GRACE_MS = 5_000
 
+/** How long past a run's own `timeoutMs` this adapter will keep waiting for ANYTHING before it
+ *  stops waiting and answers with what it has. Covers the kill, the drain grace, and the salvage
+ *  window below, with room to spare; see the hard stop in realSpawn. */
+const HARD_STOP_GRACE_MS = 30_000
+
+/** After the hard stop has aborted the drains, how long they are given to hand back the text they
+ *  had already accumulated before the adapter answers without them. */
+const SALVAGE_MS = 2_000
+
+const EMPTY_DRAIN = { text: '', dropped: 0 }
+
+/**
+ * Run one child and come back with its output and exit code - AND COME BACK, whatever the child
+ * or its descendants do.
+ *
+ * ⛔ THE CHILD EXITING IS NOT THE PIPE CLOSING, AND THAT WEDGED THE WHOLE ROUTE (2026-09-18).
+ * `Promise.all([drainStdout, drainStderr, proc.exited])` settles on the SLOWEST of the three, and a
+ * grandchild that inherited the child's stdout holds that pipe open for as long as IT lives - so a
+ * child that died in 79 seconds kept its operation reading `running` until the deadline killed it
+ * an hour later. Reproduced exactly: a script that spawns `Popen([...])` with no redirection and
+ * then `sys.exit(1)` settles this adapter in 100 ms if nothing else holds the pipe, and in
+ * `timeoutMs + DRAIN_GRACE_MS` if something does. An hour-long deadline is a normal, correct
+ * declaration for `migrate_batch`; it must not become the floor on noticing a crash.
+ *
+ * So three bounds, each one narrower than the last:
+ *
+ *   1. THE REAPER - `proc.exited` starts the same DRAIN_GRACE_MS countdown a kill does. The child
+ *      is the run; once it is gone, whatever still holds its pipe is a stranger, and what arrived
+ *      is the honest answer.
+ *   2. THE DEADLINE - unchanged: `timeoutMs` kills the tree and flags `timedOut`.
+ *   3. THE HARD STOP - at `timeoutMs + HARD_STOP_GRACE_MS` this function answers no matter what,
+ *      even if `proc.exited` itself never settles (a kill that could not take, a pid the OS will
+ *      not reap). A deadline enforced only by a kill is not enforced: it assumes the kill worked.
+ */
 async function realSpawn(command: string[], cwd: string, timeoutMs: number, hooks?: SpawnHooks) {
   const proc = Bun.spawn(command, {
     cwd,
@@ -835,11 +946,15 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number, hook
   })
   const abandon = new AbortController()
   let grace: ReturnType<typeof setTimeout> | null = null
+  // Once, whichever reason gets here first: the child was killed, or the child exited by itself.
+  const abandonDrainsSoon = () => {
+    grace ??= setTimeout(() => abandon.abort(), DRAIN_GRACE_MS)
+  }
   const killAndBound = () => {
     killTree(proc)
     // The kill takes the tree we can see. If a pipe is still open DRAIN_GRACE_MS later, something
     // we could not see holds it; stop reading rather than hang the route on it.
-    grace ??= setTimeout(() => abandon.abort(), DRAIN_GRACE_MS)
+    abandonDrainsSoon()
   }
   hooks?.onProcess?.(killAndBound)
   let timedOut = false
@@ -847,19 +962,47 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number, hook
     timedOut = true
     killAndBound()
   }, timeoutMs)
+
+  // BOUND 1, the reaper: the child's own exit starts the drain countdown too.
+  const exited = proc.exited.then((code) => {
+    abandonDrainsSoon()
+    return code
+  })
+
+  // BOUND 3, the hard stop. `hardStop` resolves at the wall; `salvage` resolves SALVAGE_MS later,
+  // which is what each pending drain is raced against - so a drain that was abandoned at the wall
+  // still gets to hand back the text it had, and only a drain that cannot even do that is dropped.
+  let hardStopped = false
+  let hardTimer: ReturnType<typeof setTimeout> | null = null
+  const hardStop = new Promise<void>((resolve) => {
+    hardTimer = setTimeout(() => {
+      hardStopped = true
+      timedOut = true
+      killAndBound()
+      abandon.abort()
+      resolve()
+    }, timeoutMs + HARD_STOP_GRACE_MS)
+  })
+  const salvage = hardStop.then(() => new Promise<void>((r) => setTimeout(r, SALVAGE_MS)))
+  const bounded = <T>(p: Promise<T>, fallback: T): Promise<T> =>
+    Promise.race([p, salvage.then(() => fallback)])
+
   try {
     // Both streams drained together, bounded as they arrive (drainBounded): a child that fills one
     // pipe while the other is unread would otherwise deadlock, and one that never stops talking
     // would otherwise be held whole in memory until its deadline.
     const [out, err, code] = await Promise.all([
-      drainBounded(proc.stdout, MAX_OUTPUT_CHARS, abandon.signal),
-      drainBounded(proc.stderr, MAX_OUTPUT_CHARS, abandon.signal),
-      proc.exited,
+      bounded(drainBounded(proc.stdout, MAX_OUTPUT_CHARS, abandon.signal), EMPTY_DRAIN),
+      bounded(drainBounded(proc.stderr, MAX_OUTPUT_CHARS, abandon.signal), EMPTY_DRAIN),
+      bounded<number | null>(exited, null),
     ])
     return {
       code,
       stdout: out.text,
-      stderr: err.text,
+      stderr:
+        hardStopped && code === null
+          ? `${err.text}${err.text && !err.text.endsWith('\n') ? '\n' : ''}[agenthydra] the child did not settle within ${Math.round((timeoutMs + HARD_STOP_GRACE_MS) / 1000)}s of starting (deadline ${Math.round(timeoutMs / 1000)}s + grace) and was abandoned; its exit code is unknown.\n`
+          : err.text,
       timedOut,
       stdoutDropped: out.dropped,
       stderrDropped: err.dropped,
@@ -869,6 +1012,7 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number, hook
     // fire on a run that is already over, and a child still alive must not outlive its adapter.
     clearTimeout(killer)
     if (grace) clearTimeout(grace)
+    if (hardTimer) clearTimeout(hardTimer)
     if (proc.exitCode === null && !proc.killed) killTree(proc)
   }
 }

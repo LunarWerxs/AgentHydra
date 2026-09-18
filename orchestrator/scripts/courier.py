@@ -96,6 +96,58 @@ CLAIM_STALE_SECS = deliverylib.CLAIM_STALE_SECS
 # skips straight past mark_failed and the results row every other refusal gets.
 ACTUATOR_TIMEOUT_SECS = 300
 
+# ⛔ ONE ROW MAY NOT EAT THE WHOLE RUN (2026-09-18). Every step below is individually bounded -
+# the daemon send at CONFIRM_SECS+120, the actuator at 300s, the confirm at CONFIRM_SECS - and
+# NOTHING bounded their SUM. Worst case for one row is over thirteen minutes, so a `courier --yes
+# --only a --only b` declared at 300s could spend its whole declared deadline inside row A and
+# never reach row B: the caller sees a run killed at its wall with neither row delivered and no
+# report, which is exactly what a person watching `stage_reply --list` saw that day (the first
+# row's attempts climbing, the second still at 0).
+#
+# THE BUDGET IS A WALL-CLOCK DEADLINE CARRIED DOWN THE ROW, not a thread this run abandons. Each
+# step takes the SMALLER of its own timeout and the time this row has left, and a step that has
+# no time left is not started at all - it is an honest failure with the attempt already burnt
+# (deliver_one records the attempt before the outcome, on purpose), and the loop advances. A
+# bounded step can be aimed at a window; an abandoned thread cannot be taken off one, and the
+# claim and the instance lock this row holds would be released out from under it.
+ROW_BUDGET_SECS = configlib.get("courier.row_budget_secs")
+
+
+def _left(deadline: float | None) -> float:
+    """Seconds this row has left, or `inf` when no caller set a budget (the old behaviour, which
+    is what every direct unit test of these helpers still exercises)."""
+    if deadline is None:
+        return float("inf")
+    return deadline - time.time()
+
+
+def _budget(deadline: float | None, own: float) -> float:
+    """A step's own timeout, capped by what the row has left. Never below one second: a step
+    given zero would fail in a way that reads like the daemon refusing, and the caller checks
+    `_left()` before starting a step at all."""
+    return max(1.0, min(float(own), _left(deadline)))
+
+
+def _out_of_budget(entry: dict, sid: str, attempt: str | None, doing: str, budget: float) -> dict:
+    """The row ran out of its own time BEFORE `doing` - so nothing was sent, typed or begun.
+
+    That is the NOT-YET class this file already has a door for (`deliverylib.defer` - "the
+    delivery could not be ATTEMPTED"), not a delivery that went wrong: the row stays STAGED for
+    the next cycle, the deferral is counted so a chat that is slow forever still expires, and the
+    ledger attempt is taken back because the breaker counts futility, not restraint. A send that
+    WAS started and then timed out is the other case entirely, and it keeps its attempt and burns
+    the row exactly as every other send failure does.
+    """
+    why = (f"this delivery used its whole {budget:.0f}s row budget before {doing} - the run "
+           "advances to the next row rather than spending the caller's entire deadline here. "
+           "Nothing was sent; it is retried on the next cycle.")
+    deliverylib.defer(entry["id"], why)
+    if attempt is not None:
+        ledgerlib.discount("deliver", sid, attempt)
+    return {"id": entry["id"], "ok": False, "deferred": True,
+            "outcome": f"out of time before {doing} - staged, and retried next cycle",
+            "detail": why[:200]}
+
 
 def _rmtree_claim(path) -> None:
     """Drop a claim directory and the owner record inside it. The claim used to be an empty
@@ -215,7 +267,8 @@ def _activity_of(session_id: str, transcript_path: str | None = None) -> tuple[s
 # send is also what boots a dormant or crashed chat (the daemon's own 2026-08-26 measurement).
 
 
-def _run_actuator(title: str, instance: str, message: str, verify: str) -> tuple[int, str]:
+def _run_actuator(title: str, instance: str, message: str, verify: str,
+                  deadline: float | None = None) -> tuple[int, str]:
     if not ACTUATOR.exists():
         return 1, f"the delivery actuator is missing at {ACTUATOR}"
     args = [
@@ -227,7 +280,7 @@ def _run_actuator(title: str, instance: str, message: str, verify: str) -> tuple
     if instance:
         args += ["-Instance", instance]
     try:
-        r = clilib.run_text(args, timeout=ACTUATOR_TIMEOUT_SECS)
+        r = clilib.run_text(args, timeout=_budget(deadline, ACTUATOR_TIMEOUT_SECS))
     except subprocess.TimeoutExpired:
         # A hung actuator is a delivery failure like any other (rows above return (1, why))
         # - never an exception that escapes deliver_one and skips mark_failed/the results row.
@@ -486,7 +539,8 @@ def _capture_before_state(sid: str) -> _BeforeState:
 
 
 def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
-                     doctrine_note: str, attempt: str | None = None) -> dict | None:
+                     doctrine_note: str, attempt: str | None = None,
+                     deadline: float | None = None) -> dict | None:
     """THE ROUTE: the daemon's message endpoint (POST /api/sessions/:id/message), which picks
     the right channel by itself - and prefers THE OFFICIAL PEER CHANNEL (owner, 2026-09-01:
     "why don't we use the old method"). For a LIVE session it injects into the chat's own
@@ -520,7 +574,7 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
                                  # so the endpoint must refuse rather than fall through to the
                                  # composer it normally uses for a chat with no pipe.
                                  "peer_only": bool(match.get("peer_only"))},
-                                timeout=CONFIRM_SECS + 120)
+                                timeout=_budget(deadline, CONFIRM_SECS + 120))
         if isinstance(got, dict) and got.get("delivered"):
             deliverylib.mark_delivered(entry["id"])
             ledgerlib.clear("deliver", sid)
@@ -616,12 +670,13 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
         return None  # 404 = older daemon without the endpoint: drive the actuator locally.
 
 
-def _wait_for_movement(sid: str, before: _BeforeState) -> bool:
+def _wait_for_movement(sid: str, before: _BeforeState,
+                       deadline: float | None = None) -> bool:
     """CONFIRM: the keystroke is not the delivery. Watch for the chat to actually move - a
     growing transcript, a fresh lastActivityAt, or (a boot from dormant) a changed live-
     registry entry, which shows there before the first transcript write."""
-    deadline = time.time() + CONFIRM_SECS
-    while time.time() < deadline:
+    until = time.time() + _budget(deadline, CONFIRM_SECS)
+    while time.time() < until:
         after_activity, after_size = _activity_of(sid, before.tpath)
         if (after_activity and after_activity != before.activity) or after_size > before.size:
             return True
@@ -636,17 +691,17 @@ def _wait_for_movement(sid: str, before: _BeforeState) -> bool:
 
 
 def _deliver_via_actuator(entry: dict, match: dict, sid: str, before: _BeforeState,
-                          doctrine_note: str) -> dict:
+                          doctrine_note: str, deadline: float | None = None) -> dict:
     """The composer fallback (an older daemon, 404, with no /message endpoint): drive the
     local actuator directly, then rail 7 - refuse to call it delivered until the chat moves."""
     title = match.get("title") or entry.get("title") or ""
     instance = match.get("instance") or entry.get("instance") or ""
-    code, out = _run_actuator(title, instance, entry["text"], entry["verifyText"])
+    code, out = _run_actuator(title, instance, entry["text"], entry["verifyText"], deadline)
     if code != 0:
         deliverylib.mark_failed(entry["id"], f"composer: {out or f'exit {code}'}")
         return {"id": entry["id"], "ok": False, "outcome": "the composer refused",
                 "detail": (out.splitlines()[-1] if out else f"exit {code}")[:160]}
-    if not _wait_for_movement(sid, before):
+    if not _wait_for_movement(sid, before, deadline):
         deliverylib.mark_failed(
             entry["id"],
             "the actuator reported it typed and sent, but the chat did not move within "
@@ -660,13 +715,22 @@ def _deliver_via_actuator(entry: dict, match: dict, sid: str, before: _BeforeSta
             "detail": (f"'{title}' took the message and started moving" + doctrine_note)[:250]}
 
 
-def deliver_one(entry: dict, match: dict) -> dict:
-    """Send it, then prove the chat moved. Every outcome is recorded on the ledger."""
+def deliver_one(entry: dict, match: dict, budget_secs: float | None = None) -> dict:
+    """Send it, then prove the chat moved. Every outcome is recorded on the ledger.
+
+    `budget_secs` is THIS ROW'S whole wall-clock allowance (ROW_BUDGET_SECS by default; None
+    turns the bound off, which is what a direct unit test of one step wants). Every step below
+    takes the smaller of its own timeout and what is left, and a step with nothing left is not
+    started - the row fails honestly with its attempt already burnt, and the caller's loop moves
+    on. See ROW_BUDGET_SECS for why the sum needed a bound the parts did not give it.
+    """
     sid = entry["session"]
     title = match.get("title") or entry.get("title") or ""
     rejected = _reject_if_unstaged(entry)
     if rejected is not None:
         return rejected
+    budget = ROW_BUDGET_SECS if budget_secs is None else budget_secs
+    deadline = None if budget is None else time.time() + float(budget)
     before = _capture_before_state(sid)
     # THE ATTEMPT IS RECORDED BEFORE THE OUTCOME IS KNOWN, deliberately: a crash mid-send must
     # not leave an unrecorded attempt. The cost is that a refusal which never got to ACT still
@@ -677,7 +741,11 @@ def deliver_one(entry: dict, match: dict) -> dict:
     deliverylib.note_attempt(entry["id"])
     # THE LAST DURABLE MOMENT (_ensure_doctrine): stamp the chat before the send boots it.
     doctrine_note = _ensure_doctrine(sid, match)
-    settled = _send_via_daemon(entry, match, sid, before, doctrine_note, attempt)
+    # The send is the expensive step and the one that has to be STARTED to mean anything: a send
+    # begun with two seconds left is a half-typed message nobody can account for. Refuse instead.
+    if _left(deadline) <= 5:
+        return _out_of_budget(entry, sid, attempt, "the send could be started", float(budget))
+    settled = _send_via_daemon(entry, match, sid, before, doctrine_note, attempt, deadline)
     if settled is not None:
         return settled
     if match.get("peer_only") and _still_mid_turn(sid, match):
@@ -692,7 +760,10 @@ def deliver_one(entry: dict, match: dict) -> dict:
         return {"id": entry["id"], "ok": False,
                 "outcome": "no peer route on this daemon and the turn is in flight - not typing",
                 "detail": "upgrade the daemon, or re-run once the chat is idle"}
-    return _deliver_via_actuator(entry, match, sid, before, doctrine_note)
+    if _left(deadline) <= 5:
+        return _out_of_budget(entry, sid, attempt,
+                              "the composer fallback could be started", float(budget))
+    return _deliver_via_actuator(entry, match, sid, before, doctrine_note, deadline)
 
 
 def _verify_of(report: dict, delivery_id: str) -> str:

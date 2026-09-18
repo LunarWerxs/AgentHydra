@@ -64,13 +64,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   it: both records read `exitCode: 1, stdout: "", stderr: ""`, which sent the first diagnosis
   hunting a silent exception that had never happened. `PYTHONUNBUFFERED=1` is pinned alongside
   the existing UTF-8 pins, so a cancelled or timed-out run now returns every line it got out.
-- **A declared deadline that nothing enforced.** Neither `orchestrator_run`'s `timeout_secs` nor
-  `migrate_batch`'s 3600s tripped, and both runs had to be killed by hand. Two bounds now sit
-  under them: `realSpawn` answers at `timeoutMs + 30s` whatever the child or its descendants do
-  (a deadline enforced only by a kill assumes the kill worked), and the operation registry closes
-  its own record 90s past a run's declared deadline, killing what is left and saying so - so
-  `running` forever is not a state the daemon can be in. A late result cannot reopen a record the
-  watchdog has already reported.
+- **A deadline enforced only by a kill assumes the kill worked** (`server/src/orchestrator.ts`).
+  `realSpawn` killed the tree at `timeoutMs` and then went on awaiting `proc.exited`, which a pid
+  the OS will not reap never settles - the deadline would have been missed with nothing to say so.
+  Two bounds close it: the adapter now answers at `timeoutMs + 30s` whatever the child or its
+  descendants do, and the operation registry closes its own record 90s past a run's declared
+  deadline, killing what is left and naming why, so `running` forever is not a state the daemon
+  can be in. A late result cannot reopen a record the watchdog has already reported.
+  ⚠️ **Latent, not observed.** The 2026-09-18 incident report said both deadlines had passed
+  without firing; the records say both runs were CANCELLED at 79s and 15s, far inside them (the
+  "65 minutes" was a mis-timed poll, corrected at source). These two bounds are defence in depth
+  for a hole found by reading, not a fix for a failure anyone measured.
 - **A source row settled against a RUNNING app was reported as final, and two came back**
   (`orchestrator/scripts/migrate_chat.py`, `migrate_batch.py`). A two-chat move off a running
   account settled and tombstoned both source rows; `list_chats` read `unarchived: 0` and the move

@@ -1180,6 +1180,50 @@ def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str,
     return note, state
 
 
+def source_still_visible(session_id: str, src_instance: str, fleet_data: dict | None = None) -> bool:
+    """Public name for `_source_still_visible` - the re-read a caller takes AFTER a delay to see
+    whether a running source app wrote its un-archived copy back over a settled row."""
+    return _source_still_visible(session_id, src_instance, fleet_data)
+
+
+def clear_resurrected_source_record(session_id: str, src_instance: str, target: dict,
+                                    fleet_data: dict | None = None) -> str | None:
+    """Re-run the tombstone for one settled source row, clearing a record the source app has
+    re-saved from memory since. Idempotent by construction (see
+    `_tombstone_source_session_file`): nothing left to find returns None.
+
+    ⛔ A RESURRECTION IS NOT ONLY AN UN-ARCHIVED ROW. The 2026-09-18 pair came back ARCHIVED -
+    the app re-saved its in-memory copy, archived flag and all - so `source_still_visible` was
+    false for both and a caller checking only that would have called it clean. What came back
+    was the stale `local_<id>.json` NAME, which is the whole thing the tombstone exists to
+    remove, so the re-check runs this whatever the visible test said."""
+    return _tombstone_source_session_file(session_id, src_instance, target, fleet_data)
+
+
+def source_app_running(match: dict, target: dict, fleet: dict) -> bool:
+    """Was the SOURCE account's app running when we settled it?
+
+    ⛔ A SETTLE AGAINST A RUNNING APP IS PROVISIONAL, AND ONE WAS REPORTED AS FINAL (2026-09-18).
+    A two-chat `move_chats` off a running #15 landed both chats and settled both source rows;
+    `list_chats {instance:15}` read `all: 200, unarchived: 0` and the move was reported to the
+    owner as settled. Seventy-five minutes later the same call read `all: 202` - the app had
+    held both chats in memory the whole time and re-saved them over the records the settle had
+    tombstoned. The owner archived them by hand.
+
+    That resurrection is not new and not a bug in the tombstone: `_tombstone_source_session_file`
+    documents it and clears the duplicate - ON A LATER CALL. Nothing fired a later call, because
+    the move had already written its terminal `stamped` phase and stopped being anybody's
+    business. So the fact is recorded HERE, the journal stays owed (`phase_stamp`), and the
+    report says the verdict is provisional - a disk read taken seconds after a settle cannot
+    prove what a running app will write next.
+    """
+    src_name = str(match.get("instance") or "")
+    if not src_name or src_name.lower() == str(target.get("name", "")).lower():
+        return False
+    src_inst = resolve_instance(fleet, src_name)
+    return bool(src_inst and src_inst.get("isRunning"))
+
+
 def _settle_source_row_core(match: dict, target: dict, fleet: dict, session_id: str,
                        chat_title, sw=None) -> tuple[str, str]:
     """Settle the superseded SOURCE row (_settle_source docstring).
@@ -1600,7 +1644,7 @@ class _Landing:
 
     __slots__ = ("parsed", "sw", "notes", "match", "fleet", "target", "session_id",
                  "chat_title", "src_instance", "result", "after", "settle_note",
-                 "source_row", "doctrine", "mutation_id")
+                 "source_row", "doctrine", "mutation_id", "source_app_running")
 
     def __init__(self, **kw) -> None:
         for slot in _Landing.__slots__:
@@ -1734,8 +1778,17 @@ def landed_meta_path(land: _Landing) -> str:
 def phase_settle(land: _Landing) -> None:
     """PHASE TWO: settle the SOURCE row, so the account it left stops showing it."""
     land.sw.resume()
+    # Read BEFORE the settle: the actuator can close nothing, but a settle that takes several
+    # seconds must not be judged against a fleet read taken after it.
+    land.source_app_running = source_app_running(land.match, land.target, land.fleet)
     land.settle_note, land.source_row = _settle_source_row(
         land.match, land.target, land.fleet, land.session_id, land.chat_title, sw=land.sw)
+    if land.source_app_running and land.source_row in ("settled", "flagged"):
+        land.settle_note += (
+            f" ⚠ PROVISIONAL: {land.match.get('instance')}'s app was RUNNING, and a running app "
+            "re-saves chats it holds in memory - one did exactly that 75 minutes after a move on "
+            "2026-09-18, resurrecting both settled rows. Re-read the source before calling this "
+            "final; `migrate_reconcile` still owes this row and `--finish` re-settles it.")
     # Two laps, not one: 'settle-drive' is the actuator driving the source app's own archive
     # control, 'settle-confirm' is the disk read-back that proves it. A single 'settle-source'
     # number could not say which half a slow settle was spending (2026-09-06: ~7.5s per chat
@@ -1765,9 +1818,21 @@ def phase_stamp(land: _Landing, watched: dict | None = None) -> None:
         # stamp runs whatever the settle said, so writing the finished phase here unconditionally
         # overwrote 'settle-visible' - a real half-move - with the one phase migrate_reconcile
         # treats as owing nothing, and the duplicate became invisible to the tool built to find it.
-        mutationlib.advance_phase(
-            land.mutation_id,
-            "stamped" if land.source_row != "visible" else "stamped-settle-visible")
+        # ⛔ AND NOT "stamped" WHILE THE SOURCE APP IS STILL RUNNING (2026-09-18, see
+        # source_app_running). `stamped` is migrate_reconcile's DONE_PHASE: writing it closes the
+        # row forever, and a row closed forever is a row nothing re-reads when the app writes its
+        # in-memory copy back ten minutes later. `stamped-source-running` keeps the move owed
+        # until reconcile has re-checked the CHAT'S CURRENT STATE - which is the one read that
+        # can tell a settle that held from one the app undid. Reconcile advances it to `settled`
+        # itself once the source row is provably archived or gone, so a move off a running app
+        # that stayed settled stops being re-checked after exactly one pass.
+        if land.source_row == "visible":
+            phase = "stamped-settle-visible"
+        elif land.source_app_running:
+            phase = "stamped-source-running"
+        else:
+            phase = "stamped"
+        mutationlib.advance_phase(land.mutation_id, phase)
     # The verdict outlives the tool call. This incident had to be reconstructed from file
     # mtimes because nothing about the stamp was ever persisted (2026-09-05).
     mutationlib.record("setmode", land.session_id, instance=land.target.get("name") or "",
@@ -1826,6 +1891,13 @@ def landing_payload(land: _Landing) -> dict:
         # sourceRow is the machine half; sourceSettled stays for older readers.
         "sourceRow": source_row,
         "sourceSettled": source_row in ("settled", "flagged", "none"),
+        # ⛔ THE HALF A DISK READ CANNOT ANSWER (2026-09-18). True means the source app was
+        # RUNNING when this row was settled, so the settle is provisional: that app holds the
+        # chat in memory and may write the record back minutes later. A caller must NOT report
+        # this move as settled on the strength of a `list_chats` taken right afterwards - re-read
+        # the source after a delay, or let `migrate_reconcile` do it (the journal stays owed).
+        "sourceRowProvisional": bool(land.source_app_running
+                                     and source_row in ("settled", "flagged")),
         "daemon": land.result,
         "secs": land.sw.total(),
         "timings": land.sw.phases,
