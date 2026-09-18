@@ -309,7 +309,15 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   // this call: disk said archived, the app still reported isArchived:false, and the chat
   // stayed in the sidebar. Reporting that as success is how "archived" came to mean "still
   // there".
-  const underRunningApp = (result.hits ?? []).some((h) => h.changed && h.wasRunning)
+  // ⛔ NOT `h.changed && h.wasRunning` (fixed 2026-09-18). This decides whether the response
+  // carries `stillOnScreen` and the `uiArchive` outcome at all - and that question is "does a
+  // RUNNING app hold this chat's list?", which has nothing to do with whether THIS call happened
+  // to write the flag. With the old test, the retry after a failed click ran the click (the gate
+  // below is fixed too) and then fell through to a bare fallback return that dropped the outcome
+  // on the floor: the caller saw `{ok, hits, flagOnDisk: []}` and no sign a click had been
+  // attempted. `retiredInApp` still distinguishes "the row is gone" from "it is still there", so
+  // widening this cannot report a retired row as on-screen.
+  const underRunningApp = (result.hits ?? []).some((h) => h.wasRunning)
   // ⛔ `changed:true` MEANS "I WROTE IT", NOT "IT STUCK" - and for ten minutes after any archive
   // those were different facts, silently. READ THE FLAG BACK. This is the same disk-vs-reality
   // lesson as `stillOnScreen`, one layer down: there the write was real and the SCREEN disagreed;
@@ -380,7 +388,15 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   }> = []
   if (wantArchived) {
     for (const hit of result.hits ?? []) {
-      if (!hit.changed || !hit.wasRunning) continue
+      // ⛔ NOT `!hit.changed || !hit.wasRunning` (fixed 2026-09-18). The click's job is to remove
+      // the ROW, and a row can be on screen whether or not THIS call wrote the flag - in fact the
+      // state that needs it most is "flag already true, row still rendered", which is exactly what
+      // a failed click leaves behind. Gating on `changed` made the first attempt the only attempt:
+      // if its last-moment re-aim guard refused (the sidebar moved as the menu opened), every
+      // retry answered `changed:false, wasRunning:false` and did nothing, forever. Measured on
+      // #13. A running app is the whole precondition; `uiArchiveWithinBudget` is already bounded,
+      // and a row the sidebar no longer renders is its own cheap no-op.
+      if (!hit.wasRunning) continue
       const outcome = await uiArchiveWithinBudget(hit.profile, sessionId)
       uiOutcomes.push({ profile: hit.profile, ...outcome })
     }

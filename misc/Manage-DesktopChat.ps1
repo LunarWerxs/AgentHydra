@@ -745,10 +745,36 @@ foreach ($m in $mains) {
   # is printed either way, so the report says what was acted on instead of what was intended.
   $aimed = ''
   try { $aimed = [string]$kebab.Current.Name } catch { $aimed = '' }
+  # ⛔ AN EMPTY READ IS "COULD NOT READ", NOT "A DIFFERENT ROW" (2026-09-18). Opening the menu can
+  # re-serve the a11y tree, and a cached AutomationElement then answers Name = '' - the file's own
+  # Wake comment at the top already documents this exact symptom ("refused a row that had not moved
+  # at all"). Treating '' as a MISMATCH turned a transient read failure into a permanent refusal:
+  # reproduced three times in a row on instance 13, each with the row plainly rendered and the
+  # correct kebab open, so the archive could never settle in-app and the row stayed on screen.
+  #
+  # Unknown is not a verdict anywhere else in this repo, and it is not one here. Re-read once after
+  # a short settle; only a name that is BOTH readable AND wrong is a moved sidebar. A second empty
+  # read still refuses - that is a tree we genuinely cannot see, and refusing is right for it.
+  if (-not $aimed) {
+    # Two further reads, spaced: a re-served tree settles in well under a second, and a cached
+    # element starts answering again once it does. No re-resolve here on purpose - finding the
+    # kebab afresh while its menu is open is how you end up aimed at something else, which is
+    # the very thing this guard exists to prevent.
+    foreach ($waitMs in 600, 900) {
+      Start-Sleep -Milliseconds $waitMs
+      try { $aimed = [string]$kebab.Current.Name } catch { $aimed = '' }
+      if ($aimed) { break }
+    }
+  }
   if (-not $aimed -or -not $aimed.EndsWith($Title)) {
     try { $ec.Collapse() } catch { }
+    $why = if (-not $aimed) {
+      "its name could not be read twice - the accessibility tree was re-served under us"
+    } else {
+      "the sidebar moved while the menu opened"
+    }
     Write-Output ("FAIL: the row under this menu is no longer '$Title' (it reads '" + $aimed +
-      "') - the sidebar moved while the menu opened; refusing to $Action a neighbouring row")
+      "') - $why; refusing to $Action a neighbouring row")
     exit 1
   }
   Write-Output "acting on row: '$aimed'"

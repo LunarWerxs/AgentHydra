@@ -514,7 +514,22 @@ export async function archiveDesktopChat(
       // Already in the requested state: report the hit without rewriting the file, so a
       // periodic sweep is idempotent instead of churning every metadata file every pass.
       if (meta.isArchived === archived) {
-        hits.push({ profile, wasRunning: false, changed: false })
+        // ⛔ `changed:false` MEANS "THE FILE ALREADY SAID SO", NOT "THERE IS NOTHING LEFT TO DO"
+        // (2026-09-18). This branch used to hard-code `wasRunning: false`, and the archive route
+        // gates its in-app click on `changed && wasRunning` - so the moment the flag was already
+        // true, EVERY retry became a no-op that reported nothing running. That is precisely the
+        // state a failed click leaves behind: flag written, row STILL ON SCREEN, and from then on
+        // unfixable by the tool that is supposed to fix it. Measured on #13, where the first
+        // attempt's last-moment re-aim guard refused (the sidebar moved as the menu opened) and
+        // the next two calls could no longer even try.
+        //
+        // The idempotence this branch exists for is about NOT REWRITING THE FILE, which it still
+        // does not. Liveness is a fact about the machine, so report the fact.
+        hits.push({
+          profile,
+          wasRunning: await isInstanceRunning(profile).catch(() => false),
+          changed: false,
+        })
         continue
       }
       meta.isArchived = archived
