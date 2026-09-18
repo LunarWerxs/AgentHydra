@@ -18,9 +18,11 @@ import {
   archiveDesktopChat,
   archiveRootsForMove,
   awaitChatRecord,
+  cancelChatArchiveReassert,
   coldImportSessionToDesktop,
   desktopChatCarriers,
   desktopHomeFor,
+  findChatMetaPath,
   importSessionToDesktop,
   isSessionSuperseded,
   launchTerminalSession,
@@ -287,6 +289,20 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
       },
       409,
     )
+  // ⛔ CALL OFF ANY LIVE ARCHIVE WATCHER **BEFORE** WRITING (2026-09-18, measured on instance 56 /
+  // chat d9fc4886). The `wantArchived` guard below stops this route FIRING a watcher on an
+  // unarchive - but it never addressed the watcher an EARLIER archive already left running, and
+  // that one lives for ten minutes. Inside that window every unarchive was reverted within ~1.5s
+  // while this route answered ok:true / changed:true: three tool calls and a hand-written flip of
+  // the JSON all lost, with four daemon lines claiming "the app's re-save" for an app that was
+  // CLOSED. An unarchive is the owner contradicting the intent that armed the watcher, so it
+  // stands the watcher down first - cancelling after the write would just lose a race.
+  const cancelledWatchers: string[] = []
+  if (!wantArchived) {
+    for (const profile of roots ?? desktopChatCarriers(sessionId)) {
+      if (cancelChatArchiveReassert(profile, sessionId)) cancelledWatchers.push(profile)
+    }
+  }
   const result = await archiveDesktopChat(sessionId, wantArchived, roots)
   // SAY when the flag landed under a running app, rather than returning a bare ok:true for a
   // chat the owner can still see. Measured 2026-08-26 by asking the app itself right after
@@ -294,6 +310,39 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   // stayed in the sidebar. Reporting that as success is how "archived" came to mean "still
   // there".
   const underRunningApp = (result.hits ?? []).some((h) => h.changed && h.wasRunning)
+  // ⛔ `changed:true` MEANS "I WROTE IT", NOT "IT STUCK" - and for ten minutes after any archive
+  // those were different facts, silently. READ THE FLAG BACK. This is the same disk-vs-reality
+  // lesson as `stillOnScreen`, one layer down: there the write was real and the SCREEN disagreed;
+  // here the write was real and the FILE disagreed a second later. A caller cannot tell either
+  // from `ok:true`, so the route says what is actually on disk now.
+  const flagOnDisk: Array<{ profile: string; isArchived: boolean | null }> = []
+  for (const hit of result.hits ?? []) {
+    if (!hit.changed) continue
+    let seen: boolean | null = null
+    try {
+      const metaPath = findChatMetaPath(hit.profile, sessionId)
+      if (metaPath) seen = JSON.parse(readFileSync(metaPath, 'utf8')).isArchived === true
+    } catch {
+      // an unreadable file is "cannot say", never a quiet "it worked"
+      seen = null
+    }
+    flagOnDisk.push({ profile: hit.profile, isArchived: seen })
+  }
+  const flagStuck = flagOnDisk.length > 0 && flagOnDisk.every((f) => f.isArchived === wantArchived)
+  /** Facts every response below carries, so no exit path can drop them. */
+  const writeTruth = {
+    flagOnDisk,
+    flagStuck,
+    ...(cancelledWatchers.length ? { cancelledWatchers } : {}),
+    ...(flagOnDisk.length && !flagStuck
+      ? {
+          flagWarning:
+            'the write was made and the flag on disk does NOT match what was asked. Something ' +
+            'else is writing this record - check for a reassertChatArchive watcher still ' +
+            'running for this chat, and for the app re-saving its in-memory copy.',
+        }
+      : {}),
+  }
   // THE DURABLE FIX BELONGS HERE TOO (owner, 2026-09-01: "it's also duplicating chats"). A
   // RUNNING app re-saves isArchived=false within seconds and resurrects the row it was just
   // told to put away — so a chat archived on its old account came back and appeared in BOTH
@@ -340,6 +389,7 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   if (underRunningApp && retiredInApp)
     return c.json({
       ...result,
+      ...writeTruth,
       stillOnScreen: false,
       uiArchive: uiOutcomes,
       // ⛔ SAY WHICH OF THE TWO SETTLED IT (2026-09-17). `verified` is true down two different
@@ -357,6 +407,7 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
   if (underRunningApp)
     return c.json({
       ...result,
+      ...writeTruth,
       stillOnScreen: true,
       ...(uiOutcomes.length ? { uiArchive: uiOutcomes } : {}),
       note:
@@ -376,7 +427,7 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
             "unarchiving has no in-app control to drive - the app's row menu can archive a chat, " +
             'not restore one, so only that restart brings it back.'),
     })
-  return c.json(result, result.ok ? 200 : 404)
+  return c.json({ ...result, ...writeTruth }, result.ok ? 200 : 404)
 })
 // The default first message a migrated chat receives when the caller supplies no prompt.
 const MIGRATION_NOTICE =

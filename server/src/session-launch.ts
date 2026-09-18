@@ -1260,6 +1260,36 @@ export async function reassertChatAutomation(
 }
 
 /**
+ * Live `reassertChatArchive` watchers, keyed by profile+session, so a DELIBERATE unarchive can
+ * call one off (see cancelChatArchiveReassert). Without this the watcher is unreachable once
+ * fired: it is started fire-and-forget from two routes and nothing holds its handle.
+ */
+const archiveReassertWatchers = new Map<string, { cancelled: boolean }>()
+
+/** The one spelling of the registry key, so a cancel cannot miss a watcher over path case. */
+function archiveReassertKey(instanceDir: string, sessionId: string): string {
+  return `${instanceDir.toLowerCase()}::${sessionId}`
+}
+
+/**
+ * STOP the archive watcher for one chat, and say whether one was actually running.
+ *
+ * ⛔ WHY THIS EXISTS (measured live 2026-09-18 on instance 56 / chat d9fc4886). The route already
+ * refuses to FIRE the watcher on an unarchive - but an archive fired minutes earlier leaves one
+ * running for ten minutes, and that watcher destroys every later unarchive within ~1.5s while the
+ * caller is told `ok:true, changed:true`. Three `archive_desktop_chat {archived:false}` calls AND a
+ * hand-written JSON flip were all reverted, with four matching daemon lines. The guard against
+ * firing was never the whole hole; the hole is that a live watcher outlives the intent that armed
+ * it. An unarchive is the owner contradicting that intent, so it must be able to call it off.
+ */
+export function cancelChatArchiveReassert(instanceDir: string, sessionId: string): boolean {
+  const handle = archiveReassertWatchers.get(archiveReassertKey(instanceDir, sessionId))
+  if (!handle || handle.cancelled) return false
+  handle.cancelled = true
+  return true
+}
+
+/**
  * THE DURABLE FIX for the zombie-twin leak (owner ask, 2026-09-01). After a migrate archives
  * the SOURCE chat's meta on disk, a RUNNING source app holds its chat list in memory and
  * re-saves isArchived=false within seconds - resurrecting a visible stale twin that then makes
@@ -1267,6 +1297,10 @@ export async function reassertChatAutomation(
  * bounded watcher that re-writes isArchived=true whenever the app flips it back, scoped to the
  * SOURCE dir only (never the fresh target import), until the app's next boot reads the store
  * and the flag sticks for good - or the caps below fire. Non-throwing; returns restore count.
+ *
+ * CANCELLABLE since 2026-09-18: it registers itself for the life of the watch and checks that
+ * registration every tick, so `cancelChatArchiveReassert` can end it the moment the owner
+ * unarchives. A watcher that cannot be called off is indistinguishable from a bug.
  */
 export async function reassertChatArchive(
   instanceDir: string,
@@ -1278,6 +1312,8 @@ export async function reassertChatArchive(
     maxMisses?: number
     sleep?: (ms: number) => Promise<void>
     now?: () => number
+    /** Report whether the app is up. Only used to keep the log line HONEST - see below. */
+    isAppRunning?: () => boolean
   },
 ): Promise<number> {
   const windowMs = opts?.windowMs ?? 10 * 60_000
@@ -1287,30 +1323,52 @@ export async function reassertChatArchive(
   const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const now = opts?.now ?? Date.now
   const deadline = now() + windowMs
+  const key = archiveReassertKey(instanceDir, sessionId)
+  // A second watcher for the same chat would race the first and double its restores; the newest
+  // intent wins, so stand the old one down rather than running both.
+  const prior = archiveReassertWatchers.get(key)
+  if (prior) prior.cancelled = true
+  const handle = { cancelled: false }
+  archiveReassertWatchers.set(key, handle)
   let restores = 0
   let misses = 0
   let metaPath: string | null = null
-  while (now() < deadline && restores < maxRestores) {
-    await sleep(intervalMs)
-    try {
-      if (!metaPath || !existsSync(metaPath)) metaPath = findChatMetaPath(instanceDir, sessionId)
-      if (!metaPath) {
-        if (++misses >= maxMisses) return restores
-        continue
+  try {
+    while (now() < deadline && restores < maxRestores) {
+      await sleep(intervalMs)
+      if (handle.cancelled) return restores
+      try {
+        if (!metaPath || !existsSync(metaPath)) metaPath = findChatMetaPath(instanceDir, sessionId)
+        if (!metaPath) {
+          if (++misses >= maxMisses) return restores
+          continue
+        }
+        misses = 0
+        const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+        if (meta.isArchived === true) continue
+        meta.isArchived = true
+        writeFileSync(metaPath, JSON.stringify(meta))
+        invalidateSessionMetaCache()
+        restores++
+        // ⛔ DO NOT blame the app unconditionally. This line read "(the app's re-save resurrected
+        // the twin)" on every restore, and on 2026-09-18 it printed that three times for a
+        // CLOSED app while the thing it had actually reverted was the owner's own unarchive -
+        // sending the reader after an imaginary Electron re-save. Name what is known.
+        const appUp = opts?.isAppRunning?.()
+        const because =
+          appUp === false
+            ? 'the app is NOT running, so this was an external write - if it was deliberate, cancel this watcher instead of fighting it'
+            : "the app's re-save resurrected the twin"
+        console.log(
+          `[agenthydra] re-asserted archived on ${sessionId} in ${instanceDir} (${because})`,
+        )
+      } catch {
+        // a contended or half-written pass says nothing about the next tick
       }
-      misses = 0
-      const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
-      if (meta.isArchived === true) continue
-      meta.isArchived = true
-      writeFileSync(metaPath, JSON.stringify(meta))
-      invalidateSessionMetaCache()
-      restores++
-      console.log(
-        `[agenthydra] re-asserted archived on ${sessionId} in ${instanceDir} (the app's re-save resurrected the twin)`,
-      )
-    } catch {
-      // a contended or half-written pass says nothing about the next tick
     }
+  } finally {
+    // Only retract OUR OWN registration: a newer watcher may already own the key.
+    if (archiveReassertWatchers.get(key) === handle) archiveReassertWatchers.delete(key)
   }
   return restores
 }

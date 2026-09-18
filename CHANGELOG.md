@@ -7,6 +7,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- ⛔ **`reassertChatArchive` could not be called off, so for TEN MINUTES after any archive every
+  unarchive of that chat was silently reverted** - while `archive_desktop_chat` still answered
+  `ok: true, changed: true`. The route already refused to FIRE the watcher on an unarchive
+  (2026-09-17); what nobody handled is the watcher an EARLIER archive left running. Measured live
+  on instance #56 / chat `d9fc4886`: three `archive_desktop_chat {archived:false}` calls **and** a
+  hand-written flip of the JSON, all reverted within ~1.5s, with four `daemon.log` lines reading
+  `re-asserted archived ... (the app's re-save resurrected the twin)` **while the app was CLOSED** -
+  the log blamed Electron for the owner's own write. Proof it was only ever the watcher: once the
+  ten-minute window lapsed the same unarchive stuck and survived an app boot. Now: a watcher
+  registry keyed by profile+session, checked every tick, with a re-arm superseding the previous
+  watcher rather than racing it; `cancelChatArchiveReassert()` called by the unarchive path
+  **before** it writes (cancelling after would only lose the race) and reported as
+  `cancelledWatchers`; the route reads the flag back off disk and returns `flagOnDisk` /
+  `flagStuck` / `flagWarning`, because `changed: true` only ever meant "I wrote it", not "it
+  stuck"; and the log line stops naming the app when the app is not running. Four tests in
+  `server/tests/archive-watcher-cancel.test.ts`, proven red-then-green - with the cancel check
+  disabled the first one reads `restores: 1`, the exact live symptom.
+
 ### Changed
 
 - ⛔ **The chat actuator is ONE file again, and the copy the daemon was running was the WEAK one**
@@ -28,6 +48,52 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **A finished orchestrator run polled `running` for as long as its declared deadline, because
+  the PIPE decided when it was over and not the PROCESS** (`server/src/orchestrator.ts`). The
+  spawn adapter awaited `Promise.all([drainStdout, drainStderr, proc.exited])`, which settles on
+  the slowest of the three - and a grandchild that inherited the child's stdout holds that pipe
+  open for as long as IT lives. A `move_chats` whose child exited after 79 seconds therefore sat
+  `status: 'running', result: null` until the hour-long deadline killed it, losing the per-chat
+  report it was launched for; a hand-run `courier` did the same past its 300s. Reproduced against
+  a real interpreter (a script that spawns an un-redirected `Popen` and exits: 100 ms without a
+  pipe-holder, `timeoutMs + 5s` with one). The child's own exit now starts the same drain
+  countdown a kill does, so the run is reaped in seconds instead of at its wall.
+- **The same run's output died with the process, so a killed run read as a crash with no
+  diagnostic** (`server/src/orchestrator.ts`). Python block-buffers stdout when it is a pipe, so
+  everything two cancelled runs had printed sat in an 8 KB buffer inside the child and went with
+  it: both records read `exitCode: 1, stdout: "", stderr: ""`, which sent the first diagnosis
+  hunting a silent exception that had never happened. `PYTHONUNBUFFERED=1` is pinned alongside
+  the existing UTF-8 pins, so a cancelled or timed-out run now returns every line it got out.
+- **A declared deadline that nothing enforced.** Neither `orchestrator_run`'s `timeout_secs` nor
+  `migrate_batch`'s 3600s tripped, and both runs had to be killed by hand. Two bounds now sit
+  under them: `realSpawn` answers at `timeoutMs + 30s` whatever the child or its descendants do
+  (a deadline enforced only by a kill assumes the kill worked), and the operation registry closes
+  its own record 90s past a run's declared deadline, killing what is left and saying so - so
+  `running` forever is not a state the daemon can be in. A late result cannot reopen a record the
+  watchdog has already reported.
+- **A source row settled against a RUNNING app was reported as final, and two came back**
+  (`orchestrator/scripts/migrate_chat.py`, `migrate_batch.py`). A two-chat move off a running
+  account settled and tombstoned both source rows; `list_chats` read `unarchived: 0` and the move
+  was reported settled. Seventy-five minutes later the app had re-saved both chats from memory
+  and the owner archived them by hand. A disk read taken seconds after a settle cannot answer
+  what a running app will write next, so: the payload carries `sourceRowProvisional`, the batch
+  runs a fifth phase after the resume that re-reads every provisional row and re-settles or
+  re-tombstones whatever came back, the report says so in prose, and `phase_stamp` leaves the
+  journal on `stamped-source-running` so `migrate_reconcile` keeps re-checking the row long after
+  the process is gone (it advances the row to `settled-verified` itself once it holds).
+- **One stuck delivery could eat a whole courier run** (`orchestrator/scripts/courier.py`). Every
+  step was bounded - the daemon send at `confirm_secs + 120`, the actuator at 300s, the confirm
+  watch at `confirm_secs` - and nothing bounded their sum, so one row's worst case ran past
+  thirteen minutes and a `courier --only a --only b` declared at 300s could spend its entire
+  deadline inside row A with row B never attempted (seen live: A's `attempts` climbing while B
+  stayed at 0). `courier.row_budget_secs` (new, default 420s) is a wall-clock deadline carried
+  down the row: each step takes the smaller of its own timeout and what is left, a step with
+  nothing left is refused rather than half-started, and the loop advances.
+- **A spawned terminal held the daemon's pipes open after its script had exited**
+  (`orchestrator/scripts/cli_spawn.py`). The `Popen` that opens a console redirected nothing, so
+  it inherited the daemon's stdout/stderr - the same defect above, at its source. It now takes
+  `DEVNULL`, and `tests/test_no_inherited_stdio.py` refuses any `Popen` under `scripts/` that
+  does not say where its output goes.
 - **An UNARCHIVE under a running app was silently undone by the route's own watcher**
   (`server/src/routes/desktop-sessions.ts`). `reassertChatArchive` writes `isArchived=true` and
   nothing else, for ten minutes or eight restores - it exists to beat a running app's re-save
