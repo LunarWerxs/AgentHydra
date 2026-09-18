@@ -43,7 +43,6 @@ import { pendingSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
-import SettingsPanel from '@/shell/SettingsPanel.vue'
 import Sidebar from '@/shell/Sidebar.vue'
 import { usePushPanel } from '@/shell/usePushPanel'
 
@@ -372,7 +371,7 @@ onUnmounted(stopAvailabilityPolling)
 
     <!-- settings: the shared push-in panel. Custom header carries the theme picker + shut-down
          icons beside the panel's ✕ (owner request). -->
-    <SettingsPanel v-model:open="settingsOpen" :side="side" :title="$t('app.settings')" :width-px="widthPx">
+    <Sidebar v-model:open="settingsOpen" :side="side" :title="$t('app.settings')" :width-px="widthPx">
       <template #header>
         <span class="text-xs font-semibold">{{ $t('app.settings') }}</span>
         <div class="ms-auto flex items-center gap-0.5">
@@ -414,7 +413,7 @@ onUnmounted(stopAvailabilityPolling)
           <Button size="sm" @click="saveSettings">{{ $t('settings.saveSettings') }}</Button>
         </div>
       </template>
-    </SettingsPanel>
+    </Sidebar>
 
     <!-- close-button: vue-sonner defaults it OFF, which left every toast in the app dismissable
          only by waiting it out or clicking its body. The plain ones showed it worst — an

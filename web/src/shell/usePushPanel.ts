@@ -31,7 +31,7 @@ import { contributeContentInset } from "@/lib/content-inset";
  *   const open = ref(false);
  *   const { side, containerStyle } = usePushPanel(open, { shellMaxWidth: () => 1000 });
  *   // <div class="transition-[padding] duration-300 ease-in-out" :style="containerStyle"> ... </div>
- *   // <SettingsPanel v-model:open="open" :side="side"> ... </SettingsPanel>
+ *   // <Sidebar v-model:open="open" :side="side"> ... </Sidebar>
  */
 export type PushPanelSide = "right" | "bottom";
 
