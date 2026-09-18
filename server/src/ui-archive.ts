@@ -21,6 +21,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { isGenericChatTitle } from './chat-title'
 import { collectChats } from './core/chat-store-scan'
+import { spawnCaptured } from './core/process.ts'
 import { instanceDirForLabel } from './instance-sessions'
 import { CHAT_MANAGER_FILE, resolveMiscAsset } from './misc-assets'
 import { findChatMetaPath } from './session-launch'
@@ -85,24 +86,28 @@ async function runPs1(args: string[]): Promise<{ code: number; out: string }> {
   // is exactly the false OK this guard exists to prevent.
   if (!asset.path)
     return { code: 1, out: asset.error ?? `misc\\${CHAT_MANAGER_FILE} could not be resolved` }
-  const proc = Bun.spawn(
+  // Stderr rides along: the PS1 runs under ErrorActionPreference=Stop, so a UIA call that throws
+  // (window closed mid-click) puts the only real diagnostic on stderr - dropping it reported bare
+  // 'exited 1' with nothing to act on (review-confirmed).
+  //
+  // ⛔ AND THE BOUND IS ON THE WHOLE THING, NOT JUST THE PROCESS (swept 2026-09-18). The old shape
+  // had a `setTimeout(() => proc.kill())`, which settles `proc.exited` - but it awaited the two
+  // DRAINS first, and a drain finishes only when the PIPE closes. This actuator drives a desktop
+  // window; anything powershell leaves behind that inherited these pipes holds them open after it
+  // has gone, so the kill could fire and the await still sit there. spawnCaptured bounds the
+  // drains as well and kills the tree.
+  const r = await spawnCaptured(
     ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', asset.path, ...args],
-    // A console spawn: windowsHide required (repo guardrail - only GUI spawns stay visible).
-    { stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', windowsHide: true },
+    { timeoutMs: SPAWN_TIMEOUT_MS },
   )
-  const timer = setTimeout(() => proc.kill(), SPAWN_TIMEOUT_MS)
-  try {
-    // Stderr rides along: the PS1 runs under ErrorActionPreference=Stop, so a UIA call that
-    // throws (window closed mid-click) puts the only real diagnostic on stderr - dropping it
-    // reported bare 'exited 1' with nothing to act on (review-confirmed).
-    const [out, err] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ])
-    const code = await proc.exited
-    return { code, out: err.trim() ? `${out}\n${err}` : out }
-  } finally {
-    clearTimeout(timer)
+  if (r.timedOut)
+    return {
+      code: 1,
+      out: `${r.stdout}\n[agenthydra] the chat actuator did not finish within ${SPAWN_TIMEOUT_MS / 1000}s and was killed${r.stderr.trim() ? `\n${r.stderr}` : ''}`.trim(),
+    }
+  return {
+    code: r.code ?? 1,
+    out: r.stderr.trim() ? `${r.stdout}\n${r.stderr}` : r.stdout,
   }
 }
 

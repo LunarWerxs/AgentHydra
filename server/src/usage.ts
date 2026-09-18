@@ -22,6 +22,7 @@ import {
   resolveClaudeExe,
 } from './config'
 import { cliConfigDirCredentialState, resolveCliConfigDirToken } from './core/accounts'
+import { capturePipedProc } from './core/process.ts'
 import { encodeCwdKey } from './transcript'
 import type { UsageAdvice, UsageSnapshot } from './types'
 import { fetchUsageApi } from './usage-api'
@@ -639,22 +640,18 @@ async function spawnUsageProbe(
     return parseUsageOutput('', label) // never even launched → no data
   }
 
-  const timer = setTimeout(() => {
-    try {
-      proc.kill()
-    } catch {
-      // already gone
-    }
-  }, opts.timeoutMs ?? 60_000)
-
+  // Bounded through the one bounded spawn (swept 2026-09-18): the old timer killed the process
+  // but the await sat on the DRAIN, which ends when the PIPE closes, not when the child does.
   let out = ''
   try {
-    const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-    out = stdout
+    const r = await capturePipedProc(proc, {
+      timeoutMs: opts.timeoutMs ?? 60_000,
+      wantStderr: false,
+    })
+    out = r.stdout
   } catch {
     // read/exit error → whatever we captured (likely empty) parses to no-data
   } finally {
-    clearTimeout(timer)
     // The probe has exited, so its transcript is closed and safe to drop. Swept every time rather
     // than on a schedule: the stub has no value the moment the numbers above are parsed, and the
     // cost is one readdir of a folder that holds at most a handful of files.

@@ -38,6 +38,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   past its own timeout on a process that was already dead; the read is raced now as well. Proven by
   `spawn-captured-bounded.test.ts`: a child that never exits, one that floods the previously-unread
   stream, and one whose grandchild holds the pipe.
+- **Four MORE of the same shape, found because the first sweep's own grep was truncated**
+  (`ui-archive.ts`, `usage.ts`, `session-keepalive.ts`, and the kit's `tray-bootstrap.mjs`). Three
+  had a timer that killed the PROCESS while the `await` sat on the DRAIN - which ends when the pipe
+  closes, not when the child does - so the chat actuator, the usage probe and the keepalive probe
+  could each outlive their own declared deadline. The fourth had no deadline of any kind.
+- ⛔ **The tray-host probe was unbounded IN EVERY APP THAT VENDORS THE KIT** (fixed at source in
+  `lunarwerx-ui` 62212dd, synced here and into ReDesign). `trayHostProcessState` awaited the stdout
+  drain and then `proc.exited` with nothing racing either, so anything the probe spawned that
+  inherited the handle held it open for as long as it lived. One unbounded await, copied into four
+  products. DevWebUI and RepoYeti still carry the old copy - they had another session's uncommitted
+  work in their trees, so they were left alone; `node ../../lunarwerx-ui/sync.mjs --app <name>`
+  picks it up.
 
 - ⛔ **`reassertChatArchive` could not be called off, so for TEN MINUTES after any archive every
   unarchive of that chat was silently reverted** - while `archive_desktop_chat` still answered

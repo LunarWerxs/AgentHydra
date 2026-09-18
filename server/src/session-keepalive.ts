@@ -21,6 +21,7 @@
 //   · an unreadable quota reading is a skip, never a guess. "I could not tell" must not spend.
 
 import { CLAUDE_PROBE_NO_MCP_ARGS, resolveClaudeExe } from './config'
+import { capturePipedProc } from './core/process.ts'
 import type { UsageSnapshot } from './types'
 import { checkUsage, pruneUsageProbeTranscripts, usageProbeCwd } from './usage'
 import { getCachedUsage } from './usage-cache'
@@ -135,19 +136,14 @@ export async function nudgeWindow(
     return false // never launched → nothing was spent and nothing was started
   }
 
-  const timer = setTimeout(() => {
-    try {
-      proc.kill()
-    } catch {
-      // already gone
-    }
-  }, deps.timeoutMs ?? 60_000)
+  // Bounded through the one bounded spawn (swept 2026-09-18). The old shape killed the process on
+  // a timer but awaited the DRAIN, which finishes only when the PIPE closes - so anything the
+  // probe left behind holding that pipe kept this await alive past its own deadline.
   try {
-    await Promise.all([new Response(proc.stdout).text(), proc.exited])
+    await capturePipedProc(proc, { timeoutMs: deps.timeoutMs ?? 60_000, wantStderr: false })
   } catch {
     // a read/exit error still may have spent the turn; the reading below is what decides
   } finally {
-    clearTimeout(timer)
     pruneUsageProbeTranscripts()
   }
 

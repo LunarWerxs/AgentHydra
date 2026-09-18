@@ -197,6 +197,10 @@ export function parseTrayHostCount(stdout) {
  * The count cannot raise an error record at all, which is the other half of this function's story
  * (see the file header). PowerShell is a console program, hence windowsHide.
  */
+/** The tray-host probe is one process-table read. Past ten seconds it is not slow, it is
+ *  stuck - and a caller waiting on the tray's state must never be the thing that hangs. */
+const TRAY_PROBE_TIMEOUT_MS = 10_000
+
 export async function trayHostProcessState({ spawnProbe, configFile } = {}) {
   try {
     const run =
@@ -208,8 +212,29 @@ export async function trayHostProcessState({ spawnProbe, configFile } = {}) {
           stdout: 'pipe',
           stderr: 'ignore',
         })
-        const out = await new Response(proc.stdout).text()
-        await proc.exited
+        // ⛔ BOUNDED (2026-09-18). This probe had NO deadline of any kind: it awaited the stdout
+        // drain and then `proc.exited`, and a drain ends when the PIPE closes, not when the child
+        // does - so anything the probe spawned that inherited this handle held it open for as long
+        // as IT lived, and `trayHostProcessState` never returned. It is kit-shared, so that one
+        // unbounded await was copied into every product that vendors this file.
+        //
+        // Self-contained on purpose: this file ships into several apps and cannot import any one
+        // of their helpers. The race always settles, and the child is killed on the way out.
+        let timer
+        const out = await Promise.race([
+          new Response(proc.stdout).text(),
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve(''), TRAY_PROBE_TIMEOUT_MS)
+          }),
+        ]).finally(() => {
+          if (timer) clearTimeout(timer)
+        })
+        // Never await proc.exited unconditionally - that is the same unbounded wait one level down.
+        try {
+          proc.kill()
+        } catch {
+          // already gone
+        }
         return out
       })
     return parseTrayHostCount(await run(trayHostProbeArgv(configFile)))
