@@ -26,6 +26,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   stuck"; and the log line stops naming the app when the app is not running. Four tests in
   `server/tests/archive-watcher-cancel.test.ts`, proven red-then-green - with the cancel check
   disabled the first one reads `restores: 1`, the exact live symptom.
+  **PROVEN ON A RUNNING DAEMON, 2026-09-18** (0.43.0 from source, after a tray restart), on
+  instance #56 / chat `d9fc4886` with the app UP: archive under the running app armed a watcher,
+  and the unarchive that immediately followed answered
+  `cancelledWatchers: ["…\\test9"]` and `flagStuck: true`. The flag then read `false` on disk at
+  5s, 10s, 15s, 20s, 25s and 30s - where the pre-fix behaviour reverted inside ~4s - and
+  `daemon.log` has recorded ZERO `re-asserted archived` lines since the restart, against four in
+  the same chat before it.
 
 ### Changed
 
