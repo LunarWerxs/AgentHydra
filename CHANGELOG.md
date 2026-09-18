@@ -42,6 +42,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
     fails 5; the kebab-id-only match fails 13); the UIA readers were checked read-only on a live
     Chromium tree. ⛔ NOT YET PROVEN END TO END: the owner stopped all instance launches for the
     night before one `archive_desktop_chat` could run on a rendered row.
+- **A refused in-app archive reported its tidy-up note instead of the refusal**
+  (`server/src/ui-archive.ts`, `verdictLineOf`). The daemon relayed the actuator's LAST line as the
+  reason, and whenever the run had expanded a sidebar group to find the row, that line was
+  "collapsed N sidebar group(s) back the way they were", printed by the script's `finally` AFTER
+  its `FAIL:` line. The reason is now the last line that starts with one of the actuator's own
+  verdict words (FAIL, AMBIGUOUS, STOPPED, INVOKED), else the last line as before. Proven red on
+  the old logic, green on the new.
 
 - **ELEVEN more unbounded waits on a child process, swept out after the orchestrator one**
   (`server/src/core/process.ts` and ten call sites). Every `.exited` await in `server/src` was

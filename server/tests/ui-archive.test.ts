@@ -12,6 +12,7 @@ import {
   type UiArchiveDeps,
   uiArchiveChat,
   uiRenameChat,
+  verdictLineOf,
 } from '../src/ui-archive'
 
 function deps(over: {
@@ -97,6 +98,25 @@ test('a hard tool failure (exit 1/3) is a no-click with the exit surfaced', asyn
   const r = await uiArchiveChat('C:/i1', 'sid', d)
   expect(r.clicked).toBe(false)
   expect(r.reason).toContain('exited 1')
+})
+
+test('the refusal is the reason, not the group tidy-up printed after it', async () => {
+  // The actuator's finally folds back sidebar groups it opened and prints that AFTER its FAIL
+  // line, so the last line was a tidy-up note and the refusal itself was dropped (2026-09-18).
+  const out = [
+    "found 'Real Chat Name' in C:/i1",
+    "FAIL: could not prove the open menu belongs to the row 'Real Chat Name' - this row's kebab is not the one holding the open menu; refusing to Archive rather than risk a neighbouring row",
+    'collapsed 1 sidebar group(s) back the way they were',
+  ].join('\r\n')
+  const { d } = deps({ invokeCode: 1 })
+  d.invoke = async () => ({ code: 1, out })
+  const r = await uiArchiveChat('C:/i1', 'sid', d)
+  expect(r.clicked).toBe(false)
+  expect(r.reason).toContain('exited 1: FAIL: could not prove the open menu belongs to the row')
+  expect(r.reason).not.toContain('collapsed 1 sidebar group')
+  // No verdict word at all: the last line still stands, as before.
+  expect(verdictLineOf('one\ntwo\n')).toBe('two')
+  expect(verdictLineOf('')).toBe('')
 })
 
 test('exit 2 (invoked, row lingered) still polls the disk - a late removal settles as verified', async () => {

@@ -377,6 +377,22 @@ export interface UiArchiveDeps {
   now?: () => number
 }
 
+/**
+ * The line of the actuator's output that says WHY it stopped. Not simply the last line: its
+ * `finally` folds back any sidebar group the run expanded and prints "collapsed N sidebar
+ * group(s) back the way they were" AFTER the refusal, so taking the last line relayed a tidy-up
+ * note as the reason and dropped the refusal itself (2026-09-18). The actuator's own verdict
+ * lines start with one of these words; fall back to the last line for anything else.
+ */
+export function verdictLineOf(out: string): string {
+  const lines = out
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const verdict = lines.filter((l) => /^(FAIL|AMBIGUOUS|STOPPED|INVOKED|RENAME INVOKED)\b/.test(l))
+  return verdict.at(-1) ?? lines.at(-1) ?? ''
+}
+
 export async function uiArchiveChat(
   profileDir: string,
   sessionId: string,
@@ -453,7 +469,7 @@ export async function uiArchiveChat(
     return {
       clicked: false,
       verified: false,
-      reason: `the UI archive tool exited ${code}: ${out.trim().split('\n').pop() ?? ''}`,
+      reason: `the UI archive tool exited ${code}: ${verdictLineOf(out)}`,
     }
   // Confirm by ID that the app's re-save carries the flag. Brief poll: the app writes its
   // store asynchronously after the click.
