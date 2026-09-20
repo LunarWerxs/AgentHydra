@@ -29,6 +29,7 @@ import io
 import json
 import sys
 import threading
+import tempfile
 import unittest
 import unittest.mock as mock
 from pathlib import Path
@@ -223,7 +224,10 @@ class ResumeTest(_BatchTest):
         self.assertIn("courier --yes --only d-sid-two", two["retry"],
                       "a staged-not-delivered reply must name its own retry")
         self.assertNotIn("resume", by_chat["three"], "a refused chat has nothing to resume")
-        self.assertEqual(out["resume"], {"asked": 2, "delivered": 1, "staged": 1})
+        self.assertEqual(out["resume"],
+                         {"asked": 2, "delivered": 1, "staged": 1, "rejected": 0},
+                         "the tally always carries `rejected`, so a caller can read it "
+                         "without knowing whether this build classifies outcomes")
         self.assertIn("RESUME", out["report"])
         # ⛔ THE HEADLINE CARRIES THE RESUME TALLY (2026-09-10). "2/3 landed" alone described a
         # migration in which one chat was moved and never told to carry on, and the headline is
@@ -638,3 +642,48 @@ class ResumePhaseTimeoutTest(_BatchTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResumeOutcomeTest(unittest.TestCase):
+    """Delivery is not continuation.
+
+    The 2026-09-18 Stackspire move reported `delivered: true ... and confirmed` and
+    `1/1 told to carry on`, while the chat's very next transcript line was "Prompt is too
+    long" - its context was full, so it could not accept ANY input. A migrated chat that
+    cannot continue reads exactly like one that is quietly busy unless something looks.
+    """
+
+    def _classify(self, tail, delivered=True):
+        item = mock.Mock()
+        item.payload = {"sessionId": "s1", "resume": {"delivered": delivered, "why": "delivered"}}
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "t.jsonl"
+            path.write_text(tail, encoding="utf-8")
+            with mock.patch.object(migrate_batch.hydralib, "resolve_one", return_value={}), \
+                 mock.patch.object(migrate_batch.gatelib, "transcript_for_match",
+                                   return_value=str(path)):
+                migrate_batch._classify_delivered_resumes({"d1": item})
+        return item.payload["resume"]
+
+    def test_prompt_is_too_long_is_a_rejection_not_a_success(self):
+        got = self._classify('{"type":"assistant","message":{"content":"Prompt is too long"}}\n')
+        self.assertEqual(got["outcome"], "rejected")
+        self.assertIn("REFUSED", got["why"])
+        self.assertIn("FRESH THREAD", got["remedy"])
+
+    def test_an_ordinary_continuation_stays_delivered(self):
+        got = self._classify('{"type":"assistant","message":{"content":"On it - reading the diff."}}\n')
+        self.assertEqual(got["outcome"], "delivered")
+        self.assertNotIn("remedy", got)
+
+    def test_a_chat_that_was_never_delivered_is_not_classified(self):
+        got = self._classify('{"type":"assistant","message":{"content":"Prompt is too long"}}\n', delivered=False)
+        self.assertNotIn("outcome", got)
+
+    def test_an_unreadable_transcript_leaves_the_couriers_verdict_alone(self):
+        item = mock.Mock()
+        item.payload = {"sessionId": "s1", "resume": {"delivered": True, "why": "delivered"}}
+        with mock.patch.object(migrate_batch.hydralib, "resolve_one",
+                               side_effect=RuntimeError("no daemon")):
+            migrate_batch._classify_delivered_resumes({"d1": item})
+        self.assertEqual(item.payload["resume"], {"delivered": True, "why": "delivered"})

@@ -114,6 +114,7 @@ Exit: 0 every named chat landed (or, under --dry-run, every plan resolved) - 2 t
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -121,7 +122,7 @@ import time
 import migrate_chat
 import stage_reply
 from lib import archivewatchlib
-from lib import clilib, deliverylib, enginelib, hydralib, ledgerlib
+from lib import clilib, deliverylib, enginelib, gatelib, hydralib, ledgerlib
 
 
 #: Flags this driver consumes itself; everything else is forwarded to each chat's own move.
@@ -783,6 +784,84 @@ def _record_resume_outcomes(by_delivery: dict[str, _Item], report: dict,
     return hard
 
 
+# --- did the chat actually CARRY ON, or just receive the words? --------------------------
+#
+# `delivered` means the resume reached the composer and was sent. It does NOT mean the model
+# accepted it, and the two are indistinguishable in the report unless something looks.
+#
+# Measured 2026-09-18, 08:50Z: the move of "Stackspire" reported `resume: {staged: true,
+# delivered: true, why: "delivered (native peer channel, via the daemon) and confirmed"}` and
+# the batch said `1/1 landed in 48s, 1/1 told to carry on`. The chat's transcript says what
+# really happened - the next entry, at 08:43:04Z, is the single line "Prompt is too long". Its
+# context was full (it had written a handoff brief seven minutes earlier), so it could not
+# accept ANY further input. An orchestrator reading `delivered: true` concludes the chat is
+# working again; a migrated chat that cannot continue looks exactly like one that is quietly
+# busy. A night's worth of chats could each be dead in the water under `N/N told to carry on`.
+#
+# So a delivered resume is classified against the target's own transcript afterwards, and a
+# known terminal answer becomes `resume.outcome = "rejected"` with the reason. Anything else
+# stays "delivered" - this never upgrades a verdict to a claim it cannot prove, it only refuses
+# to let a REFUSAL read as success.
+#
+# ⛔ MIGRATION BUYS QUOTA HEADROOM, NOT CONTEXT HEADROOM. A chat whose context is full cannot
+# be rescued by moving it; it needs a fresh thread. `remedy` says so, because three attempts
+# and an hour went into learning it the other way.
+# Only the tail: a refusal is the LAST thing written, and a full read of a megabyte
+# transcript would cost more than the wait this whole path exists to shorten.
+_RESUME_TAIL_BYTES = 64 * 1024
+
+_RESUME_TERMINAL = (
+    ("prompt is too long", "context full - the chat cannot accept ANY further input",
+     "this chat needs a FRESH THREAD, not another account: migration buys quota headroom, "
+     "not context headroom"),
+    ("context left until auto-compact: 0%", "context exhausted",
+     "let it compact, or start a fresh thread"),
+)
+
+
+def _terminal_refusal(text: str) -> tuple[str, str] | None:
+    """(reason, remedy) when `text` is a known "I cannot continue" answer, else None."""
+    low = text.lower()
+    for needle, reason, remedy in _RESUME_TERMINAL:
+        if needle in low:
+            return reason, remedy
+    return None
+
+
+def _classify_delivered_resumes(by_delivery: dict[str, _Item]) -> None:
+    """Read each delivered chat's transcript tail and say whether it CARRIED ON. Never raises.
+
+    Cheap on purpose: only the tail, only chats whose verdict says delivered, and any failure
+    to look leaves the verdict exactly as the courier wrote it. An unknown outcome must read as
+    unknown - inventing "continuing" would be the same defect in the other direction.
+    """
+    for item in by_delivery.values():
+        verdict = item.payload.get("resume") or {}
+        if not verdict.get("delivered"):
+            continue
+        try:
+            match = hydralib.resolve_one(str(item.payload["sessionId"]))
+            path = gatelib.transcript_for_match(match, hydralib.session_row)
+            if not path or not os.path.exists(path):
+                continue
+            size = os.path.getsize(path)
+            with open(path, "rb") as f:
+                if size > _RESUME_TAIL_BYTES:
+                    f.seek(size - _RESUME_TAIL_BYTES)
+                    f.readline()
+                tail = f.read().decode("utf-8", errors="replace")
+        except Exception:
+            continue  # cannot look: leave the courier's verdict alone
+        hit = _terminal_refusal(tail)
+        if hit:
+            reason, remedy = hit
+            verdict["outcome"] = "rejected"
+            verdict["why"] = f"delivered, then REFUSED by the model: {reason}"
+            verdict["remedy"] = remedy
+        else:
+            verdict["outcome"] = "delivered"
+
+
 def _resume_landed(items: list[_Item], text: str) -> dict:
     """PHASE FOUR: tell every landed chat to carry on. Returns the batch-level tally.
 
@@ -824,6 +903,10 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
     hard = _record_resume_outcomes(by_delivery, report, tally)
     if hard:
         _retry_hard_failures(hard, text, tally)
+    # Delivery is not continuation. Classify what the chat did with the words it was handed.
+    _classify_delivered_resumes(by_delivery)
+    tally["rejected"] = len([i for i in by_delivery.values()
+                             if (i.payload.get("resume") or {}).get("outcome") == "rejected"])
     return tally
 
 
@@ -1171,6 +1254,16 @@ def _report_resume_tally(results: list[dict]) -> str:
     tally = f", {told}/{len(asked_resume)} told to carry on"
     if told < len(asked_resume):
         tally += " (the rest are moved but DORMANT)"
+    # ⛔ AND THE HEADLINE MUST NOT OVER-REPORT THE OTHER WAY EITHER (2026-09-18). A chat can be
+    # told to carry on and REFUSE - "Prompt is too long" on a context-full chat - and
+    # `1/1 told to carry on` then describes a chat that is dead in the water. The refusals are
+    # named here because this is the line people read; the per-chat `resume.remedy` says what
+    # to do about each one.
+    refused_resume = len([r for r in asked_resume
+                          if (r.get("resume") or {}).get("outcome") == "rejected"])
+    if refused_resume:
+        tally += (f" - but {refused_resume} REFUSED the resume (context full; they need a fresh "
+                  "thread, not another account)")
     return tally
 
 

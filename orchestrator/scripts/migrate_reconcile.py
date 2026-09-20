@@ -80,7 +80,9 @@ FINISHED_PHASES = (DONE_PHASE, SUPERSEDED_PHASE, "settled-verified")
 #: mode stamp may still be owed, and claiming it here would be inventing evidence.
 VERIFIED_PHASE = "settled-verified"
 
-UNSETTLED_STATES = ("unsettled", "not-landed", "unknown")
+#: `source-writing` is listed FIRST because it is the loudest: a duplicate row that
+#: can still TAKE A TURN on the source account. See _state_when_on_target.
+UNSETTLED_STATES = ("source-writing", "unsettled", "not-landed", "unknown")
 
 
 def _candidates(limit: int = DEFAULT_LIMIT) -> list[dict]:
@@ -145,6 +147,28 @@ def _state_when_not_on_target(matches: list[dict], src: str, tgt: str,
 def _state_when_on_target(on_src: list[dict], src: str, tgt: str) -> dict:
     visible = [m for m in on_src if not m.get("archived")]
     if visible:
+        # ⛔ A RESURRECTED ROW WITH A LIVE ENGINE IS WORSE THAN A DUPLICATE ROW, and it is its
+        # own state (2026-09-18). Measured on the Stackspire move: the source row came back
+        # about 61 minutes after the move and the source app had not merely re-saved it, it had
+        # BOOTED AN ENGINE for it (pid 56052, started 09:43:05Z, `live: true`), while the
+        # target's engine for the same session was also alive. One session transcript, two
+        # accounts, two writers.
+        #
+        # Why that is not cosmetic: a live engine on the SOURCE can take a turn, which spends
+        # exactly the quota the move existed to protect, and two engines appending to one
+        # .jsonl can interleave writes. On that chat it was harmless only by luck - its context
+        # was full, so any turn on either account was refused.
+        writing = [m for m in visible if (m.get("live") or {}).get("pid") or m.get("live") is True]
+        if writing:
+            where = ", ".join(str((m.get("live") or {}).get("pid") or "live") for m in writing)
+            return {"state": "source-writing",
+                    "why": (f"it is on {tgt} AND UNARCHIVED ON {src} WITH A LIVE ENGINE "
+                            f"(pid {where}): one transcript, two accounts, two writers. A turn "
+                            f"taken on {src} spends the quota this move existed to protect, and "
+                            "two engines appending to one .jsonl can interleave writes. Quiesce "
+                            f"the {src} engine FIRST, then settle the row."),
+                    "remedy": (f"python orch.py chats --instance {src} (find it), quit that "
+                               "app's engine for this session, then re-run with --finish")}
         return {"state": "unsettled",
                 "why": (f"it is on {tgt} AND still unarchived on {src}: a duplicate, not a move. "
                         "The source-settle phase never ran.")}

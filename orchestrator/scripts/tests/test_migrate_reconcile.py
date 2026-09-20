@@ -306,3 +306,37 @@ class MigrateReconcileTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SourceWritingTest(unittest.TestCase):
+    """A resurrected source row with a LIVE ENGINE is its own state, louder than a duplicate.
+
+    Measured on the Stackspire move, 2026-09-18: the source row came back about 61 minutes
+    after the move and the source app had not merely re-saved it, it had BOOTED AN ENGINE
+    (pid 56052, `live: true`) while the target's engine for the same session was also alive.
+    One transcript, two accounts, two writers. A turn taken on the source spends exactly the
+    quota the move existed to protect, and two engines appending to one .jsonl can interleave
+    writes. It was harmless there only because that chat's context was full.
+    """
+
+    def test_a_live_source_engine_is_source_writing_not_merely_unsettled(self):
+        got = migrate_reconcile._state_when_on_target(
+            [{"archived": False, "live": {"pid": 56052}}], "#63", "#14")
+        self.assertEqual(got["state"], "source-writing")
+        self.assertIn("56052", got["why"])
+        self.assertIn("two writers", got["why"])
+        self.assertIn("remedy", got)
+
+    def test_an_unarchived_row_with_no_engine_is_still_just_unsettled(self):
+        got = migrate_reconcile._state_when_on_target(
+            [{"archived": False, "live": None}], "#63", "#14")
+        self.assertEqual(got["state"], "unsettled")
+        self.assertNotIn("remedy", got)
+
+    def test_an_archived_source_row_is_settled_either_way(self):
+        got = migrate_reconcile._state_when_on_target(
+            [{"archived": True, "live": {"pid": 1}}], "#63", "#14")
+        self.assertEqual(got["state"], "settled")
+
+    def test_source_writing_counts_as_unsettled_so_it_is_never_quietly_dropped(self):
+        self.assertIn("source-writing", migrate_reconcile.UNSETTLED_STATES)

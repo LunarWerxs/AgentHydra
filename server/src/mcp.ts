@@ -2221,7 +2221,19 @@ export const TOOLS: McpEngineTool[] = [
       // landed and every resume reply HAD been staged - so it staged five duplicates). Re-firing
       // the identical call now returns the ORIGINAL operation instead of moving anything twice,
       // which makes "I lost the answer, ask again" the safe move rather than a second act.
-      const idempotencyKey = `move_chats:${JSON.stringify(args)}`
+      //
+      // ⛔ EXCEPT FOR A DRY RUN, which has no act to make idempotent and is actively harmed by
+      // this (2026-09-18): two probes minutes apart with identical arguments came back
+      // BYTE-IDENTICAL, same `secs: 1.08`, same `quiet_secs: 13`, because the daemon correctly
+      // returned the existing operation rather than running twice. A caller polling the gate to
+      // find its window therefore reads a STALE quiet_secs and cannot tell - varying one
+      // argument (`wait_secs` 5 -> 7) forced a fresh run and immediately showed 21s, not 13s.
+      // "Vary an argument each time" is a trap nobody would guess from the tool description, so
+      // a dry run gets a fresh key per call instead. Nothing is moved either way.
+      const idempotencyKey =
+        a.dry_run === true
+          ? `move_chats:dry:${Date.now()}:${JSON.stringify(args)}`
+          : `move_chats:${JSON.stringify(args)}`
       // ⛔ THE SAME AUTO-DETACH orchestrator_run ALREADY EARNED FROM A NEARLY IDENTICAL INCIDENT
       // (2026-09-11, that tool's own history above) - a caller that DECLARES a run longer than
       // AUTO_DETACH_MS is detached automatically, because a batch is exactly the shape that
