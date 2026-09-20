@@ -7,6 +7,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-20
+
+### Fixed
+
+- **Sign-in and settings sync reached a domain that no longer exists.** The `.icu` registry
+  suspended `connections.icu` on 2026-09-18 and the whole zone went NXDOMAIN - no DNS record at
+  all - so every call to it failed at resolution from that date. Nothing reported it, because a
+  name with no record returns no status code and writes no log; it fails inside the same path a
+  flaky network uses. The daemon now signs in against `accounts.connectionsapi.com` and its
+  update check asks `studio.connectionsapi.com`.
+
+  Settings sync needed a second fix and it is the one worth knowing about: the issuer covers
+  sign-in, but the data locker is a SEPARATE base URL that came from `@cnct/connect`'s own
+  default - so sync kept failing while sign-in looked fine. That default is fixed in
+  `@cnct/connect@1.5.2`, which this release takes.
+
+- **The analytics pixel on agenthydra.lunarwerx.com stopped recording** for the same reason, and
+  now loads from `analytics.connectionsapi.com`. The privacy answer in the site's FAQ, which
+  names the host the update check talks to, was updated with it.
+
 ### Changed
 
 - **The version line moves to 1.x.** The package now declares 1.0.0 (was 0.43.0), so the next release is 1.0.0 rather than another 0.x (owner directive, 2026-09-18: no public project stays on a zero major).
