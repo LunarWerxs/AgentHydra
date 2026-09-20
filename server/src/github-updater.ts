@@ -53,7 +53,7 @@ const RELEASES_PAGE = `https://github.com/${REPO}/releases`
  *  IP; 90-day retention). This IS the app's update check, not an addition to it: replacing the
  *  former direct `api.github.com` call here means the periodic check that already ran adds zero
  *  extra network traffic. See README.md "Update check" for the user-facing disclosure. */
-const STUDIO_LATEST_API = 'https://studio.connections.icu/v1/app/agenthydra/latest'
+const STUDIO_LATEST_API = 'https://studio.connectionsapi.com/v1/app/agenthydra/latest'
 /** The plain GitHub API, carrying no install id and no version/os telemetry. Serves two jobs:
  *  the PRIVACY path (pinging disabled, see {@link pingOptedOut}, so opting out still leaves
  *  update-checking working) and, since 2026-08, the RESILIENCE path — {@link fetchLatestRelease}

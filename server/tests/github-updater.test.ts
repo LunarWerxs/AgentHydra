@@ -124,7 +124,7 @@ describe('anonymous install ping', () => {
     setSetting('app_ping_reported', '0')
 
     const { url, headers } = buildLatestReleaseRequest()
-    expect(url.startsWith('https://studio.connections.icu/v1/app/agenthydra/latest?')).toBe(true)
+    expect(url.startsWith('https://studio.connectionsapi.com/v1/app/agenthydra/latest?')).toBe(true)
     const params = new URL(url).searchParams
     expect(params.get('v')).toBeTruthy()
     expect(params.get('os')).toBeTruthy()
@@ -188,7 +188,7 @@ describe('update check falls back when the Studio proxy fails', () => {
       const url =
         typeof input === 'string' ? input : String((input as { url?: string })?.url ?? input)
       seen.push(url)
-      if (url.includes('studio.connections.icu')) return new Response('gone', { status: 503 })
+      if (url.includes('studio.connectionsapi.com')) return new Response('gone', { status: 503 })
       return new Response(JSON.stringify({ tag_name: 'v999.0.0', assets: [] }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -196,7 +196,7 @@ describe('update check falls back when the Studio proxy fails', () => {
     }) as unknown as typeof fetch
 
     const status = await checkForUpdate({ fresh: true })
-    expect(seen.some((u) => u.includes('studio.connections.icu'))).toBe(true)
+    expect(seen.some((u) => u.includes('studio.connectionsapi.com'))).toBe(true)
     expect(seen.some((u) => u.includes('api.github.com'))).toBe(true)
     expect(status.updateAvailable).toBe(true)
   })
@@ -209,7 +209,7 @@ describe('update check falls back when the Studio proxy fails', () => {
     globalThis.fetch = (async (input: unknown) => {
       const url =
         typeof input === 'string' ? input : String((input as { url?: string })?.url ?? input)
-      if (url.includes('studio.connections.icu')) return new Response('gone', { status: 503 })
+      if (url.includes('studio.connectionsapi.com')) return new Response('gone', { status: 503 })
       return new Response(JSON.stringify({ tag_name: 'v999.0.0', assets: [] }), {
         status: 200,
         headers: { 'content-type': 'application/json' },

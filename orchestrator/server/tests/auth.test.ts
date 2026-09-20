@@ -9,9 +9,9 @@ function oauth(extra: Partial<OAuthConfig> = {}): OAuthConfig {
 }
 
 const discovery = {
-  authorization_endpoint: 'https://accounts.connections.icu/oauth/authorize',
-  token_endpoint: 'https://accounts.connections.icu/oauth/token',
-  jwks_uri: 'https://accounts.connections.icu/oauth/jwks',
+  authorization_endpoint: 'https://accounts.connectionsapi.com/oauth/authorize',
+  token_endpoint: 'https://accounts.connectionsapi.com/oauth/token',
+  jwks_uri: 'https://accounts.connectionsapi.com/oauth/jwks',
 }
 const discoveryFetch: typeof fetch = (async (input: string | URL | Request) => {
   if (String(input).endsWith('/.well-known/openid-configuration')) return Response.json(discovery)
