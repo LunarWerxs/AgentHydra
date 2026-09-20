@@ -47,18 +47,6 @@ const OAUTH = {
   issuer: 'https://accounts.connectionsapi.com',
   clientId: '9ea648d3125f59743f7e1f651108bb42',
   scopes: ['openid', 'profile', 'email'],
-  /**
-   * Where the locker lives, passed explicitly rather than left to the SDK.
-   *
-   * `@cnct/connect@1.5.1` hardcodes `https://studio.connections.icu` (dead-host-ok) as its
-   * locker default, and that zone was suspended by its registry on 2026-09-18
-   * (NXDOMAIN, whole zone). 1.5.1 is still the newest version on npm, so there
-   * is no SDK release to upgrade to: every consumer has to name the host
-   * itself until one ships. Setting `issuer` above is not enough — the issuer
-   * covers sign-in, the locker is a separate base URL, which is how settings
-   * sync kept failing with sign-in apparently fine.
-   */
-  storeBaseUrl: 'https://studio.connectionsapi.com',
 }
 
 /**
@@ -390,17 +378,13 @@ function recordEngineStatus(status: SettingsSyncStatus): void {
 async function syncEngine(): Promise<SettingsSync> {
   if (settingsSync) return settingsSync
   let createSettingsSync: typeof import('@cnct/connect').createSettingsSync
-  let createLocker: typeof import('@cnct/connect').createLocker
   try {
-    ;({ createSettingsSync, createLocker } = await import('@cnct/connect'))
+    ;({ createSettingsSync } = await import('@cnct/connect'))
   } catch (e) {
     throw new SdkUnavailableError('@cnct/connect', e)
   }
   const client = await connect()
-  // The locker's base URL is named here rather than left to the SDK — see
-  // OAUTH.storeBaseUrl for why that default cannot be trusted.
-  const locker = client.locker((o) => createLocker({ ...o, baseUrl: OAUTH.storeBaseUrl }))
-  settingsSync = createSettingsSync(locker, {
+  settingsSync = createSettingsSync(client.locker(), {
     // Preserve the established document shape for existing users.
     keys: ['prefs', 'appearance'],
     read: () => ({
