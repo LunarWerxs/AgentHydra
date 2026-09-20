@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@cnct/connect": "^1.5.1",
-    "hono": "^4.13.7",
+    "hono": "^4.13.8",
     "safe-regex2": "^5.1.1"
   },
   "devDependencies": {

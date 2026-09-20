@@ -32,6 +32,7 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import ClaudeNativeSettings from '@/components/ClaudeNativeSettings.vue'
 import ProviderRows from '@/components/ProviderRows.vue'
 import UsageRefreshRows from '@/components/UsageRefreshRows.vue'
 import { Badge } from '@/components/ui/badge'
@@ -1009,6 +1010,15 @@ defineExpose({ save })
            renders the same four table switches in a flyout (InstanceSectionsMenu.vue) where they
            take effect. One component, one behaviour — the two surfaces cannot drift. -->
       <ProviderRows />
+    </SettingsGroup>
+
+    <SettingsGroup
+      :ref="(el: unknown) => setSectionEl('claude-native', el)"
+      :class="flashSection === 'claude-native' ? 'settings-flash' : ''"
+      :label="$t('settings.claudeNativeTitle')"
+      :description="$t('settings.claudeNativeHint')"
+    >
+      <ClaudeNativeSettings />
     </SettingsGroup>
 
     <!-- MCP: the agent-facing half of the app. On by default, because the alternative was a

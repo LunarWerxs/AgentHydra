@@ -446,6 +446,22 @@ export const updateScheduler = (b: Partial<SchedulerState>) =>
 // (distinct from the sqlite `accounts` table above, which holds auth secrets for queue
 // dispatch). See server/src/core/shared.ts for the DTO shapes.
 export const listInstances = () => j<CMInstance[]>('/api/instances')
+export interface ClaudeNativeProfileConfig {
+  port: number
+  mode: 'native-only' | 'prefer-native'
+  launchDebugger?: boolean
+}
+export type ClaudeNativeSettings = Record<string, ClaudeNativeProfileConfig>
+export const getClaudeNativeSettings = () => j<ClaudeNativeSettings>('/api/claude-native/settings')
+/** Saves per-profile control settings; does not open or restart Claude. */
+export const setClaudeNativeProfileConfig = (
+  profile: string,
+  config: ClaudeNativeProfileConfig | null,
+) =>
+  j<{ ok: true; settings: ClaudeNativeSettings }>('/api/claude-native/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ profile, config }),
+  })
 export const getInstanceAccount = (dir: string, opts: { noNetwork?: boolean } = {}) =>
   j<CMAccount>(
     `/api/instances/${encodeURIComponent(dir)}/account${opts.noNetwork ? '?noNetwork=1' : ''}`,

@@ -16,6 +16,13 @@
 
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
+import {
+  assertClaudeInspectorPortAvailable,
+  prepareClaudeNativeLaunch,
+} from '../claude-native-launch'
+import { beginNativeLaunchRegistryGuard } from '../claude-native-launch-registry'
+import { captureNativeLaunchLogCursor, waitForNativeLaunchReady } from '../claude-native-ready'
+import { getClaudeNativeProfileConfig } from '../claude-native-settings'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { detectDesktopInstall } from './desktop-install'
 import { readInstanceMetaMap } from './instance-meta'
@@ -35,6 +42,7 @@ import {
   invalidateClaudeProcessCache,
   type ListClaudeProcessesOptions,
   listClaudeProcesses,
+  scanClaudeProcesses,
 } from './process'
 import { awaitExitBounded, spawnCaptured } from './process.ts'
 import type { CMActionResult, CMInstance } from './shared'
@@ -326,14 +334,57 @@ export function buildInstanceLaunch(
  * that returns an "already running" success result (focusing the existing window
  * is left to the shell layer (out of scope for this app's browser+tray shell).
  */
+const nativeInstanceOpens = new Map<string, Promise<CMActionResult>>()
+// Packaged Electron startup rewrites per-user protocol/browser registrations. Serialize managed
+// startups so one profile cannot snapshot another profile's temporary registration as its baseline.
+let nativeInstanceOpenQueue: Promise<void> = Promise.resolve()
+
 export async function openInstance(dir: string): Promise<CMActionResult> {
   const normDir = normalizePath(dir)
+  let nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>
+  try {
+    nativeConfig = getClaudeNativeProfileConfig(normDir)
+  } catch (error) {
+    return {
+      ok: false,
+      action: 'open',
+      dir: normDir,
+      message: `Invalid native launch configuration: ${error instanceof Error ? error.message : String(error)}`,
+      data: {},
+    }
+  }
+  if (!nativeConfig?.launchDebugger) return openConfiguredInstance(normDir, nativeConfig)
+  const pending = nativeInstanceOpens.get(normDir)
+  if (pending) return pending
+  const operation = nativeInstanceOpenQueue.then(() =>
+    openConfiguredInstance(normDir, nativeConfig),
+  )
+  nativeInstanceOpenQueue = operation.then(
+    () => undefined,
+    () => undefined,
+  )
+  nativeInstanceOpens.set(normDir, operation)
+  try {
+    return await operation
+  } finally {
+    if (nativeInstanceOpens.get(normDir) === operation) nativeInstanceOpens.delete(normDir)
+  }
+}
 
+async function openConfiguredInstance(
+  normDir: string,
+  nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
+): Promise<CMActionResult> {
   try {
     // fresh: this decides whether to LAUNCH. A cached snapshot a poll tick old could miss an
     // instance that just started (→ a second copy on the same profile) or still show one the
     // user just quit (→ a click that silently does nothing).
-    const procs = await listClaudeProcesses({ fresh: true })
+    let procs: CMProcessInfo[]
+    if (nativeConfig?.launchDebugger) {
+      const scan = await scanClaudeProcesses({ fresh: true })
+      if (!scan.ok) throw Error('Could not verify that the native Claude profile is closed')
+      procs = scan.processes
+    } else procs = await listClaudeProcesses({ fresh: true })
     const running = procs.find((p) => p.dir && normalizePath(p.dir) === normDir)
     if (running) {
       return {
@@ -344,7 +395,16 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
         data: { pid: running.pid },
       }
     }
-  } catch {
+  } catch (error) {
+    if (nativeConfig?.launchDebugger) {
+      return {
+        ok: false,
+        action: 'open',
+        dir: normDir,
+        message: error instanceof Error ? error.message : String(error),
+        data: {},
+      }
+    }
     // Best-effort; if we can't determine running state, still attempt the launch
     // rather than silently failing here.
   }
@@ -380,15 +440,79 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
     }
   }
 
+  let launchDispatched = false
+  let nativeLaunchData: Record<string, unknown> | undefined
   try {
-    const { argv, detached } = buildInstanceLaunch(process.platform, binary, launchArgs(normDir))
-    const proc = Bun.spawn(argv, {
-      stdin: 'ignore',
-      stdout: 'ignore',
-      stderr: 'ignore',
-      ...(detached ? { detached: true } : {}),
-    })
-    proc.unref()
+    const plan = await prepareClaudeNativeLaunch(binary, nativeConfig)
+    if (plan.nativeDebugger) {
+      nativeLaunchData = { binary: plan.binary, nativeDebugger: plan.nativeDebugger }
+    }
+    const { argv, detached } = buildInstanceLaunch(process.platform, plan.binary, [
+      ...plan.extraArgs,
+      ...launchArgs(normDir),
+    ])
+    const registryGuard = plan.nativeDebugger
+      ? await beginNativeLaunchRegistryGuard(plan.binary, normDir)
+      : null
+    let pid = 0
+    let launchError: unknown
+    let restorationError: unknown
+    let registryRestoration: Awaited<
+      ReturnType<NonNullable<typeof registryGuard>['restore']>
+    > | null = null
+    try {
+      if (plan.nativeDebugger) {
+        await assertClaudeInspectorPortAvailable(plan.nativeDebugger.port)
+      }
+      const startupLogCursor = plan.nativeDebugger
+        ? await captureNativeLaunchLogCursor(normDir)
+        : undefined
+      const proc = Bun.spawn(argv, {
+        stdin: 'ignore',
+        stdout: 'ignore',
+        stderr: 'ignore',
+        ...(detached ? { detached: true } : {}),
+      })
+      proc.unref()
+      pid = proc.pid
+      launchDispatched = true
+      invalidateClaudeProcessCache()
+      if (nativeLaunchData) nativeLaunchData.handoffPid = proc.pid
+      if (plan.nativeDebugger) {
+        const ready = await waitForNativeLaunchReady({
+          profileDir: normDir,
+          binary: plan.binary,
+          port: plan.nativeDebugger.port,
+          startupLogCursor,
+        })
+        pid = ready.pid
+        if (nativeLaunchData) nativeLaunchData.pid = ready.pid
+      }
+    } catch (error) {
+      launchError = error
+    } finally {
+      if (registryGuard) {
+        try {
+          registryRestoration = await registryGuard.restore()
+        } catch (error) {
+          restorationError = error
+        }
+        if (nativeLaunchData) nativeLaunchData.registryRestoration = registryRestoration
+      }
+    }
+    const failures: string[] = []
+    if (launchError)
+      failures.push(launchError instanceof Error ? launchError.message : String(launchError))
+    if (restorationError) {
+      const reason =
+        restorationError instanceof Error ? restorationError.message : String(restorationError)
+      failures.push(`Registration restoration failed: ${reason}`)
+      if (nativeLaunchData) nativeLaunchData.registryRestorationError = reason
+    }
+    if (registryRestoration?.errors.length) {
+      failures.push(`Registration restoration failed: ${registryRestoration.errors.join('; ')}`)
+    }
+    if (failures.length) throw Error(failures.join('; '))
     // The world just changed under the cached snapshot — drop it so the poll tick that follows
     // this click shows the row as running instead of waiting out the TTL.
     invalidateClaudeProcessCache()
@@ -397,9 +521,15 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
       action: 'open',
       dir: normDir,
       message: 'launched',
-      // NOTE: on win32/darwin `proc.pid` is the transient hand-off process (cmd/open), not the
-      // instance; the instance's real PID is (re)discovered by the next listInstances() scan.
-      data: { binary, pid: proc.pid },
+      // Stock win32/darwin launches return the transient hand-off PID; managed launches return
+      // the real instance PID verified through its own inspector after startup.
+      data: {
+        binary: plan.binary,
+        pid,
+        ...(plan.nativeDebugger
+          ? { nativeDebugger: plan.nativeDebugger, nativeDebuggerReady: true, registryRestoration }
+          : {}),
+      },
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -407,8 +537,13 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
       ok: false,
       action: 'open',
       dir: normDir,
-      message: `Failed to launch: ${message}`,
-      data: {},
+      message:
+        nativeLaunchData && launchDispatched
+          ? `Claude launch dispatched, but startup verification failed: ${message}`
+          : `Failed to launch: ${message}`,
+      data: nativeLaunchData
+        ? { ...nativeLaunchData, launchDispatched, nativeDebuggerReady: false }
+        : {},
     }
   }
 }

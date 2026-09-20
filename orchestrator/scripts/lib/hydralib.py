@@ -178,7 +178,8 @@ def _note_side_run(store) -> None:
     )
 
 
-def _send(method: str, path: str, data: bytes | None, timeout: float) -> tuple[int, bytes]:
+def _send(method: str, path: str, data: bytes | None, timeout: float,
+          *, retry_stale_pointer: bool = True) -> tuple[int, bytes]:
     """(HTTP status, raw body) for one request to BASE - over the wire, or from the in-process
     stub registered for BASE (INPROC above). Only a transport failure raises here; the status is
     the caller's to judge, so both transports feed the same mapping in _request.
@@ -214,8 +215,10 @@ def _send(method: str, path: str, data: bytes | None, timeout: float) -> tuple[i
             detail = b""
         return e.code, detail
     except (urllib.error.URLError, TimeoutError, OSError) as e:
+        if not retry_stale_pointer:
+            raise DaemonError(path, None, f"{e} - mutation was not retried") from None
         stale = _stale_pointer_note()
-        if stale and _default_port_answers():
+        if stale and retry_stale_pointer and _default_port_answers():
             sys.stderr.write(
                 f"hydralib: {stale}; the default port answers as agenthydra, so this process uses "
                 f"{_DEFAULT_BASE} from here on. Do NOT start another daemon.\n"
@@ -254,6 +257,19 @@ def api_post(path: str, body: dict | None = None, timeout: float | None = None) 
     then WATCHES for a result - and the message endpoint does exactly that, so the caller
     has to say so (see courier's send, and the 2026-09-01 note there)."""
     return _request("POST", path, body if body is not None else {}, timeout=timeout)
+
+
+def api_post_once(path: str, body: dict, timeout: float | None = None) -> dict | list:
+    """One mutation request, without retrying an uncertain POST at another daemon."""
+    status, raw = _send("POST", path, json.dumps(body).encode(),
+                        timeout if timeout is not None else TIMEOUT_SECS,
+                        retry_stale_pointer=False)
+    if status >= 400:
+        raise DaemonError(path, status, raw.decode(errors="replace")[:500])
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise DaemonError(path, None, f"non-JSON response: {raw[:200]!r}") from None
 
 
 def health() -> dict:

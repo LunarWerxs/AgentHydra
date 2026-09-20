@@ -1,0 +1,162 @@
+import { normalizeClaudeNativeProfile } from './claude-native-settings'
+import {
+  type ClaudeInspectorClient,
+  type ClaudeInspectorIdentity,
+  connectClaudeInspector,
+} from './core/claude-native/inspector-client'
+import { scanClaudeProcesses } from './core/process'
+
+export interface NativeLaunchReadyOptions {
+  profileDir: string
+  binary: string
+  port: number
+  timeoutMs?: number
+  startupLogCursor?: NativeLaunchLogCursor
+}
+
+export interface NativeLaunchLogCursor {
+  path: string
+  position: number
+}
+
+export function captureNativeLaunchLogCursor(profileDir: string): NativeLaunchLogCursor {
+  const path = join(profileDir, 'logs', 'main.log')
+  try {
+    return { path, position: statSync(path).size }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    return { path, position: 0 }
+  }
+}
+
+export function nativeHostStartupState(text: string): 'complete' | 'skipped' | 'failed' | null {
+  if (text.includes('[Chrome Extension MCP] Native host sync complete')) return 'complete'
+  if (
+    text.includes(
+      '[Chrome Extension MCP] Skipping native host setup: local MCP is disabled by managed config',
+    ) ||
+    text.includes('[Chrome Extension MCP] Skipping native host setup: binary not found at ')
+  )
+    return 'skipped'
+  if (
+    text.includes('[Chrome Extension MCP] Failed to initialize browser automation: ') ||
+    text.includes('[Chrome Extension MCP] Failed to sync native host: ')
+  )
+    return 'failed'
+  return null
+}
+
+function newStartupLog(cursor: NativeLaunchLogCursor): string {
+  let descriptor: number | undefined
+  try {
+    const size = statSync(cursor.path).size
+    const start = Math.max(size < cursor.position ? 0 : cursor.position, size - 65536)
+    const buffer = Buffer.alloc(size - start)
+    descriptor = openSync(cursor.path, 'r')
+    const bytes = readSync(descriptor, buffer, 0, buffer.length, start)
+    return buffer.subarray(0, bytes).toString('utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+    throw error
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor)
+  }
+}
+
+interface ReadyDeps {
+  scan?: typeof scanClaudeProcesses
+  connect?: typeof connectClaudeInspector
+  sleep?: (milliseconds: number) => Promise<void>
+  now?: () => number
+}
+
+// Reads an already-running app only. No window input, foreground changes or module loading
+// beyond Electron's builtin API; registry restoration follows confirmed main-window loading.
+export const nativeLaunchReadyExpression = `(() => {
+  const req = typeof require === 'function' ? require : process.mainModule?.require?.bind(process.mainModule);
+  if (!req) return {ready:false};
+  const {app, BrowserWindow, webContents} = req('electron');
+  const loaded = app.isReady() && webContents.getAllWebContents().some(contents => {
+    if (contents.isDestroyed() || contents.isLoadingMainFrame()) return false;
+    if (contents.getType() !== 'window' || !BrowserWindow.fromWebContents(contents)) return false;
+    try { return new URL(contents.getURL()).origin === 'https://claude.ai'; } catch { return false; }
+  });
+  return {ready:loaded, pid:process.pid, executable:process.execPath, profile:app.getPath('userData')};
+})()`
+
+export async function waitForNativeLaunchReady(
+  options: NativeLaunchReadyOptions,
+  deps: ReadyDeps = {},
+): Promise<{ pid: number; identity: ClaudeInspectorIdentity; ready: boolean }> {
+  const profile = normalizeClaudeNativeProfile(options.profileDir)
+  const binary = normalizeClaudeNativeProfile(options.binary)
+  const now = deps.now ?? Date.now
+  const sleep =
+    deps.sleep ??
+    ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)))
+  const deadline = now() + (options.timeoutMs ?? 30_000)
+  let last = 'the launched profile has not appeared'
+  while (now() < deadline) {
+    const scan = await (deps.scan ?? scanClaudeProcesses)({ fresh: true })
+    if (!scan.ok) throw Error(`Native launch process discovery failed: ${scan.reason}`)
+    if (now() >= deadline) break
+    const owners = scan.processes.filter(
+      (row) => row.isMain && row.dir && normalizeClaudeNativeProfile(row.dir) === profile,
+    )
+    if (owners.length > 1) throw Error('Native launch has multiple processes for the exact profile')
+    if (owners.length === 1) {
+      const owner = owners[0]
+      let client: ClaudeInspectorClient | undefined
+      try {
+        client = await (deps.connect ?? connectClaudeInspector)({
+          pid: owner.pid,
+          profile,
+          port: options.port,
+          connectTimeoutMs: Math.max(1, Math.min(2000, deadline - now())),
+          callTimeoutMs: Math.max(1, Math.min(2000, deadline - now())),
+        })
+        const state = await client.evaluate<{
+          ready?: boolean
+          pid?: number
+          executable?: string
+          profile?: string
+        }>(nativeLaunchReadyExpression)
+        if (
+          state.pid !== owner.pid ||
+          typeof state.executable !== 'string' ||
+          normalizeClaudeNativeProfile(state.executable) !== binary ||
+          typeof state.profile !== 'string' ||
+          normalizeClaudeNativeProfile(state.profile) !== profile
+        ) {
+          throw Error('Native launch identity mismatch: PID, executable or profile changed')
+        }
+        const hostState = options.startupLogCursor
+          ? nativeHostStartupState(newStartupLog(options.startupLogCursor))
+          : 'complete'
+        if (hostState === 'failed')
+          throw Error('Native launch host setup failed before registration recovery')
+        if (state.ready === true && hostState !== null)
+          return { pid: owner.pid, identity: client.identity, ready: true }
+        last =
+          state.ready === true
+            ? 'Claude has not finished its browser registration startup task'
+            : 'Claude has not finished loading its main window'
+      } catch (error) {
+        last = error instanceof Error ? error.message : String(error)
+        if (
+          last.includes('identity mismatch') ||
+          last.includes('does not match the requested') ||
+          last.includes('host setup failed')
+        )
+          throw error
+      } finally {
+        client?.close()
+      }
+    }
+    if (now() < deadline) await sleep(Math.min(300, deadline - now()))
+  }
+  throw Error(`Native debugger launch was not verified before the deadline: ${last}`)
+}
+
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
+import { join } from 'node:path'

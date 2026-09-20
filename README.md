@@ -120,6 +120,15 @@ You can open, focus, quit, create and delete them from here, give each one a nam
 colour so they stop looking identical, and see your isolated CLI logins alongside the desktop
 instance that shares their account.
 
+**Claude native control:** open **Settings → General → Claude native control** and enable
+**Start debugger automatically** for a desktop account. Its next **Open** through AgentHydra
+starts the local connection automatically; saving does not open or restart an app. Configured
+accounts use the native session manager for archive and migration-source cleanup, without
+sidebar menus or Lua/UI automation for those steps. Other migration steps still use the existing
+guarded pipeline. New profiles need their own setting. See the
+[native-control operating guide](docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md) for the programmatic
+configuration API, supported build, exact-profile routing and failure rules.
+
 The same view manages Codex Desktop and CLI together. Each Codex instance gets its own `CODEX_HOME`
 and desktop profile, so work and personal OpenAI logins can run in separate Codex windows. Open,
 focus and quit the desktop from its row; CLI Launch and Log in actions use that same isolated login.

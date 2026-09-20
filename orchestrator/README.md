@@ -94,6 +94,17 @@ From an agent, the same three are `orchestrator_menu`, `orchestrator_loop` and
 `orchestrator_run { script, args: ["--help"] }` on the AgentHydra MCP server; `bun run
 orchestrator <script>` from the repo root is the shell equivalent.
 
+For Claude Desktop archive and migration-source cleanup, use the production scripts: they
+attempt the exact-profile native route before the legacy actuator. Enable **Settings → General
+→ Claude native control → Start debugger automatically** for each profile, or configure
+`launchDebugger:true` through `/api/claude-native/settings`. The next AgentHydra **Open** starts
+the connection without a Developer-menu click; saving settings does not restart active apps.
+Use `native-only` when UI fallback is unwanted. Refused or uncertain native mutations never
+fall back to UI/Lua or disk flags. New profiles require an explicit setting. See the
+[native-control operating guide](../docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md) before reaching for
+the POC runner or desktop controls. Destination migration settings and unarchive still have
+legacy/guarded steps; this is not a fully native move implementation.
+
 ## Decide how it behaves: `orch.py policy`
 
 **Every knob is in one place with a default, and the default is what used to be hardcoded.**
@@ -265,10 +276,10 @@ again - BUT ONLY WHILE THE ICON IS UP: driving a window is an act on the owner's
 any other (owner, 2026-09-01, after the pass flipped his windows with the icon down: "I
 didn't authorize you to start one yet"). Without the icon the doctrine lane writes the disk
 stamp and nothing else; the twins lane archives stale copies and GHOST rows (archived on disk, still rendered)
-through the app's archive control, and renames different chats that wear one title so the
-owner (and the app's own row matching) can tell them apart. A row the app has not rendered
-cannot be reached by any control - the sidebar is virtualized and does not expose a scroll
-pattern - so it gets the disk flag and is cleared the moment it shows. Every driver passes
+through the production archive route, preferring configured native control, and renames different chats that wear one title so the
+owner (and the app's own row matching) can tell them apart. The legacy UIA archive path cannot
+reach an unrendered row in the virtualized sidebar; native archive instead addresses its exact
+session ID and does not depend on row rendering. Every legacy window driver passes
 through `windowlib.instance_lock`, which now also captures and restores the window's
 placement, and an app the toolbox opens that comes up maximized is put back to normal.
 
@@ -520,15 +531,16 @@ so the split is: judgment shared, actions individual.
 | `name_chats.py` + `actuator/rename_first.ps1` | act | THE NAMING PASS: fresh imports land nameless and render generic; this names them LIVE (no restart) via the probe technique - rename one indistinguishable row to a unique probe name, learn which chat took it from the app's own re-save, then set its real title through the daemon. Runs automatically after every `sweep.py --land-console`; chats with no known real name are quarantined for an AI to name, never guessed |
 
 Testing is three tiers - unit (stub daemon, every script covered), smoke (read-only against
-the live daemon), drill (reversible live acts) - and the whole UI/UX story is programmatic
-(the daemon's UI-Automation actuator, never screen-clicking). **`orchestrator/scripts/TESTING.md`** is the
-doctrine, including why CDP is a dead end and why disk flags are not UI.
+the live daemon), drill (reversible live acts). Configured archive/source cleanup uses the
+native main-process connection; remaining desktop operations use guarded UI-Automation.
+**`orchestrator/scripts/TESTING.md`** distinguishes the native inspector from the older renderer
+CDP experiments and explains why a disk flag is not proof of an in-app result.
 
 Every act script enforces the six rules below mechanically: gate first, count the attempt,
 re-check the dossier immediately before the POST, verify after, and say what changed. Archiving
-under a RUNNING app exits 7 ("flag written, NOT claiming success") because the app holds its
-chat list in memory and can re-save the flag away - claiming that as success is how v2's
-"archived" came to mean "still there".
+under a RUNNING app must verify native state or the guarded legacy result. A disk-only outcome
+exits 7 ("flag written, NOT claiming success") because the app holds its chat list in memory
+and can re-save the flag away. A verified native result needs no UI retry or disk polling.
 
 ```sh
 python scripts/smoke.py       # read-only, safe any time: proves the observe chain end to end
@@ -571,15 +583,19 @@ question itself.
    crashed chat and runs the turn - delivery IS the revive. It reaches RENDERED rows only;
    a virtualized/collapsed row refuses honestly, and the cure is a real migration to an
    open instance (fresh imports render at the top of the sidebar).
-3. **Accessibility-API control invocation** for archive/rename/naming, same guarantees;
-   every act verifies its result. (A real native MESSAGE endpoint remains the right ask of
-   the AgentHydra effort.)
-4. **Coordinate clicks / hotkeys / CDP - never.** Clicks can land on the wrong thing, hotkeys
-   need focus, and the app exits when started with a debug port (measured).
+3. **Native control first for archive and migration-source cleanup.** The production
+   scripts call `/api/sessions/:id/native-archive`; the ordinary `desktop-archive` route
+   also tries native first. `native-only` never falls back. An unknown/refused mutation is
+   terminal in every mode. Rename/naming and other unconverted steps retain the existing
+   accessibility actuator; do not substitute a POC import/settings call for general migration.
+4. **No coordinate clicks or focus-dependent hotkeys.** Earlier stock renderer-CDP startup
+   experiments failed; that is separate from the now-tested managed main-process inspector.
+   Enable automatic startup centrally and use AgentHydra Open, not Developer-menu clicks.
 
-**The apps are NEVER restarted** (owner standing order). Nothing in this repo may wait for,
-suggest, or depend on a restart: a running app is acted on through routes 1-2, a closed one
-through disk flags.
+**Do not restart active apps to enable native control** (owner standing order). Configure a
+closed profile and use its next authorized AgentHydra Open. Saving configuration is not a
+launch. An already-running stock process is not retroactively given an inspector by saving;
+`native-only` reports an unavailable connection instead of silently using disk/UI fallback.
 
 ### The division of labor (owner directive, 2026-08-31)
 
@@ -643,14 +659,16 @@ program needs:
 | `GET /api/fleet` | instances, per-account usage, git hygiene |
 | `GET /api/sessions` | every chat, with `archived`, `instance`, `last_activity_at` |
 | `GET /api/chats/dossier?q=` | one chat: its instance, archive flag, lineage, live process |
-| `POST /api/sessions/:id/desktop-archive` | archive / unarchive a chat - an archive under a RUNNING app also drives that app's own Archive control, so the row leaves the sidebar now; `stillOnScreen` says whether it did |
+| `POST /api/sessions/:id/desktop-archive` | archive / unarchive a chat; archive prefers configured native state before any disk/UI path. Pass `instance_ref: desktop:<full profile path>` and inspect `verified`, `route` and `stillOnScreen` |
+| `POST /api/sessions/:id/native-archive` | exact-profile native archive attempt, used by archive and migration-source cleanup; no UI act is dispatched by this endpoint |
+| `GET /api/claude-native/settings`, `PUT /api/claude-native/settings` | per-profile port, routing mode and `launchDebugger`; automatic startup applies on the next AgentHydra Open |
 | `POST /api/chats/:id/rename` | rename through the running app's own control |
 | `POST /api/sessions/:id/import-desktop` | land a chat in an instance |
 | `POST /api/sessions/:id/message` | deliver text into a chat: the daemon picks the channel, preferring the native peer pipe and using the composer only for a dormant chat. This is `courier.py`'s PRIMARY route; a 404 from an older daemon is what drops it back to driving the actuator itself |
-| `GET/POST /api/instances/:dir/{open,quit}` | start or stop an instance |
+| `POST /api/instances/:dir/{open,quit}` | start or stop an instance; URL-encode the full profile path. Open honors its automatic-debugger setting |
 
-⚠ The archive, rename and message routes all drive a PowerShell helper under `misc\`, so they
-work only when the daemon build actually ships it. A compiled build embeds
+The legacy archive fallback, rename and message routes use PowerShell helpers under `misc\`;
+verified native archive skips those helpers entirely. A compiled build embeds
 `Deliver-DesktopChat.ps1` and `Manage-DesktopChat.ps1` (`RUNTIME_MISC_FILES` in
 `server/src/misc-assets.ts`) and writes them out of the binary; before 2026-09-13 both were
 located by hopping `..` off `import.meta.dir`, which inside a compiled exe points at the virtual

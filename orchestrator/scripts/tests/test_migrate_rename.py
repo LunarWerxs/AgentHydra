@@ -306,7 +306,7 @@ class MigrateTest(ActTestBase):
         # Dir-first (2026-09-06): the fixture's fleet row carries a dir for "src", so the
         # actuator (and the window lock it keys inside _settle_source) must be aimed at
         # that unique profile dir, never the bare leaf name a sibling profile could share.
-        m.assert_called_once_with("c:\\i\\src", "T")
+        m.assert_called_once_with("c:\\i\\src", "T", session_id=SID)
 
     def test_closed_source_needs_no_settle(self):
         import unittest.mock as mock

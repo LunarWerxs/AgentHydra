@@ -1,5 +1,14 @@
 # Moving chats between accounts
 
+Claude Desktop archive and migration-source cleanup now prefer the production native
+connection. Enable **Settings → General → Claude native control → Start debugger automatically**
+per profile, then use AgentHydra **Open** when that closed account is needed. The debugger starts
+on that launch without menus; saving settings does not restart an active desktop. New profiles
+need their own setting. See the [native-control operating guide](CLAUDE-DESKTOP-NATIVE-CONTROL.md)
+for the equivalent API and exact-profile result checks. General destination import/settings,
+unarchive and new/start/stop/resume are still partly legacy/guarded; use the production move
+tools below instead of the restricted POC runner or a hand-built UI sequence.
+
 ## The fast path: one call
 
 **Use the MCP tool `move_chat`. Do not recon first.** (Owner, 2026-09-04: "slower than I wanted
@@ -382,34 +391,40 @@ and repeating the test reproduced it exactly: the pointer reappeared within seco
 
 ## Archiving a chat in a RUNNING app
 
-A disk flag alone is invisible to a running app until it restarts, and the instance hosting the
-reviewer never reaches the zero-live-sessions condition that triggers one, because the reviewer is
-itself a live session. **Since 2026-09-17 the endpoint closes that gap itself:**
-`POST /api/sessions/:id/desktop-archive` writes the flag and then drives the app's OWN Archive
-control through UI-Automation, focus-free, for any profile whose app is running - including the one
-you are sitting in. No prompt, no restart, and the app makes the write, so it cannot re-save it
-away.
+A disk flag alone does not update a running app's in-memory list.
+`POST /api/sessions/:id/desktop-archive` now attempts configured native control before any
+disk flag or UI action. Pass `instance_ref: "desktop:<full profile path>"` to select the exact
+source copy. The archive and migration scripts use the same native adapter through
+`POST /api/sessions/:id/native-archive`.
 
-- Read **`stillOnScreen`** in the response: `false` = the row is gone now; `true` = only the flag
-  landed, and `note` says why the click did not settle.
-- The rails that produce a `true` are deliberate: another LIVE chat in that profile renders the same
-  title (clicking by title could hit the wrong one), or the sidebar never rendered the row at all -
-  UIA reaches rendered rows only, so a chat scrolled out of the virtualized list or inside a
-  collapsed group has nothing to click. Both take effect at that instance's next restart.
-- **Unarchiving still waits for the restart.** The row menu can archive a chat, not restore one, so
-  there is no in-app control to drive and the endpoint does not pretend otherwise.
-- A chat whose ENGINE is running is refused outright unless you pass `force` - archiving it would
-  drop a working chat out of the sidebar.
+- Native success reports `route:"native"`, `ok:true`, `verified:true`; the desktop route also
+  returns `uiArchive:[]` and `stillOnScreen:false`. It checks the app's native state and
+  bystanders, preserving chat settings and transcript bytes. Duplicate titles and unrendered
+  sidebar rows do not require clicks because native control uses exact session identity.
+- `native-only` refuses an unavailable connection, including a closed profile. Open that
+  profile through AgentHydra when authorized; never turn the refusal into a disk/UI retry.
+  `prefer-native` permits the existing guarded fallback only on proven unavailability before
+  dispatch. Native refusal or unknown mutation outcome is terminal in either mode.
+- The legacy UIA fallback can still report `stillOnScreen:true` when only a disk flag landed,
+  such as an unrendered/ambiguous row. That is not verified archive success. Do not restart an
+  active app to hide this failure.
+- Native unarchive is not integrated. Existing restore handling must be verified separately;
+  do not assume a disk flag changed the running app or request a restart to make it appear so.
+- Native archive rejects live/pending work, unsafe cascades and affected preview servers;
+  `force` does not bypass these native guards.
 
 ## Checklist for a move
 
-1. Resolve the target account's `accountUuid` / `orgUuid` from `GET /api/instances/:dir/account`.
-2. `POST /api/sessions/:id/migrate` with `instance_ref: desktop:<dir>`.
-3. Prune duplicate pointers - one metadata file per transcript.
-4. Confirm each file sits under the target account's folder; re-file if the instance was re-logged.
-5. Set `permissionMode: bypassPermissions`.
-6. Write the title to both stores.
-7. Restart the target app so it picks up files added while it was running.
-8. Deliver only from within the target instance, and verify which account ran the turn.
-9. Read `collateral` on the result (and the top of the report). Empty is the normal answer; a
+1. Use `move_chat` / `move_chats` with the requested source and destination. Their production
+   pipeline owns identity resolution, landing, source settlement and settings preservation.
+2. Preserve the per-profile native configuration. When a closed account needs opening, use
+   AgentHydra Open so `launchDebugger:true` takes effect; do not restart active apps.
+3. Require verified destination landing before exact-source archive. Read each phase's result;
+   an unknown native archive is not permission to retry through a sidebar menu.
+4. Verify the destination's title, model/effort, permission modes, working directory and history
+   through the existing guarded pipeline. Native source cleanup alone does not prove full
+   migration settings parity.
+5. Deliver only if requested, using the existing delivery route, and verify which account ran
+   the turn. Migration does not submit a prompt by itself.
+6. Read `collateral` on the result (and the top of the report). Empty is the normal answer; a
    named chat there was archived while your move ran and needs unarchiving from its own app.

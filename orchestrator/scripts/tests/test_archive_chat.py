@@ -151,7 +151,7 @@ class ArchiveChatTest(unittest.TestCase):
                                return_value=(0, "Archive done for 'T'")) as ui:
             code = self.archive_chat.main([SID, "--no-preserve"])
         # the actuator was driven; the daemon's flag endpoint was NOT touched
-        ui.assert_called_once_with("temp1", "T", False)
+        ui.assert_called_once_with("temp1", "T", False, session_id=SID)
         self.assertFalse(self.acted())
         # verify happens via the dossier; our stub flips archived after ANY desktop-archive
         # POST, which never came - so verify honestly fails and nothing is overclaimed

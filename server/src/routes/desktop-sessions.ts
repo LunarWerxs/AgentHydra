@@ -1,6 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { pickCarriedSettings } from '../chat-settings-carry'
 import { resolveRequiredTitle } from '../chat-title'
+import { tryNativeArchiveChat } from '../claude-native-archive'
+import {
+  getClaudeNativeSettings,
+  parseClaudeNativeProfileConfig,
+  setClaudeNativeProfileConfig,
+} from '../claude-native-settings'
 import { listInstances } from '../core/instances'
 import { rememberMigratedSettings } from '../db'
 import { app } from '../http-app'
@@ -244,6 +250,49 @@ async function uiArchiveWithinBudget(
   }
 }
 
+// Connections are opt-in per profile. launchDebugger applies on the next ordinary Open;
+// saving configuration does not launch or restart a desktop instance.
+app.get('/api/claude-native/settings', (c) => c.json(getClaudeNativeSettings()))
+app.put('/api/claude-native/settings', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.profile !== 'string' || !('config' in body))
+    return c.json({ ok: false, error: 'profile and config are required' }, 400)
+  try {
+    setClaudeNativeProfileConfig(
+      body.profile,
+      body.config === null ? null : parseClaudeNativeProfileConfig(body.config),
+    )
+    return c.json({ ok: true, settings: getClaudeNativeSettings() })
+  } catch (error) {
+    return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400)
+  }
+})
+
+// A capability attempt for orchestrator callers. Explicit unavailability permits their old
+// guarded path; a refusal or lost reply is terminal and must never become a title-based retry.
+app.post('/api/sessions/:id/native-archive', async (c) => {
+  const body = await jsonBody(c)
+  const profile =
+    typeof body.instance_ref === 'string' && body.instance_ref.startsWith('desktop:')
+      ? body.instance_ref.slice('desktop:'.length)
+      : ''
+  if (!/^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|\/)/i.test(profile))
+    return c.json(
+      {
+        available: true,
+        ok: false,
+        verified: false,
+        dispatch: 'not-sent',
+        reason: 'instance_ref must be desktop:<full profile directory>',
+      },
+      400,
+    )
+  const result = await tryNativeArchiveChat(profile, c.req.param('id'))
+  if (result.kind === 'unavailable')
+    return c.json({ ...result, available: false, ok: false, verified: false })
+  return c.json({ ...result, available: true }, result.ok ? 200 : 409)
+})
+
 app.post('/api/sessions/:id/desktop-archive', async (c) => {
   const body = await jsonBody(c)
   const sessionId = c.req.param('id')
@@ -256,10 +305,12 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
       ? body.instance_ref.trim()
       : null
   let roots: string[] | undefined
+  let nativeProfile: string | undefined
   if (scopeRef) {
     if (!scopeRef.startsWith('desktop:'))
       return c.json({ ok: false, error: "instance_ref must be 'desktop:<dir>'" }, 400)
     roots = [scopeRef.slice('desktop:'.length)]
+    nativeProfile = roots[0]
   } else {
     // AMBIGUITY IS A REFUSAL, the same rule the chat actuator applies to titles. Only when the
     // caller did not name a scope: an explicit target is always honoured.
@@ -276,6 +327,28 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
         },
         409,
       )
+    if (carriers.length === 1) nativeProfile = carriers[0]
+  }
+  // Native state decides whether THIS copy is busy. A migrated destination can be running
+  // while its source is safely idle. Run this before both the global live guard and disk writes.
+  if (wantArchived && nativeProfile) {
+    const native = await tryNativeArchiveChat(nativeProfile, sessionId)
+    if (native.kind === 'result') {
+      return c.json(
+        {
+          ...native,
+          available: true,
+          nativeArchive: native,
+          stillOnScreen: native.verified ? false : null,
+          uiArchive: [],
+          note: native.verified
+            ? 'Archived through the running app’s native session manager; no UI action or restart needed.'
+            : (native.reason ??
+              'Native archive was not verified; no disk or UI fallback was attempted.'),
+        },
+        native.ok ? 200 : 409,
+      )
+    }
   }
   // Never hide a chat whose engine is running, unless a caller says so outright.
   if (wantArchived && body.force !== true && liveSessionEntry(sessionId))

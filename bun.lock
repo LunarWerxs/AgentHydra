@@ -12,7 +12,7 @@
       "name": "@orchestrator/server",
       "version": "1.0.0",
       "dependencies": {
-        "hono": "^4.13.7",
+        "hono": "^4.13.8",
         "jose": "^6.2.12",
       },
       "devDependencies": {
@@ -25,7 +25,7 @@
       "version": "1.0.0",
       "dependencies": {
         "@fontsource-variable/inter": "^5.3.0",
-        "@lucide/vue": "^1.45.0",
+        "@lucide/vue": "^1.46.0",
         "@vueuse/core": "^14.4.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -52,7 +52,7 @@
       "version": "1.0.0",
       "dependencies": {
         "@cnct/connect": "^1.5.1",
-        "hono": "^4.13.7",
+        "hono": "^4.13.8",
         "safe-regex2": "^5.1.1",
       },
       "devDependencies": {
@@ -67,7 +67,7 @@
         "@agenthydra/server": "workspace:*",
         "@cnct/connect": "^1.5.1",
         "@fontsource-variable/inter": "^5.3.0",
-        "@lucide/vue": "^1.45.0",
+        "@lucide/vue": "^1.46.0",
         "@vueuse/core": "^14.4.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -304,7 +304,7 @@
 
     "graceful-fs": ["graceful-fs@4.2.11", "", {}, "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ=="],
 
-    "hono": ["hono@4.13.7", "", {}, "sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ=="],
+    "hono": ["hono@4.13.8", "", {}, "sha512-/Gng7NfoykZl2pjukW5Z6+8Yxm3BPRf86GTbQnt0SbySkvax4fyL4H3HhY1cCpBGmiW9XDRFzRV+CXK2W8QudQ=="],
 
     "jiti": ["jiti@2.7.0", "", { "bin": { "jiti": "lib/jiti-cli.mjs" } }, "sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ=="],
 

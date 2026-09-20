@@ -28,7 +28,12 @@ import {
   mutateJsonStore,
   readJsonStore,
 } from './json-store'
-import { CLAUDE_LAUNCH_EFFORTS, type LaunchOptionsInput, launchOptionError } from './launch-options'
+import {
+  CLAUDE_LAUNCH_EFFORTS,
+  type LaunchOptionsInput,
+  launchOptionError,
+  windowsTerminalArgv,
+} from './launch-options'
 import { isPathInside } from './paths'
 import type { CMActionResult } from './shared'
 
@@ -655,10 +660,9 @@ export function launchCliInstance(id: string, opts: LaunchOpts = {}): CMActionRe
 
   try {
     if (process.platform === 'win32') {
-      // Quote the exe (may contain spaces); `/k` keeps the window open after claude exits so the
-      // user can read output / see a login prompt. The empty "" is start's mandatory title slot.
-      const inner = [`"${exe}"`, ...claudeArgs].join(' ')
-      Bun.spawn(['cmd', '/c', 'start', '', 'cmd', '/k', inner], {
+      // windowsTerminalArgv keeps the exe and args as separate argv entries — see the warning
+      // there; pre-quoting and joining is what made this print "is not recognized".
+      Bun.spawn(windowsTerminalArgv(exe, claudeArgs), {
         env,
         stdin: 'ignore',
         stdout: 'ignore',

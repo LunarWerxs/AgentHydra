@@ -24,7 +24,15 @@ import {
   mutateJsonStore,
   readJsonStore,
 } from './json-store'
-import { CODEX_LAUNCH_EFFORTS, type LaunchOptionsInput, launchOptionError } from './launch-options'
+import {
+  CODEX_LAUNCH_EFFORTS,
+  type LaunchOptionsInput,
+  launchOptionError,
+  needsCmdLauncher,
+  scheduleLauncherCleanup,
+  windowsTerminalArgv,
+  writeCmdLauncher,
+} from './launch-options'
 import { isPathInside, normalizePath } from './paths'
 import type { CMActionResult } from './shared'
 
@@ -626,8 +634,14 @@ export function launchCodexInstance(id: string, options: CodexLaunchOptions = {}
 
   try {
     if (process.platform === 'win32') {
-      const inner = [`"${exe}"`, ...args.map((arg) => JSON.stringify(arg))].join(' ')
-      Bun.spawn(['cmd', '/c', 'start', '', 'cmd', '/k', inner], {
+      // windowsTerminalArgv keeps the exe and args as separate argv entries — see the warning
+      // there; pre-quoting and joining is what made this print "is not recognized".
+      //
+      // The reasoning-effort override is `model_reasoning_effort="high"`, whose quotes are part of
+      // the value. cmd.exe cannot carry those through argv at all, so that one case goes via a
+      // launcher script instead, where the arg is written verbatim (see needsCmdLauncher).
+      const launcher = needsCmdLauncher(args) ? writeCmdLauncher(exe, args) : null
+      Bun.spawn(launcher ? windowsTerminalArgv(launcher) : windowsTerminalArgv(exe, args), {
         env,
         stdin: 'ignore',
         stdout: 'ignore',
@@ -635,6 +649,7 @@ export function launchCodexInstance(id: string, options: CodexLaunchOptions = {}
         // Hide only the transient launcher cmd; `start` still creates the visible inner terminal.
         windowsHide: true,
       })
+      if (launcher) scheduleLauncherCleanup(launcher)
     } else if (process.platform === 'darwin') {
       const command = `CODEX_HOME=${JSON.stringify(instance.codexHome)} ${JSON.stringify(exe)} ${args.map((arg) => JSON.stringify(arg)).join(' ')}`
       Bun.spawn([

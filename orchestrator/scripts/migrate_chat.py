@@ -104,6 +104,7 @@ from lib import hydralib
 from lib import windowlib
 from lib import ledgerlib
 from lib import mutationlib
+from lib import nativearchivelib
 from lib import stamplib
 
 
@@ -393,7 +394,7 @@ resolve_instance = hydralib.resolve_instance
 _ACTUATOR = _Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"  # one copy since 2026-09-17
 
 
-def _settle_source(instance: str, title: str) -> tuple[int, str]:
+def _settle_source(instance: str, title: str, session_id: str = "") -> tuple[int, str]:
     """Archive the SUPERSEDED source row through its RUNNING app's own control.
 
     `instance` should be the SOURCE fleet row's unique profile DIR, not its bare name
@@ -418,6 +419,10 @@ def _settle_source(instance: str, title: str) -> tuple[int, str]:
     The yielded False is HONOURED, never ignored: another lane held the window past the
     wait, so the actuator is not driven at all and exit 75 tells the caller to fall back to
     the disk flag rather than claim a settle that never happened."""
+    if session_id:
+        native = nativearchivelib.try_archive(session_id, instance)
+        if native is not None:
+            return native
     with windowlib.instance_lock(instance, wait_secs=60) as mine:
         if not mine:
             return 75, (f"another lane held {instance}'s window past the wait - the source "
@@ -1275,9 +1280,19 @@ def _settle_source_row_core(match: dict, target: dict, fleet: dict, session_id: 
     src_dir = str(src_inst.get("dir") or "") if src_inst else ""
     settle_instance = src_dir or src_name
     dir_note = "" if src_dir else f" (no dir on record for {src_name}; settled by name)"
-    code_s, out_s = _settle_source(settle_instance, str(chat_title))
+    code_s, out_s = _settle_source(settle_instance, str(chat_title), session_id=session_id)
     if sw is not None:
         sw.lap("settle-drive")  # the actuator alone; the read-back below is the next lap
+    if code_s == nativearchivelib.NATIVE_VERIFIED:
+        return (f" Source row archived in {src_name}; the exact native session state and "
+                "unchanged bystander archive flags were verified by the running app.", "settled")
+    if code_s == nativearchivelib.NATIVE_TERMINAL:
+        native = nativearchivelib.result(out_s)
+        reason = str(native.get("reason") or "native archive not confirmed")
+        ledgerlib.annotate("migrate", session_id,
+                           f"source native archive not confirmed: {reason}", failure=True)
+        return (f" Source row in {src_name} is NOT confirmed settled: {reason}. "
+                "No UI or disk fallback was attempted; inspect the native result before retrying.", "visible")
     # DOUBLE-CHECK, NEVER ASSUME (owner, 2026-09-01: "it can't do it blind; it must always
     # double check, confirm"). Exit 3 used to be read as "already settled"; a row the app
     # virtualized off-screen is not rendered AND still visible when scrolled. So the source
