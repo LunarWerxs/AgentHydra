@@ -50,7 +50,7 @@ const OAUTH = {
   /**
    * Where the locker lives, passed explicitly rather than left to the SDK.
    *
-   * `@cnct/connect@1.5.1` hardcodes `https://studio.connections.icu` as its
+   * `@cnct/connect@1.5.1` hardcodes `https://studio.connections.icu` (dead-host-ok) as its
    * locker default, and that zone was suspended by its registry on 2026-09-18
    * (NXDOMAIN, whole zone). 1.5.1 is still the newest version on npm, so there
    * is no SDK release to upgrade to: every consumer has to name the host
