@@ -1150,8 +1150,10 @@ onUnmounted(() => {
 
     <!-- gap-10, not a divider: the two tables used to abut with a hairline between them, which read
          as one continuous table whose last rows happened to have different columns. A flex gap only
-         applies BETWEEN children, so hiding either table leaves no orphan space behind it. -->
-    <div class="flex flex-col gap-10">
+         applies BETWEEN children, so hiding either table leaves no orphan space behind it.
+         pb-16: with every section shown, the last one (DeepSeek) sat flush against the bottom edge
+         of the scroll area, its last row half-hidden behind the window chrome (owner, 2026-09-20). -->
+    <div class="flex flex-col gap-10 pb-16">
       <!-- Both tables are hideable (Settings → Providers): plenty of people use only the desktop app,
            or only the CLI, and shouldn't have to look at an empty table for the other. -->
       <!-- ExpandArea, not the kit's ExpandTransition: this table's header is `sticky top-0`, and
