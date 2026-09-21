@@ -79,8 +79,13 @@ export function setClaudeNativeProfileConfig(
 ): ClaudeNativeSettings {
   const profile = normalizeClaudeNativeProfile(profileDir)
   const settings = getClaudeNativeSettings()
-  if (config === null) delete settings[profile]
-  else {
+  const optedOut = getOptedOutProfiles()
+  if (config === null) {
+    delete settings[profile]
+    // "Use standard controls" is a person's choice; the auto-enable below must never undo it.
+    optedOut.add(profile)
+  } else {
+    optedOut.delete(profile)
     const validated = parseClaudeNativeProfileConfig(config)
     if (
       Object.entries(settings).some(
@@ -92,5 +97,50 @@ export function setClaudeNativeProfileConfig(
     settings[profile] = validated
   }
   setSetting(SETTINGS_KEY, JSON.stringify(settings))
+  setSetting(OPTED_OUT_KEY, JSON.stringify([...optedOut]))
   return settings
+}
+
+const OPTED_OUT_KEY = 'claude_native_opted_out'
+const AUTO_PORT_FIRST = 19300
+const AUTO_PORT_LAST = 19999
+
+function getOptedOutProfiles(): Set<string> {
+  const raw = getSetting(OPTED_OUT_KEY)
+  if (!raw) return new Set()
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return new Set(Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+/**
+ * NATIVE CONTROL IS THE DEFAULT FOR EVERY DESKTOP PROFILE (owner, 2026-09-20). A profile with no
+ * configuration gets `native-only` + `launchDebugger` on the first unused port, so a new account
+ * never falls back to Lua/UIA the way #38 did after being skipped by the 2026-09-19 rollout. A
+ * profile a person switched to standard controls is left alone. Returns the config in force, or
+ * null when the profile is opted out, the path is not a profile, or no port is free.
+ */
+export function ensureClaudeNativeProfileConfig(
+  profileDir: string,
+): ClaudeNativeProfileConfig | null {
+  let profile: string
+  try {
+    profile = normalizeClaudeNativeProfile(profileDir)
+  } catch {
+    return null
+  }
+  const settings = getClaudeNativeSettings()
+  if (settings[profile]) return settings[profile]
+  if (getOptedOutProfiles().has(profile)) return null
+  const used = new Set(Object.values(settings).map((c) => c.port))
+  for (let port = AUTO_PORT_FIRST; port <= AUTO_PORT_LAST; port++) {
+    if (used.has(port)) continue
+    const config: ClaudeNativeProfileConfig = { port, mode: 'native-only', launchDebugger: true }
+    setClaudeNativeProfileConfig(profile, config)
+    return config
+  }
+  return null
 }

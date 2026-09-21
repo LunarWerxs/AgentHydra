@@ -22,7 +22,10 @@ import {
 } from '../claude-native-launch'
 import { beginNativeLaunchRegistryGuard } from '../claude-native-launch-registry'
 import { captureNativeLaunchLogCursor, waitForNativeLaunchReady } from '../claude-native-ready'
-import { getClaudeNativeProfileConfig } from '../claude-native-settings'
+import {
+  ensureClaudeNativeProfileConfig,
+  getClaudeNativeProfileConfig,
+} from '../claude-native-settings'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { detectDesktopInstall } from './desktop-install'
 import { readInstanceMetaMap } from './instance-meta'
@@ -343,7 +346,12 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
   const normDir = normalizePath(dir)
   let nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>
   try {
-    nativeConfig = getClaudeNativeProfileConfig(normDir)
+    // Every desktop profile runs native control unless a person opted it out (2026-09-20).
+    // Scoped to AgentHydra's own profiles; the machine's default Claude login is never touched.
+    nativeConfig =
+      (currentPlatform() === 'win32' && isPathInside(instancesRoot(), normDir)
+        ? ensureClaudeNativeProfileConfig(normDir)
+        : null) ?? getClaudeNativeProfileConfig(normDir)
   } catch (error) {
     return {
       ok: false,

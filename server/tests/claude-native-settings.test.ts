@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, expect, test } from 'bun:test'
 import {
+  ensureClaudeNativeProfileConfig,
   getClaudeNativeProfileConfig,
   getClaudeNativeSettings,
   setClaudeNativeProfileConfig,
@@ -7,9 +8,44 @@ import {
 import { getSetting, setSetting } from '../src/db'
 
 const key = 'claude_native_profiles'
+const optedOutKey = 'claude_native_opted_out'
 const original = getSetting(key)
-beforeEach(() => setSetting(key, ''))
-afterAll(() => setSetting(key, original))
+const originalOptedOut = getSetting(optedOutKey)
+beforeEach(() => {
+  setSetting(key, '')
+  setSetting(optedOutKey, '')
+})
+afterAll(() => {
+  setSetting(key, original)
+  setSetting(optedOutKey, originalOptedOut)
+})
+
+test('a new profile is put on native control automatically, on the first free port', () => {
+  setClaudeNativeProfileConfig('C:\\Profiles\\Taken', {
+    port: 19300,
+    mode: 'native-only',
+    launchDebugger: true,
+  })
+  expect(ensureClaudeNativeProfileConfig('C:\\Profiles\\New')).toEqual({
+    port: 19301,
+    mode: 'native-only',
+    launchDebugger: true,
+  })
+  // Idempotent: an existing config is returned untouched.
+  expect(ensureClaudeNativeProfileConfig('c:/profiles/new')?.port).toBe(19301)
+  expect(ensureClaudeNativeProfileConfig('not-a-profile')).toBeNull()
+})
+
+test('a profile a person switched to standard controls is never re-enabled', () => {
+  ensureClaudeNativeProfileConfig('C:\\Profiles\\Mine')
+  setClaudeNativeProfileConfig('C:\\Profiles\\Mine', null)
+  expect(ensureClaudeNativeProfileConfig('C:\\Profiles\\Mine')).toBeNull()
+  expect(getClaudeNativeProfileConfig('C:\\Profiles\\Mine')).toBeNull()
+  // Turning it back on by hand clears the opt-out.
+  setClaudeNativeProfileConfig('C:\\Profiles\\Mine', { port: 19350, mode: 'native-only' })
+  setClaudeNativeProfileConfig('C:\\Profiles\\Other', null)
+  expect(getClaudeNativeProfileConfig('C:\\Profiles\\Mine')?.port).toBe(19350)
+})
 
 test('native profiles are opt-in and normalization persists no PID', () => {
   expect(getClaudeNativeSettings()).toEqual({})
