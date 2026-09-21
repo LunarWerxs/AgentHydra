@@ -9,6 +9,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **Every desktop account now starts on native control by default.** A new account gets
+  `native-only` with the debugger launched on the first free port when it is created or next
+  opened, so it never falls back to Lua/UIA. Choosing "Use standard controls" is remembered and
+  never undone.
 - **`move_chats` kills a live chat on its own when the source account is at 98% or more** of its
   5-hour or weekly usage (owner's standing order, 2026-09-20). Below that, `terminate_live` is
   still a person's word; an unreadable usage row never triggers it.
