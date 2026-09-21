@@ -7,6 +7,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Changed
+
+- **`move_chats` kills a live chat on its own when the source account is at 98% or more** of its
+  5-hour or weekly usage (owner's standing order, 2026-09-20). Below that, `terminate_live` is
+  still a person's word; an unreadable usage row never triggers it.
+- **A move whose source row was only disk-flagged is reported as not finished**, because the
+  running source app still shows it. The report leads with it and `sourceStillShown` lists it.
+
 ## [1.0.0] - 2026-09-20
 
 ### Fixed

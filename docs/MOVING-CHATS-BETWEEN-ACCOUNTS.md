@@ -143,6 +143,14 @@ tray icon and the fair share first), then reading two working chats' pids out of
     <dist>\misc\...` by BOTH routes (the composer route IS that script, and the peer route
     is refused by the same endpoint first). The build now embeds it or fails. If you meet
     that error, the daemon predates the fix - see `server/src/misc-assets.ts`.
+- **A source account at 98% or more is killed without asking** (owner's standing order,
+  2026-09-20). When either the 5-hour or the weekly bucket of the chat's source account reads
+  98%+, `move_chats` treats `terminate_live` as already given for it; the result's
+  `terminated.standingOrder` names the reading. An unreadable usage row never triggers it.
+- **A `sourceRow: "flagged"` result is not finished.** The source app's own control was
+  unreachable, so only a disk flag was written, and a running app keeps showing the chat. The
+  batch report now leads with `NOT FINISHED ON THE OLD ACCOUNT` and lists them in
+  `sourceStillShown`; archive them natively once that profile runs with native control.
 - **`terminate_live`** is a person's word to KILL the engine of a chat refused for being alive
   (working, or quiet but inside its window) and move it anyway. It is for the account that
   will hit its wall before the turn ends - the turn dies there regardless, holding everything

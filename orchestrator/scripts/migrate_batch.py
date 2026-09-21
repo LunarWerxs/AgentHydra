@@ -545,6 +545,47 @@ def _terminate_for(query: str) -> dict:
     return stopped
 
 
+# Owner's standing order (Michael, 2026-09-20): "if the account you're pulling it from is at
+# 100% usage... always kill. That should be a standing order. Honestly, if it's 98% or above,
+# always kill." A chat left running on a walled account burns the last of its quota and then
+# dies at the wall anyway, so the owner's word is already given for these - no flag needed.
+FULL_SOURCE_PCT = 98
+
+
+def _full_source(query: str, survey: dict | None = None) -> dict | None:
+    """The source account's usage when EITHER bucket (5-hour session or weekly all-models) is
+    at FULL_SOURCE_PCT or above, else None. An unreadable chat, survey or row answers None: an
+    unverified reading is never grounds to kill anything."""
+    try:
+        match = hydralib.resolve_one(query)
+        if survey is None:
+            survey = hydralib.usage_survey()
+    except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError):
+        return None
+    inst = str(match.get("instance") or "").strip().lower()
+    if not inst:
+        return None
+    for row in survey.get("rows", []):
+        if row.get("kind") != "desktop":
+            continue
+        names = {str(row.get("label") or "").strip().lower(),
+                 str(row.get("id") or "").replace("/", "\\").rstrip("\\").split("\\")[-1].strip().lower()}
+        if inst not in names:
+            continue
+        result = row.get("result") or {}
+        if result.get("reason") not in (None, "ok"):
+            return None
+        snap = result.get("snapshot") or {}
+        sess = (snap.get("session") or {}).get("pct")
+        week = (snap.get("weekAll") or {}).get("pct")
+        pcts = [p for p in (sess, week) if isinstance(p, (int, float))]
+        if pcts and max(pcts) >= FULL_SOURCE_PCT:
+            return {"instance": match.get("instance"), "num": row.get("num"),
+                    "sessionPct": sess, "weekPct": week}
+        return None
+    return None
+
+
 def _attach_terminated(item: _Item) -> None:
     """Put the terminate verdict on the payload the chat ended up with. Idempotent, because
     a landed chat's payload is rebuilt after the finishing phases."""
@@ -578,9 +619,18 @@ def _move_one(query: str, passthrough: list[str], terminate_live: bool = False,
     argv = [query, *passthrough, *(["--title", chat_title] if chat_title else [])]
     try:
         outcome = migrate_chat.move_only(argv)
-        if (outcome.landing is None and terminate_live
+        full = None
+        if (outcome.landing is None and not terminate_live
+                and outcome.code == _EXIT_LIVE_ENGINE):
+            full = _full_source(query)
+        if (outcome.landing is None and (terminate_live or full)
                 and outcome.code == _EXIT_LIVE_ENGINE):
             item.terminated = _terminate_for(query)
+            if full:
+                item.terminated["standingOrder"] = (
+                    f"source #{full.get('num')} is at {full.get('sessionPct')}% (5-hour) / "
+                    f"{full.get('weekPct')}% (weekly) - at or past {FULL_SOURCE_PCT}% the owner's "
+                    "standing order is to always kill, so no --terminate-live was needed")
             if item.terminated.get("stopped"):
                 outcome = migrate_chat.move_only(argv)
     except Exception as err:  # a crash in one chat must not take the batch with it
@@ -1294,8 +1344,9 @@ def _report_terminated_lines(results: list[dict]) -> list[str]:
             continue
         title = r.get("title") or r["chat"]
         if t.get("stopped"):
-            lines.append(f"  TERMINATED pid {t.get('pid')} for '{title}' on a person's word, "
-                         "then moved again")
+            word = ("by standing order (source account at/over "
+                    f"{FULL_SOURCE_PCT}% usage)") if t.get("standingOrder") else "on a person's word"
+            lines.append(f"  TERMINATED pid {t.get('pid')} for '{title}' {word}, then moved again")
         else:
             lines.append(f"  TERMINATE FAILED for '{title}': {str(t.get('why') or '')[:140]}")
     return lines
@@ -1586,6 +1637,20 @@ def _build_batch_payload(items: list, parsed, note: str, secs: float, resume) ->
                 "re-read afterwards - all still settled. The journal keeps them owed until "
                 "`migrate_reconcile` has seen them once more.")
         payload["report"] = "\n".join(lines) + "\n" + payload["report"]
+    # ⛔ A FLAGGED SOURCE ROW IS STILL ON THE OWNER'S SCREEN (2026-09-20, #38 -> #55). "flagged"
+    # means the running source app's own control could not be reached, so only the disk flag
+    # was written - and a running app shows what it holds in memory. Every tool then counted the
+    # row as settled while the owner was looking straight at it, unarchived. It leads the report.
+    shown = [r for r in results if r.get("landed") and r.get("sourceRow") == "flagged"]
+    if shown:
+        payload["sourceStillShown"] = [r.get("sessionId") or r.get("chat") for r in shown]
+        names = ", ".join(f"'{r.get('title') or r.get('chat')}'" for r in shown)
+        payload["report"] = (
+            f"⚠ NOT FINISHED ON THE OLD ACCOUNT: {names} still show unarchived in the source app - "
+            "only a disk flag was written because the app's own control was unreachable. Archive "
+            "them natively (POST /api/sessions/<id>/desktop-archive with instance_ref) once that "
+            "profile runs with native control, or they stay on screen until its next restart.\n"
+            + payload["report"])
     return payload
 
 
