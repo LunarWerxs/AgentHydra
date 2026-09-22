@@ -78,10 +78,6 @@ function harness() {
     [managerPath]: { loaded: true, exports: { claudeCodeSessionManager: manager } },
     [mainPath]: { loaded: true, exports: native },
   }
-  const hashes = new Map([
-    [managerPath, 'manager-source-hash'],
-    [mainPath, 'main-source-hash'],
-  ])
   const require: any = (name: string) => {
     if (name === 'electron')
       return {
@@ -99,13 +95,6 @@ function harness() {
           requireBases.push(filename)
           return require
         },
-      }
-    if (name === 'node:fs') return { readFileSync: (filename: string) => filename }
-    if (name === 'node:crypto')
-      return {
-        createHash: () => ({
-          update: (filename: string) => ({ digest: () => hashes.get(filename) }),
-        }),
       }
     throw Error(`Unexpected require; fixture must never import a bundle: ${name}`)
   }
@@ -135,7 +124,6 @@ function harness() {
     calls,
     requireBases,
     cache,
-    hashes,
     managerPath,
     mainPath,
     request,

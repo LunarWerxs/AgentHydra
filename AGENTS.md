@@ -30,12 +30,16 @@ right-click menus, pop-ups or developer-menu toggles.
   share `orchestrator/scripts/lib/nativearchivelib.py`.
 - `native-only` refuses a missing native connection. `prefer-native` permits the
   guarded legacy path only for definite unavailability before dispatch. A native
-  refusal, busy target, failed identity/version check, or unknown dispatch result
+  refusal, busy target, failed identity check, or unknown dispatch result
   must never trigger blind retries, disk-flag edits, or a UI fallback. Require the
   native result's `ok: true` and `verified: true` before reporting native success.
-- Automatic launch is version-pinned and uses a verified managed copy; never
-  patch the installed executable or bypass a version/hash refusal. See the
-  runbook for the supported build and evidence.
+- Automatic launch derives the build from the newest installed Claude app and
+  uses a verified managed copy that differs from the installed executable by
+  exactly one byte (the inspector fuse); every copied file is hashed into the
+  copy's manifest and re-checked against the install on each launch. Nothing is
+  pinned to a Claude release, so an update needs no code change. Never patch the
+  installed executable, and never bypass a fuse-wire, manifest, source-inventory
+  or identity refusal to make one launch work. See the runbook for evidence.
 - Do not restart or close an active desktop to obtain the connection. Configure
   the next normal launch and report its current availability. Keep chat identity,
   transcript bytes, title/model/effort/permissions and bystander state checks.

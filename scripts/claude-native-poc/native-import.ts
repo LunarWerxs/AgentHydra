@@ -57,7 +57,10 @@ async function importRuntime(
     // bundle file name: those are content-hashed and change with every Claude release.
     const appPath = key(app.getAppPath())
     const managers = Object.keys(require.cache)
-      .filter((name: string) => key(name).startsWith(appPath) && require.cache[name]?.loaded)
+      .filter((name: string) => {
+        const at = key(name)
+        return (at === appPath || at.startsWith(appPath + path.sep)) && require.cache[name]?.loaded
+      })
       .map((name: string) => ({
         filename: name,
         value: require.cache[name]?.exports?.[pin.managerExport],

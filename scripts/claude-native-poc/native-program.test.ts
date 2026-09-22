@@ -60,17 +60,22 @@ function harness() {
     losableWorkKind: () => undefined,
     hasPendingUserInput: () => false,
     localLineageIds: (s: any) => [s.cliSessionId],
+    // Shaped like Claude's: archive forwards cleanupWorktree to teardown, which reads it.
+    teardownSession: async (_id: string, _reason: string, options: any) => options?.cleanupWorktree,
     archiveSession: async (id: string, options: any) => {
+      if (options?.cleanupWorktree !== false) throw Error('fixture expects cleanupWorktree: false')
       calls.push({ id, options })
       sessions.get(id)!.isArchived = true
     },
   }
   let version = '2.9999.0'
-  let hash = 'manager-source-hash'
-  let mainHash = 'main-source-hash'
+  const hash = 'manager-source-hash'
+  const mainHash = 'main-source-hash'
   const previews: any = {
     getServersForWorktree: () => [],
-    stopServersForWorktree: () => {},
+    // Claude's prefix match, which the preview guard models and the pre-dispatch check reads.
+    stopServersForWorktree: (cwd: string) =>
+      [...previews.htmlPreviews.values()].filter((p: any) => p.cwd.startsWith(cwd)).length,
     htmlPreviews: new Map(),
   }
   const cache: any = {
@@ -140,12 +145,6 @@ function harness() {
     request,
     version: (v: string) => {
       version = v
-    },
-    hash: (h: string) => {
-      hash = h
-    },
-    mainHash: (h: string) => {
-      mainHash = h
     },
     run: (patch: Partial<NativeRequest> = {}) =>
       runInNewContext(nativeProgram({ ...request, ...patch }), { process }),
@@ -247,6 +246,49 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       managerMember: path.join('.vite', 'build', 'index.chunk-AAA.js'),
       managerSha256: 'manager-source-hash',
     })
+  })
+
+  test('a module beside the app that merely shares its path prefix is never a candidate', async () => {
+    const h = harness()
+    // Same prefix as app.asar, different folder: must not count as a second, ambiguous manager.
+    h.cache['D:\\Claude\\app.asar.unpacked\\rival.js'] = {
+      loaded: true,
+      exports: { claudeCodeSessionManager: { sessions: new Map() }, Zz: { ...h.previews } },
+    }
+    expect(await h.run()).toMatchObject({ ok: true, verified: true, changed: true })
+  })
+
+  test('a second preview manager inside the hinted module is still ambiguity', async () => {
+    const h = harness()
+    h.cache[h.mainPath].exports.Other = { ...h.previews, htmlPreviews: new Map() }
+    expect(await h.run()).toMatchObject({ ok: false, dispatch: 'not-sent' })
+    expect(h.calls).toEqual([])
+  })
+
+  test('archive refuses before dispatch when Claude stopped honouring the guards it relies on', async () => {
+    for (const change of [
+      // archive no longer takes the option that keeps the checkout's files
+      (h: ReturnType<typeof harness>) => {
+        h.manager.archiveSession = async (id: string) => {
+          h.calls.push({ id })
+        }
+      },
+      // archive still forwards it, but teardown stopped reading it
+      (h: ReturnType<typeof harness>) => {
+        h.manager.archiveSession = async (id: string, o: any) =>
+          h.manager.teardownSession(id, 'archive', { cleanupWorktree: o?.cleanupWorktree })
+        h.manager.teardownSession = async () => undefined
+      },
+      // preview cleanup no longer matches by the prefix the guard models
+      (h: ReturnType<typeof harness>) => {
+        h.previews.stopServersForWorktree = (cwd: string) => (cwd === 'exact' ? 1 : 0)
+      },
+    ]) {
+      const h = harness()
+      change(h)
+      expect(await h.run()).toMatchObject({ ok: false, dispatch: 'not-sent' })
+      expect(h.calls).toEqual([])
+    }
   })
 
   test('the preview manager is found by shape even when its export is renamed', async () => {
@@ -402,7 +444,8 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
   })
   test('bystander archive and in-place settings changes produce failed postconditions', async () => {
     const h = harness()
-    h.manager.archiveSession = async () => {
+    h.manager.archiveSession = async (_id: string, { cleanupWorktree }: any) => {
+      expect(cleanupWorktree).toBe(false)
       h.target.isArchived = true
       h.other.isArchived = true
       h.target.sessionSettings.ultracode = false
@@ -416,7 +459,8 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
   })
   test('errors after dispatch retain sent status rather than suggesting a safe retry', async () => {
     const h = harness()
-    h.manager.archiveSession = async () => {
+    h.manager.archiveSession = async (_id: string, { cleanupWorktree }: any) => {
+      expect(cleanupWorktree).toBe(false)
       h.target.isArchived = true
       throw Error('save response lost')
     }

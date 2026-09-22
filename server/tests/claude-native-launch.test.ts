@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -187,6 +187,41 @@ test('an unreadable newest app fails closed instead of falling back to an older 
 test('the derived build describes the installed app without any value pinned in this repo', async () => {
   const f = await fixture()
   expect(await discoverClaudeBuild(f.binary)).toEqual(f.build)
+})
+
+test('a copy made from an unfinished install is rebuilt once the install completes', async () => {
+  const f = await fixture()
+  const first = await prepareClaudeNativeLaunch(f.binary, f.config, f.deps)
+  // Squirrel finishes writing a file the first launch never saw; claude.exe is unchanged, so the
+  // copy keeps its name and would otherwise be trusted forever.
+  await writeFile(join(f.app, 'late-dependency.dll'), 'arrived after the copy')
+  const second = await prepareClaudeNativeLaunch(f.binary, f.config, f.deps)
+  expect(second.binary).toBe(first.binary)
+  expect(await readFile(join(dirname(second.binary), 'late-dependency.dll'), 'utf8')).toBe(
+    'arrived after the copy',
+  )
+  expect(await readFile(second.binary)).toEqual(f.modified)
+  // Neither the stale copy nor a staging folder is left behind.
+  expect((await readdir(f.deps.managedRoot)).filter((name) => name.startsWith('.'))).toEqual([])
+})
+
+test('a source file that grew after the copy also triggers a rebuild', async () => {
+  const f = await fixture()
+  const first = await prepareClaudeNativeLaunch(f.binary, f.config, f.deps)
+  await writeFile(join(f.app, 'ffmpeg.dll'), 'runtime dependency, finished writing')
+  await prepareClaudeNativeLaunch(f.binary, f.config, f.deps)
+  expect(await readFile(join(dirname(first.binary), 'ffmpeg.dll'), 'utf8')).toBe(
+    'runtime dependency, finished writing',
+  )
+})
+
+test('a refused copy leaves no staging folder behind', async () => {
+  const f = await fixture()
+  await writeFile(join(f.app, 'agenthydra-native-manifest.json'), 'not a Claude file')
+  await expect(prepareClaudeNativeLaunch(f.binary, f.config, f.deps)).rejects.toThrow(
+    'Unsupported Claude resource layout',
+  )
+  expect(await readdir(f.deps.managedRoot)).toEqual([])
 })
 
 test('refuses a preexisting parent updater instead of allowing the managed copy to update itself', async () => {

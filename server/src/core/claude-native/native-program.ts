@@ -64,7 +64,12 @@ async function nativeRuntime(request: NativeProgramRequest, pin: typeof NATIVE_P
     // read through its own export, never constructed: discovery must not initialize anything.
     const loadedMembers = () =>
       Object.keys(require.cache)
-        .filter((name: string) => pathKey(name).startsWith(appPath) && require.cache[name]?.loaded)
+        .filter((name: string) => {
+          const key = pathKey(name)
+          return (
+            (key === appPath || key.startsWith(appPath + path.sep)) && require.cache[name]?.loaded
+          )
+        })
         .map((name: string) => ({ filename: name, module: require.cache[name] }))
     const exported = (module: any, name: string) => {
       try {
@@ -219,10 +224,9 @@ async function nativeRuntime(request: NativeProgramRequest, pin: typeof NATIVE_P
     const previewMatches: any[] = []
     for (const member of loadedMembers()) {
       const hinted = exported(member.module, pin.previewExportHint)
-      if (isPreviewManager(hinted)) {
+      const hintMatched = isPreviewManager(hinted)
+      if (hintMatched)
         previewMatches.push({ ...member, name: pin.previewExportHint, value: hinted })
-        continue
-      }
       let names: string[]
       try {
         names = Object.keys(member.module.exports ?? {})
@@ -230,6 +234,7 @@ async function nativeRuntime(request: NativeProgramRequest, pin: typeof NATIVE_P
         continue
       }
       for (const name of names) {
+        if (hintMatched && name === pin.previewExportHint) continue
         const value = exported(member.module, name)
         if (isPreviewManager(value)) previewMatches.push({ ...member, name, value })
       }
@@ -242,6 +247,31 @@ async function nativeRuntime(request: NativeProgramRequest, pin: typeof NATIVE_P
     mainHash = crypto.createHash('sha256').update(fs.readFileSync(mainFilename)).digest('hex')
     mainMember = path.relative(app.getAppPath(), mainFilename)
     const previewManager = previewMatch.value
+    // What the guards below assume about Claude's own code, read from that code now that no hash
+    // pins it: archive must still forward cleanupWorktree (false is what keeps the checkout's
+    // files), and stopping a worktree's previews must still match by raw prefix, which is exactly
+    // what checkSharedPreviewSafety models. A build that moved either refuses here, before any
+    // dispatch. Minified bundles keep property and method names, so these reads survive a rebuild.
+    const sourceOf = (fn: unknown) => {
+      try {
+        return typeof fn === 'function' ? Function.prototype.toString.call(fn) : ''
+      } catch {
+        return ''
+      }
+    }
+    const archiveSource = sourceOf(manager.archiveSession)
+    if (!archiveSource.includes('cleanupWorktree')) {
+      fail('native archive no longer takes cleanupWorktree')
+    }
+    if (
+      archiveSource.includes('teardownSession') &&
+      !sourceOf(manager.teardownSession).includes('cleanupWorktree')
+    ) {
+      fail('native teardown no longer reads cleanupWorktree')
+    }
+    if (!sourceOf(previewManager.stopServersForWorktree).includes('.startsWith(')) {
+      fail('native preview cleanup no longer matches worktrees by prefix')
+    }
     const checkMainIdentity = () => {
       if (
         require.cache[mainFilename] !== loadedMain ||

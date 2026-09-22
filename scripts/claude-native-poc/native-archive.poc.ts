@@ -3,6 +3,9 @@ import { expectedSourceSha256, fixture, provenance } from './archive-fixture'
 
 describe('installed Claude archive methods with inert fixture dependencies (not live app)', () => {
   test('records source checksum and exact-ID archive/unarchive amid duplicate titles', async () => {
+    // The chunk is derived now, so the evidence is that ONE was found by its export and hashed.
+    expect(provenance.member).toMatch(/^\.vite\/build\/.+\.js$/)
+    expect(expectedSourceSha256).toMatch(/^[0-9a-f]{64}$/)
     expect(provenance.sha256).toBe(expectedSourceSha256)
     expect(provenance.methods).toHaveLength(7)
     console.info('Archive POC provenance', JSON.stringify(provenance))

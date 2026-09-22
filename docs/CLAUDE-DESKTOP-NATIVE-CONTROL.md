@@ -46,8 +46,9 @@ the POC runner is for diagnostics and bounded experiments, not the general move 
 `developer_settings.json` with `allowDevTools:true` only exposes the stock Developer menu.
 It does **not** start the inspector and is **not required** by AgentHydra's managed automatic
 launch. The central `launchDebugger` setting is what makes native control start on each
-AgentHydra Open. Unsupported Claude updates are refused until reviewed; do not weaken the
-version/hash guards to make one launch.
+AgentHydra Open. A Claude update is picked up on the next Open with no code change: the
+build, fuse offset and hashes are derived at launch. A fuse-wire, manifest, source-inventory or
+identity mismatch is refused; do not weaken those guards to make one launch.
 
 ## AgentHydra settings
 
@@ -102,7 +103,8 @@ are Code-specific (`sessionType === 'ccd'`). They use the same session manager;
 they are not the Cowork or web-chat store. Their native desktop IDs include
 `local_` IDs and must not be confused with CLI transcript UUIDs.
 
-Evidence in `resources/app.asar`:
+Evidence in `resources/app.asar` (example chunk names from the 2.2553.x builds inspected
+during the investigation; they change with every Claude build):
 
 - `index.chunk-DvmOmfFd.js`: exported `claudeCodeSessionManager` singleton.
 - `index.chunk-Cd_DKFcM.js`: native Code IPC implementations.
@@ -110,8 +112,13 @@ Evidence in `resources/app.asar`:
 - `index.chunk-B-5-UF-d.js`: in-process SDK MCP session tools.
 - `index.chunk-8cddiCms.js`: application menu and debugger entry point.
 
-These names are version-specific. The adapter pins the reviewed version and both
-bundle hashes and refuses a different build. A native live proof on **another_meh
+These names change with every build and the code never looks for them. The injected
+program finds the session manager and preview manager among modules that are already loaded,
+by export name and method shape, never imports or initializes a bundle module, and fails
+closed before any mutation if a match is missing or ambiguous. Before an archive it also reads
+the loaded code for the two behaviours its guards model (archive forwards `cleanupWorktree`,
+and preview cleanup matches worktrees by prefix) and refuses a build that changed either. It
+records the matched bundle members and their SHA-256 as evidence. A native live proof on **another_meh
 (#8)** imported a disposable chat, restored its settings and archived it. See the
 [results](CLAUDE-DESKTOP-POC-RESULTS.md) for timings and preservation checks.
 
@@ -256,7 +263,7 @@ without UI fallback. Set `config` to `null` to remove the profile's opt-in.
 Configuration stores no PID; every operation discovers and verifies the current
 owner. Saving settings does not launch or restart an instance. With
 `launchDebugger:true`, the next AgentHydra Open prepares/verifies a separate full
-copy of the pinned Windows install and launches it with an instance-specific
+copy of the newest installed Windows Claude and launches it with an instance-specific
 loopback inspector port. Omit the field or set it to false to use the ordinary
 installed launcher. A direct desktop shortcut still uses its own configured
 executable; the new behavior applies to AgentHydra's Open action.
@@ -318,7 +325,7 @@ during the first test; that unrelated change was preserved.
 
 Evidence is in `tmp/ashley15-*.json` and the before/after archive PNGs. Ashley was
 closed after verification; its AgentHydra automatic-launch opt-in remains enabled.
-These results establish automatic startup and native archive on this pinned build,
+These results establish automatic startup and native archive on the build they were measured on,
 not a fully native general migration/new/start/stop/resume implementation.
 
 ## Remaining migration work

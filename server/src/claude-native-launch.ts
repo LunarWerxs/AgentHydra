@@ -9,6 +9,7 @@ import {
   readdir,
   readFile,
   rename,
+  rm,
   writeFile,
 } from 'node:fs/promises'
 import { createServer } from 'node:net'
@@ -263,6 +264,35 @@ async function patchInspectorFuse(
   }
 }
 
+/** A verified copy that no longer matches the installed app it was made from. Not tampering: the
+ *  copy is intact but was made from an install that was not finished (see assertMatchesSource). */
+class StaleManagedCopy extends Error {}
+
+/**
+ * The installed folder must hold exactly the files the copy recorded, at the recorded sizes.
+ *
+ * Squirrel extracts an update straight into its final app-<version> folder while the old version
+ * keeps running, and the newest folder is now the one used. So a launch during that extraction can
+ * see a complete claude.exe and app.asar with other files still missing, and a copy made from that
+ * snapshot would be named after the same claude.exe as the finished install and trusted forever,
+ * because on its own it verifies perfectly. Checking the copy against its SOURCE, not just against
+ * itself, is what turns that into a rebuild. Sizes, not hashes: this runs on every launch, and a
+ * file whose content changed at the same size would have to have been rewritten by the installer
+ * after it was copied, which the per-file hashing during the copy already refuses.
+ */
+async function assertMatchesSource(sourceDir: string, recorded: FileDigest[]): Promise<void> {
+  const current = await filesIn(sourceDir)
+  if (JSON.stringify(current) !== JSON.stringify(recorded.map((entry) => entry.path))) {
+    throw new StaleManagedCopy('Installed Claude files differ from the managed copy')
+  }
+  for (const entry of recorded) {
+    const info = await lstat(childPath(sourceDir, entry.path))
+    if (info.size !== entry.size) {
+      throw new StaleManagedCopy(`Installed Claude file changed since the copy: ${entry.path}`)
+    }
+  }
+}
+
 async function verifyCopy(
   target: string,
   sourceBinary: string,
@@ -299,6 +329,8 @@ async function verifyCopy(
   if (!manifest.files.some((entry) => entry.path === 'resources/app.asar')) {
     throw Error('Managed Claude copy is missing app resources')
   }
+  // Last, so any sign of tampering above is still reported as tampering and fails closed.
+  await assertMatchesSource(dirname(sourceBinary), manifest.files)
 }
 
 const preparing = new Map<string, Promise<string>>()
@@ -328,7 +360,25 @@ async function prepareCopy(
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     return createCopy(sourceBinary, managedRoot, target, build)
   }
-  await verifyCopy(target, sourceBinary, build)
+  try {
+    await verifyCopy(target, sourceBinary, build)
+  } catch (error) {
+    if (!(error instanceof StaleManagedCopy)) throw error
+    // Made from an unfinished install of this same claude.exe: move it aside and build it again
+    // from the finished one. Windows will not move a folder whose Claude is still running, which
+    // fails closed with the reason rather than launching the incomplete copy a second time.
+    const aside = childPath(managedRoot, `.stale-${randomUUID()}`)
+    try {
+      await rename(target, aside)
+    } catch (moveError) {
+      const reason = moveError instanceof Error ? moveError.message : String(moveError)
+      throw Error(
+        `The managed Claude copy was made from an unfinished update and is still in use; close every Claude opened from it, then open again (${reason})`,
+      )
+    }
+    await rm(aside, { recursive: true, force: true }).catch(() => undefined)
+    return createCopy(sourceBinary, managedRoot, target, build)
+  }
   return join(target, 'claude.exe')
 }
 
@@ -338,9 +388,24 @@ async function createCopy(
   target: string,
   build: Readonly<ClaudeManagedBuild>,
 ): Promise<string> {
-  // An interrupted build stays in its uniquely named staging directory, never a runnable cache.
+  // A crashed build stays in its uniquely named staging directory, never a runnable cache; a
+  // refused one is removed, because each is a full copy of Claude and refusals can repeat.
   const staging = childPath(managedRoot, `.building-${randomUUID()}`)
   await mkdir(staging)
+  try {
+    return await buildCopy(sourceBinary, staging, target, build)
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+async function buildCopy(
+  sourceBinary: string,
+  staging: string,
+  target: string,
+  build: Readonly<ClaudeManagedBuild>,
+): Promise<string> {
   const sourceDir = dirname(sourceBinary)
   const files = await filesIn(sourceDir, '', async (path) => {
     if (path) await mkdir(childPath(staging, path), { recursive: true })
@@ -369,6 +434,13 @@ async function createCopy(
   executable.sha256 = build.managedSha256
   if ((await digest(sourceBinary)).sha256 !== build.sourceSha256) {
     throw Error('Installed Claude executable changed during copy')
+  }
+  // Files the installer added or grew while this copy ran mean the snapshot is not the install.
+  try {
+    await assertMatchesSource(sourceDir, copied)
+  } catch (error) {
+    if (!(error instanceof StaleManagedCopy)) throw error
+    throw Error(`Claude is still being updated; open it again in a moment (${error.message})`)
   }
   const manifest: CopyManifest = {
     schema: 1,

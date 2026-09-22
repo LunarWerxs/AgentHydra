@@ -53,7 +53,12 @@ async function settingsRuntime(
     const appPath = key(app.getAppPath())
     const members = () =>
       Object.keys(require.cache)
-        .filter((name: string) => key(name).startsWith(appPath) && require.cache[name]?.loaded)
+        .filter((name: string) => {
+          const at = key(name)
+          return (
+            (at === appPath || at.startsWith(appPath + path.sep)) && require.cache[name]?.loaded
+          )
+        })
         .map((name: string) => ({ filename: name, module: require.cache[name] }))
     const sole = (matches: any[], what: string) => {
       const distinct = matches.filter(
