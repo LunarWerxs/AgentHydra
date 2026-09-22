@@ -344,7 +344,7 @@ async function detectSelf(
  *  resolving it costs a `netstat` and only the identity tools ever ask. */
 type CallerPidSource = () => Promise<number | null>
 const CALLER_PID_ARG = 'callerPid'
-const CALLER_AWARE_TOOLS = new Set(['whoami', 'check_my_usage'])
+const CALLER_AWARE_TOOLS = new Set(['whoami', 'check_my_usage', 'move_chat', 'move_chats'])
 
 export async function callerPidFromArgs(a: Record<string, unknown>): Promise<number | null> {
   const source = a[CALLER_PID_ARG]
@@ -719,12 +719,15 @@ function targetConfirmation(how: 'here' | 'to', row: ResolvedInstanceRow): strin
  *  resolved to the intended account, not only afterwards in a landed result. */
 async function resolveMoveTarget(
   to: unknown,
+  callerPid?: number | null,
 ): Promise<{ toRef: string; targetNote: string | undefined }> {
   const toArg = to == null || str(to).trim() === '' ? 'here' : str(to).trim()
   if (toArg.toLowerCase() === 'here') {
     // "here" bills THIS process's account, so it is accepted only on a proven identity: an
-    // assumed or disambiguated answer would make the wrong account the destination.
-    const self = await selfIdentity()
+    // assumed or disambiguated answer would make the wrong account the destination. Over HTTP
+    // it must be the CALLER's identity (as whoami resolves it), never the daemon's own - which
+    // is always unidentified and refused every "here" move until 2026-09-22.
+    const self = await selfIdentity(false, callerPid)
     if (!self.instance || self.confidence !== 'exact' || self.warning)
       throw new Error(
         `cannot resolve "here" with certainty (${self.summary}${self.warning ? ` — ${self.warning}` : ''}). Pass \`to\` as the target's instance number (list_instance_numbers).`,
@@ -2007,7 +2010,7 @@ export const TOOLS: McpEngineTool[] = [
       const wait = Math.max(0, Math.min(360, Number(a.wait_secs ?? 330) || 0))
       // One resolver, shared with move_chats (resolveMoveTarget), so a batch and a single
       // move can never disagree about which account "here" or "best" names.
-      const { toRef, targetNote } = await resolveMoveTarget(a.to)
+      const { toRef, targetNote } = await resolveMoveTarget(a.to, await callerPidFromArgs(a))
       const args = [
         chat,
         '--to',
@@ -2179,7 +2182,7 @@ export const TOOLS: McpEngineTool[] = [
       // one specific chat and will wait for it; multiplied across a batch it is the entire
       // complaint this tool exists to answer.
       const wait = Math.max(0, Math.min(360, Number(a.wait_secs ?? 60) || 0))
-      const { toRef, targetNote } = await resolveMoveTarget(a.to)
+      const { toRef, targetNote } = await resolveMoveTarget(a.to, await callerPidFromArgs(a))
       const args = ['--to', toRef, '--stop-idle', '--now', '--idle-wait', String(wait), '--json']
       for (const c of chatSpecs) {
         args.push('--chat', c.chat)
