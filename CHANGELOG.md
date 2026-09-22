@@ -7,8 +7,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-22
+
 ### Added
 
+- **The app says when AgentHydra is running older code than its folder, and restarts it in one
+  click.** A source install kept serving the code it started with after a commit or a pull, so
+  routes and tools added since simply went missing (a new MCP tool answered with the web page)
+  and nothing anywhere said the daemon was just old. The daemon records the commit it booted on
+  and compares it with its checkout (read from git's own files, no process); when they differ the
+  header shows "Restart to load new code", every MCP tool result carries `daemonRestartNeeded`,
+  and `/api/health` reports `runningCode`. The restart is the existing in-place relaunch, on the
+  same port.
 - **The Instances table shows when each account was last launched on this PC**, and sorts by it.
   It counts AgentHydra's own Open (stamped the moment the app is spawned) and, on Windows, any
   launch from anywhere else that the process scan sees running (Start menu, taskbar, Claude
@@ -45,6 +55,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **The permission picker reported working chats as unapproved.** Right after a chat was moved,
+  it said two sidebar rows had the chat's name ("ambiguous:2") and then that the chat was not open,
+  while one row existed and the chat was running in bypass. Claude Desktop now puts the composer's
+  model button at the right of the message box, and the picker used that button to find where the
+  sidebar ends, so it counted the open chat's own header button as a second sidebar row and never
+  looked for it in the pane. The sidebar's edge is now measured off its own chat rows, which works
+  in any language and layout; checked read-only against three open windows.
+- **Claude Code sessions lost AgentHydra's tools when another Claude app rewrote its config.**
+  AgentHydra registered itself in `~/.claude.json` once, at startup. Every running Claude client
+  rewrites that whole file from its own copy, so one that was already open reverted the entry,
+  and a different session hours later found an MCP server with no tools and nothing saying why.
+  The entry is now re-checked every minute while registration is on and restored if it drifted
+  (an unchanged file costs one read), a failure that persists is logged once rather than every
+  minute, and `/api/health` reports whether the registration currently points at this daemon.
 - **A table sort put missing values first when descending.** Stopped instances (no memory, no
   uptime) and never-launched ones jumped to the top of any descending sort, contrary to the
   column contract that they sort last. They now sort last in both directions.
