@@ -196,6 +196,9 @@ function weeklyWait(inst: CMInstance) {
   return waitSeverity(weeklyRemaining(inst))
 }
 
+// The sort survives a reload: persisted through useUiPrefs like the table's collapse state.
+const { desktopSortKey, desktopSortDirection } = useUiPrefs()
+
 const { sortedRows, toggleSort, indicatorFor } = useSortable(
   () => instances.value,
   [
@@ -227,8 +230,26 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
     },
     { key: 'usageSession', accessor: (i: CMInstance) => usageFor(i)?.session?.pct ?? undefined },
     { key: 'plan', accessor: (i: CMInstance) => i.account?.planLabel ?? undefined },
+    // By the instant, not the "3h ago" text, so the order is true across units.
+    {
+      key: 'lastLaunched',
+      accessor: (i: CMInstance) => (i.lastLaunchedAt ? Date.parse(i.lastLaunchedAt) : undefined),
+    },
   ],
+  { key: desktopSortKey, direction: desktopSortDirection },
 )
+
+/** "3h ago" for the last launch on this PC. Reads the shared clock so the cell ticks with the tab. */
+function lastLaunchedLabel(inst: CMInstance): string {
+  void now.value
+  return timeAgo(inst.lastLaunchedAt)
+}
+/** The exact local time behind the relative label, for the hover. */
+function lastLaunchedExact(inst: CMInstance): string | undefined {
+  if (!inst.lastLaunchedAt) return undefined
+  const at = Date.parse(inst.lastLaunchedAt)
+  return Number.isFinite(at) ? new Date(at).toLocaleString() : undefined
+}
 
 // --- filter -----------------------------------------------------------------------------------
 // "Show me the rows I'm after" (composables/useInstanceFilter.ts): open or closed, which plan, how
@@ -1267,6 +1288,17 @@ onUnmounted(() => {
                 <ArrowDown v-else-if="indicatorFor('plan') === 'desc'" class="size-3" />
               </span>
             </TableHead>
+            <!-- After Plan, before Actions, in both column modes: when an account was last opened
+                 is as true in usage mode as in process mode, and placing it right of every other
+                 column keeps the fixed-width quota columns aligned with the tables below. -->
+            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('lastLaunched')">
+              <span class="inline-flex items-center gap-0.5">
+                {{ $t('instances.colLastLaunched') }}
+                <InfoHint :text="$t('instances.colLastLaunchedHint')" @click.stop />
+                <ArrowUp v-if="indicatorFor('lastLaunched') === 'asc'" class="size-3" />
+                <ArrowDown v-else-if="indicatorFor('lastLaunched') === 'desc'" class="size-3" />
+              </span>
+            </TableHead>
             <TableHead class="text-end">{{ $t('instances.colActions') }}</TableHead>
           </TableRow>
         </TableHeader>
@@ -1275,9 +1307,10 @@ onUnmounted(() => {
              that landing as a blank tbody with no explanation. -->
         <TableBody v-if="visibleRows.length === 0" class="[&>tr]:transition-colors [&>tr]:duration-200">
           <!-- Usage mode swaps three process columns for two quota ones and adds the 5-hour
-               usage chip, which lands back on nine either way. Kept as an expression rather than a
-               literal so a future column change cannot silently desync the span from the header. -->
-          <TableEmpty v-if="!loading" :colspan="usageMode ? 9 : 9">
+               usage chip, which lands back on ten either way (Last launched shows in both). Kept as
+               an expression rather than a literal so a future column change cannot silently desync
+               the span from the header. -->
+          <TableEmpty v-if="!loading" :colspan="usageMode ? 10 : 10">
             <div class="flex flex-col items-center gap-1 text-center">
               <component :is="allHiddenByFilter ? Funnel : Boxes" class="mb-1 size-6 opacity-40" />
               <p class="font-medium text-foreground">
@@ -1316,6 +1349,7 @@ onUnmounted(() => {
             </template>
             <TableCell><Skeleton class="h-5 w-14" /></TableCell>
             <TableCell><Skeleton class="h-5 w-16" /></TableCell>
+            <TableCell><Skeleton class="h-3 w-14" /></TableCell>
             <TableCell>
               <div class="flex justify-end"><Skeleton class="h-6 w-20" /></div>
             </TableCell>
@@ -1538,6 +1572,16 @@ onUnmounted(() => {
               <Badge v-if="inst.account?.planLabel" variant="outline">
                 {{ inst.account.planLabel }}
               </Badge>
+              <span v-else class="text-xs text-muted-foreground">—</span>
+            </TableCell>
+            <TableCell>
+              <span
+                v-if="inst.lastLaunchedAt"
+                class="text-xs tabular-nums"
+                :title="tooltipsEnabled ? lastLaunchedExact(inst) : undefined"
+              >
+                {{ lastLaunchedLabel(inst) }}
+              </span>
               <span v-else class="text-xs text-muted-foreground">—</span>
             </TableCell>
             <TableCell>

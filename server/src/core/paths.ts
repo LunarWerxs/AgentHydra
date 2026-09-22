@@ -85,6 +85,11 @@ export function instanceMetaFile(): string {
   return path.join(appDataDir(), 'instance-meta.json')
 }
 
+/** When each desktop instance was last launched, per machine; see core/instance-launches.ts. */
+export function instanceLaunchesFile(): string {
+  return path.join(appDataDir(), 'instance-launches.json')
+}
+
 /** Permanent instance NUMBERS (`#1`, `#2`, …), keyed by instance ref. The short handle a human
  *  says out loud and an MCP client passes around; see server/src/core/instance-numbers.ts. */
 export function instanceNumbersFile(): string {

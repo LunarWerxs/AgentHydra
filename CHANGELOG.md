@@ -7,6 +7,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **The Instances table shows when each account was last launched on this PC**, and sorts by it.
+  It counts AgentHydra's own Open (stamped the moment the app is spawned) and, on Windows, any
+  launch from anywhere else that the process scan sees running (Start menu, taskbar, Claude
+  itself), keeping the later of the two. Entries are kept per machine, so a data folder shared
+  between PCs never shows another PC's launch as a local one, and they are cleared when an
+  instance is deleted. An account shows a dash until it is next seen starting: there was no
+  record before this.
+- **The Instances table remembers how it was sorted**, across reloads, restarts and the daemon's
+  port hops, through the same mirrored preference store as its collapse state. A remembered
+  column that no longer exists reads as unsorted.
+
 ### Changed
 
 - **Native control no longer pins a Claude Desktop version, so a Claude update stops breaking
@@ -29,6 +42,25 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   still a person's word; an unreadable usage row never triggers it.
 - **A move whose source row was only disk-flagged is reported as not finished**, because the
   running source app still shows it. The report leads with it and `sourceStillShown` lists it.
+
+### Fixed
+
+- **A table sort put missing values first when descending.** Stopped instances (no memory, no
+  uptime) and never-launched ones jumped to the top of any descending sort, contrary to the
+  column contract that they sort last. They now sort last in both directions.
+- **A managed Claude copy made while Squirrel was still installing an update was trusted
+  forever.** Squirrel extracts straight into the new app folder, and the newest folder is now the
+  one used, so a launch during that window could copy a complete `claude.exe` with other files
+  missing and name the copy after the same executable as the finished install. The copy is now
+  checked against the installed folder's file list and sizes right after copying and on every
+  reuse; one made from an unfinished install is moved aside and rebuilt, and a refused copy no
+  longer leaves a full-size staging folder behind.
+- **The inspector program now checks the Claude code it relies on before an archive.** With no
+  hash pinning the bundle, it reads the loaded code to confirm that archive still forwards
+  `cleanupWorktree` (which keeps a checkout's files) and that preview cleanup still matches
+  worktrees by prefix (which its preview guard models), and refuses a build that changed either.
+  Module discovery is also scoped to the app folder itself rather than any path sharing its
+  prefix, and a second preview manager in the hinted module now counts as ambiguity.
 
 ## [1.0.0] - 2026-09-20
 

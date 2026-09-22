@@ -28,6 +28,7 @@ import {
 } from '../claude-native-settings'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { detectDesktopInstall } from './desktop-install'
+import { recordInstanceLaunches } from './instance-launches'
 import { readInstanceMetaMap } from './instance-meta'
 import { instanceNumbers, instanceRef } from './instance-numbers'
 import { readLoginUuid } from './login-state'
@@ -193,6 +194,15 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
   // One read of the presentation-metadata file (label/icon/color), keyed by normalized dir.
   const metaMap = readInstanceMetaMap()
 
+  // When each profile was last started on this PC. Every running main process is folded in with
+  // its OWN start time before the read, so an instance opened outside AgentHydra (Start menu,
+  // taskbar, Claude's shortcut) counts the same as one opened from here. Writes only on change.
+  const launches = recordInstanceLaunches(
+    [...runningByDir.entries()]
+      .map(([dir, proc]) => ({ dir, at: proc.startTime ? Date.parse(proc.startTime) : Number.NaN }))
+      .filter((launch) => Number.isFinite(launch.at)),
+  )
+
   // …and one read of the number registry for the WHOLE fleet, which also assigns a number to any
   // instance seen for the first time. Bulk rather than per-row: this list runs on a refresh timer.
   const numbers = instanceNumbers([...known.values()].map((m) => instanceRef('desktop', m.dir)))
@@ -206,6 +216,7 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
         memoryByDir,
         metaMap,
         numbers,
+        launches,
       }),
     )
   }
@@ -257,9 +268,10 @@ async function buildInstanceRow(
     memoryByDir: Map<string, number>
     metaMap: ReturnType<typeof readInstanceMetaMap>
     numbers: Map<string, number>
+    launches: Record<string, number>
   },
 ): Promise<CMInstance> {
-  const { options, running, memoryByDir, metaMap, numbers } = ctx
+  const { options, running, memoryByDir, metaMap, numbers, launches } = ctx
   let account: CMInstance['account'] = null
   if (options.includeAccount && options.resolveAccount) {
     try {
@@ -280,6 +292,7 @@ async function buildInstanceRow(
     isRunning: Boolean(running),
     pid: running?.pid ?? null,
     startTime: running?.startTime ?? null,
+    lastLaunchedAt: launches[meta.dir] ? new Date(launches[meta.dir]).toISOString() : null,
     sizeBytes,
     memoryBytes,
     account,
@@ -484,6 +497,9 @@ async function openConfiguredInstance(
       proc.unref()
       pid = proc.pid
       launchDispatched = true
+      // Stamped at spawn, not at readiness: the app WAS started on this PC even if the managed
+      // handshake that follows fails, and the process scan will confirm or refine the time.
+      recordInstanceLaunches([{ dir: normDir, at: Date.now() }])
       invalidateClaudeProcessCache()
       if (nativeLaunchData) nativeLaunchData.handoffPid = proc.pid
       if (plan.nativeDebugger) {

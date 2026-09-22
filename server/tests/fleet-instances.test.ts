@@ -12,6 +12,7 @@ function inst(over: Partial<CMInstance> & { num: number; dir: string }): CMInsta
     isRunning: false,
     pid: null,
     startTime: null,
+    lastLaunchedAt: null,
     sizeBytes: null,
     memoryBytes: null,
     account: null,
