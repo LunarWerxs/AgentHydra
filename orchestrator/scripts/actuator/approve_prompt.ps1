@@ -307,20 +307,23 @@ $btnCond = New-Object System.Windows.Automation.PropertyCondition(
   [System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
 
 function PaneMinX($root) {
-  # RAIL (review 2026-09-06): prefer the composer row's own anchor ('Model: ...') over a width
-  # fraction when it is on screen - measured 2026-09-05, the 38% line missed the true sidebar
-  # boundary on a narrow window. The fraction stays only as the documented fallback.
+  # Where the sidebar ends and the conversation pane begins. Every button's name and rectangle,
+  # read once, and the decision is Get-PaneBoundary's (in the tested region below): measured
+  # off the sidebar's own row/kebab pairs, with the old anchors only as fallbacks.
+  $descs = @()
   try {
     foreach ($b in $root.FindAll($TREE, $btnCond)) {
-      $n = $b.Current.Name
-      if ($n -and $n.StartsWith('Model: ')) {
+      try {
+        $n = $b.Current.Name
+        if (-not $n) { continue }
         $br = $b.Current.BoundingRectangle
-        if (-not $br.IsEmpty) { return $br.Left - 40 }
-      }
+        if ($br.IsEmpty) { continue }
+        $descs += [pscustomobject]@{ Name = $n; Left = $br.Left; Top = $br.Top; Right = $br.Right; Bottom = $br.Bottom }
+      } catch { continue }
     }
   } catch {}
   $r = $root.Current.BoundingRectangle
-  return $r.Left + ($r.Width * 0.38)
+  return (Get-PaneBoundary $descs $r.Left $r.Width)
 }
 
 # RAIL 2 MATCHES THE UI'S SHAPE, NEVER ITS LANGUAGE (rebuilt 2026-09-09).
@@ -383,6 +386,43 @@ function Get-OwningRow($buttons, $kebab) {
   })
   if ($holds.Count -eq 1) { return $holds[0] }
   return $null
+}
+function Get-PaneBoundary($buttons, [double]$winLeft, [double]$winWidth) {
+  # ⛔ THE COMPOSER'S 'Model: ' BUTTON NO LONGER MARKS THE PANE'S LEFT EDGE (measured live
+  # 2026-09-22 on three windows of Claude Desktop 2.2553.13). It moved to the RIGHT end of the
+  # composer, beside Effort and Usage, so 'Model: ' minus 40 put the boundary almost at the
+  # window's right edge. Everything left of it then counted as SIDEBAR, including the open
+  # chat's own header kebab, which is named exactly like its sidebar kebab. That one mistake
+  # produced both false alarms of 2026-09-22: Select-SidebarChat saw TWO kebabs named
+  # '<phrase><title>' and refused as 'ambiguous:2' while the sidebar showed one row, and
+  # Test-PaneShows looked for the header kebab only right of the boundary and reported
+  # "the pane still does not show the title" for a chat that was open.
+  #
+  # MEASURED INSTEAD: the sidebar's right edge is where its chat rows end. A row and its own
+  # kebab share one horizontal band, the row CONTAINS the kebab (row [260-513], kebab
+  # [490-510]), and the two names carry the same title behind two decorations (Get-PairTitle).
+  # The open chat's header kebab has no such partner: beside it sits '<title>, rename session',
+  # which neither contains it nor shares its tail. No names, no language, no layout constant.
+  $edge = $null
+  foreach ($k in $buttons) {
+    if (-not $k.Name) { continue }
+    $cy = ($k.Top + $k.Bottom) / 2.0
+    foreach ($row in $buttons) {
+      if ($row -eq $k -or -not $row.Name) { continue }
+      if ($row.Left -gt $k.Left -or $row.Right -lt $k.Right) { continue }
+      if ($row.Top -gt ($cy + 2) -or $row.Bottom -lt ($cy - 2)) { continue }
+      $t = Get-PairTitle $row.Name $k.Name
+      if (-not $t -or $k.Name.Length -le $t.Length) { continue }
+      if ($null -eq $edge -or $row.Right -gt $edge) { $edge = $row.Right }
+    }
+  }
+  if ($null -ne $edge) { return $edge + 4 }
+  # FALLBACKS, for a sidebar with no readable pairs (collapsed, or still empty). The composer
+  # anchor is honoured only where it was measured to work (2026-09-05): in the window's LEFT
+  # half. Otherwise the documented fraction.
+  $model = @($buttons | Where-Object { $_.Name -and $_.Name.StartsWith('Model: ') }) | Select-Object -First 1
+  if ($model -and $model.Left -lt ($winLeft + $winWidth / 2.0)) { return $model.Left - 40 }
+  return $winLeft + ($winWidth * 0.38)
 }
 function Get-KebabPhrase($buttons) {
   # Every kebab on screen reads '<phrase> <title>' with the SAME phrase, whatever the app's

@@ -56,14 +56,17 @@ foreach ($c in $spec) {
   }
   $phrase = Get-KebabPhrase $btns
   $use = if ($phrase) { $phrase } else { [string]$c.fallback }
-  $pick = Select-SidebarChat $btns ([double]$c.minX) ([string]$c.title) $use
+  $minX = [double]$c.minX
+  if ($null -ne $c.win) { $minX = Get-PaneBoundary $btns ([double]$c.win.left) ([double]$c.win.width) }
+  $pick = Select-SidebarChat $btns $minX ([string]$c.title) $use
   $out += [pscustomobject]@{
     name     = [string]$c.name
     phrase   = $phrase
     why      = [string]$pick.Why
     row      = $(if ($pick.Row) { [string]$pick.Row.Name } else { $null })
     rendered = @($pick.Rendered)
-    pane     = [bool](Test-PaneShows $btns ([double]$c.minX) ([string]$c.title) $use)
+    pane     = [bool](Test-PaneShows $btns $minX ([string]$c.title) $use)
+    minX     = $minX
   }
 }
 ($out | ConvertTo-Json -Depth 6 -Compress -AsArray) | Set-Content -LiteralPath $OutPath -Encoding utf8
@@ -166,7 +169,56 @@ SPANISH_AMBIGUOUS_SIDEBAR = [
     _kebab(EN + SPANISH_LONG_TITLE[:60] + "…", 1),
 ]
 
+def _btn(name, left, right, top, bottom, expand=False, invoke=False):
+    return {"name": name, "left": left, "top": top, "right": right, "bottom": bottom,
+            "expand": expand, "invoke": invoke}
+
+
+# READ OFF A LIVE WINDOW, 2026-09-22 (Claude Desktop 2.2553.13, read-only UIA probe, nothing
+# clicked). The open chat's HEADER kebab carries exactly the same name as its SIDEBAR kebab, and
+# the composer's 'Model: ' button now sits at the RIGHT end of the composer. The old boundary
+# ('Model: ' minus 40) therefore landed at x=1125 and counted the header kebab as a second
+# sidebar row: 'ambiguous:2' on a sidebar showing one row, and "the pane does not show the title"
+# for a chat that was open. Both false alarms of the 2026-09-22 GlimmerAC move had this cause.
+LIVE_TITLE = "Connections Architect burn-down"
+LIVE_OTHER = "Dredd continued from overnight"
+LIVE_WINDOW = {"left": 244, "width": 1137}
+LIVE_2553_13 = [
+    _btn("Menu", 264, 292, 48, 76, invoke=True),
+    _btn("Hide sidebar", 296, 324, 48, 76, invoke=True),
+    _btn("Back", 328, 356, 48, 76, invoke=True),
+    _btn("Forward", 358, 386, 48, 76, invoke=True),
+    _btn(LIVE_TITLE + ", rename session", 561, 781, 50, 74, invoke=True),
+    _btn(EN + LIVE_TITLE, 776, 801, 50, 74, expand=True),       # the OPEN chat's header kebab
+    _btn("NEWProjects", 806, 892, 52, 72, invoke=True),
+    _btn("Terminal", 1101, 1127, 49, 75, invoke=True),
+    _btn("Running " + LIVE_TITLE, 260, 513, 241, 267, invoke=True),
+    _btn(EN + LIVE_TITLE, 490, 510, 244, 264, expand=True),     # its sidebar kebab: same name
+    _btn("Idle " + LIVE_OTHER, 260, 513, 268, 294, invoke=True),
+    _btn(EN + LIVE_OTHER, 490, 510, 271, 291, expand=True),
+    _btn("Model: Opus 5.5", 1165, 1225, 990, 1014, invoke=True),
+    _btn("Effort: Ultracode", 1230, 1298, 990, 1014, invoke=True),
+]
+# The same window with the sidebar hidden: no row/kebab pairs to measure, composer anchor on the
+# right, so the fraction decides.
+LIVE_NO_SIDEBAR = [b for b in LIVE_2553_13 if b["left"] >= 540]
+# An older layout, with the composer's model button at the LEFT of the pane (measured 2026-09-05),
+# is still honoured when the sidebar gives nothing to measure.
+LEFT_ANCHOR_NO_SIDEBAR = [
+    _pane_kebab(EN + "alpha"),
+    _btn("Model: Opus 5", 700, 760, 990, 1014, invoke=True),
+]
+
 CASES = [
+    {"name": "live_open_chat", "buttons": LIVE_2553_13, "title": LIVE_TITLE, "win": LIVE_WINDOW},
+    {"name": "live_other_chat", "buttons": LIVE_2553_13, "title": LIVE_OTHER, "win": LIVE_WINDOW},
+    # The boundary the old code computed on that same window, kept to show what it did.
+    {"name": "live_old_model_anchor", "buttons": LIVE_2553_13, "title": LIVE_TITLE,
+     "minXOverride": 1125},
+    {"name": "live_no_sidebar", "buttons": LIVE_NO_SIDEBAR, "title": LIVE_TITLE,
+     "win": LIVE_WINDOW},
+    {"name": "left_anchor_no_sidebar", "buttons": LEFT_ANCHOR_NO_SIDEBAR, "title": "alpha",
+     "win": {"left": 0, "width": 2000}},
     {"name": "en_row", "buttons": EN_SIDEBAR, "title": "beta"},
     {"name": "en_open_chat", "buttons": EN_SIDEBAR, "title": "alpha"},
     {"name": "en_undecorated_row", "buttons": EN_SIDEBAR, "title": "gamma"},
@@ -216,7 +268,8 @@ class ApprovePromptMatchingTest(unittest.TestCase):
         script.write_text(HARNESS_HEAD + region + HARNESS_BODY, encoding="utf-8")
         cases = Path(tmp) / "cases.json"
         cases.write_text(json.dumps(
-            [{**c, "minX": MIN_X, "fallback": EN} for c in CASES]), encoding="utf-8")
+            [{**c, "minX": c.get("minXOverride", MIN_X), "fallback": EN} for c in CASES]),
+            encoding="utf-8")
         verdicts = Path(tmp) / "verdicts.json"
         r = subprocess.run(
             [PWSH, "-NoProfile", "-NonInteractive", "-File", str(script),
@@ -234,6 +287,35 @@ class ApprovePromptMatchingTest(unittest.TestCase):
     def case(self, name):
         self.assertIn(name, self.results, f"the harness produced no verdict for {name}")
         return self.results[name]
+
+    # --- the pane boundary is measured, not assumed (2026-09-22) -------------------------
+    def test_the_boundary_is_the_sidebar_rows_right_edge(self):
+        self.assertEqual(self.case("live_open_chat")["minX"], 517)
+
+    def test_the_open_chats_header_kebab_is_not_a_second_sidebar_row(self):
+        got = self.case("live_open_chat")
+        self.assertEqual(got["why"], "ok", "one sidebar row must not read as 'ambiguous:2'")
+        self.assertEqual(got["row"], "Running " + LIVE_TITLE)
+        self.assertTrue(got["pane"], "the open chat's header kebab is the pane receipt")
+
+    def test_a_chat_that_is_not_open_selects_but_has_no_receipt(self):
+        got = self.case("live_other_chat")
+        self.assertEqual(got["why"], "ok")
+        self.assertEqual(got["row"], "Idle " + LIVE_OTHER)
+        self.assertFalse(got["pane"])
+
+    def test_the_old_composer_anchor_reproduces_both_false_alarms(self):
+        got = self.case("live_old_model_anchor")
+        self.assertEqual(got["why"], "ambiguous:2")
+        self.assertFalse(got["pane"])
+
+    def test_a_right_hand_composer_anchor_is_ignored_when_nothing_can_be_measured(self):
+        got = self.case("live_no_sidebar")
+        self.assertAlmostEqual(got["minX"], 244 + 1137 * 0.38, places=3)
+        self.assertTrue(got["pane"])
+
+    def test_a_left_hand_composer_anchor_is_still_honoured_as_a_fallback(self):
+        self.assertEqual(self.case("left_anchor_no_sidebar")["minX"], 660)
 
     # --- it still does what it was built for -------------------------------------------
     def test_english_row_is_found_behind_its_status_prefix(self):
