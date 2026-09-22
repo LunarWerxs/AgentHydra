@@ -164,7 +164,17 @@ test("applyUpdate rolls back the checkout when build fails after the code swap",
   // reinstall pass), so this test isolates a clean rollback from the reinstall-also-fails case.
   const updater = updaterFor(local, loggingCmd(log, "install"), failsOnCallsCmd(log, "build", buildCount, [1]));
 
-  await expect(updater.applyUpdate()).rejects.toThrow("boom; rolled back to the previous version");
+  const failure = (await updater.applyUpdate().then(
+    () => null,
+    (e: unknown) => e,
+  )) as (Error & { output?: string[] }) | null;
+  expect(failure?.message).toContain("boom; rolled back to the previous version");
+  // The transcript rides on the rejection (RepoYeti issue #24): the pull, the failed build with its
+  // stderr, and the rollback steps, in order. Before, it only ever reached a caller on success.
+  const transcript = (failure?.output ?? []).join("\n");
+  expect(transcript).toContain("git pull --ff-only");
+  expect(transcript).toContain("boom");
+  expect(transcript).toContain("git reset --hard");
 
   // Checkout state, not just the log message: HEAD is back at the pre-update commit, the
   // pulled-in file change is gone, and the tree is clean (no half-applied swap left behind).

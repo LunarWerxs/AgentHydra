@@ -366,9 +366,24 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
     throw new Error(buildRollbackMessage(msg, reset, restored, stashName, changedDuring.length));
   }
 
+  // Every failure carries the transcript. `output` used to reach a caller only on SUCCESS: each
+  // failure path threw a bare Error and the array died with the frame, so a user reporting a failed
+  // update could paste one line and never the build output that explained it (RepoYeti issue #24).
+  // The rejection is still an Error whose message is the one-line reason; `err.output` holds every
+  // step recorded before it, rollback steps included, for the host to log and offer as details.
   async function applyUpdate() {
-    const before = await checkForUpdate();
     const output = [];
+    try {
+      return await applyRecording(output);
+    } catch (err) {
+      const failure = err instanceof Error ? err : new Error(String(err));
+      failure.output = output;
+      throw failure;
+    }
+  }
+
+  async function applyRecording(output) {
+    const before = await checkForUpdate();
     if (!before.updateAvailable) {
       return {
         ok: true,

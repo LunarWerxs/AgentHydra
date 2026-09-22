@@ -34,6 +34,12 @@ export interface UpdateApplyResult {
   output: string[];
 }
 
+/** What `applyUpdate` rejects with: `message` is the one-line reason, `output` is every step's
+ *  `$ command` + result recorded before the failure (rollback steps included), in order. */
+export interface UpdateApplyError extends Error {
+  output: string[];
+}
+
 export interface UpdaterOptions {
   /** Checkout root (each app resolves its own import.meta path and passes it in). */
   appRoot: string;
