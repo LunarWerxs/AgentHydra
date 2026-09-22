@@ -22,8 +22,10 @@ async function captureRuntime(request: CaptureRequest) {
       .replace(/[\\/]+$/, '')
       .toLowerCase()
   const guard = () => {
-    if (proc.pid !== request.pid || app.getVersion() !== '2.2553.13') {
-      throw Error('Capture refused: unexpected PID or Claude version')
+    // Reading windows is version-independent, so the guard is identity only: this exact
+    // process and this exact profile. Naming a release here only broke on the next one.
+    if (proc.pid !== request.pid) {
+      throw Error('Capture refused: unexpected PID')
     }
     if (normalize(app.getPath('userData')) !== normalize(request.profile) || !app.isReady()) {
       throw Error('Capture refused: unexpected profile or app state')
