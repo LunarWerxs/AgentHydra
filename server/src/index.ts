@@ -54,6 +54,7 @@ import {
 import { createChatGptContextPack } from './context-pack'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
+import { createRunningCodeProbe, restartNeededMessage } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { crashRecordLine, exitRecordLine } from './crash-record'
 import { getSetting, setSetting } from './db'
@@ -96,7 +97,7 @@ import {
   setMcpRegisterEnabled,
   syncMcpRegistration,
 } from './mcp-register'
-import { handleRpc as handleMcpRpc } from './mcp-stdio.mjs'
+import { handleRpc as handleMcpRpc, type McpEngineTool } from './mcp-stdio.mjs'
 import { startMonitor } from './monitor'
 import { sendOsNotification } from './notify-os'
 import {
@@ -230,6 +231,26 @@ function computeAllowedApiOrigins(port: number): string[] {
  */
 let daemonSelfUrl = `http://127.0.0.1:${PORT}`
 
+/** The commit this daemon booted on, against the one its checkout names now (core/running-code.ts).
+ *  Created at module load, which IS boot, so "the code I am running" is recorded before anything
+ *  can change it. */
+const runningCode = createRunningCodeProbe({ root: APP_ROOT, compiled: IS_COMPILED })
+
+/** Every MCP tool result says so when this daemon is older than its checkout: an agent whose new
+ *  tool or route "does not exist" is otherwise told nothing about why. */
+function withRestartWarning(tools: McpEngineTool[]): McpEngineTool[] {
+  return tools.map((t) => ({
+    ...t,
+    run: async (args: Record<string, unknown>, signal?: AbortSignal) => {
+      const value = await t.run(args, signal)
+      const warning = restartNeededMessage(runningCode.status())
+      return warning && value && typeof value === 'object' && !Array.isArray(value)
+        ? { daemonRestartNeeded: warning, ...(value as Record<string, unknown>) }
+        : value
+    },
+  }))
+}
+
 /** Keeps Claude Code's MCP entry pointing at THIS daemon: at boot, on the settings toggle, and
  *  once a minute while registration is on (see createMcpReasserter for why once is not enough). */
 const mcpReasserter = createMcpReasserter({ daemonUrl: () => daemonSelfUrl })
@@ -282,6 +303,9 @@ app.get('/api/health', (c) =>
     // Whether Claude Code's config points at this daemon, as of the last sync (at most a minute
     // old). A client with a stale entry has NO agenthydra tools and nothing in it says why, so the
     // state has to be readable from here rather than only from the Settings panel.
+    // Whether this daemon is serving older code than its checkout (a source install that was
+    // committed to or pulled without a restart). The app header offers the restart when it is.
+    runningCode: runningCode.status(),
     mcpRegistration: (() => {
       const last = mcpReasserter.last()
       return last ? { enabled: last.enabled, registered: last.registered, error: last.error } : null
@@ -326,7 +350,7 @@ app.post('/api/mcp', async (c) => {
   // everything else the same object", and the side-run warning (side-run.ts) is a transport concern.
   const ctx = {
     serverInfo: MCP_SERVER_INFO,
-    tools: mcpWithDaemonWarning(mcpToolsForCaller(() => callerPidOf(c))),
+    tools: withRestartWarning(mcpWithDaemonWarning(mcpToolsForCaller(() => callerPidOf(c)))),
     instructions: MCP_INSTRUCTIONS,
   }
   const { status, json } = await handleMcpHttp(body, ctx, handleMcpRpc)

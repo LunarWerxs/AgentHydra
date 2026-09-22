@@ -7,6 +7,7 @@ import {
   Monitor,
   Moon,
   Power,
+  RotateCw,
   Settings2,
   Sun,
 } from '@lucide/vue'
@@ -34,6 +35,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { useData } from '@/composables/useData'
 import { useNotifications } from '@/composables/useNotifications'
 import { usePanels } from '@/composables/usePanels'
+import { useRunningCode } from '@/composables/useRunningCode'
 import { SHELL_BASE_MAX, SHELL_WIDE_MAX, useShellWidth } from '@/composables/useShellWidth'
 import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
@@ -252,6 +254,27 @@ onMounted(showRebrandNoticeOnce)
 // Reads the daemon's LAST background check — a memory read, no network from the daemon's side and
 // nothing that delays boot. See composables/useUpdates.ts.
 onMounted(startAvailabilityPolling)
+// "The daemon is older than its folder": see composables/useRunningCode.ts.
+const {
+  restartNeeded,
+  bootCommit,
+  diskCommit,
+  restarting,
+  restartError,
+  restart: restartDaemonNow,
+  start: startRunningCodePolling,
+  stop: stopRunningCodePolling,
+} = useRunningCode()
+onMounted(startRunningCodePolling)
+onUnmounted(stopRunningCodePolling)
+const restartTitle = computed(() =>
+  restartError.value
+    ? t('app.restartFailed', { reason: restartError.value })
+    : t('app.restartNeededHint', {
+        boot: bootCommit.value?.slice(0, 7) ?? '?',
+        disk: diskCommit.value?.slice(0, 7) ?? '?',
+      }),
+)
 onUnmounted(stopAvailabilityPolling)
 </script>
 
@@ -318,6 +341,20 @@ onUnmounted(stopAvailabilityPolling)
           >
             {{ runningCount }}
           </span>
+        </Button>
+        <!-- Only when the daemon is serving older code than its folder (a commit or pull without a
+             restart): new routes and tools are missing until it restarts, and nothing else on
+             screen would say why. One click relaunches it in place and reloads the page. -->
+        <Button
+          v-if="restartNeeded"
+          variant="outline"
+          size="sm"
+          :disabled="restarting"
+          :title="restartTitle"
+          @click="restartDaemonNow"
+        >
+          <RotateCw :class="restarting ? 'animate-spin' : ''" />
+          <span class="hidden sm:inline">{{ $t(restarting ? 'app.restarting' : 'app.restartNeeded') }}</span>
         </Button>
         <!-- The update hint lives HERE, on the button that leads to the update controls, rather
              than as a banner or a toast. A newer version is not urgent — it does not want the

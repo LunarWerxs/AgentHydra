@@ -576,10 +576,20 @@ export interface Health {
   service: string
   version: string
   distribution: 'compiled' | 'source'
+  /** Is the daemon serving older code than its checkout? Absent on a daemon that predates it. */
+  runningCode?: { bootCommit: string | null; diskCommit: string | null; restartNeeded: boolean }
   ts: number
 }
 export const getHealth = (timeoutMs = 2000) =>
   j<Health>('/api/health', { signal: AbortSignal.timeout(timeoutMs) })
+
+/** Relaunch the daemon in place (server/src/index.ts /api/daemon/restart): the successor takes the
+ *  same port, so the page keeps working once it answers again. */
+export const restartDaemon = (force = false) =>
+  j<{ ok: boolean; error?: string; detail?: string }>('/api/daemon/restart', {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  })
 
 /** Where a running apply currently is (server/src/update-progress.ts). Polled while an apply is in
  *  flight so a multi-minute update reports itself instead of showing a mute spinner. */
