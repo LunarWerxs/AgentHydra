@@ -90,6 +90,7 @@ import {
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import {
+  createMcpReasserter,
   mcpRegisterEnabled,
   mcpRegistrationStatus,
   setMcpRegisterEnabled,
@@ -229,6 +230,10 @@ function computeAllowedApiOrigins(port: number): string[] {
  */
 let daemonSelfUrl = `http://127.0.0.1:${PORT}`
 
+/** Keeps Claude Code's MCP entry pointing at THIS daemon: at boot, on the settings toggle, and
+ *  once a minute while registration is on (see createMcpReasserter for why once is not enough). */
+const mcpReasserter = createMcpReasserter({ daemonUrl: () => daemonSelfUrl })
+
 // CORS narrowed to the exact allowlist above (defense-in-depth for cross-origin READABILITY); the
 // actual cross-site protection is loopbackGuard below, which rejects the REQUEST — see
 // loopback-guard.mjs for why a CORS allowlist alone is insufficient (the "simple request"
@@ -274,6 +279,13 @@ app.get('/api/health', (c) =>
     // `pid`, `sideRun`, `pointerFile`: which process this is, whether its store is the machine's,
     // and where it recorded itself - the three facts a stale-pointer investigation needs first.
     ...sideRunHealthFields(),
+    // Whether Claude Code's config points at this daemon, as of the last sync (at most a minute
+    // old). A client with a stale entry has NO agenthydra tools and nothing in it says why, so the
+    // state has to be readable from here rather than only from the Settings panel.
+    mcpRegistration: (() => {
+      const last = mcpReasserter.last()
+      return last ? { enabled: last.enabled, registered: last.registered, error: last.error } : null
+    })(),
     ts: Date.now(),
   }),
 )
@@ -507,11 +519,7 @@ app.post('/api/settings', async (c) => {
   // already. The sync writes the entry (or removes it) and reports through the same GET below.
   if (typeof body.mcpRegisterClaudeCode === 'boolean') {
     setMcpRegisterEnabled(body.mcpRegisterClaudeCode)
-    const reg = syncMcpRegistration({
-      daemonUrl: daemonSelfUrl,
-      enabled: body.mcpRegisterClaudeCode,
-    })
-    if (reg.error) console.warn(`[agenthydra] MCP registration: ${reg.error}`)
+    mcpReasserter.run(body.mcpRegisterClaudeCode)
   }
   if (typeof body.transcriptEditor === 'string')
     setSetting('transcript_editor', body.transcriptEditor.trim())
@@ -936,21 +944,24 @@ const POINTER_REASSERT_MS = 60_000
 // The handle is held, not dropped, so the graceful shutdown below can clear the ticker. `.unref()`
 // on the next line is separate and still needed: it keeps this repeating timer from being a reason
 // for the process to stay alive, which it must never be.
-const pointerReassertTimer = setInterval(
-  () =>
-    reassertInstancePointer(boundPort, () => ({
-      portableMode: portableModeEnabled(),
-      hideTrayIcon: hideTrayIconEnabled(),
-    }))
-      .then((verdict) => {
-        if (verdict === 'rewritten')
-          console.warn(
-            `[agenthydra] ${instanceFilePath()} was missing or named a dead daemon; re-asserted it for this one (pid ${process.pid}, port ${boundPort})`,
-          )
-      })
-      .catch(() => {}),
-  POINTER_REASSERT_MS,
-)
+const pointerReassertTimer = setInterval(() => {
+  reassertInstancePointer(boundPort, () => ({
+    portableMode: portableModeEnabled(),
+    hideTrayIcon: hideTrayIconEnabled(),
+  }))
+    .then((verdict) => {
+      if (verdict === 'rewritten')
+        console.warn(
+          `[agenthydra] ${instanceFilePath()} was missing or named a dead daemon; re-asserted it for this one (pid ${process.pid}, port ${boundPort})`,
+        )
+    })
+    .catch(() => {})
+  // The MCP entry goes stale the same way the pointer does (another process rewrites the file it
+  // lives in), so it is re-asserted on the same cadence. Only while registration is ON: with it
+  // off, boot and the settings toggle remove the entry exactly as before, and a minute timer has
+  // no business removing an entry someone wrote by hand in between. Synchronous, never throws.
+  if (mcpRegisterEnabled()) mcpReasserter.run()
+}, POINTER_REASSERT_MS)
 pointerReassertTimer.unref()
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
 // port, not the configured one, so a hop off a busy 7787 does not leave the Python side talking
@@ -961,12 +972,7 @@ setOrchestratorDaemonUrl(daemonSelfUrl)
 // after the port is bound, because the entry carries the URL: registering before the hop is
 // resolved would write a URL nothing is listening on. Runs on every boot so a hop cannot leave a
 // stale one behind, writes only when the entry actually differs, and never throws.
-{
-  const reg = syncMcpRegistration({ daemonUrl: daemonSelfUrl })
-  if (reg.error) console.warn(`[agenthydra] MCP registration: ${reg.error}`)
-  else if (reg.action === 'added' || reg.action === 'updated' || reg.action === 'removed')
-    console.log(`[agenthydra] MCP registration ${reg.action} in ${reg.configPath}`)
-}
+mcpReasserter.run()
 // AH-11: now that boundPort (and the runtime pointer) are known, resolve the exact-origin
 // allowlist the cors() and loopbackGuard() callbacks above read on every request. This runs well
 // before Bun.serve() starts accepting connections, so no request can observe the empty initial []

@@ -403,6 +403,53 @@ export function syncMcpRegistration(
   )
 }
 
+/**
+ * What a daemon keeps between registration syncs: the last result, so /api/health can report it
+ * without re-reading ~/.claude.json, and so a failure that persists is logged once rather than on
+ * every tick.
+ *
+ * Why a daemon re-runs the sync at all: ~/.claude.json is not ours, and every running Claude client
+ * rewrites the whole file from its own in-memory copy. A client already open when the daemon wrote
+ * the entry quietly reverts it on its next save, and a sync that only ran at boot never looked
+ * again, so the symptom surfaced hours later in a DIFFERENT session as an MCP server with no tools
+ * and nothing pointing at AgentHydra. The sync writes only when the entry differs and detects a
+ * concurrent writer, so re-running it against an unchanged file costs one read. `run` never throws:
+ * it is called from a repeating timer, where a throw would end the daemon.
+ */
+export function createMcpReasserter(opts: {
+  daemonUrl: () => string
+  configPath?: string
+  log?: { info: (message: string) => void; warn: (message: string) => void }
+}): { run: (enabled?: boolean) => McpRegisterStatus | null; last: () => McpRegisterStatus | null } {
+  let last: McpRegisterStatus | null = null
+  const log = opts.log ?? { info: console.log, warn: console.warn }
+  return {
+    last: () => last,
+    run(enabled) {
+      try {
+        const previous = last
+        const reg = syncMcpRegistration({
+          daemonUrl: opts.daemonUrl(),
+          enabled,
+          configPath: opts.configPath,
+        })
+        last = reg
+        if (reg.error) {
+          if (reg.error !== previous?.error) log.warn(`[agenthydra] MCP registration: ${reg.error}`)
+        } else if (reg.action === 'added' || reg.action === 'updated' || reg.action === 'removed') {
+          log.info(`[agenthydra] MCP registration ${reg.action} in ${reg.configPath}`)
+        }
+        return reg
+      } catch (error) {
+        log.warn(
+          `[agenthydra] MCP registration check failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        return last
+      }
+    },
+  }
+}
+
 /** Read-only: what the config says right now, for the Settings panel. Writes nothing. */
 export function mcpRegistrationStatus(opts: {
   daemonUrl: string
