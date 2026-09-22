@@ -1,10 +1,17 @@
-/** Builds inspector expressions; importing this module never connects to Claude. */
+/**
+ * Builds inspector expressions; importing this module never connects to Claude.
+ *
+ * Nothing here names a Claude release. Its bundle chunks are content-hashed, so their file
+ * names and hashes changed on every update and pinning them stopped every native-control
+ * instance until a person re-measured the new build. The runtime finds the same two singletons
+ * by shape instead, inside the loaded module cache, and refuses anything ambiguous. The export
+ * names below are hints that shorten the search, never the thing that is trusted.
+ */
 export const NATIVE_PROGRAM_PIN = Object.freeze({
-  version: '2.2553.1',
-  managerMember: '.vite/build/index.chunk-BQEs5Gzg.js',
-  managerSha256: '484ab045a1fbe63766a8f65d1258412c3943a60f21b8dcea3a8d63f1ed36a151',
-  mainMember: '.vite/build/index.chunk-1pAtASm0.js',
-  mainSha256: '92bdc38ead84f3b1e989f5e125b2d64ca832d7b3e34a97f29964015344f39fa3',
+  managerExport: 'claudeCodeSessionManager',
+  previewExportHint: 'Ac',
+  /** Only the settings POC needs this one; it has no shape of its own to recognize. */
+  bypassExportHint: 'io',
 })
 
 export interface NativeProgramRequest {
@@ -48,16 +55,43 @@ async function nativeRuntime(request: NativeProgramRequest, pin: typeof NATIVE_P
     }
     const checkProcess = () => {
       if (runtimeProcess.pid !== request.pid) fail('PID changed or wrong process')
-      if (!app.isReady() || app.getVersion() !== pin.version) fail('unsupported app version/state')
+      if (!app.isReady()) fail('unsupported app state')
       if (pathKey(app.getPath('userData')) !== pathKey(request.profileDir)) fail('wrong profile')
     }
     checkProcess()
-    const filename = require.resolve(path.join(app.getAppPath(), pin.managerMember))
-    const loaded = require.cache[filename]
-    if (!loaded?.loaded) fail('manager chunk is not already initialized')
+    const appPath = pathKey(app.getAppPath())
+    // Only already-initialized modules of THIS application are considered, and a module is
+    // read through its own export, never constructed: discovery must not initialize anything.
+    const loadedMembers = () =>
+      Object.keys(require.cache)
+        .filter((name: string) => pathKey(name).startsWith(appPath) && require.cache[name]?.loaded)
+        .map((name: string) => ({ filename: name, module: require.cache[name] }))
+    const exported = (module: any, name: string) => {
+      try {
+        return module?.exports?.[name]
+      } catch {
+        return undefined
+      }
+    }
+    /** One distinct value or nothing: two different candidates mean the shape is ambiguous. */
+    const only = (matches: any[], what: string) => {
+      const distinct = matches.filter(
+        (match, at) => matches.findIndex((other) => other.value === match.value) === at,
+      )
+      if (distinct.length > 1) fail(`more than one ${what} is loaded`)
+      return distinct[0]
+    }
+    const managerMatch = only(
+      loadedMembers()
+        .map((member: any) => ({ ...member, value: exported(member.module, pin.managerExport) }))
+        .filter((member: any) => member.value),
+      'native session manager',
+    )
+    if (!managerMatch) fail('manager chunk is not already initialized')
+    const filename = managerMatch.filename
+    const loaded = managerMatch.module
     const hash = crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex')
-    if (hash !== pin.managerSha256) fail('manager source does not match reviewed version')
-    const manager = loaded.exports?.claudeCodeSessionManager
+    const manager = managerMatch.value
     if (!manager?.sessions?.get || !manager.sessions.values) fail('native singleton is unavailable')
     for (const name of [
       'waitForInitialization',
@@ -72,10 +106,7 @@ async function nativeRuntime(request: NativeProgramRequest, pin: typeof NATIVE_P
     }
     const checkIdentity = () => {
       checkProcess()
-      if (
-        require.cache[filename] !== loaded ||
-        loaded.exports.claudeCodeSessionManager !== manager
-      ) {
+      if (require.cache[filename] !== loaded || exported(loaded, pin.managerExport) !== manager) {
         fail('native singleton changed')
       }
       if (!manager.currentAccountId || !manager.currentOrgId) fail('account is unavailable')
@@ -139,14 +170,17 @@ async function nativeRuntime(request: NativeProgramRequest, pin: typeof NATIVE_P
       return session
     }
     let mainHash: string | undefined
+    let mainMember: string | undefined
     const identity = () => ({
       pid: runtimeProcess.pid,
       profileDir: app.getPath('userData'),
       version: app.getVersion(),
       accountId: manager.currentAccountId,
       orgId: manager.currentOrgId,
+      // Recorded, not compared: this is the evidence of which bundle actually answered.
+      managerMember: path.relative(app.getAppPath(), filename),
       managerSha256: hash,
-      ...(mainHash ? { mainSha256: mainHash } : {}),
+      ...(mainHash ? { mainSha256: mainHash, mainMember } : {}),
     })
     // getSessionList is the app's list contract, but its folder checks await. Identity is checked
     // again and the selected object is read afresh after those awaits before any mutation.
@@ -175,14 +209,44 @@ async function nativeRuntime(request: NativeProgramRequest, pin: typeof NATIVE_P
     if (!request.accountId || !request.orgId || !request.sessionId || !request.cliSessionId) {
       fail('archive requires account, organization, native ID and current CLI ID')
     }
-    const mainFilename = require.resolve(path.join(app.getAppPath(), pin.mainMember))
-    const loadedMain = require.cache[mainFilename]
-    if (!loadedMain?.loaded) fail('main chunk is not already initialized')
+    // The preview manager is the one singleton whose state archive can disturb, so it is
+    // identified by the exact surface archive depends on, not by a bundle file name.
+    const isPreviewManager = (value: any) =>
+      !!value &&
+      typeof value.getServersForWorktree === 'function' &&
+      typeof value.stopServersForWorktree === 'function' &&
+      Object.prototype.toString.call(value.htmlPreviews) === '[object Map]'
+    const previewMatches: any[] = []
+    for (const member of loadedMembers()) {
+      const hinted = exported(member.module, pin.previewExportHint)
+      if (isPreviewManager(hinted)) {
+        previewMatches.push({ ...member, name: pin.previewExportHint, value: hinted })
+        continue
+      }
+      let names: string[]
+      try {
+        names = Object.keys(member.module.exports ?? {})
+      } catch {
+        continue
+      }
+      for (const name of names) {
+        const value = exported(member.module, name)
+        if (isPreviewManager(value)) previewMatches.push({ ...member, name, value })
+      }
+    }
+    const previewMatch = only(previewMatches, 'native preview manager')
+    if (!previewMatch) fail('main chunk is not already initialized')
+    const mainFilename = previewMatch.filename
+    const loadedMain = previewMatch.module
+    const previewExport = previewMatch.name
     mainHash = crypto.createHash('sha256').update(fs.readFileSync(mainFilename)).digest('hex')
-    if (mainHash !== pin.mainSha256) fail('main source does not match reviewed version')
-    const previewManager = loadedMain.exports?.Ac
+    mainMember = path.relative(app.getAppPath(), mainFilename)
+    const previewManager = previewMatch.value
     const checkMainIdentity = () => {
-      if (require.cache[mainFilename] !== loadedMain || loadedMain.exports?.Ac !== previewManager) {
+      if (
+        require.cache[mainFilename] !== loadedMain ||
+        exported(loadedMain, previewExport) !== previewManager
+      ) {
         fail('native preview singleton changed')
       }
     }

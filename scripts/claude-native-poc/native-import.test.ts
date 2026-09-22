@@ -6,7 +6,6 @@ import {
   type NativeImportRequest,
   nativeImportProgram,
 } from './native-import'
-import { NATIVE_PROGRAM_PIN } from './native-program'
 
 // Inert runtime tests the safety wrapper, not Claude's importer implementation or live UI.
 function fixture() {
@@ -18,7 +17,8 @@ function fixture() {
     cliSessionId: DISPOSABLE_IMPORT_IDS[0],
     title: 'Fallback proof title',
   }
-  const filename = path.join('D:\\Claude\\app.asar', NATIVE_PROGRAM_PIN.managerMember)
+  // A content-hashed bundle name: the wrapper must find the manager by its export.
+  const filename = path.join('D:\\Claude\\app.asar', '.vite/build/index.chunk-AAA.js')
   const transcriptPath = path.join('D:\\transcripts', `${request.cliSessionId}.jsonl`)
   const other: any = { sessionId: 'local_other', cliSessionId: 'other-cli', isArchived: false }
   const sessions = new Map([[other.sessionId, other]])
@@ -69,7 +69,7 @@ function fixture() {
       return {
         app: {
           isReady: () => true,
-          getVersion: () => NATIVE_PROGRAM_PIN.version,
+          getVersion: () => '2.9999.0',
           getPath: () => request.profileDir,
           getAppPath: () => 'D:\\Claude\\app.asar',
         },
@@ -91,7 +91,7 @@ function fixture() {
       return {
         createHash: () => ({
           update: (bytes: string) => ({
-            digest: () => (bytes === 'manager' ? NATIVE_PROGRAM_PIN.managerSha256 : bytes),
+            digest: () => (bytes === 'manager' ? 'manager-source-hash' : bytes),
           }),
         }),
       }

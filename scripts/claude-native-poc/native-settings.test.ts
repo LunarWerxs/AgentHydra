@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { win32 as path } from 'node:path'
 import { runInNewContext } from 'node:vm'
-import { NATIVE_PROGRAM_PIN } from './native-program'
 import {
   NATIVE_PROOF_SETTINGS,
   type NativeSettingsRequest,
@@ -13,8 +12,9 @@ import {
 function harness() {
   const profileDir = 'D:\\profiles\\target'
   const appPath = 'D:\\Claude\\app.asar'
-  const managerPath = path.join(appPath, NATIVE_PROGRAM_PIN.managerMember)
-  const mainPath = path.join(appPath, NATIVE_PROGRAM_PIN.mainMember)
+  // Content-hashed bundle names: both modules must be found by what they export.
+  const managerPath = path.join(appPath, '.vite/build/index.chunk-AAA.js')
+  const mainPath = path.join(appPath, '.vite/build/index.chunk-BBB.js')
   const target: any = {
     ...NATIVE_PROOF_SETTINGS,
     title: 'Disposable migration proof',
@@ -79,15 +79,15 @@ function harness() {
     [mainPath]: { loaded: true, exports: native },
   }
   const hashes = new Map([
-    [managerPath, NATIVE_PROGRAM_PIN.managerSha256 as string],
-    [mainPath, NATIVE_PROGRAM_PIN.mainSha256 as string],
+    [managerPath, 'manager-source-hash'],
+    [mainPath, 'main-source-hash'],
   ])
   const require: any = (name: string) => {
     if (name === 'electron')
       return {
         app: {
           isReady: () => true,
-          getVersion: () => NATIVE_PROGRAM_PIN.version,
+          getVersion: () => '2.9999.0',
           getPath: () => profileDir,
           getAppPath: () => appPath,
         },
@@ -126,6 +126,7 @@ function harness() {
     expectedTitle: target.title,
   }
   return {
+    appPath,
     target,
     other,
     manager,
@@ -239,7 +240,7 @@ describe('native settings proof wrapper (inert runtime, no connection)', () => {
       expect(h.calls).toEqual([])
     }
   })
-  test('unloaded or changed pinned sources and wrong identity refuse before mutation', async () => {
+  test('unloaded, ambiguous or wrong-identity sources refuse before mutation', async () => {
     for (const change of [
       (h: ReturnType<typeof harness>) => {
         delete h.cache[h.managerPath]
@@ -248,10 +249,20 @@ describe('native settings proof wrapper (inert runtime, no connection)', () => {
         delete h.cache[h.mainPath]
       },
       (h: ReturnType<typeof harness>) => {
-        h.hashes.set(h.managerPath, 'unreviewed')
+        h.cache[h.managerPath].loaded = false
       },
       (h: ReturnType<typeof harness>) => {
-        h.hashes.set(h.mainPath, 'unreviewed')
+        h.cache[h.mainPath].loaded = false
+      },
+      // A second in-app module exporting another manager leaves the choice ambiguous.
+      (h: ReturnType<typeof harness>) => {
+        h.cache[path.join(h.appPath, 'rival.js')] = {
+          loaded: true,
+          exports: { claudeCodeSessionManager: { sessions: new Map() } },
+        }
+      },
+      (h: ReturnType<typeof harness>) => {
+        h.cache[path.join(h.appPath, 'rival.js')] = { loaded: true, exports: { io: () => false } }
       },
       (h: ReturnType<typeof harness>) => {
         h.manager.currentAccountId = 'different'

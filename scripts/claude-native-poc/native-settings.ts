@@ -43,31 +43,53 @@ async function settingsRuntime(
     const require = rootRequire('node:module').createRequire(
       path.join(app.getAppPath(), 'package.json'),
     )
-    const fs = require('node:fs'),
-      crypto = require('node:crypto')
     const key = (value: string) => {
       const resolved = path.resolve(value).replace(/[\\/]+$/, '')
       return proc.platform === 'win32' ? resolved.toLowerCase() : resolved
     }
-    const pinned = (member: string, expectedHash: string) => {
-      const filename = require.resolve(path.join(app.getAppPath(), member))
-      const module = require.cache[filename]
-      if (
-        !module?.loaded ||
-        crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex') !== expectedHash
+    // Bundle chunks are content-hashed, so a pinned file name and hash broke on every Claude
+    // release. Both modules are found among THIS app's already-loaded ones instead, and an
+    // ambiguous match fails closed. Reading an export never initializes a module.
+    const appPath = key(app.getAppPath())
+    const members = () =>
+      Object.keys(require.cache)
+        .filter((name: string) => key(name).startsWith(appPath) && require.cache[name]?.loaded)
+        .map((name: string) => ({ filename: name, module: require.cache[name] }))
+    const sole = (matches: any[], what: string) => {
+      const distinct = matches.filter(
+        (match: any, at: number) =>
+          matches.findIndex((other: any) => other.value === match.value) === at,
       )
-        fail('unloaded or unreviewed native source')
-      return { filename, module }
+      if (distinct.length !== 1) fail(`expected exactly one ${what}, found ${distinct.length}`)
+      return distinct[0]
     }
-    const cachedManager = pinned(pin.managerMember, pin.managerSha256)
-    const cachedMain = pinned(pin.mainMember, pin.mainSha256)
-    const manager = cachedManager.module.exports.claudeCodeSessionManager
+    const read = (module: any, name: string) => {
+      try {
+        return module?.exports?.[name]
+      } catch {
+        return undefined
+      }
+    }
+    const cachedManager = sole(
+      members()
+        .map((member: any) => ({ ...member, value: read(member.module, pin.managerExport) }))
+        .filter((member: any) => member.value),
+      'native session manager',
+    )
+    // The bypass-permissions predicate has no distinguishing shape, so this POC still leans on
+    // its minified export name. That is a diagnostic harness limit, not the production path.
+    const cachedMain = sole(
+      members()
+        .map((member: any) => ({ ...member, value: read(member.module, pin.bypassExportHint) }))
+        .filter((member: any) => typeof member.value === 'function' && member.value.length === 0),
+      'native bypass-permissions predicate',
+    )
+    const manager = cachedManager.value
     const native = cachedMain.module.exports
     const guardIdentity = () => {
       if (
         proc.pid !== request.pid ||
         !app.isReady() ||
-        app.getVersion() !== pin.version ||
         key(app.getPath('userData')) !== key(request.profileDir) ||
         key(manager.userDataPath) !== key(request.profileDir) ||
         manager.currentAccountId !== request.accountId ||
@@ -77,7 +99,7 @@ async function settingsRuntime(
       if (
         require.cache[cachedManager.filename] !== cachedManager.module ||
         require.cache[cachedMain.filename] !== cachedMain.module ||
-        cachedManager.module.exports.claudeCodeSessionManager !== manager ||
+        read(cachedManager.module, pin.managerExport) !== manager ||
         cachedMain.module.exports !== native
       )
         fail('native singleton changed')

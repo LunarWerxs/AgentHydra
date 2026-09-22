@@ -1,14 +1,17 @@
 import { describe, expect, test } from 'bun:test'
 import { win32 as path } from 'node:path'
 import { runInNewContext } from 'node:vm'
-import { NATIVE_PROGRAM_PIN, type NativeRequest, nativeProgram } from './native-program'
+import { type NativeRequest, nativeProgram } from './native-program'
 
 // Tests the generated program's own guards in an inert runtime. Actual installed archive
 // behavior is separately tested by native-archive.poc.ts; this suite needs no installed app.
 function harness() {
   const profileDir = 'D:\\profiles\\target'
-  const managerPath = 'D:\\Claude\\app.asar\\.vite\\build\\index.chunk-BQEs5Gzg.js'
-  const mainPath = 'D:\\Claude\\app.asar\\.vite\\build\\index.chunk-1pAtASm0.js'
+  // Content-hashed bundle names: the program must find these by export, not by file name.
+  const appPath = 'D:\\Claude\\app.asar'
+  const managerPath = path.join(appPath, '.vite', 'build', 'index.chunk-AAA.js')
+  const mainPath = path.join(appPath, '.vite', 'build', 'index.chunk-BBB.js')
+  const strayPath = path.join('D:\\elsewhere', 'index.chunk-CCC.js')
   const target: any = {
     sessionId: 'local_target',
     cliSessionId: 'cli-target',
@@ -62,16 +65,19 @@ function harness() {
       sessions.get(id)!.isArchived = true
     },
   }
-  let version: string = NATIVE_PROGRAM_PIN.version
-  let hash: string = NATIVE_PROGRAM_PIN.managerSha256
-  let mainHash: string = NATIVE_PROGRAM_PIN.mainSha256
+  let version = '2.9999.0'
+  let hash = 'manager-source-hash'
+  let mainHash = 'main-source-hash'
   const previews: any = {
     getServersForWorktree: () => [],
+    stopServersForWorktree: () => {},
     htmlPreviews: new Map(),
   }
   const cache: any = {
     [managerPath]: { loaded: true, exports: { claudeCodeSessionManager: manager } },
     [mainPath]: { loaded: true, exports: { Ac: previews } },
+    // Another application's module, and an unfinished one, are both out of scope for discovery.
+    [strayPath]: { loaded: true, exports: { claudeCodeSessionManager: {}, Ac: previews } },
   }
   const require: any = (name: string) => {
     if (name === 'node:module')
@@ -120,6 +126,7 @@ function harness() {
     expectedTitle: target.title,
   }
   return {
+    appPath,
     manager,
     target,
     other,
@@ -128,6 +135,7 @@ function harness() {
     cache,
     managerPath,
     mainPath,
+    strayPath,
     previews,
     request,
     version: (v: string) => {
@@ -194,16 +202,32 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       expect(h.calls).toEqual([])
     }
   })
-  test('source/version pin and unloaded module fail closed, never importing another singleton', async () => {
+  test('unloaded, missing and ambiguous singletons fail closed, never importing another', async () => {
     for (const change of [
-      (h: ReturnType<typeof harness>) => h.version('next-version'),
-      (h: ReturnType<typeof harness>) => h.hash('different-source'),
-      (h: ReturnType<typeof harness>) => h.mainHash('different-main-source'),
       (h: ReturnType<typeof harness>) => {
         delete h.cache[h.managerPath]
       },
       (h: ReturnType<typeof harness>) => {
         delete h.cache[h.mainPath]
+      },
+      (h: ReturnType<typeof harness>) => {
+        h.cache[h.managerPath].loaded = false
+      },
+      (h: ReturnType<typeof harness>) => {
+        h.cache[h.mainPath].loaded = false
+      },
+      // A second in-app module exporting a DIFFERENT manager is ambiguous, so nothing is chosen.
+      (h: ReturnType<typeof harness>) => {
+        h.cache[path.join(h.appPath, 'rival.js')] = {
+          loaded: true,
+          exports: { claudeCodeSessionManager: { sessions: new Map() } },
+        }
+      },
+      (h: ReturnType<typeof harness>) => {
+        h.cache[path.join(h.appPath, 'rival.js')] = {
+          loaded: true,
+          exports: { Ac: { ...h.previews, htmlPreviews: new Map() } },
+        }
       },
     ]) {
       const h = harness()
@@ -211,6 +235,27 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       expect(await h.run()).toMatchObject({ ok: false, dispatch: 'not-sent' })
       expect(h.calls).toEqual([])
     }
+  })
+
+  test('a new Claude version needs no code change, and its bundle members are reported', async () => {
+    const h = harness()
+    h.version('3.0.0-brand-new')
+    const result: any = await h.run({ action: 'inspect', sessionId: undefined })
+    expect(result).toMatchObject({ ok: true, verified: true })
+    expect(result.identity).toMatchObject({
+      version: '3.0.0-brand-new',
+      managerMember: path.join('.vite', 'build', 'index.chunk-AAA.js'),
+      managerSha256: 'manager-source-hash',
+    })
+  })
+
+  test('the preview manager is found by shape even when its export is renamed', async () => {
+    const h = harness()
+    const renamed = { ...h.cache[h.mainPath].exports.Ac }
+    h.cache[h.mainPath].exports = { Zz: renamed }
+    const result: any = await h.run()
+    expect(result).toMatchObject({ ok: true, verified: true, changed: true })
+    expect(result.identity.mainMember).toBe(path.join('.vite', 'build', 'index.chunk-BBB.js'))
   })
   test('account switch and resumed turn during async list read are checked before mutation', async () => {
     for (const change of [
@@ -256,7 +301,7 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
     h.other.cwd = h.target.cwd
     const result = await h.run()
     expect(result).toMatchObject({ ok: true, dispatch: 'sent', bystanderArchiveChanges: [] })
-    expect(result.identity.mainSha256).toBe(NATIVE_PROGRAM_PIN.mainSha256)
+    expect(result.identity.mainSha256).toBe('main-source-hash')
     expect(h.calls).toEqual([{ id: 'local_target', options: { cleanupWorktree: false } }])
     expect(h.other.isArchived).toBe(false)
   })

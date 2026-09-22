@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import {
   assertClaudeInspectorPortAvailable,
   type ClaudeManagedBuild,
+  discoverClaudeBuild,
   prepareClaudeNativeLaunch,
   resolveClaudeNativeSource,
 } from '../src/claude-native-launch'
@@ -56,7 +57,6 @@ async function fixture() {
   const deps = {
     platform: 'win32' as const,
     managedRoot: join(scratch, 'hydra-data', 'claude-native'),
-    build,
     assertPortAvailable: async (port: number) => {
       checks.push(port)
     },
@@ -151,21 +151,42 @@ test('refuses an extra executable in the existing copy', async () => {
   )
 })
 
-test('refuses a changed installed executable even when a previously verified copy exists', async () => {
+test('refuses an installed executable with no recognizable fuse wire', async () => {
   const f = await fixture()
   await prepareClaudeNativeLaunch(f.binary, f.config, f.deps)
   await writeFile(f.binary, 'new version')
   await expect(prepareClaudeNativeLaunch(f.binary, f.config, f.deps)).rejects.toThrow(
-    'supported 2.2553.1',
+    '0 Electron fuse wires',
   )
 })
 
-test('a newer app adjacent to Squirrel stub fails closed instead of launching an old managed copy', async () => {
+test('refuses an executable carrying more than one fuse wire rather than guessing', async () => {
+  const f = await fixture()
+  await writeFile(f.binary, Buffer.concat([f.original, f.original]))
+  await expect(prepareClaudeNativeLaunch(f.binary, f.config, f.deps)).rejects.toThrow(
+    '2 Electron fuse wires',
+  )
+})
+
+test('a newer app adjacent to the Squirrel stub is the one used, not an older neighbour', async () => {
+  const f = await fixture()
+  const newer = join(f.install, 'app-3.0.0')
+  await mkdir(newer)
+  await writeFile(join(newer, 'claude.exe'), f.original)
+  expect(await resolveClaudeNativeSource(join(f.install, 'claude.exe'))).toBe(
+    join(newer, 'claude.exe'),
+  )
+})
+
+test('an unreadable newest app fails closed instead of falling back to an older one', async () => {
   const f = await fixture()
   await mkdir(join(f.install, 'app-3.0.0'))
-  await expect(resolveClaudeNativeSource(join(f.install, 'claude.exe'), f.build)).rejects.toThrow(
-    '3.0.0 is not supported',
-  )
+  await expect(resolveClaudeNativeSource(join(f.install, 'claude.exe'))).rejects.toThrow()
+})
+
+test('the derived build describes the installed app without any value pinned in this repo', async () => {
+  const f = await fixture()
+  expect(await discoverClaudeBuild(f.binary)).toEqual(f.build)
 })
 
 test('refuses a preexisting parent updater instead of allowing the managed copy to update itself', async () => {

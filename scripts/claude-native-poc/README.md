@@ -22,21 +22,21 @@ bun test ./scripts/claude-native-poc/native-archive.poc.ts
 ```
 
 The explicit relative path is required: `.poc.ts` keeps this installed-app experiment out
-of ordinary `bun test` discovery and CI. The default source is the installed Claude
-Desktop **2.2553.1** archive at
-`%LOCALAPPDATA%/AnthropicClaude/app-2.2553.1/resources/app.asar`.
-`CLAUDE_POC_ASAR` can point to another copy of that same build. The fixture parses the
-ASAR header and reads `.vite/build/index.chunk-BQEs5Gzg.js` directly. It never imports
-or initializes the Electron bundle.
+of ordinary `bun test` discovery and CI. The default source is the newest installed Claude
+Desktop archive under `%LOCALAPPDATA%/AnthropicClaude/app-*/resources/app.asar`, and
+`CLAUDE_POC_ASAR` can point at another copy. The fixture parses the ASAR header and finds
+the chunk that exports `claudeCodeSessionManager`, because chunk file names are content
+hashes and change with every release; more than one match fails before anything runs. It
+never imports or initializes the Electron bundle.
 
-The source member must have SHA-256:
+The test output records the Claude version, the chunk it chose, its SHA-256, and each
+extracted method's signature, character offset, length and SHA-256, so a run is still
+reproducible evidence about one exact build.
 
-```text
-484ab045a1fbe63766a8f65d1258412c3943a60f21b8dcea3a8d63f1ed36a151
-```
-
-An unexpected checksum fails before any extracted code executes. The test output also
-records each extracted method's signature, character offset, length, and SHA-256.
+One thing here is still release-sensitive by nature: the extracted method bodies reference
+minified module-level names, and the inert scope in `archive-fixture.ts` supplies them by
+those names. A Claude release that renames them makes the fixture throw rather than run
+something unexpected, and the names have to be re-derived by diffing the extracted bodies.
 These are the unmodified bundled method bodies:
 
 - `archiveSession` and `teardownSession`

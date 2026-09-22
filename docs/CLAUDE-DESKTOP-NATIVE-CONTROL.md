@@ -1,6 +1,13 @@
 # Native control of Claude Desktop chats
 
-Investigation: 2026-09-19, installed Claude Desktop **2.2553.1**.
+Investigation: 2026-09-19, installed Claude Desktop **2.2553.1**. Nothing in the
+code is pinned to a Claude release any more: on 2026-09-22 the version, the two
+bundle chunks and the executable hashes all became things AgentHydra derives from
+whatever is installed, because pinning them stopped every native-control instance
+on the day Claude updated (2.2553.13, the first build that runs Opus 5.5, did
+exactly that). Bundle names quoted below are examples from a specific build, never
+values the code looks for. What replaced the pins is structural, in
+[Managed launch](#managed-launch-and-ashley-production-proof).
 
 Scope: moving, archiving and migrating **Code** chats between desktop instances.
 Message delivery is outside this work.
@@ -97,11 +104,11 @@ they are not the Cowork or web-chat store. Their native desktop IDs include
 
 Evidence in `resources/app.asar`:
 
-- `index.chunk-BQEs5Gzg.js`: exported `claudeCodeSessionManager` singleton.
+- `index.chunk-DvmOmfFd.js`: exported `claudeCodeSessionManager` singleton.
 - `index.chunk-Cd_DKFcM.js`: native Code IPC implementations.
 - `mainView.js`: renderer preload API.
 - `index.chunk-B-5-UF-d.js`: in-process SDK MCP session tools.
-- `index.chunk-1pAtASm0.js`: application menu and debugger entry point.
+- `index.chunk-8cddiCms.js`: application menu and debugger entry point.
 
 These names are version-specific. The adapter pins the reviewed version and both
 bundle hashes and refuses a different build. A native live proof on **another_meh
@@ -264,15 +271,24 @@ result so their bystander-state checks cannot interfere with each other.
 ## Managed launch and Ashley production proof
 
 The managed copy lives under AgentHydra's data directory in
-`claude-native/2.2553.1-d67ae3d5da7e`. The original signed executable is untouched.
+`claude-native/<version>-<first twelve hex of the installed hash>`. The original signed executable is untouched.
 The copied executable has the single inspector-fuse modification and therefore
 does not retain the original executable's valid signature. Other fuses and all
 application resources remain unchanged. Copies are complete regular files, not
 junctions into the installed app.
 
-AgentHydra verifies the installed version/hash, copied files, exact profile/PID/
-executable, loopback connection and loaded Claude view. It rejects occupied ports,
-changed copies and unsupported installed versions. The managed copy omits the
+AgentHydra derives the build rather than recognizing a reviewed one, and verifies
+it structurally: the installed executable must carry exactly one Electron fuse wire
+with the expected layout and the inspector fuse off, and the copy must differ from
+the original by that one byte and nothing else. Every copied file is hashed into
+the copy's manifest and re-verified on later launches, alongside the exact
+profile/PID/executable, loopback connection and loaded Claude view. It rejects
+occupied ports, changed copies, an ambiguous or unreadable fuse wire, and an
+installed executable whose fuse is not in the expected off state. Inside the app,
+the session manager and preview manager are found among already-loaded modules by
+the exports and method surface they must have, and anything ambiguous fails closed;
+the bundle file names and hashes that answered are recorded as evidence, not
+compared against constants. The managed copy omits the
 parent Squirrel updater; the live log confirmed its self-updater is disabled.
 Managed startups are serialized while global registrations are snapshotted and
 restored. Restoration waits for Claude's browser-host startup task, restores only

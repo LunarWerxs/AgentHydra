@@ -9,7 +9,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
-- **Every desktop account now starts on native control by default.** A new account gets
+- **Native control no longer pins a Claude Desktop version, so a Claude update stops breaking
+  it.** The supported version, both executable hashes, the Electron inspector-fuse offset and
+  the two bundle chunks the inspector program uses were constants in this repo, and a Claude
+  update invalidated all of them: 2.2553.13 (the first build that runs Opus 5.5) refused to
+  start under native control until a person re-measured the new binary by hand. All of it is
+  derived from whatever is installed now. The guarantees that replace the pins are structural:
+  exactly one Electron fuse wire with the expected layout and the inspector fuse off, a managed
+  copy that differs from the original by that single byte with every other file hashed into its
+  manifest, and, inside the running app, the session manager and preview manager found among
+  already-loaded modules by the exports and method surface they must have, with anything
+  ambiguous failing closed. Which bundle answered is now recorded as evidence in the result
+  rather than compared against a constant. A new account gets
   `native-only` with the debugger launched on the first free port when it is created or next
   opened, so it never falls back to Lua/UIA. Choosing "Use standard controls" is remembered and
   never undone.

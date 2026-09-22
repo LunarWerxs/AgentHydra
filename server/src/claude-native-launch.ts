@@ -17,6 +17,10 @@ import type { ClaudeNativeProfileConfig } from './claude-native-settings'
 import { DATA_DIR } from './config'
 
 const FUSE_MARKER = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX')
+/** Electron's fuse wire: the marker, a schema byte, a fuse count, then one byte per fuse. */
+const FUSE_WIRE = FUSE_MARKER.length + 2 + 9
+/** The inspector fuse is the fourth of them; 48 is '0' (off) and 49 is '1' (on). */
+const INSPECTOR_FUSE = FUSE_MARKER.length + 2 + 3
 const MANIFEST = 'agenthydra-native-manifest.json'
 
 export interface ClaudeManagedBuild {
@@ -25,13 +29,6 @@ export interface ClaudeManagedBuild {
   managedSha256: string
   fuseOffset: number
 }
-
-export const CLAUDE_MANAGED_BUILD: Readonly<ClaudeManagedBuild> = Object.freeze({
-  version: '2.2553.1',
-  sourceSha256: 'd67ae3d5da7eb34413f55c295f4847955af6322e028bd0700d4141101b6e5f6b',
-  managedSha256: '5e23a282fccf79b77d2cef79cd1c72e1ab5d44a2d2b2af6ef5f4d6fa0d624a3c',
-  fuseOffset: 199419677,
-})
 
 interface FileDigest {
   path: string
@@ -62,7 +59,7 @@ export interface ClaudeNativeLaunchPlan {
   }
 }
 
-/** Dependency injection is for small filesystem fixtures; runtime callers use the pinned build. */
+/** Dependency injection is for small filesystem fixtures; runtime callers derive the build. */
 export interface ClaudeNativeLaunchDependencies {
   platform?: NodeJS.Platform
   managedRoot?: string
@@ -120,11 +117,91 @@ async function filesIn(
   return files.sort()
 }
 
-/** Resolve the real application behind Squirrel's stable stub, never silently pin an older app. */
-export async function resolveClaudeNativeSource(
+/**
+ * One streaming pass over the installed executable yields everything the managed copy needs:
+ * where the inspector fuse is, the installed hash, and the hash the patched copy must have.
+ * Deriving these is what lets a Claude update work on the day it lands: the previous code
+ * compared them against constants checked into this repo, so every release stopped every
+ * native-control instance until a person re-measured the new binary by hand.
+ */
+async function scanInspectorFuse(
   binary: string,
-  build: Readonly<ClaudeManagedBuild> = CLAUDE_MANAGED_BUILD,
-): Promise<string> {
+): Promise<Pick<ClaudeManagedBuild, 'sourceSha256' | 'managedSha256' | 'fuseOffset'>> {
+  const source = createHash('sha256')
+  const managed = createHash('sha256')
+  let markerOffset = -1
+  let markers = 0
+  let carry = Buffer.alloc(0)
+  let position = 0
+  for await (const chunk of createReadStream(binary)) {
+    const bytes = chunk as Buffer
+    source.update(bytes)
+    // The marker can straddle a chunk boundary, so search it together with the previous tail.
+    const window = carry.length ? Buffer.concat([carry, bytes]) : bytes
+    const windowStart = position - carry.length
+    for (let at = window.indexOf(FUSE_MARKER); at >= 0; at = window.indexOf(FUSE_MARKER, at + 1)) {
+      markers++
+      if (markerOffset < 0) markerOffset = windowStart + at
+    }
+    carry = Buffer.from(window.subarray(Math.max(0, window.length - (FUSE_MARKER.length - 1))))
+    // The fuse always sits after the marker that announces it, so one pass can hash both forms.
+    const fuse = markerOffset < 0 ? -1 : markerOffset + INSPECTOR_FUSE
+    if (fuse >= position && fuse < position + bytes.length) {
+      const patched = Buffer.from(bytes)
+      patched[fuse - position] = 49
+      managed.update(patched)
+    } else {
+      managed.update(bytes)
+    }
+    position += bytes.length
+  }
+  if (markers !== 1) {
+    throw Error(`Claude executable has ${markers} Electron fuse wires; expected exactly one`)
+  }
+  const fuseOffset = markerOffset + INSPECTOR_FUSE
+  if (fuseOffset + 1 > position) throw Error('Claude fuse wire is truncated')
+  return {
+    sourceSha256: source.digest('hex'),
+    managedSha256: managed.digest('hex'),
+    fuseOffset,
+  }
+}
+
+/** Reads the fuse wire itself, so an unexpected layout is refused before anything is copied. */
+async function assertFuseWire(binary: string, fuseOffset: number): Promise<void> {
+  const file = await open(binary, 'r')
+  try {
+    const wire = Buffer.alloc(FUSE_WIRE)
+    const { bytesRead } = await file.read(wire, 0, wire.length, fuseOffset - INSPECTOR_FUSE)
+    if (
+      bytesRead !== wire.length ||
+      !wire.subarray(0, FUSE_MARKER.length).equals(FUSE_MARKER) ||
+      wire[FUSE_MARKER.length] !== 1 ||
+      wire[FUSE_MARKER.length + 1] !== 9 ||
+      wire[INSPECTOR_FUSE] !== 48
+    ) {
+      throw Error('Unsupported Claude Electron inspector fuse state')
+    }
+  } finally {
+    await file.close()
+  }
+}
+
+/**
+ * Describes the installed build instead of recognizing a reviewed one. The guarantees that
+ * matter are unchanged and are all structural: exactly one fuse wire, a known fuse layout,
+ * the inspector fuse currently off, and a copy that differs from the original by that one byte.
+ */
+export async function discoverClaudeBuild(sourceBinary: string): Promise<ClaudeManagedBuild> {
+  const scanned = await scanInspectorFuse(sourceBinary)
+  await assertFuseWire(sourceBinary, scanned.fuseOffset)
+  const folder = basename(dirname(sourceBinary))
+  const version = /^app-(\d+(?:\.\d+)*)$/.exec(folder)?.[1] ?? 'unknown'
+  return Object.freeze({ version, ...scanned })
+}
+
+/** Resolve the real application behind Squirrel's stable stub, never silently pin an older app. */
+export async function resolveClaudeNativeSource(binary: string): Promise<string> {
   if (basename(binary).toLowerCase() !== 'claude.exe') {
     throw Error('Automatic Claude debugger startup requires the Windows Claude executable')
   }
@@ -141,18 +218,10 @@ export async function resolveClaudeNativeSource(
       }
       return 0
     })
-  let source = binary
-  if (apps.length) {
-    if (apps[0].name !== `app-${build.version}`) {
-      throw Error(`Claude ${apps[0].name.slice(4)} is not supported by automatic debugger startup`)
-    }
-    source = join(parent, apps[0].name, 'claude.exe')
-  }
+  // Always the newest installed application, never the stub's own older neighbour.
+  const source = apps.length ? join(parent, apps[0].name, 'claude.exe') : binary
   await regularDirectory(dirname(source))
-  const actual = await digest(source)
-  if (actual.sha256 !== build.sourceSha256) {
-    throw Error(`Claude executable does not match the supported ${build.version} build`)
-  }
+  await digest(source)
   return source
 }
 
@@ -181,20 +250,9 @@ async function patchInspectorFuse(
   binary: string,
   build: Readonly<ClaudeManagedBuild>,
 ): Promise<void> {
+  await assertFuseWire(binary, build.fuseOffset)
   const file = await open(binary, 'r+')
   try {
-    const wire = Buffer.alloc(FUSE_MARKER.length + 2 + 9)
-    const markerOffset = build.fuseOffset - FUSE_MARKER.length - 2 - 3
-    const { bytesRead } = await file.read(wire, 0, wire.length, markerOffset)
-    if (
-      bytesRead !== wire.length ||
-      !wire.subarray(0, FUSE_MARKER.length).equals(FUSE_MARKER) ||
-      wire[FUSE_MARKER.length] !== 1 ||
-      wire[FUSE_MARKER.length + 1] !== 9 ||
-      wire[FUSE_MARKER.length + 2 + 3] !== 48
-    ) {
-      throw Error('Unsupported Claude Electron inspector fuse state')
-    }
     await file.write(Buffer.from([49]), 0, 1, build.fuseOffset)
     await file.sync()
   } finally {
@@ -338,8 +396,8 @@ export async function prepareClaudeNativeLaunch(
   }
   const checkPort = dependencies.assertPortAvailable ?? assertClaudeInspectorPortAvailable
   await checkPort(config.port)
-  const build = dependencies.build ?? CLAUDE_MANAGED_BUILD
-  const sourceBinary = await resolveClaudeNativeSource(binary, build)
+  const sourceBinary = await resolveClaudeNativeSource(binary)
+  const build = dependencies.build ?? (await discoverClaudeBuild(sourceBinary))
   const managedRoot = resolve(dependencies.managedRoot ?? join(DATA_DIR, 'claude-native'))
   const key = `${managedRoot}\0${sourceBinary}`
   let operation = preparing.get(key)

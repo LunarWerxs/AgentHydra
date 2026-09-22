@@ -48,21 +48,35 @@ async function importRuntime(
       return proc.platform === 'win32' ? result.toLowerCase() : result
     }
     const processGuard = () => {
-      if (proc.pid !== request.pid || !app.isReady() || app.getVersion() !== pin.version)
-        fail('wrong PID/version/state')
+      if (proc.pid !== request.pid || !app.isReady()) fail('wrong PID/state')
       if (key(app.getPath('userData')) !== key(request.profileDir)) fail('wrong profile')
     }
     processGuard()
-    const filename = require.resolve(path.join(app.getAppPath(), pin.managerMember))
-    const loaded = require.cache[filename]
-    if (!loaded?.loaded) fail('manager is not already initialized')
     const digest = (bytes: any) => crypto.createHash('sha256').update(bytes).digest('hex')
-    if (digest(fs.readFileSync(filename)) !== pin.managerSha256) fail('unreviewed manager source')
-    const manager = loaded.exports?.claudeCodeSessionManager
+    // Found by its export inside the already-loaded module cache of THIS app, never by a
+    // bundle file name: those are content-hashed and change with every Claude release.
+    const appPath = key(app.getAppPath())
+    const managers = Object.keys(require.cache)
+      .filter((name: string) => key(name).startsWith(appPath) && require.cache[name]?.loaded)
+      .map((name: string) => ({
+        filename: name,
+        value: require.cache[name]?.exports?.[pin.managerExport],
+      }))
+      .filter((member: any) => member.value)
+    const distinct = managers.filter(
+      (member: any, at: number) =>
+        managers.findIndex((other: any) => other.value === member.value) === at,
+    )
+    if (distinct.length > 1) fail('more than one native session manager is loaded')
+    if (!distinct.length) fail('manager is not already initialized')
+    const filename = distinct[0].filename
+    const loaded = require.cache[filename]
+    const managerSha256 = digest(fs.readFileSync(filename))
+    const manager = distinct[0].value
     if (!manager) fail('native singleton unavailable')
     const identityGuard = () => {
       processGuard()
-      if (require.cache[filename] !== loaded || loaded.exports.claudeCodeSessionManager !== manager)
+      if (require.cache[filename] !== loaded || loaded.exports?.[pin.managerExport] !== manager)
         fail('singleton changed')
       if (
         key(manager.userDataPath) !== key(request.profileDir) ||
@@ -169,7 +183,7 @@ async function importRuntime(
         accountId: manager.currentAccountId,
         orgId: manager.currentOrgId,
         version: app.getVersion(),
-        managerSha256: pin.managerSha256,
+        managerSha256,
       },
       session: {
         sessionId: session.sessionId,

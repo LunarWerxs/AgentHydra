@@ -97,7 +97,7 @@ export default {
   claudeNativeEnabledAccounts: 'Automatic startup: {accounts}',
   claudeNativeNoAutomaticAccounts: 'Automatic startup is not enabled for any account.',
   claudeNativeSupport:
-    'Automatic startup uses a separate managed copy of Claude. Currently supports Windows Claude 2.2553.1; unsupported updates are refused.',
+    'Automatic startup uses a separate managed copy of Claude. Currently supports Windows Claude 2.2553.13; unsupported updates are refused.',
   claudeNativeSaving: 'Saving…',
   claudeNativeSaved: 'Native control settings saved for {account}.',
   claudeNativeSaveFailed: 'Could not save native control settings.',

@@ -1,31 +1,60 @@
 /** Executes selected installed methods only; never imports/initializes the Electron bundle. */
 
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 
-const asarPath =
-  process.env.CLAUDE_POC_ASAR ??
-  (process.env.LOCALAPPDATA
-    ? join(process.env.LOCALAPPDATA, 'AnthropicClaude', 'app-2.2553.1', 'resources', 'app.asar')
-    : undefined)
-if (!asarPath) throw Error('Set CLAUDE_POC_ASAR to the reviewed Claude Desktop 2.2553.1 app.asar')
+function installedAsar(): string | undefined {
+  const local = process.env.LOCALAPPDATA
+  if (!local) return undefined
+  const root = join(local, 'AnthropicClaude')
+  const apps = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^app-\d+(?:\.\d+)*$/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((a, b) => {
+      const left = a.slice(4).split('.').map(Number)
+      const right = b.slice(4).split('.').map(Number)
+      for (let i = 0; i < Math.max(left.length, right.length); i++) {
+        const diff = (right[i] ?? 0) - (left[i] ?? 0)
+        if (diff) return diff
+      }
+      return 0
+    })
+  return apps.length ? join(root, apps[0], 'resources', 'app.asar') : undefined
+}
+
+const asarPath = process.env.CLAUDE_POC_ASAR ?? installedAsar()
+if (!asarPath) throw Error('Set CLAUDE_POC_ASAR to a Claude Desktop app.asar')
+export const claudeVersion = /app-(\d+(?:\.\d+)*)/.exec(asarPath)?.[1] ?? 'unknown'
 const archive = readFileSync(asarPath)
 const header = JSON.parse(archive.subarray(16, 16 + archive.readUInt32LE(12)).toString())
-const member = '.vite/build/index.chunk-BQEs5Gzg.js'
-let entry = header
-for (const part of member.split('/')) entry = entry.files[part]
-const base = 8 + archive.readUInt32LE(4) + Number(entry.offset)
-const source = archive.subarray(base, base + entry.size).toString()
-const sha256 = createHash('sha256').update(source).digest('hex')
-export const expectedSourceSha256 =
-  '484ab045a1fbe63766a8f65d1258412c3943a60f21b8dcea3a8d63f1ed36a151'
-if (sha256 !== expectedSourceSha256) {
-  throw Error(
-    `Untested Claude bundle ${sha256}: this POC only executes the reviewed 2.2553.1 source`,
-  )
+const base0 = 8 + archive.readUInt32LE(4)
+
+function members(node: any, prefix: string, out: Array<{ path: string; entry: any }>) {
+  for (const [name, entry] of Object.entries<any>(node.files ?? {})) {
+    const at = prefix ? `${prefix}/${name}` : name
+    if (entry.files) members(entry, at, out)
+    else out.push({ path: at, entry })
+  }
+  return out
 }
+
+// The bundle chunk is found by the export it owns, never by its file name: those names are
+// content hashes, so naming one pinned this harness to a single Claude release.
+const owning = members(header, '', []).filter(({ path, entry }) => {
+  if (!path.endsWith('.js')) return false
+  const from = base0 + Number(entry.offset)
+  return archive.subarray(from, from + entry.size).includes('exports.claudeCodeSessionManager=')
+})
+if (owning.length !== 1) {
+  throw Error(`Expected exactly one session-manager chunk, found ${owning.length}`)
+}
+const member = owning[0].path
+const from = base0 + Number(owning[0].entry.offset)
+const source = archive.subarray(from, from + owning[0].entry.size).toString()
+export const expectedSourceSha256 = createHash('sha256').update(source).digest('hex')
+const sha256 = expectedSourceSha256
 
 const boundaries = [
   ['async archiveSession(e,t){', 'async archiveSessionForAgent('],
@@ -46,7 +75,7 @@ function extract(start: string, end: string) {
 }
 
 export const provenance = {
-  claudeVersion: '2.2553.1',
+  claudeVersion,
   asarPath,
   member,
   sha256,
@@ -77,14 +106,14 @@ export function fixture() {
     {
       t: {
         mv: { forgetSession: no },
-        mU: { info: no, warn: no, error: no },
+        gU: { info: no, warn: no, error: no },
         Yh: no,
         jc: no,
         Ac: { stopServersForWorktree: no },
         Wd: no,
         JT: no,
       },
-      n: { lo: { endSession: no }, ao: { clear: no }, gi: { clear: no } },
+      n: { uo: { endSession: no }, oo: { clear: no }, _i: { clear: no } },
       w: { i: no },
       L: { v: no },
       f: {
@@ -93,9 +122,9 @@ export function fixture() {
           getUncommittedChanges: spy('gitStatus', Promise.resolve([])),
         },
       },
-      If: () => true,
-      zr: no,
-      Mb: spy('clear transcript release markers'),
+      Lf: () => true,
+      Rr: no,
+      Ib: spy('clear transcript release markers'),
     },
     { timeout: 1000 },
   )

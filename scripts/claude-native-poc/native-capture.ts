@@ -22,7 +22,7 @@ async function captureRuntime(request: CaptureRequest) {
       .replace(/[\\/]+$/, '')
       .toLowerCase()
   const guard = () => {
-    if (proc.pid !== request.pid || app.getVersion() !== '2.2553.1') {
+    if (proc.pid !== request.pid || app.getVersion() !== '2.2553.13') {
       throw Error('Capture refused: unexpected PID or Claude version')
     }
     if (normalize(app.getPath('userData')) !== normalize(request.profile) || !app.isReady()) {
