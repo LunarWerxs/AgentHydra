@@ -58,6 +58,76 @@ export interface DossierChat {
 const iso = (ms: unknown): string | null =>
   typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString() : null
 
+/** One field off a parsed metadata record. JSON.parse hands back `unknown`-shaped data; the
+ *  helpers below narrow it, so a malformed record yields nulls instead of a bad row. */
+function metaField(meta: unknown, key: string): unknown {
+  return (meta as Record<string, unknown> | null | undefined)?.[key]
+}
+
+/** A non-empty string field, or null. */
+function nonEmptyText(value: unknown): string | null {
+  return typeof value === 'string' && value ? value : null
+}
+
+/** Any string field (empty included), or null - the store's own `permissionMode` may be ''. */
+function anyText(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+/** A trimmed, non-empty string field, or null. */
+function trimmedText(value: unknown): string | null {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return text ? text : null
+}
+
+/** The string members of a list field, or [] when the field is not a list. */
+function textList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((x: unknown) => typeof x === 'string') : []
+}
+
+/** The file's mtime as ISO, or null when stat cannot read it (deleted mid-scan, permissions). */
+function metaMtimeIso(path: string): string | null {
+  try {
+    return new Date(statSync(path).mtimeMs).toISOString()
+  } catch {
+    return null
+  }
+}
+
+/** One store record -> one DossierChat row. Throws on an unreadable/half-written file, exactly as
+ *  the inlined reader did, so the caller's per-record skip still covers it. */
+function chatRecordFromFile(
+  dir: string,
+  rel: string,
+  label: string,
+  loginUuid: string | null,
+): DossierChat {
+  const path = join(dir, rel)
+  // Bun's glob yields native separators on Windows, so split on both.
+  const accountUuid = rel.split(/[\\/]/)[0] || null
+  const meta = JSON.parse(readFileSync(path, 'utf8'))
+  const chatId = rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null
+  return {
+    instance: label,
+    metaPath: path,
+    metaMtime: metaMtimeIso(path),
+    chatId,
+    cliSessionId: nonEmptyText(metaField(meta, 'cliSessionId')),
+    priorCliSessionIds: textList(metaField(meta, 'priorCliSessionIds')),
+    title: trimmedText(metaField(meta, 'title')),
+    cwd: nonEmptyText(metaField(meta, 'cwd')),
+    createdAt: iso(metaField(meta, 'createdAt')),
+    lastActivityAt: iso(metaField(meta, 'lastActivityAt')),
+    archived: !!metaField(meta, 'isArchived'),
+    isArchived: !!metaField(meta, 'isArchived'),
+    permissionMode: anyText(metaField(meta, 'permissionMode')),
+    accountUuid,
+    loginUuid,
+    staleLogin:
+      loginUuid && accountUuid ? accountUuid.toLowerCase() !== loginUuid.toLowerCase() : null,
+  }
+}
+
 function scanStoreFull(userDataDir: string, label: string, out: DossierChat[]): void {
   const dir = join(userDataDir, 'claude-code-sessions')
   if (!existsSync(dir)) return
@@ -67,39 +137,7 @@ function scanStoreFull(userDataDir: string, label: string, out: DossierChat[]): 
   const loginUuid = readLoginUuid(userDataDir)
   for (const rel of glob.scanSync({ cwd: dir, onlyFiles: true })) {
     try {
-      const path = join(dir, rel)
-      // Bun's glob yields native separators on Windows, so split on both.
-      const accountUuid = rel.split(/[\\/]/)[0] || null
-      const meta = JSON.parse(readFileSync(path, 'utf8'))
-      const chatId = rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null
-      out.push({
-        instance: label,
-        metaPath: path,
-        metaMtime: ((): string | null => {
-          try {
-            return new Date(statSync(path).mtimeMs).toISOString()
-          } catch {
-            return null
-          }
-        })(),
-        chatId,
-        cliSessionId:
-          typeof meta?.cliSessionId === 'string' && meta.cliSessionId ? meta.cliSessionId : null,
-        priorCliSessionIds: Array.isArray(meta?.priorCliSessionIds)
-          ? meta.priorCliSessionIds.filter((x: unknown) => typeof x === 'string')
-          : [],
-        title: typeof meta?.title === 'string' && meta.title.trim() ? meta.title.trim() : null,
-        cwd: typeof meta?.cwd === 'string' && meta.cwd ? meta.cwd : null,
-        createdAt: iso(meta?.createdAt),
-        lastActivityAt: iso(meta?.lastActivityAt),
-        archived: !!meta?.isArchived,
-        isArchived: !!meta?.isArchived,
-        permissionMode: typeof meta?.permissionMode === 'string' ? meta.permissionMode : null,
-        accountUuid,
-        loginUuid,
-        staleLogin:
-          loginUuid && accountUuid ? accountUuid.toLowerCase() !== loginUuid.toLowerCase() : null,
-      })
+      out.push(chatRecordFromFile(dir, rel, label, loginUuid))
     } catch {
       /* unreadable metadata file: skip it */
     }
