@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-24
+
 ### Added
 
 - **A chat that left background work hanging is asked whether it is stuck** (new lane
@@ -68,6 +70,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Opening a Codex Desktop instance works again, and never claims a launch that did not
+  happen** (`server/src/core/codex-desktop.ts`, `server/tests/codex-desktop.test.ts`). Since the
+  OpenAI.Codex 26.917 MSIX build, Windows refuses a plain start of the package's `ChatGPT.exe`
+  ("Access is denied"), and the launcher's exit code was ignored, so `open_codex_desktop_instance`
+  answered "Codex Desktop launched." while nothing opened. A packaged Codex is now started inside
+  its package (`Invoke-CommandInDesktopPackage`), through a hidden PowerShell that sets the
+  instance's `CODEX_HOME` first, because the cmdlet drops the caller's environment and the app
+  otherwise came up on the default, logged-out home. The open now fails with the launcher's own
+  error, and reports success only once a process on the instance's profile appears (its pid is
+  returned).
+- **A fan-out never adopts somebody else's chat** (`orchestrator/scripts/spawn_chat.py`,
+  `orchestrator/scripts/fan_out.py`, `server/src/mcp.ts`). Reported 2026-09-23: a person started
+  a chat on the same account inside a spawn's wait, the spawner took "the newest chat" as its
+  member, typed the fan-out prompt into it, and `fan_out_delete` would have deleted it. A new chat
+  is now bound only when its first user turn IS the spawn's prompt; one that opens with other
+  words is skipped and never typed into, and one that never shows the prompt is recorded as
+  `unbound` rather than claimed. `fan_out_send` and `fan_out_delete` refuse a member whose chat
+  opens with somebody else's words (`--force` included) and unbind it in the group record. A chat
+  that already opens with the prompt is also no longer sent it a second time by the fallback
+  starter.
 - **A moved chat keeps its NAME, instead of arriving on the new account called "General coding
   session"** (`server/src/session-launch.ts`, `server/src/title-sweep.ts`,
   `server/src/routes/desktop-sessions.ts`, `server/src/index.ts`,
