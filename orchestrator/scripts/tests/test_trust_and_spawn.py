@@ -183,9 +183,17 @@ class SpawnChatTest(unittest.TestCase):
         self.assertEqual(code, 3)
         popen.assert_not_called()
 
-    def _live_route(self, sid):
+    def _live_route(self, sid, first_turn="do the thing"):
+        """The new session's registration, plus its transcript opening with `first_turn` (None:
+        no user turn yet). A spawn binds a chat only when that turn is its own prompt."""
         resolved_cwd = str(self.folder.resolve())
         calls = {"n": 0}
+        tp = Path(self._tmp.name) / f"{sid}.jsonl"
+        tp.write_text("" if first_turn is None else json.dumps(
+            {"type": "user", "message": {"role": "user", "content": first_turn}}) + "\n",
+            encoding="utf-8")
+        self.stub.routes[f"/api/sessions/{sid}"] = {"session_id": sid, "transcript_path": str(tp)}
+        self.transcript = tp
 
         def route(method, path, query, body):
             calls["n"] += 1
@@ -217,8 +225,17 @@ class SpawnChatTest(unittest.TestCase):
         self.assertEqual(self.stub.posts, [])  # no fallback POST to /message
 
     def test_an_unconfirmed_composer_still_gets_the_message_fallback(self):
-        self.stub.routes["/api/sessions/live"] = self._live_route("new-sid-fallback")
-        self.stub.routes["/api/sessions/new-sid-fallback/message"] = {"ok": True, "delivered": True}
+        self.stub.routes["/api/sessions/live"] = self._live_route("new-sid-fallback",
+                                                                  first_turn=None)
+
+        def deliver(method, path, query, body):
+            # the delivered prompt becomes the chat's first turn, as the real route's does
+            self.transcript.write_text(json.dumps(
+                {"type": "user", "message": {"role": "user", "content": body["text"]}}) + "\n",
+                encoding="utf-8")
+            return {"ok": True, "delivered": True}
+
+        self.stub.routes["/api/sessions/new-sid-fallback/message"] = deliver
         with mock.patch.object(spawn_chat, "_binary", return_value="claude.exe"), \
              mock.patch.object(spawn_chat.subprocess, "Popen"), \
              mock.patch.object(spawn_chat, "TRUST_ACTUATOR", Path("nope-not-here")), \
@@ -233,6 +250,26 @@ class SpawnChatTest(unittest.TestCase):
         posts = [p for p, _ in self.stub.posts if p.endswith("/message")]
         self.assertEqual(len(posts), 1)
         self.assertTrue(res["started"].startswith("running"), res["started"])
+
+    def test_a_new_chat_that_opens_with_somebody_elses_words_is_never_bound_or_typed_into(self):
+        # 2026-09-23: a person started a chat on the same account inside the spawn's wait; the
+        # spawner took it as its member and typed the fan-out prompt into it.
+        sid = "a-persons-chat"
+        self.stub.routes["/api/sessions/live"] = self._live_route(
+            sid, first_turn="fix the GP invoices page")
+        self.stub.routes[f"/api/sessions/{sid}/message"] = {"ok": True, "delivered": True}
+        with mock.patch.object(spawn_chat, "_binary", return_value="claude.exe"), \
+             mock.patch.object(spawn_chat.subprocess, "Popen"), \
+             mock.patch.object(spawn_chat, "TRUST_ACTUATOR", Path("nope-not-here")), \
+             mock.patch.object(spawn_chat, "SUBMIT_ACTUATOR", Path("nope-not-here")), \
+             mock.patch.object(spawn_chat, "START_WAIT_SECS", 6), \
+             mock.patch("trust_workspace.apply_trust", return_value={"trusted": []}), \
+             mock.patch.object(spawn_chat.clilib, "run_text") as run_mock:
+            res = spawn_chat.spawn(str(self.folder), "do the thing", "open1")
+        self.assertIsNone(res["sessionId"])
+        self.assertEqual(res["skippedForeign"], [sid])
+        self.assertEqual([p for p, _ in self.stub.posts if p.endswith("/message")], [])
+        self.assertFalse(any("-SetMode" in c.args[0] for c in run_mock.call_args_list))
 
     def test_main_returns_4_when_the_first_turn_is_not_confirmed_running(self):
         with mock.patch.object(spawn_chat, "spawn", return_value={

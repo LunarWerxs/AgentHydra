@@ -536,6 +536,21 @@ class StatusAndSendTest(FanOutBase):
         self.assertTrue(all(c.kwargs.get("force") for c in d.call_args_list))
         self.assertFalse(fan_out.find_group("g1").get("deletedAt"))
 
+    def test_delete_never_touches_a_member_whose_chat_opens_with_somebody_elses_words(self):
+        # 2026-09-23: a spawn adopted a chat a person had just started on the same account, so
+        # fan_out_delete would have deleted it. --force is a person's word about holds, not about
+        # whose chat it is.
+        self._spawn_two()
+        t1 = self._transcript("sid-1", [
+            {"type": "user", "message": {"role": "user", "content": "fix the GP invoices page"}}])
+        self.stub.routes["/api/sessions/sid-1"] = {"session_id": "sid-1", "transcript_path": t1}
+        with mock.patch.object(fan_out.delete_chat, "delete",
+                               return_value={"ok": True, "code": 0}) as d:
+            code, out, _ = run_cli(fan_out.main, ["delete", "g1", "--json", "--force"])
+        self.assertEqual([c.args[0] for c in d.call_args_list], ["sid-2"])
+        self.assertIn("not this group's chat", json.loads(out)["results"][0]["skipped"])
+        self.assertEqual(fan_out.find_group("g1")["members"][0]["state"], "unbound")
+
     def test_list_shows_every_group_newest_last(self):
         self._spawn_two()
         code, out, err = run_cli(fan_out.main, ["--spec", self.spec(1, group="g3"), "--json"])

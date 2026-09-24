@@ -94,6 +94,9 @@ LAST_TEXT_CHARS = 600
 # The message route's own confirm window; the call waits that long for the chat to move. A
 # composer send boots a fresh engine first, which is why it is the route's own 120s default.
 SEND_CONFIRM_SECS = 120
+# Why send/delete leave a member alone whose chat opens with somebody else's words.
+NOT_OUR_CHAT = ("not this group's chat: its first turn is not the member's prompt, so it is "
+                "somebody else's - never sent to or deleted")
 
 
 # --- the group ledger ------------------------------------------------------------------------
@@ -382,6 +385,10 @@ def _spawn_state(res: dict) -> tuple[str, str | None]:
     if not res.get("ok"):
         return "refused", str(res.get("why") or "spawn refused")
     if not res.get("sessionId"):
+        if res.get("unboundSessionId"):
+            # a new chat appeared but never opened with this prompt: not claimed as a member
+            return "unbound", (f"new chat {res['unboundSessionId']} was not bound - "
+                               f"{res.get('started')}")
         return "not-registered", (f"the app never registered a new session (submitted: "
                                   f"{res.get('submitted')}; {res.get('submitNote') or ''})".strip())
     started = str(res.get("started") or "")
@@ -445,7 +452,8 @@ def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
         m["state"], m["why"] = _spawn_state(res)
         m["sessionId"] = res.get("sessionId")
         m["spawn"] = {k: res.get(k) for k in ("started", "submitted", "submitNote", "landedIn",
-                                              "modeSet", "trustDialog", "window")
+                                              "modeSet", "trustDialog", "window",
+                                              "unboundSessionId", "skippedForeign")
                       if k in res}
         m["spawnedAt"] = _now_iso()
         if m["sessionId"]:
@@ -611,6 +619,18 @@ def _short_last_line(sid: str) -> str:
     return last if 0 < len(last) < 10 else ""
 
 
+def _unbind_if_foreign(m: dict) -> bool:
+    """True, and the member unbound in its record, when its chat opens with somebody else's
+    words (spawn_chat.first_turn_owner). The record keeps the id as `unboundSessionId`, so
+    status stops gating a stranger's chat as ours and nothing later acts on it."""
+    sid = m.get("sessionId")
+    if not sid or spawn_chat.first_turn_owner(sid, m.get("prompt") or "") != "foreign":
+        return False
+    m["unboundSessionId"], m["sessionId"] = sid, None
+    m["state"], m["why"] = "unbound", NOT_OUR_CHAT
+    return True
+
+
 def send(group: dict, text: str, only: list[str] | None = None, force: bool = False) -> dict:
     """One follow-up into every member with a session (or the `only` ones): the member's idle
     engine is stopped first (_quiesce), then the daemon's message route boots the chat through
@@ -629,6 +649,10 @@ def send(group: dict, text: str, only: list[str] | None = None, force: bool = Fa
         if m.get("deleted"):
             results.append({"index": m.get("index"), "title": m.get("title"), "sessionId": sid,
                             "delivered": False, "skipped": "deleted"})
+            continue
+        if _unbind_if_foreign(m):
+            results.append({"index": m.get("index"), "title": m.get("title"), "sessionId": sid,
+                            "delivered": False, "skipped": NOT_OUR_CHAT})
             continue
         held = holdlib.why_blocked(sid)
         if held and not force:
@@ -694,6 +718,11 @@ def delete_group(group: dict, force: bool = False) -> dict:
             continue
         if m.get("deleted"):
             results.append({**base, "deleted": True, "skipped": "already deleted"})
+            continue
+        if _unbind_if_foreign(m):
+            # somebody else's chat, adopted by a spawn from before the first-turn check: never
+            # deleted, --force included - force is a person's word about holds, not ownership
+            results.append({**base, "deleted": False, "skipped": NOT_OUR_CHAT})
             continue
         try:
             # the instance this group spawned the chat into: the app that renders it even

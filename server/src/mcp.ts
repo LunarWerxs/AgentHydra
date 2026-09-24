@@ -640,6 +640,7 @@ const FAN_OUT_BAD_MEMBER_STATES = new Set([
   'open-failed',
   'not-registered',
   'spawned-unconfirmed',
+  'unbound',
   'crashed',
   'stalled',
   'unknown',

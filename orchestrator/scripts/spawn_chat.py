@@ -39,7 +39,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from lib import clilib, hydralib
+from lib import clilib, gatelib, hydralib
 from lib import windowlib
 
 MODE_ACTUATOR = Path(__file__).resolve().parent / "actuator" / "approve_prompt.ps1"
@@ -278,7 +278,36 @@ def _drive_spawn_window(inst: dict, folder: str, prompt: str, binary: str) -> di
             "submit_note": submit_note, "window_note": window_note}
 
 
-def _await_new_session(folder: str, before_ids: set, inst: dict) -> tuple[str | None, str | None]:
+def _is_own_prompt(first: str, prompt: str) -> bool:
+    """A chat's first user turn is THIS prompt: its head appears in that turn, whitespace and
+    case aside (a launcher may wrap the prompt with the folder, never rewrite it)."""
+    def norm(s: str) -> str:
+        return " ".join(str(s or "").split()).lower()
+    want = norm(prompt)[:300]
+    return bool(want) and want in norm(first)
+
+
+def first_turn_owner(session_id: str, prompt: str) -> str:
+    """Whose chat this is, by its FIRST user turn: 'ours' when that turn is `prompt`, 'foreign'
+    when it is somebody else's text, 'empty' when there is no user turn (or no transcript) yet.
+
+    ⛔ THE ADOPTED CHAT (2026-09-23). "Any new session on the instance" is not proof: a person
+    started a chat on the same account inside the spawn's wait, the spawner took it as its own,
+    typed the fan-out prompt into it, and fan_out_delete would have deleted it. A chat is ours
+    only when it opens with our prompt."""
+    try:
+        row = hydralib.session_row(session_id)
+    except hydralib.DaemonError:
+        row = None
+    tp = (row or {}).get("transcript_path") or gatelib.find_transcript_on_disk(session_id)
+    first = gatelib.first_user_prompt(tp) if tp else ""
+    if not first.strip():
+        return "empty"
+    return "ours" if _is_own_prompt(first, prompt) else "foreign"
+
+
+def _await_new_session(folder: str, before_ids: set, inst: dict,
+                       prompt: str) -> tuple[str | None, str | None, str, list[str]]:
     """Wait for the new session to REGISTER (it appears in the live registry with our folder as
     its cwd). A spawn that never registers is reported honestly, never claimed.
 
@@ -286,33 +315,53 @@ def _await_new_session(folder: str, before_ids: set, inst: dict) -> tuple[str | 
     deeplink chat opened and ran, but in the instance's own scratch workspace
     (...\\<instance>\\scratch-workspaces\\...), so a cwd==folder test reported "not-confirmed"
     for a chat that was live and answering. A brand-new session in a scratch workspace of the
-    app we just poked IS our chat - taken, and REPORTED as landed in scratch so nobody reads the
-    folder as trusted-and-used when it was not. Returns (session_id, landed_in), both None if
-    nothing registered inside START_WAIT_SECS."""
+    app we just poked is a CANDIDATE - taken only once its first user turn is our prompt (see
+    first_turn_owner), and REPORTED as landed in scratch so nobody reads the folder as
+    trusted-and-used when it was not. A candidate that opens with somebody else's words is
+    skipped for good; one with no user turn yet is kept waiting on.
+
+    Returns (session_id, landed_in, owner, foreign): owner is 'ours', or 'empty' for a
+    candidate that still had no user turn at the deadline; session_id is None when nothing
+    registered inside START_WAIT_SECS; foreign lists the new chats skipped as not ours."""
     deadline = time.time() + START_WAIT_SECS
     want = str(Path(folder).resolve()).replace(chr(92), "/").lower()
+    foreign: list[str] = []
+    empty: tuple[str, str] | None = None
     while time.time() < deadline:
         time.sleep(5)
         try:
             live = hydralib.api_get("/api/sessions/live").get("sessions", [])
         except hydralib.DaemonError:
             continue
-        new = [s for s in live if s.get("sessionId") not in before_ids]
+        new = [s for s in live if s.get("sessionId") not in before_ids
+               and s.get("sessionId") not in foreign]
         fresh = [s for s in new
                  if str(s.get("cwd") or "").replace(chr(92), "/").lower() == want]
         scratch = [s for s in new
                    if "scratch-workspaces" in str(s.get("cwd") or "").replace(chr(92), "/").lower()
                    and str(inst.get("dir") or "").replace(chr(92), "/").lower()
                    in str(s.get("cwd") or "").replace(chr(92), "/").lower()]
-        if fresh or scratch:
-            session_id = (fresh or scratch)[0].get("sessionId")
-            landed_in = "folder" if fresh else "scratch-workspace (the app ignored --folder)"
-            return session_id, landed_in
-    return None, None
+        for s in fresh + scratch:
+            sid = str(s.get("sessionId") or "")
+            if not sid:
+                continue
+            landed_in = "folder" if s in fresh else "scratch-workspace (the app ignored --folder)"
+            owner = first_turn_owner(sid, prompt)
+            if owner == "ours":
+                return sid, landed_in, "ours", foreign
+            if owner == "foreign":
+                foreign.append(sid)
+                if empty and empty[0] == sid:
+                    empty = None
+            elif empty is None:
+                empty = (sid, landed_in)
+    if empty:
+        return empty[0], empty[1], "empty", foreign
+    return None, None, "empty", foreign
 
 
 def _start_first_turn(session_id: str, inst: dict, prompt: str, submitted: str,
-                       folder: str) -> tuple[str, str]:
+                       folder: str, owner: str = "ours") -> tuple[str, str, bool]:
     """Get the new session's first turn actually running, then BORN RIGHT, THEN KEPT RIGHT
     (2026-09-01): set its permission mode through the app's own control - the new-chat view
     shows no permission picker until the chat exists, so a deeplink chat starts in the app's
@@ -320,16 +369,22 @@ def _start_first_turn(session_id: str, inst: dict, prompt: str, submitted: str,
     write the running app does not re-save away. Also records the spawn in the ledger as THE
     PROVENANCE RECORD: this chat was born by the toolbox with bypass PROMISED, so if it still
     stalls on a prompt in default mode, unblock_prompts may answer it on the strength of this
-    record - a person never chose that mode, the spawner did. Returns (started, mode_set)."""
-    if submitted == "sent":
-        # The composer submit already started the first turn - registering IS the proof.
-        # POSTing the prompt to the session as well queued the identical prompt a second time
-        # (review 2026-09-01: two starters stacked, where one was meant as a fallback), so the
-        # chat ran its whole task twice.
-        started = "running (composer submitted; engine registered)"
+    record - a person never chose that mode, the spawner did. Returns (started, mode_set,
+    bound): a chat that was not already `owner == 'ours'` gets the fallback starter only (it
+    has no user turn to clash with), and is bound - moded, ledgered, marked - only once its first
+    turn then reads as our prompt."""
+    if owner == "ours":
+        # The chat already opens with our prompt, so its first turn has started - the composer
+        # submit, or a Send the actuator could not confirm. POSTing the prompt to the session as
+        # well queued the identical prompt a second time (review 2026-09-01: two starters
+        # stacked, where one was meant as a fallback), so the chat ran its whole task twice.
+        started = ("running (composer submitted; engine registered)" if submitted == "sent"
+                   else "running (its first turn is our prompt)")
     else:
         # FALLBACK STARTER: no actuator pressed Send, so deliver the prompt through the
-        # daemon's message endpoint - the peer channel for a live session, no UI.
+        # daemon's message endpoint - the peer channel for a live session, no UI. Only ever
+        # reached for a chat with NO user turn: one that opens with somebody else's words was
+        # skipped in _await_new_session and is never typed into.
         try:
             got = hydralib.api_post(f"/api/sessions/{session_id}/message",
                                     {"text": prompt, "confirm_secs": 90}, timeout=180)
@@ -337,6 +392,9 @@ def _start_first_turn(session_id: str, inst: dict, prompt: str, submitted: str,
                        else "typed-not-confirmed")
         except hydralib.DaemonError as err:
             started = f"first-turn delivery failed ({(err.detail or str(err))[:100]})"
+    if owner != "ours" and first_turn_owner(session_id, prompt) != "ours":
+        return (f"unbound: the prompt was not confirmed as its first turn ({started})",
+                "not-attempted", False)
     mode_set = _set_mode_live(session_id, inst, prompt)
     from lib import ledgerlib
     ledgerlib.note("spawned", session_id, note=f"spawn_chat: {folder}; mode: {mode_set[:80]}")
@@ -345,7 +403,7 @@ def _start_first_turn(session_id: str, inst: dict, prompt: str, submitted: str,
     # every doctrine stamp give this chat the automation profile instead of the owner's.
     from lib import stamplib
     stamplib.mark_automation(session_id, "spawn_chat")
-    return started, mode_set
+    return started, mode_set, True
 
 
 def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -> dict:
@@ -377,16 +435,27 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
     submit_note = drive["submit_note"]
     window_note = drive["window_note"]
 
-    session_id, landed_in = _await_new_session(folder, before_ids, inst)
+    session_id, landed_in, owner, foreign = _await_new_session(folder, before_ids, inst, prompt)
     started = "not-confirmed"
     mode_set = "not-attempted"
+    unbound = None
+    if session_id and owner != "ours" and submitted == "sent":
+        # Send was pressed on OUR composer, yet the new chat never showed our prompt: whatever
+        # it is, it is not proven ours, so nothing below may touch it.
+        unbound, session_id = session_id, None
+        started = "unbound: the new chat never showed this prompt as its first turn"
     if session_id:
-        started, mode_set = _start_first_turn(session_id, inst, prompt, submitted, folder)
+        started, mode_set, bound = _start_first_turn(session_id, inst, prompt, submitted, folder,
+                                                     owner)
+        if not bound:
+            unbound, session_id = session_id, None
 
     return {"ok": True, "instance": inst.get("name"), "folder": folder,
             "landedIn": landed_in,
             "trusted": trust["trusted"], "trustDialog": dialog,
-            "sessionId": session_id, "submitted": submitted, "submitNote": submit_note,
+            "sessionId": session_id, "unboundSessionId": unbound,
+            "skippedForeign": foreign,
+            "submitted": submitted, "submitNote": submit_note,
             "started": started, "modeSet": mode_set,
             "window": window_note,
             "url": url[:120]}
