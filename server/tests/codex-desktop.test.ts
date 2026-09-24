@@ -1,9 +1,12 @@
 import { expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildCodexDesktopLaunch,
   codexDesktopRuntimesFromRecords,
   codexDesktopUserDataDir,
+  openCodexDesktop,
 } from '../src/core/codex-desktop'
 
 test('Codex Desktop profile is kept inside its isolated CODEX_HOME', () => {
@@ -35,10 +38,10 @@ test('Codex Desktop runtime discovery maps a crashpad profile back to the main w
   ])
 })
 
-test('Windows Codex Desktop launch carries both isolation variables through the detached handoff', () => {
+test('Windows Codex Desktop launch starts inside its MSIX package and still carries both isolation variables', () => {
   const launch = buildCodexDesktopLaunch(
     'win32',
-    'C:\\Program Files\\WindowsApps\\OpenAI.Codex\\app\\ChatGPT.exe',
+    'C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.917.8451.0_x64__2p2nqsd0c76g0\\app\\ChatGPT.exe',
     'C:\\profiles\\work',
     'C:\\profiles\\work\\desktop',
   )
@@ -47,10 +50,45 @@ test('Windows Codex Desktop launch carries both isolation variables through the 
   expect(launch.detached).toBe(false)
   expect(launch.argv.at(-2)).toBe('-EncodedCommand')
   const script = Buffer.from(launch.argv.at(-1)!, 'base64').toString('utf16le')
-  expect(script).toContain('CODEX_HOME')
-  expect(script).toContain('CODEX_ELECTRON_USER_DATA_PATH')
-  expect(script).toContain('--user-data-dir=C:\\profiles\\work\\desktop')
-  expect(script).toContain('Start-Process')
+  expect(script).toContain("-PackageFamilyName 'OpenAI.Codex_2p2nqsd0c76g0'")
+  // Invoke-CommandInDesktopPackage drops the caller's environment, so the variables must travel
+  // inside the command it runs in the package.
+  const inner = script.match(/-EncodedCommand ([A-Za-z0-9+/=]+)/)
+  expect(inner).not.toBeNull()
+  const innerScript = Buffer.from(inner![1]!, 'base64').toString('utf16le')
+  expect(innerScript).toContain("$env:CODEX_HOME = 'C:\\profiles\\work'")
+  expect(innerScript).toContain(
+    "$env:CODEX_ELECTRON_USER_DATA_PATH = 'C:\\profiles\\work\\desktop'",
+  )
+  expect(innerScript).toContain('--user-data-dir=C:\\profiles\\work\\desktop')
+})
+
+test('a Codex Desktop launch the launcher refused is reported as a failure, not "launched"', async () => {
+  const codexHome = mkdtempSync(join(tmpdir(), 'ah-codex-open-'))
+  try {
+    const refused = (() => ({
+      pid: undefined,
+      exitCode: 1,
+      exited: Promise.resolve(1),
+      stderr: new Response(
+        'Start-Process : This command cannot be run due to the error: Access is denied.\r\nAt line:1 char:230\r\n',
+      ).body,
+      unref() {},
+    })) as unknown as typeof Bun.spawn
+    const result = await openCodexDesktop(
+      { id: 'x', name: 'x', codexHome },
+      {
+        platform: 'win32',
+        listProcesses: async () => [],
+        resolveBinary: async () => 'C:\\Codex\\ChatGPT.exe',
+        spawn: refused,
+      },
+    )
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('Access is denied')
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true })
+  }
 })
 
 test('macOS Codex Desktop launch uses a detached process with isolated environment', () => {

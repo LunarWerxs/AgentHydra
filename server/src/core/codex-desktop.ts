@@ -323,6 +323,39 @@ async function findRuntime(
   )
 }
 
+/** The launcher shell only hands off; the MSIX route loads the Appx module first (~2-4s). */
+const HANDOFF_TIMEOUT_MS = 30_000
+/** How long a handed-off Codex Desktop gets to show a process on its profile (~3s measured). */
+const START_TIMEOUT_MS = 20_000
+const START_POLL_MS = 750
+
+async function waitForRuntime(
+  target: CodexDesktopTarget,
+  listProcesses: ListDesktopProcesses | undefined,
+  timeoutMs: number,
+): Promise<CodexDesktopRuntime | null> {
+  const deadline = Date.now() + timeoutMs
+  while (true) {
+    const runtime = await findRuntime(target, listProcesses, { fresh: true })
+    if (runtime || Date.now() >= deadline) return runtime
+    await Bun.sleep(START_POLL_MS)
+  }
+}
+
+/** The first real line of a PowerShell error, plain or CLIXML (which -EncodedCommand can emit). */
+function handoffError(stderr: string): string {
+  const text = stderr.startsWith('#< CLIXML')
+    ? [...stderr.matchAll(/<S S="Error">([^<]*)<\/S>/g)]
+        .map((m) => m[1]!.replace(/_x000D__x000A_/g, '\n'))
+        .join('')
+    : stderr
+  const line = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l.length > 0)
+  return (line ?? '').slice(0, 300)
+}
+
 /** Resolves the packaged desktop GUI, independently from the Codex CLI resolver. */
 export async function resolveCodexDesktopBinary(
   platform: NodeJS.Platform = process.platform,
@@ -368,12 +401,36 @@ export async function resolveCodexDesktopBinary(
 
 const powershellLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`
 
+// Encoding prevents PowerShell's `-Command` quote rules from consuming the `$env:` assignments
+// before Start-Process receives them.
+const encodePowerShell = (script: string): string =>
+  Buffer.from(script, 'utf16le').toString('base64')
+
+/** The main window's `<Application Id>` in the OpenAI.Codex MSIX manifest (read off 26.917). */
+const CODEX_MSIX_APP_ID = 'App'
+
+/** `Name_PublisherId` of the MSIX package a binary is installed in, or null when it is not in one.
+ *  The install folder is the package FULL name, `Name_Version_Arch_ResourceId_PublisherId`. */
+function msixPackageFamilyName(binary: string): string | null {
+  const match = binary.match(
+    /[\\/]WindowsApps[\\/]([^\\/_]+)_[^\\/_]+_[^\\/_]+_[^\\/_]*_([^\\/_]+)[\\/]/i,
+  )
+  return match ? `${match[1]}_${match[2]}` : null
+}
+
 /**
  * Builds a launch that survives quitting/updating AgentHydra. On Windows, a short-lived
  * PowerShell process applies the instance environment and hands the GUI to Start-Process. Once the
  * hand-off exits, Codex is no longer in the daemon's live process tree. The generic WMI detacher is
  * intentionally not used there: an MSIX full-trust executable created by the WMI service exits
  * before Electron starts, even though Win32_Process.Create reports success.
+ *
+ * Since the 26.917 MSIX build (2026-09-23), Windows refuses a plain CreateProcess on the package's
+ * ChatGPT.exe ("Access is denied"), so a packaged binary is started INSIDE its package with
+ * Invoke-CommandInDesktopPackage. That cmdlet drops the caller's environment (verified: the app came
+ * up on the default ~/.codex, logged out), so what it starts in the package is a hidden PowerShell
+ * that sets the isolation variables and then runs the same Start-Process. A plain Start-Process
+ * stays as the fallback for an unpackaged binary or a Windows without the cmdlet.
  *
  * `--user-data-dir` is intentionally passed as well: the Windows MSIX build reads the environment
  * variable inside the app, but Chromium's package-level single-instance bootstrap only separates
@@ -386,16 +443,27 @@ export function buildCodexDesktopLaunch(
   desktopUserDataDir: string,
 ): CodexDesktopLaunch {
   if (platform === 'win32') {
-    const script = [
+    const direct = [
       `$env:CODEX_HOME = ${powershellLiteral(codexHome)}`,
       `$env:CODEX_ELECTRON_USER_DATA_PATH = ${powershellLiteral(desktopUserDataDir)}`,
       `Start-Process -FilePath ${powershellLiteral(binary)} -ArgumentList ${powershellLiteral(`--user-data-dir=${desktopUserDataDir}`)}`,
     ].join('; ')
-    // Encoding prevents PowerShell's `-Command` quote rules from consuming the `$env:` assignments
-    // before Start-Process receives them.
-    const encodedScript = Buffer.from(script, 'utf16le').toString('base64')
+    const family = msixPackageFamilyName(binary)
+    const inPackageArgs = `-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${encodePowerShell(`$ErrorActionPreference = 'Stop'; ${direct}`)}`
+    const script = family
+      ? [
+          "$ErrorActionPreference = 'Stop'",
+          `try { Invoke-CommandInDesktopPackage -PackageFamilyName ${powershellLiteral(family)} -AppId ${powershellLiteral(CODEX_MSIX_APP_ID)} -Command (Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe') -Args ${powershellLiteral(inPackageArgs)} } catch { ${direct} }`,
+        ].join('; ')
+      : `$ErrorActionPreference = 'Stop'; ${direct}`
     return {
-      argv: ['powershell', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodedScript],
+      argv: [
+        'powershell',
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        encodePowerShell(script),
+      ],
       detached: false,
       envOverrides: {},
     }
@@ -447,6 +515,14 @@ export async function openCodexDesktop(
     }
   }
 
+  const failed = (message: string): CMActionResult => ({
+    ok: false,
+    action: 'codex-desktop-open',
+    dir: target.codexHome,
+    message,
+    data: { id: target.id, binary, desktopUserDataDir: desktopDir },
+  })
+
   try {
     mkdirSync(desktopDir, { recursive: true })
     const platform = options.platform ?? process.platform
@@ -456,20 +532,46 @@ export async function openCodexDesktop(
       env: { ...(process.env as Record<string, string>), ...launch.envOverrides },
       stdin: 'ignore',
       stdout: 'ignore',
-      stderr: 'ignore',
+      stderr: launch.detached ? 'ignore' : 'pipe',
       windowsHide: platform === 'win32',
       ...(launch.detached ? { detached: true } : {}),
     })
-    child.unref()
+    if (launch.detached) {
+      child.unref()
+    } else {
+      // The hand-off is a short-lived shell whose exit code IS the launch verdict. It used to be
+      // ignored, so "Access is denied" from Start-Process was reported as "Codex Desktop launched."
+      const [code, stderr] = await Promise.all([
+        awaitExitBounded(child, HANDOFF_TIMEOUT_MS),
+        child.stderr instanceof ReadableStream
+          ? new Response(child.stderr).text().catch(() => '')
+          : Promise.resolve(''),
+      ])
+      if (code !== 0) {
+        const reason = handoffError(stderr)
+        return failed(
+          code === null
+            ? `Failed to launch Codex Desktop: the launcher did not finish within ${HANDOFF_TIMEOUT_MS / 1000}s.`
+            : `Failed to launch Codex Desktop${reason ? `: ${reason}` : ` (launcher exit ${code}).`}`,
+        )
+      }
+    }
     // The cached snapshot is now wrong by construction — drop it so the next poll shows the row
     // as running rather than waiting out the TTL.
     invalidateCodexProcessCache()
+    // A clean hand-off still proves nothing: only a process on THIS profile does.
+    const started = await waitForRuntime(target, options.listProcesses, START_TIMEOUT_MS)
+    if (!started) {
+      return failed(
+        `Codex Desktop did not start: no process for this instance's profile appeared within ${START_TIMEOUT_MS / 1000}s.`,
+      )
+    }
     return {
       ok: true,
       action: 'codex-desktop-open',
       dir: target.codexHome,
       message: 'Codex Desktop launched.',
-      data: { id: target.id, binary, desktopUserDataDir: desktopDir },
+      data: { id: target.id, binary, desktopUserDataDir: desktopDir, pid: started.pid },
     }
   } catch (error) {
     return {
