@@ -80,6 +80,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   otherwise came up on the default, logged-out home. The open now fails with the launcher's own
   error, and reports success only once a process on the instance's profile appears (its pid is
   returned).
+- **The Codex terminal launch runs the newest Codex CLI the desktop app installed**
+  (`server/src/config.ts`). Its version folders are content hashes, and the pick was the
+  alphabetically last one, so after an update it could launch the older binary left beside it.
 - **A new CLI instance's MCP seed reads the same `~/.claude.json` Claude Code does**
   (`server/src/core/cli-instances.ts`). It followed Bun's `os.homedir()`, which on Linux ignores a
   `HOME` set at runtime where Node's (Claude Code's) honours it; the ubuntu CI leg was red on it.

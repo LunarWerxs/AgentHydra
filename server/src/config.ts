@@ -7,6 +7,7 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
+  statSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -428,9 +429,14 @@ export function resolveCodexExe(): string {
 
   const desktopBin = join(LOCALAPPDATA, 'OpenAI', 'Codex', 'bin')
   if (existsSync(desktopBin)) {
+    // The folders are content hashes, so their names say nothing about age: an update leaves the
+    // old one beside the new, and the newest binary is the one the desktop app itself runs.
     const glob = new Bun.Glob('*/codex.exe')
-    const matches = [...glob.scanSync({ cwd: desktopBin, onlyFiles: true })]
-    if (matches.length > 0) return join(desktopBin, matches.sort().at(-1)!)
+    const newest = [...glob.scanSync({ cwd: desktopBin, onlyFiles: true })]
+      .map((rel) => join(desktopBin, rel))
+      .map((path) => ({ path, mtime: statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? 0 }))
+      .sort((a, b) => b.mtime - a.mtime)[0]
+    if (newest) return newest.path
   }
 
   const npmCandidates = [join(APPDATA, 'npm', 'codex.cmd'), join(APPDATA, 'npm', 'codex')]
