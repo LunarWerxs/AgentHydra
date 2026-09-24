@@ -70,6 +70,81 @@ interface ReadyDeps {
   now?: () => number
 }
 
+/** Only a changed identity or a failed host setup is worth abandoning the whole wait for. */
+function isFatalLaunchReason(message: string): boolean {
+  return (
+    message.includes('identity mismatch') ||
+    message.includes('does not match the requested') ||
+    message.includes('host setup failed')
+  )
+}
+
+type LaunchProbe =
+  | { kind: 'ready'; pid: number; identity: ClaudeInspectorIdentity }
+  | { kind: 'retry'; reason: string }
+  | { kind: 'fatal'; error: unknown }
+
+/**
+ * One readiness attempt against the single main process already owning the profile. Retryable
+ * outcomes come back as data so the caller keeps its budget and its last-seen explanation.
+ */
+async function probeNativeLaunchOwner(
+  owner: { pid: number },
+  profile: string,
+  binary: string,
+  options: NativeLaunchReadyOptions,
+  deps: ReadyDeps,
+  deadline: number,
+  now: () => number,
+): Promise<LaunchProbe> {
+  let client: ClaudeInspectorClient | undefined
+  try {
+    client = await (deps.connect ?? connectClaudeInspector)({
+      pid: owner.pid,
+      profile,
+      port: options.port,
+      connectTimeoutMs: Math.max(1, Math.min(2000, deadline - now())),
+      callTimeoutMs: Math.max(1, Math.min(2000, deadline - now())),
+    })
+    const state = await client.evaluate<{
+      ready?: boolean
+      pid?: number
+      executable?: string
+      profile?: string
+    }>(nativeLaunchReadyExpression)
+    if (
+      state.pid !== owner.pid ||
+      typeof state.executable !== 'string' ||
+      normalizeClaudeNativeProfile(state.executable) !== binary ||
+      typeof state.profile !== 'string' ||
+      normalizeClaudeNativeProfile(state.profile) !== profile
+    ) {
+      throw Error('Native launch identity mismatch: PID, executable or profile changed')
+    }
+    const hostState = options.startupLogCursor
+      ? nativeHostStartupState(newStartupLog(options.startupLogCursor))
+      : 'complete'
+    if (hostState === 'failed') {
+      throw Error('Native launch host setup failed before registration recovery')
+    }
+    if (state.ready === true && hostState !== null) {
+      return { kind: 'ready', pid: owner.pid, identity: client.identity }
+    }
+    return {
+      kind: 'retry',
+      reason:
+        state.ready === true
+          ? 'Claude has not finished its browser registration startup task'
+          : 'Claude has not finished loading its main window',
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    return isFatalLaunchReason(reason) ? { kind: 'fatal', error } : { kind: 'retry', reason }
+  } finally {
+    client?.close()
+  }
+}
+
 // Reads an already-running app only. No window input, foreground changes or module loading
 // beyond Electron's builtin API; registry restoration follows confirmed main-window loading.
 export const nativeLaunchReadyExpression = `(() => {
@@ -84,17 +159,27 @@ export const nativeLaunchReadyExpression = `(() => {
   return {ready:loaded, pid:process.pid, executable:process.execPath, profile:app.getPath('userData')};
 })()`
 
+interface LaunchWait {
+  now: () => number
+  sleep: (milliseconds: number) => Promise<void>
+  deadline: number
+}
+
+function nativeLaunchWait(options: NativeLaunchReadyOptions, deps: ReadyDeps): LaunchWait {
+  const now = deps.now ?? Date.now
+  const sleep =
+    deps.sleep ??
+    ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)))
+  return { now, sleep, deadline: now() + (options.timeoutMs ?? 30_000) }
+}
+
 export async function waitForNativeLaunchReady(
   options: NativeLaunchReadyOptions,
   deps: ReadyDeps = {},
 ): Promise<{ pid: number; identity: ClaudeInspectorIdentity; ready: boolean }> {
   const profile = normalizeClaudeNativeProfile(options.profileDir)
   const binary = normalizeClaudeNativeProfile(options.binary)
-  const now = deps.now ?? Date.now
-  const sleep =
-    deps.sleep ??
-    ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)))
-  const deadline = now() + (options.timeoutMs ?? 30_000)
+  const { now, sleep, deadline } = nativeLaunchWait(options, deps)
   let last = 'the launched profile has not appeared'
   while (now() < deadline) {
     const scan = await (deps.scan ?? scanClaudeProcesses)({ fresh: true })
@@ -104,54 +189,22 @@ export async function waitForNativeLaunchReady(
       (row) => row.isMain && row.dir && normalizeClaudeNativeProfile(row.dir) === profile,
     )
     if (owners.length > 1) throw Error('Native launch has multiple processes for the exact profile')
-    if (owners.length === 1) {
-      const owner = owners[0]
-      let client: ClaudeInspectorClient | undefined
-      try {
-        client = await (deps.connect ?? connectClaudeInspector)({
-          pid: owner.pid,
-          profile,
-          port: options.port,
-          connectTimeoutMs: Math.max(1, Math.min(2000, deadline - now())),
-          callTimeoutMs: Math.max(1, Math.min(2000, deadline - now())),
-        })
-        const state = await client.evaluate<{
-          ready?: boolean
-          pid?: number
-          executable?: string
-          profile?: string
-        }>(nativeLaunchReadyExpression)
-        if (
-          state.pid !== owner.pid ||
-          typeof state.executable !== 'string' ||
-          normalizeClaudeNativeProfile(state.executable) !== binary ||
-          typeof state.profile !== 'string' ||
-          normalizeClaudeNativeProfile(state.profile) !== profile
-        ) {
-          throw Error('Native launch identity mismatch: PID, executable or profile changed')
-        }
-        const hostState = options.startupLogCursor
-          ? nativeHostStartupState(newStartupLog(options.startupLogCursor))
-          : 'complete'
-        if (hostState === 'failed')
-          throw Error('Native launch host setup failed before registration recovery')
-        if (state.ready === true && hostState !== null)
-          return { pid: owner.pid, identity: client.identity, ready: true }
-        last =
-          state.ready === true
-            ? 'Claude has not finished its browser registration startup task'
-            : 'Claude has not finished loading its main window'
-      } catch (error) {
-        last = error instanceof Error ? error.message : String(error)
-        if (
-          last.includes('identity mismatch') ||
-          last.includes('does not match the requested') ||
-          last.includes('host setup failed')
-        )
-          throw error
-      } finally {
-        client?.close()
+    const owner = owners[0]
+    if (owner) {
+      const probe = await probeNativeLaunchOwner(
+        owner,
+        profile,
+        binary,
+        options,
+        deps,
+        deadline,
+        now,
+      )
+      if (probe.kind === 'fatal') throw probe.error
+      if (probe.kind === 'ready') {
+        return { pid: probe.pid, identity: probe.identity, ready: true }
       }
+      last = probe.reason
     }
     if (now() < deadline) await sleep(Math.min(300, deadline - now()))
   }
