@@ -10,13 +10,23 @@
 // Persistence mirrors the desktop instance-identity split: a plain JSON store under CONFIG_DIR
 // (NOT the sqlite db — no schema migration, same as instances-cache.json). Never carries a token;
 // login is the USER's step (an OAuth/password flow an AI must never perform), so this module can
-// only (a) create the dir, (b) detect logged-in state by the presence of `.credentials.json`, and
+// only (a) create the dir and seed it with the user's MCP servers (see seedInstanceMcpServers —
+// never their logins), (b) detect logged-in state by the presence of `.credentials.json`, and
 // (c) open a real terminal with the env set so the user can `/login` (or just use the session).
 //
 // Never throws for expected failures (bad name, collision, missing dir, guard refusal) — every
 // mutating function returns a status-carrying CMActionResult, same contract as core/lifecycle.ts.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
 import type { CliInstance, UsageSnapshot } from '../types'
@@ -45,6 +55,36 @@ const CLI_INSTANCES_ROOT = join(CONFIG_DIR, 'cli-instances')
 const STORE_PATH = join(CONFIG_DIR, 'cli-instances.json')
 
 const NAME_MAX = 60
+
+/**
+ * Seed a brand-new instance dir with the user's MCP servers.
+ *
+ * `CLAUDE_CONFIG_DIR` isolates a CLI instance COMPLETELY: it does not fall back to `~/.claude.json`,
+ * so an instance created as a bare `mkdir` has zero MCP servers and keeps zero forever. Found
+ * 2026-09-16 on a real install: an instance sat at `mcpServers: {}` while the user's own config
+ * carried five, so a session launched into it silently had none of the tooling every other session
+ * on that machine had. It looked healthy and was blind — the worst shape for a bug to take.
+ *
+ * Only `mcpServers` is copied. NOT logins, NOT `projects` trust (that is `ensureProjectTrusted`'s job,
+ * per-folder and deliberate), NOT onboarding state — login stays the user's step. Best-effort by
+ * design: a machine with no `~/.claude.json`, or an unreadable one, just yields an unseeded instance,
+ * which is exactly today's behaviour.
+ */
+function seedInstanceMcpServers(configDir: string): void {
+  const target = join(configDir, '.claude.json')
+  if (existsSync(target)) return
+  try {
+    const user = JSON.parse(readFileSync(join(homedir(), '.claude.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >
+    const servers = user.mcpServers as Record<string, unknown> | undefined
+    if (!servers || Object.keys(servers).length === 0) return
+    writeFileSync(target, JSON.stringify({ mcpServers: servers }, null, 2))
+  } catch {
+    // No user config, unreadable, or an unwritable instance dir: leave it unseeded.
+  }
+}
 
 // --- persistence -------------------------------------------------------------
 //
@@ -309,6 +349,7 @@ export function createCliInstance(name: string): CMActionResult {
       data: { name },
     }
   }
+  seedInstanceMcpServers(configDir)
   const rec: CliInstance = {
     num: instanceNumberFor('cli', id),
     id,

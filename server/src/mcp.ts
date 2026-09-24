@@ -2822,6 +2822,84 @@ export const TOOLS: McpEngineTool[] = [
       })
     },
   },
+  {
+    name: 'unblock_prompts',
+    description:
+      "MUTATES: ANSWER A PERMISSION PROMPT A CHAT IS STOPPED ON, WHILE ITS ENGINE IS MID-TURN — the path for \"that chat has been sitting on Allow / Accept / Continue for ten minutes and only a human click restarts it\". CALL THIS ON A STALL: `fan_out_send` REFUSES a member whose engine reads working, and a chat frozen on a prompt IS working, so steering it with more text cannot clear it; this presses the button instead. `session` names one chat (or several) and narrows every stage to it — WITHOUT it this is the fleet-wide sweep, so pass it whenever you mean one chat. ⛔ NOTHING IS PRESSED UNLESS THE TRAY ICON IS UP (`orchestrator_switch {action:'armed'}` FIRST — a disarmed fleet silently downgrades to plan-only and says so in the output, which reads exactly like a chat that was not stuck). ⛔ IT IS NOT A POLICY DECISION AND NAMING A CHAT IS NOT CONSENT: a chat is pressed only where its own configured mode is bypassPermissions (or the toolbox spawned it with bypass promised), it is not held, its own last words are visible in the pane, and the PENDING COMMAND ITSELF classifies APPROVE against approval_policy.json. A hardline-destructive command (rm -rf, force-push, a credential path) is DENIED and left stuck however it was invoked; anything the policy does not place is ESCALATED to the judgment queue rather than pressed on a guess — `force` is a PERSON's word that presses an escalated one after showing the command, and it is also the documented bypass of the tray switch for one run. `dry_run: true` reports what WOULD be pressed and touches nothing. Returns the orchestrator's own report: `stuck` (every waiting chat with its verdict and command), `results` (per press: approved / no prompt showing / could not reach that pane), `denied`, `queuedForJudgment`, and `notFound` — a chat you NAMED that is not waiting on anything, which is how you tell 'cleared' from 'never stuck'.",
+    inputSchema: S({
+      session: {
+        type: ['string', 'array'],
+        items: { type: 'string' },
+        description:
+          'Session id(s) to clear. Omit ONLY when you mean the whole-fleet sweep; a manager steering one chat should always pass this.',
+      },
+      dry_run: {
+        type: 'boolean',
+        description: 'Report what would be pressed and press nothing. Default false (act).',
+      },
+      force: {
+        type: 'boolean',
+        description:
+          "A PERSON's word, for one run: press an ESCALATED prompt after showing its command, and act without the tray icon. Pass it only when the human asked for this act.",
+      },
+      max: { type: 'number', description: 'Cap how many prompts one run presses (default 6).' },
+      min_wait_secs: {
+        type: 'number',
+        description:
+          'How long a chat must have been quiet to count as stuck. Defaults to 0 when `session` is given (you have already looked at that chat) and 240 for a sweep, where the wait is what stops a click landing on a command that is merely still running.',
+      },
+    }),
+    run: async (a) => {
+      const sessions = (Array.isArray(a.session) ? a.session : a.session == null ? [] : [a.session])
+        .map(str)
+        .map((s) => s.trim())
+        .filter(Boolean)
+      const act = a.dry_run !== true
+      const scan: string[] = ['--json']
+      for (const sid of sessions) scan.push('--session', sid)
+      if (a.min_wait_secs != null) scan.push('--min-wait', String(Number(a.min_wait_secs)))
+      if (a.max != null) scan.push('--max', String(Number(a.max)))
+
+      const runScript = async (args: string[], timeoutMs: number) =>
+        (await api('/api/orchestrator/run', {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ script: 'unblock_prompts', args, timeoutMs }),
+        })) as { stdout?: string; stderr?: string; exitCode?: number }
+      const report = (r: { stdout?: string }): Record<string, unknown> | null => {
+        try {
+          const parsed: unknown = JSON.parse(String(r.stdout ?? ''))
+          return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null
+        } catch {
+          return null
+        }
+      }
+
+      // ⛔ PROVE THE NARROWING BEFORE PRESSING ANYTHING (the reason `supports` exists — see
+      // SUPPORTS in unblock_prompts.py). The daemon runs whatever orchestrator copy is INSTALLED
+      // beside it, not necessarily the one this tool shipped with, and that script reads argv by
+      // lookup: a copy predating `--session` IGNORES it and sweeps the whole fleet instead. With
+      // `--yes` attached, the failure mode of a version skew is pressing prompts in chats nobody
+      // named. So a targeted ACT plans first and refuses unless the script names the flag itself.
+      if (sessions.length && act) {
+        const plan = report(await runScript(scan, 5 * 60_000))
+        const supports = Array.isArray(plan?.supports) ? (plan.supports as unknown[]).map(str) : []
+        if (!supports.includes('session'))
+          throw new Error(
+            'refusing to press: the orchestrator answering this daemon predates `--session`, so it ' +
+              'would IGNORE the chat you named and sweep the whole fleet with --yes. Update the ' +
+              'orchestrator beside the running daemon (or point AGENTHYDRA_ORCHESTRATOR_DIR at a ' +
+              'checkout that has it) and call again. Nothing was pressed.',
+          )
+      }
+
+      const args = [...scan]
+      if (act) args.push('--yes')
+      if (a.force === true) args.push('--force')
+      const result = await runScript(args, 20 * 60_000)
+      return { ...result, report: report(result) }
+    },
+  },
 ]
 
 export const SERVER_INFO = { name: 'agenthydra', version: VERSION }

@@ -586,7 +586,7 @@ CATALOG: dict[str, dict] = {
         "invocation": "both",
         "platforms": "windows-only",
         "guards": ("hold", "breaker", "armed-window", "force"),
-        "result": "0 nothing stuck, or everything pressed - 2 something did not clear (each named) - 1 daemon failure",
+        "result": "0 nothing stuck, or everything pressed - 2 something did not clear (each named) - 3 bad usage (an unknown flag, refused before anything is scanned or pressed) - 1 daemon failure",
         "availability": "available",
         "summary": "ACT: restart chats that stopped on a permission prompt they should",
     },

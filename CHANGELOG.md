@@ -7,6 +7,37 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **`unblock_prompts` is a first-class MCP tool, and it can be aimed at ONE chat**
+  (`server/src/mcp.ts`, `orchestrator/scripts/unblock_prompts.py`,
+  `server/tests/unblock-prompts-mcp.test.ts`,
+  `orchestrator/scripts/tests/test_unblock_targeting.py`,
+  `docs/UNBLOCKING-STUCK-PROMPTS.md`). A chat stopped on Allow/Accept/Continue is not slow, it is
+  stopped, and its engine still reads `working` - which is precisely the state `fan_out_send`
+  refuses, so the one tool a manager chat would reach for cannot clear the one stall it hits.
+  Pressing the button existed (the 5-minute unattended lane), but only as a fleet-wide sweep on a
+  schedule, reachable by name through `orchestrator_run`.
+  - `--session <id>` (repeatable, or a comma list) narrows every stage to the named chats. It
+    narrows and never widens: the bypass/spawn doctrine, the hold, the verify snippet and the
+    tri-state verdict over the pending command all still apply. Naming a chat says *which*, never
+    *press it regardless*.
+  - `--min-wait` moves the quiet gate, and a named session defaults it to **0**. The 4-minute wait
+    exists so a *sweep* does not click at a chat whose command is merely still running; a caller
+    naming one session has already looked at it, and making it wait out a window it has usually
+    already waited is what made "clear this stall now" unusable.
+  - A named chat that is **not** waiting is reported (`notFound`), because otherwise "I cleared it"
+    and "it was never stuck" are the same silence.
+  - ⛔ **An unknown flag is now a refusal (exit 3), not a shrug.** Argv was read by lookup, so a
+    mistyped flag was ignored - and the flag most worth mistyping is the one that *narrows*, which
+    means the punishment for a typo was a fleet-wide press. Nothing is scanned or pressed until
+    argv is understood.
+  - ⛔ **A targeted act plans first and refuses on a version skew.** The daemon runs whatever
+    orchestrator copy is installed beside it, not necessarily this checkout; a copy predating
+    `--session` would ignore it and sweep the fleet with `--yes`, and nothing would say so. The
+    script now names its own flags in `--json` (`supports`), and the tool will not attach `--yes`
+    to a run it cannot prove was narrowed.
+
 ### Fixed
 
 - **A moved chat keeps its NAME, instead of arriving on the new account called "General coding

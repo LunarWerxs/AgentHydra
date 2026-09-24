@@ -34,10 +34,26 @@ ESCALATE (everything the policy does not place) is never pressed UNATTENDED eith
 queued for interview.py's judgment queue instead. Only the INTERACTIVE run (`--force`, a
 person at orch.py) may press an ESCALATE row, and only after showing the command.
 
+TARGETING ONE CHAT (--session, 2026-09-11). The sweep above answers "what in the fleet is
+stuck"; a MANAGER chat driving another account has the opposite question - "THIS chat stopped
+mid-turn, clear it NOW". `--session <id>` (repeatable, or a comma list) narrows every stage to
+the named chats, and reports a named chat that is NOT waiting on a prompt instead of silently
+finding nothing. ⛔ IT NARROWS, IT NEVER WIDENS: every rail above still applies to a named
+chat - the bypass/spawn doctrine, the hold, the verify snippet, the tri-state verdict. Naming
+a chat is a caller saying WHICH one, never a caller saying "press it regardless".
+
+`--min-wait SECS` moves the quiet threshold that MIN_WAIT_SECS sets, and with `--session` it
+defaults to 0. The 4-minute wait exists so a SWEEP does not click at a healthy chat whose
+command is merely still running; a caller naming one session has already observed that chat
+sitting on a prompt, and making it wait out a window it has often already waited is the whole
+reason "clear this stall" was not a usable path.
+
 Usage: python unblock_prompts.py [--json]        # what is stuck, and what would be pressed
        python unblock_prompts.py --yes [--max N] # press them
+       python unblock_prompts.py --session <id> [--session <id>] [--yes]   # just these
+       python unblock_prompts.py --min-wait 0 --json                       # ignore the quiet gate
 Exit:  0 nothing stuck, or everything pressed - 2 something did not clear (each named) -
-       1 daemon failure.
+       3 bad usage (an unknown flag) - 1 daemon failure.
 """
 
 from __future__ import annotations
@@ -80,7 +96,16 @@ def _pending_record(transcript: Path) -> dict | None:
     return last if (last["has_tool_use"] and not last["has_tool_result"]) else None
 
 
-def find_stuck() -> list[dict]:
+def find_stuck(only: set[str] | None = None,
+               min_wait_secs: float | None = None) -> list[dict]:
+    """Every chat waiting on a permission prompt, newest wait first.
+
+    `only` NARROWS the scan to those session ids and nothing else - it is which-chat, never
+    a waiver: every rail below (live engine, the waiting shape, bypass/spawn doctrine, the
+    hold, the verify snippet) is applied to a named chat exactly as it is to a swept one.
+    `min_wait_secs` overrides MIN_WAIT_SECS for this scan; see the module docstring for why a
+    named session defaults it to 0."""
+    wait_floor = MIN_WAIT_SECS if min_wait_secs is None else max(0.0, float(min_wait_secs))
     fleet = hydralib.fleet()
     tpath = stamplib.transcript_index(fleet)
     live = {s.get("sessionId") for s in
@@ -95,6 +120,8 @@ def find_stuck() -> list[dict]:
             sid = str(meta.get("cliSessionId") or path.stem.replace("local_", ""))
             if not sid or sid in seen or sid not in live:
                 continue
+            if only and sid not in only:
+                continue
             f = tpath.get(sid)
             if not f or not f.exists():
                 continue
@@ -102,7 +129,7 @@ def find_stuck() -> list[dict]:
                 quiet = now - f.stat().st_mtime
             except OSError:
                 continue
-            if quiet < MIN_WAIT_SECS:
+            if quiet < wait_floor:
                 continue
             pending = _pending_record(f)
             if pending is None:
@@ -322,6 +349,87 @@ def _resolve_max_cap(argv: list[str]) -> tuple[int, str | None]:
     return int(raw), None
 
 
+# WHAT THIS BUILD UNDERSTANDS, stated in its own --json payload.
+#
+# ⛔ THE FAILURE THIS EXISTS TO PREVENT, and it is silent. main() below reads the flags it knows
+# out of argv; an OLDER copy of this script does not know `--session`, and argv parsing by
+# lookup IGNORES what it does not recognise. So a caller that names one chat and is answered by
+# a build predating this flag does not get an error - it gets a FLEET-WIDE run, with `--yes`,
+# pressing prompts in chats nobody named. That is exactly backwards from what was asked for.
+# The daemon makes this a live risk rather than a theoretical one: it runs whatever orchestrator
+# copy is INSTALLED next to it (server/src/orchestrator.ts, AGENTHYDRA_ORCHESTRATOR_DIR), which
+# is not necessarily this checkout. A caller acting on named sessions therefore plans first and
+# refuses to act unless it sees its flag named here (server/src/mcp.ts, `unblock_prompts`).
+SUPPORTS = ("session", "min-wait")
+
+# Flags main() knows. A flag NOT in here is a typo or a newer caller's word, and either way
+# acting on it as though it had been understood is the silent fleet-wide press described above.
+_FLAGS_NO_VALUE = frozenset({"--json", "--yes", "--force", "--help", "-h"})
+_FLAGS_WITH_VALUE = frozenset({"--max", "--session", "--min-wait"})
+
+
+def _unknown_args(argv: list[str]) -> list[str]:
+    """Anything in argv this build does not understand. Values belonging to a known flag are
+    consumed with it, so `--max 3` never reports `3` as unknown."""
+    unknown: list[str] = []
+    i = 0
+    while i < len(argv):
+        word = argv[i]
+        if word in _FLAGS_WITH_VALUE:
+            i += 2
+            continue
+        if word in _FLAGS_NO_VALUE:
+            i += 1
+            continue
+        unknown.append(word)
+        i += 1
+    return unknown
+
+
+def _requested_sessions(argv: list[str]) -> list[str]:
+    """Every `--session` value, in order, de-duplicated. A comma list counts as several, so
+    one `--session a,b` and two `--session` flags mean the same thing."""
+    out: list[str] = []
+    for i, word in enumerate(argv):
+        if word != "--session" or i + 1 >= len(argv):
+            continue
+        for part in str(argv[i + 1]).split(","):
+            sid = part.strip()
+            if sid and sid not in out:
+                out.append(sid)
+    return out
+
+
+def _resolve_min_wait(argv: list[str], targeted: bool) -> tuple[float, str | None]:
+    """(the quiet threshold for this run, error). Absent `--min-wait`, a TARGETED run waits 0
+    and a sweep keeps MIN_WAIT_SECS - the docstring's own reasoning: the wait protects a chat
+    found by a sweep from being clicked at mid-command, and a caller naming a session has
+    already looked at it."""
+    if "--min-wait" not in argv:
+        return (0.0 if targeted else float(MIN_WAIT_SECS)), None
+    i = argv.index("--min-wait")
+    raw = argv[i + 1] if i + 1 < len(argv) else ""
+    try:
+        secs = float(raw)
+    except ValueError:
+        return 0.0, f"unblock FAILED: --min-wait needs a number of seconds, got {raw!r}"
+    if secs < 0:
+        return 0.0, f"unblock FAILED: --min-wait cannot be negative, got {raw!r}"
+    return secs, None
+
+
+def _missing_report(requested: list[str], stuck: list[dict]) -> list[dict]:
+    """The named chats that produced no row: named, with the honest reason, rather than left
+    to read as "nothing was stuck". A caller steering one chat needs to tell "I cleared it"
+    apart from "that chat is not waiting on anything I can press"."""
+    found = {r["sessionId"] for r in stuck}
+    return [{"sessionId": sid,
+             "why": ("not waiting on a permission prompt right now - its engine is not live, "
+                     "its newest record is not an unanswered tool call, or it has not been "
+                     "quiet long enough (--min-wait)")}
+            for sid in requested if sid not in found]
+
+
 def _ineligible_reason(row: dict) -> str:
     """Why one stuck-but-not-eligible chat was left alone, for the text report.
     r["ineligibleWhy"] is already computed (find_stuck) for the verify-snippet failure - use
@@ -340,14 +448,22 @@ def _ineligible_reason(row: dict) -> str:
 
 def _print_text_report(stuck: list[dict], results: list[dict], eligible: list[dict],
                         act: bool, queued: list[dict] | None = None,
-                        denied: list[dict] | None = None, context: str = "unattended") -> None:
+                        denied: list[dict] | None = None, context: str = "unattended",
+                        missing: list[dict] | None = None) -> None:
     """The human-readable (non --json) report: what is stuck, what was pressed (if anything),
-    what got DENIED or ESCALATED by the tri-state gate, and why every remaining stuck chat
-    was left alone."""
+    what got DENIED or ESCALATED by the tri-state gate, why every remaining stuck chat was
+    left alone, and (when sessions were named) which named chat was not waiting at all."""
     queued = queued or []
     denied = denied or []
+    missing = missing or []
+
+    def _say_missing() -> None:
+        for row in missing:
+            print(f"  -- {row['sessionId']}: {row['why']}")
+
     if not stuck:
         print("no chat is waiting on a permission prompt.")
+        _say_missing()
         return
     print(f"{len(stuck)} chat(s) waiting on a permission prompt ({context} run):")
     for r in (results or eligible):
@@ -368,6 +484,7 @@ def _print_text_report(stuck: list[dict], results: list[dict], eligible: list[di
             continue
         print(f"  ?? [{r['instance']}] {r['title'][:52]} - waiting {r['quietMins']:.0f}m: "
               f"{_ineligible_reason(r)}")
+    _say_missing()
     if not act and eligible:
         print("\nPLAN ONLY - add --yes to answer the prompts these chats should never have seen.")
 
@@ -379,6 +496,15 @@ def main(argv: list[str]) -> int:
         return 0
     as_json = "--json" in argv
     act = "--yes" in argv
+    # A FLAG THIS BUILD DOES NOT KNOW IS A REFUSAL, NOT A SHRUG (see SUPPORTS above). Argv is
+    # read by lookup, so an unrecognised word used to be ignored in silence - and the word most
+    # likely to be mistyped is the one that NARROWS the run, which means the typo's punishment
+    # was a fleet-wide press. Nothing is scanned or pressed until argv is understood.
+    unknown = _unknown_args(argv)
+    if unknown:
+        print(f"unblock FAILED: unknown argument(s) {' '.join(unknown)} - this build understands "
+              f"{' '.join(sorted(_FLAGS_NO_VALUE | _FLAGS_WITH_VALUE))}", file=sys.stderr)
+        return 3
     if act and not configlib.get("unblock.enabled"):
         # THE MASTER SWITCH (2026-09-17). Stuck prompts are still found and still reported -
         # they are simply never pressed, so every one of them becomes yours to answer.
@@ -396,13 +522,19 @@ def main(argv: list[str]) -> int:
     if cap_error:
         print(cap_error, file=sys.stderr)
         return 1
+    requested = _requested_sessions(argv)
+    min_wait, wait_error = _resolve_min_wait(argv, bool(requested))
+    if wait_error:
+        print(wait_error, file=sys.stderr)
+        return 1
 
     context = _run_context(argv)
     try:
-        stuck = find_stuck()
+        stuck = find_stuck(only=set(requested) or None, min_wait_secs=min_wait)
     except hydralib.DaemonError as err:
         print(f"unblock FAILED: {err}", file=sys.stderr)
         return 1
+    missing = _missing_report(requested, stuck)
     press_candidates, queued, denied = _select(stuck, context)
     eligible = press_candidates[:cap]
     results = [press(r) for r in eligible] if act else []
@@ -418,10 +550,15 @@ def main(argv: list[str]) -> int:
 
     if as_json:
         print(json.dumps({"stuck": stuck, "results": results, "context": context,
-                          "queuedForJudgment": queued, "denied": denied}, indent=2))
+                          "queuedForJudgment": queued, "denied": denied,
+                          # `supports` is this build naming its own flags, so a caller can tell
+                          # "narrowed to the chat I named" from "an older copy ignored --session
+                          # and swept the fleet" - the two are otherwise identical on the wire.
+                          "supports": list(SUPPORTS),
+                          "requested": requested, "notFound": missing}, indent=2))
         return 2 if [r for r in results if not r["ok"]] else 0
 
-    _print_text_report(stuck, results, eligible, act, queued, denied, context)
+    _print_text_report(stuck, results, eligible, act, queued, denied, context, missing)
     return 2 if [r for r in results if not r["ok"]] else 0
 
 
