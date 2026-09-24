@@ -440,6 +440,113 @@ function snapshot(op: OrchestratorOperation): OrchestratorOperation {
  * or already succeeded, must not start a second act - but a failed or cancelled run leaves the
  * key free for the very next call with that key to try again for real.
  */
+/** The live record an idempotency key may reuse: one that is RUNNING or already SUCCEEDED. A
+ *  failed or cancelled run does not pin its key (see startOrchestratorOperation). */
+function reusableOperation(key: string | null): OperationEntry | null {
+  if (!key) return null
+  for (const e of operations.values()) {
+    if (e.op.idempotencyKey === key && (e.op.status === 'running' || e.op.status === 'done'))
+      return e
+  }
+  return null
+}
+
+/** The record for a new run, shaped from what validation accepted (or refused). */
+function newOperation(
+  input: { script?: unknown; args?: unknown; timeoutMs?: unknown },
+  key: string | null,
+  check: InvocationCheck,
+): OrchestratorOperation {
+  return {
+    id: crypto.randomUUID(),
+    script: check.ok ? check.invocation.script : String(input.script ?? ''),
+    args: check.ok ? check.invocation.args : [],
+    idempotencyKey: key,
+    startedAt: Date.now(),
+    finishedAt: null,
+    status: 'running',
+    result: null,
+    ran: false,
+  }
+}
+
+function newOperationEntry(op: OrchestratorOperation): OperationEntry {
+  return {
+    op,
+    promise: Promise.resolve(op),
+    kill: null,
+    cancelRequested: false,
+    watchdog: null,
+  }
+}
+
+/** The spawn hook handed to runOrchestrator: keep the kill switch on the record and honour a
+ *  cancel that arrived before the child existed. */
+function operationProcessHandler(
+  op: OrchestratorOperation,
+  entry: OperationEntry,
+  deps: SpawnDeps & { dir?: string; python?: string },
+): (kill: () => void) => void {
+  return (kill) => {
+    op.ran = true
+    entry.kill = kill
+    deps.onProcess?.(kill)
+    // A cancel that arrived before the child existed lands the moment it does.
+    if (entry.cancelRequested) kill()
+  }
+}
+
+/** Close the record on its run's result. */
+function settleOperation(
+  op: OrchestratorOperation,
+  entry: OperationEntry,
+  result: OrchestratorOutcome,
+): OrchestratorOperation {
+  if (entry.watchdog) {
+    clearTimeout(entry.watchdog)
+    entry.watchdog = null
+  }
+  // THE WATCHDOG'S VERDICT STANDS. If it already closed this record, a caller has been told the
+  // run was abandoned; a late result arriving afterwards must not quietly reopen it as `done`.
+  if (op.finishedAt !== null) return snapshot(op)
+  // An injected spawn never reports a process; if the run went far enough to have a script
+  // record, it ran as far as this registry is concerned.
+  if ('script' in result) op.ran = true
+  op.result = result
+  op.finishedAt = Date.now()
+  op.status = entry.cancelRequested ? 'cancelled' : result.ok ? 'done' : 'failed'
+  return snapshot(op)
+}
+
+/** THE REGISTRY'S OWN DEADLINE (OPERATION_WATCHDOG_GRACE_MS): whatever happens above, the record
+ *  closes - putting down a child that is somehow still there first, best-effort. */
+function expireOperation(
+  op: OrchestratorOperation,
+  entry: OperationEntry,
+  declared: number,
+  graceMs: number,
+): void {
+  entry.watchdog = null
+  if (op.finishedAt !== null) return
+  // Put the child down if one is somehow still there; then answer, regardless of whether it did.
+  try {
+    entry.kill?.()
+  } catch {
+    /* the kill is best-effort - the record closes either way, which is the point */
+  }
+  op.result = {
+    ok: false,
+    error:
+      `${op.script} passed its declared deadline of ${Math.round(declared / 1000)}s ` +
+      `(plus ${Math.round(graceMs / 1000)}s of grace) without its run ` +
+      'settling, so the daemon closed this operation and killed whatever was left of it. The ' +
+      'script may have done part or all of its work before that - read the toolbox’s own ' +
+      'ledger and verify the effect directly; do NOT re-fire the act blind.',
+  }
+  op.finishedAt = Date.now()
+  op.status = 'failed'
+}
+
 export function startOrchestratorOperation(
   input: { script?: unknown; args?: unknown; timeoutMs?: unknown },
   opts: {
@@ -452,83 +559,24 @@ export function startOrchestratorOperation(
 ): { op: OrchestratorOperation; promise: Promise<OrchestratorOperation>; reused: boolean } {
   pruneOperations()
   const key = opts.idempotencyKey?.trim() || null
-  if (key) {
-    for (const e of operations.values()) {
-      if (e.op.idempotencyKey === key && (e.op.status === 'running' || e.op.status === 'done'))
-        return { op: snapshot(e.op), promise: e.promise, reused: true }
-    }
-  }
+  const reusable = reusableOperation(key)
+  if (reusable) return { op: snapshot(reusable.op), promise: reusable.promise, reused: true }
   const check = validateInvocation(input)
-  const op: OrchestratorOperation = {
-    id: crypto.randomUUID(),
-    script: check.ok ? check.invocation.script : String(input.script ?? ''),
-    args: check.ok ? check.invocation.args : [],
-    idempotencyKey: key,
-    startedAt: Date.now(),
-    finishedAt: null,
-    status: 'running',
-    result: null,
-    ran: false,
-  }
-  const entry: OperationEntry = {
-    op,
-    promise: Promise.resolve(op),
-    kill: null,
-    cancelRequested: false,
-    watchdog: null,
-  }
+  const op = newOperation(input, key, check)
+  const entry = newOperationEntry(op)
   const deps = opts.deps ?? {}
   entry.promise = runOrchestrator(input, {
     ...deps,
-    onProcess: (kill) => {
-      op.ran = true
-      entry.kill = kill
-      deps.onProcess?.(kill)
-      // A cancel that arrived before the child existed lands the moment it does.
-      if (entry.cancelRequested) kill()
-    },
-  }).then((result) => {
-    if (entry.watchdog) {
-      clearTimeout(entry.watchdog)
-      entry.watchdog = null
-    }
-    // THE WATCHDOG'S VERDICT STANDS. If it already closed this record, a caller has been told the
-    // run was abandoned; a late result arriving afterwards must not quietly reopen it as `done`.
-    if (op.finishedAt !== null) return snapshot(op)
-    // An injected spawn never reports a process; if the run went far enough to have a script
-    // record, it ran as far as this registry is concerned.
-    if ('script' in result) op.ran = true
-    op.result = result
-    op.finishedAt = Date.now()
-    op.status = entry.cancelRequested ? 'cancelled' : result.ok ? 'done' : 'failed'
-    return snapshot(op)
-  })
-  // THE REGISTRY'S OWN DEADLINE (OPERATION_WATCHDOG_GRACE_MS): whatever happens below this line,
-  // the record closes. `validateInvocation` failing means the run resolves immediately with a
-  // refusal, so the default deadline is only ever a placeholder for a timer that never fires.
+    onProcess: operationProcessHandler(op, entry, deps),
+  }).then((result) => settleOperation(op, entry, result))
+  // `validateInvocation` failing means the run resolves immediately with a refusal, so the default
+  // deadline is only ever a placeholder for a timer that never fires.
   const declared = check.ok ? check.invocation.timeoutMs : DEFAULT_TIMEOUT_MS
   const graceMs = opts.watchdogGraceMs ?? OPERATION_WATCHDOG_GRACE_MS
-  entry.watchdog = setTimeout(() => {
-    entry.watchdog = null
-    if (op.finishedAt !== null) return
-    // Put the child down if one is somehow still there; then answer, regardless of whether it did.
-    try {
-      entry.kill?.()
-    } catch {
-      /* the kill is best-effort - the record closes either way, which is the point */
-    }
-    op.result = {
-      ok: false,
-      error:
-        `${op.script} passed its declared deadline of ${Math.round(declared / 1000)}s ` +
-        `(plus ${Math.round(graceMs / 1000)}s of grace) without its run ` +
-        'settling, so the daemon closed this operation and killed whatever was left of it. The ' +
-        'script may have done part or all of its work before that - read the toolbox’s own ' +
-        'ledger and verify the effect directly; do NOT re-fire the act blind.',
-    }
-    op.finishedAt = Date.now()
-    op.status = 'failed'
-  }, declared + graceMs)
+  entry.watchdog = setTimeout(
+    () => expireOperation(op, entry, declared, graceMs),
+    declared + graceMs,
+  )
   // Node/Bun keep the process alive for a pending timer; a daemon is long-lived anyway, but an
   // hour-long watchdog must never be the reason a CLI or a test run refuses to exit.
   entry.watchdog.unref?.()
