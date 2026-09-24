@@ -1376,14 +1376,34 @@ export function cancelChatArchiveReassert(instanceDir: string, sessionId: string
   return true
 }
 
-/**
- * THE DURABLE FIX for the zombie-twin leak (owner ask, 2026-09-01). After a migrate archives
- * the SOURCE chat's meta on disk, a RUNNING source app holds its chat list in memory and
- * re-saves isArchived=false within seconds - resurrecting a visible stale twin that then makes
- * the chat ambiguous to resolve. This is the archive-flag twin of reassertChatAutomation: a
- * bounded watcher that re-writes isArchived=true whenever the app flips it back, scoped to the
- * SOURCE dir only (never the fresh target import), until the app's next boot reads the store
- * and the flag sticks for good - or the caps below fire. Non-throwing; returns restore count.
+/** The watcher's resolved knobs, defaults applied once. */
+interface ArchiveReassertConfig {
+  windowMs: number
+  intervalMs: number
+  maxRestores: number
+  maxMisses: number
+  sleep: (ms: number) => Promise<void>
+  now: () => number
+  isAppRunning?: () => boolean
+}
+
+/** The per-watcher mutable accounting, handed to every tick. */
+interface ArchiveReassertState {
+  metaPath: string | null
+  restores: number
+  misses: number
+}
+
+/** What one tick of the watcher resolved to. */
+type ArchiveReassertTick = 'continue' | 'stop'
+
+/** THE DURABLE FIX for the zombie-twin leak (owner ask, 2026-09-01). After a migrate archives
+ *  the SOURCE chat's meta on disk, a RUNNING source app holds its chat list in memory and
+ *  re-saves isArchived=false within seconds - resurrecting a visible stale twin that then makes
+ *  the chat ambiguous to resolve. This is the archive-flag twin of reassertChatAutomation: a
+ *  bounded watcher that re-writes isArchived=true whenever the app flips it back, scoped to the
+ *  SOURCE dir only (never the fresh target import), until the app's next boot reads the store
+ *  and the flag sticks for good - or the caps below fire. Non-throwing; returns restore count.
  *
  * CANCELLABLE since 2026-09-18: it registers itself for the life of the watch and checks that
  * registration every tick, so `cancelChatArchiveReassert` can end it the moment the owner
@@ -1403,13 +1423,16 @@ export async function reassertChatArchive(
     isAppRunning?: () => boolean
   },
 ): Promise<number> {
-  const windowMs = opts?.windowMs ?? 10 * 60_000
-  const intervalMs = opts?.intervalMs ?? 1_500
-  const maxRestores = opts?.maxRestores ?? 8
-  const maxMisses = opts?.maxMisses ?? 40
-  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
-  const now = opts?.now ?? Date.now
-  const deadline = now() + windowMs
+  const config: ArchiveReassertConfig = {
+    windowMs: opts?.windowMs ?? 10 * 60_000,
+    intervalMs: opts?.intervalMs ?? 1_500,
+    maxRestores: opts?.maxRestores ?? 8,
+    maxMisses: opts?.maxMisses ?? 40,
+    sleep: opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
+    now: opts?.now ?? Date.now,
+    isAppRunning: opts?.isAppRunning,
+  }
+  const deadline = config.now() + config.windowMs
   const key = archiveReassertKey(instanceDir, sessionId)
   // A second watcher for the same chat would race the first and double its restores; the newest
   // intent wins, so stand the old one down rather than running both.
@@ -1417,38 +1440,13 @@ export async function reassertChatArchive(
   if (prior) prior.cancelled = true
   const handle = { cancelled: false }
   archiveReassertWatchers.set(key, handle)
-  let restores = 0
-  let misses = 0
-  let metaPath: string | null = null
+  const state: ArchiveReassertState = { metaPath: null, restores: 0, misses: 0 }
   try {
-    while (now() < deadline && restores < maxRestores) {
-      await sleep(intervalMs)
-      if (handle.cancelled) return restores
+    while (config.now() < deadline && state.restores < config.maxRestores) {
+      await config.sleep(config.intervalMs)
+      if (handle.cancelled) return state.restores
       try {
-        if (!metaPath || !existsSync(metaPath)) metaPath = findChatMetaPath(instanceDir, sessionId)
-        if (!metaPath) {
-          if (++misses >= maxMisses) return restores
-          continue
-        }
-        misses = 0
-        const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
-        if (meta.isArchived === true) continue
-        meta.isArchived = true
-        writeFileSync(metaPath, JSON.stringify(meta))
-        invalidateSessionMetaCache()
-        restores++
-        // ⛔ DO NOT blame the app unconditionally. This line read "(the app's re-save resurrected
-        // the twin)" on every restore, and on 2026-09-18 it printed that three times for a
-        // CLOSED app while the thing it had actually reverted was the owner's own unarchive -
-        // sending the reader after an imaginary Electron re-save. Name what is known.
-        const appUp = opts?.isAppRunning?.()
-        const because =
-          appUp === false
-            ? 'the app is NOT running, so this was an external write - if it was deliberate, cancel this watcher instead of fighting it'
-            : "the app's re-save resurrected the twin"
-        console.log(
-          `[agenthydra] re-asserted archived on ${sessionId} in ${instanceDir} (${because})`,
-        )
+        if (reassertChatArchiveTick(state, instanceDir, sessionId, config) === 'stop') break
       } catch {
         // a contended or half-written pass says nothing about the next tick
       }
@@ -1457,7 +1455,54 @@ export async function reassertChatArchive(
     // Only retract OUR OWN registration: a newer watcher may already own the key.
     if (archiveReassertWatchers.get(key) === handle) archiveReassertWatchers.delete(key)
   }
-  return restores
+  return state.restores
+}
+
+/**
+ * ONE tick of the archive watcher: find the chat's meta file if it is not already in hand,
+ * re-assert isArchived=true when the app flipped it back, and account for a miss. Throws when a
+ * file cannot be read or written - the caller's guard treats that as "says nothing about the
+ * next tick". 'stop' means the miss cap is reached and the watch should end.
+ */
+function reassertChatArchiveTick(
+  state: ArchiveReassertState,
+  instanceDir: string,
+  sessionId: string,
+  config: ArchiveReassertConfig,
+): ArchiveReassertTick {
+  if (!state.metaPath || !existsSync(state.metaPath))
+    state.metaPath = findChatMetaPath(instanceDir, sessionId)
+  if (!state.metaPath) {
+    state.misses++
+    return state.misses >= config.maxMisses ? 'stop' : 'continue'
+  }
+  state.misses = 0
+  const metaPath = state.metaPath
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+  if (meta.isArchived === true) return 'continue'
+  meta.isArchived = true
+  writeFileSync(metaPath, JSON.stringify(meta))
+  invalidateSessionMetaCache()
+  state.restores++
+  logArchiveReassert(sessionId, instanceDir, config)
+  return 'continue'
+}
+
+/** ⛔ DO NOT blame the app unconditionally. This line read "(the app's re-save resurrected the
+ *  twin)" on every restore, and on 2026-09-18 it printed that three times for a CLOSED app while
+ *  the thing it had actually reverted was the owner's own unarchive - sending the reader after an
+ *  imaginary Electron re-save. Name what is known. */
+function logArchiveReassert(
+  sessionId: string,
+  instanceDir: string,
+  config: ArchiveReassertConfig,
+): void {
+  const appUp = config.isAppRunning?.()
+  const because =
+    appUp === false
+      ? 'the app is NOT running, so this was an external write - if it was deliberate, cancel this watcher instead of fighting it'
+      : "the app's re-save resurrected the twin"
+  console.log(`[agenthydra] re-asserted archived on ${sessionId} in ${instanceDir} (${because})`)
 }
 
 /**
