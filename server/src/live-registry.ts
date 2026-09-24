@@ -18,6 +18,9 @@ export interface LiveSession {
   name: string
   startedAt: number
   transcriptPath: string | null
+  /** The Claude Code version the session's engine runs, as the engine wrote it on start. Absent on
+   *  records too old to carry one. version-drift.ts reads it to find chats left on an old engine. */
+  version?: string
 }
 
 function pidAlive(pid: number): boolean {
@@ -145,6 +148,7 @@ export function readLiveRegistry(claudeHome: string): LiveSession[] {
         name: typeof reg.name === 'string' ? reg.name : reg.sessionId.slice(0, 8),
         startedAt: typeof reg.startedAt === 'number' ? reg.startedAt : 0,
         transcriptPath: transcriptPathFor(claudeHome, reg.cwd, reg.sessionId),
+        ...(typeof reg.version === 'string' ? { version: reg.version } : {}),
       })
     } catch {
       // One unreadable registry entry must not hide the others.

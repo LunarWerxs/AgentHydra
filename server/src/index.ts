@@ -129,6 +129,7 @@ import { updateProgress } from './update-progress'
 import { applyUpdate, checkForUpdate } from './updater'
 import { getUsageSettings, setUsageSettings, startUsageRefresh } from './usage-refresh'
 import { checkUsageForCliInstance, checkUsageForDesktop } from './usage-service'
+import { startVersionDriftWatch } from './version-drift'
 import { WINDOW_SIZE_HINT_PARAM, windowSizeHintFor } from './window-size'
 
 // Persist console output to <CONFIG_DIR>/logs/daemon.log BEFORE anything else can throw, so the
@@ -738,6 +739,7 @@ await import('./routes/usage')
 await import('./routes/monitor-fleet')
 await import('./routes/desktop-sessions')
 await import('./routes/session-message')
+await import('./routes/versions')
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------
 app.post('/api/portable-window', async (c) => {
@@ -1274,6 +1276,10 @@ startMonitor()
 // re-saves, so the app's next boot makes it permanent - the durable half of the migrate fix.
 // See automation-stamp-sweep.ts for why the per-import watcher alone could not do this.
 startAutomationStampSweep()
+// Every 10 minutes: flags any open instance or live chat on an older Claude than the rest of the
+// fleet, stages the current Claude Code into closed profiles and keeps the CLI install in step.
+// See version-drift.ts.
+startVersionDriftWatch()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading
