@@ -334,18 +334,21 @@ def dry_loop(as_json: bool) -> tuple[int, dict]:
     return (2 if problems else 0), stages
 
 
-def render_loop(s: dict) -> str:
-    from lib import configlib
-
-    L = ["DRY LOOP - every stage below is a plan. Nothing was touched.\n"]
+def _render_census(s: dict, L: list[str]) -> None:
     c = s["census"]
     L.append(f"1. CENSUS      daemon {c['daemon']} · {c['instancesOpen']} of {c['instancesTotal']} "
              f"instances open · sanity {'OK' if c['plausible'] else '** NOT PLAUSIBLE **'}")
+
+
+def _render_gate(s: dict, L: list[str]) -> None:
     g = s["gate"]
     L.append(f"2. GATE        {g['scanned']} visible chats"
              + ("" if g["complete"] else "  ⚠ INCOMPLETE - a read failed, counts are lower bounds"))
     for k, v in sorted(g["byDecision"].items(), key=lambda kv: -kv[1]):
         L.append(f"                 {v:>3}  {k}")
+
+
+def _render_accounts(s: dict, L: list[str]) -> None:
     a = s["accounts"]
     L.append(f"3. ACCOUNTS    {a['usable']} usable of {a['logins']} logins (usage via {a['usageSource']})")
     # ⛔ A TOTAL USAGE BLACKOUT MUST NOT READ LIKE A QUIET FLEET (seen live 2026-09-01, during
@@ -369,6 +372,9 @@ def render_loop(s: dict) -> str:
         tag = "OPEN" if n.get("open") else "closed, would need opening"
         L.append(f"                 hand off #{i}: {n['email']} ({tag}) binding {n['bindingPct']}%")
     L.append(f"                 balancing: {a['balancing']['level'].upper()} - {a['balancing']['why']}")
+
+
+def _render_lanes(s: dict, L: list[str]) -> None:
     L.append("4. LANES       what one `sweep --all --yes` would do:")
     for lane in ("archive", "moves", "landConsole", "deliver"):
         v = s["lanes"][lane]
@@ -385,15 +391,24 @@ def render_loop(s: dict) -> str:
                  "nothing files a chat, in any lane")
     for why in s["lanes"]["deliverySkipped"][:3]:
         L.append(f"                 delivery skipped: {why[:96]}")
+
+
+def _render_naming(s: dict, L: list[str]) -> None:
     n = s["naming"]
     L.append(f"5. NAMING      {sum(n['namelessByInstance'].values()) or 'no'} chat(s) need a real name"
              + (f" {n['namelessByInstance']}" if n["namelessByInstance"] else ""))
+
+
+def _render_reconcile(s: dict, L: list[str]) -> None:
     r = s["reconcile"]
     L.append(f"6. RECONCILE   {r['checked']} past archive attempt(s): "
              + ", ".join(f"{v} {k}" for k, v in r["states"].items()) if r["checked"] else
              "6. RECONCILE   nothing to re-check")
     if r["reverted"]:
         L.append(f"                 ⚠ {r['reverted']} archive(s) need settling through the app's own control")
+
+
+def _render_judgment(s: dict, L: list[str]) -> None:
     L.append(f"7. JUDGMENT    {len(s['judgmentQueue'])} chat(s) need a decided reply (the AI's lane)")
     for j in s["judgmentQueue"][:6]:
         L.append(f"                 [{j['instance'] or 'console'}] {str(j['title'])[:58]}")
@@ -401,6 +416,11 @@ def render_loop(s: dict) -> str:
         L.append(f"                 ... and {len(s['judgmentQueue']) - 6} more")
     if s["onHold"]:
         L.append(f"8. ON HOLD     {len(s['onHold'])} chat(s) you put out of reach: {', '.join(str(t) for t in s['onHold'][:4])}")
+
+
+def _render_policy(s: dict, L: list[str]) -> None:
+    from lib import configlib
+
     for p in s.get("policyProblems") or []:
         L.append(f"\n⛔ POLICY     {p}")
     if s.get("policyProblems"):
@@ -415,12 +435,28 @@ def render_loop(s: dict) -> str:
         # never again once a policy file exists - a prompt that repeats forever gets skimmed.
         L.append("\nPOLICY       running on every default. `orch.py policy --wizard` picks your "
                  "toggles (or --ask for an AI to).")
+
+
+def _render_timings(s: dict, L: list[str]) -> None:
     if s.get("timings"):
         slow = sorted(s["timings"].items(), key=lambda kv: -kv[1])[:3]
         L.append(f"\nwalked in {s['elapsedSecs']}s (slowest: "
                  + ", ".join(f"{k} {v}s" for k, v in slow) + "). Nothing was changed.")
     else:
         L.append(f"\nwalked in {s['elapsedSecs']}s. Nothing was changed.")
+
+
+def render_loop(s: dict) -> str:
+    L = ["DRY LOOP - every stage below is a plan. Nothing was touched.\n"]
+    _render_census(s, L)
+    _render_gate(s, L)
+    _render_accounts(s, L)
+    _render_lanes(s, L)
+    _render_naming(s, L)
+    _render_reconcile(s, L)
+    _render_judgment(s, L)
+    _render_policy(s, L)
+    _render_timings(s, L)
     return "\n".join(L)
 
 

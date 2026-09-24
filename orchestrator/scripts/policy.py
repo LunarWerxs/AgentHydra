@@ -480,6 +480,77 @@ def _arg(argv: list[str], flag: str) -> str | None:
     return argv[argv.index(flag) + 1] if flag in argv and argv.index(flag) + 1 < len(argv) else None
 
 
+def _rest(argv: list[str], flag: str) -> list[str]:
+    """Every argument after `flag` that is not itself another flag - the --set / --unset /
+    --list idiom (flags win over the values they precede)."""
+    return [a for a in argv[argv.index(flag) + 1:] if not a.startswith("--")]
+
+
+def _needs(flag: str, what: str) -> int:
+    """The one shape every 'this flag was given without its value' answer takes: named on
+    stderr, exit 3. Kept in one place so the three flags cannot drift apart."""
+    print(f"{flag} needs {what}", file=sys.stderr)
+    return 3
+
+
+def _cmd_wizard(argv: list[str], _as_json: bool, _group: str | None) -> int:
+    return do_wizard()
+
+
+def _cmd_ask(argv: list[str], as_json: bool, group: str | None) -> int:
+    return do_ask(group, as_json)
+
+
+def _cmd_apply(argv: list[str], _as_json: bool, _group: str | None) -> int:
+    target = _arg(argv, "--apply")
+    return do_apply(target) if target else _needs("--apply", "a file")
+
+
+def _cmd_doctor(argv: list[str], as_json: bool, _group: str | None) -> int:
+    return do_doctor(as_json)
+
+
+def _cmd_preset(argv: list[str], _as_json: bool, _group: str | None) -> int:
+    name = _arg(argv, "--preset")
+    return do_preset(name, "--yes" in argv) if name else _needs(
+        "--preset", f"a name: {', '.join(configlib.PRESETS)}")
+
+
+def _cmd_unset(argv: list[str], _as_json: bool, _group: str | None) -> int:
+    keys = _rest(argv, "--unset")
+    return do_unset(keys) if keys else _needs("--unset", "a key")
+
+
+def _cmd_set(argv: list[str], _as_json: bool, _group: str | None) -> int:
+    pairs = _rest(argv, "--set")
+    return do_set(pairs) if pairs else _needs("--set", "key=value")
+
+
+def _cmd_list(argv: list[str], as_json: bool, group: str | None) -> int:
+    after = _rest(argv, "--list")
+    return show_list(after[0] if after else group, as_json)
+
+
+def _cmd_explain(argv: list[str], as_json: bool, _group: str | None) -> int:
+    key = _arg(argv, "--explain")
+    return show_explain(key, as_json) if key else _needs("--explain", "a key")
+
+
+# FIRST MATCH WINS, so this order IS the CLI's precedence order - it is the same chain the
+# machine used to spell out as a ladder of `if flag in argv` returns.
+FLAGS = (
+    ("--wizard", _cmd_wizard),
+    ("--ask", _cmd_ask),
+    ("--apply", _cmd_apply),
+    ("--doctor", _cmd_doctor),
+    ("--preset", _cmd_preset),
+    ("--unset", _cmd_unset),
+    ("--set", _cmd_set),
+    ("--list", _cmd_list),
+    ("--explain", _cmd_explain),
+)
+
+
 def main(argv: list[str]) -> int:
     clilib.use_utf8_console()
     if "--help" in argv or "-h" in argv:
@@ -487,33 +558,9 @@ def main(argv: list[str]) -> int:
         return 0
     as_json = "--json" in argv
     group = _arg(argv, "--group")
-
-    if "--wizard" in argv:
-        return do_wizard()
-    if "--ask" in argv:
-        return do_ask(group, as_json)
-    if "--apply" in argv:
-        target = _arg(argv, "--apply")
-        return do_apply(target) if target else (print("--apply needs a file", file=sys.stderr) or 3)
-    if "--doctor" in argv:
-        return do_doctor(as_json)
-    if "--preset" in argv:
-        name = _arg(argv, "--preset")
-        return do_preset(name, "--yes" in argv) if name else (
-            print(f"--preset needs a name: {', '.join(configlib.PRESETS)}", file=sys.stderr) or 3)
-    if "--unset" in argv:
-        keys = [a for a in argv[argv.index("--unset") + 1:] if not a.startswith("--")]
-        return do_unset(keys) if keys else (print("--unset needs a key", file=sys.stderr) or 3)
-    if "--set" in argv:
-        pairs = [a for a in argv[argv.index("--set") + 1:] if not a.startswith("--")]
-        return do_set(pairs) if pairs else (print("--set needs key=value", file=sys.stderr) or 3)
-    if "--list" in argv:
-        after = [a for a in argv[argv.index("--list") + 1:] if not a.startswith("--")]
-        return show_list(after[0] if after else group, as_json)
-    if "--explain" in argv:
-        key = _arg(argv, "--explain")
-        return show_explain(key, as_json) if key else (
-            print("--explain needs a key", file=sys.stderr) or 3)
+    for flag, handler in FLAGS:
+        if flag in argv:
+            return handler(argv, as_json, group)
     return show_status(as_json)
 
 

@@ -1585,6 +1585,53 @@ def _batch_ids(items: list) -> set[str]:
     return ids
 
 
+def _warn_provisional_source_rows(payload: dict, results: list) -> None:
+    """⛔ THE SOURCE-SIDE WARNING LEADS, because the one time it mattered the owner found out by
+    opening his own sidebar (2026-09-18). A row settled against a RUNNING app can come back;
+    phase five looked once, and whatever it found has to be in the PROSE, not only the JSON."""
+    provisional = [r for r in results if r.get("sourceRowProvisional")]
+    if not provisional:
+        return
+    came_back = [r for r in provisional
+                 if (r.get("sourceRowRecheck") or {}).get("cameBack")]
+    unchecked = [r for r in provisional
+                 if not (r.get("sourceRowRecheck") or {}).get("checked")]
+    lines = []
+    if came_back:
+        lines.append(
+            f"⚠ {len(came_back)} source row(s) CAME BACK after the settle - the source app "
+            "re-saved them from memory; they were settled again here. Re-read the source "
+            "before calling this move done.")
+    if unchecked:
+        lines.append(
+            f"⚠ {len(unchecked)} source row(s) are still PROVISIONAL - not re-checked. Run "
+            "`migrate_reconcile` (and `--finish` anything it calls unsettled).")
+    if not came_back and not unchecked:
+        lines.append(
+            f"note: {len(provisional)} source row(s) were settled against a RUNNING app and "
+            "re-read afterwards - all still settled. The journal keeps them owed until "
+            "`migrate_reconcile` has seen them once more.")
+    payload["report"] = "\n".join(lines) + "\n" + payload["report"]
+
+
+def _warn_flagged_source_rows(payload: dict, results: list) -> None:
+    """⛔ A FLAGGED SOURCE ROW IS STILL ON THE OWNER'S SCREEN (2026-09-20, #38 -> #55). "flagged"
+    means the running source app's own control could not be reached, so only the disk flag
+    was written - and a running app shows what it holds in memory. Every tool then counted the
+    row as settled while the owner was looking straight at it, unarchived. It leads the report."""
+    shown = [r for r in results if r.get("landed") and r.get("sourceRow") == "flagged"]
+    if not shown:
+        return
+    payload["sourceStillShown"] = [r.get("sessionId") or r.get("chat") for r in shown]
+    names = ", ".join(f"'{r.get('title') or r.get('chat')}'" for r in shown)
+    payload["report"] = (
+        f"⚠ NOT FINISHED ON THE OLD ACCOUNT: {names} still show unarchived in the source app - "
+        "only a disk flag was written because the app's own control was unreachable. Archive "
+        "them natively (POST /api/sessions/<id>/desktop-archive with instance_ref) once that "
+        "profile runs with native control, or they stay on screen until its next restart.\n"
+        + payload["report"])
+
+
 def _build_batch_payload(items: list, parsed, note: str, secs: float, resume) -> dict:
     results = [i.payload for i in items]
     landed = sum(1 for r in results if r.get("landed"))
@@ -1612,45 +1659,8 @@ def _build_batch_payload(items: list, parsed, note: str, secs: float, resume) ->
         # The batch-level tally: `asked` landed chats were told to carry on, `delivered` of
         # them took it, `staged` still hold the reply. Present only when --resume ran.
         payload["resume"] = resume
-    # ⛔ THE SOURCE-SIDE WARNING LEADS, because the one time it mattered the owner found out by
-    # opening his own sidebar (2026-09-18). A row settled against a RUNNING app can come back;
-    # phase five looked once, and whatever it found has to be in the PROSE, not only the JSON.
-    provisional = [r for r in results if r.get("sourceRowProvisional")]
-    if provisional:
-        came_back = [r for r in provisional
-                     if (r.get("sourceRowRecheck") or {}).get("cameBack")]
-        unchecked = [r for r in provisional
-                     if not (r.get("sourceRowRecheck") or {}).get("checked")]
-        lines = []
-        if came_back:
-            lines.append(
-                f"⚠ {len(came_back)} source row(s) CAME BACK after the settle - the source app "
-                "re-saved them from memory; they were settled again here. Re-read the source "
-                "before calling this move done.")
-        if unchecked:
-            lines.append(
-                f"⚠ {len(unchecked)} source row(s) are still PROVISIONAL - not re-checked. Run "
-                "`migrate_reconcile` (and `--finish` anything it calls unsettled).")
-        if not came_back and not unchecked:
-            lines.append(
-                f"note: {len(provisional)} source row(s) were settled against a RUNNING app and "
-                "re-read afterwards - all still settled. The journal keeps them owed until "
-                "`migrate_reconcile` has seen them once more.")
-        payload["report"] = "\n".join(lines) + "\n" + payload["report"]
-    # ⛔ A FLAGGED SOURCE ROW IS STILL ON THE OWNER'S SCREEN (2026-09-20, #38 -> #55). "flagged"
-    # means the running source app's own control could not be reached, so only the disk flag
-    # was written - and a running app shows what it holds in memory. Every tool then counted the
-    # row as settled while the owner was looking straight at it, unarchived. It leads the report.
-    shown = [r for r in results if r.get("landed") and r.get("sourceRow") == "flagged"]
-    if shown:
-        payload["sourceStillShown"] = [r.get("sessionId") or r.get("chat") for r in shown]
-        names = ", ".join(f"'{r.get('title') or r.get('chat')}'" for r in shown)
-        payload["report"] = (
-            f"⚠ NOT FINISHED ON THE OLD ACCOUNT: {names} still show unarchived in the source app - "
-            "only a disk flag was written because the app's own control was unreachable. Archive "
-            "them natively (POST /api/sessions/<id>/desktop-archive with instance_ref) once that "
-            "profile runs with native control, or they stay on screen until its next restart.\n"
-            + payload["report"])
+    _warn_provisional_source_rows(payload, results)
+    _warn_flagged_source_rows(payload, results)
     return payload
 
 

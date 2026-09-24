@@ -281,28 +281,43 @@ def _median(xs: list[float]) -> float:
                                round((xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2, 2))
 
 
-def summarize(rows: list[dict]) -> dict:
-    done = [r for r in rows if r.get("stages")]
-    failed = [r for r in rows if not r.get("stages")]
-    exit2 = [r for r in done if r["exit"] == 2]
-    counts = [_stage_counts(r) for r in done]
+def _count_range(counts: list[dict]) -> dict:
+    """Per count key: the (first, last) value seen across the completed runs, or None when the
+    loop never reported it. The range is the whole self-consistency story: identical every run,
+    or moved."""
     varies = {k: sorted({c[k] for c in counts if c[k] is not None})
               for k in (counts[0] if counts else {})}
+    return {k: (v[0], v[-1]) if v else None for k, v in varies.items()}
+
+
+def _stage_secs(done: list[dict]) -> dict:
+    """Per-stage wall clock across the completed runs: median (where the time goes) and worst
+    (the tail a single run would hide)."""
     timings: dict[str, list[float]] = {}
     for r in done:
         for stage, secs in ((r["stages"].get("timings")) or {}).items():
             timings.setdefault(stage, []).append(secs)
-    flaps = find_flaps(done)
+    return {k: {"median": _median(v), "max": max(v), "share": None}
+            for k, v in timings.items()}
+
+
+def _wall_secs(done: list[dict]) -> dict:
+    xs = [r["secs"] for r in done]
+    return {"min": min(xs, default=0), "median": _median(xs), "max": max(xs, default=0)}
+
+
+def summarize(rows: list[dict]) -> dict:
+    done = [r for r in rows if r.get("stages")]
+    failed = [r for r in rows if not r.get("stages")]
+    counts = [_stage_counts(r) for r in done]
     return {
         "runs": len(rows), "completed": len(done), "crashed": len(failed),
-        "exitZero": sum(1 for r in done if r["exit"] == 0), "exitTwo": len(exit2),
-        "secs": {"min": min((r["secs"] for r in done), default=0),
-                 "median": _median([r["secs"] for r in done]),
-                 "max": max((r["secs"] for r in done), default=0)},
-        "stageSecs": {k: {"median": _median(v), "max": max(v), "share": None}
-                      for k, v in timings.items()},
-        "countRange": {k: (v[0], v[-1]) if v else None for k, v in varies.items()},
-        "flaps": flaps,
+        "exitZero": sum(1 for r in done if r["exit"] == 0),
+        "exitTwo": sum(1 for r in done if r["exit"] == 2),
+        "secs": _wall_secs(done),
+        "stageSecs": _stage_secs(done),
+        "countRange": _count_range(counts),
+        "flaps": find_flaps(done),
         "problems": [{"run": i, "why": r["why"]} for i, r in enumerate(rows) if r.get("why")],
     }
 
@@ -424,45 +439,47 @@ def render(summary: dict) -> str:
     return "\n".join(L)
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
+def _flags(argv: list[str]) -> tuple[bool, bool, int, float]:
+    """(--json, --runs given, runs, gap) - the flags every mode reads, parsed once."""
     as_json = "--json" in argv
     runs = int(argv[argv.index("--runs") + 1]) if "--runs" in argv else 50
     gap = float(argv[argv.index("--gap") + 1]) if "--gap" in argv else 2.0
-    if not ORCH.exists():
-        print(f"cannot find {ORCH}", file=sys.stderr)
-        return 1
-    REPORTS.mkdir(parents=True, exist_ok=True)
+    return as_json, "--runs" in argv, runs, gap
 
-    if "--matrix" in argv:
-        print(f"POLICY MATRIX - {len(MATRIX)} variant(s), {runs if '--runs' in argv else 1} "
-              "run(s) each. Your own config.json is not touched.\n")
-        result = run_matrix(runs if "--runs" in argv else 1)
-        payload = {"mode": "matrix", **result}
-        if as_json:
-            print(json.dumps(payload, indent=2, default=str))
-        else:
-            print("\n" + result["note"])
-            if result["failed"]:
-                print(f"\n⛔ {', '.join(result['failed'])} did not do what it claims - a knob "
-                      "that changes nothing is a knob the owner only THINKS he has.")
-            else:
-                seen = sum(1 for v in result["variants"] if v["verdict"] == "steered")
-                hid = sum(1 for v in result["variants"] if v["verdict"] == "not-visible-here")
-                print(f"\n{seen} variant(s) steered the plan exactly as claimed; {hid} act at "
-                      "ACT time and are covered by the named unit tests instead.")
-                if result["inconclusive"]:
-                    print(f"⚠ {', '.join(result['inconclusive'])}: this fleet could not show "
-                          "whether the knob is wired - NOT proven, re-run when there is work "
-                          "for it to steer.")
-                else:
-                    print("Nothing was silently inert.")
-        _save(payload)
-        return 2 if result["failed"] else 0
 
+def _print_matrix_verdict(result: dict) -> None:
+    """The prose verdict for one matrix pass - never one 'ok' that hides the difference."""
+    print("\n" + result["note"])
+    if result["failed"]:
+        print(f"\n⛔ {', '.join(result['failed'])} did not do what it claims - a knob "
+              "that changes nothing is a knob the owner only THINKS he has.")
+        return
+    seen = sum(1 for v in result["variants"] if v["verdict"] == "steered")
+    hid = sum(1 for v in result["variants"] if v["verdict"] == "not-visible-here")
+    print(f"\n{seen} variant(s) steered the plan exactly as claimed; {hid} act at "
+          "ACT time and are covered by the named unit tests instead.")
+    if result["inconclusive"]:
+        print(f"⚠ {', '.join(result['inconclusive'])}: this fleet could not show "
+              "whether the knob is wired - NOT proven, re-run when there is work "
+              "for it to steer.")
+    else:
+        print("Nothing was silently inert.")
+
+
+def _report_matrix(has_runs: bool, runs: int, as_json: bool) -> int:
+    print(f"POLICY MATRIX - {len(MATRIX)} variant(s), {runs if has_runs else 1} "
+          "run(s) each. Your own config.json is not touched.\n")
+    result = run_matrix(runs if has_runs else 1)
+    payload = {"mode": "matrix", **result}
+    if as_json:
+        print(json.dumps(payload, indent=2, default=str))
+    else:
+        _print_matrix_verdict(result)
+    _save(payload)
+    return 2 if result["failed"] else 0
+
+
+def _report_runs(runs: int, gap: float, as_json: bool) -> int:
     print(f"{runs} dry run(s), each a fresh process, {gap}s apart. Nothing is touched.\n")
     rows = run_many(runs, gap)
     summary = summarize(rows)
@@ -475,6 +492,21 @@ def main(argv: list[str]) -> int:
     serious_flaps = [f for f in summary["flaps"] if f.get("serious")]
     return 0 if (summary["completed"] == summary["runs"] and not serious_flaps
                  and not summary["exitTwo"]) else 2
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    as_json, has_runs, runs, gap = _flags(argv)
+    if not ORCH.exists():
+        print(f"cannot find {ORCH}", file=sys.stderr)
+        return 1
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    if "--matrix" in argv:
+        return _report_matrix(has_runs, runs, as_json)
+    return _report_runs(runs, gap, as_json)
 
 
 def _save(payload: dict) -> Path:
