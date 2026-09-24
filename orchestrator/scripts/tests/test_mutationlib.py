@@ -286,6 +286,13 @@ class ArchiveAndRenameMutationRailTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+        # The policy file lives in the temp state too: the machine's own config.json (where the
+        # owner may have switched archive.enabled OFF) must not decide what this test sees.
+        from lib import configlib
+        self.addCleanup(setattr, configlib, "CONFIG_PATH", configlib.CONFIG_PATH)
+        self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
+        configlib.CONFIG_PATH = Path(self._state.name) / "config.json"
+        configlib._CACHE = None
         self.archived = {"v": False}
         self.title = {"v": "Old Title"}
 
