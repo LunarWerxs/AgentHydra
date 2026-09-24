@@ -8,8 +8,8 @@
 // lives here") went on reporting them present, because every scan globbed `*/*/local_*.json`
 // across all account folders. These pin the tag, the visible-only residency read, the set-aside
 // a re-home performs, and the cold landing's choice of folder.
-import { expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { afterAll, beforeAll, expect, test } from 'bun:test'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { collectChats, listChats } from '../src/chat-dossier'
@@ -28,9 +28,20 @@ const NOW = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 const ORG = 'cccccccc-3333-4333-8333-cccccccccccc'
 const OLD_ORG = 'dddddddd-4444-4444-8444-dddddddddddd'
 
+// One scratch root per file, reaped in afterAll; every other scratch dir nests inside it.
+let ROOT = ''
+let seq = 0
+beforeAll(() => {
+  ROOT = mkdtempSync(join(tmpdir(), 'stale-login-records-'))
+})
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true })
+})
+
 /** A profile signed into NOW that still carries a leaf from its previous login, OLD. */
 function profile(opts: { login?: string | null; oldIsNewer?: boolean } = {}): string {
-  const dir = mkdtempSync(join(tmpdir(), 'stale-login-'))
+  const dir = join(ROOT, `profile-${seq++}`)
+  mkdirSync(dir, { recursive: true })
   const login = opts.login === undefined ? NOW : opts.login
   writeFileSync(
     join(dir, 'config.json'),
@@ -109,7 +120,8 @@ test('with the signed-in account unknown, residency answers as it always did', (
 
 test('set-aside moves the stale record into a backup and restore puts it back', () => {
   const dir = profile()
-  const backupRoot = mkdtempSync(join(tmpdir(), 'stale-login-backup-'))
+  const backupRoot = join(ROOT, 'backup-set-aside')
+  mkdirSync(backupRoot, { recursive: true })
   const original = staleLoginChatRecords(dir, 'rusttor-id')[0]
   const body = readFileSync(original, 'utf8')
   const moved = setAsideStaleLoginRecords(dir, 'rusttor-id', { backupRoot, now: () => 0 })
@@ -137,7 +149,8 @@ test('a new record goes in the SIGNED-IN account folder even when the old one wa
 
 test('a cold re-home lands where the app looks and leaves no stale twin behind', async () => {
   const dir = profile({ oldIsNewer: true })
-  const backupRoot = mkdtempSync(join(tmpdir(), 'stale-login-backup-'))
+  const backupRoot = join(ROOT, 'backup-cold-rehome')
+  mkdirSync(backupRoot, { recursive: true })
   const got = await coldImportSessionToDesktop({
     sessionId: 'rusttor-id',
     instanceDir: dir,

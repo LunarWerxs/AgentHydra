@@ -67,8 +67,7 @@ const boundaries = [
 ]
 function extract(start: string, end: string) {
   const from = source.indexOf(start)
-  if (from < 0 || source.indexOf(start, from + 1) >= 0)
-    throw Error(`Ambiguous/missing method ${start}`)
+  if (from < 0 || source.includes(start, from + 1)) throw Error(`Ambiguous/missing method ${start}`)
   const to = source.indexOf(end, from + start.length)
   if (to < 0) throw Error(`Missing method boundary ${end}`)
   return source.slice(from, to)

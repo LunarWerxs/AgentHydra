@@ -11,17 +11,23 @@
 // So: a watcher that cannot be called off is a bug, and a `changed:true` that does not survive the
 // next second is a lie. These tests fail against the pre-2026-09-18 code.
 
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cancelChatArchiveReassert, reassertChatArchive } from '../src/session-launch'
 
 const SESSION = 'd9fc4886-acc0-466f-ac71-a8238dd5ce3b'
 
+const scratchDirs: string[] = []
+afterAll(() => {
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true })
+})
+
 /** A profile holding one chat record, in the store shape findChatMetaPath walks. */
 function profileWithChat(isArchived: boolean): string {
   const dir = mkdtempSync(join(tmpdir(), 'ah-archive-cancel-'))
+  scratchDirs.push(dir)
   const leaf = join(dir, 'claude-code-sessions', 'root-uuid', 'leaf-uuid')
   mkdirSync(leaf, { recursive: true })
   writeFileSync(
