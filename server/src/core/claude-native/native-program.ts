@@ -396,6 +396,30 @@ function nativeRequireArchiveRequest(request: any): void {
   }
 }
 
+/** Session-side evidence that archive would interrupt work rather than a settled idle session. */
+function nativeSessionIsBusy(before: any, session: any): boolean {
+  return (
+    before.isRunning ||
+    before.isStopping ||
+    before.starting ||
+    before.losableWork ||
+    before.pendingInput ||
+    before.pendingPermission ||
+    before.pendingDialog ||
+    session.startResumeInFlight
+  )
+}
+
+/** Manager-side in-flight bookkeeping for the same session. */
+function nativeManagerIsBusy(manager: any, sessionId: string): boolean {
+  return (
+    manager.parked.has(sessionId) ||
+    manager.movesInFlight.has(sessionId) ||
+    manager.deletingSessionIds.has(sessionId) ||
+    (manager.sideSessionStartsInFlight.get(sessionId) ?? 0) > 0
+  )
+}
+
 function nativeArchivePreconditions(found: any, session: any, before: any): void {
   if (session.prewarmHidden || session.backend?.kind !== 'local' || session.backend?.remoteTarget) {
     nativeRefuse('only ordinary local Desktop sessions are supported')
@@ -404,18 +428,8 @@ function nativeArchivePreconditions(found: any, session: any, before: any): void
     nativeRefuse('attached parent could receive side effects')
   }
   if (
-    before.isRunning ||
-    before.isStopping ||
-    before.starting ||
-    before.losableWork ||
-    before.pendingInput ||
-    before.pendingPermission ||
-    before.pendingDialog ||
-    session.startResumeInFlight ||
-    found.manager.parked.has(session.sessionId) ||
-    found.manager.movesInFlight.has(session.sessionId) ||
-    found.manager.deletingSessionIds.has(session.sessionId) ||
-    (found.manager.sideSessionStartsInFlight.get(session.sessionId) ?? 0) > 0
+    nativeSessionIsBusy(before, session) ||
+    nativeManagerIsBusy(found.manager, session.sessionId)
   ) {
     nativeRefuse('session has live, pending, or transitioning work')
   }
@@ -647,6 +661,8 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeCheckSharedPreviewSafety,
     nativeMainInfo,
     nativeRequireArchiveRequest,
+    nativeSessionIsBusy,
+    nativeManagerIsBusy,
     nativeArchivePreconditions,
     nativeArchiveFlags,
     nativeBystanderChanges,
