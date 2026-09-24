@@ -56,6 +56,13 @@ const STORE_PATH = join(CONFIG_DIR, 'cli-instances.json')
 
 const NAME_MAX = 60
 
+/** The home Claude Code reads `~/.claude.json` from: HOME (USERPROFILE on Windows) first, as Node's
+ *  os.homedir() does. Bun's homedir() on Linux does not follow a HOME set at runtime, which is how
+ *  the seed read the wrong home on ubuntu CI only (2026-09-24). */
+function userHome(): string {
+  return (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || homedir()
+}
+
 /**
  * Seed a brand-new instance dir with the user's MCP servers.
  *
@@ -74,7 +81,7 @@ function seedInstanceMcpServers(configDir: string): void {
   const target = join(configDir, '.claude.json')
   if (existsSync(target)) return
   try {
-    const user = JSON.parse(readFileSync(join(homedir(), '.claude.json'), 'utf8')) as Record<
+    const user = JSON.parse(readFileSync(join(userHome(), '.claude.json'), 'utf8')) as Record<
       string,
       unknown
     >
