@@ -316,3 +316,7 @@ Made by [LunarWerx Studios](https://lunarwerx.com). Also see
 ## License
 
 [MIT](LICENSE).
+
+## Star history
+
+<a href="https://www.star-history.com/?repos=lunarwerxs%2Fagenthydra&type=date&legend=bottom-right"><img src="https://api.star-history.com/svg?repos=lunarwerxs%2Fagenthydra&type=Date&theme=dark&legend=bottom-right" width="100%" alt="AgentHydra GitHub stars over time"></a>
