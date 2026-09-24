@@ -392,10 +392,18 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
   }
 }
 
-async function openConfiguredInstance(
+/**
+ * Is this profile's app already up? Returns the "already running" success result when it is,
+ * the native-config failure result when the freshness check itself failed on a managed profile
+ * (the caller cannot decide), and `undefined` when nothing is running.
+ *
+ * Split out of openConfiguredInstance so its freshness scan + its two-shaped failure path do not
+ * nest inside the launch dispatch below. Behaviour is unchanged.
+ */
+async function probeRunningInstance(
   normDir: string,
   nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
-): Promise<CMActionResult> {
+): Promise<CMActionResult | undefined> {
   try {
     // fresh: this decides whether to LAUNCH. A cached snapshot a poll tick old could miss an
     // instance that just started (→ a second copy on the same profile) or still show one the
@@ -429,38 +437,67 @@ async function openConfiguredInstance(
     // Best-effort; if we can't determine running state, still attempt the launch
     // rather than silently failing here.
   }
+  return undefined
+}
 
-  let binary: string | null = null
+/** The launch binary, or null when it could not be resolved (the caller still answers a result). */
+async function resolveLaunchBinaryOrNull(): Promise<string | null> {
   try {
-    binary = await resolveLaunchBinary()
+    return await resolveLaunchBinary()
   } catch {
-    binary = null
+    return null
   }
+}
 
-  if (!binary) {
-    // Say WHY when we can: on Windows the usual culprit is the MSIX build (not launchable
-    // with --user-data-dir, see core/desktop-install.ts), so the failure toast becomes
-    // actionable instead of a dead end.
-    let message = 'No Claude launch binary could be resolved.'
-    try {
-      const install = await detectDesktopInstall()
-      if (install.platform === 'win32') {
-        message = install.msixDetected
-          ? 'Only the MSIX (Windows Apps) build of Claude Desktop is installed; it cannot be launched with an isolated profile. Install the classic Windows installer.'
-          : 'No Claude Desktop installation was found. Install the classic Windows installer.'
-      }
-    } catch {
-      // Detection is best-effort; keep the generic message.
+/**
+ * The failure result for "no binary": say WHY when we can, because on Windows the usual culprit
+ * is the MSIX build (not launchable with --user-data-dir, see core/desktop-install.ts), so the
+ * failure toast becomes actionable instead of a dead end.
+ */
+async function noLaunchBinaryResult(normDir: string): Promise<CMActionResult> {
+  let message = 'No Claude launch binary could be resolved.'
+  try {
+    const install = await detectDesktopInstall()
+    if (install.platform === 'win32') {
+      message = install.msixDetected
+        ? 'Only the MSIX (Windows Apps) build of Claude Desktop is installed; it cannot be launched with an isolated profile. Install the classic Windows installer.'
+        : 'No Claude Desktop installation was found. Install the classic Windows installer.'
     }
-    return {
-      ok: false,
-      action: 'open',
-      dir: normDir,
-      message,
-      data: {},
-    }
+  } catch {
+    // Detection is best-effort; keep the generic message.
   }
+  return {
+    ok: false,
+    action: 'open',
+    dir: normDir,
+    message,
+    data: {},
+  }
+}
 
+async function openConfiguredInstance(
+  normDir: string,
+  nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
+): Promise<CMActionResult> {
+  const running = await probeRunningInstance(normDir, nativeConfig)
+  if (running) return running
+
+  const binary = await resolveLaunchBinaryOrNull()
+  if (!binary) return await noLaunchBinaryResult(normDir)
+
+  return dispatchConfiguredLaunch(normDir, binary, nativeConfig)
+}
+
+/**
+ * Spawn the launch, wait for a managed profile to report ready, restore the registry guard, and
+ * answer either the launch result or the (possibly partial) failure. Split out of
+ * openConfiguredInstance; the spawn/verify/restore order and every side effect are unchanged.
+ */
+async function dispatchConfiguredLaunch(
+  normDir: string,
+  binary: string,
+  nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
+): Promise<CMActionResult> {
   let launchDispatched = false
   let nativeLaunchData: Record<string, unknown> | undefined
   try {
