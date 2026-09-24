@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 from lib import ledgerlib
@@ -105,11 +106,87 @@ def read_meta(meta_path: str | Path) -> dict:
     return json.loads(Path(meta_path).read_text(encoding="utf-8"))
 
 
+# THE LAUNCH MARKER (owner, 2026-09-24: "I run chats on ultra, you run them on whatever you know
+# is efficient"). Every chat the toolbox launches itself is recorded here by session id, in the
+# state dir beside the ledger - not in the meta record, which the running app re-saves from
+# memory and drops fields it does not know. The ledger's own 'spawned' row ages out of its
+# window; this file does not.
+AUTOMATION_NAME = "automation-chats.json"
+_MARKS: dict = {"key": None, "ids": frozenset()}
+
+
+def _automation_path() -> Path:
+    return ledgerlib._state_dir() / AUTOMATION_NAME
+
+
+def load_automation() -> dict:
+    try:
+        raw = json.loads(_automation_path().read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def mark_automation(session_id: str, via: str) -> None:
+    """Record that the toolbox launched this chat (`via` names the launcher). Never raises: a
+    marker that could not be written leaves the chat on the owner's doctrine, which is the
+    shipped behaviour, not a failure of the launch it follows."""
+    if not session_id:
+        return
+    try:
+        with ledgerlib.locked("automation-chats"):
+            data = load_automation()
+            data[str(session_id)] = {"at": int(time.time() * 1000), "via": via[:80]}
+            p = _automation_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+            os.replace(tmp, p)
+    except (OSError, TimeoutError):
+        pass
+
+
+def automation_ids() -> frozenset:
+    """Every marked session id, re-read only when the file changes (a fleet pass asks once per
+    chat)."""
+    p = _automation_path()
+    try:
+        st = p.stat()
+    except OSError:
+        return frozenset()
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    if _MARKS["key"] != key:
+        _MARKS["key"], _MARKS["ids"] = key, frozenset(load_automation())
+    return _MARKS["ids"]
+
+
+def is_automation(meta: dict) -> bool:
+    """True when the toolbox launched this chat: its CLI id or its local id is marked."""
+    ids = automation_ids()
+    if not ids:
+        return False
+    local = str(meta.get("sessionId") or "")
+    mine = {str(meta.get("cliSessionId") or ""), local, local.removeprefix("local_")} - {""}
+    return bool(mine & ids)
+
+
+def _automation_effort(meta: dict) -> str | None:
+    """The effort a chat the toolbox launched runs at once the owner has taken ultracode off
+    those chats (doctrine.automation_ultracode OFF); None for every chat the owner's doctrine
+    covers - which, on the shipped defaults, is every chat."""
+    if configlib.get("doctrine.automation_ultracode") or not is_automation(meta):
+        return None
+    return configlib.get("doctrine.automation_effort")
+
+
 def is_stamped(meta: dict) -> bool:
-    return (
-        (meta.get("sessionSettings") or {}).get("ultracode") is True
-        and meta.get("effort") == ULTRACODE_EFFORT
-    )
+    """The effort half is on its profile: ultracode + ULTRACODE_EFFORT, or - for a launched chat
+    under the automation profile - ultracode off at the automation effort."""
+    ultra = (meta.get("sessionSettings") or {}).get("ultracode") is True
+    auto = _automation_effort(meta)
+    if auto is not None:
+        return not ultra and meta.get("effort") == auto
+    return ultra and meta.get("effort") == ULTRACODE_EFFORT
 
 
 BYPASS = "bypassPermissions"
@@ -156,14 +233,22 @@ def _apply_doctrine(meta: dict) -> bool:
     hardcoded here. Someone who wants the fleet on bypass but NOT on ultracode - or on a
     different effort - no longer has to edit this function to get it."""
     want_bypass = configlib.get("doctrine.stamp_bypass_permissions")
-    want_ultra = configlib.get("doctrine.stamp_ultracode")
+    # A chat the toolbox launched, under the automation profile, gets ultracode OFF at the
+    # automation effort - never put back on the owner's ultracode (owner, 2026-09-24).
+    auto = _automation_effort(meta)
+    want_ultra = auto is None and configlib.get("doctrine.stamp_ultracode")
     # ONE effort value for the check and the write: is_stamped() compares against
     # ULTRACODE_EFFORT, so writing a fresher read here would re-stamp the record every pass.
     effort = ULTRACODE_EFFORT
-    if (not want_bypass or is_bypass(meta)) and (not want_ultra or is_stamped(meta)):
+    if ((not want_bypass or is_bypass(meta))
+            and (not (want_ultra or auto) or is_stamped(meta))):
         return False
     if want_bypass:
         meta["permissionMode"] = BYPASS
+    if auto:
+        if (meta.get("sessionSettings") or {}).get("ultracode") is True:
+            meta["sessionSettings"] = {**meta["sessionSettings"], "ultracode": False}
+        meta["effort"] = auto
     if want_ultra:
         settings = dict(meta.get("sessionSettings") or {})
         settings["ultracode"] = True

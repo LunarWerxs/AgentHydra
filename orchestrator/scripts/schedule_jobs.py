@@ -37,6 +37,9 @@ THE JOBS (cadence set 2026-08-31 by owner: "these sweeps need to run every 5 min
               accounts until the running floor is met (18 is a floor, not a ceiling)
   unblock     every 5 min - restart chats stopped on a permission prompt they should never
               have seen (bypass chats, or chats the toolbox itself promised bypass)
+  stall-watch every 5 min - a chat whose turn ended while a background sub-agent, workflow
+              or command it started went silent is ASKED whether it is stuck (never killed:
+              only that chat can TaskStop it); asked 3x and still stalled = an incident
   twins       every 5 min - is any chat VISIBLE in two places, or the same task started
               twice? --fix retires the stale copy / HOLDS the later duplicate; never live work
   groundskeeper every 5 min - archive chats whose own recap claims done (through the
@@ -227,6 +230,15 @@ JOBS: dict[str, dict] = {
                 "2026-09-01: 'four chats currently pending on someone to push enter')",
         "schedule": EVERY_5_MIN,
         "lines": [r'"{python}" "{scripts}\unblock_prompts.py" --yes'],
+        "needs_daemon": True,
+        "lock": True,
+    },
+    "stall-watch": {
+        "what": "ASK ABOUT THE WORK LEFT HANGING: a chat whose turn ended while a background "
+                "sub-agent, workflow or command it started went silent is asked whether it is "
+                "stuck (owner, 2026-09-24: 'the annoying little gray dot forever')",
+        "schedule": EVERY_5_MIN,
+        "lines": [r'"{python}" "{scripts}\stall_watch.py" --yes'],
         "needs_daemon": True,
         "lock": True,
     },

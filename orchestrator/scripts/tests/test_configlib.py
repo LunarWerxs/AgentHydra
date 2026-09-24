@@ -63,6 +63,19 @@ class SpecTest(_ConfigCase):
                 self.assertIn(row["group"], {g for g, _ in configlib.GROUPS},
                               f"{row['key']}: group is not in GROUPS, so the menu hides it")
 
+    def test_the_automation_profile_ships_as_todays_doctrine(self):
+        # Owner, 2026-09-24: chats AgentHydra launches may run at a cheaper effort than the
+        # owner's own - but the repo is shared, so the SHIPPED profile is exactly the old
+        # behaviour (ultracode + xhigh on desktop, --effort max in the console).
+        dflt = configlib.defaults()
+        self.assertEqual((dflt["doctrine.automation_ultracode"], dflt["doctrine.automation_effort"],
+                          dflt["doctrine.console_effort"]), (True, "xhigh", "max"))
+        self.write({"doctrine.automation_ultracode": False, "doctrine.automation_effort": "high",
+                    "doctrine.console_effort": "high"})
+        self.assertEqual(configlib.problems(), [])
+        self.assertEqual(configlib.get("doctrine.automation_effort"), "high")
+        self.assertIs(configlib.get("doctrine.stamp_ultracode"), True)
+
     def test_every_default_validates_against_its_own_row(self):
         for row in configlib.SPEC:
             with self.subTest(row["key"]):

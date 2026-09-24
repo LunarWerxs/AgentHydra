@@ -55,7 +55,7 @@ STALE_SECS = 60
 GATED_SCRIPTS = frozenset({
     "audit_twins", "automation_chat", "chips", "cli_saturate", "courier",
     "groundskeeper", "harvest_todos", "overlord", "reconcile", "saturate",
-    "sweep", "unblock_prompts",
+    "stall_watch", "sweep", "unblock_prompts",
 })
 
 

@@ -276,6 +276,32 @@ class FleetEnforceTest(unittest.TestCase):
         self.assertEqual([p for p, _ in self.stub.posts if p.endswith("/automation")],
                          [f"/api/sessions/{'a' * 8}/automation"])
 
+    def test_the_fleet_pass_never_re_stamps_a_launched_chat_back_to_ultracode(self):
+        # Owner, 2026-09-24: "I run chats on ultra, you run them on whatever you know is
+        # efficient." Under the efficient policy a chat AgentHydra launched is on doctrine at
+        # bypass + high with ultracode off; the owner's chats still get ultracode + xhigh.
+        from lib import configlib
+
+        self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
+        configlib._CACHE = {**configlib.defaults(), "doctrine.automation_ultracode": False,
+                            "doctrine.automation_effort": "high"}
+        store = self.unstamped.parent
+        launched = store / "local_d.json"
+        launched.write_text(json.dumps({"cliSessionId": "d" * 8, "title": "Fan-out member",
+                                        "permissionMode": "bypassPermissions", "effort": "high"}),
+                            encoding="utf-8")
+        stamplib.mark_automation("d" * 8, "fan_out")
+        code, out, _ = run_cli(automation_chat.main, ["--all", "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual([r["title"] for r in json.loads(out)["rows"]], ["Needs both"])
+        code, out, _ = run_cli(automation_chat.main, ["--all", "--yes", "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["stamped"], 1)
+        meta = json.loads(launched.read_text(encoding="utf-8"))
+        self.assertEqual((meta["effort"], meta.get("sessionSettings")), ("high", None))
+        mine = json.loads(self.unstamped.read_text(encoding="utf-8"))
+        self.assertEqual((mine["effort"], mine["sessionSettings"]), ("xhigh", {"ultracode": True}))
+
     def test_a_held_chat_still_gets_its_PERMISSION_MODE(self):
         # Owner, 2026-09-01: "I am getting sick of having to change things from manual edits to
         # bypass permissions." A hold means do not act on the chat's WORK - no message, no

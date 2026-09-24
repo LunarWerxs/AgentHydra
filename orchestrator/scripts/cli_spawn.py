@@ -40,11 +40,15 @@ import time
 from pathlib import Path
 
 import cli_accounts
-from lib import clilib, peerlib
+from lib import clilib, configlib, peerlib
 
-# The doctrine, as arguments. Nothing else can set these once the process is up, and nothing
-# else needs to.
-DOCTRINE_ARGS = ["--dangerously-skip-permissions", "--effort", "max"]
+def doctrine_args() -> list[str]:
+    """The doctrine, as arguments. Nothing else can set these once the process is up, and nothing
+    else needs to. The effort is doctrine.console_effort (shipped: max, the old literal) - every
+    console chat is one the fleet started or woke, so it runs at the automation effort (owner,
+    2026-09-24: "I run chats on ultra, you run them on whatever you know is efficient")."""
+    return ["--dangerously-skip-permissions", "--effort", configlib.get("doctrine.console_effort")]
+
 # How long to wait for a started chat to publish its session record.
 START_WAIT_SECS = 45
 
@@ -143,7 +147,7 @@ def spawn(folder: str, prompt: str | None, account: str | None,
                                          "resets (--force overrides)")}
         picked = (usable or ready)[0]
 
-    args = list(DOCTRINE_ARGS)
+    args = doctrine_args()
     if model:
         args += ["--model", model]
     if resume:
@@ -215,6 +219,11 @@ def spawn(folder: str, prompt: str | None, account: str | None,
             if rec.get("sessionId") not in before and same_cwd:
                 started = rec.get("sessionId")
                 break
+    if started and not resume:
+        # A console chat can be landed into the desktop later (lanes.land_console); the marker
+        # keeps the doctrine stamping it as the fleet's, not as one the owner started.
+        from lib import stamplib
+        stamplib.mark_automation(started, "cli_spawn")
     return {"ok": started is not None, "account": picked["name"],
             "configDir": picked["configDir"], "folder": folder, "model": model,
             "resumed": resume, "args": args, "sessionId": started,

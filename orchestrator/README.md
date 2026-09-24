@@ -209,9 +209,10 @@ touches nothing, so you can see exactly what a real pass would do before arming 
 `python orch.py loop --live` is the acting version, and is identical to `sweep.py --all --yes`
 - there is no third behaviour hiding in the driver.
 
-THREE WAYS IT RUNS: (1) BY ITSELF - nine Windows scheduled tasks every 5 minutes (dashboard,
-reconcile, todo-sweep, saturate, unblock, twins, groundskeeper, overlord, doctrine;
-`python scripts/schedule_jobs.py --status`); (2) A PERSON - `orch.py` above, or the dashboard
+THREE WAYS IT RUNS: (1) BY ITSELF - Windows scheduled tasks every few minutes (dashboard,
+reconcile, chat-journal, todo-sweep, saturate, unblock, stall-watch, twins, chips,
+groundskeeper, overlord, doctrine; `python scripts/schedule_jobs.py --status` is the live list);
+(2) A PERSON - `orch.py` above, or the dashboard
 at http://127.0.0.1:7799; (3) AN AI - the `/orchestrate` command (canonical copy in this repo's
 `.claude/commands/orchestrate.md`, mirrored to `~/.claude/commands/`), which drives the toolbox
 through the AgentHydra MCP server's `orchestrator_*` tools: dry loop -> acting sweep -> the

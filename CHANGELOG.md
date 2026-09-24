@@ -9,6 +9,34 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
+- **A chat that left background work hanging is asked whether it is stuck** (new lane
+  `orchestrator/scripts/stall_watch.py`, `lib/stalllib.py`, scheduled as `stall-watch` every 5
+  minutes, policy group `stallwatch`). A chat's turn can end while a sub-agent, workflow or
+  background command it started hangs; the desktop keeps the chat showing as busy for as long as
+  any of them is registered, the chat's model is idle, and a hung task never sends the notice
+  that would wake it. The first read of the live fleet found 12 chats in that state, holding
+  tasks silent for 2 to 61 hours. The lane reads each live chat's transcript for background tasks
+  that were launched and never ended (a completion notice or a successful TaskStop), measures how
+  long each has written nothing (an agent's transcript, a workflow's folder and each agent its
+  journal says started and never returned, a command's age), and types ONE question into a chat
+  whose turn has ended or gone quiet: which task, its id, `TaskStop <id>`, and for a workflow
+  `resumeFromRunId` so only the stuck agent reruns. It never kills anything itself - only the
+  chat that launched a task can stop it. The same task is asked about again after 30 minutes, at
+  most 3 times, then filed as an incident. Silent threshold 20 minutes, measured: over 10,132
+  agents on this machine, a healthy agent's longest silence was 0.6 min at the median and 18.9
+  min at p99. Plan-only unless the tray icon is up, skips held chats, `stallwatch.enabled` off in
+  the observe-only preset. Tests: `tests/test_stall_watch.py`.
+
+- **Chats the toolbox launches itself can run at their own effort** (`lib/stamplib.py`,
+  `lib/configlib.py`, `cli_spawn.py`, `spawn_chat.py`). Every chat `spawn_chat` starts (and so
+  every fan-out member, chip and manager chat) and every new console chat is recorded by session
+  id in `state/automation-chats.json`. Three new doctrine keys decide what those chats get:
+  `doctrine.automation_ultracode`, `doctrine.automation_effort` and `doctrine.console_effort`
+  (which replaces the hard-coded `--effort max` in `cli_spawn`). The shipped defaults (on, xhigh,
+  max) stamp them exactly as before; turning `automation_ultracode` off runs them at the
+  automation effort with ultracode off while the owner's own chats keep ultracode + xhigh. A
+  measured reason to do so: high matched xhigh on 10 of 10 real fixes at 2.3x fewer output tokens.
+
 - **`unblock_prompts` is a first-class MCP tool, and it can be aimed at ONE chat**
   (`server/src/mcp.ts`, `orchestrator/scripts/unblock_prompts.py`,
   `server/tests/unblock-prompts-mcp.test.ts`,

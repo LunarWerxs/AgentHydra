@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cli_accounts  # noqa: E402
 import cli_spawn  # noqa: E402
 from lib import bandlib  # noqa: E402
+from lib import configlib  # noqa: E402
 from lib import holdlib  # noqa: E402
 from lib import hydralib  # noqa: E402
 from lib import peerlib  # noqa: E402
@@ -164,11 +165,23 @@ class SpawnTest(unittest.TestCase):
         # The whole reason the console side is worth trying: permissions and effort are set
         # when the process starts, so nothing can re-save over them and no chat can stop to ask.
         cmd, env = cli_spawn._terminal_cmd("C:/cfg", "D:/work",
-                                           cli_spawn.DOCTRINE_ARGS, "orch:work")
+                                           cli_spawn.doctrine_args(), "orch:work")
         line = " ".join(cmd)
         self.assertIn("--dangerously-skip-permissions", line)
         self.assertIn("--effort", line)
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], "C:/cfg")
+
+    def test_the_console_effort_ships_as_max_and_follows_the_policy(self):
+        # Owner, 2026-09-24: "I run chats on ultra, you run them on whatever you know is
+        # efficient." The console fleet is chats nobody typed into, so its effort is a knob;
+        # the shipped default is the old literal, so an install that never set it is unchanged.
+        self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
+        configlib._CACHE = configlib.defaults()
+        self.assertEqual(cli_spawn.doctrine_args(),
+                         ["--dangerously-skip-permissions", "--effort", "max"])
+        configlib._CACHE = {**configlib.defaults(), "doctrine.console_effort": "high"}
+        self.assertEqual(cli_spawn.doctrine_args(),
+                         ["--dangerously-skip-permissions", "--effort", "high"])
 
     @unittest.skipIf(cli_spawn.claude_exe() == "claude",
                      "Claude Code is not installed here, so claude_exe() has nothing absolute to "

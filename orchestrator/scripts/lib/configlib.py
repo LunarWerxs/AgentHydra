@@ -151,6 +151,24 @@ SPEC: list[dict] = [
     _k("doctrine.stamp_effort", "xhigh", "enum", "doctrine",
        "Reasoning effort stamped alongside ultracode.",
        choices=["low", "medium", "high", "xhigh", "max"]),
+    # THE AUTOMATION PROFILE (owner, 2026-09-24: "I run chats on ultra, you run them on whatever
+    # you know is efficient"). Chats the toolbox launches itself - spawn_chat and everything built
+    # on it (fan_out, chips, the overlord), the console fleet - carry a launch marker
+    # (stamplib.mark_automation) and are stamped with these instead of the two above. Shipped
+    # defaults are today's doctrine exactly; the owner's own measurement (high passed the same
+    # 10/10 real fixes as xhigh on 2.3x fewer output tokens) is why his machine sets them lower.
+    _k("doctrine.automation_ultracode", True, "bool", "doctrine",
+       "Chats the toolbox launches itself (fan-outs, chips, the manager chat): ON stamps them "
+       "exactly like every other chat, by the two settings above. OFF runs them at the "
+       "automation effort below with ultracode off; your own chats keep the settings above."),
+    _k("doctrine.automation_effort", "xhigh", "enum", "doctrine",
+       "Reasoning effort stamped on chats the toolbox launches itself. Ultracode needs xhigh, so "
+       "anything lower only means something with automation ultracode OFF.",
+       choices=["low", "medium", "high", "xhigh", "max"]),
+    _k("doctrine.console_effort", "max", "enum", "doctrine",
+       "The --effort flag every console chat the console fleet starts or wakes is launched with "
+       "(it is set at launch and cannot drift).",
+       choices=["low", "medium", "high", "xhigh", "max"]),
     _k("doctrine.stamp_held_chats", True, "bool", "doctrine",
        "Stamp chats you have put on HOLD too. ON is today's behaviour (the stamp is config, "
        "not work); OFF leaves a held chat completely untouched by every lane."),
@@ -246,6 +264,28 @@ SPEC: list[dict] = [
        "Consecutive failed presses on one chat before it is filed as an incident you see.",
        min=1, max=20),
 
+    # ---- STALLED BACKGROUND WORK -----------------------------------------------------
+    # stall_watch.py (owner, 2026-09-24: "just says to the chat, Hey, you've been stuck a while.
+    # Are you stuck?"). New lane, so its defaults are its first values, not a moved constant.
+    _k("stallwatch.enabled", True, "bool", "stallwatch",
+       "Ask a chat whose turn has ended about background work it started that has gone silent "
+       "(a sub-agent, workflow or command that never finished keeps the chat showing as busy)."),
+    _k("stallwatch.silent_secs", 1200, "secs", "stallwatch",
+       "How long a background sub-agent or workflow may write nothing before its chat is asked. "
+       "Measured 2026-09-24 over 10,132 agents: healthy ones went quiet 0.6 min at the median, "
+       "18.9 min at p99.", min=300, max=86400),
+    _k("stallwatch.shell_secs", 3600, "secs", "stallwatch",
+       "How long a background COMMAND may run before its chat is asked (a command's silence says "
+       "nothing - it may write to its own log - so it is judged on age).", min=600, max=172800),
+    _k("stallwatch.renudge_secs", 1800, "secs", "stallwatch",
+       "Minimum gap before the same stalled task is asked about again.", min=300, max=86400),
+    _k("stallwatch.max_nudges", 3, "int", "stallwatch",
+       "Times one stalled task is asked about before it is filed as an incident for you and the "
+       "chat is left alone.", min=1, max=20),
+    _k("stallwatch.max_per_run", 5, "int", "stallwatch",
+       "Most chats one pass may ask (each ask wakes a chat, which spends its account).",
+       min=1, max=50),
+
     # ---- DELIVERING REPLIES ----------------------------------------------------------
     _k("courier.max_deliveries", 5, "int", "courier",
        "Most staged replies one pass may deliver.", min=1, max=50),
@@ -308,6 +348,8 @@ JOB_LANES: list[tuple[str, int, bool, str]] = [
     ("saturate", 5, False, "wake dormant chats round-robin to hold the machine's running floor"),
     ("unblock", 5, False, "restart bypassPermissions chats stopped on a prompt they should "
                           "never have seen"),
+    ("stall_watch", 5, False, "ask chats about background work they left hanging - the busy "
+                              "dot that never clears"),
     ("twins", 5, False, "find and settle duplicate chat records before one becomes unmanageable"),
     ("chips", 5, False, "start the desktop's Suggested-task chips locally through the app menu"),
     ("groundskeeper", 5, False, "the five duties: evacuate, archive, name the stuck, rebalance, "
@@ -341,6 +383,7 @@ GROUPS: list[tuple[str, str]] = [
     ("bands", "USAGE BANDS - when an account is too burnt to take work"),
     ("saturate", "WAKING - keeping the machine full"),
     ("unblock", "PERMISSION PROMPTS - answering the ones nobody is there to click"),
+    ("stallwatch", "STALLED BACKGROUND WORK - asking a chat whether what it left running is stuck"),
     ("courier", "DELIVERY - sending staged replies"),
     ("interview", "THE JUDGMENT QUEUE - the part an AI answers"),
     ("overlord", "THE STANDING MANAGER - the watchdog that keeps the orchestrator alive"),
@@ -381,7 +424,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "lanes.deliver": False, "lanes.doctrine_pass": False, "lanes.naming_pass": False,
         "groundskeeper.duty_evacuate": False, "groundskeeper.duty_archive": False,
         "groundskeeper.duty_rebalance": False, "groundskeeper.duty_reap": False,
-        "saturate.enabled": False, "unblock.enabled": False,
+        "saturate.enabled": False, "unblock.enabled": False, "stallwatch.enabled": False,
         "doctrine.ensure_allow_all": False,
     },
     "conservative": {

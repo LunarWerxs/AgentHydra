@@ -340,6 +340,11 @@ def _start_first_turn(session_id: str, inst: dict, prompt: str, submitted: str,
     mode_set = _set_mode_live(session_id, inst, prompt)
     from lib import ledgerlib
     ledgerlib.note("spawned", session_id, note=f"spawn_chat: {folder}; mode: {mode_set[:80]}")
+    # THE LAUNCH MARKER (owner, 2026-09-24: "I run chats on ultra, you run them on whatever you
+    # know is efficient"). The ledger row above ages out; this one does not, and it is what makes
+    # every doctrine stamp give this chat the automation profile instead of the owner's.
+    from lib import stamplib
+    stamplib.mark_automation(session_id, "spawn_chat")
     return started, mode_set
 
 

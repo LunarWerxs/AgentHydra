@@ -572,6 +572,15 @@ CATALOG: dict[str, dict] = {
         "summary": "ACT (batch, one invocation): execute the predetermined plan in ONE command.",
         "notes": "batches the archive/migrate/name-chats lanes, each a windows-only actuator owner; marked platform=any because sweep.py owns no ACTUATOR constant itself - flagged rather than guessed.",
     },
+    "stall_watch": {
+        "kind": "mutate",
+        "invocation": "both",
+        "platforms": "windows-only",
+        "guards": ("hold", "armed-window", "force"),
+        "result": "0 nothing stalled, or every chat asked - 2 an ask did not land (each named) - 3 bad usage (an unknown flag, refused before anything is read) - 1 daemon failure",
+        "availability": "available",
+        "summary": "ACT: ask a chat whether background work it left running is stuck.",
+    },
     "trust_workspace": {
         "kind": "mutate",
         "invocation": "direct",

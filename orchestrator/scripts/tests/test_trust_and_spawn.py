@@ -277,6 +277,10 @@ class SpawnChatTest(unittest.TestCase):
         rows = [r for r in ledger.get("attempts", [])
                 if r.get("kind") == "spawned" and r.get("session") == sid]
         self.assertEqual(len(rows), 1)
+        # ...and the durable launch marker the doctrine reads (owner, 2026-09-24: chats nobody
+        # typed into run at the automation effort, never re-stamped to the owner's ultracode).
+        marks = json.loads((Path(state.name) / "automation-chats.json").read_text(encoding="utf-8"))
+        self.assertEqual(marks[sid]["via"], "spawn_chat")
 
     def test_no_title_yet_reports_and_never_sets_the_mode(self):
         # Item 2b: the app has not auto-titled the new chat yet - _set_mode_live must say so

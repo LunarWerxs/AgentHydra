@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib import ledgerlib, stamplib  # noqa: E402
+from lib import configlib, ledgerlib, stamplib  # noqa: E402
 
 
 class MutateMetaTest(unittest.TestCase):
@@ -119,6 +119,86 @@ class MutateMetaTest(unittest.TestCase):
         self.assertFalse(r2["stamped"])
         self.assertIsNotNone(r2["error"])
         self.assertEqual(self.meta.read_text(encoding="utf-8"), "{not json")
+
+
+class AutomationProfileTest(unittest.TestCase):
+    """Owner, 2026-09-24: "I run chats on ultra, you run them on whatever you know is
+    efficient." A chat AgentHydra launched itself carries a marker (stamplib.mark_automation), and
+    the doctrine stamps it with the AUTOMATION profile (doctrine.automation_*). The shipped
+    defaults keep that profile identical to the owner's, so an install that never set them sees
+    no change; the owner's own chats keep ultracode + xhigh either way."""
+
+    EFFICIENT = {"doctrine.automation_ultracode": False, "doctrine.automation_effort": "high"}
+
+    def setUp(self):
+        self._state = tempfile.TemporaryDirectory()
+        os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
+        self.mine = self._meta("jacob-1")
+        self.bot = self._meta("bot-1")
+        stamplib.mark_automation("bot-1", "test")
+
+    def tearDown(self):
+        os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
+        self._tmp.cleanup()
+        self._state.cleanup()
+
+    def _meta(self, sid: str, **fields) -> Path:
+        p = Path(self._tmp.name) / f"local_{sid}.json"
+        p.write_text(json.dumps({"cliSessionId": sid, "sessionId": f"local_{sid}",
+                                 "permissionMode": "acceptEdits", **fields}), encoding="utf-8")
+        return p
+
+    def policy(self, **overrides):
+        configlib._CACHE = {**configlib.defaults(), **overrides}
+
+    def read(self, p: Path) -> dict:
+        return json.loads(p.read_text(encoding="utf-8"))
+
+    def test_the_shipped_defaults_stamp_a_launched_chat_exactly_like_the_owners(self):
+        self.policy()
+        for p in (self.mine, self.bot):
+            r = stamplib.stamp_doctrine(p)
+            self.assertEqual((r["bypass"], r["ultracode"], r["error"]), (True, True, None))
+            m = self.read(p)
+            self.assertEqual((m["permissionMode"], m["effort"], m["sessionSettings"]),
+                             ("bypassPermissions", "xhigh", {"ultracode": True}))
+
+    def test_the_efficient_policy_never_puts_ultracode_on_a_launched_chat(self):
+        self.policy(**self.EFFICIENT)
+        r = stamplib.stamp_doctrine(self.bot)
+        self.assertEqual((r["changed"], r["bypass"], r["ultracode"]), (True, True, True))
+        m = self.read(self.bot)
+        self.assertEqual(m["permissionMode"], "bypassPermissions")
+        self.assertEqual(m["effort"], "high")
+        self.assertIsNot((m.get("sessionSettings") or {}).get("ultracode"), True)
+        # the next pass finds it on its profile and writes nothing - no flip-flop
+        self.assertFalse(stamplib.stamp_doctrine(self.bot)["changed"])
+
+    def test_the_owners_chats_keep_ultracode_under_the_efficient_policy(self):
+        self.policy(**self.EFFICIENT)
+        stamplib.stamp_doctrine(self.mine)
+        m = self.read(self.mine)
+        self.assertEqual((m["effort"], m["sessionSettings"]), ("xhigh", {"ultracode": True}))
+
+    def test_a_launched_chat_found_on_ultracode_is_brought_back_to_the_efficient_effort(self):
+        self.policy(**self.EFFICIENT)
+        self.bot.write_text(json.dumps({"cliSessionId": "bot-1", "permissionMode": "bypassPermissions",
+                                        "effort": "xhigh", "sessionSettings": {"ultracode": True, "keep": 1}}),
+                            encoding="utf-8")
+        self.assertFalse(stamplib.is_stamped(self.read(self.bot)))
+        stamplib.stamp_doctrine(self.bot)
+        m = self.read(self.bot)
+        self.assertEqual((m["effort"], m["sessionSettings"]), ("high", {"ultracode": False, "keep": 1}))
+        self.assertTrue(stamplib.is_stamped(m))
+
+    def test_the_marker_is_matched_by_the_local_id_as_well_as_the_cli_id(self):
+        stamplib.mark_automation("local_zz-9", "test")
+        self.assertTrue(stamplib.is_automation({"sessionId": "local_zz-9", "cliSessionId": "other"}))
+        self.assertTrue(stamplib.is_automation({"cliSessionId": "bot-1"}))
+        self.assertFalse(stamplib.is_automation({"cliSessionId": "jacob-1", "sessionId": "local_jacob-1"}))
+        self.assertFalse(stamplib.is_automation({}))
 
 
 if __name__ == "__main__":
