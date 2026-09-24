@@ -20,7 +20,10 @@ import {
   assertClaudeInspectorPortAvailable,
   prepareClaudeNativeLaunch,
 } from '../claude-native-launch'
-import { beginNativeLaunchRegistryGuard } from '../claude-native-launch-registry'
+import {
+  beginNativeLaunchRegistryGuard,
+  type NativeLaunchRegistryResult,
+} from '../claude-native-launch-registry'
 import { captureNativeLaunchLogCursor, waitForNativeLaunchReady } from '../claude-native-ready'
 import {
   ensureClaudeNativeProfileConfig,
@@ -488,6 +491,22 @@ async function openConfiguredInstance(
   return dispatchConfiguredLaunch(normDir, binary, nativeConfig)
 }
 
+/** The scratch one launch attempt carries: what we spawned (so a partial failure can name it) and
+ *  whether a process actually got started. */
+interface LaunchAttempt {
+  dispatched: boolean
+  nativeData?: Record<string, unknown>
+}
+
+/** What a launch that reached verification reports: the pid to answer with, and the registry
+ *  restoration that was performed (null when this profile needed no guard). */
+interface VerifiedLaunch {
+  pid: number
+  registryRestoration: NativeLaunchRegistryResult | null
+}
+
+type NativeLaunchPlan = Awaited<ReturnType<typeof prepareClaudeNativeLaunch>>
+
 /**
  * Spawn the launch, wait for a managed profile to report ready, restore the registry guard, and
  * answer either the launch result or the (possibly partial) failure. Split out of
@@ -498,13 +517,11 @@ async function dispatchConfiguredLaunch(
   binary: string,
   nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
 ): Promise<CMActionResult> {
-  let launchDispatched = false
-  let nativeLaunchData: Record<string, unknown> | undefined
+  const attempt: LaunchAttempt = { dispatched: false }
   try {
     const plan = await prepareClaudeNativeLaunch(binary, nativeConfig)
-    if (plan.nativeDebugger) {
-      nativeLaunchData = { binary: plan.binary, nativeDebugger: plan.nativeDebugger }
-    }
+    if (plan.nativeDebugger)
+      attempt.nativeData = { binary: plan.binary, nativeDebugger: plan.nativeDebugger }
     const { argv, detached } = buildInstanceLaunch(process.platform, plan.binary, [
       ...plan.extraArgs,
       ...launchArgs(normDir),
@@ -512,86 +529,18 @@ async function dispatchConfiguredLaunch(
     const registryGuard = plan.nativeDebugger
       ? await beginNativeLaunchRegistryGuard(plan.binary, normDir)
       : null
-    let pid = 0
-    let launchError: unknown
-    let restorationError: unknown
-    let registryRestoration: Awaited<
-      ReturnType<NonNullable<typeof registryGuard>['restore']>
-    > | null = null
-    try {
-      if (plan.nativeDebugger) {
-        await assertClaudeInspectorPortAvailable(plan.nativeDebugger.port)
-      }
-      const startupLogCursor = plan.nativeDebugger
-        ? await captureNativeLaunchLogCursor(normDir)
-        : undefined
-      const proc = Bun.spawn(argv, {
-        stdin: 'ignore',
-        stdout: 'ignore',
-        stderr: 'ignore',
-        ...(detached ? { detached: true } : {}),
-      })
-      proc.unref()
-      pid = proc.pid
-      launchDispatched = true
-      // Stamped at spawn, not at readiness: the app WAS started on this PC even if the managed
-      // handshake that follows fails, and the process scan will confirm or refine the time.
-      recordInstanceLaunches([{ dir: normDir, at: Date.now() }])
-      invalidateClaudeProcessCache()
-      if (nativeLaunchData) nativeLaunchData.handoffPid = proc.pid
-      if (plan.nativeDebugger) {
-        const ready = await waitForNativeLaunchReady({
-          profileDir: normDir,
-          binary: plan.binary,
-          port: plan.nativeDebugger.port,
-          startupLogCursor,
-        })
-        pid = ready.pid
-        if (nativeLaunchData) nativeLaunchData.pid = ready.pid
-      }
-    } catch (error) {
-      launchError = error
-    } finally {
-      if (registryGuard) {
-        try {
-          registryRestoration = await registryGuard.restore()
-        } catch (error) {
-          restorationError = error
-        }
-        if (nativeLaunchData) nativeLaunchData.registryRestoration = registryRestoration
-      }
-    }
-    const failures: string[] = []
-    if (launchError)
-      failures.push(launchError instanceof Error ? launchError.message : String(launchError))
-    if (restorationError) {
-      const reason =
-        restorationError instanceof Error ? restorationError.message : String(restorationError)
-      failures.push(`Registration restoration failed: ${reason}`)
-      if (nativeLaunchData) nativeLaunchData.registryRestorationError = reason
-    }
-    if (registryRestoration?.errors.length) {
-      failures.push(`Registration restoration failed: ${registryRestoration.errors.join('; ')}`)
-    }
-    if (failures.length) throw Error(failures.join('; '))
+    const verified = await spawnVerifyAndRestore({
+      normDir,
+      plan,
+      argv,
+      detached,
+      registryGuard,
+      attempt,
+    })
     // The world just changed under the cached snapshot — drop it so the poll tick that follows
     // this click shows the row as running instead of waiting out the TTL.
     invalidateClaudeProcessCache()
-    return {
-      ok: true,
-      action: 'open',
-      dir: normDir,
-      message: 'launched',
-      // Stock win32/darwin launches return the transient hand-off PID; managed launches return
-      // the real instance PID verified through its own inspector after startup.
-      data: {
-        binary: plan.binary,
-        pid,
-        ...(plan.nativeDebugger
-          ? { nativeDebugger: plan.nativeDebugger, nativeDebuggerReady: true, registryRestoration }
-          : {}),
-      },
-    }
+    return launchedResult(normDir, plan, verified)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return {
@@ -599,14 +548,142 @@ async function dispatchConfiguredLaunch(
       action: 'open',
       dir: normDir,
       message:
-        nativeLaunchData && launchDispatched
+        attempt.nativeData && attempt.dispatched
           ? `Claude launch dispatched, but startup verification failed: ${message}`
           : `Failed to launch: ${message}`,
-      data: nativeLaunchData
-        ? { ...nativeLaunchData, launchDispatched, nativeDebuggerReady: false }
+      data: attempt.nativeData
+        ? {
+            ...attempt.nativeData,
+            launchDispatched: attempt.dispatched,
+            nativeDebuggerReady: false,
+          }
         : {},
     }
   }
+}
+
+/** The success result for a verified launch. */
+function launchedResult(
+  normDir: string,
+  plan: NativeLaunchPlan,
+  verified: VerifiedLaunch,
+): CMActionResult {
+  return {
+    ok: true,
+    action: 'open',
+    dir: normDir,
+    message: 'launched',
+    // Stock win32/darwin launches return the transient hand-off PID; managed launches return
+    // the real instance PID verified through its own inspector after startup.
+    data: {
+      binary: plan.binary,
+      pid: verified.pid,
+      ...(plan.nativeDebugger
+        ? {
+            nativeDebugger: plan.nativeDebugger,
+            nativeDebuggerReady: true,
+            registryRestoration: verified.registryRestoration,
+          }
+        : {}),
+    },
+  }
+}
+
+/**
+ * Spawn and (for a managed profile) wait for readiness, and ALWAYS restore the registry guard
+ * afterwards - whether or not any of that worked - then report or throw the accumulated failure.
+ */
+async function spawnVerifyAndRestore(args: {
+  normDir: string
+  plan: NativeLaunchPlan
+  argv: string[]
+  detached: boolean
+  registryGuard: { restore(): Promise<NativeLaunchRegistryResult> } | null
+  attempt: LaunchAttempt
+}): Promise<VerifiedLaunch> {
+  const { normDir, plan, argv, detached, registryGuard, attempt } = args
+  let pid = 0
+  let launchError: unknown
+  let restorationError: unknown
+  let registryRestoration: NativeLaunchRegistryResult | null = null
+  try {
+    pid = await spawnAndAwaitReady(normDir, plan, argv, detached, attempt)
+  } catch (error) {
+    launchError = error
+  } finally {
+    if (registryGuard) {
+      try {
+        registryRestoration = await registryGuard.restore()
+      } catch (error) {
+        restorationError = error
+      }
+      if (attempt.nativeData) attempt.nativeData.registryRestoration = registryRestoration
+    }
+  }
+  const failures = launchFailures(launchError, restorationError, registryRestoration, attempt)
+  if (failures.length) throw Error(failures.join('; '))
+  return { pid, registryRestoration }
+}
+
+/** Every reason this attempt must be answered as a failure, in the order they were found. */
+function launchFailures(
+  launchError: unknown,
+  restorationError: unknown,
+  registryRestoration: NativeLaunchRegistryResult | null,
+  attempt: LaunchAttempt,
+): string[] {
+  const failures: string[] = []
+  if (launchError)
+    failures.push(launchError instanceof Error ? launchError.message : String(launchError))
+  if (restorationError) {
+    const reason =
+      restorationError instanceof Error ? restorationError.message : String(restorationError)
+    failures.push(`Registration restoration failed: ${reason}`)
+    if (attempt.nativeData) attempt.nativeData.registryRestorationError = reason
+  }
+  if (registryRestoration?.errors.length) {
+    failures.push(`Registration restoration failed: ${registryRestoration.errors.join('; ')}`)
+  }
+  return failures
+}
+
+/** Spawn the argv and, for a managed profile, wait until its inspector answers; returns the pid to
+ *  report. Split out so the guard/restore bookkeeping above is not nested inside the spawn. */
+async function spawnAndAwaitReady(
+  normDir: string,
+  plan: NativeLaunchPlan,
+  argv: string[],
+  detached: boolean,
+  attempt: LaunchAttempt,
+): Promise<number> {
+  if (plan.nativeDebugger) {
+    await assertClaudeInspectorPortAvailable(plan.nativeDebugger.port)
+  }
+  const startupLogCursor = plan.nativeDebugger
+    ? await captureNativeLaunchLogCursor(normDir)
+    : undefined
+  const proc = Bun.spawn(argv, {
+    stdin: 'ignore',
+    stdout: 'ignore',
+    stderr: 'ignore',
+    ...(detached ? { detached: true } : {}),
+  })
+  proc.unref()
+  attempt.dispatched = true
+  // Stamped at spawn, not at readiness: the app WAS started on this PC even if the managed
+  // handshake that follows fails, and the process scan will confirm or refine the time.
+  recordInstanceLaunches([{ dir: normDir, at: Date.now() }])
+  invalidateClaudeProcessCache()
+  if (attempt.nativeData) attempt.nativeData.handoffPid = proc.pid
+  if (!plan.nativeDebugger) return proc.pid
+  const ready = await waitForNativeLaunchReady({
+    profileDir: normDir,
+    binary: plan.binary,
+    port: plan.nativeDebugger.port,
+    startupLogCursor,
+  })
+  if (attempt.nativeData) attempt.nativeData.pid = ready.pid
+  return ready.pid
 }
 
 // ----------------------------------------------------------------------------
