@@ -13,7 +13,7 @@ preload = ["./tests/setup.ts"]
 # Mirrors .gitignore's `tmp/`: what git does not see, the suite does not run.
 pathIgnorePatterns = ["**/tmp/**"]
 
-# NO [install] block. An isolated linker backed by a global store was tried here on 2026-08-07 and
+# NO LINKER SETTING. An isolated linker backed by a global store was tried here on 2026-08-07 and
 # reverted the same day: it installs fine on a machine whose global store is already warm, and fails
 # on one where it is not. CI's windows-latest runner caches ~/.bun/install/cache but not the store,
 # so it hit `ENOENT: failed to link package (copyfile)` on 98 packages while ubuntu passed.
@@ -23,3 +23,19 @@ pathIgnorePatterns = ["**/tmp/**"]
 # and server/src/updater.ts), so an install strategy that needs a pre-warmed store would break
 # updating for exactly the people who never populated one. `patchedDependencies` in package.json is
 # unaffected and stays; patching does not depend on the linker.
+
+# Supply-chain posture: a published version is not installable until it has been public for 3 days
+# (259200s). A compromised or yanked release is normally caught upstream inside that window, so the
+# bad version never resolves here at all. This is the ONLY setting [install] carries - see the
+# linker note above for what must not be added back to it.
+#
+# What the cooldown does and does not block (measured 2026-09-15): `bun install --frozen-lockfile`
+# against a COMPLETE lockfile is untouched, whatever the pinned versions' ages, so users' auto-update
+# reinstalls keep working. Any RE-RESOLUTION (`bun add`, `bun update`, an install that finds the
+# lockfile incomplete) re-checks every range and fails on any pin younger than 3 days - the day this
+# landed, @vitejs/plugin-vue 6.0.9 (published 2026-09-14) blocked `bun add` for a day. Odin's bumper
+# now bumps under this same cooldown (`--cooldown` to npm-check-updates), so a fresh pin should not
+# recur; if you must add a dependency while one is still young, lower the value for that ONE command
+# and put it back before committing.
+[install]
+minimumReleaseAge = 259200

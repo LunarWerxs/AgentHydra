@@ -21,6 +21,24 @@ export function pathKey(p: string, caseFold: boolean = process.platform === 'win
   return caseFold ? unified.toLowerCase() : unified
 }
 
+/**
+ * Is `child` inside `dir` (or `dir` itself)? A bare `startsWith` is NOT this question and was
+ * the bug (review, 2026-09-17): `<...>/pap3r rotate2/chat.json` begins with `<...>/pap3r rotate`
+ * and belongs to a DIFFERENT account, so a per-profile chat lookup could answer with a sibling
+ * profile's record - and its callers archive, stamp and rename what they are handed. The
+ * boundary has to be a separator.
+ */
+export function isInsideDir(
+  child: string | null | undefined,
+  dir: string | null | undefined,
+  caseFold?: boolean,
+): boolean {
+  if (!child || !dir) return false
+  const c = pathKey(child, caseFold)
+  const d = pathKey(dir, caseFold)
+  return c === d || c.startsWith(`${d}/`)
+}
+
 /** Do two spellings name the same path? Null/empty never matches anything. */
 export function samePathKey(
   a: string | null | undefined,

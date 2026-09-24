@@ -1,0 +1,15 @@
+diff --git a/package.json b/package.json
+index 18da5db15bb3aeed3ef8071ac7eeb3730cd2ce8c..bff82d512737caf95cefd8cc52f6fddce60344e7 100644
+--- a/package.json
++++ b/package.json
+@@ -41,5 +41,8 @@
+     "bun.js",
+     "types"
+   ],
+-  "version": "1.4.2"
++  "version": "1.4.2",
++  "peerDependencies": {
++    "undici-types": "*"
++  }
+ }
+\ No newline at end of file

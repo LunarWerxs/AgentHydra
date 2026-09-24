@@ -14,6 +14,9 @@ import type {
   CMInstance,
   CodexAccount,
   CodexInstance,
+  CodexMovePlan,
+  CodexMoveRequest,
+  CodexMoveResult,
   CodexResetRedeemResult,
   ConcurrencyPoint,
   DispatchedScope,
@@ -443,6 +446,22 @@ export const updateScheduler = (b: Partial<SchedulerState>) =>
 // (distinct from the sqlite `accounts` table above, which holds auth secrets for queue
 // dispatch). See server/src/core/shared.ts for the DTO shapes.
 export const listInstances = () => j<CMInstance[]>('/api/instances')
+export interface ClaudeNativeProfileConfig {
+  port: number
+  mode: 'native-only' | 'prefer-native'
+  launchDebugger?: boolean
+}
+export type ClaudeNativeSettings = Record<string, ClaudeNativeProfileConfig>
+export const getClaudeNativeSettings = () => j<ClaudeNativeSettings>('/api/claude-native/settings')
+/** Saves per-profile control settings; does not open or restart Claude. */
+export const setClaudeNativeProfileConfig = (
+  profile: string,
+  config: ClaudeNativeProfileConfig | null,
+) =>
+  j<{ ok: true; settings: ClaudeNativeSettings }>('/api/claude-native/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ profile, config }),
+  })
 export const getInstanceAccount = (dir: string, opts: { noNetwork?: boolean } = {}) =>
   j<CMAccount>(
     `/api/instances/${encodeURIComponent(dir)}/account${opts.noNetwork ? '?noNetwork=1' : ''}`,
@@ -557,10 +576,20 @@ export interface Health {
   service: string
   version: string
   distribution: 'compiled' | 'source'
+  /** Is the daemon serving older code than its checkout? Absent on a daemon that predates it. */
+  runningCode?: { bootCommit: string | null; diskCommit: string | null; restartNeeded: boolean }
   ts: number
 }
 export const getHealth = (timeoutMs = 2000) =>
   j<Health>('/api/health', { signal: AbortSignal.timeout(timeoutMs) })
+
+/** Relaunch the daemon in place (server/src/index.ts /api/daemon/restart): the successor takes the
+ *  same port, so the page keeps working once it answers again. */
+export const restartDaemon = (force = false) =>
+  j<{ ok: boolean; error?: string; detail?: string }>('/api/daemon/restart', {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  })
 
 /** Where a running apply currently is (server/src/update-progress.ts). Polled while an apply is in
  *  flight so a multi-minute update reports itself instead of showing a mute spinner. */
@@ -756,6 +785,21 @@ export const checkCliInstanceUsage = (id: string, refresh = false) =>
   )
 
 // --- Codex CLI + Desktop instances -------------------------------------------
+export type {
+  CodexMoveChat,
+  CodexMovePlan,
+  CodexMoveRequest,
+  CodexMoveResult,
+} from '@agenthydra/server/types'
+export const planCodexChatMove = (id: string, targetId: string) =>
+  j<CodexMovePlan>(
+    `/api/codex-instances/${encodeURIComponent(id)}/move-chats?targetId=${encodeURIComponent(targetId)}`,
+  )
+export const moveCodexChat = (id: string, request: CodexMoveRequest) =>
+  j<CodexMoveResult>(`/api/codex-instances/${encodeURIComponent(id)}/move-chat`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
 // Each listed instance already carries a locally-resolved `account` (auth.json is plain JSON, so
 // the server can afford to attach it eagerly); getCodexInstanceAccount is the LIVE refresh, which
 // re-reads the plan from ChatGPT rather than from the token's mint-time claim.
@@ -851,3 +895,43 @@ export const migrateSession = (
       }),
     },
   )
+
+// --- DeepSeek Harness instances (a home per account; see server/src/core/dsh-instances.ts) -------
+//
+// ⛔ Nothing here ever receives the harness's URL. Its `?token=` IS the session, so the daemon
+// opens the window itself and these calls answer with an outcome only — see the route comments.
+export interface DshInstance {
+  /** Permanent short handle (`#7`), from the sequence desktop/CLI/Codex instances share. */
+  num: number
+  id: string
+  name: string
+  /** The DSH_HOME this instance is. */
+  home: string
+  /** True for the machine's own harness install, which is listed but never managed by us. */
+  isDefault: boolean
+  sessions: number
+  port: number | null
+  running: boolean
+  createdAt: number
+}
+export const listDshInstances = () => j<DshInstance[]>('/api/dsh-instances')
+export const createDshInstance = (name: string) =>
+  j<CMActionResult>('/api/dsh-instances', { method: 'POST', body: JSON.stringify({ name }) })
+/** Start a server for this home (or open a window against one already running) — both are this. */
+export const launchDshInstance = (id: string) =>
+  j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}/launch`, { method: 'POST' })
+export const quitDshInstance = (id: string) =>
+  j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}/quit`, { method: 'POST' })
+export const renameDshInstance = (id: string, name: string) =>
+  j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}/rename`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+export const deleteDshInstance = (
+  id: string,
+  opts: { deleteFiles?: boolean; confirmName?: string } = {},
+) =>
+  j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    body: JSON.stringify(opts),
+  })

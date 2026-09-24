@@ -28,7 +28,12 @@ import {
   mutateJsonStore,
   readJsonStore,
 } from './json-store'
-import { CLAUDE_LAUNCH_EFFORTS, type LaunchOptionsInput, launchOptionError } from './launch-options'
+import {
+  CLAUDE_LAUNCH_EFFORTS,
+  type LaunchOptionsInput,
+  launchOptionError,
+  windowsTerminalArgv,
+} from './launch-options'
 import { isPathInside } from './paths'
 import type { CMActionResult } from './shared'
 
@@ -138,7 +143,11 @@ export function isLoggedIn(configDir: string): boolean {
 // The fix is to treat "`<CLI_INSTANCES_ROOT>/<id>`" as what it always was — a derivation, not
 // user data. `canonicalConfigDir` re-derives it on read (so every process, including the separate
 // quick-instances window, agrees without needing a write), and migrateCliInstanceConfigDirs
+// arkitect-allow: no-bandaids carrying credentials from the pre-canonical path is the canonicalisation's own migration step, run on every start by design
 // persists the rewrite and carries any credentials still sitting at the old path across.
+// arkitect-allow: no-bandaids permanent path-derivation fix for the ccmanagerui->agenthydra
+// rebrand, not a temporary shim — any carried-over install can surface a pre-rebrand configDir at
+// any future migration, so re-derivation on read has to keep running indefinitely.
 
 /**
  * Where this record's config dir MUST be, if it is one we manage.
@@ -171,11 +180,16 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
 }
 
 /**
+ * arkitect-allow: no-bandaids same migration step as above - the old path is read only to move what is still there
  * Persist the canonicalisation above, moving any credentials left behind at the old path.
  *
  * Called once at daemon boot. Copy-then-leave rather than move: the old directory is under a config
  * root we no longer own, and deleting a user's credentials to tidy up a path string is not a trade
  * worth making. Returns the ids it rewrote (empty = nothing to do, and nothing was written).
+ *
+ * arkitect-allow: no-bandaids runs on every boot for the lifetime of any pre-rebrand install;
+ * copy-then-leave is the permanent, deliberately conservative behavior (never delete a user's
+ * credentials), not a stopgap awaiting a real fix.
  */
 export function migrateCliInstanceConfigDirs(): string[] {
   const outcome = mutate((store) => {
@@ -646,10 +660,9 @@ export function launchCliInstance(id: string, opts: LaunchOpts = {}): CMActionRe
 
   try {
     if (process.platform === 'win32') {
-      // Quote the exe (may contain spaces); `/k` keeps the window open after claude exits so the
-      // user can read output / see a login prompt. The empty "" is start's mandatory title slot.
-      const inner = [`"${exe}"`, ...claudeArgs].join(' ')
-      Bun.spawn(['cmd', '/c', 'start', '', 'cmd', '/k', inner], {
+      // windowsTerminalArgv keeps the exe and args as separate argv entries — see the warning
+      // there; pre-quoting and joining is what made this print "is not recognized".
+      Bun.spawn(windowsTerminalArgv(exe, claudeArgs), {
         env,
         stdin: 'ignore',
         stdout: 'ignore',

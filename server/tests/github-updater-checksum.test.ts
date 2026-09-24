@@ -5,15 +5,21 @@
 // Pure and offline: a scratch file stands in for the archive, a hand-written manifest for the
 // release's. The network wiring (fetching the manifest asset, refusing a release without one) is
 // read in downloadAndVerifyUpdate / applyUpdate; what can be pinned deterministically is here.
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseSha256Sums, sha256File, verifyArchiveChecksum } from '../src/github-updater'
 
+const scratchDirs: string[] = []
+afterEach(() => {
+  for (const d of scratchDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
 function scratchArchive(bytes: string): { dir: string; path: string; name: string; hex: string } {
   const dir = mkdtempSync(join(tmpdir(), 'ah-checksum-'))
+  scratchDirs.push(dir)
   const name = 'AgentHydra-9.9.9-windows-x64.zip'
   const path = join(dir, name)
   writeFileSync(path, bytes)

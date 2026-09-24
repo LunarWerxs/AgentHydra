@@ -43,7 +43,7 @@ const share = (pct: number, value: number) =>
       <div
         v-for="r in rows"
         :key="r.key"
-        class="h-full first:rounded-l-full last:rounded-r-full"
+        class="h-full first:rounded-s-full last:rounded-e-full"
         :style="{ width: `${Math.max(r.value > 0 ? 0.5 : 0, r.pct)}%`, background: r.color }"
         :title="`${$t(r.labelKey)}: ${formatCompact(r.value)}`"
       ></div>
@@ -56,7 +56,7 @@ const share = (pct: number, value: number) =>
           <span class="size-2 shrink-0 rounded-[2px]" :style="{ background: r.color }"></span>
           <span class="truncate">{{ $t(r.labelKey) }}</span>
         </dt>
-        <dd class="pl-3.5 text-sm font-medium tabular-nums">
+        <dd class="ps-3.5 text-sm font-medium tabular-nums">
           {{ formatCompact(r.value) }}
           <span class="text-[11px] font-normal text-muted-foreground">
             {{ share(r.pct, r.value) }}

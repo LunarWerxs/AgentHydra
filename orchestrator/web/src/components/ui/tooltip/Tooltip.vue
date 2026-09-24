@@ -25,7 +25,7 @@ const localOpen = ref(props.defaultOpen ?? false)
 const open = computed(() => (consumerControlled ? (props.open ?? false) : localOpen.value))
 
 /**
- * Refusing reka's closes, for now. Set the moment a gesture reveals the tooltip and cleared a short
+ * Refusing reka's closes while a gesture holds the tooltip. Set the moment a gesture reveals it and cleared a short
  * grace after that gesture ends — see touch.ts for why it must not be permanent.
  */
 const held = ref(false)

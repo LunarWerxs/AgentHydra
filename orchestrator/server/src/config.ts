@@ -31,7 +31,7 @@ export const DAEMON_URL = (process.env.AGENTHYDRA_URL ?? 'http://127.0.0.1:7787'
 )
 
 export interface OAuthConfig {
-  /** IdP issuer origin, e.g. https://accounts.connections.icu */
+  /** IdP issuer origin, e.g. https://accounts.connectionsapi.com */
   issuer: string
   clientId: string
   /** The EXACT registered redirect URI a Quick Tunnel login must use (the relay's callback). */
@@ -81,7 +81,7 @@ export interface RemoteConfig {
  * through the relay, loopback completes directly on the gateway.
  */
 export const CONNECTIONS_OAUTH: OAuthConfig = {
-  issuer: 'https://accounts.connections.icu',
+  issuer: 'https://accounts.connectionsapi.com',
   clientId: 'fa219acf42e2f4ccfce5ab7ddda9544c',
   redirectUri: 'https://app.repoyeti.com/oauth/callback',
   scopes: 'openid profile email photo',

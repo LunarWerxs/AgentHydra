@@ -107,6 +107,19 @@ pub struct POINT {
     pub y: i32,
 }
 
+#[repr(C)]
+#[derive(Default)]
+pub struct SYSTEMTIME {
+    pub wYear: u16,
+    pub wMonth: u16,
+    pub wDayOfWeek: u16,
+    pub wDay: u16,
+    pub wHour: u16,
+    pub wMinute: u16,
+    pub wSecond: u16,
+    pub wMilliseconds: u16,
+}
+
 #[link(name = "kernel32")]
 extern "system" {
     pub fn CreateMutexW(attrs: *mut c_void, initial_owner: i32, name: *const u16) -> HANDLE;
@@ -114,6 +127,19 @@ extern "system" {
     pub fn GetLastError() -> u32;
     pub fn GetModuleHandleW(name: *const u16) -> HINSTANCE;
     pub fn CloseHandle(h: HANDLE) -> i32;
+    pub fn GetLocalTime(t: *mut SYSTEMTIME);
+}
+
+/// Local wall-clock stamp, `YYYY-MM-DD HH:MM:SS`, for log lines a human reads beside Windows'
+/// own timestamps. LOCAL rather than UTC on purpose: the tray's log is correlated by hand against
+/// Event Viewer and Task Scheduler, both of which show local time.
+pub fn local_timestamp() -> String {
+    let mut t = SYSTEMTIME::default();
+    unsafe { GetLocalTime(&mut t) };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
+    )
 }
 
 #[link(name = "user32")]

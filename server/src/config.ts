@@ -40,6 +40,7 @@ export function noAutoOpen(): boolean {
  * Deliberately non-destructive: the move only happens when the new dir does NOT exist yet, and any
  * failure (a pre-rename daemon still holding runtime.json open, a cross-device home, a permission
  * problem) falls back to using the legacy dir where it stands. Losing this directory would lose the
+ * arkitect-allow: no-bandaids keeping the legacy data dir on any failed move is the data-safety rule (queue, settings, labels, accounts cache live there); it is not a shim to retire
  * run queue, settings, instance labels and the accounts cache, so "keep working from the old path"
  * always beats "start clean at the new one".
  *
@@ -127,16 +128,57 @@ if (
   console.error(
     `[agenthydra] NODE_ENV=test with no AGENTHYDRA_HOME/DB/DATA_DIR override — using throwaway state at ${scratch}`,
   )
+  // Outcome-independent reap: this module-scope block runs once per test process (bun caches the
+  // module), so process exit is the only hook that always fires, matching setup.ts's own pattern.
+  process.on('exit', () => {
+    rmSync(scratch, { recursive: true, force: true })
+  })
 }
 
 /** Canonical Claude Code CLI transcript store: <home>/.claude/projects/<encoded-cwd>/<session-id>.jsonl */
 export const CLAUDE_PROJECTS_ROOT = join(HOME, '.claude', 'projects')
 
-/** Codex stores active rollouts in date folders and archived rollouts in a flat sibling folder. */
+/**
+ * The DEFAULT Codex install's home. Active rollouts live in date folders under `sessions/`,
+ * archived ones in the flat sibling `archived_sessions/`, and the sidebar's titles in
+ * `session_index.jsonl` beside them.
+ *
+ * DELIBERATELY NOT ACCOMPANIED BY `…_SESSIONS_ROOT` CONSTANTS ANY MORE. Those existed, the reader
+ * globbed them and nothing else, and that is exactly how every chat on a MANAGED Codex account
+ * became invisible to listing, search and tailing (found 2026-09-11). This machine has one Codex
+ * home PER ACCOUNT; the set of them is core/codex-instances.ts's `codexInstanceStores()`, and a
+ * reader that wants Codex transcripts asks it rather than joining paths onto this. Naming the
+ * default's subdirectories here again would re-open the hole on the first person who imported one.
+ */
 export const CODEX_HOME = appEnv('CODEX_HOME')?.trim() || join(HOME, '.codex')
-export const CODEX_SESSIONS_ROOT = join(CODEX_HOME, 'sessions')
-export const CODEX_ARCHIVED_SESSIONS_ROOT = join(CODEX_HOME, 'archived_sessions')
-export const CODEX_SESSION_INDEX_PATH = join(CODEX_HOME, 'session_index.jsonl')
+
+/**
+ * The DEFAULT DeepSeek Harness home, matching the harness's own precedence.
+ *
+ * `@deepseek-ai/dsh-home-paths` resolves its root as an explicit configured path, else `$DSH_HOME`,
+ * else `~/.dsh`, and treats a blank `$DSH_HOME` as unset rather than as the cwd — so this reads the
+ * harness's OWN variable first (a user who repointed it means it), with AgentHydra's prefixed
+ * override ahead of that for a test or a second checkout.
+ *
+ * DELIBERATELY NOT ACCOMPANIED BY A `…_SESSIONS_ROOT` CONSTANT, for the reason CODEX_HOME gives
+ * above: the set of homes is this one PLUS every instance created in the app, and that set is
+ * core/dsh-instances.ts's `dshInstanceStores()`. A reader that joins `sessions/` onto this constant
+ * would make every conversation in every other home invisible to listing, search and analytics.
+ */
+export const DSH_HOME =
+  appEnv('DSH_HOME')?.trim() || process.env.DSH_HOME?.trim() || join(HOME, '.dsh')
+
+/**
+ * The DeepSeek zswarm's home (`Lunarwerx/zswarm`'s `config.py`: `Path(os.environ.get("ZSWARM_HOME") or
+ * (Path.home() / ".zswarm"))`), read with AgentHydra's own prefixed override ahead of the zswarm's own
+ * variable, same precedence DSH_HOME gives above.
+ *
+ * UNLIKE DSH_HOME, this is the only root there is - the zswarm is not a login product with a home per
+ * account, so there is no per-instance store list a reader must ask for instead (server/src/zswarm-
+ * sessions.ts and server/src/zswarm-cost.ts both take this as their default).
+ */
+export const ZSWARM_HOME =
+  appEnv('ZSWARM_HOME')?.trim() || process.env.ZSWARM_HOME?.trim() || join(HOME, '.zswarm')
 
 /** OpenCode CLI and Desktop share this SQLite session store. */
 export const OPENCODE_DB_PATH =

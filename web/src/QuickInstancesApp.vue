@@ -684,7 +684,7 @@ onBeforeUnmount(() => {
           <div class="flex items-center gap-2 border-b px-3 py-2.5">
             <Boxes class="size-4 text-primary" />
             <h2 class="text-sm font-medium">Codex</h2>
-            <Badge variant="secondary" class="ml-auto">{{ codex.length }}</Badge>
+            <Badge variant="secondary" class="ms-auto">{{ codex.length }}</Badge>
           </div>
           <div v-if="sortedCodex.length === 0" class="px-4 py-6 text-center text-sm text-muted-foreground">
             No Codex instances found.

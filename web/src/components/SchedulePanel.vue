@@ -130,7 +130,7 @@ async function saveTomorrowTime() {
       </Button>
       <!-- the tomorrow time is user-configurable; the tiny gear edits it in place, below -->
       <div class="relative">
-        <Button variant="outline" size="xs" class="w-full pr-5" @click="pickTomorrow()">
+        <Button variant="outline" size="xs" class="w-full pe-5" @click="pickTomorrow()">
           {{ $t('scheduler.presetTomorrow', { time: tomorrowTime }) }}
         </Button>
         <button

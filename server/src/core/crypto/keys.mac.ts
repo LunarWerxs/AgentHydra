@@ -9,6 +9,12 @@
 // Nothing here throws for expected failure conditions (Keychain item missing, access denied /
 // user cancelled the prompt, `security` binary missing) — every path returns `null`.
 
+import { spawnCaptured } from '../process.ts'
+
+/** A keychain read answers instantly or it is waiting on a human at an access prompt. Five
+ *  seconds tells those apart without ever cutting off a working lookup. */
+const KEYCHAIN_TIMEOUT_MS = 5_000
+
 const SALT = 'saltysalt'
 const PBKDF2_ITERATIONS = 1003
 const KEY_LENGTH_BYTES = 16 // AES-128
@@ -29,21 +35,20 @@ const KEYCHAIN_CANDIDATES: KeychainCandidate[] = [
   { service: 'Chromium Safe Storage', account: 'Chromium' },
 ]
 
+// ⛔ BOUNDED (swept 2026-09-18): `security find-generic-password` prompts for keychain access,
+// and this awaited its stdout drain plus proc.exited with no deadline - so an unanswered prompt
+// hung the caller forever. It also piped stderr and never read it, which deadlocks a child that
+// fills that pipe. spawnCaptured drains both streams and always settles.
 async function readKeychainPassword(service: string, account: string): Promise<string | null> {
   try {
-    const proc = Bun.spawn(
+    const r = await spawnCaptured(
       ['security', 'find-generic-password', '-s', service, '-a', account, '-w'],
-      {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      },
+      { timeoutMs: KEYCHAIN_TIMEOUT_MS },
     )
 
-    const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+    if (r.timedOut || r.code !== 0) return null
 
-    if (exitCode !== 0) return null
-
-    const trimmed = stdout.trim()
+    const trimmed = r.stdout.trim()
     return trimmed ? trimmed : null
   } catch {
     // `security` missing, spawn failure, etc.

@@ -28,7 +28,10 @@
 //      words rather than arbitrary substrings. Both are real limits, so every answer says which
 //      path produced it and the caller can force the exhaustive scan.
 //   3. NEVER IN THE WAY. Building it costs ~20 s the first time. That happens in the background,
+// arkitect-allow: no-bandaids the pre-warm read path is the lazy-index design: a search before the index is ready must still answer
 //      never inside a request, and a search issued before it is ready simply takes the old path.
+//      arkitect-allow: no-bandaids "old path" here is the permanent non-indexed streaming-scan
+//      fallback described in property 1 above, not deprecated code slated for removal.
 //
 // One file, `search-index.db`, in the app's data dir, with journalling set to `delete` so it stays
 // exactly one file: "you can delete it whenever you like" has to survive someone actually doing it.
@@ -63,11 +66,22 @@ const SCHEMA_VERSION = 2
 const docKey = (f: IndexableFile) => dedupeKey(f)
 
 let db: Database | null = null
-let openFailed = false
+
+/**
+ * After a failed open, no retry until this time. This used to be a permanent latch: one failed
+ * open and the index stayed off for the rest of the process, every query falling back to the scan
+ * with no way back short of a restart. A transient cause (GitHub's Windows runner, 2026-09-12: one
+ * open that took 6.6 s and failed, on a fresh file an antivirus pass was still holding) therefore
+ * switched the index off for good. A genuinely corrupt file must still not be re-opened on every
+ * query, so the answer is a cooldown, not "try every time".
+ */
+const OPEN_RETRY_MS = 30_000
+let openBlockedUntil = 0
+let now = (): number => Date.now()
 
 function open(): Database | null {
   if (db) return db
-  if (openFailed) return null
+  if (now() < openBlockedUntil) return null
   try {
     db = new Database(indexPath, { create: true })
     // One file, always: a WAL sidecar would make "just delete search-index.db" a corruption bug.
@@ -103,8 +117,8 @@ function open(): Database | null {
     return db
   } catch {
     // A corrupt or unwritable index is not an error the user should ever see: it just means the
-    // scan answers instead.
-    openFailed = true
+    // scan answers instead, and the next attempt waits out the cooldown.
+    openBlockedUntil = now() + OPEN_RETRY_MS
     db = null
     return null
   }
@@ -410,7 +424,7 @@ export function dropSearchIndex(): boolean {
   close()
   try {
     rmSync(indexPath, { force: true })
-    openFailed = false
+    openBlockedUntil = 0
     return true
   } catch {
     return false
@@ -420,6 +434,11 @@ export function dropSearchIndex(): boolean {
 /** Test seam: point the index at a scratch file and forget any open handle. */
 export function setSearchIndexPathForTests(path: string) {
   close()
-  openFailed = false
+  openBlockedUntil = 0
   indexPath = path
+}
+
+/** Test seam: the clock the open cooldown reads, so a test can wait 30 s without waiting. */
+export function setSearchIndexClockForTests(clock: (() => number) | null) {
+  now = clock ?? (() => Date.now())
 }

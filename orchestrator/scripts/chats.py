@@ -25,6 +25,8 @@ Usage:
   python chats.py --instance temp2                 # only that instance
   python chats.py --search "rolodexter"            # title contains
   python chats.py --console                        # only console-only (no desktop home)
+                                                   # (Claude Code sessions only - zswarm, codex
+                                                   # and other headless runs are never chats)
   python chats.py --json
 
   python chats.py --search "rolodexter" --move-to 5claude          # PLAN the move
@@ -99,11 +101,19 @@ def collect(include_archived: bool, account: str | None, instance: str | None,
             continue
         inst_name = r.get("instance")
         acct = by_inst.get(str(inst_name or "").lower(), {})
+        # ⛔ A HEADLESS RUN IS NOT A HOMELESS CHAT (2026-09-18). The sessions table carries every
+        # source - zswarm jobs, codex, opencode - and none of them can ever have a desktop home,
+        # yet all of them used to land in "console-only - no desktop home". 263 rows came back,
+        # ~220 of them zswarm/bench jobs, and an agent asked to "re-migrate orphaned chats" read
+        # that list as the orphans and moved 25 old chats onto an account nobody asked for. Only a
+        # Claude Code session with no desktop home is a console chat; the rest say what they are.
+        source = str(r.get("source") or "claude")
         row = {
             "sessionId": r.get("session_id"),
             "title": r.get("title"),
             "instance": inst_name,
-            "origin": "desktop" if inst_name else "console",
+            "origin": "desktop" if inst_name else ("console" if source == "claude" else source),
+            "source": source,
             "email": acct.get("email"),
             "accountName": names.get(str(inst_name or "").lower()),
             "plan": acct.get("plan"),
@@ -148,7 +158,8 @@ def render(rows: list[dict]) -> str:
     L = []
     groups: dict[str, list[dict]] = {}
     for r in rows:
-        key = f"{r['email'] or '(console-only - no desktop home)'}"
+        key = r["email"] or ("(console-only - no desktop home)" if r["origin"] == "console"
+                             else f"(headless {r['origin']} runs - never a desktop chat)")
         groups.setdefault(key, []).append(r)
     for email, chats in groups.items():
         inst = chats[0]["instance"]

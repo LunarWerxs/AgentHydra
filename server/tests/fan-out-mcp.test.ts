@@ -31,7 +31,16 @@ function reportRun(report: unknown, exitCode = 0, stderr = '') {
 function runBody() {
   const c = calls.find((x) => x.url.includes('/api/orchestrator/run'))
   if (!c) throw new Error('no run call was made')
-  return c.body as { script: string; args: string[]; timeoutMs: number }
+  return c.body as { script: string; args: string[]; timeoutMs: number; async?: boolean }
+}
+
+/** Every fan_out spawn now mints its own --group-id (defect 2, 2026-09-15) so it can hand the id
+ *  back before spawning finishes; the value is generated (time + a random suffix), so tests that
+ *  pin the REST of the argv strip it out here rather than hardcoding it. */
+function stripGroupId(args: string[]): { rest: string[]; groupId: string | null } {
+  const i = args.indexOf('--group-id')
+  if (i < 0) return { rest: args, groupId: null }
+  return { rest: [...args.slice(0, i), ...args.slice(i + 2)], groupId: args[i + 1] ?? null }
 }
 
 beforeEach(() => {
@@ -101,10 +110,11 @@ describe('the three fan-out tools exist and say what they are', () => {
 describe('what fan_out sends to the daemon', () => {
   test('tasks become an inline --spec (cwd -> folder, title kept when given) plus --json', async () => {
     reportRun({ id: 'fo-1', members: [] })
-    const res = (await tool('fan_out').run({ tasks: twoTasks, exclude_self: false })) as Record<
-      string,
-      unknown
-    >
+    const res = (await tool('fan_out').run({
+      tasks: twoTasks,
+      exclude_self: false,
+      background: false,
+    })) as Record<string, unknown>
     const b = runBody()
     expect(b.script).toBe('fan_out')
     expect(b.args[0]).toBe('--spec')
@@ -114,9 +124,13 @@ describe('what fan_out sends to the daemon', () => {
         { folder: 'D:/repo/api', prompt: twoTasks[1]!.prompt },
       ],
     })
-    expect(b.args.slice(2)).toEqual(['--json'])
+    const { rest, groupId } = stripGroupId(b.args)
+    expect(rest.slice(2)).toEqual(['--json'])
+    expect(groupId).toMatch(/^fo-/)
+    expect(b.async).toBe(false)
     expect(res.ok).toBe(true)
     expect(res.id).toBe('fo-1')
+    expect(res.groupId).toBe(groupId) // the id the tool minted, handed back on the same call too
     expect(res.selfNote).toContain('exclude_self: false')
   })
 
@@ -133,7 +147,8 @@ describe('what fan_out sends to the daemon', () => {
     })
     const b = runBody()
     expect(JSON.parse(b.args[1]!).group).toBe('lint sweep')
-    expect(b.args.slice(2)).toEqual([
+    const { rest } = stripGroupId(b.args)
+    expect(rest.slice(2)).toEqual([
       '--json',
       '--per-account',
       '2',
@@ -142,6 +157,7 @@ describe('what fan_out sends to the daemon', () => {
       '--dry-run',
     ])
     expect(b.timeoutMs).toBe(180_000) // a dry run only ranks and plans
+    expect(b.async).toBe(false) // a dry run never backgrounds
   })
 
   test('per_account of 1 (the default) adds no flag; the spawn deadline grows with the task count', async () => {
@@ -169,7 +185,8 @@ describe('what fan_out sends to the daemon', () => {
       exclude_self: false,
     })
     const b = runBody()
-    expect(b.args.slice(2)).toEqual(['--json', '--only', '8', '--only', '36', '--exclude', '8'])
+    const { rest } = stripGroupId(b.args)
+    expect(rest.slice(2)).toEqual(['--json', '--only', '8', '--only', '36', '--exclude', '8'])
   })
 
   test('a spec too long for one argv entry travels as a temp file the script can read, removed after the run', async () => {
@@ -196,13 +213,36 @@ describe('what fan_out sends to the daemon', () => {
       cwd: `D:/repo/plane-${i}`,
       prompt: `plane ${i}: ${'lint every file and fix what you find. '.repeat(20)}`,
     }))
-    await tool('fan_out').run({ tasks: big, exclude_self: false })
+    await tool('fan_out').run({ tasks: big, exclude_self: false, background: false })
     const b = runBody()
     const path = b.args[1]!
     expect(path.length).toBeLessThan(4000)
     expect(seen.atRunTime).toEqual({ exists: true, tasks: 8, last: 'D:/repo/plane-7' })
     // review 2026-09-05: the temp file used to be left behind forever
     expect(existsSync(path)).toBe(false)
+  })
+
+  test('a backgrounded spawn does NOT delete its temp spec file the instant the 202 comes back', async () => {
+    // ⛔ THE SCRIPT MAY NOT HAVE READ ITS OWN ARGV YET when backgrounding answers - it only
+    // proves the daemon STARTED the child, not that fan_out.py has parsed --spec. Deleting the
+    // file synchronously in this call's own `finally` (the pre-defect-2 behaviour) would race a
+    // slow Python interpreter startup and delete the spec out from under it. This pins that the
+    // fix defers the cleanup rather than reintroducing "removed after the run" for a run that, by
+    // the time this call returns, has only just been told to start.
+    reportRun({ id: 'fo-5c', members: [] })
+    const big = Array.from({ length: 8 }, (_, i) => ({
+      cwd: `D:/repo/plane-${i}`,
+      prompt: `plane ${i}: ${'lint every file and fix what you find. '.repeat(20)}`,
+    }))
+    const res = (await tool('fan_out').run({ tasks: big, exclude_self: false })) as Record<
+      string,
+      unknown
+    >
+    expect(res.started).toBe(true) // confirms this exercised the background path
+    const path = runBody().args[1]!
+    expect(existsSync(path)).toBe(true)
+    // clean up what the deferred timer would have removed, so this test leaves nothing behind
+    if (existsSync(path)) rmSync(path)
   })
 
   test('an inline spec leaves no file behind and the inline arg is left alone', async () => {
@@ -222,10 +262,11 @@ describe('what fan_out sends to the daemon', () => {
 
   test("the script's exit code becomes a verdict, and a non-zero one is ok:false with the report intact", async () => {
     reportRun({ id: 'fo-6', members: [{ index: 0, state: 'unassigned' }] }, 4, 'note')
-    const res = (await tool('fan_out').run({ tasks: twoTasks, exclude_self: false })) as Record<
-      string,
-      unknown
-    >
+    const res = (await tool('fan_out').run({
+      tasks: twoTasks,
+      exclude_self: false,
+      background: false,
+    })) as Record<string, unknown>
     expect(res.ok).toBe(false)
     expect(res.exitCode).toBe(4)
     expect(String(res.verdict)).toMatch(/^partial/)
@@ -238,13 +279,121 @@ describe('what fan_out sends to the daemon', () => {
       url.includes('/api/orchestrator/run')
         ? { ok: true, exitCode: 3, stdout: '', stderr: 'REFUSED: task 0: not a directory' }
         : { ok: true }
+    const res = (await tool('fan_out').run({
+      tasks: twoTasks,
+      exclude_self: false,
+      background: false,
+    })) as Record<string, unknown>
+    expect(res.ok).toBe(false)
+    expect(res.stderr).toContain('not a directory')
+    expect(String(res.verdict)).toMatch(/^refused/)
+  })
+
+  test('a verdict is never "ok" while any member is planned/unassigned/refused/spawned-unconfirmed - the exact count instead (defect 1, 2026-09-15)', async () => {
+    // Found live: fan_out_status answered `verdict: "ok: every member spawned and confirmed..."`
+    // for a group whose real counts were finished 1, planned 1, unassigned 1 - because the old
+    // verdict came only from fan_out.py's exit code (status always exits 0). The verdict must be
+    // built from what the members actually say, every time.
+    reportRun({
+      id: 'fo-10',
+      counts: { finished: 1, planned: 1, unassigned: 1 },
+      members: [
+        { index: 0, state: 'finished' },
+        { index: 1, state: 'planned' },
+        { index: 2, state: 'unassigned' },
+      ],
+    })
+    const res = (await tool('fan_out_status').run({ group: 'fo-10' })) as Record<string, unknown>
+    expect(String(res.verdict)).not.toMatch(/^ok/)
+    expect(String(res.verdict)).toContain('finished 1')
+    expect(String(res.verdict)).toContain('planned 1')
+    expect(String(res.verdict)).toContain('unassigned 1')
+    expect(res.ok).toBe(false)
+  })
+
+  test('fan_out_delete never says "ok" over a member skipped "no session" (defect 1, 2026-09-15)', async () => {
+    reportRun({
+      id: 'fo-11',
+      results: [
+        { index: 0, deleted: true },
+        { index: 1, deleted: false, skipped: 'no session' },
+        { index: 2, deleted: false, skipped: 'no session' },
+      ],
+    })
+    const res = (await tool('fan_out_delete').run({ group: 'fo-11' })) as Record<string, unknown>
+    expect(String(res.verdict)).not.toMatch(/^ok/)
+    expect(String(res.verdict)).toContain('skipped 2')
+    expect(String(res.verdict)).toContain('deleted 1')
+    expect(res.ok).toBe(false)
+  })
+
+  test('every member spawned really is "ok" - the fix does not turn a good run into a false red', async () => {
+    reportRun({
+      id: 'fo-12',
+      members: [
+        { index: 0, state: 'spawned' },
+        { index: 1, state: 'spawned' },
+      ],
+    })
+    const res = (await tool('fan_out_status').run({ group: 'fo-12' })) as Record<string, unknown>
+    expect(String(res.verdict)).toMatch(/^ok/)
+    expect(res.ok).toBe(true)
+  })
+})
+
+describe('fan_out auto-detaches so a client timeout can no longer cancel a spawn mid-flight (defect 2, 2026-09-15)', () => {
+  test('a bare call already declares itself past the ceiling and goes async without being asked, returning the group id at once', async () => {
+    reportRun({ id: 'fo-13', members: [] })
     const res = (await tool('fan_out').run({ tasks: twoTasks, exclude_self: false })) as Record<
       string,
       unknown
     >
-    expect(res.ok).toBe(false)
-    expect(res.stderr).toContain('not a directory')
-    expect(String(res.verdict)).toMatch(/^refused/)
+    const b = runBody()
+    expect(b.timeoutMs).toBeGreaterThan(120_000)
+    expect(b.async).toBe(true)
+    expect(res.started).toBe(true)
+    expect(typeof res.groupId).toBe('string')
+    expect(String(res.groupId)).toMatch(/^fo-/)
+    expect(String(res.poll)).toContain('fan_out_status')
+    expect(String(res.poll)).toContain(String(res.groupId))
+    expect(String(res.note)).toContain('Detached automatically')
+  })
+
+  test('background: false is a person choosing to wait, and is honoured even past the ceiling', async () => {
+    reportRun({ id: 'fo-14', members: [{ index: 0, state: 'spawned' }] })
+    const res = (await tool('fan_out').run({
+      tasks: twoTasks,
+      exclude_self: false,
+      background: false,
+    })) as Record<string, unknown>
+    const b = runBody()
+    expect(b.async).toBe(false)
+    expect(res.started).toBeUndefined()
+    expect(res.poll).toBeUndefined()
+    // the blocking path still parses the script's own report off stdout
+    expect(res.id).toBe('fo-14')
+  })
+
+  test('background: true still answers with the id and how to poll it, in its own words', async () => {
+    reportRun({ id: 'fo-15', members: [] })
+    const res = (await tool('fan_out').run({
+      tasks: twoTasks,
+      exclude_self: false,
+      background: true,
+    })) as Record<string, unknown>
+    expect(runBody().async).toBe(true)
+    expect(String(res.note)).toContain('Poll fan_out_status')
+    expect(String(res.note)).not.toContain('Detached automatically')
+  })
+
+  test('the group id sent to fan_out.py is the same one returned to the caller', async () => {
+    reportRun({ id: 'fo-16', members: [] })
+    const res = (await tool('fan_out').run({ tasks: twoTasks, exclude_self: false })) as Record<
+      string,
+      unknown
+    >
+    const { groupId } = stripGroupId(runBody().args)
+    expect(res.groupId).toBe(groupId)
   })
 })
 

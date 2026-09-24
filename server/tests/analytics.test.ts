@@ -44,9 +44,9 @@ describe('tokens and time', () => {
   test('per-model totals come out of the assistant turns', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        assistant('2026-08-10T10:00:00.000Z', U),
-        assistant('2026-08-10T10:01:00.000Z', U, 'claude-sonnet-5'),
-        assistant('2026-08-10T10:02:00.000Z', U),
+        assistant('2024-08-10T10:00:00.000Z', U),
+        assistant('2024-08-10T10:01:00.000Z', U, 'claude-sonnet-5'),
+        assistant('2024-08-10T10:02:00.000Z', U),
       ]),
       'claude',
     )
@@ -59,10 +59,10 @@ describe('tokens and time', () => {
   test('a user turn carrying a usage echo does not double-count the spend', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        assistant('2026-08-10T10:00:00.000Z', U),
+        assistant('2024-08-10T10:00:00.000Z', U),
         {
           type: 'user',
-          timestamp: '2026-08-10T10:00:30.000Z',
+          timestamp: '2024-08-10T10:00:30.000Z',
           message: { role: 'user', usage: U },
         },
       ]),
@@ -74,9 +74,9 @@ describe('tokens and time', () => {
   test('engaged time caps each gap, so an overnight pause is not counted as work', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        assistant('2026-08-10T10:00:00.000Z', U),
-        assistant('2026-08-10T10:02:00.000Z', U), // 2 min: real
-        assistant('2026-08-11T09:00:00.000Z', U), // ~23 h: capped at 5 min
+        assistant('2024-08-10T10:00:00.000Z', U),
+        assistant('2024-08-10T10:02:00.000Z', U), // 2 min: real
+        assistant('2024-08-11T09:00:00.000Z', U), // ~23 h: capped at 5 min
       ]),
       'claude',
     )
@@ -87,9 +87,9 @@ describe('tokens and time', () => {
   test('the day and hour histograms follow the turns, not the file', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        assistant('2026-08-10T10:00:00.000Z', U),
-        assistant('2026-08-10T11:00:00.000Z', U),
-        assistant('2026-08-11T10:00:00.000Z', U),
+        assistant('2024-08-10T10:00:00.000Z', U),
+        assistant('2024-08-10T11:00:00.000Z', U),
+        assistant('2024-08-11T10:00:00.000Z', U),
       ]),
       'claude',
     )
@@ -108,7 +108,7 @@ describe('tools, failures and edits', () => {
   test('tool uses are counted by name', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        tools('2026-08-10T10:00:00.000Z', [
+        tools('2024-08-10T10:00:00.000Z', [
           { type: 'tool_use', name: 'Bash', input: {} },
           { type: 'tool_use', name: 'Bash', input: {} },
           { type: 'tool_use', name: 'Read', input: { file_path: 'a.ts' } },
@@ -122,7 +122,7 @@ describe('tools, failures and edits', () => {
   test('a failure streak RESETS on a success, which is the whole point of a streak', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        results('2026-08-10T10:00:00.000Z', [
+        results('2024-08-10T10:00:00.000Z', [
           { type: 'tool_result', is_error: true },
           { type: 'tool_result', is_error: true },
           { type: 'tool_result' }, // success: the run of failures ends here
@@ -138,7 +138,7 @@ describe('tools, failures and edits', () => {
   test('edits are the file-changing tools only, and carry their path', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        tools('2026-08-10T10:00:00.000Z', [
+        tools('2024-08-10T10:00:00.000Z', [
           { type: 'tool_use', name: 'Edit', input: { file_path: 'D:/x/a.ts' } },
           { type: 'tool_use', name: 'Write', input: { file_path: 'D:/x/b.ts' } },
           { type: 'tool_use', name: 'Read', input: { file_path: 'D:/x/c.ts' } },
@@ -154,7 +154,7 @@ describe('tools, failures and edits', () => {
   test('an edit tool with no path is not counted, rather than logged as an empty file', async () => {
     const a = await scanSessionAnalytics(
       transcript([
-        tools('2026-08-10T10:00:00.000Z', [{ type: 'tool_use', name: 'Edit', input: {} }]),
+        tools('2024-08-10T10:00:00.000Z', [{ type: 'tool_use', name: 'Edit', input: {} }]),
       ]),
       'claude',
     )
@@ -165,7 +165,7 @@ describe('tools, failures and edits', () => {
     const a = await scanSessionAnalytics(
       transcript([
         { type: 'user', isCompactSummary: true, message: { role: 'user', content: [] } },
-        assistant('2026-08-10T10:00:00.000Z', U),
+        assistant('2024-08-10T10:00:00.000Z', U),
         { type: 'user', isCompactSummary: true, message: { role: 'user', content: [] } },
       ]),
       'claude',
@@ -183,7 +183,7 @@ describe('the edges', () => {
   })
 
   test('a half-written line is skipped, not fatal', async () => {
-    const path = transcript([assistant('2026-08-10T10:00:00.000Z', U)])
+    const path = transcript([assistant('2024-08-10T10:00:00.000Z', U)])
     writeFileSync(path, `${'{"type":"assistant","mess'}\n`, { flag: 'a' })
     const a = await scanSessionAnalytics(path, 'claude')
     expect(a.tokens['claude-opus-5']?.turns).toBe(1)
@@ -191,7 +191,7 @@ describe('the edges', () => {
 
   test('OpenCode records no per-turn usage, so it totals to nothing rather than zeros', async () => {
     const a = await scanSessionAnalytics(
-      transcript([assistant('2026-08-10T10:00:00.000Z', U)]),
+      transcript([assistant('2024-08-10T10:00:00.000Z', U)]),
       'opencode',
     )
     expect(a.tokens).toEqual({})
@@ -208,7 +208,7 @@ describe('the placeholder row can never be mistaken for a parsed session', () =>
   // sessions view. The placeholder now carries an impossible (-1, -1) revision, which the list can
   // only ever treat as stale.
   test('a row written by the analytics pass is stale to the list scanner by construction', async () => {
-    const path = transcript([assistant('2026-08-10T10:00:00.000Z', U)])
+    const path = transcript([assistant('2024-08-10T10:00:00.000Z', U)])
     const tf = {
       source: 'claude' as const,
       session_id: 'aaaaaaaa-0000-4000-8000-000000000001',
@@ -280,15 +280,15 @@ describe('a Codex conversation is more than one file', () => {
     // the main rollout and three subagent rollouts all open at exactly the same totals, and three
     // subagents that ran inside a nine-minute window each record 5,090 counter events reaching 552
     // million tokens. Summing them turned 11.9B store-wide into 637B.
-    const main = rollout('2026-08-10T10:00:00.000Z', [
+    const main = rollout('2024-08-10T10:00:00.000Z', [
       [100, 10],
       [300, 30],
     ])
-    const replay1 = rollout('2026-08-10T10:01:00.000Z', [
+    const replay1 = rollout('2024-08-10T10:01:00.000Z', [
       [100, 10],
       [250, 25],
     ])
-    const replay2 = rollout('2026-08-10T10:02:00.000Z', [[200, 20]])
+    const replay2 = rollout('2024-08-10T10:02:00.000Z', [[200, 20]])
 
     const alone = await scanSessionAnalytics(main, 'codex', 'sess')
     expect(alone.tokens['gpt-5.6-sol']?.input).toBe(300)
@@ -301,8 +301,8 @@ describe('a Codex conversation is more than one file', () => {
   test('a sibling that reached further wins, because the counter is the conversation’s', async () => {
     // Two of 109 real conversations end this way: the main rollout stopped being written before a
     // subagent did, so the subagent holds the highest reading of the shared counter.
-    const short = rollout('2026-08-10T10:00:00.000Z', [[100, 10]])
-    const long = rollout('2026-08-10T10:05:00.000Z', [[900, 90]])
+    const short = rollout('2024-08-10T10:00:00.000Z', [[100, 10]])
+    const long = rollout('2024-08-10T10:05:00.000Z', [[900, 90]])
     const both = await scanSessionAnalytics(short, 'codex', 'sess', [long])
     expect(both.tokens['gpt-5.6-sol']?.input).toBe(900)
   })
@@ -310,8 +310,8 @@ describe('a Codex conversation is more than one file', () => {
   test('an unreadable sibling does not lose the conversation', async () => {
     // Codex moves rollouts between sessions/ and archived_sessions/ while the daemon scans, so a
     // file vanishing mid-read is expected rather than exceptional.
-    const main = rollout('2026-08-10T10:00:00.000Z', [[100, 10]])
-    const other = rollout('2026-08-10T10:01:00.000Z', [[80, 8]])
+    const main = rollout('2024-08-10T10:00:00.000Z', [[100, 10]])
+    const other = rollout('2024-08-10T10:01:00.000Z', [[80, 8]])
     const a = await scanSessionAnalytics(main, 'codex', 'sess', [
       join(dir, 'does-not-exist.jsonl'),
       other,
@@ -344,9 +344,9 @@ describe('a Codex rollout that spends before it names its model', () => {
 
   test('the spend is attributed to the model the file names LATER, not to a placeholder', async () => {
     const path = transcript([
-      tokenLine('2026-08-10T10:00:00.000Z', 400, 40),
-      ctx('2026-08-10T10:01:00.000Z', 'gpt-5.6-sol'),
-      tokenLine('2026-08-10T10:01:00.000Z', 900, 90),
+      tokenLine('2024-08-10T10:00:00.000Z', 400, 40),
+      ctx('2024-08-10T10:01:00.000Z', 'gpt-5.6-sol'),
+      tokenLine('2024-08-10T10:01:00.000Z', 900, 90),
     ])
     const out = await scanSessionAnalytics(path, 'codex', 'sess')
     expect(out.tokens['gpt-5.6-sol']?.input).toBe(900)
@@ -357,11 +357,11 @@ describe('a Codex rollout that spends before it names its model', () => {
     // Only the turns BEFORE the first naming are ambiguous. Once a file has said what it is
     // running, a later switch applies from that point on, exactly as it did before.
     const path = transcript([
-      tokenLine('2026-08-10T10:00:00.000Z', 100, 10),
-      ctx('2026-08-10T10:01:00.000Z', 'gpt-5.6-sol'),
-      tokenLine('2026-08-10T10:01:00.000Z', 300, 30),
-      ctx('2026-08-10T10:02:00.000Z', 'gpt-5.6-terra'),
-      tokenLine('2026-08-10T10:02:00.000Z', 700, 70),
+      tokenLine('2024-08-10T10:00:00.000Z', 100, 10),
+      ctx('2024-08-10T10:01:00.000Z', 'gpt-5.6-sol'),
+      tokenLine('2024-08-10T10:01:00.000Z', 300, 30),
+      ctx('2024-08-10T10:02:00.000Z', 'gpt-5.6-terra'),
+      tokenLine('2024-08-10T10:02:00.000Z', 700, 70),
     ])
     const out = await scanSessionAnalytics(path, 'codex', 'sess')
     expect(out.tokens['gpt-5.6-sol']?.input).toBe(300)
@@ -372,9 +372,9 @@ describe('a Codex rollout that spends before it names its model', () => {
     // Attribution is per rollout, because a conversation's totals come from one rollout: the file
     // that reached furthest. A later turn naming the model settles the earlier unnamed ones.
     const path = transcript([
-      tokenLine('2026-08-10T10:00:00.000Z', 100, 10),
-      ctx('2026-08-10T10:01:00.000Z', 'gpt-5.6-sol'),
-      tokenLine('2026-08-10T10:01:00.000Z', 1000, 100),
+      tokenLine('2024-08-10T10:00:00.000Z', 100, 10),
+      ctx('2024-08-10T10:01:00.000Z', 'gpt-5.6-sol'),
+      tokenLine('2024-08-10T10:01:00.000Z', 1000, 100),
     ])
     const out = await scanSessionAnalytics(path, 'codex', 'sess')
     expect(out.tokens['gpt-5.6-sol']?.input).toBe(1000)
@@ -384,14 +384,14 @@ describe('a Codex rollout that spends before it names its model', () => {
   test('when NOTHING in the conversation names a model it stays unknown, not invented', async () => {
     // The honest outcome: an id no price table matches, reported as unpriced. Better than picking
     // a plausible model and printing a dollar figure nobody can check.
-    const path = transcript([tokenLine('2026-08-10T10:00:00.000Z', 500, 50)])
+    const path = transcript([tokenLine('2024-08-10T10:00:00.000Z', 500, 50)])
     const out = await scanSessionAnalytics(path, 'codex', 'sess')
     expect(out.tokens.codex?.input).toBe(500)
   })
 
   test('an unnamed turn still lands on the day and hour charts at full weight', async () => {
     // The per-model row is what waits; the timeline is not model-dependent and must not thin out.
-    const path = transcript([tokenLine('2026-08-10T10:00:00.000Z', 500, 50)])
+    const path = transcript([tokenLine('2024-08-10T10:00:00.000Z', 500, 50)])
     const out = await scanSessionAnalytics(path, 'codex', 'sess')
     expect(Object.values(out.days).reduce((a, b) => a + b, 0)).toBeGreaterThan(0)
     expect(Object.values(out.hours).reduce((a, b) => a + b, 0)).toBe(1)

@@ -51,10 +51,12 @@ import json
 import sys
 
 from lib import clilib, gatelib
+from lib import configlib
 from lib import holdlib
 from lib import hydralib
 from lib import ledgerlib
 from lib import mutationlib
+from lib import nativearchivelib
 from lib import windowlib
 
 
@@ -68,9 +70,10 @@ def out(payload: dict, as_json: bool, code: int) -> int:
 
 from pathlib import Path as _Path
 
-# Relocated into this repo 2026-09-01 (owner: "I own both codebases") from AgentHydra's
-# public misc/ folder; same script, the orchestrator's copy.
-ACTUATOR = _Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"
+# THE ONE CHAT ACTUATOR (collapsed 2026-09-17). A second copy lived under
+# actuator/manage_desktop_chat.ps1 from 2026-09-01 and drifted away from the one the
+# daemon runs; the daemon's is now the only one, and its header says what the drift cost.
+ACTUATOR = _Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"
 
 # THE PRESERVATION STEP (owner rule, 2026-09-01). Brief on purpose - "doesn't need to be
 # comprehensive": just ask for the docs worth keeping.
@@ -82,7 +85,7 @@ PRESERVE_PROMPT = (
 )
 # How long to wait for a chat to run its preservation turn before archiving anyway (a dormant
 # chat that never took the turn must not wedge the archive forever).
-PRESERVE_GRACE_MIN = 20
+PRESERVE_GRACE_MIN = configlib.get("archive.preserve_grace_min")
 
 # The preserve POST asks the daemon's message endpoint to watch for up to confirm_secs before
 # answering - hydralib's generic TIMEOUT_SECS (30s) is sized for a plain read, not for that
@@ -126,14 +129,18 @@ def _request_preservation(session_id: str) -> tuple[bool, str]:
         return False, (err.detail or str(err))[:160]
 
 
-def _ui_archive(instance: str, title: str, unarchive: bool) -> tuple[int, str]:
-    """Drive the running app's OWN Archive/Unarchive control (focus-free UIA). The app makes
+def _ui_archive(instance: str, title: str, unarchive: bool,
+                session_id: str = "") -> tuple[int, str]:
+    """Try native archive before driving the running app's Archive/Unarchive control. The app makes
     the write itself, so its later memory->disk re-saves cannot undo it - this is the only
     immediate-and-durable path under a running app, and restarts are never an option.
 
     The actuator's exits: 0 done (row acted on and left/joined the sidebar) - 1 error or
     ambiguity - 2 invoked but the row did not move - 3 the row is not rendered."""
-    import subprocess
+    if not unarchive and session_id:
+        native = nativearchivelib.try_archive(session_id, instance)
+        if native is not None:
+            return native
 
     if not ACTUATOR.exists():
         return 1, f"the UIA actuator is missing at {ACTUATOR}"
@@ -237,7 +244,15 @@ def _handle_already_settled(match: dict, desired: bool, verb: str, title, as_jso
         # old disk-flag write). Settle it through the app's own control: exit 3 (row not
         # rendered) means the screen already agrees - settled; exit 0 means the row WAS
         # still there and has now been archived for real.
-        code, ui_out = _ui_archive(str(match.get("instance")), str(title), unarchive=False)
+        code, ui_out = _ui_archive(str(match.get("instance")), str(title), unarchive=False,
+                                   session_id=str(match.get("cliSessionId") or match.get("chatId") or ""))
+        if code == nativearchivelib.NATIVE_VERIFIED:
+            return _verify_native_archive(str(match.get("cliSessionId") or ""), str(title),
+                                          nativearchivelib.result(ui_out), as_json,
+                                          before={"archived": True},
+                                          instance=str(match.get("instance") or ""))
+        if code == nativearchivelib.NATIVE_TERMINAL:
+            return _native_archive_refusal(ui_out, as_json)
         if code == 3:
             return out(
                 {"changed": False, "durable": True,
@@ -446,6 +461,26 @@ def _pending_preserve_check(session_id: str, title, prev: dict, as_json: bool) -
             },
             as_json, 8,
         )
+    # THE GRACE HAS ELAPSED WITH NO PRESERVATION TURN, and what happens next is now the
+    # owner's call (2026-09-17). The default is unchanged - archive anyway, because a dormant
+    # chat that never ran cannot update docs and waiting for it forever wedges the lane. With
+    # archive.archive_anyway_after_grace OFF, that chat is NEVER archived unattended: it
+    # stays deferred, pass after pass, until a person archives it themselves. Slower sidebar,
+    # zero chance of filing a chat that still had something to say.
+    if not grew and not configlib.get("archive.archive_anyway_after_grace"):
+        return out(
+            {
+                "changed": False,
+                "preserving": True,
+                "report": (
+                    f"DEFERRED INDEFINITELY: '{title}' never ran its preservation turn and "
+                    f"the {PRESERVE_GRACE_MIN}m grace has elapsed, but your policy "
+                    "(archive.archive_anyway_after_grace = OFF) says never archive one of "
+                    "these unattended. Archive it by hand when you are ready."
+                ),
+            },
+            as_json, 8,
+        )
     # Either the turn ran (grew) or the grace elapsed with no preservation turn (a dormant
     # chat that never ran: a dead chat cannot update docs, so archive anyway rather than
     # wedge). THE PRESERVE ROW IS CLEARED ONLY WHEN THE ARCHIVE LANDS (below in the caller's
@@ -459,8 +494,12 @@ def _preserve_before_archive(session_id: str, title, desired: bool, no_preserve:
     """KNOWLEDGE PRESERVATION (owner rule, 2026-09-01): the final act before an archive is to
     ask the chat to update its docs. --force does NOT skip this (capturing knowledge is
     orthogonal to permission), only --no-preserve does, and only unarchive/no-preserve skip
-    it outright. Returns a stop exit code to defer, or None once the act may proceed."""
-    if not desired or no_preserve:
+    it outright. Returns a stop exit code to defer, or None once the act may proceed.
+
+    Since 2026-09-17 the whole step is also a policy knob (archive.preserve_knowledge,
+    default ON = today's behaviour). OFF archives immediately and loses whatever the chat
+    never wrote down, which is why the menu spells that out rather than calling it 'faster'."""
+    if not desired or no_preserve or not configlib.get("archive.preserve_knowledge"):
         return None
     prev = _newest_preserve(session_id)
     if prev is None:
@@ -473,7 +512,11 @@ def _archive_via_running_app(session_id: str, instance, title, unarchive: bool, 
     app's OWN control instead (immediate, durable, focus-free). Restarting is never an option
     (owner's standing order), so this is THE path, not a fallback. Returns (result, None) to
     continue to verification, or (None, stop_code) when the control could not land the act."""
-    code, ui_out = _ui_archive(str(instance), str(title), unarchive)
+    code, ui_out = _ui_archive(str(instance), str(title), unarchive, session_id=session_id)
+    if code == nativearchivelib.NATIVE_VERIFIED:
+        return {"via": "app-native", "native": nativearchivelib.result(ui_out)}, None
+    if code == nativearchivelib.NATIVE_TERMINAL:
+        return None, _native_archive_refusal(ui_out, as_json)
     last = ui_out.splitlines()[-1] if ui_out else f"exit {code}"
     if code != 0:
         if "AMBIGUOUS" in ui_out:
@@ -487,6 +530,37 @@ def _archive_via_running_app(session_id: str, instance, title, unarchive: bool, 
                         "Attempt recorded - nothing silent happened.")},
             as_json, 7)
     return {"ok": True, "via": "app-ui", "detail": last}, None
+
+
+def _native_archive_refusal(detail: str, as_json: bool) -> int:
+    native = nativearchivelib.result(detail)
+    not_sent = native.get("dispatch") == "not-sent"
+    return out({"changed": False if not_sent else None,
+                "durable": False if not_sent else None, "native": native,
+                "report": (f"archive not confirmed: {native.get('reason') or 'native refusal'}. "
+                           "No UI or disk fallback was attempted; inspect the native result before retrying.")},
+               as_json, 7)
+
+
+def _verify_native_archive(session_id: str, title: str, native: dict, as_json: bool,
+                           *, before: dict, instance: str) -> int:
+    """The route already re-read the exact live native session and checked bystanders.
+
+    A dossier scan can lag the app's asynchronous save or select the moved destination.
+    Record native state evidence without claiming to have inspected the rendered sidebar.
+    """
+    ledgerlib.verify("archive", session_id, True, note="native session state verified")
+    changed = native.get("changed") is True
+    if changed:
+        mutationlib.record("archive", session_id, instance=instance, title=title,
+                           before={**before, "archived": False},
+                           after={"archived": True}, undoable=True)
+    ledgerlib.clear("archive", session_id)
+    ledgerlib.clear("preserve", session_id)
+    return out({"changed": changed, "durable": True,
+                "via": "app-native", "native": native,
+                "report": (f"archived and VERIFIED in the running app's native session state: "
+                           f"'{title}' ({session_id}).")}, as_json, 0)
 
 
 def _archive_via_disk_flag(session_id: str, desired: bool, verb: str, as_json: bool) -> tuple[dict | None, int | None]:
@@ -508,14 +582,18 @@ def _archive_via_disk_flag(session_id: str, desired: bool, verb: str, as_json: b
             1,
         )
     if any(h.get("changed") and h.get("wasRunning") for h in result.get("hits", [])):
-        # The app opened in the race window between our check and the POST. The flag is
-        # now the un-durable kind - re-run immediately: the running-app path will take
-        # over and settle it through the app's own control.
-        return None, out(
-            {"changed": True, "durable": False, "daemon": result,
-             "report": (f"the app opened mid-act, so the flag write is not durable - "
-                        "re-run this command now and the app's own control will settle it.")},
-            as_json, 7)
+        # The app opened in the race window between our check and the POST, so the flag write
+        # alone is the un-durable kind. Since 2026-09-17 the daemon route drives the app's own
+        # Archive control itself in that case (server/src/routes/desktop-sessions.ts), and
+        # stillOnScreen is its verdict: False means the row has already left the sidebar, which
+        # is durable - fall through to the normal verification rather than sending the caller
+        # round again to redo work the daemon just did.
+        if result.get("stillOnScreen") is not False:
+            return None, out(
+                {"changed": True, "durable": False, "daemon": result,
+                 "report": (f"the app opened mid-act, so the flag write is not durable - "
+                            "re-run this command now and the app's own control will settle it.")},
+                as_json, 7)
     return result, None
 
 
@@ -619,6 +697,9 @@ def _act_and_verify(session_id: str, match: dict, unarchive: bool, desired: bool
     if stop is not None:
         return stop
 
+    if isinstance(result, dict) and result.get("via") == "app-native":
+        return _verify_native_archive(session_id, str(title), result["native"], as_json,
+                                      before=before, instance=instance)
     return _verify_archive(session_id, desired, verb, title, result, as_json,
                            before=before, instance=instance)
 
@@ -683,6 +764,18 @@ def main(argv: list[str]) -> int:
     query = args[0]
     desired = not unarchive
     verb = "unarchive" if unarchive else "archive"
+
+    # ⛔ THE MASTER SWITCH (2026-09-17). archive.enabled OFF means NOTHING in this toolbox
+    # archives a chat - not the sweep lane, not the groundskeeper's duty 2, not an AI's
+    # answer in the judgment queue, not a --force. Candidates are still found and still
+    # reported; they are simply never filed. Unarchiving is untouched: the switch exists to
+    # stop work disappearing, so it must never block work coming back.
+    if desired and not configlib.get("archive.enabled"):
+        return out({"changed": False, "refused": "policy",
+                    "report": (f"REFUSED: archiving is switched OFF in your policy "
+                               f"(archive.enabled). '{query}' was left alone. Turn it back on "
+                               "with `orch.py policy --set archive.enabled=on`.")},
+                   as_json, 2)
 
     # -- resolve: zero or many matches is deterministic - record it so unattended callers
     #    stop after one, and say which chats collided.

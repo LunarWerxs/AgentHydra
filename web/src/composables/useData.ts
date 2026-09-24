@@ -67,6 +67,8 @@ const SESSION_SOURCES: readonly SessionSourceScope[] = [
   'codex',
   'opencode',
   'hermes',
+  'dsh',
+  'zswarm',
 ]
 const DISPATCHED_SCOPES: readonly DispatchedScope[] = ['all', 'queued', 'manual']
 const RATE_LIMIT_SCOPES: readonly RateLimitScope[] = ['all', 'only', 'pending']

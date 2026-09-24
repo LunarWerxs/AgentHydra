@@ -10,8 +10,11 @@ the AgentHydra repository - as this folder, unchanged in shape - so there is one
 explain and one MCP surface to use ("so I don't have to explain that you have to use both").
 The boundary survives the move: nothing in here imports the daemon, everything in here talks to
 it over HTTP, and the daemon drives this toolbox only by running `python orch.py <script>` on a
-caller's behalf (`server/src/orchestrator.ts`; MCP tools `orchestrator_menu`, `orchestrator_run`,
-`orchestrator_loop`, `orchestrator_switch`).
+caller's behalf (`server/src/orchestrator.ts`). Six MCP tools reach it: `orchestrator_menu`,
+`orchestrator_run`, `orchestrator_loop`, `orchestrator_switch`, `orchestrator_operation` (poll or
+list a detached run's verdict) and `orchestrator_cancel` (stop a run that is still going, added
+2026-09-13, which also frees the route lock the daemon keys by script name, so a `409 busy`
+refusal now names the operation holding it instead of leaving `taskkill` as the only way out).
 
 ## Why the rewrite
 
@@ -60,6 +63,10 @@ counting how many times the same act had already failed or measuring whether it 
    beats any verdict computed 20 seconds earlier. Re-check immediately before acting, not only
    when deciding.
 6. **Report what changed, not what exists.** A status recital is a failed run.
+7. **Prove you changed nothing else.** An act that verifies only the row it INTENDED cannot see
+   what it also did: a move that settled its four chats correctly archived three others in the
+   same minutes and reported a clean run (2026-09-16). Every move now reads the whole machine's
+   chat records before and after itself and names anything it archived that it was not given.
 
 ## Layout
 
@@ -86,6 +93,89 @@ python orch.py <script> --help # any script explains itself
 From an agent, the same three are `orchestrator_menu`, `orchestrator_loop` and
 `orchestrator_run { script, args: ["--help"] }` on the AgentHydra MCP server; `bun run
 orchestrator <script>` from the repo root is the shell equivalent.
+
+For Claude Desktop archive and migration-source cleanup, use the production scripts: they
+attempt the exact-profile native route before the legacy actuator. Enable **Settings → General
+→ Claude native control → Start debugger automatically** for each profile, or configure
+`launchDebugger:true` through `/api/claude-native/settings`. The next AgentHydra **Open** starts
+the connection without a Developer-menu click; saving settings does not restart active apps.
+Use `native-only` when UI fallback is unwanted. Refused or uncertain native mutations never
+fall back to UI/Lua or disk flags. New profiles require an explicit setting. See the
+[native-control operating guide](../docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md) before reaching for
+the POC runner or desktop controls. Destination migration settings and unarchive still have
+legacy/guarded steps; this is not a fully native move implementation.
+
+## Decide how it behaves: `orch.py policy`
+
+**Every knob is in one place with a default, and the default is what used to be hardcoded.**
+Before 2026-09-17 there were 138 user-facing policy knobs spread across 18 files as module
+constants and unswitchable `always-on` behaviours, and no config file at all - steering the
+fleet meant editing Python. Now:
+
+```sh
+python orch.py policy                     # what is set, what is not at default, and the rails
+python orch.py policy --wizard            # a person: every group, Enter keeps the current value
+python orch.py policy --ask > q.json      # an AI: the questionnaire...
+python orch.py policy --apply answers.json  # ...and its answers, applied atomically
+python orch.py policy --set archive.per_run=5 lanes.deliver=off
+python orch.py policy --preset conservative --yes
+python orch.py policy --explain gate.signal_no_open_recommendations
+```
+
+Your decisions live in `state/config.json` (gitignored, machine-local). Values equal to the
+default are not written, so a later default change still reaches a machine that never disagreed
+with it. **Precedence is always: a flag you typed > `config.json` > the default.** Turning a
+sweep lane off changes what `--all` does; naming that lane explicitly still runs it (the one
+exception is `archive.enabled`, the fleet-wide master switch: with it off, no lane archives,
+named or not).
+
+**A policy file with any problem stops unattended acting** - unreadable JSON, a value that
+fails its check, or a key the toolbox does not know (a typo like `archive.enable` would
+otherwise read as "archiving is off" and change nothing). Each of those falls back to a
+default, and a lane acting on a default where you wrote the opposite would undo your decision.
+`orch.py policy --doctor` names them; `policy --unset <key>` removes an unknown key; `--force`
+still runs a single act by hand. Writes are atomic and one at a time, and a note you add by
+hand (`"_why": "..."`) survives the next rewrite.
+
+**Groups:** the gate (timings, and its four archive signals with a switch each) · archiving
+(master switch, quiet window, caps, knowledge preservation, the grace window) · the sweep's
+lanes and its naming/doctrine passes · the doctrine stamps themselves · the groundskeeper's
+five duties · the usage bands · waking (including the exact wake prompt) · permission prompts ·
+delivery · the judgment queue · the standing manager · all eleven scheduled lanes (on/off and
+cadence) · speed.
+
+**⛔ What is deliberately NOT a knob**, and is listed in the menu so its absence reads as a
+decision rather than an oversight: the live-writer rule, the hold rail, the T-0 re-check,
+post-act verification, the DENY list, the tray-icon switch, and that the shared-cause breaker
+fires at all. Those are the reasons this toolbox is allowed to act unattended; a switch for one
+of them is a switch for losing work.
+
+## Prove it still works: `orch.py dryrun`
+
+```sh
+python orch.py dryrun --runs 50    # 50 dry loops, each a fresh process, all read-only
+python orch.py dryrun --matrix     # does flipping a policy knob actually steer the plan?
+```
+
+One dry loop tells you it did not crash *that* time. N of them answer what one structurally
+cannot: the intermittent-crash rate, where the time goes per stage, and whether the loop agrees
+with itself - it fingerprints every chat's decision and reports **flaps**, a verdict that
+changed *and changed back*. A flap is a timing-dependent verdict, and on an acting pass that is
+the difference between archiving a chat and waking it. (A verdict that moved once and stayed is
+just the fleet moving forward, and is reported as such.) A live chat that pauses past
+the idle window and resumes flips `leave-alone` <-> `judgment`; that is reported as expected
+(both states mean a writer is alive) and never fails the run - every other flap does.
+
+Every run is a fresh subprocess on purpose: looping inside one process would let the
+usage-survey cache and every module constant carry over, so runs 2..N would be faster and more
+identical than reality - a false green in exactly the place this harness exists to be honest
+about. `--matrix` judges each variant against **what it claims to change**, on evidence an inert
+knob cannot fake: a cap is checked inside its own run (shown == min(cap, waiting)), and a
+switched-off archive signal must release every chat the baseline shows held back by it alone.
+When the fleet has nothing that could tell a wired knob from an inert one, the variant says
+`INCONCLUSIVE` - not proven, and not a pass. A knob that acts at ACT time and cannot be seen in
+a dry loop says `not-visible-here` and names the unit test that covers it. Reports land in
+`state/dryruns/`.
 
 ## Moving a machine off the standalone checkout (once, per machine)
 
@@ -129,8 +219,8 @@ interview protocol. The judgment queue only drains when (3) runs.
 
 ⛔ NOTHING ACTS WITHOUT THE TRAY ICON (owner order, 2026-09-01: "it should never just do
 whatever it wants without at least some occasional instruction... it can't be running without
-the status bar icon, so I can terminate it if I want"). The icon (`scripts/tray.ps1`; `python
-orch.py arm` starts it) comes up PAUSED and writes a heartbeat every 15 seconds; every
+the status bar icon, so I can terminate it if I want"). The icon (`orchestrator/scripts/tray.ps1`;
+`python orch.py arm` starts it) comes up PAUSED and writes a heartbeat every 15 seconds; every
 acting script asks `lib/armlib` for that heartbeat before it moves, wakes, archives, presses,
 stamps or writes, and prints DISARMED instead; observing is never gated. Exit the icon, kill
 it, or pick Pause in its menu and everything stops. The default on any machine is OFF.
@@ -186,10 +276,10 @@ again - BUT ONLY WHILE THE ICON IS UP: driving a window is an act on the owner's
 any other (owner, 2026-09-01, after the pass flipped his windows with the icon down: "I
 didn't authorize you to start one yet"). Without the icon the doctrine lane writes the disk
 stamp and nothing else; the twins lane archives stale copies and GHOST rows (archived on disk, still rendered)
-through the app's archive control, and renames different chats that wear one title so the
-owner (and the app's own row matching) can tell them apart. A row the app has not rendered
-cannot be reached by any control - the sidebar is virtualized and does not expose a scroll
-pattern - so it gets the disk flag and is cleared the moment it shows. Every driver passes
+through the production archive route, preferring configured native control, and renames different chats that wear one title so the
+owner (and the app's own row matching) can tell them apart. The legacy UIA archive path cannot
+reach an unrendered row in the virtualized sidebar; native archive instead addresses its exact
+session ID and does not depend on row rendering. Every legacy window driver passes
 through `windowlib.instance_lock`, which now also captures and restores the window's
 placement, and an app the toolbox opens that comes up maximized is put back to normal.
 
@@ -217,7 +307,7 @@ THE CHIPS (owner, 2026-09-01: "always Start locally, never in a worktree"). The 
 a `Suggested task` card in a chat's pane - title, description, branch tags, `Dismiss
 suggestion`, `Start with worktree` and a `More start options` menu (`Start locally`, `Send to
 cloud`, `Fix in this session`). Starting one creates a NEW chat for that task, running at once,
-in the parent's folder and permission mode. `scripts/chips.py` (a gated 5-minute lane) does
+in the parent's folder and permission mode. `orchestrator/scripts/chips.py` (a gated 5-minute lane) does
 what the owner asked instead of driving that menu: it creates the chat through the toolbox's
 own spawner from the card's title and description, in the parent chat's folder, on the
 parent's instance - so the duplicate guard on that exact prompt, bypass from birth,
@@ -250,7 +340,7 @@ against the IdP's public JWKS), plus a
 **Vue 3 + Tailwind v4 + lunarwerx-ui** dashboard (`web/`) built on the shared kit (accent:
 amber; `bun run check:kit`).
 
-**What it can do, exactly:** everything `scripts/dashboard.py` answers (the plan, waiting-on-you,
+**What it can do, exactly:** everything `orchestrator/scripts/dashboard.py` answers (the plan, waiting-on-you,
 every chat, instances, holds and the breaker, the accounts strip and balancing plan, the rules,
 the scripts, the logic tree), and **THE SWITCH** - turn the tray icon on or off from the phone
 (`python orch.py arm` / `disarm`, run on the machine). Nothing else. The Python data layer is
@@ -270,7 +360,7 @@ bun run remote:test                     # the gateway's own tests (auth gate, CS
 ### The permanent addresses
 
 Each machine gets ONE named Cloudflare tunnel on `lunarwerx.com`, provisioned by
-`scripts/remote_tunnel.py`. Named, not quick: the hostname never rotates, it resolves on
+`orchestrator/scripts/remote_tunnel.py`. Named, not quick: the hostname never rotates, it resolves on
 networks that DNS-block `trycloudflare.com`, and sign-in completes on the daemon's own
 `/oauth/callback` with no relay hop.
 
@@ -337,7 +427,7 @@ was a false kill switch: the lane was ungated, so closing the icon stopped the l
 quietly restored remote access five minutes later - and this gateway can throw the arm switch
 from a phone, so that is a route to arming the machine with no kill switch on screen.
 
-`scripts/tray.ps1` starts the gateway when remote access is enabled, watchdogs it every 15
+`orchestrator/scripts/tray.ps1` starts the gateway when remote access is enabled, watchdogs it every 15
 seconds (stopping after three failed starts rather than hammering a broken one), and closes it
 on Exit. `python orch.py disarm` closes it too - it kills the icon with `/F`, which skips the
 tray's own shutdown path, so disarm stops the gateway itself.
@@ -406,6 +496,7 @@ so the split is: judgment shared, actions individual.
 | `gatelib.py` | lib | THE GATE: running / crashed / finished + lanes, ported from v2's chat-gate |
 | `ledgerlib.py` | lib | THE ATTEMPT LEDGER: rule 3, the memory of failure v2 lacked (`state/attempts.json`) |
 | `clilib.py` | lib | `capture(fn, argv)` - the one way a lane script runs another script's main() as a step (was six identical lines pasted in seven scripts) |
+| `archivewatchlib.py` | lib | THE COLLATERAL WATCH: every chat record on the machine, read before a move and after it. A record that went from visible to ARCHIVED without sharing an id with the move is named in the move's report, filed as an incident, and makes the move not-ok. Built 2026-09-17, after a four-chat batch settled every chat it was given while three chats outside it went archived in the same two minutes - one in an account the batch never named - and every rail, exit code and journal read clean |
 | `stamplib.py` | lib | the on-disk AUTOMATION STAMP: sessionSettings.ultracode=true + effort=xhigh written into a desktop chat's meta record - the MECHANICAL half of the doctrine (prompt words cannot set harness parameters; owner correction 2026-08-31). Model never touched |
 | `census.py` | observe | fleet census, parity port of orchestrate.mjs (same fields, same exit codes) |
 | `waiting_scan.py` | observe | waiting-on-a-person over REAL transcript tails - the census's admitted blind spot |
@@ -415,10 +506,10 @@ so the split is: judgment shared, actions individual.
 | `attempts.py` | observe | what the breaker is holding back, and why; `--clear` on a person's word |
 | `smoke.py` | observe | READ-ONLY smoke against the live daemon - proves the whole observe chain |
 | `archive_chat.py` | act | archive/unarchive one chat - gated, breakered, re-checked, verified |
-| `migrate_chat.py` | act | land one chat in an instance - verified landing (the source row is re-read after the settle and must be gone), superseded = deterministic stop; `--stop-idle` stops an IDLE engine first through `lib/enginelib` (never a working or stuck one) so the desktop's never-exiting engines cannot pin a chat forever; every verified landing then stamps bypassPermissions via the daemon AND ultracode into the meta record (the automation doctrine, applied mechanically at the one moment it is durable - before first boot; a failed stamp is reported, never hidden) |
+| `migrate_chat.py` | act | land one chat in an instance - verified landing (the source row is re-read after the settle and must be gone), superseded = deterministic stop; `--stop-idle` stops an IDLE engine first through `lib/enginelib` (never a working or stuck one) so the desktop's never-exiting engines cannot pin a chat forever; every verified landing then stamps bypassPermissions via the daemon AND ultracode into the meta record (the automation doctrine, applied mechanically at the one moment it is durable - before first boot; a failed stamp is reported, never hidden). Every move also runs the COLLATERAL WATCH (`archivewatchlib`): exit **2** means the chat landed AND a chat outside the move went archived while it ran - `collateral` names each one and the account to unarchive it from, and the move is reported not-ok rather than clean |
 | `automation_chat.py` | act | enforce the automation doctrine on ONE existing chat, or FLEET-WIDE with `--all [--yes]` (enumerates the disk stores, lists every chat missing a stamp; held chats are stamped too - a hold covers a chat's work, not its permission mode): bypassPermissions (daemon primitive) + ultracode (stamplib), both verified on disk, with the honest running-app caveat. Proven live 2026-08-31 - single chat and a 26/26 fleet sweep |
 | `compact_chat.py` | act | COMPACT one console/CLI chat's context instead of abandoning it: there is no headless /compact, so it resumes the session with a small --autocompact window + a do-nothing prompt and the engine's own pass fires; verified from the transcript's own usage numbers (before/after + compact marker). Console-only - a desktop chat is refused (resuming it outside its app would fork behind the app's back); full rails (floor, quiet, hold, breaker) |
-| `rename_chat.py` | act | rename through the app's own control, driven from THIS repo's `scripts/actuator/manage_desktop_chat.ps1` (the daemon's copy counts the open chat's header menu beside its sidebar menu and refuses every open chat as ambiguous - found live 2026-09-01) - hold-aware, verified through the dossier |
+| `rename_chat.py` | act | rename through the app's own control, driven from `misc/Manage-DesktopChat.ps1` - the ONE actuator since 2026-09-17, shared with the daemon (the second copy that used to live under `scripts/actuator/` had drifted; its InPrimaryPane fix, which stops the open chat's header menu being counted beside its sidebar menu and every open chat reading as ambiguous, is in the one file now) - hold-aware, verified through the dossier |
 | `open_instance.py` | act | start an instance (idempotent) |
 | `quit_instance.py` | act | stop an instance - refuses while chats have live writers |
 | `drill.py` | act | REVERSIBLE live proof of the act chain (archive round-trip, UI rename round-trip) |
@@ -429,6 +520,8 @@ so the split is: judgment shared, actions individual.
 | `fan_out.py` | act | DISSEMINATE one task list into N visible desktop chats, ONE ACCOUNT EACH, and manage them as a group (owner ask, 2026-09-04: "lint six or seven planes from one chat, orchestrated into other accounts"). Ranks accounts by real room the way balance.py does (open first; unknown is never room), spawns through `spawn_chat.py` one window at a time, refuses a task whose prompt already runs in the fleet while letting one spec share a prompt across its own tasks, reports an unassigned task instead of dropping it, keeps the group in `state/fanouts.json`; `status` = every member's gate verdict + last words, `send` = one follow-up into all of them through the daemon's message route, holds respected. A person's act - no tray icon needed. MCP: `fan_out` / `fan_out_status` / `fan_out_send` |
 | `delete_chat.py` | act | DELETE one chat everywhere it exists, with an undo copy (owner rule, 2026-09-04: "all ping requests or account identification requests must be deleted after they are created and not left in the account" - archiving a probe still leaves it in the account). Rails in order: one chat (ambiguity refuses), hold (`--force` is a person's word), live writer (`--stop-idle` stops an IDLE engine through enginelib, never a working or stuck one), the undo copy into `state/trash/<sid>/` FIRST, then the running app's own Delete control (the actuator's `-Action Delete`: row menu Delete + the app's confirm button, both by label), then the meta record in every profile and the transcript; verified through the dossier and the disk, anything left named. `--undo <sid>` restores; `undo.py` knows the kind. `fan_out delete` runs it per member. `--released [--yes]` is THE SWEEP of what the app's own Delete leaves behind: deleting a chat in Claude Desktop removes its record and writes `<sid>.desktop-released.json`, but the TRANSCRIPT stays (12 of them, 8 MB, on the owner's machine 2026-09-04) - listed by default, deleted with `--yes` |
 | `chats.py` | observe (+`--move-to`) | every chat grouped by ACCOUNT (email, plan, app open?), filterable by account/instance/title/console-only, and the easy way to move chats between accounts - each move goes through migrate_chat's own rails, capped, plan-first. Reads each child's JSON payload rather than guessing from its exit code, so "already lives there" (a no-op that also exits 0) is never counted as a landing, and the headline counts what LANDED (it used to print the PLANNED count in the past tense, so a fully-refused run announced "3 chat(s) moved" above three refusals). Forwards `--idle-wait`; deliberately has NO `--force`, because that is a person's word for ONE act and would otherwise be spent on every chat a substring selected |
+| `migrate_batch.py` | act (batch) | MOVE MANY CHATS IN ONE RUN, the engine behind MCP `move_chats`: migrate_chat's own pipeline inside ONE interpreter and ONE route-lock acquisition, BY PHASE (move all, settle all, stamp all), so the fleet/session/usage reads and the 8s bypass watch are paid once for the batch instead of once per chat. Since 2026-09-13 each post-landing phase runs bounded on a worker thread (`_run_bounded`) and a phase over budget is ABANDONED with the timeout NAMED on every chat left without a verdict, rather than the whole call dying with no report. ⛔ ARCHIVED CHATS: `--archived` alone is REFUSED. It needs `--archived-count N` MATCHING the archived chats the batch actually holds, and they must be the WHOLE batch, never mixed with unarchived ones - a boolean an agent set for itself is how 22 archived chats were queued behind the 3 a human asked for (2026-09-13). `migrate_chat.py` remains the way to move ONE named archived chat |
+| `migrate_reconcile.py` | observe (+`--finish`/`--reverse`) | WHICH MOVES STOPPED HALF-WAY? A move is four acts (import, verify, settle the source, stamp the mode) and only the first pair was ever written down, so the 25-chat batch killed on 2026-09-13 left 14 chats imported onto the target and STILL unarchived on the source - duplicates, not moves, with nothing on the machine saying which. Every migrate mutation now carries a PHASE (`mutationlib.advance_phase`), and this re-checks each unfinished row against the chat's CURRENT state: `unsettled` (the half-move), `not-landed` (the ledger and the machine disagree - the loudest row), `settled` (advances the journal so it is never re-read), `gone`, `unknown` (a failed read, counted WITH the unsettled ones). `--finish` re-drives migrate_chat's own `phase_settle`/`phase_stamp`; `--reverse` hands the row to `undo.py`. It owns no actuator of its own |
 | `deliverylib.py` + `stage_reply.py` + `courier.py` | lib + act | THE COURIER, the last manual lane: an AI stages a decided reply (`stage_reply.py`), the courier types it into the chat through the app's own composer and proves the chat MOVED afterwards. Rails in order: held? breaker? resolves to one? never mid-turn? verify-snippet proves the right chat? then send, then confirm. Also `sweep.py --deliver` |
 | `schedule_jobs.py` | act (machine config) | run the recurring jobs on a timer via WINDOWS TASK SCHEDULER, registered from this repo, ALL EVERY 5 MINUTES (owner order) and windowless (VBS shim + pythonw): dashboard keepalive (starts it only if the port is dead), reconcile (observe only), to-do sweep (`odin discover` + `odin loki --file --apply`). Every tick logs to `state/logs/<job>.log` (rotated ~2MB). Dry-run by default; `--status` / `--pause` / `--resume` / `--remove` to inspect, silence or undo. **AgentHydra's own queue cannot host these** - headless runs are hard-refused (`headlessRunsAllowed()` returns literal false; owner law, "there is no setting for this"), and that queue launches chats, not scripts |
 | `holdlib.py` + `hold_chat.py` | lib + act | PER-CHAT AUTOMATION OPT-OUT: "leave this one to me". Demands a reason, outranks every gate verdict and the breaker, keeps the chat visible (held, not hidden), never blocks a deed a person asks for directly (`--force`). The safety valve the postmortems argue for - in place BEFORE anything runs unattended |
@@ -438,15 +531,16 @@ so the split is: judgment shared, actions individual.
 | `name_chats.py` + `actuator/rename_first.ps1` | act | THE NAMING PASS: fresh imports land nameless and render generic; this names them LIVE (no restart) via the probe technique - rename one indistinguishable row to a unique probe name, learn which chat took it from the app's own re-save, then set its real title through the daemon. Runs automatically after every `sweep.py --land-console`; chats with no known real name are quarantined for an AI to name, never guessed |
 
 Testing is three tiers - unit (stub daemon, every script covered), smoke (read-only against
-the live daemon), drill (reversible live acts) - and the whole UI/UX story is programmatic
-(the daemon's UI-Automation actuator, never screen-clicking). **`scripts/TESTING.md`** is the
-doctrine, including why CDP is a dead end and why disk flags are not UI.
+the live daemon), drill (reversible live acts). Configured archive/source cleanup uses the
+native main-process connection; remaining desktop operations use guarded UI-Automation.
+**`orchestrator/scripts/TESTING.md`** distinguishes the native inspector from the older renderer
+CDP experiments and explains why a disk flag is not proof of an in-app result.
 
 Every act script enforces the six rules below mechanically: gate first, count the attempt,
 re-check the dossier immediately before the POST, verify after, and say what changed. Archiving
-under a RUNNING app exits 7 ("flag written, NOT claiming success") because the app holds its
-chat list in memory and can re-save the flag away - claiming that as success is how v2's
-"archived" came to mean "still there".
+under a RUNNING app must verify native state or the guarded legacy result. A disk-only outcome
+exits 7 ("flag written, NOT claiming success") because the app holds its chat list in memory
+and can re-save the flag away. A verified native result needs no UI retry or disk polling.
 
 ```sh
 python scripts/smoke.py       # read-only, safe any time: proves the observe chain end to end
@@ -463,7 +557,7 @@ First live run of `waiting_scan.py` (2026-08-31): the preview census reported 0 
 the full-tail scan found 15 - the exact truncated-preview hole orchestrate.mjs documents.
 
 `orchestrate.mjs` stays until the Python census has run in anger for a while; it is superseded
-by `scripts/census.py` and adds nothing the port lacks.
+by `orchestrator/scripts/census.py` and adds nothing the port lacks.
 
 ### How this is meant to be run (the operating model, owner-set 2026-08-31)
 
@@ -489,15 +583,19 @@ question itself.
    crashed chat and runs the turn - delivery IS the revive. It reaches RENDERED rows only;
    a virtualized/collapsed row refuses honestly, and the cure is a real migration to an
    open instance (fresh imports render at the top of the sidebar).
-3. **Accessibility-API control invocation** for archive/rename/naming, same guarantees;
-   every act verifies its result. (A real native MESSAGE endpoint remains the right ask of
-   the AgentHydra effort.)
-4. **Coordinate clicks / hotkeys / CDP - never.** Clicks can land on the wrong thing, hotkeys
-   need focus, and the app exits when started with a debug port (measured).
+3. **Native control first for archive and migration-source cleanup.** The production
+   scripts call `/api/sessions/:id/native-archive`; the ordinary `desktop-archive` route
+   also tries native first. `native-only` never falls back. An unknown/refused mutation is
+   terminal in every mode. Rename/naming and other unconverted steps retain the existing
+   accessibility actuator; do not substitute a POC import/settings call for general migration.
+4. **No coordinate clicks or focus-dependent hotkeys.** Earlier stock renderer-CDP startup
+   experiments failed; that is separate from the now-tested managed main-process inspector.
+   Enable automatic startup centrally and use AgentHydra Open, not Developer-menu clicks.
 
-**The apps are NEVER restarted** (owner standing order). Nothing in this repo may wait for,
-suggest, or depend on a restart: a running app is acted on through routes 1-2, a closed one
-through disk flags.
+**Do not restart active apps to enable native control** (owner standing order). Configure a
+closed profile and use its next authorized AgentHydra Open. Saving configuration is not a
+launch. An already-running stock process is not retroactively given an inspector by saving;
+`native-only` reports an unavailable connection instead of silently using disk/UI fallback.
 
 ### The division of labor (owner directive, 2026-08-31)
 
@@ -561,10 +659,20 @@ program needs:
 | `GET /api/fleet` | instances, per-account usage, git hygiene |
 | `GET /api/sessions` | every chat, with `archived`, `instance`, `last_activity_at` |
 | `GET /api/chats/dossier?q=` | one chat: its instance, archive flag, lineage, live process |
-| `POST /api/sessions/:id/desktop-archive` | archive / unarchive a chat |
+| `POST /api/sessions/:id/desktop-archive` | archive / unarchive a chat; archive prefers configured native state before any disk/UI path. Pass `instance_ref: desktop:<full profile path>` and inspect `verified`, `route` and `stillOnScreen` |
+| `POST /api/sessions/:id/native-archive` | exact-profile native archive attempt, used by archive and migration-source cleanup; no UI act is dispatched by this endpoint |
+| `GET /api/claude-native/settings`, `PUT /api/claude-native/settings` | per-profile port, routing mode and `launchDebugger`; automatic startup applies on the next AgentHydra Open |
 | `POST /api/chats/:id/rename` | rename through the running app's own control |
 | `POST /api/sessions/:id/import-desktop` | land a chat in an instance |
-| `GET/POST /api/instances/:dir/{open,quit}` | start or stop an instance |
+| `POST /api/sessions/:id/message` | deliver text into a chat: the daemon picks the channel, preferring the native peer pipe and using the composer only for a dormant chat. This is `courier.py`'s PRIMARY route; a 404 from an older daemon is what drops it back to driving the actuator itself |
+| `POST /api/instances/:dir/{open,quit}` | start or stop an instance; URL-encode the full profile path. Open honors its automatic-debugger setting |
+
+The legacy archive fallback, rename and message routes use PowerShell helpers under `misc\`;
+verified native archive skips those helpers entirely. A compiled build embeds
+`Deliver-DesktopChat.ps1` and `Manage-DesktopChat.ps1` (`RUNTIME_MISC_FILES` in
+`server/src/misc-assets.ts`) and writes them out of the binary; before 2026-09-13 both were
+located by hopping `..` off `import.meta.dir`, which inside a compiled exe points at the virtual
+embedded root, so all three routes were silently dead there and rename still answered `ok: true`.
 
 Everything else - gating, deciding, delivering, holding, the ledger - is gone from there and is
 this program's to rebuild.
@@ -577,6 +685,10 @@ python scripts/waiting_scan.py # the real waiting-on-a-person answer, over full 
 ```
 
 The acting half now exists as individual scripts (`archive_chat.py`, `migrate_chat.py`, ...) -
-each one act, fully rail-guarded, run deliberately by a person or an agent. There is no sweep
-loop yet, on purpose: nothing here acts on the whole fleet unattended, because shipping a
-half-built unattended actuator is exactly how the last two versions went wrong.
+each one act, fully rail-guarded, run deliberately by a person or an agent. **The sweep loop now
+exists**: `sweep.py --all --yes`, which `python orch.py loop --live` is identical to, executes the
+whole mechanical plan across the fleet within its caps and through each act script's own rails,
+and `schedule_jobs.py` runs it on a timer. What has NOT changed is the reason this paragraph used
+to say there was none: nothing acts unattended without the tray icon up, every act keeps its own
+refusals, and the loop is dry by default. Shipping a half-built unattended actuator is how the
+last two versions went wrong; the rails are the answer to that, not the absence of a loop.

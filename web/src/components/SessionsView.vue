@@ -270,6 +270,8 @@ const {
   sourceLabel,
   rowSourceLabel,
   sourceBadgeClass,
+  sourceHasFile: SOURCE_HAS_FILE,
+  sourceFileIsText: SOURCE_FILE_IS_TEXT,
   shapeLabel,
   shapeTitleOf,
   copyChipOf,
@@ -461,7 +463,7 @@ function onComposerSent(mode: 'now' | 'queued') {
          its own surface every region painted --background and the whole app read as one flat sheet,
          separated only by the hairline border. -->
     <aside
-      class="relative min-h-0 shrink-0 overflow-hidden border-r border-border bg-sidebar"
+      class="relative min-h-0 shrink-0 overflow-hidden border-e border-border bg-sidebar"
       :class="resizing ? '' : 'transition-[width] duration-300 ease-in-out'"
       :style="asideStyle"
     >
@@ -483,14 +485,14 @@ function onComposerSent(mode: 'now' | 'queued') {
         :class="collapsed ? 'pointer-events-none opacity-0' : 'opacity-100'"
         :style="{ width: `min(${sidebarWidth}px, calc(100vw - 56px))` }"
       >
-        <div class="flex shrink-0 items-center gap-2 p-3 pr-11">
+        <div class="flex shrink-0 items-center gap-2 p-3 pe-11">
           <div class="relative flex-1">
             <Search class="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref="searchInput"
               v-model="search"
               :placeholder="$t('sessions.searchPlaceholder')"
-              class="pl-8 pr-8"
+              class="ps-8 pe-8"
             />
             <!-- Same popper-anchor rule as the instance filter below: the Popover root lives
                  INSIDE IconTooltip, so PopoverTrigger's PopperAnchor finds the popover's own
@@ -597,7 +599,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <MessagesSquare />
                       {{ $t('sessions.filterSource') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ sourceFilterLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -608,6 +610,8 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <DropdownMenuRadioItem value="codex">{{ $t('sessions.sourceCodex') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="opencode">{{ $t('sessions.sourceOpenCode') }}</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="hermes">{{ $t('sessions.sourceHermes') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="dsh">{{ $t('sessions.sourceDsh') }}</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="zswarm">{{ $t('sessions.sourceZswarm') }}</DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
@@ -616,13 +620,15 @@ function onComposerSent(mode: 'now' | 'queued') {
                     :disabled="
                       sessionSourceFilter === 'codex' ||
                       sessionSourceFilter === 'opencode' ||
-                      sessionSourceFilter === 'hermes'
+                      sessionSourceFilter === 'hermes' ||
+                      sessionSourceFilter === 'dsh' ||
+                      sessionSourceFilter === 'zswarm'
                     "
                   >
                     <DropdownMenuSubTrigger>
                       <Boxes />
                       {{ $t('sessions.filterInstance') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ instanceFilterLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -640,11 +646,16 @@ function onComposerSent(mode: 'now' | 'queued') {
                        every dispatch names the session id on the command line, so a queue row for
                        that id IS the fact. Never applied on our own initiative — 'all' is the
                        default and stays it. -->
-                  <DropdownMenuSub :disabled="sessionSourceFilter === 'codex' || sessionSourceFilter === 'opencode'">
+                  <!-- Disabled off CLAUDE-ONLY rather than off a list of other sources: both of
+                       these facts exist only for Claude (a dispatch names a session id on the
+                       command line; a usage wall is judged from a Claude transcript), and the
+                       hand-written "codex or opencode" list silently went stale twice as sources
+                       were added. -->
+                  <DropdownMenuSub :disabled="sessionSourceFilter !== 'all' && sessionSourceFilter !== 'claude'">
                     <DropdownMenuSubTrigger>
                       <ListTodo />
                       {{ $t('sessions.dispatched') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ dispatchedScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -660,11 +671,11 @@ function onComposerSent(mode: 'now' | 'queued') {
                   <!-- sessions a usage wall cut off. Server-side like the scopes above it, but
                        the verdict comes from the transcript parse rather than the mtime index, so
                        the first use after an upgrade is slow while the scan cache refills. -->
-                  <DropdownMenuSub :disabled="sessionSourceFilter === 'codex' || sessionSourceFilter === 'opencode'">
+                  <DropdownMenuSub :disabled="sessionSourceFilter !== 'all' && sessionSourceFilter !== 'claude'">
                     <DropdownMenuSubTrigger>
                       <CircleAlert />
                       {{ $t('sessions.rateLimited') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ rateLimitScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -687,7 +698,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <Hourglass />
                       {{ $t('sessions.shape') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ shapeScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -712,7 +723,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <Archive />
                       {{ $t('sessions.archived') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ archivedScopeLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -732,7 +743,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuSubTrigger>
                       <CalendarRange />
                       {{ $t('sessions.period') }}
-                      <span class="ml-auto max-w-24 truncate pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto max-w-24 truncate ps-2 text-[11px] text-muted-foreground">
                         {{ periodLabel }}
                       </span>
                     </DropdownMenuSubTrigger>
@@ -751,7 +762,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <DropdownMenuItem @select="clearDoneMarks">
                       <CircleSlash />
                       {{ $t('sessions.clearDoneMarks') }}
-                      <span class="ml-auto pl-2 text-[11px] text-muted-foreground">
+                      <span class="ms-auto ps-2 text-[11px] text-muted-foreground">
                         {{ $t('sessions.doneMarkCount', { n: doneCount }) }}
                       </span>
                     </DropdownMenuItem>
@@ -829,7 +840,7 @@ function onComposerSent(mode: 'now' | 'queued') {
             <button
               v-for="r in bodyResults"
               :key="`${r.source}:${r.session_id}`"
-              class="mb-1.5 w-full rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-accent/50"
+              class="mb-1.5 w-full rounded-lg border border-transparent px-3 py-2.5 text-start transition-colors hover:border-border hover:bg-accent/50"
               @click="selectFromBodyResult(r)"
             >
               <div class="flex items-start justify-between gap-2">
@@ -908,7 +919,7 @@ function onComposerSent(mode: 'now' | 'queued') {
             <ContextMenu v-for="s in filtered" :key="`${s.source}:${s.session_id}`">
               <ContextMenuTrigger as-child>
                 <button
-                  class="mb-1.5 w-full rounded-lg border px-3 py-2.5 text-left transition-colors"
+                  class="mb-1.5 w-full rounded-lg border px-3 py-2.5 text-start transition-colors"
                   :class="[
                     // Selected is a RAISED GREY, not an accent tint. bg-primary/10 composited to a
                     // maroon (#352626) against the dark ground, which read as a colour wash rather
@@ -950,7 +961,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                       wrapper around the first message, so it may match nothing the user has named.
                       --><span
                         v-if="titleIsUnattributed(s)"
-                        class="ml-1 align-middle text-[10px] font-normal text-muted-foreground/70"
+                        class="ms-1 align-middle text-[10px] font-normal text-muted-foreground/70"
                       >&lt;{{ s.title_tag }}&gt;</span></span>
                     <!-- the wall this conversation died at. `pending` is the actionable half —
                          nothing followed the notice, so it is still sitting there — and it is the
@@ -1009,6 +1020,17 @@ function onComposerSent(mode: 'now' | 'queued') {
                       :title="s.instance ? undefined : $t('sessions.instanceUnknownHint')"
                     >
                       <Boxes class="size-3" />{{ s.instance ? (s.instance === 'default' ? $t('sessions.instanceDefault') : instanceLabelFor(s.instance)) : $t('sessions.instanceUnknown') }}
+                    </span>
+                    <!-- A store that splits per ACCOUNT (Codex: one CODEX_HOME per instance) names
+                         its own on the row, so the label is shown as-is rather than resolved
+                         against the Claude desktop list. No "unknown" branch: the path the rollout
+                         was read from IS the answer, so this is either known or not a row. -->
+                    <span
+                      v-else-if="s.instance"
+                      class="inline-flex items-center gap-1"
+                      :title="s.instance_num ? `#${s.instance_num}` : undefined"
+                    >
+                      <Boxes class="size-3" />{{ s.instance }}
                     </span>
                     <!-- one conversation, several transcripts. Deliberately a label and not a
                          fold: every older copy measured held turns the newer one did not, and they
@@ -1112,8 +1134,11 @@ function onComposerSent(mode: 'now' | 'queued') {
                   <MessagesSquare />
                   {{ $t('sessions.openTranscript') }}
                 </ContextMenuItem>
-                <template v-if="s.source !== 'opencode'">
-                  <ContextMenuItem @select="openFile(s)">
+                <template v-if="SOURCE_HAS_FILE[s.source]">
+                  <!-- Not offered for a source whose file is not prose (see SOURCE_FILE_IS_TEXT):
+                       an editor pointed at a compressed log shows binary, which reads as a corrupt
+                       session. The readable exports below are the way in for those. -->
+                  <ContextMenuItem v-if="SOURCE_FILE_IS_TEXT[s.source]" @select="openFile(s)">
                     <FileSymlink />
                     {{ $t('sessions.openFile') }}
                   </ContextMenuItem>
@@ -1315,7 +1340,7 @@ function onComposerSent(mode: 'now' | 'queued') {
               <!-- Link, not Copy: it sits next to the copy-session-id button, and two identical
                    clipboard glyphs side by side are indistinguishable at icon size. -->
               <IconTooltip
-                v-if="selected.source !== 'opencode'"
+                v-if="SOURCE_HAS_FILE[selected.source]"
                 :label="$t('sessions.copyFileLocation')"
                 :description="$t('sessions.copyFileLocationHint')"
               >
@@ -1431,12 +1456,15 @@ function onComposerSent(mode: 'now' | 'queued') {
                         <AlignJustify class="size-3.5" />{{ $t('sessions.compactLayout') }}
                       </DropdownMenuCheckboxItem>
 
-                      <template v-if="selected.source !== 'opencode'">
+                      <template v-if="SOURCE_HAS_FILE[selected.source]">
                         <DropdownMenuSeparator />
                         <DropdownMenuLabel class="flex items-center gap-2">
                           <FileSymlink class="size-3.5" />{{ $t('sessions.fileActions') }}
                         </DropdownMenuLabel>
-                        <DropdownMenuItem @select="openFile(selected)">
+                        <DropdownMenuItem
+                          v-if="SOURCE_FILE_IS_TEXT[selected.source]"
+                          @select="openFile(selected)"
+                        >
                           <FileSymlink />{{ $t('sessions.openFile') }}
                         </DropdownMenuItem>
                         <!-- one entry, three formats. The raw .jsonl is still here because it is
@@ -1620,7 +1648,7 @@ function onComposerSent(mode: 'now' | 'queued') {
           <Button
             variant="ghost"
             size="icon-sm"
-            class="ml-auto"
+            class="ms-auto"
             :aria-label="$t('sessions.findClose')"
             @click="closeFind"
           >
@@ -1676,7 +1704,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                 <!-- tool activity and reasoning: a compact log line, not a bubble -->
                 <div
                   v-if="ev.kind !== 'text'"
-                  class="w-full min-w-0 rounded-md border-l-2 border-border bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground"
+                  class="w-full min-w-0 rounded-md border-s-2 border-border bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground"
                   :class="ev.kind === 'thinking' ? 'italic' : 'font-mono'"
                 >
                   <div class="mb-0.5 flex items-center gap-1 font-semibold not-italic">
@@ -1686,7 +1714,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      class="ml-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-60"
+                      class="ms-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-60"
                       :title="$t('sessions.copyMessage')"
                       @click="copyMessage(i, ev.text)"
                     >
@@ -1694,9 +1722,10 @@ function onComposerSent(mode: 'now' | 'queued') {
                       <Copy v-else />
                     </Button>
                   </div>
-                  <!-- eslint-disable-next-line vue/no-v-html -- the text is HTML-escaped before
-                       anything reads it (lib/markdown.ts), and lib/find.ts only ever adds <mark>
-                       around already-escaped slices, so no tag here came from the transcript -->
+                  <!-- the text is HTML-escaped before anything reads it (lib/markdown.ts), and
+                       lib/find.ts only ever adds <mark> around already-escaped slices, so no tag
+                       here came from the transcript -->
+                  <!-- eslint-disable-next-line vue/no-v-html -- see the note above -->
                   <div
                     class="break-words"
                     :class="[
@@ -1720,7 +1749,7 @@ function onComposerSent(mode: 'now' | 'queued') {
                 <div
                   v-else
                   class="min-w-0 max-w-[85%] rounded-2xl px-3.5 py-2 text-sm"
-                  :class="ev.role === 'user' ? 'rounded-br-md bg-accent' : 'rounded-bl-md bg-muted/50'"
+                  :class="ev.role === 'user' ? 'rounded-ee-md bg-accent' : 'rounded-es-md bg-muted/50'"
                 >
                   <!-- eslint-disable-next-line vue/no-v-html -- see the note above -->
                   <div
@@ -1803,7 +1832,7 @@ function onComposerSent(mode: 'now' | 'queued') {
               <li v-for="s in g.sessions" :key="s.session_id">
                 <button
                   type="button"
-                  class="w-full truncate rounded border border-border px-2 py-1 text-left hover:bg-accent"
+                  class="w-full truncate rounded border border-border px-2 py-1 text-start hover:bg-accent"
                   @click="openFromBulkDialog(s)"
                 >
                   {{ s.title }}

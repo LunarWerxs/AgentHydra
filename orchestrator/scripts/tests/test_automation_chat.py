@@ -175,6 +175,42 @@ class AutomationChatTest(unittest.TestCase):
         self.assertTrue(payload["bypassStamped"])
         self.assertTrue(payload["ultracodeStamped"])
 
+    def test_title_flag_lets_the_remedy_aim_the_picker_when_the_dossier_has_gone_stale(self):
+        """⛔ THE 2026-09-15 BUG: a RUNNING app can erase a chat's disk title in the gap between
+        when a batch VERIFIES the rendered name and when a human runs the printed remedy by
+        hand - and the remedy's own title lookup (the dossier) is a disk read no fresher than
+        the one that just went stale (title_for_row's daemon fallback hits the same dossier).
+        Without --title the remedy failed with "no name to aim at" on the exact chat it exists
+        to fix; with it, the caller's own verified name reaches the picker directly."""
+        stub = self.stub
+
+        def stale_dossier(method, path, query, body):
+            if dossier_query(query) != SID:
+                return {"matches": []}
+            return {"matches": [{"instance": "cold", "chatId": "local_x", "cliSessionId": SID,
+                                 "lineageIds": [SID], "title": None, "archived": False,
+                                 "lastActivityAt": "T1", "live": None, "metaPath": str(self.meta)}]}
+
+        stub.routes["/api/chats/dossier"] = stale_dossier
+        stub.routes["/api/fleet"] = {"instances": [
+            {"num": 1, "name": "cold", "dir": "c:\\i\\cold", "isRunning": True, "signedIn": True}]}
+
+        code, out, _ = run_cli(automation_chat.main, [SID, "--force"])
+        self.assertIn("no name to aim at", out)
+
+        with mock.patch.object(automation_chat.clilib, "run_text",
+                               return_value=mock.Mock(returncode=0,
+                                                       stdout="MODE SET 'Bypass permissions'\n",
+                                                       stderr="")) as run_mock:
+            code, out, _ = run_cli(
+                automation_chat.main,
+                [SID, "--force", "--title", "Sub-brand logo set integration"])
+        self.assertEqual(code, 0)
+        pickers = [c.args[0] for c in run_mock.call_args_list if "approve_prompt.ps1" in c.args[0][5]]
+        self.assertEqual(len(pickers), 1)
+        self.assertIn("Sub-brand logo set integration", pickers[0])
+        self.assertIn("APP-CONFIRMED", out)
+
 
 class FleetEnforceTest(unittest.TestCase):
     """--all: the fleet-wide doctrine sweep, against a fake disk store."""
@@ -428,6 +464,146 @@ class ViaAppTest(unittest.TestCase):
         payload = json.loads(out)
         self.assertEqual(payload["confirmedInApp"], automation_chat.PICKER_PER_TICK)
         self.assertEqual(len(payload["pendingInApp"]), 6 - automation_chat.PICKER_PER_TICK)
+
+
+class TitleForRowTest(unittest.TestCase):
+    """⛔ AN IMPORTED CHAT'S META RECORD CARRIES NO TITLE (found 2026-09-09, still live and
+    fixed 2026-09-10). Every row builder here reads `meta["title"]`, which is None for a fresh
+    landing while the sidebar renders a perfectly good name, so `-Title ""` reached PowerShell
+    and approve_prompt.ps1's [ValidateNotNullOrEmpty] killed the pipeline with an argument-
+    validation error - which reads like an environment or permissions fault and is neither.
+    The `--force` remedy a `disk-only` landing prints could therefore never work on the one
+    population it exists to serve."""
+
+    def test_a_disk_title_is_used_as_is(self):
+        with mock.patch.object(automation_chat.hydralib, "resolve_one",
+                               side_effect=AssertionError("must not ask the daemon")):
+            self.assertEqual(
+                automation_chat.title_for_row({"sessionId": SID, "title": "Ship the parser"}),
+                "Ship the parser")
+
+    def test_a_missing_disk_title_falls_back_to_the_name_the_APP_renders(self):
+        with mock.patch.object(automation_chat.hydralib, "resolve_one",
+                               return_value={"title": "Resume Stackspire project"}):
+            self.assertEqual(automation_chat.title_for_row({"sessionId": SID, "title": None}),
+                             "Resume Stackspire project")
+
+    def test_a_chat_nobody_can_name_returns_EMPTY_never_the_string_None(self):
+        with mock.patch.object(automation_chat.hydralib, "resolve_one",
+                               return_value={"title": None}):
+            self.assertEqual(automation_chat.title_for_row({"sessionId": SID, "title": None}), "")
+
+    def test_a_daemon_that_cannot_answer_is_not_an_exception(self):
+        for err in (hydralib.ChatNotFound("x"),
+                    hydralib.DaemonError("/api/chats/dossier", 500, "boom")):
+            with mock.patch.object(automation_chat.hydralib, "resolve_one", side_effect=err):
+                self.assertEqual(
+                    automation_chat.title_for_row({"sessionId": SID, "title": None}), "")
+
+    def test_set_mode_via_app_REFUSES_a_nameless_chat_and_drives_nothing(self):
+        """The floor: an empty -Title is not a weaker attempt, it is a crash that never reaches
+        the picker. Refuse in words, and never spawn the actuator."""
+        with mock.patch.object(automation_chat.hydralib, "resolve_one",
+                               return_value={"title": None}), \
+             mock.patch.object(automation_chat, "_run_actuator",
+                               side_effect=AssertionError("the actuator must not be spawned")):
+            said = automation_chat.set_mode_via_app(
+                {"sessionId": SID, "title": None, "instance": "temp1", "metaPath": "x"},
+                {"instances": []}, force=True)
+        self.assertIn("REFUSED", said)
+        self.assertIn("no name to aim at", said)
+
+
+class RenderedNameRetryTest(unittest.TestCase):
+    """⛔ THE APP RENAMES A LANDED CHAT UNDER US (live, 2026-09-11). migrate_batch moved six
+    chats from one account to another; two came back `disk-only` because the picker aimed at
+    the title the record carried while the sidebar had already re-rendered them as
+    'QuickDictate' and 'Stackspire'. No wait cures that - the refusal says so itself ("a MATCH
+    failure, not a timing one") - and `automation_chat --force` by hand fixed both on the first
+    try minutes later, once the record had caught up. The refusal already NAMES every row it
+    can see, so the retry needs no new evidence, only to read what it was told."""
+
+    REFUSAL = (
+        "REFUSED: no sidebar row is named 'QuickDictate listening stops intermittently' in "
+        "c:/users/blogi/.claude-instances/another_meh - a MATCH failure, not a timing one: 3 "
+        "rows are rendered right now (rows read by the kebab phrase 'Chat options'). "
+        "Rows: 'QuickDictate' | 'Slite changelog review' | 'Ask AI rollout deployment'"
+    )
+
+    def setUp(self):
+        self._state = tempfile.TemporaryDirectory()
+        os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+
+    def tearDown(self):
+        os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
+        self._state.cleanup()
+
+    def test_rendered_rows_reads_a_match_failure_and_nothing_else(self):
+        self.assertEqual(automation_chat.rendered_rows(self.REFUSAL),
+                         ["QuickDictate", "Slite changelog review", "Ask AI rollout deployment"])
+        self.assertEqual(
+            automation_chat.rendered_rows("MODE SET 'Accept edits' -> 'Bypass permissions'"), [])
+        self.assertEqual(automation_chat.rendered_rows(
+            "REFUSED: the sidebar in x rendered NO chat rows at all in 6s"), [])
+        self.assertEqual(automation_chat.rendered_rows(""), [])
+
+    def test_an_alias_is_taken_only_when_ONE_row_stands_clear(self):
+        long_title = "QuickDictate listening stops intermittently"
+        self.assertEqual(
+            automation_chat.best_rendered_alias(long_title, ["QuickDictate", "Ask AI rollout"]),
+            "QuickDictate")
+        self.assertEqual(
+            automation_chat.best_rendered_alias("Resume Stackspire project",
+                                                ["Stackspire", "Slite changelog review"]),
+            "Stackspire")
+        # Nothing close: the actuator's honest refusal stands.
+        self.assertIsNone(automation_chat.best_rendered_alias(
+            long_title, ["Ask AI rollout", "Slite changelog review"]))
+        # Two rows fit equally well: a rename is recognised, never guessed.
+        self.assertIsNone(automation_chat.best_rendered_alias(
+            "Connections Architect burn-down resume", ["Connections", "Connections Architect"]))
+        self.assertIsNone(automation_chat.best_rendered_alias("anything", []))
+
+    def test_a_renamed_chat_is_pressed_under_the_name_the_app_shows(self):
+        calls = []
+
+        def fake(args, inst_dir):
+            calls.append(args)
+            if len(calls) == 1:
+                return 4, [self.REFUSAL]
+            return 0, ["MODE SET 'Accept edits' -> 'Bypass permissions' for 'QuickDictate'"]
+
+        with mock.patch.object(automation_chat, "_run_actuator", side_effect=fake):
+            said = automation_chat.set_mode_via_app(
+                {"sessionId": SID, "title": "QuickDictate listening stops intermittently",
+                 "instance": "another_meh", "metaPath": "x"},
+                {"instances": []}, force=True)
+        self.assertEqual(len(calls), 2, "exactly one retry, aimed at the rendered name")
+        self.assertEqual(calls[1][calls[1].index("-Title") + 1], "QuickDictate")
+        self.assertTrue(automation_chat.picker_line_ok(said), said)
+        self.assertIn("the app renders this chat as 'QuickDictate'", said)
+        # The app's own word is the verdict, so the chat is confirmed - no manual remedy left.
+        self.assertIn(SID, automation_chat.load_confirmed())
+
+    def test_a_refusal_with_no_plausible_alias_is_left_exactly_as_it_was(self):
+        refusal = (
+            "REFUSED: no sidebar row is named 'Ship the parser' in c:/x - a MATCH failure, not a "
+            "timing one: 2 rows are rendered right now (no kebab phrase could be read off this "
+            "window). Rows: 'Slite changelog review' | 'Ask AI rollout deployment'"
+        )
+        calls = []
+
+        def fake(args, inst_dir):
+            calls.append(args)
+            return 4, [refusal]
+
+        with mock.patch.object(automation_chat, "_run_actuator", side_effect=fake):
+            said = automation_chat.set_mode_via_app(
+                {"sessionId": SID, "title": "Ship the parser", "instance": "i", "metaPath": "x"},
+                {"instances": []}, force=True)
+        self.assertEqual(len(calls), 1, "no second press on a guess")
+        self.assertEqual(said, refusal[:160])
+        self.assertNotIn(SID, automation_chat.load_confirmed())
 
 
 if __name__ == "__main__":

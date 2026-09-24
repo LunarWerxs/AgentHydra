@@ -18,7 +18,7 @@ test('band edges sit exactly on 80 / 85 / 90', () => {
   expect(bandFor(Number.NaN)).toBe('unknown')
 })
 
-const NOW = Date.parse('2026-08-29T12:00:00Z')
+const NOW = Date.parse('2024-08-29T12:00:00Z')
 
 function snap(over: Partial<UsageSnapshot>): UsageSnapshot {
   return {
@@ -36,7 +36,7 @@ test('reset minutes come from the ISO timestamp when present', () => {
     nowMs: NOW,
     cache: () => ({
       'desktop:a': snap({
-        weekAll: { pct: 50, resets: 'whenever', resetsAt: '2026-08-29T14:00:00Z' },
+        weekAll: { pct: 50, resets: 'whenever', resetsAt: '2024-08-29T14:00:00Z' },
         session: { pct: 10, resets: '', resetsAt: null },
       }),
     }),

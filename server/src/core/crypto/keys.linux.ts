@@ -22,16 +22,21 @@ const PEANUTS_FALLBACK = 'peanuts'
 
 const derivedKeyCache = new Map<string, Uint8Array>()
 
+import { spawnCaptured } from '../process.ts'
+
+/** A secret store answers in milliseconds or it is waiting on a human (an unlocked-keyring
+ *  prompt). Five seconds tells those apart without ever cutting off a working lookup. */
+const SECRET_STORE_TIMEOUT_MS = 5_000
+
+// ⛔ BOUNDED, because a secret store can BLOCK (swept 2026-09-18). This awaited a stdout drain
+// and proc.exited together with no deadline at all, so a `secret-tool` sitting on a locked-keyring
+// prompt hung whatever asked for a credential - and, piping stderr without ever reading it, a
+// child that filled that pipe could not exit either. spawnCaptured drains both and always returns.
 async function runCommand(cmd: string[]): Promise<string | null> {
-  try {
-    const proc = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'pipe' })
-    const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-    if (exitCode !== 0) return null
-    const trimmed = stdout.trim()
-    return trimmed ? trimmed : null
-  } catch {
-    return null
-  }
+  const r = await spawnCaptured(cmd, { timeoutMs: SECRET_STORE_TIMEOUT_MS })
+  if (r.timedOut || r.code !== 0) return null
+  const trimmed = r.stdout.trim()
+  return trimmed ? trimmed : null
 }
 
 /** Tries `secret-tool` (gnome-libsecret), the most common Linux secret store. */

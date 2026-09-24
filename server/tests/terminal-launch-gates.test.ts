@@ -14,14 +14,18 @@
 //
 // The rule the tests below hold down is the one that keeps the first fix honest: mirroring an
 // existing YES is normalization, granting a new one is not, and this code must never do the second.
-import { expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildTerminalLaunchPlan, ensureProjectTrusted } from '../src/session-launch'
 
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'ah-trust-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
 const cfgDir = (projects: Record<string, unknown>): string => {
-  const d = mkdtempSync(join(tmpdir(), 'ah-trust-'))
+  const d = mkdtempSync(join(ROOT, 'ah-trust-'))
   writeFileSync(join(d, '.claude.json'), JSON.stringify({ projects }))
   return d
 }
@@ -102,10 +106,10 @@ test('IT NEVER GRANTS TRUST NOBODY GAVE', () => {
 })
 
 test('a missing or unreadable CLI config refuses rather than guessing', () => {
-  const empty = mkdtempSync(join(tmpdir(), 'ah-trust-none-'))
+  const empty = mkdtempSync(join(ROOT, 'ah-trust-none-'))
   expect(ensureProjectTrusted('D:\\Work', empty).reason).toBe('no-cli-config')
 
-  const broken = mkdtempSync(join(tmpdir(), 'ah-trust-bad-'))
+  const broken = mkdtempSync(join(ROOT, 'ah-trust-bad-'))
   writeFileSync(join(broken, '.claude.json'), '{ not json')
   expect(ensureProjectTrusted('D:\\Work', broken).reason).toBe('cli-config-unreadable')
 })

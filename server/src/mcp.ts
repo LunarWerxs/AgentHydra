@@ -28,12 +28,18 @@ import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appEnv, IS_COMPILED, PORT, VERSION } from './config'
+import { appEnv, IS_COMPILED, PORT, SERVICE_NAME, VERSION } from './config'
 import type { SelfIdentityDetection } from './core/self-identity'
-import { readInstanceInfo } from './instance'
+import { instanceFilePath, readInstanceInfo } from './instance'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 import { runMcpStdio } from './mcp-stdio.mjs'
 import type { UsageAdvice, UsageSnapshot } from './types'
+
+const DEFAULT_BASE = `http://127.0.0.1:${PORT}`
+
+/** Set once a pointer-named port refused a connection and the default port answered instead: the
+ *  rest of this process talks to the default. Cleared only by resetDaemonResolutionForTests. */
+let staleFallbackBase: string | null = null
 
 // Resolve the base URL per call: an explicit AGENTHYDRA_URL/AGENTHYDRA_PORT always wins, else
 // follow the port the daemon ACTUALLY bound (~/.agenthydra/runtime.json), so an auto-hopped port
@@ -43,7 +49,8 @@ export function daemonBase(): string {
   if (url) return url
   const port = appEnv('PORT')
   if (port) return `http://127.0.0.1:${port}`
-  return readInstanceInfo()?.url ?? `http://127.0.0.1:${PORT}`
+  if (staleFallbackBase) return staleFallbackBase
+  return readInstanceInfo()?.url ?? DEFAULT_BASE
 }
 
 /** The daemon isn't listening. Distinct from a real API error, so a fallback can fire on THIS and
@@ -57,15 +64,115 @@ const startHint = IS_COMPILED
   ? 'Start it by running the AgentHydra executable (or its tray shortcut).'
   : 'Start it with `bun run start`.'
 
+interface DaemonHealth {
+  ok?: boolean
+  service?: string
+  version?: string
+}
+
+/** /api/health of `base`, or null unless it answers ok AS this service within timeoutMs. */
+async function healthOf(base: string, timeoutMs: number): Promise<DaemonHealth | null> {
+  try {
+    const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return null
+    const body = (await res.json()) as DaemonHealth | null
+    return body?.ok && body.service === SERVICE_NAME ? body : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * THE POINTER NAMED A PORT THAT REFUSED. Say so in those words, and ask the DEFAULT port before
+ * concluding the daemon is down.
+ *
+ * On 2026-09-12 a probe daemon left ~/.agenthydra/runtime.json naming a dead 7799 while the real
+ * daemon answered on 7787, and this client said "couldn't reach the daemon ... start it". Every
+ * word of that was the wrong advice: nothing suggested the pointer, and starting a daemon would
+ * have made a second one. The pointer's OWNER now keeps it honest (instance.ts); this is the
+ * client's half: name the file, name the port it names, and try the default once. Only a base that
+ * came from the pointer qualifies - an explicit AGENTHYDRA_URL/PORT is the caller's word and is
+ * never second-guessed.
+ */
+async function recoverFromStalePointer(): Promise<{ note: string; recovered: boolean }> {
+  if (appEnv('URL') || appEnv('PORT') || staleFallbackBase) return { note: '', recovered: false }
+  const named = readInstanceInfo()?.url
+  if (!named) return { note: '', recovered: false }
+  const note =
+    `${instanceFilePath()} names ${named}, nothing is listening there, and it may be stale ` +
+    '(a daemon that exits cleanly deletes it; a crash, a hard kill or a side-run leaves it behind). '
+  if (named === DEFAULT_BASE) return { note, recovered: false }
+  const health = await healthOf(DEFAULT_BASE, 1500)
+  if (!health) {
+    return { note: `${note}The default port ${PORT} did not answer either. `, recovered: false }
+  }
+  staleFallbackBase = DEFAULT_BASE
+  console.error(
+    `[agenthydra mcp] ${note}The default port ${PORT} answers as ${SERVICE_NAME} ${health.version ?? ''}, ` +
+      `so this process uses ${DEFAULT_BASE} from here on. Do NOT start another daemon.`,
+  )
+  return { note, recovered: true }
+}
+
+/** Non-null once the daemon we reached declared itself a SIDE-RUN (a relocated store). Put on
+ *  every tool result by withDaemonWarning, so no caller can read a scratch store as the fleet. */
+let daemonWarning: string | null = null
+
+/** The daemon stamps every answer with `x-agenthydra-side-run: <store>` when its store is not the
+ *  machine's (side-run.ts), so noticing costs no extra request. A client that silently reaches a
+ *  scratch database is worse than an outage, because it looks like it worked. */
+function noteSideRun(res: Response): void {
+  if (daemonWarning) return
+  const store = (res as { headers?: Headers }).headers?.get('x-agenthydra-side-run')
+  if (!store) return
+  daemonWarning =
+    `SIDE-RUN DAEMON: ${daemonBase()} serves ${store}, which is NOT this machine's fleet store. ` +
+    'Every read and write through these tools goes to that store. If you meant the real daemon, ' +
+    'set AGENTHYDRA_URL to it, or stop the side-run.'
+  console.error(`[agenthydra mcp] ${daemonWarning}`)
+}
+
+/** Every tool answer carries `daemonWarning` while one is set. Applied where tools are handed to a
+ *  transport (stdio and HTTP), not to TOOLS itself, so a test of one tool sees the bare result. */
+export function withDaemonWarning(tools: McpEngineTool[]): McpEngineTool[] {
+  return tools.map((t) => ({
+    ...t,
+    run: async (args: Record<string, unknown>, signal?: AbortSignal) => {
+      const value = await t.run(args, signal)
+      return daemonWarning && value && typeof value === 'object' && !Array.isArray(value)
+        ? { daemonWarning, ...(value as Record<string, unknown>) }
+        : value
+    },
+  }))
+}
+
+/** Tests only: forget a stale-pointer fallback and a side-run notice left by an earlier case. */
+export function resetDaemonResolutionForTests(): void {
+  staleFallbackBase = null
+  daemonWarning = null
+}
+
 async function api(pathname: string, init?: RequestInit): Promise<unknown> {
   let res: Response
   try {
     res = await fetch(`${daemonBase()}${pathname}`, init)
   } catch (e) {
-    throw new DaemonUnreachable(
-      `couldn't reach the AgentHydra daemon at ${daemonBase()}. ${startHint} (${e instanceof Error ? e.message : String(e)})`,
-    )
+    const first = e instanceof Error ? e.message : String(e)
+    const { note, recovered } = await recoverFromStalePointer()
+    if (!recovered) {
+      throw new DaemonUnreachable(
+        `couldn't reach the AgentHydra daemon at ${daemonBase()}. ${note}${startHint} (${first})`,
+      )
+    }
+    try {
+      res = await fetch(`${daemonBase()}${pathname}`, init)
+    } catch (e2) {
+      throw new DaemonUnreachable(
+        `couldn't reach the AgentHydra daemon at ${daemonBase()} even after setting the stale pointer aside. ${startHint} (${e2 instanceof Error ? e2.message : String(e2)})`,
+      )
+    }
   }
+  noteSideRun(res)
   if (!res.ok) throw new Error(`AgentHydra ${res.status}: ${await res.text()}`)
   const text = await res.text()
   try {
@@ -120,6 +227,10 @@ const S = (properties: Record<string, unknown> = {}, required: string[] = []) =>
 })
 const JSON_HEADERS = { 'content-type': 'application/json' }
 const str = (v: unknown): string => String(v ?? '')
+// Past this DECLARED run length, orchestrator_run detaches instead of blocking: no MCP client
+// holds a connection open that long, and a call the client abandons loses the report for work
+// the daemon finishes anyway (2026-09-11, the lost `sweep --all --yes`).
+const AUTO_DETACH_MS = 120_000
 const qs = (params: Record<string, unknown>): string => {
   const p = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) if (v != null) p.set(k, String(v))
@@ -165,7 +276,54 @@ interface ResolvedInstanceRow {
  *  loopback request. */
 let selfDetectionCache: Promise<SelfIdentityDetection> | null = null
 
-async function detectSelf(fresh = false): Promise<SelfIdentityDetection> {
+/** ⛔ OVER HTTP, "THIS PROCESS" IS THE DAEMON, AND THE ANSWER WAS USELESS (2026-09-11).
+ *  mcp-register.ts registers the HTTP transport for every client, so `whoami` ran inside the
+ *  daemon and walked the DAEMON'S ancestry - the tray, and whatever started that - then reported
+ *  "this process does not look like it is running under Claude Code at all" to an agent that very
+ *  much is. `to: "here"` (refused unless the identity is exact) and check_my_usage's attribution
+ *  went down with it, for every caller on the machine.
+ *
+ *  The caller is not unknowable: it opened a loopback socket, so the OS can name its pid, and that
+ *  pid IS the engine - `<instanceDir>/claude-code/<ver>/claude.exe`. Feeding that chain to the
+ *  EXISTING stage-5 signals identifies it exactly. The env stages are skipped deliberately (`env:
+ *  {}`): the daemon's environment says nothing about the caller, and a ruledOut line claiming a
+ *  check that was never performed against that process would be a fabricated working. */
+const callerDetectionCache = new Map<number, Promise<SelfIdentityDetection>>()
+
+async function detectForCaller(callerPid: number, fresh: boolean): Promise<SelfIdentityDetection> {
+  const cached = fresh ? undefined : callerDetectionCache.get(callerPid)
+  if (cached) return cached
+  const probe = (async () => {
+    const { detectSelfIdentity } = await import('./core/self-identity')
+    const { processAncestry } = await import('./core/process')
+    const detection = await detectSelfIdentity({
+      env: {},
+      ancestry: () => processAncestry(callerPid, { includeSelf: true }),
+    })
+    return {
+      ...detection,
+      ruledOut: [
+        `answered for the CALLING process (pid ${callerPid}), not for this daemon: MCP arrived over ` +
+          "HTTP, so the caller's own environment cannot be read from here and only its process " +
+          'chain was walked',
+        ...detection.ruledOut.filter((r) => r.includes('ancestor') || r.includes('ancestry')),
+      ],
+    }
+  })()
+  callerDetectionCache.set(callerPid, probe)
+  try {
+    return await probe
+  } catch (e) {
+    callerDetectionCache.delete(callerPid) // a failed probe must not be remembered as the answer
+    throw e
+  }
+}
+
+async function detectSelf(
+  fresh = false,
+  callerPid?: number | null,
+): Promise<SelfIdentityDetection> {
+  if (callerPid) return detectForCaller(callerPid, fresh)
   if (fresh || !selfDetectionCache) {
     selfDetectionCache = (async () => {
       const { detectSelfIdentity } = await import('./core/self-identity')
@@ -177,6 +335,24 @@ async function detectSelf(fresh = false): Promise<SelfIdentityDetection> {
   } catch (e) {
     selfDetectionCache = null // a failed probe must not be remembered as the answer
     throw e
+  }
+}
+
+/** How the HTTP route hands a tool the process that sent the request. It is a FUNCTION on
+ *  purpose: JSON cannot carry one, so a client cannot forge `callerPid` in its own arguments -
+ *  only our own route, which resolves it from the socket, can put one here. Lazy, because
+ *  resolving it costs a `netstat` and only the identity tools ever ask. */
+type CallerPidSource = () => Promise<number | null>
+const CALLER_PID_ARG = 'callerPid'
+const CALLER_AWARE_TOOLS = new Set(['whoami', 'check_my_usage', 'move_chat', 'move_chats'])
+
+export async function callerPidFromArgs(a: Record<string, unknown>): Promise<number | null> {
+  const source = a[CALLER_PID_ARG]
+  if (typeof source !== 'function') return null
+  try {
+    return await (source as CallerPidSource)()
+  } catch {
+    return null
   }
 }
 
@@ -196,9 +372,12 @@ interface SelfIdentityPayload {
   warning?: string
 }
 
-async function selfIdentity(fresh = false): Promise<SelfIdentityPayload> {
+async function selfIdentity(
+  fresh = false,
+  callerPid?: number | null,
+): Promise<SelfIdentityPayload> {
   const { describeSelfIdentity } = await import('./core/self-identity')
-  const detection = await detectSelf(fresh)
+  const detection = await detectSelf(fresh, callerPid)
 
   let instance: ResolvedInstanceRow | null = null
   if (detection.configDir) {
@@ -431,7 +610,10 @@ function specArg(spec: string): string {
   return path
 }
 
-/** What fan_out.py's own exit codes mean (its docstring is the source). */
+/** What fan_out.py's own exit codes mean (its docstring is the source) - the FALLBACK verdict used
+ *  only when the payload carries no members/results to count for itself (no JSON on stdout, or an
+ *  empty group). Whenever there IS a per-member or per-result list, fanOutVerdict below reads it
+ *  instead of trusting the exit code alone. */
 const FAN_OUT_VERDICTS: Readonly<Record<number, string>> = Object.freeze({
   0: 'ok: every member spawned and confirmed / read / delivered / deleted and verified',
   4: 'partial: some members not confirmed, refused, unassigned, or not delivered - read each member',
@@ -439,6 +621,76 @@ const FAN_OUT_VERDICTS: Readonly<Record<number, string>> = Object.freeze({
   3: 'refused: bad spec, unknown group, or bad usage',
   1: 'daemon failure',
 })
+
+/** Member/result states that mean the work is NOT done, so a verdict built from these must never
+ *  read "ok" - whatever fan_out.py's own exit code said.
+ *
+ *  ⛔ FALSE GREEN, TWICE (found live 2026-09-15). `fan_out_status` answered `verdict: "ok: every
+ *  member spawned and confirmed..."` for a group whose counts were `finished 1, planned 1,
+ *  unassigned 1`, and `fan_out_delete` printed the identical sentence over `skipped: "no session"`
+ *  for two members that never spawned - because the verdict came ONLY from fan_out.py's exit code
+ *  (status always exits 0; delete's own exit code ignores a member with no session to delete at
+ *  all, see fan_out.py's `delete_exit_code`). A member that never spawned, was never assigned, or
+ *  was skipped is not ok, however the exit code reads. */
+const FAN_OUT_BAD_MEMBER_STATES = new Set([
+  'planned',
+  'unassigned',
+  'refused',
+  'refused-duplicate',
+  'open-failed',
+  'not-registered',
+  'spawned-unconfirmed',
+  'crashed',
+  'stalled',
+  'unknown',
+  'ungateable',
+])
+
+/** Tally `items` by `key(item)`, insertion order, as `"state N"` fragments joined for the verdict. */
+function stateCounts<T>(items: readonly T[], key: (item: T) => string): string {
+  const counts = new Map<string, number>()
+  for (const item of items) {
+    const k = key(item) || '?'
+    counts.set(k, (counts.get(k) ?? 0) + 1)
+  }
+  return [...counts.entries()].map(([k, v]) => `${k} ${v}`).join(', ')
+}
+
+/** A `send`/`delete` result's own state, for the same per-state counting `fan_out_status` gets
+ *  from a member's `state` field - these reports carry `delivered`/`deleted` booleans and a
+ *  `skipped` reason instead. */
+function fanOutResultState(r: Record<string, unknown>): string {
+  if (r.skipped) return 'skipped'
+  if ('delivered' in r) return r.delivered ? 'delivered' : 'not-delivered'
+  if ('deleted' in r) return r.deleted ? 'deleted' : 'not-deleted'
+  return '?'
+}
+
+/** The verdict text AND whether it is actually ok, read from the payload's own member/result
+ *  states when there are any - the exit-code table above is the fallback for a payload with
+ *  nothing to count (no JSON on stdout, or a group with no members yet). */
+function fanOutVerdict(
+  code: number | null,
+  payload: Record<string, unknown> | null,
+): { verdict: string; bad: boolean } {
+  const fallback = code == null ? 'no exit code' : (FAN_OUT_VERDICTS[code] ?? `exit ${code}`)
+  const members = payload && Array.isArray(payload.members) ? payload.members : null
+  if (members && members.length > 0) {
+    const rows = members as Record<string, unknown>[]
+    const bad = rows.some((m) => FAN_OUT_BAD_MEMBER_STATES.has(str(m.state)))
+    return { verdict: `${bad ? 'partial' : 'ok'}: ${stateCounts(rows, (m) => str(m.state))}`, bad }
+  }
+  const results = payload && Array.isArray(payload.results) ? payload.results : null
+  if (results && results.length > 0) {
+    const rows = results as Record<string, unknown>[]
+    const bad = rows.some((r) => !['delivered', 'deleted'].includes(fanOutResultState(r)))
+    return {
+      verdict: `${bad ? 'partial' : 'ok'}: ${stateCounts(rows, fanOutResultState)}`,
+      bad,
+    }
+  }
+  return { verdict: fallback, bad: false }
+}
 
 /** Run one fan_out.py invocation through the daemon and hand back its JSON report with the exit
  *  code translated. No JSON on stdout means the script never reached its own report (python
@@ -467,12 +719,15 @@ function targetConfirmation(how: 'here' | 'to', row: ResolvedInstanceRow): strin
  *  resolved to the intended account, not only afterwards in a landed result. */
 async function resolveMoveTarget(
   to: unknown,
+  callerPid?: number | null,
 ): Promise<{ toRef: string; targetNote: string | undefined }> {
   const toArg = to == null || str(to).trim() === '' ? 'here' : str(to).trim()
   if (toArg.toLowerCase() === 'here') {
     // "here" bills THIS process's account, so it is accepted only on a proven identity: an
-    // assumed or disambiguated answer would make the wrong account the destination.
-    const self = await selfIdentity()
+    // assumed or disambiguated answer would make the wrong account the destination. Over HTTP
+    // it must be the CALLER's identity (as whoami resolves it), never the daemon's own - which
+    // is always unidentified and refused every "here" move until 2026-09-22.
+    const self = await selfIdentity(false, callerPid)
     if (!self.instance || self.confidence !== 'exact' || self.warning)
       throw new Error(
         `cannot resolve "here" with certainty (${self.summary}${self.warning ? ` — ${self.warning}` : ''}). Pass \`to\` as the target's instance number (list_instance_numbers).`,
@@ -495,12 +750,21 @@ async function resolveMoveTarget(
   return { toRef: String(row.num), targetNote: targetConfirmation('to', row) }
 }
 
-async function runFanOut(args: string[], timeoutMs: number): Promise<Record<string, unknown>> {
+/** `background: true` posts `async: true` and hands back the daemon's 202 (`operationId`,
+ *  `status`) verbatim - there is no stdout to parse yet, exactly like move_chats' own detached
+ *  path (mcp.ts's orchestrator_run / move_chats). The caller decorates that with the group id it
+ *  already knows (see the `fan_out` tool) and how to poll it. */
+async function runFanOut(
+  args: string[],
+  timeoutMs: number,
+  opts: { background?: boolean } = {},
+): Promise<Record<string, unknown>> {
   const run = (await api('/api/orchestrator/run', {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ script: 'fan_out', args, timeoutMs }),
+    body: JSON.stringify({ script: 'fan_out', args, timeoutMs, async: opts.background === true }),
   })) as Record<string, unknown>
+  if (opts.background === true) return run
   let payload: Record<string, unknown> | null = null
   try {
     const parsed: unknown = JSON.parse(str(run.stdout))
@@ -509,15 +773,38 @@ async function runFanOut(args: string[], timeoutMs: number): Promise<Record<stri
     payload = null
   }
   const code = typeof run.exitCode === 'number' ? run.exitCode : null
-  const verdict = code == null ? 'no exit code' : (FAN_OUT_VERDICTS[code] ?? `exit ${code}`)
+  const { verdict, bad } = fanOutVerdict(code, payload)
   if (!payload) return { ...run, ok: false, args, verdict }
   return {
-    ok: code === 0,
+    ok: code === 0 && !bad,
     ...payload,
     exitCode: code,
     verdict,
     ...(str(run.stderr).trim() ? { stderr: run.stderr } : {}),
   }
+}
+
+/** The daemon's own refusal payload when it answers 409 busy, or null for any other failure.
+ *
+ *  ⛔ A REFUSAL ARRIVES AS A THROW, NOT AS A RESULT. `api` rejects on every non-2xx, so a 409
+ *  reached the caller as the bare string `AgentHydra 409: {…}` - which is why the busy case read
+ *  as "the tool blew up" rather than "the route is held, here is the operation holding it", and
+ *  why the resume text had nowhere to be caught. Parsed back into the object the daemon sent so
+ *  both are possible. Anything that is not a busy 409 is re-thrown untouched. */
+function busyRefusal(err: unknown): Record<string, unknown> | null {
+  const message = err instanceof Error ? err.message : String(err)
+  const body = message.startsWith('AgentHydra 409: ')
+    ? message.slice('AgentHydra 409: '.length)
+    : ''
+  if (!body) return null
+  try {
+    const parsed: unknown = JSON.parse(body)
+    if (parsed && typeof parsed === 'object' && (parsed as Record<string, unknown>).busy === true)
+      return parsed as Record<string, unknown>
+  } catch {
+    /* a 409 whose body is not the refusal shape belongs to the caller, unaltered */
+  }
+  return null
 }
 
 export const TOOLS: McpEngineTool[] = [
@@ -572,7 +859,7 @@ export const TOOLS: McpEngineTool[] = [
       },
       source: {
         type: 'string',
-        enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'],
+        enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
         description:
           'Optional provider filter. "foreign" is the shared reader for the other local agents ' +
           '(Cursor, Windsurf, Zed, Copilot CLI and the rest) — omit it to get every store at once.',
@@ -684,7 +971,10 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
+        source: {
+          type: 'string',
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
+        },
       },
       ['id'],
     ),
@@ -708,7 +998,7 @@ export const TOOLS: McpEngineTool[] = [
         caseSensitive: { type: 'boolean', description: 'Match case exactly (default false).' },
         source: {
           type: 'string',
-          enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'],
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
           description:
             "Optional provider filter. 'foreign' is the shared reader for the other local agents " +
             '(Cursor, Windsurf, Zed, Copilot CLI and the rest); omit it to search every store.',
@@ -776,7 +1066,7 @@ export const TOOLS: McpEngineTool[] = [
       // private store. Named in the FIRST sentence as the thing to call before a migration,
       // because the tools that could half-answer it are a listing tool that returns 2KB rows and
       // a MUTATING move tool run with dry_run.
-      'EVERY CHAT ON ONE DESKTOP ACCOUNT, compactly — start here before moving, auditing or counting chats. Returns one small row per chat (chatId, sessionId, title, isArchived, lastActivityAt, cwd) plus `live`/`livePid`, which say whether an engine is hosting it RIGHT NOW: that is the single fact that decides whether move_chat will refuse it, and before this tool the only way to learn it was to attempt the move and read the refusal. Do NOT use list_sessions for this — its rows carry 27 fields each and one 206-chat account came to 117KB, refused by the caller\'s token cap before a single row was read. `counts` describes the WHOLE account regardless of the filters ({all, unarchived, archived, live}), so "1 row" can never be misread as "this account is empty": an account is typically 200+ chats of which one or two are unarchived, because archived is Claude Desktop\'s resting state, not a sign a chat is finished. `total` is the matches BEFORE limit/offset. `instances` lists every label the scan saw, so a mistyped instance shows up beside the real names instead of as an empty answer. Read-only: it touches nothing.',
+      'EVERY CHAT ON ONE DESKTOP ACCOUNT, compactly — start here before moving, auditing or counting chats. Returns one small row per chat (chatId, sessionId, title, isArchived, lastActivityAt, cwd) plus `live`/`livePid`, which say whether an engine is hosting it RIGHT NOW: that is the single fact that decides whether move_chat will refuse it, and before this tool the only way to learn it was to attempt the move and read the refusal. Do NOT use list_sessions for this — its rows carry 27 fields each and one 206-chat account came to 117KB, refused by the caller\'s token cap before a single row was read. `counts` describes the WHOLE account regardless of the filters ({all, unarchived, archived, live, staleLogin}), so "1 row" can never be misread as "this account is empty": an account is typically 200+ chats of which one or two are unarchived, because archived is Claude Desktop\'s resting state, not a sign a chat is finished. `total` is the matches BEFORE limit/offset. `instances` lists every label the scan saw, so a mistyped instance shows up beside the real names instead of as an empty answer. ⛔ `staleLogin: true` ON A ROW MEANS ON DISK BUT NOT IN THE APP: the chat is filed under an account that profile is no longer signed into, and the desktop app shows only the signed-in account\'s chats, so a re-login hides every chat of the previous login (#12, 2026-09-18: four chats vanished this way and every tool still called them present). `counts.staleLogin` counts the unarchived ones - anything above zero is chats the owner cannot see; move_chats to that SAME instance re-homes them. Read-only: it touches nothing.',
     inputSchema: S({
       instance: {
         type: ['string', 'number'],
@@ -820,7 +1110,10 @@ export const TOOLS: McpEngineTool[] = [
       'list_chats. The archive flag is returned under BOTH `archived` and `isArchived`, the ' +
       'second being the name the metadata file on disk uses: an agent that hand-read the store ' +
       "for the documented name got every chat wrong (206 read as unarchived when 205 weren't) " +
-      'and nothing errored, so the two names are kept deliberately in sync.',
+      'and nothing errored, so the two names are kept deliberately in sync. Each match also ' +
+      'carries `accountUuid` (the account folder its record is filed under), `loginUuid` (the ' +
+      'account that profile is signed into now) and `staleLogin`: TRUE MEANS THE RECORD IS ON ' +
+      'DISK AND NOT IN THE APP, because the app shows only the signed-in account. Null = unknown.',
     inputSchema: S(
       { q: { type: 'string', description: 'Title fragment or any session/chat id (substring).' } },
       ['q'],
@@ -844,7 +1137,10 @@ export const TOOLS: McpEngineTool[] = [
           type: 'boolean',
           description: 'Only the user turns. Overrides textOnly. Use this to skim a long session.',
         },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
+        source: {
+          type: 'string',
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
+        },
       },
       ['id'],
     ),
@@ -872,7 +1168,10 @@ export const TOOLS: McpEngineTool[] = [
         id: { type: 'string' },
         format: { type: 'string', enum: ['markdown', 'html'], description: 'Default markdown.' },
         thinking: { type: 'boolean', description: "Include the model's reasoning blocks." },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
+        source: {
+          type: 'string',
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
+        },
       },
       ['id'],
     ),
@@ -895,7 +1194,10 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(
       {
         id: { type: 'string' },
-        source: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'foreign'] },
+        source: {
+          type: 'string',
+          enum: ['claude', 'codex', 'opencode', 'hermes', 'dsh', 'zswarm', 'foreign'],
+        },
       },
       ['id'],
     ),
@@ -1134,7 +1436,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'whoami',
     description:
-      "WHICH INSTANCE AM I? Identifies the instance THIS process is actually running as — permanent number, kind, account email, plan and raw rate-limit tier — and shows its WORKING. It does NOT just read one env var: a Claude Desktop session sets no CLAUDE_CONFIG_DIR, so identification walks CODEX_HOME → CLAUDE_CONFIG_DIR → CLAUDE_CODE_EXECPATH → the instance folder holding this session's own claude-code-sessions file → the parent `claude.exe` process and the Electron host's --user-data-dir. Read `confidence`: 'exact' means a signal named the credential store and you may quote the number; 'assumed' means it fell back to the default ~/.claude login by ELIMINATION and must be hedged. `clues` is the literal proof, `ruledOut` says what was checked and came up empty. TWO THINGS THAT LOOK AUTHORITATIVE AND LIE, so never identify yourself from them: your transcript's location (a Desktop-instance session still writes to the DEFAULT ~/.claude/projects) and ~/.claude.json's oauthAccount email (the machine's default login, not the credential this session bills to). If a human tells you an instance number, THAT beats all of this.",
+      "WHICH INSTANCE AM I? Identifies the instance THIS process is actually running as — permanent number, kind, account email, plan and raw rate-limit tier — and shows its WORKING. It does NOT just read one env var: a Claude Desktop session sets no CLAUDE_CONFIG_DIR, so identification walks CODEX_HOME → CLAUDE_CONFIG_DIR → CLAUDE_CODE_EXECPATH → the instance folder holding this session's own claude-code-sessions file → the parent `claude.exe` process and the Electron host's --user-data-dir. Read `confidence`: 'exact' means a signal named the credential store and you may quote the number; 'assumed' means it fell back to the default ~/.claude login by ELIMINATION and must be hedged. `clues` is the literal proof, `ruledOut` says what was checked and came up empty. OVER HTTP (how this server is normally registered) the tools run inside the DAEMON, so \"this process\" would be the daemon and never you: the answer is resolved from the process that opened the connection instead - its own command line is the instance dir - and `ruledOut` says so outright when that is what happened. TWO THINGS THAT LOOK AUTHORITATIVE AND LIE, so never identify yourself from them: your transcript's location (a Desktop-instance session still writes to the DEFAULT ~/.claude/projects) and ~/.claude.json's oauthAccount email (the machine's default login, not the credential this session bills to). If a human tells you an instance number, THAT beats all of this.",
     inputSchema: S({
       fresh: {
         type: 'boolean',
@@ -1143,7 +1445,7 @@ export const TOOLS: McpEngineTool[] = [
       },
     }),
     run: async (a) => {
-      const self = await selfIdentity(a.fresh === true)
+      const self = await selfIdentity(a.fresh === true, await callerPidFromArgs(a))
       return {
         ...self,
         note: self.instance
@@ -1223,8 +1525,8 @@ export const TOOLS: McpEngineTool[] = [
     description:
       'Self-check: read YOUR OWN remaining Claude quota, right now, in ~300ms. Returns the session (5h) %, the weekly all-models % (the BINDING cap), an `advice` verdict with `shouldOffload` / `safeToFanOut` flags, and `identity` — WHICH numbered instance you are, on WHAT plan/tier, and HOW that was established, so you can report "instance #11 (Pro) is at 82% weekly" instead of an unattributed percentage. It identifies itself the same way whoami does (env → session file → parent process), so it reports the right account for a Claude DESKTOP session too, not just a CLI instance that sets CLAUDE_CONFIG_DIR. CALL THIS when you are doing long or heavy work: if `shouldOffload` is true you are close to being cut off mid-task, and you should WRITE YOUR WORKING CONTEXT, FINDINGS, AND NEXT STEPS TO A FILE BEFORE CONTINUING, so the work survives. Also call it before a big multi-agent fan-out — and gate on CURRENT + PROJECTED cost, because a fan-out cannot be recalled once launched while solo work can be stopped at any tool call. If `identity.warning` is present, the percentages are real but WHOSE they are is not settled: say so rather than quoting a bare number.',
     inputSchema: S(),
-    run: async () => {
-      const self = await selfIdentity()
+    run: async (a) => {
+      const self = await selfIdentity(false, await callerPidFromArgs(a))
 
       // Prefer the INSTANCE route. It matters: a desktop instance's credential lives in Electron
       // safeStorage, not in a `.credentials.json`, so reading it by configDir alone returns
@@ -1263,24 +1565,34 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'list_usage',
     description:
-      "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. Checks are concurrent and cost no quota.",
+      "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict, plus the DeepSeek zswarm's own account balance (`deepseek`) beside them. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. When every account is saturated, the mechanical/checkable work belongs on the zswarm (`zswarm_run`), not queued behind a Claude account's reset. Checks are concurrent and cost no quota.",
     inputSchema: S(),
     run: async () => {
       const survey = (await apiOrLocal('/api/usage/survey', async () => {
         const { surveyUsage } = await import('./usage-service')
         const { usageAdvice } = await import('./usage')
-        const rows = await surveyUsage()
+        const { deepseekBalance } = await import('./zswarm-cost')
+        const [rows, deepseek] = await Promise.all([surveyUsage(), deepseekBalance()])
         return {
           rows: rows.map((r) => ({ ...r, advice: usageAdvice(r.result.snapshot) })),
+          deepseek,
           daemon: 'offline (answered locally)',
         }
       })) as Record<string, unknown>
+      // Every row saturated (weekly binding % >= 90, and actually read — 'unknown' never counts as
+      // saturated, that would be guessing) is the trigger the TODO this landed from names: route
+      // mechanical, checkable batch work to the zswarm instead of waiting on a reset.
+      const rows = (survey.rows ?? []) as Array<{ advice?: { bindingPct?: number | null } }>
+      const allSaturated = rows.length > 0 && rows.every((r) => (r.advice?.bindingPct ?? -1) >= 90)
       return {
         ...survey,
         // A survey has no single advice to branch on, so the instruction is about what to DO with
         // a list: pick by the binding cap, and quote the number so the human can check the choice.
         nextStep:
-          'Route heavy work to the row with the lowest WEEKLY (all models) %, not the lowest session %, and name it by its `num` when you say where you sent it. A row whose advice.severity is "unknown" was not read successfully; that is not headroom.',
+          'Route heavy work to the row with the lowest WEEKLY (all models) %, not the lowest session %, and name it by its `num` when you say where you sent it. A row whose advice.severity is "unknown" was not read successfully; that is not headroom.' +
+          (allSaturated
+            ? ' EVERY account is at or above 90% weekly: do not fan out to any of them. Mechanical, checkable batch work (find/read/classify/extract-to-schema, not judgment) goes to the DeepSeek zswarm instead - zswarm_run, `deepseek` balance permitting.'
+            : ''),
       }
     },
   },
@@ -1654,7 +1966,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'move_chat',
     description:
-      'MUTATES: MOVE ONE CHAT BETWEEN ACCOUNTS IN ONE CALL — the path for "move the X chat from Martin to here" (owner, 2026-09-04: by hand this took a dozen round trips and minutes; now it is this call). `chat` is a title fragment — matched FUZZILY, so case, punctuation and a misspelling still find it ("arkitecht cleanup" finds "Arkitekt cleanup") — or a session id. `from` (optional) is the account it lives on — instance number, name, label or email — and scopes the search, so a title two accounts share is not ambiguous. `to` defaults to "here" (the instance THIS process runs as, resolved like whoami; refused unless that identity is exact); "best" picks the running desktop instance with the most real headroom (tier × remaining weekly %, from the usage survey, never the source); or name any instance by number/name/label/email. It runs the orchestrator\'s migrate_chat with EVERY rail it has — hold, breaker, live-writer refusal, verified landing, source row settled so the old account no longer shows it — plus --now: a chat whose turn is finished and whose transcript shows NO background job outstanding moves after 15s of quiet instead of the standing 300s (an outstanding job, a working or stuck engine still wait or refuse). `wait_secs` (default 330, max 360) is how long the call itself waits for a chat that is idle but not yet quiet enough. EVERY LANDING IS STAMPED bypassPermissions + ultracode, and then ADJUDICATED, because a disk read is not the mode the chat opens with: the app holds each chat\'s mode in MEMORY and only re-reads its store at its own process boot. Read `bypassVerdict`, never `permissionMode` (which is only what the disk said last). `app-confirmed` = the target app\'s own permission picker was driven and agreed; `adopted-at-boot` = the target app is closed, so it will read this stamp at its next boot; both are real. `disk-only` = NOT a guarantee, the chat may open on a prompting mode, and `bypassRemedy` is the exact command that fixes it. `bypassStamped` is true only for the two earned verdicts. `force` is a PERSON\'S word — pass it only when the human asked for this move (it overrides a hold or a superseded lineage; a live writer is never overridden). `dry_run` resolves the chat, the target, the hold and the engine\'s idleness and reports the plan without moving anything. Read `report`; `landed` is the verdict. `targetNote` CONFIRMS the resolved account by NAME AND EMAIL ("to = instance #12 (pap3r rotate2 · Max 20×) — someone@example.com") — a stale identity signal has landed chats on the wrong account before (2026-09-07); when `to`/"here" is not obviously right, call this with `dry_run: true` FIRST and read `targetNote` before the real move. A just-landed chat does not process peer messages until the user first interacts with it.',
+      'MUTATES: MOVE ONE CHAT BETWEEN ACCOUNTS IN ONE CALL — the path for "move the X chat from Martin to here" (owner, 2026-09-04: by hand this took a dozen round trips and minutes; now it is this call). `chat` is a title fragment — matched FUZZILY, so case, punctuation and a misspelling still find it ("arkitecht cleanup" finds "Arkitekt cleanup") — or a session id. `from` (optional) is the account it lives on — instance number, name, label or email — and scopes the search, so a title two accounts share is not ambiguous. `to` defaults to "here" (the instance THIS process runs as, resolved like whoami; refused unless that identity is exact); "best" picks the running desktop instance with the most real headroom (tier × remaining weekly %, from the usage survey, never the source); or name any instance by number/name/label/email. It runs the orchestrator\'s migrate_chat with EVERY rail it has — hold, breaker, live-writer refusal, verified landing, source row settled so the old account no longer shows it — plus --now: a chat whose turn is finished and whose transcript shows NO background job outstanding moves after 15s of quiet instead of the standing 300s (an outstanding job, a working or stuck engine still wait or refuse). `wait_secs` (default 330, max 360) is how long the call itself waits for a chat that is idle but not yet quiet enough. EVERY LANDING IS STAMPED bypassPermissions + ultracode, and then ADJUDICATED, because a disk read is not the mode the chat opens with: the app holds each chat\'s mode in MEMORY and only re-reads its store at its own process boot. Read `bypassVerdict`, never `permissionMode` (which is only what the disk said last). `app-confirmed` = the target app\'s own permission picker was driven and agreed; `adopted-at-boot` = the target app is closed, so it will read this stamp at its next boot; both are real. `disk-only` = NOT a guarantee, the chat may open on a prompting mode, and `bypassRemedy` is the exact command that fixes it. `bypassStamped` is true only for the two earned verdicts. `force` is a PERSON\'S word — pass it only when the human asked for this move (it overrides a hold or a superseded lineage; a live writer is never overridden). `dry_run` resolves the chat, the target, the hold and the engine\'s idleness and reports the plan without moving anything. Read `report`; `landed` is the verdict. ⛔ READ `collateral`: a move now reads every chat record on the machine before and after itself, and any chat OUTSIDE the move that went archived while it ran is named there, with `ok` false and the report saying which account to unarchive it from (a bystander was archived this way on 2026-09-16 and nothing reported it). `targetNote` CONFIRMS the resolved account by NAME AND EMAIL ("to = instance #12 (pap3r rotate2 · Max 20×) — someone@example.com") — a stale identity signal has landed chats on the wrong account before (2026-09-07); when `to`/"here" is not obviously right, call this with `dry_run: true` FIRST and read `targetNote` before the real move. A just-landed chat does not process peer messages until the user first interacts with it.',
     inputSchema: S(
       {
         chat: { type: 'string', description: 'Title fragment (fuzzy) or session id.' },
@@ -1698,7 +2010,7 @@ export const TOOLS: McpEngineTool[] = [
       const wait = Math.max(0, Math.min(360, Number(a.wait_secs ?? 330) || 0))
       // One resolver, shared with move_chats (resolveMoveTarget), so a batch and a single
       // move can never disagree about which account "here" or "best" names.
-      const { toRef, targetNote } = await resolveMoveTarget(a.to)
+      const { toRef, targetNote } = await resolveMoveTarget(a.to, await callerPidFromArgs(a))
       const args = [
         chat,
         '--to',
@@ -1742,8 +2054,12 @@ export const TOOLS: McpEngineTool[] = [
         // daemon busy) — hand back the raw run so the reason is visible, never a bare failure
         return { ...run, ok: false, args, targetNote }
       }
+      // COLLATERAL IS NOT OK (2026-09-17). `landed` answers "did THIS chat move"; a move that
+      // archived a chat it was never given is not a clean move, and the script already says so
+      // on its own payload - so the tool's verdict must not read it back as a success.
+      const collateral = Array.isArray(payload.collateral) ? payload.collateral : []
       return {
-        ok: payload.landed === true || payload.dryRun === true,
+        ok: (payload.landed === true || payload.dryRun === true) && collateral.length === 0,
         ...payload,
         targetNote,
         exitCode: run.exitCode,
@@ -1755,15 +2071,36 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'move_chats',
     description:
-      "MUTATES: MOVE MANY CHATS BETWEEN ACCOUNTS IN ONE CALL — move_chat's plural, and the one you should reach for whenever more than a single chat is being moved (owner, 2026-09-05, angry: 13 chats took ~15 minutes as 13 separate calls). Do NOT loop move_chat and do NOT fire it in parallel: the daemon keys its in-flight map by SCRIPT NAME, so concurrent move_chat calls do not overlap — all but one return `409 busy` and the rest time their sockets out. This runs the orchestrator's migrate_batch, which executes migrate_chat's OWN pipeline inside ONE interpreter and ONE route-lock acquisition, BY PHASE rather than by chat (owner, 2026-09-06: \"move them all, archive them all, then set all the permissions\"): every chat is moved and verified, THEN every source row is settled, THEN one shared bypass watch is followed by every chat's permission stamp. So the fleet, session and usage-survey reads are paid once for the whole batch, the 8s bypass watch is paid once instead of once per chat, and the chats are usable as soon as the first phase ends. EVERY RAIL IS UNCHANGED AND PER CHAT: each chat is re-resolved immediately before its own gates (a liveness read from batch start is not liveness), a live writer is still refused, the landing is still verified by read-back, the source row is still settled, and the bypass verdict is still ADJUDICATED — read each result's `bypassVerdict`, never `permissionMode`. Imports are deliberately NOT parallelised: /import-desktop takes no act lock and two at once into one store can create a duplicate row that makes a chat permanently unreachable. Pass `chats` (title fragments or session ids), or `all_unarchived: true` to take every unarchived desktop chat — with `from` to scope that to one account and `limit` to cap it. A REFUSED CHAT DOES NOT STOP THE BATCH: it is reported by name with its reason and the rest continue, so read `refused` and the per-chat `results`, never just `moved`. `dry_run: true` plans every chat and moves nothing. Expect roughly 15-25s per chat that actually lands (the import, the source settle and the app's own permission picker each drive one window under its own lock, so they are irreducibly serial); the saving is in what is no longer repeated and no longer waited for twice, not in doing several at once. `targetNote` CONFIRMS the WHOLE BATCH's resolved account by NAME AND EMAIL — resolved once, before the FIRST chat is imported, and identical whether `dry_run` is set or not, so a `dry_run: true` call reads the exact same confirmation a real batch would land under, with nothing yet moved. A stale identity signal landed three chats on the wrong account this way (2026-09-07) before anyone read it; when `to`/\"here\" is not obviously right for a batch this size, dry-run it first and check `targetNote` before moving anything.",
+      "MUTATES: MOVE MANY CHATS BETWEEN ACCOUNTS IN ONE CALL — move_chat's plural, and the one you should reach for whenever more than a single chat is being moved (owner, 2026-09-05, angry: 13 chats took ~15 minutes as 13 separate calls). Do NOT loop move_chat and do NOT fire it in parallel: the daemon keys its in-flight map by SCRIPT NAME, so concurrent move_chat calls do not overlap — all but one return `409 busy` and the rest time their sockets out. This runs the orchestrator's migrate_batch, which executes migrate_chat's OWN pipeline inside ONE interpreter and ONE route-lock acquisition, BY PHASE rather than by chat (owner, 2026-09-06: \"move them all, archive them all, then set all the permissions\"): every chat is moved and verified, THEN every source row is settled, THEN one shared bypass watch is followed by every chat's permission stamp. So the fleet, session and usage-survey reads are paid once for the whole batch, the 8s bypass watch is paid once instead of once per chat, and the chats are usable as soon as the first phase ends. EVERY RAIL IS UNCHANGED AND PER CHAT: each chat is re-resolved immediately before its own gates (a liveness read from batch start is not liveness), a live writer is still refused, the landing is still verified by read-back, the source row is still settled, and the bypass verdict is still ADJUDICATED — read each result's `bypassVerdict`, never `permissionMode`. Imports are deliberately NOT parallelised: /import-desktop takes no act lock and two at once into one store can create a duplicate row that makes a chat permanently unreachable. Pass `chats` (title fragments or session ids), or `all_unarchived: true` to take every unarchived desktop chat — with `from` to scope that to one account and `limit` to cap it. A CHAT FILED UNDER A PREVIOUS LOGIN OF THE TARGET (list_chats `staleLogin: true`) IS NOT ALREADY THERE: moving it to that same instance RE-HOMES it into the signed-in account's folder, and its old record is set aside under ~/.agenthydra/backups/stale-login-records (never deleted). A REFUSED CHAT DOES NOT STOP THE BATCH: it is reported by name with its reason and the rest continue, so read `refused` and the per-chat `results`, never just `moved`. ⛔ READ `collateral`: a move now reads every chat record on the machine before and after itself, and any chat OUTSIDE the move that went archived while it ran is named there, with `ok` false and the report saying which account to unarchive it from (a bystander was archived this way on 2026-09-16 and nothing reported it). `dry_run: true` plans every chat and moves nothing. Expect roughly 15-25s per chat that actually lands (the import, the source settle and the app's own permission picker each drive one window under its own lock, so they are irreducibly serial); the saving is in what is no longer repeated and no longer waited for twice, not in doing several at once. `targetNote` CONFIRMS the WHOLE BATCH's resolved account by NAME AND EMAIL — resolved once, before the FIRST chat is imported, and identical whether `dry_run` is set or not, so a `dry_run: true` call reads the exact same confirmation a real batch would land under, with nothing yet moved. A stale identity signal landed three chats on the wrong account this way (2026-09-07) before anyone read it; when `to`/\"here\" is not obviously right for a batch this size, dry-run it first and check `targetNote` before moving anything. ⛔ ARCHIVED CHATS DO NOT MOVE HERE BY DEFAULT AND MUST NOT BE SWEPT ALONG (owner directive, Michael, 2026-09-05, restated angrily 2026-09-13): an account's archive is the overwhelming MAJORITY of its chats - 22 of 25 in the incident - so \"migrate this account\" means its UNARCHIVED chats unless the human said otherwise, and the engine refuses the WHOLE batch if archived chats are named without `archived_count`, if that count does not match, or if archived and unarchived chats are mixed in one batch.",
     inputSchema: S(
       {
         chats: {
           type: 'array',
           minItems: 1,
-          items: { type: 'string' },
+          items: {
+            type: ['string', 'object'],
+            properties: {
+              chat: { type: 'string', description: 'A title fragment (fuzzy) or a session id.' },
+              title: {
+                type: 'string',
+                description:
+                  "THIS chat's own real title - the per-chat door added 2026-09-15 (TODO item 1). " +
+                  "Without it, a bare move restates one of the chat's two CURRENT names as " +
+                  "confirm_title (the daemon session's own title, or the desktop record's - they " +
+                  'can disagree, e.g. a chat titled by its first message on one side and renamed ' +
+                  'in the app on the other), and a caller with no way to read which one the door ' +
+                  "wants got a deterministic 400. Naming the chat's real title here is a NEW " +
+                  'name, which the naming door always accepts outright - no restatement, no ' +
+                  'guessing which store the door compares against. Ignored on a plain-string ' +
+                  'entry.',
+              },
+            },
+            required: ['chat'],
+          },
           description:
-            'The chats to move: each a title fragment (fuzzy) or a session id. Omit only when using all_unarchived.',
+            'The chats to move: each a title fragment (fuzzy) or a session id, OR ' +
+            '`{chat, title}` to also give that one chat its own real title (see `title` above). ' +
+            'Omit only when using all_unarchived.',
         },
         all_unarchived: {
           type: 'boolean',
@@ -1785,10 +2122,10 @@ export const TOOLS: McpEngineTool[] = [
           description:
             "A person's word, applied to EVERY chat in the batch: override a hold / superseded lineage. A live writer is never overridden. Only when the human asked.",
         },
-        archived: {
-          type: 'boolean',
+        archived_count: {
+          type: 'number',
           description:
-            'Allow ARCHIVED chats to move too. Default false. Ignored by all_unarchived, which is unarchived by definition.',
+            "⛔ ONLY WHEN THE HUMAN NAMED ARCHIVED CHATS. How many of the chats in this batch are ARCHIVED. Replaced the old `archived: true` boolean on 2026-09-13, because a boolean cannot tell the human's instruction from an agent's own initiative and an agent set it for itself while sweeping an account, queueing all 22 of its archived chats behind the 3 that were asked for. The engine REFUSES THE WHOLE BATCH unless this number EQUALS the archived chats it actually holds, and unless they are the WHOLE batch - archived chats never ride along with unarchived ones. Counting them first is the point. Omit it entirely for ordinary work; `all_unarchived` never needs it.",
         },
         limit: {
           type: 'number',
@@ -1803,26 +2140,39 @@ export const TOOLS: McpEngineTool[] = [
         resume: {
           type: 'string',
           description:
-            "After EVERY landed chat is moved, settled and stamped, stage this text as a reply to each one and deliver it by hand - the courier's NAMED-delivery path: no tray icon, no fair-share cap, because a person is managing (owner, 2026-09-06). This is what makes a migrated chat CONTINUE WORKING: a landed chat is otherwise DORMANT until someone types into it. A chat whose engine booted on landing and is mid-turn keeps the reply staged (the courier never interrupts a live turn); its result carries `resume.retry`, the exact command. Read each result's `resume` ({delivered, why, retry}) - a landed chat with resume.delivered false is moved but has not been told to carry on. Say in the text that the chat was moved and why, and if terminate_live is on, that any in-flight tool result was lost.",
+            "After EVERY landed chat is moved, settled and stamped, stage this text as a reply to each one and deliver it by hand - the courier's NAMED-delivery path: no tray icon, no fair-share cap, because a person is managing (owner, 2026-09-06). This is what makes a migrated chat CONTINUE WORKING: a landed chat is otherwise DORMANT until someone types into it. A chat whose engine booted on landing and is mid-turn keeps the reply staged (the courier never interrupts a live turn); its result carries `resume.retry`, the exact command. Read each result's `resume` ({delivered, why, retry}) - a landed chat with resume.delivered false is moved but has not been told to carry on. Say in the text that the chat was moved and why, and if terminate_live is on, that any in-flight tool result was lost. If the whole call is REFUSED because another batch holds the route, the resume is not lost: it is staged against each named chat and listed in `resumeStaged` (deliver with courier --yes --only <id>).",
         },
         terminate_live: {
           type: 'boolean',
           description:
-            "A PERSON'S WORD: a chat refused for a live engine (working, or quiet but not yet past its window) has that engine KILLED - the whole process tree - and is then moved. For draining an account about to hit its limit, where letting the turn finish would spend the last of its quota and the turn would die on the wall anyway. The transcript survives; a tool result still in flight is lost, so pair it with `resume` text that says so. Never implied by `force` (which only overrides a hold); never applied to a hold, the breaker, or an archived chat; an unconfirmed kill leaves the refusal in place and says why.",
+            "A PERSON'S WORD: a chat refused for a live engine (working, or quiet but not yet past its window) has that engine KILLED - the whole process tree - and is then moved. ALREADY GIVEN when the source account is at 98% or more on its 5-hour OR weekly bucket (owner's standing order, 2026-09-20): the engine kills those without this flag, and the result's `terminated.standingOrder` says so. For draining an account about to hit its limit, where letting the turn finish would spend the last of its quota and the turn would die on the wall anyway. The transcript survives; a tool result still in flight is lost, so pair it with `resume` text that says so. Never implied by `force` (which only overrides a hold); never applied to a hold, the breaker, or an archived chat; an unconfirmed kill leaves the refusal in place and says why. It also PREEMPTS a patient move_chats already running for the SAME chats (the answer carries `preempted: <operation id>`), so 'kill it and move it' is this one call, never a taskkill; a running batch that names chats this call does not is still refused, and stopping it is orchestrator_cancel's job.",
         },
         dry_run: { type: 'boolean', description: 'Plan every chat, move nothing.' },
         background: {
           type: 'boolean',
           description:
-            "Answer AT ONCE with `operationId` instead of holding the connection open for the whole batch, then poll `orchestrator_operation {id}` for the full report. STRONGLY PREFERRED for more than two or three chats: this batch's own deadline runs to an hour, which is far longer than most MCP callers will wait, and a caller that gives up first loses the entire per-chat report - what landed, every bypassVerdict, whether each resume was delivered - for work that is still running and WILL finish.",
+            "ALREADY THE DEFAULT (2026-09-13) whenever this batch's own declared length exceeds 120s, which is nearly always - only a batch you declare SHORT (one chat, a small idle-wait, no resume) ever runs blocking. True answers AT ONCE with `operationId` instead of holding the connection open; poll `orchestrator_operation {id}` for the full report. `false` FORCES blocking even past 120s - only for a caller who knows their own transport can wait. Omit it to get the auto rule. This batch's own deadline runs to an hour, which is far longer than most MCP callers will wait, and a caller that gives up first loses the entire per-chat report - what landed, every bypassVerdict, whether each resume was delivered - for work that is still running and WILL finish.",
         },
       },
       [],
     ),
     run: async (a) => {
-      const chats = Array.isArray(a.chats)
-        ? a.chats.map((c) => str(c).trim()).filter((c) => c !== '')
-        : []
+      // Each entry is a bare query string, or `{chat, title}` naming that one chat's own real
+      // title (2026-09-15, TODO item 1's per-chat door). Either shape reduces to a {chat, title}
+      // pair; a bare string just carries no title.
+      const chatSpecs = (Array.isArray(a.chats) ? a.chats : [])
+        .map((c) => {
+          if (c != null && typeof c === 'object') {
+            const o = c as Record<string, unknown>
+            return {
+              chat: str(o.chat).trim(),
+              title: typeof o.title === 'string' ? o.title.trim() : '',
+            }
+          }
+          return { chat: str(c).trim(), title: '' }
+        })
+        .filter((c) => c.chat !== '')
+      const chats = chatSpecs.map((c) => c.chat)
       const all = a.all_unarchived === true
       if (!all && chats.length === 0)
         throw new Error(
@@ -1832,16 +2182,29 @@ export const TOOLS: McpEngineTool[] = [
       // one specific chat and will wait for it; multiplied across a batch it is the entire
       // complaint this tool exists to answer.
       const wait = Math.max(0, Math.min(360, Number(a.wait_secs ?? 60) || 0))
-      const { toRef, targetNote } = await resolveMoveTarget(a.to)
+      const { toRef, targetNote } = await resolveMoveTarget(a.to, await callerPidFromArgs(a))
       const args = ['--to', toRef, '--stop-idle', '--now', '--idle-wait', String(wait), '--json']
-      for (const c of chats) args.push('--chat', c)
+      for (const c of chatSpecs) {
+        args.push('--chat', c.chat)
+        if (c.title) args.push('--chat-title', c.title)
+      }
       if (all) args.push('--all-unarchived')
       if (a.from != null && str(a.from).trim() !== '') {
         const src = await resolveRef(str(a.from).trim())
         args.push('--from', String(src.num))
       }
       if (a.force === true) args.push('--force')
-      if (a.archived === true) args.push('--archived')
+      // arkitect-allow: no-bandaids "stopgap" names the mechanism's cautious design (refuse a
+      // mismatched count), not a temporary state — this replaced the old bare boolean permanently
+      // (landed 6be90fd, no compatibility shim, an old caller fails the schema loudly by design).
+      // arkitect-allow: no-bandaids (reason in the comment above)
+      // The archive stopgap's caller half: a COUNT, never a bare boolean, and the count travels
+      // with the override so the engine can refuse a number that does not match what it sees.
+      // `all_unarchived` is unarchived by definition, so a count against it is meaningless and
+      // is dropped rather than forwarded as a contradiction.
+      const archivedCount = Number(a.archived_count)
+      if (!all && Number.isFinite(archivedCount) && archivedCount > 0)
+        args.push('--archived', '--archived-count', String(Math.floor(archivedCount)))
       if (a.dry_run === true) args.push('--dry-run')
       const limit = Math.max(0, Math.floor(Number(a.limit ?? 0) || 0))
       if (limit > 0) args.push('--limit', String(limit))
@@ -1861,19 +2224,66 @@ export const TOOLS: McpEngineTool[] = [
       // landed and every resume reply HAD been staged - so it staged five duplicates). Re-firing
       // the identical call now returns the ORIGINAL operation instead of moving anything twice,
       // which makes "I lost the answer, ask again" the safe move rather than a second act.
-      const idempotencyKey = `move_chats:${JSON.stringify(args)}`
-      const background = a.background === true
-      const run = (await api('/api/orchestrator/run', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          script: 'migrate_batch',
+      //
+      // ⛔ EXCEPT FOR A DRY RUN, which has no act to make idempotent and is actively harmed by
+      // this (2026-09-18): two probes minutes apart with identical arguments came back
+      // BYTE-IDENTICAL, same `secs: 1.08`, same `quiet_secs: 13`, because the daemon correctly
+      // returned the existing operation rather than running twice. A caller polling the gate to
+      // find its window therefore reads a STALE quiet_secs and cannot tell - varying one
+      // argument (`wait_secs` 5 -> 7) forced a fresh run and immediately showed 21s, not 13s.
+      // "Vary an argument each time" is a trap nobody would guess from the tool description, so
+      // a dry run gets a fresh key per call instead. Nothing is moved either way.
+      const idempotencyKey =
+        a.dry_run === true
+          ? `move_chats:dry:${Date.now()}:${JSON.stringify(args)}`
+          : `move_chats:${JSON.stringify(args)}`
+      // ⛔ THE SAME AUTO-DETACH orchestrator_run ALREADY EARNED FROM A NEARLY IDENTICAL INCIDENT
+      // (2026-09-11, that tool's own history above) - a caller that DECLARES a run longer than
+      // AUTO_DETACH_MS is detached automatically, because a batch is exactly the shape that
+      // outlives an MCP client's transport (found again 2026-09-13: a ONE-chat batch's own
+      // `timeoutMs` was already 330s+ - the default `background: a.background === true` waited
+      // for the connection to die anyway, `The operation timed out.` with NO operationId, and
+      // the finished report - including whether the resume was delivered - was unreachable).
+      // `timeoutMs` here is built from the batch's own per-chat budget, so it is ALWAYS the
+      // honest declared length of the run; an explicit `background: false` is still honoured
+      // for a caller who really does want to block (and knows their transport can wait).
+      const background =
+        a.background === true || (a.background == null && timeoutMs > AUTO_DETACH_MS)
+      let run: Record<string, unknown>
+      try {
+        run = (await api('/api/orchestrator/run', {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            script: 'migrate_batch',
+            args,
+            timeoutMs,
+            async: background,
+            idempotencyKey,
+          }),
+        })) as Record<string, unknown>
+      } catch (err) {
+        // The route said no - another batch holds it and this call does not cover its chats (see
+        // mayPreempt). Hand back the daemon's refusal as an object, not a thrown string. Its
+        // `resumeStaged` was written by the DAEMON (orchestrator.ts stageRefusedResume), which is
+        // the one place a refusal is seen on both the blocking and the detached path.
+        const refusal = busyRefusal(err)
+        if (!refusal) throw err
+        const staged = Array.isArray(refusal.resumeStaged) ? refusal.resumeStaged : null
+        return {
+          ...refusal,
+          ok: false,
           args,
-          timeoutMs,
-          async: background,
-          idempotencyKey,
-        }),
-      })) as Record<string, unknown>
+          targetNote,
+          ...(resume === ''
+            ? {}
+            : {
+                note: staged?.length
+                  ? 'The move was refused, but its resume text is STAGED against each named chat (see resumeStaged) - deliver it with courier.py --yes --only <id>, or leave it for the next successful move. Re-firing this call re-uses the same staged row rather than writing a second one.'
+                  : 'The move was refused and its resume text was NOT kept: there was no named chat to stage it against (a whole-account sweep names none). Re-send it with the retry.',
+              }),
+        }
+      }
       // `background` answers with the id and nothing else yet - there is no report to parse.
       if (background)
         return {
@@ -1881,7 +2291,10 @@ export const TOOLS: McpEngineTool[] = [
           started: true,
           targetNote,
           poll: `orchestrator_operation { id: "${str(run.operationId)}" }`,
-          note: 'The batch is running in the daemon. Poll the id above for the full per-chat report; re-calling move_chats with these exact arguments returns this same operation rather than moving anything twice.',
+          note:
+            a.background === true
+              ? 'The batch is running in the daemon. Poll the id above for the full per-chat report; re-calling move_chats with these exact arguments returns this same operation rather than moving anything twice.'
+              : `Detached automatically: this batch's own declared length (${Math.round(timeoutMs / 1000)}s) is longer than an MCP client will hold a connection open, and a call the client abandons loses the report - what landed, every bypassVerdict, whether each resume was delivered - for work that keeps running anyway. Poll the id above for the full per-chat report; pass background:false if you really do want to block (only worth it for a batch you know is short).`,
         }
       let payload: Record<string, unknown> | null = null
       try {
@@ -1911,7 +2324,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'fan_out',
     description:
-      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). Then fan_out_status reads them and fan_out_send steers them. `dry_run: true` returns the plan and spawns nothing. This is a person's act and does not need the tray icon. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
+      "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). ⛔ SPAWNING RUNS IN THE DAEMON, NOT ON THIS CONNECTION: a real fan-out (~30-90s per chat, sequential) is always DETACHED automatically past 120s declared - you get the group id and an operationId AT ONCE, and the daemon keeps spawning every chat regardless of whether this call's own connection is abandoned (a lost client can no longer cancel work mid-spawn). Poll fan_out_status { group } for each member's progress; pass `background: false` only for a one-or-two-chat call you know your transport can hold open. Then fan_out_status reads them and fan_out_send steers them. `dry_run: true` returns the plan and spawns nothing, and always blocks (it only ranks and plans). This is a person's act and does not need the tray icon. WRONG TOOL when every Claude account is at/above 90% weekly (check list_usage first): mechanical, checkable batch work belongs on the DeepSeek zswarm instead (zswarm_run) rather than queued behind N account resets; fan_out remains right for work that needs a real Claude Desktop chat. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
     inputSchema: S(
       {
         tasks: {
@@ -1965,6 +2378,11 @@ export const TOOLS: McpEngineTool[] = [
             "A person's word: start a task even though an identical chat already exists.",
         },
         dry_run: { type: 'boolean', description: 'Plan only: rank, assign, spawn nothing.' },
+        background: {
+          type: 'boolean',
+          description:
+            'ALREADY THE DEFAULT whenever this spawn declares itself longer than 120s, which is nearly every real fan-out (~30-90s per chat, sequential): answers AT ONCE with the group id and an operationId instead of holding the connection open for the whole spawn, which keeps running in the daemon regardless. Poll fan_out_status { group } for per-member progress. `false` forces blocking even past 120s - only for a caller whose own transport can wait that long. Omit it to get the auto rule; a dry_run never backgrounds (it only ranks and plans, in seconds).',
+        },
       },
       ['tasks'],
     ),
@@ -1982,7 +2400,16 @@ export const TOOLS: McpEngineTool[] = [
       })
       const groupName = str(a.group).trim()
       const spec = JSON.stringify({ ...(groupName ? { group: groupName } : {}), tasks })
-      const args = ['--spec', specArg(spec), '--json']
+      // ⛔ GENERATED HERE, NOT BY fan_out.py, SO IT CAN BE RETURNED BEFORE SPAWNING FINISHES
+      // (found live 2026-09-15, operation 2411fce7: the MCP call blocked on the WHOLE spawn -
+      // 30-90s per chat, sequential - and the client gave up long before the last chat landed,
+      // stranding it `planned` forever with no id anyone had ever seen). fan_out.py accepts this
+      // id verbatim via --group-id instead of minting its own, so the id handed back here is
+      // GUARANTEED to be the real group's id, not a guess - and the daemon keeps spawning
+      // server-side however this call is answered, so an abandoned client can no longer cancel
+      // work mid-spawn.
+      const groupId = `fo-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`
+      const args = ['--spec', specArg(spec), '--group-id', groupId, '--json']
       const perAccount = Number(a.per_account)
       if (Number.isFinite(perAccount) && perAccount > 1)
         args.push('--per-account', String(Math.floor(perAccount)))
@@ -2032,17 +2459,56 @@ export const TOOLS: McpEngineTool[] = [
       // only ranks and plans
       const timeoutMs =
         a.dry_run === true ? 180_000 : Math.min(60 * 60_000, 90_000 + tasks.length * 240_000)
+      // The SAME auto-detach rule orchestrator_run and move_chats already earned from nearly
+      // identical incidents: a caller that DECLARES a run longer than AUTO_DETACH_MS is detached
+      // automatically, because a real fan-out (30-90s PER CHAT, sequential) always outlives an
+      // MCP client's transport. A dry run never backgrounds - it only ranks and plans, in
+      // seconds, and the caller wants the plan back in the same call.
+      const background =
+        a.dry_run !== true &&
+        (a.background === true || (a.background == null && timeoutMs > AUTO_DETACH_MS))
       try {
-        return { ...(await runFanOut(args, timeoutMs)), selfNote }
+        const run = await runFanOut(args, timeoutMs, { background })
+        if (background)
+          return {
+            ...run,
+            groupId,
+            started: true,
+            selfNote,
+            poll: `fan_out_status { group: "${groupId}" }`,
+            note:
+              a.background === true
+                ? `Spawning is running in the daemon under group ${groupId}. Poll fan_out_status { group: "${groupId}" } for each member's progress; it does not block on the spawn.`
+                : `Detached automatically: this spawn's own declared length (${Math.round(timeoutMs / 1000)}s, ${tasks.length} chat(s) at ~30-90s each) is longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running anyway. Group ${groupId} is spawning in the daemon regardless of this call's connection; poll fan_out_status { group: "${groupId}" } for per-member progress, or pass background:false if you really do want to block (only worth it for one or two chats).`,
+          }
+        return { ...run, groupId, selfNote }
       } finally {
+        // arkitect-allow: no-bandaids permanent finally-block cleanup, not scheduled for removal —
         // a spec that travelled as a temp file is ours to remove once the script has read it
         // (review 2026-09-05: nothing else ever deleted it)
         const specPath = args[1]
         if (specPath !== spec) {
-          try {
-            unlinkSync(specPath)
-          } catch {
-            /* already gone, or never written */
+          if (background) {
+            // ⛔ THE SCRIPT MAY NOT HAVE READ ITS OWN ARGV YET. Backgrounding answers as soon as
+            // the daemon has STARTED the child, not once fan_out.py has parsed --spec - Python
+            // interpreter startup (importing orch.py, fan_out.py and everything it pulls in) can
+            // take longer than this call's own round trip, and deleting the file the instant we
+            // are told the run started would delete it out from under a `parse_spec` that has not
+            // run yet. Cleanup here is best-effort already (see the comment above); a generous
+            // delayed unlink keeps it best-effort rather than a race.
+            setTimeout(() => {
+              try {
+                unlinkSync(specPath)
+              } catch {
+                /* already gone, or never written */
+              }
+            }, 120_000)
+          } else {
+            try {
+              unlinkSync(specPath)
+            } catch {
+              /* already gone, or never written */
+            }
           }
         }
       }
@@ -2121,7 +2587,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'archive_desktop_chat',
     description:
-      'MUTATES: archive (archived=true, the default) or unarchive a chat in the Claude DESKTOP app by flipping its per-profile metadata flag. ⛔ WITHOUT `instance` THIS IS FLEET-WIDE - it flips EVERY profile whose store carries that session id, and after a migration that is BOTH the source leftover AND the real chat on the target, so an unscoped call can hide a chat the owner is using (it did, 2026-09-08). It now REFUSES (409) when more than one profile carries the session and no `instance` was named, and refuses to archive a chat whose engine is RUNNING unless `force`. Pass `instance` whenever you mean one copy. Caveat the caller must relay: for an instance whose app is RUNNING, the change appears only after that instance next restarts (a running app may even re-save the old state); for closed instances it is reliable. The AgentHydra done-mark is the immediate in-AgentHydra signal either way.',
+      'MUTATES: archive (archived=true, the default) or unarchive a chat in the Claude DESKTOP app by flipping its per-profile metadata flag. ⛔ WITHOUT `instance` THIS IS FLEET-WIDE - it flips EVERY profile whose store carries that session id, and after a migration that is BOTH the source leftover AND the real chat on the target, so an unscoped call can hide a chat the owner is using (it did, 2026-09-08). It now REFUSES (409) when more than one profile carries the session and no `instance` was named, and refuses to archive a chat whose engine is RUNNING unless `force`. Pass `instance` whenever you mean one copy. For an instance whose app is RUNNING, this DRIVES THE ARCHIVE CONTROL IN THE APP ITSELF (2026-09-17), so the row leaves the sidebar immediately and the app makes the write - read `stillOnScreen`: false means retired now, true means only the flag landed and `note` says why the click did not settle (the rails refuse when another LIVE chat in that profile renders the same title, and a row the sidebar never rendered cannot be clicked), in which case it lands at that instance next restart. UNARCHIVING has no in-app control to drive and always waits for that restart. For closed instances the flag alone is reliable. The AgentHydra done-mark is the immediate in-AgentHydra signal either way.',
     inputSchema: S(
       {
         session_id: { type: 'string' },
@@ -2166,6 +2632,20 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(),
     run: () => api('/api/update'),
   },
+  {
+    name: 'check_versions',
+    description:
+      "READ-ONLY: is the whole fleet on one Claude version? Returns the newest installed Claude Desktop build and the build each OPEN instance runs, the Claude Code version the newest Desktop asks for (`engine.target`) and every live chat's engine version, the Claude Code copy staged in every instance folder (closed ones included), the terminal CLI's version, and `flags`: one plain sentence per thing that is out of step. A closed instance whose staged copy is behind is NOT a problem by itself (the app fetches the new one on its next session); an OPEN instance on an old build or a live chat on an old engine only changes when it restarts, and nothing here restarts anything. The daemon runs the fixing pass every 10 minutes on its own; sync_versions runs it now.",
+    inputSchema: S(),
+    run: () => api('/api/versions'),
+  },
+  {
+    name: 'sync_versions',
+    description:
+      "MUTATES: run the version-drift pass now instead of waiting for its 10-minute timer. Stages the current Claude Code into every CLOSED instance that is behind (hard-linked from a copy the app already downloaded and verified, renamed into place in one step), updates the npm CLI install to the Desktop's version when no process runs from it, records one incident per thing still out of step and resolves the ones that are fixed. Never closes, restarts or stops an open instance or a live chat. AGENTHYDRA_VERSION_AUTOFIX=0 on the daemon makes it flag only.",
+    inputSchema: S(),
+    run: () => api('/api/versions/sync', { method: 'POST' }),
+  },
 
   // --- the orchestrator ------------------------------------------------------------
   // The Python toolbox under orchestrator/ decides what SHOULD happen to a chat; the daemon runs
@@ -2181,7 +2661,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'orchestrator_run',
     description:
-      "Run ONE orchestrator script by its menu name (`chats`, `migrate_chat`, `dossier`, `audit_twins`, `archive_chat`, `census`, ...) with its own arguments, exactly as `python orch.py <script> ...` would. OBSERVE scripts are read-only; ACT scripts MUTATE, and they keep every rail they have on the command line: NOTHING ACTS WITHOUT THE TRAY ICON (orchestrator_switch {action:'armed'} tells you), a live chat is never moved or archived, every attempt is counted, and `--force` is a PERSON'S word for one act - pass it only when the human asked for that act. TWO SCRIPTS ARE HAND-RUN AND DO NOT NEED THE ICON: `migrate_chat` and `chats --move-to` (the icon gates the unattended lanes, not a person's own move) - so for a targeted move do NOT arm first: arming resumes `saturate`, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet 300s. Pass `--idle-wait 330` with `--stop-idle` and the command sleeps out that window itself instead of you retrying on a guess (a working or stuck engine still refuses in a second). Returns stdout, stderr, the exit code and what the driver's codes mean (0 ok · 2 something failed · 3 refused/unknown/not armed · 1 daemon failure); a script's own codes are in its `--help`, which you can run here too (args: ['--help']). Long scripts get `timeout_secs` (default 600, max 3600).",
+      "Run ONE orchestrator script by its menu name (`chats`, `migrate_chat`, `dossier`, `audit_twins`, `archive_chat`, `census`, ...) with its own arguments, exactly as `python orch.py <script> ...` would. OBSERVE scripts are read-only; ACT scripts MUTATE, and they keep every rail they have on the command line: NOTHING ACTS WITHOUT THE TRAY ICON (orchestrator_switch {action:'armed'} tells you), a live chat is never moved or archived, every attempt is counted, and `--force` is a PERSON'S word for one act - pass it only when the human asked for that act. TWO SCRIPTS ARE HAND-RUN AND DO NOT NEED THE ICON: `migrate_chat` and `chats --move-to` (the icon gates the unattended lanes, not a person's own move) - so for a targeted move do NOT arm first: arming resumes `saturate`, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet 300s. Pass `--idle-wait 330` with `--stop-idle` and the command sleeps out that window itself instead of you retrying on a guess (a working or stuck engine still refuses in a second). Returns stdout, stderr, the exit code and what the driver's codes mean (0 ok · 2 something failed · 3 refused/unknown/not armed · 1 daemon failure); a script's own codes are in its `--help`, which you can run here too (args: ['--help']). Long scripts get `timeout_secs` (default 600, server cap 3600) - but YOUR client's transport gives up far below that, so a blocking call that outlives it loses the report for work the daemon keeps running. Anything you declare longer than 120s is DETACHED for you: you get an `operationId` and a `poll` line at once, and `orchestrator_operation {id}` hands back the same verdict the blocking call would have (kept for an hour, FOR AS LONG AS THE DAEMON THAT RAN IT STAYS UP). Lost a call anyway? `orchestrator_operation {}` with no id lists the recent runs. ⛔ But a RESTART wipes those records while the detached child keeps running: if a poll says `reason: 'daemon-restarted'`, the act may well have COMPLETED - never re-fire it, read the toolbox's own ledger and verify the effect directly.",
     inputSchema: S(
       {
         script: {
@@ -2207,26 +2687,48 @@ export const TOOLS: McpEngineTool[] = [
       },
       ['script'],
     ),
-    run: async (a) =>
-      api('/api/orchestrator/run', {
+    run: async (a) => {
+      const timeoutMs = a.timeout_secs != null ? Number(a.timeout_secs) * 1000 : undefined
+      // ⛔ A LONG BLOCKING RUN LOSES ITS OWN REPORT (2026-09-11). `sweep --all --yes` with
+      // timeout_secs 1200 (and again 1800) answered only "The operation timed out" while the
+      // sweep ran five minutes to completion in the daemon: no stdout, no exit code, and - the
+      // part that actually hurt - no operationId, so the finished verdict could not even be
+      // fetched afterwards. The detached path already existed; the caller simply had to know
+      // to ask for it, which is a rail nobody can follow the first time. A caller that DECLARES
+      // a run longer than this now gets detached automatically, with the id and how to poll it.
+      // An explicit `background: false` is still honoured - that is someone who wants to wait.
+      const detach =
+        a.background === true || (a.background == null && (timeoutMs ?? 0) > AUTO_DETACH_MS)
+      const run = (await api('/api/orchestrator/run', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
           script: a.script,
           args: Array.isArray(a.args) ? a.args : [],
-          timeoutMs: a.timeout_secs != null ? Number(a.timeout_secs) * 1000 : undefined,
-          async: a.background === true,
+          timeoutMs,
+          async: detach,
           idempotencyKey:
             typeof a.idempotency_key === 'string' && a.idempotency_key.trim()
               ? a.idempotency_key.trim()
               : undefined,
         }),
-      }),
+      })) as Record<string, unknown>
+      if (!detach) return run
+      return {
+        ...run,
+        started: true,
+        poll: `orchestrator_operation { id: "${str(run.operationId)}" }`,
+        note:
+          a.background === true
+            ? 'Running in the daemon. Poll the id above for stdout, the exit code and the verdict; kept for an hour unless the daemon restarts, which wipes the record while the run itself carries on.'
+            : `Detached automatically: you declared timeout_secs ${Number(a.timeout_secs)}, longer than an MCP client will hold a connection open, and a call the client abandons loses the report for work that keeps running. Poll the id above for the full result; pass background:false if you really do want to block.`,
+      }
+    },
   },
   {
     name: 'orchestrator_operation',
     description:
-      "READ THE VERDICT OF A RUN WHOSE CALL YOU LOST - poll one orchestrator operation by id, or list the recent ones. THE DAEMON KEEPS EVERY RUN'S FULL RESULT FOR AN HOUR, so a call that died on YOUR transport timeout is not lost work and never has to be guessed at or re-run: the script kept going in the daemon, finished, and its stdout/exit code/verdict are still here. Read them instead of re-firing the act. `id` polls one (`operationId` comes back from every orchestrator_run, INCLUDING the 409-busy refusal that names the run already in flight); omit it to list recent operations, which is how you find the id when the call that would have told you it never returned. `status` is 'running' or 'done'/'failed'; a running one can be polled again. Read-only - it starts nothing and cancels nothing.",
+      "READ THE VERDICT OF A RUN WHOSE CALL YOU LOST - poll one orchestrator operation by id, or list the recent ones. A RUN'S FULL RESULT IS KEPT FOR AN HOUR BY THE DAEMON PROCESS THAT RAN IT, so a call that died on YOUR transport timeout is not lost work and need not be guessed at or re-run: the script kept going, finished, and its stdout/exit code/verdict are still here. Read them instead of re-firing the act. ⛔ THE ONE CASE WHERE THEY ARE NOT: these records live in memory, so a daemon RESTART loses them - and a detached child survives the restart and finishes anyway, so the work is usually done even though the record is gone. A miss says which case it is (`reason`: 'daemon-restarted' vs 'unknown-id') and names when this daemon started; on 'daemon-restarted' do NOT re-fire the act, read the toolbox's own ledger for what it did and check the effect. `id` polls one (`operationId` comes back from every orchestrator_run, INCLUDING the 409-busy refusal that names the run already in flight); omit it to list recent operations, which is how you find the id when the call that would have told you it never returned. `status` is 'running' or 'done'/'failed'; a running one can be polled again. Read-only - it starts nothing and stops nothing: `orchestrator_cancel {id}` is what stops a run that is still going.",
     inputSchema: S({
       id: {
         type: 'string',
@@ -2240,6 +2742,29 @@ export const TOOLS: McpEngineTool[] = [
           ? `/api/orchestrator/operations/${encodeURIComponent(a.id.trim())}`
           : '/api/orchestrator/operations',
       ),
+  },
+  {
+    name: 'orchestrator_cancel',
+    description:
+      "MUTATES: STOP A RUN THAT IS STILL GOING - the counterpart to orchestrator_operation, which only reads. The operation's WHOLE PROCESS TREE is killed and its outcome then reads `cancelled`. This is the supported way out of a batch that was launched with the wrong scope or is sitting out a patient wait; before this existed the only route was to find the pid by hand and taskkill it, which is outside every rail the tools exist to provide. ⛔ CANCEL IS NOT AN UNDO: whatever the run already DID stays done - chats a migrate_batch already landed remain landed on the target, and nothing is moved back. It stops the REMAINDER. ⛔ AND THE PER-ITEM REPORT DIES WITH THE PROCESS: a cancelled batch never returns its per-chat results, so establish what actually happened by READING THE FLEET afterwards (`list_chats` on the source and the target), never by assuming the run had not got that far. A chat killed mid-move is the one real hazard - imports are deliberately serialised because two into one store can create a duplicate row that makes a chat permanently unreachable - so prefer cancelling a batch that is still waiting or between chats, and verify the in-flight chat by name afterwards. Cancelling also FREES THE ROUTE LOCK, which the daemon keys by SCRIPT NAME: that is what lets a corrected call (a narrower chat list, or the same move with `terminate_live`) run at once instead of being refused 409 busy. A finished operation is left exactly as it is and its recorded verdict still reads - cancelling one is a no-op that answers with the status it already had, so it is safe to call when you are unsure whether it is still running. An unknown id answers 404.",
+    inputSchema: S(
+      {
+        id: {
+          type: 'string',
+          description:
+            'The operationId to stop - the one every backgrounded orchestrator_run / move_chats answered with. Lost it? `orchestrator_operation {}` with no id lists the recent runs, newest first.',
+        },
+      },
+      ['id'],
+    ),
+    run: async (a) => {
+      const id = typeof a.id === 'string' ? a.id.trim() : ''
+      if (!id) return { ok: false, error: 'id is required (the operationId of the run to stop)' }
+      return api(`/api/orchestrator/operations/${encodeURIComponent(id)}/cancel`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+      })
+    },
   },
   {
     name: 'orchestrator_loop',
@@ -2301,6 +2826,27 @@ export const TOOLS: McpEngineTool[] = [
 
 export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
 
+/** The same tool set, with the identity tools bound to whoever sent THIS request.
+ *
+ * The stdio transport needs nothing of the sort: there, the server IS a child of the calling
+ * engine, so "this process" and "the caller" share an ancestry. Over HTTP they are different
+ * processes on the same machine, and only the route that owns the socket can say which one asked
+ * - so it hands that answer in here rather than letting the identity tools guess from a process
+ * that happens to be the daemon (see detectForCaller). */
+export function toolsForCaller(getCallerPid: () => Promise<number | null>): McpEngineTool[] {
+  // Only the identity tools are rebound; every other entry is the SAME object (pinned by
+  // mcp-caller-identity.test.ts). The side-run wrapper is applied by the HTTP route on top of this.
+  return TOOLS.map((t) =>
+    CALLER_AWARE_TOOLS.has(t.name)
+      ? {
+          ...t,
+          run: (args: Record<string, unknown>, signal?: AbortSignal) =>
+            t.run({ ...args, [CALLER_PID_ARG]: getCallerPid }, signal),
+        }
+      : t,
+  )
+}
+
 /**
  * STANDING INSTRUCTIONS, handed to the model in the MCP `initialize` handshake, before it calls
  * anything.
@@ -2315,7 +2861,7 @@ export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
  * is rent. Rules only, no explanation, no API shapes (docs/AI_USAGE_SELFCHECK.md holds the
  * reasoning). If a line would not change what an agent DOES, it does not belong here.
  */
-export const SERVER_INSTRUCTIONS = `AgentHydra manages every Claude/Codex account on this machine and knows what each has left.
+export const SERVER_INSTRUCTIONS = `AgentHydra manages every Claude/Codex account here and knows what each has left.
 
 CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted: check_my_usage {} works out which account
 you are and reads it (~300ms, no quota, works with the app closed). Then act on the answer:
@@ -2323,30 +2869,36 @@ you are and reads it (~300ms, no quota, works with the app closed). Then act on 
   agent that runs out mid-task dies holding everything it had not saved.
 - advice.safeToFanOut false -> shrink or postpone the fan-out. Gate on CURRENT + PROJECTED cost:
   a fan-out cannot be recalled once launched, solo work can be stopped at any tool call.
-- A percentage decides nothing alone; usage_budget {} gives exhaustsBeforeReset, branch on that.
-- The weekly (all-models) % is the binding cap, except on Pro, where the 5-hour window usually
-  binds first. Switching model does not dodge the shared weekly bucket.
-- severity 'unknown' or a failed read is NOT "plenty left". Never fan out on an unverified read.
+- A percentage decides nothing alone; usage_budget {} gives exhaustsBeforeReset - branch on it.
+- Weekly (all-models) % is the binding cap; on Pro the 5-hour window usually binds first.
+  Switching model does not dodge the shared weekly bucket.
+- severity 'unknown' or a failed read is NOT "plenty left". Never fan out on an unverified one.
 
-NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance. If identity.warning is present, say
-so. A human who tells you your instance number OVERRULES the detection; the config files on this
-machine are exactly what lie about it.
+NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance, and say so when identity.warning is
+present. A human who tells you your instance number OVERRULES the detection - the config files
+are the thing that lies.
 
-list_usage {} surveys every account; route heavy work by instance number. Mutating tools say
-MUTATES:; never run /login for a human.
+list_usage {} surveys every account (\`deepseek\` = zswarm balance); route heavy work by instance
+number. With every account at/above 90% weekly, fan_out just spreads it over the same saturated
+accounts: send mechanical, checkable batches to the zswarm (zswarm_run). Mutating tools say
+MUTATES:; never /login for a human.
 
 THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); nothing there acts
-unless the tray icon is up: orchestrator_switch {action:"armed"} first. One-call paths needing
-no icon: move_chat {chat, from, to} moves a chat between accounts; fan_out {tasks:[{cwd, prompt}]}
-spreads a task list over OTHER accounts as VISIBLE desktop chats, one each, then fan_out_status {}
-reads every member's verdict and last words and fan_out_send {group, text} steers them all.
-add_queue_item and launch_terminal_session are REFUSED here (no chat nobody can see).
-ANY PROBE CHAT YOU CREATE (a ping, a which-account check, a drill) MUST BE DELETED AFTERWARDS,
-never left in the account: fan_out_delete {group}, or orchestrator_run delete_chat <chat>.`
+unless the tray icon is up: orchestrator_switch {action:"armed"} first. No icon needed for
+move_chat {chat, from, to}, or fan_out {tasks:[{cwd, prompt}]}, which spreads a task list over
+OTHER accounts as VISIBLE desktop chats (never one a person is working in); fan_out_status {}
+then reads every member's verdict and fan_out_send {group, text} steers them all.
+add_queue_item and launch_terminal_session are REFUSED (no chat nobody can see).
+ANY PROBE CHAT YOU CREATE (a ping, a drill) MUST BE DELETED AFTERWARDS, never left in the
+account: fan_out_delete {group}, or orchestrator_run delete_chat <chat>.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {
-  return runMcpStdio({ serverInfo: SERVER_INFO, tools: TOOLS, instructions: SERVER_INSTRUCTIONS })
+  return runMcpStdio({
+    serverInfo: SERVER_INFO,
+    tools: withDaemonWarning(TOOLS),
+    instructions: SERVER_INSTRUCTIONS,
+  })
 }
 
 // Only run the stdio loop when this file is the entry point (`bun run mcp`), not when a test

@@ -324,9 +324,12 @@ jobs:
           fi
           # Which Windows download? The two Windows assets sit side by side with nothing at the
           # download point telling them apart, and the .exe is the bigger, more obvious, more "just
-          # download the app" choice — and it is the one that CANNOT show a tray icon, because the
-          # icon is drawn by misc/lunarwerx-tray.exe and a single file carries no misc/ folder. That
-          # costs real users, who reasonably read a missing icon as a bug. Renaming the assets is
+          # download the app" choice. It used to be the one that could not show a tray icon at all -
+          # the icon is drawn by misc/lunarwerx-tray.exe and a single file carried no misc/ folder -
+          # and this table was where we admitted that instead of fixing it. Since 0.41.0 the toolkit
+          # is embedded in the binary and written out on first run, so the icon column is yes for
+          # both; the orchestrator row below is the one real difference that remains. Renaming the
+          # assets is
           # NOT the fix: the updater matches its archive by name (`-<target>.zip`), so a rename
           # silently breaks self-update for every install already out there. Saying it here is free
           # and lands exactly where the choice is made.
@@ -348,13 +351,13 @@ jobs:
           | file | tray icon | orchestrator | notes |
           | --- | --- | --- | --- |
           | `...-windows-x64.zip` | **yes** | **yes** | The executable plus the `misc\` tray toolkit and the `orchestrator\` toolbox. Double-click `AgentHydra.exe` and the daemon starts the tray launcher for you; or run `misc\Create-Shortcut.ps1` once for a shortcut that launches through it directly. |
-          | `...-windows-x64.exe` | no | no | One portable file, nothing to unpack. A single file carries no `misc\` or `orchestrator\` folder, so no tray icon can appear whatever the in-app setting says, and the orchestrator tools report themselves as not installed. |
+          | `...-windows-x64.exe` | **yes** | no | One portable file, nothing to unpack. Since 0.41.0 the tray toolkit rides INSIDE the binary and is written out beside the app's state on first run, so the icon, Quit and the supervisor all work. The `orchestrator\` toolbox is still a folder and still only ships in the zip, so its tools report themselves as not installed. |
 
-          Both self-update, and both are the same daemon. The zip is the complete install; the
-          single file is the daemon alone, without the two folders that sit beside it — the tray
-          toolkit and the orchestrator. Each says so plainly rather than looking broken: the .exe
-          tells you about the tray icon once on first start, and `GET /api/orchestrator` answers
-          `present:false` and names the folder it looked for.
+          Both self-update, and both are the same daemon with the same tray. The zip additionally
+          carries the `orchestrator\` toolbox as a folder beside the executable, which a single file
+          cannot: there, `GET /api/orchestrator` answers `present:false` and names the folder it
+          looked for, rather than looking broken. The single file only notifies you about the tray
+          if it could not place it - which is a fault, not a limitation.
           NOTE
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

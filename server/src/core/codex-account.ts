@@ -28,11 +28,12 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { UsageLimit, UsageSnapshot } from '../types'
+import { type CodexRpc, connectCodexRpc } from './codex-rpc'
 import { appDataDir, normalizeInstancePath } from './paths'
 
-/** The endpoint the Codex CLI's own status screen reads. Verified live 2026-08-07: returns
+/** The endpoint the Codex CLI's own status screen reads. Verified live 2026-09-11: returns
  *  `user_id`, `account_id`, `email`, `plan_type`, and a `rate_limit` with up to two windows. */
-export const CODEX_USAGE_API_URL = 'https://chatgpt.com/backend-api/codex/usage'
+export const CODEX_USAGE_API_URL = 'https://chatgpt.com/backend-api/wham/usage'
 
 /** A window at or under this length is the short rolling "session" window; anything longer is the
  *  weekly cap. The endpoint does NOT label its windows — it returns `primary_window` and
@@ -93,6 +94,8 @@ const KNOWN_PLANS: Record<string, string> = {
   free: 'Free',
   plus: 'Plus',
   pro: 'Pro',
+  prolite: 'Pro Lite',
+  go: 'Go',
   business: 'Business',
   team: 'Team',
   enterprise: 'Enterprise',
@@ -117,7 +120,7 @@ export function codexPlanLabel(planType: string | null | undefined): string | nu
   if (!key) return null
   const known = KNOWN_PLANS[key]
   if (known) return known
-  return key.charAt(0).toUpperCase() + key.slice(1)
+  return key.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 function buildLabel(name: string | null, email: string | null, planLabel: string | null): string {
@@ -354,6 +357,13 @@ interface CodexUsageResponse {
   rate_limit_reset_credits?: {
     available_count?: number
   } | null
+  additional_rate_limits?:
+    | {
+        limit_name?: string
+        metered_feature?: string
+        rate_limit?: CodexUsageResponse['rate_limit']
+      }[]
+    | null
 }
 
 async function fetchCodexUsage(
@@ -453,6 +463,22 @@ export function codexUsageSnapshot(
     resetCredits: codexBankedResetCredits(body),
   }
   const rl = body?.rate_limit
+  if (body) {
+    snap.additionalLimits = (body.additional_rate_limits ?? []).flatMap((entry) => {
+      const label = entry.limit_name ?? entry.metered_feature
+      if (!label || !entry.rate_limit) return []
+      const mapped = codexUsageSnapshot({ rate_limit: entry.rate_limit }, accountLabel)
+      return [{ label, session: mapped.session, weekAll: mapped.weekAll }]
+    })
+    snap.sessionLimitUnavailable =
+      !!rl &&
+      ![rl.primary_window, rl.secondary_window].some(
+        (window) =>
+          window?.limit_window_seconds != null &&
+          window.limit_window_seconds > 0 &&
+          window.limit_window_seconds <= SESSION_WINDOW_MAX_SECONDS,
+      )
+  }
   if (!rl) return snap
 
   for (const window of [rl.primary_window, rl.secondary_window]) {
@@ -482,6 +508,77 @@ function codexBankedResetCredits(body: CodexUsageResponse | null): number | null
 export interface ResolveCodexAccountOptions {
   /** Never call the usage endpoint — resolve from auth.json claims + our own cache only. */
   noNetwork?: boolean
+  /** Injectable local app-server connection for the expired-token fallback. */
+  connect?: (home: string) => Promise<CodexRpc>
+}
+
+interface RpcLimit {
+  limitName?: string | null
+  planType?: string | null
+  primary?: {
+    usedPercent: number
+    windowDurationMins: number | null
+    resetsAt: number | null
+  } | null
+  secondary?: RpcLimit['primary']
+}
+
+/** Let Codex own OAuth refresh instead of rotating another app's refresh token ourselves. */
+async function fetchUsageViaAppServer(
+  codexHome: string,
+  connect: (home: string) => Promise<CodexRpc>,
+): Promise<CodexUsageResponse | null> {
+  let rpc: CodexRpc | undefined
+  try {
+    rpc = await connect(codexHome)
+    const identity = await rpc.call<{ account: { email?: string; planType?: string } | null }>(
+      'account/read',
+      { refreshToken: true },
+    )
+    const result = await rpc.call<{
+      accountId?: string | null
+      rateLimits?: RpcLimit
+      rateLimitsByLimitId?: Record<string, RpcLimit> | null
+      rateLimitResetCredits?: { availableCount: number } | null
+    }>('account/rateLimits/read')
+    const window = (value: RpcLimit['primary']): CodexUsageWindow | null =>
+      value
+        ? {
+            used_percent: value.usedPercent,
+            limit_window_seconds:
+              value.windowDurationMins == null ? undefined : value.windowDurationMins * 60,
+            reset_at: value.resetsAt ?? undefined,
+          }
+        : null
+    const limits = (value?: RpcLimit): CodexUsageResponse['rate_limit'] =>
+      value
+        ? {
+            primary_window: window(value.primary),
+            secondary_window: window(value.secondary),
+          }
+        : null
+    const main = result.rateLimitsByLimitId?.codex ?? result.rateLimits
+    if (!main) return null
+    return {
+      account_id: result.accountId ?? undefined,
+      email: identity.account?.email,
+      plan_type: main.planType ?? identity.account?.planType,
+      rate_limit: limits(main),
+      rate_limit_reset_credits: result.rateLimitResetCredits
+        ? { available_count: result.rateLimitResetCredits.availableCount }
+        : null,
+      additional_rate_limits: Object.entries(result.rateLimitsByLimitId ?? {})
+        .filter(([id]) => id !== 'codex')
+        .map(([id, value]) => ({
+          limit_name: value.limitName ?? id,
+          rate_limit: limits(value),
+        })),
+    }
+  } catch {
+    return null
+  } finally {
+    await rpc?.close()
+  }
 }
 
 export interface CodexAccountResult {
@@ -516,7 +613,8 @@ function mergeCachedCodexIdentity(
   return {
     email: local.email ?? (usable ? cached?.email : null) ?? null,
     name: local.name ?? (usable ? cached?.name : null) ?? null,
-    planType: local.planType ?? (usable ? cached?.planType : null) ?? null,
+    // A successful live read supersedes the token's mint-time subscription snapshot.
+    planType: (usable ? cached?.planType : null) ?? local.planType ?? null,
     userId: local.userId ?? (usable ? (cached?.userId ?? null) : null),
     orgTitle: local.orgTitle ?? (usable ? (cached?.orgTitle ?? null) : null),
     subscriptionActiveUntil:
@@ -599,16 +697,26 @@ export async function resolveCodexAccount(
 
     const expiresAt = jwtExpiryMs(accessClaims)
     const expired = expiresAt > 0 && expiresAt < Date.now()
-    if (options.noNetwork || expired) {
+    if (options.noNetwork) {
       return {
-        account: localCodexAccount(codexHome, options.noNetwork ? 'noNetwork' : 'expired'),
+        account: localCodexAccount(codexHome, 'noNetwork'),
         usage: null,
       }
     }
 
-    const body = await fetchCodexUsage(auth.tokens.access_token, accountId)
+    const body = expired
+      ? await fetchUsageViaAppServer(codexHome, options.connect ?? connectCodexRpc)
+      : await fetchCodexUsage(auth.tokens.access_token, accountId)
     // Token was only ever held in this local binding; nothing persists it.
     if (!body) return { account: localCodexAccount(codexHome), usage: null }
+    // Reject a workspace mismatch or a login changed while the asynchronous read was in flight.
+    const currentAccountId = localCodexAccount(codexHome).accountId
+    if (
+      (body.account_id && accountId && body.account_id !== accountId) ||
+      currentAccountId !== accountId
+    ) {
+      return { account: localCodexAccount(codexHome), usage: null }
+    }
 
     // The live answer is authoritative for everything it reports; the token claims fill the gaps it
     // does not (name and org title are not in the usage response).
@@ -647,7 +755,7 @@ export async function resolveCodexAccount(
         source: 'live',
         label,
       }),
-      usage: codexUsageSnapshot(body, label),
+      usage: { ...codexUsageSnapshot(body, label), codexAccountId: resolvedAccountId },
     }
   } catch {
     return {

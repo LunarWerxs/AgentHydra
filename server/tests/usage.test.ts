@@ -30,13 +30,13 @@ describe('parseUsageOutput', () => {
     const snap = parseUsageOutput(
       FIXTURE,
       'lunarwerx@example.com',
-      new Date('2026-07-14T02:00:00Z'),
+      new Date('2024-07-14T02:00:00Z'),
     )
     expect(snap.account).toBe('lunarwerx@example.com')
     expect(snap.session).toEqual({ pct: 0, resets: 'Jul 13, 11:49pm' })
     expect(snap.weekAll).toEqual({ pct: 97, resets: 'Jul 14, 2:59am' })
     expect(snap.weekModel).toEqual({ label: 'Fable', pct: 89, resets: 'Jul 14, 3am' })
-    expect(snap.capturedAt).toBe('2026-07-14T02:00:00.000Z')
+    expect(snap.capturedAt).toBe('2024-07-14T02:00:00.000Z')
   })
 
   test('the all-models weekly is the binding cap', () => {
@@ -134,8 +134,8 @@ describe('resetTimeIso', () => {
   })
 
   test('prefers a present resetsAt, normalized to ISO', () => {
-    const iso = resetTimeIso({ resetsAt: '2026-07-19T08:59:59.574959+00:00', resets: 'ignored' })
-    expect(iso).toBe(new Date('2026-07-19T08:59:59.574959+00:00').toISOString())
+    const iso = resetTimeIso({ resetsAt: '2024-07-19T08:59:59.574959+00:00', resets: 'ignored' })
+    expect(iso).toBe(new Date('2024-07-19T08:59:59.574959+00:00').toISOString())
   })
 
   test('falls back to parsing the human `resets` string when resetsAt is absent', () => {
@@ -162,7 +162,7 @@ describe('usageAdvice', () => {
     session: null,
     weekAll: null,
     weekModel: null,
-    capturedAt: '2026-07-14T00:00:00.000Z',
+    capturedAt: '2024-07-14T00:00:00.000Z',
     source: 'cli',
   }
 

@@ -186,7 +186,17 @@ def spawn(folder: str, prompt: str | None, account: str | None,
             f"chat {resume} already has a live engine on '{picked['name']}' - a second "
             "--resume would fork its transcript")}
     try:
-        subprocess.Popen(cmd, env=env, close_fds=True)
+        # ⛔ NEVER HAND A LONG-LIVED CHILD THIS PROCESS'S STDIO (2026-09-18). A terminal opened
+        # here outlives this script by design - that is the whole point of it - and with no
+        # redirection it INHERITS our stdout/stderr. Under the daemon those are pipes it is
+        # reading, so the terminal held them open after we exited and the daemon's read of the
+        # run could not end: an operation that polled `running` for as long as the terminal
+        # lived, for a script that had finished. The daemon now reaps on the child's own exit
+        # (server/src/orchestrator.ts, realSpawn), and this is the same defect closed at its
+        # source - the terminal has its own window for output and never needed ours.
+        subprocess.Popen(cmd, env=env, close_fds=True,
+                         stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as err:
         return {"ok": False, "why": f"could not open a terminal: {err}"}
 

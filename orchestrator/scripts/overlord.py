@@ -58,6 +58,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lib import armlib, clilib
+from lib import configlib
 from lib import gatelib
 from lib import holdlib
 from lib import hydralib
@@ -66,7 +67,7 @@ from lib import ledgerlib
 # Owner, 2026-09-01: "it needs to check every 5 minutes or whatever, not every 30 or 60" -
 # the task fires every 5 minutes AND the quiet threshold is 5 minutes, so an idle overlord
 # with waiting work is woken on the very next tick, never parked for a grace period.
-NUDGE_QUIET_SECS = 5 * 60
+NUDGE_QUIET_SECS = configlib.get("overlord.nudge_quiet_secs")
 NUDGE_PROMPT = (
     "Automated watchdog wake-up: you are the standing orchestrator chat and work is "
     "waiting. Run the next full pass now: /orchestrate"
@@ -74,7 +75,7 @@ NUDGE_PROMPT = (
 # A turn in flight past this long is not proof of a problem (real builds run long) - it is
 # proof a JUDGMENT is due (owner, 2026-09-01: "if a background task has been running longer
 # than like 30 minutes the AI should check into it ... programmatically").
-LONG_RUN_SECS = 30 * 60
+LONG_RUN_SECS = configlib.get("overlord.long_run_secs")
 _LR_TAIL_BYTES = 400_000
 # Widened up to this before giving up on finding a turn's start (mirrors gatelib.read_records'
 # adaptive tail): a single closing record, or a very chatty turn, can push the real start of
@@ -244,7 +245,7 @@ def manager_chats(exclude: set[str] | None = None) -> list[dict]:
 
 
 # No second rebirth inside this window: the sessions index lags a spawn by minutes.
-REBIRTH_COOLDOWN_SECS = 30 * 60
+REBIRTH_COOLDOWN_SECS = configlib.get("overlord.rebirth_cooldown_secs")
 
 
 def rebirth(argv: list[str], as_json: bool, why: str) -> int:
@@ -406,7 +407,7 @@ def _write_claim(sid: str, title: str | None, *, manual: bool,
 
 # A delivery that landed this recently counts as the wake: the automatic lanes do not send a
 # second one (a dormant chat's boot plus its first turn easily takes this long).
-RECENT_DELIVERY_SECS = 180
+RECENT_DELIVERY_SECS = configlib.get("saturate.recent_delivery_secs")
 # The desktop app's own limit notice, as it renders in the pane - the ONLY text that means
 # "this chat cannot take a turn here". Deliberately narrow: a prose mention of "quota" or
 # "limit" must never move a chat (it did, once).
@@ -1042,6 +1043,14 @@ def main(argv: list[str]) -> int:
 
     if "--claim" in argv:
         return _cmd_claim(argv, as_json)
+
+    # THE WATCHDOG'S MASTER SWITCH (2026-09-17). OFF means no wake, no relocation and no
+    # rebirth: the standing manager is entirely yours to run. --status still answers, because
+    # "is there a manager at all" is a question you want answerable with the lane switched off.
+    if not configlib.get("overlord.enabled") and "--status" not in argv:
+        print("overlord is switched OFF in your policy (overlord.enabled) - the standing "
+              "manager is not woken, relocated or reborn by this lane.")
+        return 0
 
     row, early = _locate_or_rebirth(argv, as_json)
     if early is not None:

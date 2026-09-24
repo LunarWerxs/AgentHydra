@@ -1,5 +1,14 @@
 # Moving chats between accounts
 
+Claude Desktop archive and migration-source cleanup now prefer the production native
+connection. Enable **Settings → General → Claude native control → Start debugger automatically**
+per profile, then use AgentHydra **Open** when that closed account is needed. The debugger starts
+on that launch without menus; saving settings does not restart an active desktop. New profiles
+need their own setting. See the [native-control operating guide](CLAUDE-DESKTOP-NATIVE-CONTROL.md)
+for the equivalent API and exact-profile result checks. General destination import/settings,
+unarchive and new/start/stop/resume are still partly legacy/guarded; use the production move
+tools below instead of the restricted POC runner or a hand-built UI sequence.
+
 ## The fast path: one call
 
 **Use the MCP tool `move_chat`. Do not recon first.** (Owner, 2026-09-04: "slower than I wanted
@@ -50,6 +59,39 @@ move_chats { from: "Carlos", all_unarchived: true,
                       still in flight. Re-read your last message and carry on." }
 ```
 
+⛔ **"Drain this account" means its UNARCHIVED chats, and nothing else** (owner directive,
+2026-09-05, restated angrily on 2026-09-13). An account's archive is usually the overwhelming
+majority of what it holds: in the incident that produced this paragraph, 25 chats were 3
+unarchived and 22 archived, and an agent that set the old `archived: true` flag for itself
+queued all 25. `all_unarchived: true` is the right call here and never needs anything else.
+
+To move archived chats you must have been ASKED for them, and then you pass `archived_count: N`,
+the number of archived chats in the batch. The engine refuses the whole batch if that number does
+not match what it actually holds, or if archived and unarchived chats are mixed in one call,
+because mixing is exactly how 22 rode in behind 3. The old `archived: true` boolean was REMOVED
+on 2026-09-13 rather than deprecated: a boolean cannot tell a human's instruction from an
+agent's own initiative, and a caller passing it now fails the schema loudly instead of quietly
+sweeping an archive.
+
+**A drain of any size answers immediately, not at the end.** Since 2026-09-13 `move_chats`
+auto-detaches whenever its own declared length exceeds 120s, which a one-chat batch already does
+(its floor is 180s), so the call returns an `operationId` and the per-chat report is read with
+`orchestrator_operation {id}`. Before that, a long batch could die on a bare transport timeout
+and return nothing at all about work it had in fact done. If a batch is stuck or was launched
+with the wrong scope, `orchestrator_cancel {id}` stops it and frees the route lock; that is not
+an undo, so read the fleet afterwards to see what had already landed - and since 2026-09-14,
+`python migrate_reconcile.py` is how you see it, because a killed batch leaves half-moves that no
+fleet read names (below).
+
+**"Kill it and move it" is now one call, and a refused call keeps its resume** (2026-09-14). A
+patient move sitting out its `wait_secs` used to refuse the SAME move with `terminate_live` as
+`409 busy` - the route is keyed by script name - and the only way through was `taskkill` by hand.
+Now a call carrying `terminate_live` PREEMPTS a run whose chats it covers: the holder is
+cancelled, and this call does that work itself. A holder naming chats the new call does not is
+still refused (cancelling it abandons those chats, which is a person's decision), and that
+refusal now STAGES the call's `resume` text against each named chat instead of losing it with the
+call - deduped, so re-firing cannot leave two wakes. Read `resumeStaged` in the answer.
+
 What it replaced (2026-09-06, Carlos at 95% of its window and Martin at 88% of its week,
 seven chats to Eduardo): ~25 round trips and most of an hour. The four moves were fine; the
 rest was learning that a landed chat sits DORMANT until someone types into it, finding the
@@ -66,18 +108,126 @@ tray icon and the fair share first), then reading two working chats' pids out of
   mid-turn keeps its reply staged; its result carries `resume.retry`, the exact command. Read
   each result's `resume` - a landed chat with `resume.delivered: false` is moved but has not
   been told to carry on.
+  - ⛔ **LANDING IS ACTIVITY, so the resume gates each chat with the `--now` window, not the
+    standing 180s** (2026-09-14). The import stamps `lastActivityAt` with the landing time, so
+    under the standing quiet window every chat couriered within 180s of landing read as
+    `running`: the delivery went `peer_only`, the peer channel dead-lettered on a chat that was
+    not taking turns, and the row was deferred as "mid-turn". Draining #63 to #13 that morning,
+    four of five resumes went that way, the one couriered 194s after landing was delivered, and
+    the operation sat nine minutes before it had to be cancelled. Phase four now uses
+    `migrate_chat.quiet_window`'s fast window when the transcript was scanned and no background
+    job is outstanding, and the standing window otherwise (including when the scan cannot be
+    read). Only the WAIT is shortened - the tail must still show a finished turn, so a chat that
+    really is working after it lands is still left alone.
+  - ⛔ **AND THE BOOT ITSELF USED TO LOOK LIKE A TURN.** `claude://resume` appends a user-role
+    record when it boots the landed chat, so the gate's "has the turn ended" tests all failed on
+    THAT record rather than on the turn - the state stuck at `running, not idle` for as long as
+    the landed engine lived, and wakes were refused hours after landing (so this was never only a
+    timing window). The gate now sees past trailing records the app marks `isMeta` (a boot hook,
+    an injected cross-session message, the local-command caveat); an ordinary user record still
+    ends a transcript mid-turn. Separately, the courier now consults the daemon's own
+    `limit_stop.pending`: a chat parked at a usage wall cannot be writing, so it is never treated
+    as mid-turn - which is exactly the population a drain moves.
+  - Re-firing a batch whose resumes are still staged **re-uses those rows** rather than staging a
+    second copy of the same words (2026-09-14: a cancelled batch left two rows each for two
+    chats). A staged reply with DIFFERENT text - a person's - is never folded into the resume.
+  - A delivery that was ATTEMPTED and FAILED is **retried once automatically** (2026-09-12).
+    The retry RE-STAGES first, and that is the whole point: a failed row is no longer
+    `staged`, so the retry a person reaches for - `courier --yes --only <id>` - answers
+    "nothing staged - the courier has nothing to deliver" and READS AS SUCCESS while doing
+    nothing. A row the courier SKIPPED is left alone: a mid-turn chat and a tripped breaker
+    are deliberate deferrals, and hammering them is the cycle the breaker exists to end.
+  - ⛔ **A COMPILED BUILD COULD NOT DELIVER AT ALL until 2026-09-12**, so `resume` silently
+    did nothing on one: the single-file exe embedded the web assets and the tray but not
+    `misc\Deliver-DesktopChat.ps1`, and the daemon answered `delivery actuator missing at
+    <dist>\misc\...` by BOTH routes (the composer route IS that script, and the peer route
+    is refused by the same endpoint first). The build now embeds it or fails. If you meet
+    that error, the daemon predates the fix - see `server/src/misc-assets.ts`.
+- **A source account at 98% or more is killed without asking** (owner's standing order,
+  2026-09-20). When either the 5-hour or the weekly bucket of the chat's source account reads
+  98%+, `move_chats` treats `terminate_live` as already given for it; the result's
+  `terminated.standingOrder` names the reading. An unreadable usage row never triggers it.
+- **A `sourceRow: "flagged"` result is not finished.** The source app's own control was
+  unreachable, so only a disk flag was written, and a running app keeps showing the chat. The
+  batch report now leads with `NOT FINISHED ON THE OLD ACCOUNT` and lists them in
+  `sourceStillShown`; archive them natively once that profile runs with native control.
 - **`terminate_live`** is a person's word to KILL the engine of a chat refused for being alive
   (working, or quiet but inside its window) and move it anyway. It is for the account that
   will hit its wall before the turn ends - the turn dies there regardless, holding everything
   it had not saved. The transcript survives; a tool result still in flight does not, so say so
   in `resume`. `force` never implies it: `force` overrides a hold, nothing more. A hold or the
   breaker is never killed through.
+- **A detached batch's report does not survive a daemon RESTART** (2026-09-12). Operation
+  records live in the daemon process that ran them, while the batch's child process outlives
+  a restart and finishes its work orphaned - so the chats move and the report vanishes. A
+  poll now answers `reason: 'daemon-restarted'` and names when the daemon started. ⛔ On that
+  answer do NOT re-fire the move: read the toolbox's ledger and check `list_chats` for what
+  actually landed.
 - **Check the account first with `list_chats`**, not `list_sessions` (which missed one of
   Martin's four chats behind its 7-day default) and not a dry-run move. If `list_chats` answers
   with an HTML-instead-of-JSON error, the running daemon is older than the tool: rebuild and
-  restart it.
+  restart it. Since 2026-09-14 `--all-unarchived` reads that SAME endpoint: the two used to
+  disagree, and the one that said "0 unarchived" on an account holding three is the reading that
+  silently does nothing. `/api/sessions` resolves a chat to ONE owning account, so a half-moved
+  chat - which is on two at once - was invisible to the account it was still sitting on.
+- **A KILLED BATCH LEAVES HALF-MOVES, and `python migrate_reconcile.py` is what finds them.**
+  Killing the 25-chat batch of 2026-09-13 left 14 chats imported onto the target and still
+  unarchived on the source; the fleet read taken straight after showed all 25 on the source, so
+  the run read as "nothing landed" and the truth surfaced twenty minutes later by eye. Every
+  migrate now journals its phase, and the reconciler re-checks each unfinished one against the
+  chat's current state: `unsettled` is that duplicate, `not-landed` means the ledger and the
+  machine disagree. `--finish <id>` completes it through the mover's own phases, `--reverse <id>`
+  undoes it. Run it after any cancel.
 - By hand, the same thing is `courier --yes --only <id> --only <id>` for the replies (several
   ids, one run, no icon needed) and `migrate_batch ... --terminate-live --resume "..."`.
+
+## Moving a CODEX chat: a different mechanism, and not an MCP tool
+
+`move_chat` and `move_chats` are CLAUDE. A Codex chat cannot move that way, and the reason is not
+an omission: a Codex thread belongs to the home it was written in, and Codex has no verb that
+re-homes one. AgentHydra does it by copy, verify, then archive, driven from the Codex instances
+table in the web UI over two routes:
+
+```
+GET  /api/codex-instances/:id/move-chats?targetId=<destination>   # plan only, moves nothing
+POST /api/codex-instances/:id/move-chat                           # one reviewed chat
+```
+
+The plan lists every active chat in the source home with its title, its folder and the account
+identity at both ends. The move then copies the rollout under a fresh id, imports it into the
+destination, confirms it really landed, and only then archives the source.
+
+**There is deliberately no `move_codex_chat` MCP tool.** The plan exists to be READ by a person
+first, and the destructive half only accepts a chat that came back from a plan, carrying its
+`updatedAt` and both account ids, so a stale or unreviewed request is refused rather than guessed
+at.
+
+### What it refuses, and what an interruption leaves behind
+
+Every refusal happens at planning time, before anything connects:
+
+- an unfinished CLI turn, even with the desktop stopped;
+- an unknown process state, or a login that changed under the plan;
+- a destination that is the same home as the source;
+- a transcript that is archived, edited since the plan, or outside the home;
+- a corrupt move history, which prevents any copy rather than being quietly repaired.
+
+The ORDER of the remaining steps is chosen so an interruption is readable rather than lossy:
+
+- a failed import keeps the copy on disk and never archives the source;
+- a failed archive retries the SAVED copy instead of copying again, so a repeat cannot create a
+  duplicate;
+- an edit during the import keeps both chats and refuses the stale retry;
+- failed destination verification preserves the original untouched.
+
+The worst case is two readable chats. It is never zero.
+
+### The copy keeps its DISPLAYED history, which is not the same as keeping its messages
+
+`copyCodexTranscript` rewrites the identity in `session_meta` and in every `thread_id`, and carries
+paginated ordinals and `item-completed` events across untouched. Downgrading `history_mode` would
+be simpler and is wrong: Codex silently drops the displayed items while the model messages sit
+intact on disk, so the moved chat opens LOOKING empty and reads as a failed move.
 
 ---
 
@@ -129,6 +279,35 @@ migrate route invalidates the 15-second metadata cache so the next read sees the
 the state before it. Pruning duplicates is still tidier, but the dashboard no longer lies while
 they exist.
 
+## A move proves it archived nothing else (`collateral`)
+
+Measured 2026-09-16, operation `98008cf6`: a four-chat `move_chats` batch landed and settled every
+chat it was given, and in the same two minutes **three chats that were not in it went archived** -
+one of them in an account the batch never named. Every rail on the move verifies the row it
+INTENDED, so the per-chat results, the exit code and the chat journal all read clean, and the owner
+found out by noticing chats missing from his sidebar.
+
+The writer could not be identified from the logs (the daemon's archive paths do not log, the
+actuator's menu search is already scoped to the target app's own process, the doctrine lane stamped
+two other chats that minute, and the cross-account archive fell inside the batch's IMPORT phase,
+not its settle). So the move proves it instead of assuming it:
+
+- Every chat record on the machine is read **before** the first chat moves and **after** the last
+  phase (`orchestrator/scripts/lib/archivewatchlib.py`).
+- A record that went from visible to archived **without sharing an id with the move** is
+  COLLATERAL. Archiving the move's own source rows and its twins in other profiles is the move
+  doing its job and is never counted.
+- It is named at the top of the report with the account it is in, filed as an incident, put on the
+  payload as `collateral`, and the move is **not ok**: `migrate_chat` exits **2** (landed, not
+  clean) and `move_chat` / `move_chats` stop answering `ok: true`.
+
+**If you see it:** unarchive each named chat from its own account's app (Archived view ->
+Unarchive). A disk write is undone by a running app, which is why the report points at the app.
+The move's own chats are unaffected and must not be re-moved.
+
+The wording is "archived **while it ran**", never "archived **by** it" - the watch detects the
+outcome whatever caused it, including another lane or another agent acting in the same minutes.
+
 ## A session with no Desktop entry can never be archived
 
 `archiveDesktopChat` finds nothing to flag and returns `no-desktop-chat-found` (HTTP 404). These are
@@ -160,6 +339,19 @@ minute. `session-launch.ts` already reports this honestly as `titleDurable: !run
 ```
 
 and re-apply the metadata write after any operation that boots the chat.
+
+⛔ **On a compiled daemon before 2026-09-13, `chat_rename` answered `ok: true` and did nothing,**
+and so did archive and unarchive. `ui-archive.ts` located its PowerShell by hopping `..` off
+`import.meta.dir`, which inside a `bun build --compile` exe is the virtual embedded root, so it
+asked for a path on a drive that does not exist; `powershell -File <missing>` prints its complaint
+and EXITS 0, so a `code === 0` check read that as success. Found by exactly the case above: a
+migrated chat landed with no title, `chat_rename` reported success three times, and the sidebar
+never changed. Fixed in `bd8bba2` (the script is embedded and resolved through `resolveMiscAsset`,
+and a missing path now returns non-zero). ⚠ **A SOURCE daemon was never affected** and never is:
+it resolves a real `misc\` folder, so the `..` hop landed correctly there. The defect and its
+false green belong to COMPILED builds only, so on a compiled install still on 0.41.0 treat a green
+`ok: true` from any of those three as no evidence at all; the rendered sidebar row is the proof.
+Check which you are on before trusting either answer: `GET /api/health` reports `distribution`.
 
 ## Imports land on `acceptEdits`, which deadlocks an unattended chat
 
@@ -205,27 +397,42 @@ and repeating the test reproduced it exactly: the pointer reappeared within seco
   it starts). `POST /api/sessions/:id/automation` does the stamp; the dossier shows the mode.
 - After any delivery, verify **which account actually ran it**, not merely that the transcript grew.
 
-## Archiving a chat in the app you are running in
+## Archiving a chat in a RUNNING app
 
-Disk flags are invisible to a running app until it restarts, and the instance hosting the reviewer
-never reaches the zero-live-sessions condition that triggers the restart, because the reviewer is
-itself a live session.
+A disk flag alone does not update a running app's in-memory list.
+`POST /api/sessions/:id/desktop-archive` now attempts configured native control before any
+disk flag or UI action. Pass `instance_ref: "desktop:<full profile path>"` to select the exact
+source copy. The archive and migration scripts use the same native adapter through
+`POST /api/sessions/:id/native-archive`.
 
-- **Other instances:** `POST /api/sessions/:id/desktop-archive` works programmatically, no prompt.
-- **Your own instance:** only the app's own archive updates the sidebar immediately, and that tool
-  always asks for confirmation. There is currently **no unattended path** for this case.
-
-That gap is worth closing: an endpoint that asks the running app to reload its chat list, or to
-archive by id, would make the whole flow scriptable. Until then, expect one confirmation per chat
-when tidying the app you are sitting in.
+- Native success reports `route:"native"`, `ok:true`, `verified:true`; the desktop route also
+  returns `uiArchive:[]` and `stillOnScreen:false`. It checks the app's native state and
+  bystanders, preserving chat settings and transcript bytes. Duplicate titles and unrendered
+  sidebar rows do not require clicks because native control uses exact session identity.
+- `native-only` refuses an unavailable connection, including a closed profile. Open that
+  profile through AgentHydra when authorized; never turn the refusal into a disk/UI retry.
+  `prefer-native` permits the existing guarded fallback only on proven unavailability before
+  dispatch. Native refusal or unknown mutation outcome is terminal in either mode.
+- The legacy UIA fallback can still report `stillOnScreen:true` when only a disk flag landed,
+  such as an unrendered/ambiguous row. That is not verified archive success. Do not restart an
+  active app to hide this failure.
+- Native unarchive is not integrated. Existing restore handling must be verified separately;
+  do not assume a disk flag changed the running app or request a restart to make it appear so.
+- Native archive rejects live/pending work, unsafe cascades and affected preview servers;
+  `force` does not bypass these native guards.
 
 ## Checklist for a move
 
-1. Resolve the target account's `accountUuid` / `orgUuid` from `GET /api/instances/:dir/account`.
-2. `POST /api/sessions/:id/migrate` with `instance_ref: desktop:<dir>`.
-3. Prune duplicate pointers - one metadata file per transcript.
-4. Confirm each file sits under the target account's folder; re-file if the instance was re-logged.
-5. Set `permissionMode: bypassPermissions`.
-6. Write the title to both stores.
-7. Restart the target app so it picks up files added while it was running.
-8. Deliver only from within the target instance, and verify which account ran the turn.
+1. Use `move_chat` / `move_chats` with the requested source and destination. Their production
+   pipeline owns identity resolution, landing, source settlement and settings preservation.
+2. Preserve the per-profile native configuration. When a closed account needs opening, use
+   AgentHydra Open so `launchDebugger:true` takes effect; do not restart active apps.
+3. Require verified destination landing before exact-source archive. Read each phase's result;
+   an unknown native archive is not permission to retry through a sidebar menu.
+4. Verify the destination's title, model/effort, permission modes, working directory and history
+   through the existing guarded pipeline. Native source cleanup alone does not prove full
+   migration settings parity.
+5. Deliver only if requested, using the existing delivery route, and verify which account ran
+   the turn. Migration does not submit a prompt by itself.
+6. Read `collateral` on the result (and the top of the report). Empty is the normal answer; a
+   named chat there was archived while your move ran and needs unarchiving from its own app.

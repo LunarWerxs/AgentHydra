@@ -18,6 +18,9 @@ export interface LiveSession {
   name: string
   startedAt: number
   transcriptPath: string | null
+  /** The Claude Code version the session's engine runs, as the engine wrote it on start. Absent on
+   *  records too old to carry one. version-drift.ts reads it to find chats left on an old engine. */
+  version?: string
 }
 
 function pidAlive(pid: number): boolean {
@@ -27,6 +30,26 @@ function pidAlive(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'EPERM'
   }
+}
+
+/** Is this REGISTRY RECORD's session alive — not merely "some process owns that pid"?
+ *
+ *  A pid alone cannot answer that. The registry is written on start and never cleaned on crash,
+ *  so a session that died un-gracefully leaves `<pid>.json` behind, and the OS is free to hand
+ *  that number to something else: measured 2026-09-13, a dead session's pid had been recycled by
+ *  an unrelated instance's Electron renderer, so `list_chats` reported the chat live, the move
+ *  gates would have refused it, and `terminate_live` would have killed a STRANGER'S process tree.
+ *
+ *  `messagingSocketPath` is the session's own named pipe (Windows) / unix socket (POSIX), and it
+ *  names THAT session, so a recycled pid cannot answer for it. It is an ADDITIONAL requirement,
+ *  never a substitute: on POSIX a crash can leave the socket file on disk, so the pid check still
+ *  carries the verdict there and this only narrows it. A record too old to carry a socket path
+ *  falls back to the pid alone, which is exactly what every record used to get. */
+function sessionAlive(reg: { pid: number; messagingSocketPath?: unknown }): boolean {
+  if (!pidAlive(reg.pid)) return false
+  const sock = reg.messagingSocketPath
+  if (typeof sock !== 'string' || sock === '') return true
+  return existsSync(sock)
 }
 
 /** The CLI's transcript-store encoding of a cwd: every non-alphanumeric character becomes '-'. */
@@ -72,7 +95,7 @@ export function readOrphanedRegistry(claudeHome: string): OrphanSession[] {
     try {
       const reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
       if (typeof reg?.sessionId !== 'string' || typeof reg?.cwd !== 'string') continue
-      if (typeof reg.pid !== 'number' || pidAlive(reg.pid)) continue
+      if (typeof reg.pid !== 'number' || sessionAlive(reg)) continue
       out.push({
         pid: reg.pid,
         sessionId: reg.sessionId,
@@ -117,7 +140,7 @@ export function readLiveRegistry(claudeHome: string): LiveSession[] {
       const reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
       if (typeof reg?.sessionId !== 'string' || typeof reg?.cwd !== 'string') continue
       if (typeof reg.pid !== 'number') continue
-      if (!pidAlive(reg.pid)) continue
+      if (!sessionAlive(reg)) continue
       live.push({
         pid: reg.pid,
         sessionId: reg.sessionId,
@@ -125,6 +148,7 @@ export function readLiveRegistry(claudeHome: string): LiveSession[] {
         name: typeof reg.name === 'string' ? reg.name : reg.sessionId.slice(0, 8),
         startedAt: typeof reg.startedAt === 'number' ? reg.startedAt : 0,
         transcriptPath: transcriptPathFor(claudeHome, reg.cwd, reg.sessionId),
+        ...(typeof reg.version === 'string' ? { version: reg.version } : {}),
       })
     } catch {
       // One unreadable registry entry must not hide the others.

@@ -117,6 +117,164 @@ function liveRun(script: string): InFlightRun | null {
   return null
 }
 
+/** fan_out.py's own read-only subcommands (its docstring: `status` and `list` never spawn, send
+ *  or delete anything) - the ONLY fan_out invocations this route must never queue behind a write. */
+const FAN_OUT_READ_SUBCOMMANDS = new Set(['status', 'list'])
+
+/**
+ * The in-flight/route-lock KEY for one invocation - `script` for every script, UNLESS it is one
+ * of fan_out's read-only subcommands, which take no lock at all.
+ *
+ * ⛔ A READ WAS REFUSED BY THE WRITE'S LOCK (found live 2026-09-15). The route locks by SCRIPT
+ * NAME, and `fan_out status`/`fan_out list` run the very same script name as a spawn that can
+ * take minutes (~30-90s per chat, sequential) - so `fan_out_status`, read-only by its own MCP
+ * description, answered `409 fan_out is already running through this route` three times while a
+ * spawn it had nothing to do with was still working. `null` means "no lock at all": two reads may
+ * run concurrently with each other and with a write, exactly as reading a file while it is being
+ * written is fine as long as the write is atomic (fan_out.py's `_upsert` already is - see
+ * `_save`'s write-then-`os.replace`). Every OTHER fan_out subcommand (a bare spawn, `send`,
+ * `delete`) keeps the single shared "fan_out" key they always had, so two spawns - or a spawn and
+ * a delete - still cannot overlap.
+ */
+export function routeLockKey(script: string, args: string[]): string | null {
+  if (script === 'fan_out' && FAN_OUT_READ_SUBCOMMANDS.has(args[0] ?? '')) return null
+  return script
+}
+
+/** The chats an invocation names: every `--chat <query>`, normalized, plus whether it sweeps a
+ *  whole account. Parsing is literal on purpose - resolving a fragment to a chat is the Python
+ *  side's job, and a daemon that guessed would be a second, disagreeing resolver. */
+export function chatScopeOf(args: string[]): { chats: Set<string>; sweeps: boolean } {
+  const chats = new Set<string>()
+  let sweeps = false
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--all-unarchived') sweeps = true
+    else if (args[i] === '--chat' && i + 1 < args.length)
+      chats.add(
+        String(args[i + 1] ?? '')
+          .trim()
+          .toLowerCase(),
+      )
+  }
+  chats.delete('')
+  return { chats, sweeps }
+}
+
+/**
+ * May the incoming call take the route from the run that holds it?
+ *
+ * ⛔ ONLY WHEN A PERSON SAID SO, AND ONLY WHEN NOTHING IS STRANDED. Found live 2026-09-12,
+ * draining #8: a patient `move_chats` sat in stop-idle for its 300s while the owner said "kill
+ * it and move it", and the correct call - the same move with `terminate_live` - was refused 409
+ * because the route is keyed by SCRIPT NAME. The only way through was to find the engine's pid
+ * and `taskkill` it by hand, which is outside every rail these tools exist to provide, and the
+ * refused call's resume text was lost with it.
+ *
+ * Two conditions, both necessary. `--terminate-live` is the person's word: it is the same act
+ * with the waiting overridden, and queueing it behind the very wait it overrides is backwards.
+ * And the incoming call's chats must COVER the holder's, so no chat is left half-moved by the
+ * kill: whatever the preempted run had started, the incoming run is about to do itself, and
+ * migrate_chat re-resolves and re-gates every chat from scratch. A holder that names chats this
+ * call does not is never preempted - that is what orchestrator_cancel is for, deliberately, by
+ * a person who can see what they are abandoning (and migrate_reconcile.py to find it after).
+ */
+export function mayPreempt(incoming: string[], holder: string[]): boolean {
+  if (!incoming.includes('--terminate-live')) return false
+  const want = chatScopeOf(incoming)
+  const held = chatScopeOf(holder)
+  if (held.sweeps) return want.sweeps // only a sweep covers a sweep
+  if (held.chats.size === 0) return false // an unreadable scope is never preempted
+  for (const chat of held.chats) if (!want.chats.has(chat)) return false
+  return true
+}
+
+/** The resume text a migrate_batch invocation carries, and the chats it names. */
+function resumeOf(args: string[]): { resume: string; chats: string[] } {
+  const i = args.indexOf('--resume')
+  const resume = i >= 0 && i + 1 < args.length ? String(args[i + 1] ?? '').trim() : ''
+  return { resume, chats: [...chatScopeOf(args).chats] }
+}
+
+/**
+ * A REFUSED MOVE MUST NOT EAT ITS RESUME: stage it against every chat the call named.
+ *
+ * ⛔ WHY IT LIVES HERE AND NOT IN THE MCP TOOL (review finding, 2026-09-14). The first cut
+ * staged from `move_chats` after catching the 409 - but `move_chats` detaches by default (any
+ * batch carrying a resume declares more than two minutes), so the route answered 202 with an
+ * operation id and the refusal happened later, inside that operation, where no MCP code ever saw
+ * it. The fix covered the rare blocking call and missed the path nearly every real call takes.
+ * This is the one place both paths go through.
+ *
+ * WHY AT ALL (found live 2026-09-12): a `move_chats` carrying a resume was refused busy; the
+ * refusal was right, but the words died with the call, and the landed chat had to be told by
+ * hand that four background jobs had been orphaned. Staged through `stage_reply` - the script
+ * that owns the delivery ledger - with `--dedupe`, so a re-fired call re-uses the row instead of
+ * leaving two wakes. Staged, never sent: the courier types it later, with its own rails.
+ */
+async function stageRefusedResume(
+  args: string[],
+  deps: SpawnDeps & { dir?: string; python?: string },
+): Promise<Array<Record<string, unknown>>> {
+  const { resume, chats } = resumeOf(args)
+  if (!resume) return []
+  const out: Array<Record<string, unknown>> = []
+  for (const chat of chats) {
+    const run = await runOrchestrator(
+      {
+        script: 'stage_reply',
+        args: [chat, '--text', resume, '--by', 'move_chats (refused)', '--dedupe', '--json'],
+        timeoutMs: 60_000,
+      },
+      deps,
+    )
+    let payload: Record<string, unknown> | null = null
+    try {
+      const parsed: unknown = JSON.parse('stdout' in run ? run.stdout : '')
+      if (parsed && typeof parsed === 'object') payload = parsed as Record<string, unknown>
+    } catch {
+      payload = null
+    }
+    out.push(
+      payload?.id
+        ? { chat, staged: true, id: payload.id, reused: payload.reused === true }
+        : {
+            chat,
+            staged: false,
+            why:
+              'error' in run
+                ? run.error
+                : run.stderr.trim() || run.exitMeaning || `exit ${String(run.exitCode)}`,
+          },
+    )
+  }
+  return out
+}
+
+/** How long to wait for a preempted run's lock to clear before giving up and refusing as usual.
+ *  realSpawn's kill settles its promise in milliseconds; this is the bound, not the expectation. */
+let PREEMPT_WAIT_MS = 5_000
+
+/** Test seam: shorten the preempt wait, so the "did not clear in time" branch is testable without
+ *  a five-second sleep. Returns the previous value. */
+export function setPreemptWaitMsForTests(ms: number): number {
+  const was = PREEMPT_WAIT_MS
+  PREEMPT_WAIT_MS = ms
+  return was
+}
+
+/** Poll until `script` holds no live run, or the bound elapses. Returns whether it cleared. */
+async function waitForLockToClear(
+  script: string,
+  budgetMs: number = PREEMPT_WAIT_MS,
+): Promise<boolean> {
+  const until = Date.now() + budgetMs
+  while (Date.now() < until) {
+    if (!liveRun(script)) return true
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  return !liveRun(script)
+}
+
 /** Is any toolbox script running through this daemon right now? The compiled updater asks
  *  before it replaces orchestrator/ (audit AH-08). Reaps stale entries first - an immortal lock
  *  must not block an update forever either. */
@@ -143,8 +301,27 @@ export function orchestratorBusy(): boolean {
 // Results are kept in memory, bounded (OPERATION_KEEP) and expiring (OPERATION_TTL_MS): this is
 // reconciliation for a dropped connection and a restart-free daemon, not an audit log - the
 // toolbox's own ledgers are the durable record of what an act did.
+//
+// ⛔ 'RESTART-FREE' IS THE LOAD-BEARING WORD, AND IT USED TO BE INVISIBLE TO CALLERS (2026-09-12).
+// A migration batch was launched detached, the daemon restarted while it ran, the batch's child
+// process survived the restart and finished its work ORPHANED - and every poll of its id then
+// answered a bare 'no such operation', with the recent list empty. The MCP descriptions promised
+// an unconditional hour and 'nothing is gone', so the honest conclusion from the answer was that
+// the run had never existed. An hour was spent reconstructing the per-chat verdicts from four
+// other tools. Nothing here is made durable in response - that WOULD be the audit log this
+// deliberately is not - but a miss now says WHY it missed, so a caller can tell 'never existed'
+// from 'did not survive a restart' and knows to read the toolbox's ledger instead.
 
-export type OrchestratorOutcome = OrchestratorRun | { ok: false; error: string; busy?: boolean }
+export type OrchestratorOutcome =
+  | OrchestratorRun
+  | {
+      ok: false
+      error: string
+      busy?: boolean
+      operationId?: string
+      /** A refused migrate_batch's resume text, staged per named chat (see stageRefusedResume). */
+      resumeStaged?: Array<Record<string, unknown>>
+    }
 
 export interface OrchestratorOperation {
   id: string
@@ -166,11 +343,71 @@ interface OperationEntry {
   promise: Promise<OrchestratorOperation>
   kill: (() => void) | null
   cancelRequested: boolean
+  /** The registry's own deadline timer (see OPERATION_WATCHDOG_GRACE_MS). Cleared the moment the
+   *  run settles, so a finished operation leaves no timer behind. */
+  watchdog: ReturnType<typeof setTimeout> | null
 }
+
+/**
+ * How long past a run's OWN declared deadline the registry waits before closing the record itself.
+ *
+ * ⛔ A DEADLINE THAT ONLY THE SPAWN ADAPTER ENFORCES IS A DEADLINE THAT CAN BE MISSED (2026-09-18).
+ * Two runs sat `status: 'running', result: null` long past their declared length - 3600 s for a
+ * `migrate_batch`, 300 s for a hand-run `courier` - and had to be killed by a person, because the
+ * ONLY thing that could ever close a record was `runOrchestrator` resolving. Any way that promise
+ * fails to settle (and one was found: a grandchild holding the child's pipe, see realSpawn) is the
+ * same outcome to a caller: an operation that polls alive forever, with the per-chat report it was
+ * launched for lost. This is the backstop that does not depend on the spawn behaving: it holds
+ * nothing but a timer and the record, and it fires on the wall clock.
+ *
+ * Generous on purpose - realSpawn's own hard stop is `timeoutMs + 30 s`, so in a healthy daemon
+ * this timer is always beaten to the record and never fires at all. When it does fire, something
+ * below it is broken, and that is exactly what it says.
+ */
+const OPERATION_WATCHDOG_GRACE_MS = 90_000
 
 const OPERATION_TTL_MS = 60 * 60_000
 const OPERATION_KEEP = 200
 const operations = new Map<string, OperationEntry>()
+
+/** When THIS daemon process started. A miss is interpreted against it: an id minted by an
+ *  earlier process cannot be in this one's map, and that is a different fact from a bad id. */
+const REGISTRY_STARTED_AT = Date.now()
+
+/** Why an id is not here - so a 404 can be acted on instead of puzzled over. */
+export type OperationMiss = {
+  ok: false
+  error: string
+  reason: 'unknown-id' | 'daemon-restarted'
+  /** When the daemon that is answering started. */
+  daemonStartedAt: number
+  /** How many records this process is holding, so 'empty' is distinguishable from 'pruned'. */
+  held: number
+}
+
+export function operationMissReason(now = Date.now()): OperationMiss {
+  // A registry this young cannot have pruned anything: OPERATION_TTL_MS is an hour, so an id
+  // that is absent from a process younger than that was either never minted here or was minted
+  // before a restart. Either way the caller's next move is the same, and saying so is the fix.
+  const youngerThanTtl = now - REGISTRY_STARTED_AT < OPERATION_TTL_MS
+  const restarted = youngerThanTtl
+  return {
+    ok: false,
+    reason: restarted ? 'daemon-restarted' : 'unknown-id',
+    daemonStartedAt: REGISTRY_STARTED_AT,
+    held: operations.size,
+    error: restarted
+      ? 'no such operation here - THIS DAEMON STARTED AT ' +
+        new Date(REGISTRY_STARTED_AT).toISOString() +
+        ', less than an hour ago, and operation records live only in the daemon process that ' +
+        'ran them. If your run began before that time, it was a DIFFERENT process: the record ' +
+        'did not survive the restart, and the run itself may well have finished (a detached ' +
+        "child outlives the daemon). Do NOT re-fire the act - read the toolbox's own ledger " +
+        'for what it did, and verify the effect directly.'
+      : 'no such operation - this daemon has been up over an hour, so the id was either never ' +
+        'minted here or its record has passed the one-hour retention.',
+  }
+}
 
 function pruneOperations(now = Date.now()): void {
   const finished = [...operations.values()].filter((e) => e.op.finishedAt !== null)
@@ -191,26 +428,36 @@ function snapshot(op: OrchestratorOperation): OrchestratorOperation {
 }
 
 /**
- * Start a run as an operation - or, with an idempotency key that names one already running or
- * recently finished (and which actually ran), return that one and start nothing.
+ * Start a run as an operation - or, with an idempotency key that names one already RUNNING or
+ * that SUCCEEDED, return that one and start nothing.
+ *
+ * A failed or cancelled run does NOT pin the key. `ran` alone used to be the test - true the
+ * moment a child process actually started - so a deterministic failure (title mismatch, a
+ * refused precondition, anything that fails the same way every time) got resurrected forever:
+ * the same key kept answering the old FAILED operation, and the only escape was perturbing an
+ * argument (see docs/todo/TODO.md, "Overnight orchestration run", item 3). A key still protects
+ * what it exists to protect - a dropped connection retried while the original is still running,
+ * or already succeeded, must not start a second act - but a failed or cancelled run leaves the
+ * key free for the very next call with that key to try again for real.
  */
-export function startOrchestratorOperation(
-  input: { script?: unknown; args?: unknown; timeoutMs?: unknown },
-  opts: {
-    idempotencyKey?: string | null
-    deps?: SpawnDeps & { dir?: string; python?: string }
-  } = {},
-): { op: OrchestratorOperation; promise: Promise<OrchestratorOperation>; reused: boolean } {
-  pruneOperations()
-  const key = opts.idempotencyKey?.trim() || null
-  if (key) {
-    for (const e of operations.values()) {
-      if (e.op.idempotencyKey === key && (e.op.status === 'running' || e.op.ran))
-        return { op: snapshot(e.op), promise: e.promise, reused: true }
-    }
+/** The live record an idempotency key may reuse: one that is RUNNING or already SUCCEEDED. A
+ *  failed or cancelled run does not pin its key (see startOrchestratorOperation). */
+function reusableOperation(key: string | null): OperationEntry | null {
+  if (!key) return null
+  for (const e of operations.values()) {
+    if (e.op.idempotencyKey === key && (e.op.status === 'running' || e.op.status === 'done'))
+      return e
   }
-  const check = validateInvocation(input)
-  const op: OrchestratorOperation = {
+  return null
+}
+
+/** The record for a new run, shaped from what validation accepted (or refused). */
+function newOperation(
+  input: { script?: unknown; args?: unknown; timeoutMs?: unknown },
+  key: string | null,
+  check: InvocationCheck,
+): OrchestratorOperation {
+  return {
     id: crypto.randomUUID(),
     script: check.ok ? check.invocation.script : String(input.script ?? ''),
     args: check.ok ? check.invocation.args : [],
@@ -221,31 +468,118 @@ export function startOrchestratorOperation(
     result: null,
     ran: false,
   }
-  const entry: OperationEntry = {
+}
+
+function newOperationEntry(op: OrchestratorOperation): OperationEntry {
+  return {
     op,
     promise: Promise.resolve(op),
     kill: null,
     cancelRequested: false,
+    watchdog: null,
   }
+}
+
+/** The spawn hook handed to runOrchestrator: keep the kill switch on the record and honour a
+ *  cancel that arrived before the child existed. */
+function operationProcessHandler(
+  op: OrchestratorOperation,
+  entry: OperationEntry,
+  deps: SpawnDeps & { dir?: string; python?: string },
+): (kill: () => void) => void {
+  return (kill) => {
+    op.ran = true
+    entry.kill = kill
+    deps.onProcess?.(kill)
+    // A cancel that arrived before the child existed lands the moment it does.
+    if (entry.cancelRequested) kill()
+  }
+}
+
+/** Close the record on its run's result. */
+function settleOperation(
+  op: OrchestratorOperation,
+  entry: OperationEntry,
+  result: OrchestratorOutcome,
+): OrchestratorOperation {
+  if (entry.watchdog) {
+    clearTimeout(entry.watchdog)
+    entry.watchdog = null
+  }
+  // THE WATCHDOG'S VERDICT STANDS. If it already closed this record, a caller has been told the
+  // run was abandoned; a late result arriving afterwards must not quietly reopen it as `done`.
+  if (op.finishedAt !== null) return snapshot(op)
+  // An injected spawn never reports a process; if the run went far enough to have a script
+  // record, it ran as far as this registry is concerned.
+  if ('script' in result) op.ran = true
+  op.result = result
+  op.finishedAt = Date.now()
+  op.status = entry.cancelRequested ? 'cancelled' : result.ok ? 'done' : 'failed'
+  return snapshot(op)
+}
+
+/** THE REGISTRY'S OWN DEADLINE (OPERATION_WATCHDOG_GRACE_MS): whatever happens above, the record
+ *  closes - putting down a child that is somehow still there first, best-effort. */
+function expireOperation(
+  op: OrchestratorOperation,
+  entry: OperationEntry,
+  declared: number,
+  graceMs: number,
+): void {
+  entry.watchdog = null
+  if (op.finishedAt !== null) return
+  // Put the child down if one is somehow still there; then answer, regardless of whether it did.
+  try {
+    entry.kill?.()
+  } catch {
+    /* the kill is best-effort - the record closes either way, which is the point */
+  }
+  op.result = {
+    ok: false,
+    error:
+      `${op.script} passed its declared deadline of ${Math.round(declared / 1000)}s ` +
+      `(plus ${Math.round(graceMs / 1000)}s of grace) without its run ` +
+      'settling, so the daemon closed this operation and killed whatever was left of it. The ' +
+      'script may have done part or all of its work before that - read the toolbox’s own ' +
+      'ledger and verify the effect directly; do NOT re-fire the act blind.',
+  }
+  op.finishedAt = Date.now()
+  op.status = 'failed'
+}
+
+export function startOrchestratorOperation(
+  input: { script?: unknown; args?: unknown; timeoutMs?: unknown },
+  opts: {
+    idempotencyKey?: string | null
+    deps?: SpawnDeps & { dir?: string; python?: string }
+    /** TESTS ONLY: shrink OPERATION_WATCHDOG_GRACE_MS so the backstop can be proven in a second
+     *  rather than in ninety. No route passes it; the default is the only value production uses. */
+    watchdogGraceMs?: number
+  } = {},
+): { op: OrchestratorOperation; promise: Promise<OrchestratorOperation>; reused: boolean } {
+  pruneOperations()
+  const key = opts.idempotencyKey?.trim() || null
+  const reusable = reusableOperation(key)
+  if (reusable) return { op: snapshot(reusable.op), promise: reusable.promise, reused: true }
+  const check = validateInvocation(input)
+  const op = newOperation(input, key, check)
+  const entry = newOperationEntry(op)
   const deps = opts.deps ?? {}
   entry.promise = runOrchestrator(input, {
     ...deps,
-    onProcess: (kill) => {
-      op.ran = true
-      entry.kill = kill
-      deps.onProcess?.(kill)
-      // A cancel that arrived before the child existed lands the moment it does.
-      if (entry.cancelRequested) kill()
-    },
-  }).then((result) => {
-    // An injected spawn never reports a process; if the run went far enough to have a script
-    // record, it ran as far as this registry is concerned.
-    if ('script' in result) op.ran = true
-    op.result = result
-    op.finishedAt = Date.now()
-    op.status = entry.cancelRequested ? 'cancelled' : result.ok ? 'done' : 'failed'
-    return snapshot(op)
-  })
+    onProcess: operationProcessHandler(op, entry, deps),
+  }).then((result) => settleOperation(op, entry, result))
+  // `validateInvocation` failing means the run resolves immediately with a refusal, so the default
+  // deadline is only ever a placeholder for a timer that never fires.
+  const declared = check.ok ? check.invocation.timeoutMs : DEFAULT_TIMEOUT_MS
+  const graceMs = opts.watchdogGraceMs ?? OPERATION_WATCHDOG_GRACE_MS
+  entry.watchdog = setTimeout(
+    () => expireOperation(op, entry, declared, graceMs),
+    declared + graceMs,
+  )
+  // Node/Bun keep the process alive for a pending timer; a daemon is long-lived anyway, but an
+  // hour-long watchdog must never be the reason a CLI or a test run refuses to exit.
+  entry.watchdog.unref?.()
   operations.set(op.id, entry)
   return { op: snapshot(op), promise: entry.promise, reused: false }
 }
@@ -275,9 +609,30 @@ export function cancelOrchestratorOperation(
   return { ok: true, status: 'running' }
 }
 
-/** Tests only: forget every operation (the registry is module state). */
+/**
+ * Tests only: forget every operation AND release every route lock.
+ *
+ * ⛔ THE LOCK HALF IS LOAD-BEARING, AND IT WAS MISSING (GitHub CI, Linux, 2026-09-14). `bun test`
+ * runs every file in ONE process, so `inFlight` outlives the file that filled it. A file that
+ * stubs a spawn which never settles - which is exactly how orchestrator-stale-lock.test.ts pins
+ * "a young lock still blocks" - leaves an IMMORTAL `migrate_batch` lock behind, and every later
+ * file's migrate_batch run is then refused busy by a run that does not exist. The preempt suite
+ * went red on Linux and green on Windows off nothing but readdir order deciding which file ran
+ * first: its holder could not start, so there was no operation to preempt. Clearing the
+ * operations without the locks left exactly half the module state behind.
+ *
+ * Clears rather than kills: a stub's kill switch is the test's own business, and a real run's
+ * lock is never reached by this seam because production never calls it.
+ */
 export function resetOrchestratorOperationsForTests(): void {
+  // The watchdog timers go with the records. A stub spawn that never settles leaves one armed for
+  // as long as its declared deadline, and `bun test` runs every file in ONE process.
+  for (const e of operations.values()) {
+    if (e.watchdog) clearTimeout(e.watchdog)
+    e.watchdog = null
+  }
   operations.clear()
+  inFlight.clear()
 }
 /** Output kept per stream. The dry loop over a full fleet is a few thousand lines; a runaway is
  *  truncated from the FRONT so the verdict lines at the end survive. */
@@ -385,6 +740,10 @@ export interface OrchestratorRun {
   durationMs: number
   stdout: string
   stderr: string
+  /** The operation this run took the route from, when a person's `--terminate-live` preempted a
+   *  patient move of the same chats (see mayPreempt). Absent on an ordinary run, so a caller
+   *  that does not know about preemption reads exactly what it always did. */
+  preempted?: string
 }
 
 /** One row of `lib/actionlib.CATALOG`, as `orch.py --catalog` prints it. Deliberately loose: the
@@ -555,6 +914,14 @@ export function setOrchestratorDaemonUrl(url: string): void {
  *   * PYTHONUTF8 / PYTHONIOENCODING: Python writing to a PIPE on Windows encodes with the locale
  *     code page (cp1252) unless told otherwise, and the toolbox prints '×', '🟢' and account names
  *     - decoded as UTF-8 here that would be mojibake on a machine without UTF-8 mode.
+ *   * PYTHONUNBUFFERED: THIS IS WHY A DEAD RUN LOOKED SILENT (2026-09-18). Python block-buffers
+ *     stdout whenever it is a pipe rather than a console, so everything a script printed sat in
+ *     an 8 KB buffer inside the CHILD until it exited cleanly - and a child that is killed (a
+ *     cancel, a deadline) or that dies hard never flushes it. Two cancelled runs came back
+ *     `exitCode: 1, stdout: "", stderr: ""` and were read as a crash with no diagnostic anywhere;
+ *     the diagnostic had been written and thrown away with the process. Unbuffered, the adapter
+ *     already holds every line the child got out before it died, which is the whole value of
+ *     having a deadline that kills.
  *   * AGENTHYDRA_URL: THE DAEMON THAT SPAWNED THE CHILD (audit AH-04). hydralib's default is
  *     127.0.0.1:7787 and it only ever read AGENTHYDRA_URL, while this daemon auto-hops to another
  *     port when 7787 is taken and never told its child. Reproduced: AGENTHYDRA_PORT=17787 with no
@@ -571,15 +938,51 @@ export function orchestratorChildEnv(
     ...(base as Record<string, string>),
     PYTHONUTF8: '1',
     PYTHONIOENCODING: 'utf-8',
+    PYTHONUNBUFFERED: '1',
   }
   const own = url ?? readInstanceInfo()?.url ?? null
   if (own) env.AGENTHYDRA_URL = own
   return env
 }
 
-/** After a kill, how long an unclosed pipe is waited on before the drain is abandoned. */
+/** After a kill - or after the child has EXITED on its own - how long an unclosed pipe is waited
+ *  on before the drain is abandoned. */
 const DRAIN_GRACE_MS = 5_000
 
+/** How long past a run's own `timeoutMs` this adapter will keep waiting for ANYTHING before it
+ *  stops waiting and answers with what it has. Covers the kill, the drain grace, and the salvage
+ *  window below, with room to spare; see the hard stop in realSpawn. */
+const HARD_STOP_GRACE_MS = 30_000
+
+/** After the hard stop has aborted the drains, how long they are given to hand back the text they
+ *  had already accumulated before the adapter answers without them. */
+const SALVAGE_MS = 2_000
+
+const EMPTY_DRAIN = { text: '', dropped: 0 }
+
+/**
+ * Run one child and come back with its output and exit code - AND COME BACK, whatever the child
+ * or its descendants do.
+ *
+ * ⛔ THE CHILD EXITING IS NOT THE PIPE CLOSING, AND THAT WEDGED THE WHOLE ROUTE (2026-09-18).
+ * `Promise.all([drainStdout, drainStderr, proc.exited])` settles on the SLOWEST of the three, and a
+ * grandchild that inherited the child's stdout holds that pipe open for as long as IT lives - so a
+ * child that died in 79 seconds kept its operation reading `running` until the deadline killed it
+ * an hour later. Reproduced exactly: a script that spawns `Popen([...])` with no redirection and
+ * then `sys.exit(1)` settles this adapter in 100 ms if nothing else holds the pipe, and in
+ * `timeoutMs + DRAIN_GRACE_MS` if something does. An hour-long deadline is a normal, correct
+ * declaration for `migrate_batch`; it must not become the floor on noticing a crash.
+ *
+ * So three bounds, each one narrower than the last:
+ *
+ *   1. THE REAPER - `proc.exited` starts the same DRAIN_GRACE_MS countdown a kill does. The child
+ *      is the run; once it is gone, whatever still holds its pipe is a stranger, and what arrived
+ *      is the honest answer.
+ *   2. THE DEADLINE - unchanged: `timeoutMs` kills the tree and flags `timedOut`.
+ *   3. THE HARD STOP - at `timeoutMs + HARD_STOP_GRACE_MS` this function answers no matter what,
+ *      even if `proc.exited` itself never settles (a kill that could not take, a pid the OS will
+ *      not reap). A deadline enforced only by a kill is not enforced: it assumes the kill worked.
+ */
 async function realSpawn(command: string[], cwd: string, timeoutMs: number, hooks?: SpawnHooks) {
   const proc = Bun.spawn(command, {
     cwd,
@@ -591,11 +994,15 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number, hook
   })
   const abandon = new AbortController()
   let grace: ReturnType<typeof setTimeout> | null = null
+  // Once, whichever reason gets here first: the child was killed, or the child exited by itself.
+  const abandonDrainsSoon = () => {
+    grace ??= setTimeout(() => abandon.abort(), DRAIN_GRACE_MS)
+  }
   const killAndBound = () => {
     killTree(proc)
     // The kill takes the tree we can see. If a pipe is still open DRAIN_GRACE_MS later, something
     // we could not see holds it; stop reading rather than hang the route on it.
-    grace ??= setTimeout(() => abandon.abort(), DRAIN_GRACE_MS)
+    abandonDrainsSoon()
   }
   hooks?.onProcess?.(killAndBound)
   let timedOut = false
@@ -603,19 +1010,47 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number, hook
     timedOut = true
     killAndBound()
   }, timeoutMs)
+
+  // BOUND 1, the reaper: the child's own exit starts the drain countdown too.
+  const exited = proc.exited.then((code) => {
+    abandonDrainsSoon()
+    return code
+  })
+
+  // BOUND 3, the hard stop. `hardStop` resolves at the wall; `salvage` resolves SALVAGE_MS later,
+  // which is what each pending drain is raced against - so a drain that was abandoned at the wall
+  // still gets to hand back the text it had, and only a drain that cannot even do that is dropped.
+  let hardStopped = false
+  let hardTimer: ReturnType<typeof setTimeout> | null = null
+  const hardStop = new Promise<void>((resolve) => {
+    hardTimer = setTimeout(() => {
+      hardStopped = true
+      timedOut = true
+      killAndBound()
+      abandon.abort()
+      resolve()
+    }, timeoutMs + HARD_STOP_GRACE_MS)
+  })
+  const salvage = hardStop.then(() => new Promise<void>((r) => setTimeout(r, SALVAGE_MS)))
+  const bounded = <T>(p: Promise<T>, fallback: T): Promise<T> =>
+    Promise.race([p, salvage.then(() => fallback)])
+
   try {
     // Both streams drained together, bounded as they arrive (drainBounded): a child that fills one
     // pipe while the other is unread would otherwise deadlock, and one that never stops talking
     // would otherwise be held whole in memory until its deadline.
     const [out, err, code] = await Promise.all([
-      drainBounded(proc.stdout, MAX_OUTPUT_CHARS, abandon.signal),
-      drainBounded(proc.stderr, MAX_OUTPUT_CHARS, abandon.signal),
-      proc.exited,
+      bounded(drainBounded(proc.stdout, MAX_OUTPUT_CHARS, abandon.signal), EMPTY_DRAIN),
+      bounded(drainBounded(proc.stderr, MAX_OUTPUT_CHARS, abandon.signal), EMPTY_DRAIN),
+      bounded<number | null>(exited, null),
     ])
     return {
       code,
       stdout: out.text,
-      stderr: err.text,
+      stderr:
+        hardStopped && code === null
+          ? `${err.text}${err.text && !err.text.endsWith('\n') ? '\n' : ''}[agenthydra] the child did not settle within ${Math.round((timeoutMs + HARD_STOP_GRACE_MS) / 1000)}s of starting (deadline ${Math.round(timeoutMs / 1000)}s + grace) and was abandoned; its exit code is unknown.\n`
+          : err.text,
       timedOut,
       stdoutDropped: out.dropped,
       stderrDropped: err.dropped,
@@ -625,7 +1060,81 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number, hook
     // fire on a run that is already over, and a child still alive must not outlive its adapter.
     clearTimeout(killer)
     if (grace) clearTimeout(grace)
+    if (hardTimer) clearTimeout(hardTimer)
     if (proc.exitCode === null && !proc.killed) killTree(proc)
+  }
+}
+
+/** Outcome of checking whether a script is already running through this route: either the caller
+ *  is free to proceed (optionally because it just preempted the holder), or must stop and return
+ *  the given refusal. */
+type LiveRunConflict =
+  | { blocked: false; preempted?: string }
+  | { blocked: true; outcome: OrchestratorOutcome }
+
+/**
+ * `script` already has `running` in flight; decide whether this call may preempt it or must be
+ * refused. Split out of runOrchestrator so its nested preempt/refuse branches don't compound with
+ * the spawn/try/catch below them. Callers check `liveRun` themselves and only call this — and only
+ * `await` its result — when it is non-null, so a caller with nothing in flight reaches its spawn in
+ * the same synchronous tick it always did.
+ *
+ * Name the run that holds the lock AND the one call that releases it. A bare "wait for it" is
+ * what sent 2026-09-12 to taskkill and 2026-09-13 to a hand-killed migrate_batch: the remedy
+ * existed both times (cancelOrchestratorOperation) and the refusal never said so.
+ */
+async function resolveLiveRunConflict(
+  script: string,
+  args: string[],
+  deps: SpawnDeps & { dir?: string; python?: string },
+  running: InFlightRun,
+): Promise<LiveRunConflict> {
+  const holder = [...operations.values()].find(
+    (e) => e.op.status === 'running' && e.op.script === script,
+  )
+  // Every refusal below carries the call's resume, staged, when it had one.
+  const refuse = async (error: string): Promise<OrchestratorOutcome> => {
+    const resumeStaged =
+      script === 'migrate_batch' && resumeOf(args).resume
+        ? await stageRefusedResume(args, deps)
+        : undefined
+    return {
+      ok: false,
+      busy: true,
+      ...(holder ? { operationId: holder.op.id } : {}),
+      ...(resumeStaged ? { resumeStaged } : {}),
+      error,
+    }
+  }
+
+  // ...and when the incoming call is the SAME act with a person's word added, take the route
+  // instead of naming a remedy the person then has to run by hand. See mayPreempt.
+  if (holder && mayPreempt(args, holder.op.args)) {
+    const stop = cancelOrchestratorOperation(holder.op.id)
+    if (stop.ok && (await waitForLockToClear(script)))
+      return { blocked: false, preempted: holder.op.id }
+    // ⛔ THE HOLDER IS ALREADY DYING, SO DO NOT SAY "WAIT FOR IT" (review finding, 2026-09-14).
+    // A tree whose grandchild holds a pipe open can outlast the wait, and falling through to
+    // the ordinary refusal told the caller to wait for a healthy run, or to cancel one this
+    // very call had just cancelled - while nothing was moving the chats at all.
+    if (stop.ok)
+      return {
+        blocked: true,
+        outcome: await refuse(
+          `${script} (operation ${holder.op.id}) was preempted by this call and is still being torn down after ${Math.round(PREEMPT_WAIT_MS / 1000)}s - it needs no orchestrator_cancel. Fire this same call again in a few seconds; nothing is moving these chats until you do.`,
+        ),
+      }
+  }
+
+  const age = Math.round((Date.now() - running.started) / 1000)
+  const remedy = holder
+    ? `wait for it, or stop it with orchestrator_cancel { id: "${holder.op.id}" } and fire this call again`
+    : 'wait for it rather than starting a second one'
+  return {
+    blocked: true,
+    outcome: await refuse(
+      `${script} is already running through this route (started ${age}s ago) - ${remedy}`,
+    ),
   }
 }
 
@@ -635,7 +1144,7 @@ async function realSpawn(command: string[], cwd: string, timeoutMs: number, hook
 export async function runOrchestrator(
   input: { script?: unknown; args?: unknown; timeoutMs?: unknown },
   deps: SpawnDeps & { dir?: string; python?: string } = {},
-): Promise<OrchestratorRun | { ok: false; error: string; busy?: boolean }> {
+): Promise<OrchestratorOutcome> {
   const check = validateInvocation(input)
   if (!check.ok) return { ok: false, error: check.error }
   const { script, args, timeoutMs } = check.invocation
@@ -648,22 +1157,33 @@ export async function runOrchestrator(
     }
   const command = [deps.python ?? pythonBinary(), 'orch.py', script, ...args]
   const spawn = deps.spawn ?? realSpawn
-  const running = liveRun(script)
-  if (running)
-    return {
-      ok: false,
-      busy: true,
-      error: `${script} is already running through this route (started ${Math.round((Date.now() - running.started) / 1000)}s ago) - wait for it rather than starting a second one`,
-    }
+
+  // ⛔ ONLY AWAIT WHEN THERE IS SOMETHING TO RESOLVE. A caller that finds no live run must reach
+  // the spawn below in the SAME synchronous tick as before — tests rely on that to observe a
+  // spawn's side effect (e.g. an increment) immediately after firing two calls back to back with
+  // no await between them. Introducing an `await` here unconditionally would push that spawn a
+  // microtask later even when `liveRun` says there is nothing to wait for.
+  const lockKey = routeLockKey(script, args)
+  let preempted: string | undefined
+  const running = lockKey !== null ? liveRun(lockKey) : null
+  if (running) {
+    const conflict = await resolveLiveRunConflict(lockKey as string, args, deps, running)
+    if (conflict.blocked) return conflict.outcome
+    preempted = conflict.preempted
+  }
+
   const started = Date.now()
-  const entry: InFlightRun = { started, deadline: started + timeoutMs + STALE_LOCK_GRACE_MS }
-  inFlight.set(script, entry)
+  const entry: InFlightRun | null =
+    lockKey !== null ? { started, deadline: started + timeoutMs + STALE_LOCK_GRACE_MS } : null
+  if (lockKey !== null && entry) inFlight.set(lockKey, entry)
   try {
     const r = await spawn(command, dir, timeoutMs, {
       // Keep this run's kill switch on its own lock entry, so a later caller that finds the
       // entry orphaned can put down a child that outlived its deadline before starting afresh.
+      // `entry` is null for an unlocked invocation (routeLockKey said so - see fan_out's
+      // status/list) - there is no lock entry to attach the kill switch to, and none is needed.
       onProcess: (kill) => {
-        entry.kill = kill
+        if (entry) entry.kill = kill
         deps.onProcess?.(kill)
       },
     })
@@ -673,6 +1193,7 @@ export async function runOrchestrator(
       args,
       command,
       cwd: dir,
+      ...(preempted ? { preempted } : {}),
       exitCode: r.code,
       exitMeaning: exitMeaning(script, r.code),
       timedOut: r.timedOut,
@@ -690,7 +1211,7 @@ export async function runOrchestrator(
     // may already own the key by the time an abandoned promise finally settles, and an
     // unconditional delete would release ITS lock - handing a second caller a concurrent acting
     // pass, which is the one thing this map exists to prevent. Identity check, not a name check.
-    if (inFlight.get(script) === entry) inFlight.delete(script)
+    if (lockKey !== null && entry && inFlight.get(lockKey) === entry) inFlight.delete(lockKey)
   }
 }
 

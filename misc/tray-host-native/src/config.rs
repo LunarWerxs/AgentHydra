@@ -49,6 +49,10 @@ pub struct Config {
     pub menu_open_label: String,
     pub rebuild_command: Option<String>,
     pub rebuild_log_name: String,
+    /// The tray's OWN log, beside the rebuild log: every daemon birth and death it witnesses.
+    /// Separate from the daemon's `logs/daemon.log`, deliberately - the deaths worth recording here
+    /// are the ones the daemon could not write down itself.
+    pub tray_log_name: String,
     /// "Rebuild & Restart" is dev-only: a distributed build ships no source to rebuild.
     pub is_dev_tree: bool,
 
@@ -306,6 +310,7 @@ impl Config {
                 .unwrap_or_else(|| format!("Open {}", v.str_at("displayName").unwrap_or("app"))),
             rebuild_command: opt_string(v.str_at("rebuildCommand")),
             rebuild_log_name: v.str_at("rebuildLogName").unwrap_or("Rebuild.log").to_string(),
+            tray_log_name: v.str_at("trayLogName").unwrap_or("Tray.log").to_string(),
             is_dev_tree: resolve_is_dev_tree(v),
             shutdown_token_env_var: opt_string(v.str_at("shutdownTokenEnvVar")),
             shutdown_header_prefix: v.str_at("shutdownHeaderPrefix").unwrap_or("x-app").to_string(),

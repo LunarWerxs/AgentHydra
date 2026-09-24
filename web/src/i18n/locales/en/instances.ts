@@ -27,7 +27,17 @@ export default {
   colSession: 'Session (5h)',
   colWeekly: 'Weekly',
   resetsIn: 'in {when}',
+  // The Weekly cell copies its reset DATE AND TIME on click (the bar shows a countdown, a calendar
+  // wants a date and a time).
+  resetDateCopyHint: 'Resets {date}. Click to copy the date and time.',
+  toastResetDateCopied: 'Copied {date}, when this weekly limit resets.',
+  // Said only when the write actually failed (no secure context, or permission refused): the date and
+  // time are in the message so they can still be read off the screen and typed.
+  toastResetDateCopyFailed: 'Could not reach the clipboard. This limit resets {date}.',
   colPlan: 'Plan',
+  colLastLaunched: 'Last launched',
+  colLastLaunchedHint:
+    'When this profile was last started on this PC: opened from AgentHydra, or on Windows seen starting from anywhere else (Start menu, taskbar, Claude itself). A dash means it has not been seen starting on this machine yet.',
   colActions: 'Actions',
   running: 'Running',
   stopped: 'Stopped',
@@ -324,6 +334,12 @@ export default {
   // explains a refusal before it happens rather than after.
   chatsLive: 'Running',
   chatsArchivedBadge: 'Archived',
+  // A chat filed under an account this profile is no longer signed into: its record is on disk,
+  // but the app shows only the signed-in account's chats, so the owner cannot see it (2026-09-18).
+  chatsStaleLoginCount: '{n} hidden by a re-login',
+  chatsStaleLoginBadge: 'Hidden (old login)',
+  chatsStaleLoginHint:
+    'Filed under the account this app was signed into before. The app only shows the current account’s chats, so this one is invisible there. Move it to this same account to bring it back.',
   chatsNoTitle: '(untitled chat)',
   chatsNeverActive: 'No recorded activity',
   // Only a chat with a CLI transcript can be opened in Sessions; one without is a Desktop-only

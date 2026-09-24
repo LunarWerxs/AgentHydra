@@ -102,6 +102,89 @@ class LedgerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ledgerlib.check("achive", "s1", now_ms=T0)  # the typo'd read must not un-count
 
+    # --- discount: the act never happened, so the attempt comes back ----------------------
+    # Found live 2026-09-12: the courier refused (correctly) to type into a chat mid-turn and
+    # the refusal still burned a breaker attempt, so four honest deferrals would suppress the
+    # chat the courier was being careful with. The brake counts futility, not restraint.
+
+    def test_discount_takes_back_exactly_one_attempt(self):
+        for i in range(ledgerlib.ATTEMPT_CAP):
+            ledgerlib.note("deliver", "s1", now_ms=T0 + i)
+        self.assertTrue(ledgerlib.check("deliver", "s1", now_ms=T0 + 10)["suppressed"])
+        ledgerlib.discount("deliver", "s1")
+        v = ledgerlib.check("deliver", "s1", now_ms=T0 + 10)
+        self.assertFalse(v["suppressed"])
+        self.assertEqual(v["attempts"], ledgerlib.ATTEMPT_CAP - 1,
+                         "a deferral forgives its own attempt, never the ones before it")
+
+    def test_discount_is_not_clear_and_leaves_the_earlier_history(self):
+        """clear() would forgive a genuine futile loop; a deferral must not be able to."""
+        for i in range(3):
+            ledgerlib.note("deliver", "s1", now_ms=T0 + i)
+        ledgerlib.discount("deliver", "s1")
+        self.assertEqual(ledgerlib.check("deliver", "s1", now_ms=T0 + 10)["attempts"], 2)
+
+    def test_discount_removes_the_MOST_RECENT_row(self):
+        ledgerlib.note("deliver", "s1", note="older", now_ms=T0)
+        ledgerlib.note("deliver", "s1", note="newer", now_ms=T0 + 1)
+        ledgerlib.discount("deliver", "s1")
+        notes = [r.get("note") for r in ledgerlib._load()]
+        self.assertEqual(notes, ["older"])
+
+    def test_discount_with_an_attempt_id_takes_back_ITS_row_not_a_concurrent_pass_s(self):
+        """REVIEW FINDING, 2026-09-14. Two passes delivering to one chat interleave note(): pass A
+        records, pass B records, then A defers. By "newest row" A took back B's attempt and kept
+        its own, so B's genuine futile try went uncounted. note() returns the id that fixes it."""
+        mine = ledgerlib.note("deliver", "s1", note="pass A", now_ms=T0)
+        ledgerlib.note("deliver", "s1", note="pass B", now_ms=T0 + 1)
+        ledgerlib.discount("deliver", "s1", mine)
+        self.assertEqual([r.get("note") for r in ledgerlib._load()], ["pass B"])
+
+    def test_discount_of_an_attempt_already_gone_is_a_no_op_not_someone_else_s_row(self):
+        mine = ledgerlib.note("deliver", "s1", note="pass A", now_ms=T0)
+        ledgerlib.discount("deliver", "s1", mine)
+        ledgerlib.note("deliver", "s1", note="pass B", now_ms=T0 + 1)
+        ledgerlib.discount("deliver", "s1", mine)  # a second take-back of the same attempt
+        self.assertEqual([r.get("note") for r in ledgerlib._load()], ["pass B"])
+
+    def test_note_hands_back_a_distinct_id_per_attempt(self):
+        ids = {ledgerlib.note("deliver", "s1", now_ms=T0 + i) for i in range(5)}
+        self.assertEqual(len(ids), 5)
+
+    def test_discount_never_takes_a_deterministic_row(self):
+        """A deterministic refusal outlives the window on purpose; a deferral must not
+        resurrect a chat that was already stopped for good."""
+        ledgerlib.note("deliver", "s1", deterministic=True, note="two rows share this title",
+                       now_ms=T0)
+        ledgerlib.discount("deliver", "s1")
+        v = ledgerlib.check("deliver", "s1", now_ms=T0 + 1)
+        self.assertTrue(v["suppressed"])
+        self.assertTrue(v["deterministic"])
+
+    def test_discount_steps_over_a_deterministic_row_to_the_ordinary_one_below(self):
+        ledgerlib.note("deliver", "s1", note="ordinary", now_ms=T0)
+        ledgerlib.note("deliver", "s1", deterministic=True, note="stuck", now_ms=T0 + 1)
+        ledgerlib.discount("deliver", "s1")
+        kept = [(r.get("note"), bool(r.get("deterministic"))) for r in ledgerlib._load()]
+        self.assertEqual(kept, [("stuck", True)])
+
+    def test_discount_only_touches_its_own_kind_and_chat(self):
+        ledgerlib.note("deliver", "s1", now_ms=T0)
+        ledgerlib.note("deliver", "s2", now_ms=T0)
+        ledgerlib.note("archive", "s1", now_ms=T0)
+        ledgerlib.discount("deliver", "s1")
+        self.assertEqual(ledgerlib.check("deliver", "s2", now_ms=T0 + 1)["attempts"], 1)
+        self.assertEqual(ledgerlib.check("archive", "s1", now_ms=T0 + 1)["attempts"], 1)
+        self.assertEqual(ledgerlib.check("deliver", "s1", now_ms=T0 + 1)["attempts"], 0)
+
+    def test_discount_with_nothing_to_take_is_a_no_op_not_a_crash(self):
+        ledgerlib.discount("deliver", "s1")
+        self.assertEqual(ledgerlib.check("deliver", "s1", now_ms=T0)["attempts"], 0)
+
+    def test_discount_refuses_an_unknown_kind(self):
+        with self.assertRaises(ValueError):
+            ledgerlib.discount("frobnicate", "s1")
+
     # --- never claim an act landed without checking (orchestrator rule 4) -----------------
 
     def test_verify_true_marks_the_latest_row_confirmed(self):

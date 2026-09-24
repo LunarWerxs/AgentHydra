@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { chatDossier, listChats } from '../chat-dossier'
+import { chatDossier, listChats, liveLineage } from '../chat-dossier'
 import { CLIPBOARD_DIR } from '../config'
 import { resolveInstance } from '../core/instance-ref'
 import { defaultClaudeUserDataDir } from '../core/paths'
+import { awaitExitBounded } from '../core/process.ts'
 import { db, getSetting } from '../db'
 import { contentDispositionAttachment, safeTranscriptFilename } from '../filenames'
 import { app } from '../http-app'
@@ -35,7 +36,11 @@ import {
   type SessionPeriod,
   type SessionSource,
 } from '../types'
-import { uiRenameChat } from '../ui-archive'
+import { renameChatDiscoveringRenderedTitle } from '../ui-archive'
+
+/** Putting a staged file on the clipboard is instant or it is stuck on a session that cannot
+ *  take one. Ten seconds keeps the button honest without ever holding the route open. */
+const CLIPBOARD_TIMEOUT_MS = 10_000
 
 /**
  * A point in time from a query string: epoch milliseconds, or anything Date can parse (ISO-8601).
@@ -215,16 +220,30 @@ app.post('/api/chats/:id/rename', async (c) => {
     return c.json({ ok: false, detail: 'no desktop instance holds this chat' }, 404)
   // The app matches rows by what it RENDERS, which is not always the disk title (that mismatch
   // is the whole reason this route exists), so the caller may name the on-screen row itself.
-  const from =
+  const explicitCurrentTitle =
     typeof body.current_title === 'string' && body.current_title.trim()
       ? body.current_title.trim()
-      : chat.title
+      : null
+  const from = explicitCurrentTitle ?? chat.title
   if (!from)
     return c.json(
       { ok: false, detail: "this chat's current on-screen name is unknown - pass current_title" },
       400,
     )
-  return c.json(await uiRenameChat(chat.instance, from, newTitle))
+  // ⛔ THE DISK TITLE CAN BE STALE (found live 2026-09-15): a RUNNING app re-saves a chat's
+  // record from memory and can erase the title an import just wrote, so a rename aimed at the
+  // disk title alone refused chats the sidebar was rendering under a different name - with no
+  // route from that refusal to a confirmed rename. When the caller did not name the row itself,
+  // discover it from what the app actually renders rather than refusing on a guess that has
+  // already gone stale (see renameChatDiscoveringRenderedTitle).
+  return c.json(
+    await renameChatDiscoveringRenderedTitle(
+      chat.instance,
+      from,
+      newTitle,
+      explicitCurrentTitle !== null,
+    ),
+  )
 })
 
 app.get('/api/chats/dossier', (c) => {
@@ -309,13 +328,26 @@ app.get('/api/chats', async (c) => {
 // the same pid-checked registry the dossier's `live` field answers from, so the two can
 // never disagree. Built 2026-08-31 for the orchestrator's machine-wide concurrency cap
 // ("18 chats running at one time"); its fallback was one dossier walk per visible chat.
+//
+// `?lineage=1` (2026-09-17) adds `lineageIds` to every row - every id that engine's chat has
+// ever answered to - and `lineage: true` at the top, so a caller can tell this answer from an
+// older daemon that ignored the parameter. Opt-in because it scans the chat store, and the
+// running-count callers ask this endpoint far more often than the orchestrator's plan does.
 app.get('/api/sessions/live', (c) => {
   const sessions = readLiveRegistry(join(homedir(), '.claude'))
   const seen = new Set<string>()
-  const rows = sessions.filter((s) =>
-    seen.has(s.sessionId) ? false : (seen.add(s.sessionId), true),
-  )
-  return c.json({ count: rows.length, sessions: rows })
+  const rows = sessions.filter((s) => {
+    if (seen.has(s.sessionId)) return false
+    seen.add(s.sessionId)
+    return true
+  })
+  if (c.req.query('lineage') !== '1') return c.json({ count: rows.length, sessions: rows })
+  const lineage = liveLineage(rows.map((s) => s.sessionId))
+  return c.json({
+    count: rows.length,
+    lineage: true,
+    sessions: rows.map((s) => ({ ...s, lineageIds: lineage.get(s.sessionId) ?? [s.sessionId] })),
+  })
 })
 app.get('/api/sessions/:id', async (c) => {
   const rawSource = c.req.query('source')
@@ -478,6 +510,19 @@ app.post('/api/sessions/:id/open-file', async (c) => {
   if (!tf) return c.json({ error: 'session not found' }, 404)
   if (tf.source === 'opencode' || tf.source === 'hermes')
     return c.json({ error: 'OpenCode and Hermes sessions are stored in a shared database' }, 409)
+  // A DeepSeek Harness log IS a file — it is just Zstandard frames, so an editor would show binary
+  // and the person would read that as a corrupted session. Refused with the reason and the way out,
+  // rather than spawning an editor on bytes nobody can read. The SPA hides the action for the same
+  // reason (SOURCE_FILE_IS_TEXT in web/src/lib/session-labels.ts); this is the API's own answer, for
+  // a caller that never saw that menu.
+  if (tf.source === 'dsh')
+    return c.json(
+      {
+        error:
+          'A DeepSeek Harness session log is compressed (zstd), so an editor cannot read it. Export the transcript instead, or copy the file itself.',
+      },
+      409,
+    )
   const cmd = buildTranscriptOpenArgv(
     process.platform,
     tf.path,
@@ -558,7 +603,11 @@ app.post('/api/sessions/:id/copy-file', async (c) => {
     })
     // Awaited, unlike open-file's fire-and-forget: the button reports whether the copy landed, and
     // "it's on your clipboard" is a claim we should only make once the exit code says so.
-    const code = await proc.exited
+    // ⛔ BUT BOUNDED (swept 2026-09-18). This is an HTTP ROUTE, and `await proc.exited` had
+    // nothing racing it: a `Set-Clipboard` that wedges - a locked session, an RDP clipboard
+    // channel that never answers - meant the route never replied at all, which is the exact
+    // failure just fixed in the orchestrator adapter. A null code answers 500 honestly instead.
+    const code = await awaitExitBounded(proc, CLIPBOARD_TIMEOUT_MS)
     return code === 0
       ? c.json({ ok: true, filename: basename(staged) })
       : c.json({ ok: false }, 500)

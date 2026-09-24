@@ -204,13 +204,29 @@ def _loop_stage_accounts(bal: dict) -> dict:
 
 def _loop_stage_lanes(batch: dict) -> dict:
     """Stage 4: the sweep's lanes - built plan-only, reusing the plan and balance already
-    in hand."""
+    in hand.
+
+    `enabled` is the policy's answer for each lane (2026-09-17). The batch is built in full
+    whatever the policy says - you should always be able to SEE what is waiting - but a loop
+    that printed "archive: 3" while the archive lane was switched off would be describing a
+    sweep that will not happen, which is the most expensive kind of wrong in a dry run."""
+    from lib import configlib
+    import sweep
+
+    on = {lane: configlib.get(key) for lane, _flag, key in sweep.LANE_FLAGS}
+    # The master switch drops the archive lane in the sweep too (sweep.parse_lanes).
+    on["archive"] = on["archive"] and configlib.get("archive.enabled")
     stage = {
         lane: {"would": len(v["rows"]), "overCap": v["overCap"],
+               "enabled": bool(on.get(lane, True)),
                "rows": [r.get("title") for r in v["rows"]]}
         for lane, v in batch["lanes"].items()
     }
     stage["deliverySkipped"] = [s["why"] for s in batch.get("deliverySkipped", [])]
+    stage["archivingEnabled"] = bool(configlib.get("archive.enabled"))
+    # Console strays left out because they are not Claude chats - named, so a land lane that
+    # shrank is auditable from the dry loop too, not only from a sweep's own print.
+    stage["landNotClaude"] = batch.get("landNotClaude", 0)
     return stage
 
 
@@ -256,50 +272,83 @@ def dry_loop(as_json: bool) -> tuple[int, dict]:
     import name_chats
     import reconcile as reconcile_mod
     import sweep
-    from lib import holdlib, hydralib
+    from lib import configlib, holdlib, hydralib
 
     started = time.time()
     stages: dict = {}
+    # PER-STAGE TIMING (2026-09-17). The loop reported one total and nothing else, so "it
+    # takes 132 seconds" was all anyone could say about it - you could not tell a slow daemon
+    # from a slow transcript walk without instrumenting it by hand. dryrun.py aggregates
+    # these over N runs, which is how the expensive stage gets named instead of guessed at.
+    timings: dict[str, float] = {}
 
-    stages["census"], open_instances = _loop_stage_census(hydralib)
+    def timed(name, fn):
+        t0 = time.time()
+        try:
+            return fn()
+        finally:
+            timings[name] = round(time.time() - t0, 2)
+
+    stages["census"], open_instances = timed("census", lambda: _loop_stage_census(hydralib))
 
     # 2. Every chat, gated, decided.
-    plan = dashboard.build_plan()
+    plan = timed("buildPlan", dashboard.build_plan)
     stages["gate"] = _loop_stage_gate(plan)
 
     # 3. Accounts and balancing. (The plan from stage 2 is handed in - rebuilding it here
     # was one of FOUR identical build_plan passes per loop; efficiency pass, 2026-08-31.)
-    bal = balance.build(plan=plan)
+    bal = timed("balance", lambda: balance.build(plan=plan))
     stages["accounts"] = _loop_stage_accounts(bal)
 
     # 4. The sweep's lanes - built plan-only, reusing the plan and balance already in hand.
-    batch = sweep.build_batch(allow_pending=False, max_per_lane=sweep.DEFAULT_MAX_PER_LANE,
-                              plan=plan, bal=bal)
+    batch = timed("lanes", lambda: sweep.build_batch(
+        allow_pending=False, max_per_lane=sweep.DEFAULT_MAX_PER_LANE, plan=plan, bal=bal))
     stages["lanes"] = _loop_stage_lanes(batch)
 
-    stages["naming"] = _loop_stage_naming(open_instances, name_chats)
+    stages["naming"] = timed("naming", lambda: _loop_stage_naming(open_instances, name_chats))
 
     # 6. Reconcile: did earlier archives land? (Observe-only by design.)
-    rec = reconcile_mod.reconcile()
+    rec = timed("reconcile", reconcile_mod.reconcile)
     stages["reconcile"] = _loop_stage_reconcile(rec)
 
     stages["judgmentQueue"], stages["onHold"], stages["holds"] = _loop_stage_judgment(batch, holdlib)
     stages["elapsedSecs"] = round(time.time() - started, 1)
+    stages["timings"] = timings
+    # THE DECISION FINGERPRINT: sessionId -> decision kind, for every chat the gate saw. It is
+    # what makes "did 50 dry runs agree" answerable at all - two runs with the same counts can
+    # still disagree about WHICH chat is which, and that flap is the bug worth catching.
+    stages["decisions"] = {ch["sessionId"]: ch["decision"]["kind"] for ch in plan["chats"]}
+    # Which archive signals hold each finished chat back, whatever the policy says - the
+    # matrix's prediction of what switching a signal off must release.
+    stages["dissent"] = {ch["sessionId"]: ch["dissent"] for ch in plan["chats"]
+                         if ch.get("dissent")}
+    # Which policy knobs are not at their default, so a saved run says what it was run under.
+    stages["policy"] = {k: v for k, (_d, v) in configlib.diff().items()}
+    # A policy nobody can read stops every unattended act (armlib.refuse_unless_armed), so the
+    # loop says so and counts it as a finding - a plan built on defaults is not the plan that
+    # will run.
+    stages["policyProblems"] = configlib.problems()
 
-    problems = (not stages["census"]["plausible"]) or (not plan["complete"]) or rec["reverted"]
+    problems = ((not stages["census"]["plausible"]) or (not plan["complete"])
+                or rec["reverted"] or bool(stages["policyProblems"]))
     return (2 if problems else 0), stages
 
 
-def render_loop(s: dict) -> str:
-    L = ["DRY LOOP - every stage below is a plan. Nothing was touched.\n"]
+def _render_census(s: dict, L: list[str]) -> None:
     c = s["census"]
     L.append(f"1. CENSUS      daemon {c['daemon']} · {c['instancesOpen']} of {c['instancesTotal']} "
              f"instances open · sanity {'OK' if c['plausible'] else '** NOT PLAUSIBLE **'}")
+
+
+def _render_gate(s: dict, L: list[str]) -> None:
     g = s["gate"]
     L.append(f"2. GATE        {g['scanned']} visible chats"
              + ("" if g["complete"] else "  ⚠ INCOMPLETE - a read failed, counts are lower bounds"))
     for k, v in sorted(g["byDecision"].items(), key=lambda kv: -kv[1]):
         L.append(f"                 {v:>3}  {k}")
+
+
+def _render_accounts(s: dict, L: list[str]) -> None:
     a = s["accounts"]
     L.append(f"3. ACCOUNTS    {a['usable']} usable of {a['logins']} logins (usage via {a['usageSource']})")
     # ⛔ A TOTAL USAGE BLACKOUT MUST NOT READ LIKE A QUIET FLEET (seen live 2026-09-01, during
@@ -323,24 +372,43 @@ def render_loop(s: dict) -> str:
         tag = "OPEN" if n.get("open") else "closed, would need opening"
         L.append(f"                 hand off #{i}: {n['email']} ({tag}) binding {n['bindingPct']}%")
     L.append(f"                 balancing: {a['balancing']['level'].upper()} - {a['balancing']['why']}")
+
+
+def _render_lanes(s: dict, L: list[str]) -> None:
     L.append("4. LANES       what one `sweep --all --yes` would do:")
     for lane in ("archive", "moves", "landConsole", "deliver"):
         v = s["lanes"][lane]
         extra = f" (+{v['overCap']} over cap)" if v["overCap"] else ""
-        L.append(f"                 {lane:<12} {v['would']}{extra}")
+        off = "" if v.get("enabled", True) else "   ** OFF in your policy - these will NOT run **"
+        L.append(f"                 {lane:<12} {v['would']}{extra}{off}")
         for t in v["rows"][:4]:
             L.append(f"                      - {t}")
+    if s["lanes"].get("landNotClaude"):
+        L.append(f"                 ({s['lanes']['landNotClaude']} console stray(s) left out of "
+                 "landConsole: zswarm / OpenCode / DSH sessions, not Claude chats)")
+    if not s["lanes"].get("archivingEnabled", True):
+        L.append("                 ⛔ archiving is switched OFF fleet-wide (archive.enabled) - "
+                 "nothing files a chat, in any lane")
     for why in s["lanes"]["deliverySkipped"][:3]:
         L.append(f"                 delivery skipped: {why[:96]}")
+
+
+def _render_naming(s: dict, L: list[str]) -> None:
     n = s["naming"]
     L.append(f"5. NAMING      {sum(n['namelessByInstance'].values()) or 'no'} chat(s) need a real name"
              + (f" {n['namelessByInstance']}" if n["namelessByInstance"] else ""))
+
+
+def _render_reconcile(s: dict, L: list[str]) -> None:
     r = s["reconcile"]
     L.append(f"6. RECONCILE   {r['checked']} past archive attempt(s): "
              + ", ".join(f"{v} {k}" for k, v in r["states"].items()) if r["checked"] else
              "6. RECONCILE   nothing to re-check")
     if r["reverted"]:
         L.append(f"                 ⚠ {r['reverted']} archive(s) need settling through the app's own control")
+
+
+def _render_judgment(s: dict, L: list[str]) -> None:
     L.append(f"7. JUDGMENT    {len(s['judgmentQueue'])} chat(s) need a decided reply (the AI's lane)")
     for j in s["judgmentQueue"][:6]:
         L.append(f"                 [{j['instance'] or 'console'}] {str(j['title'])[:58]}")
@@ -348,7 +416,47 @@ def render_loop(s: dict) -> str:
         L.append(f"                 ... and {len(s['judgmentQueue']) - 6} more")
     if s["onHold"]:
         L.append(f"8. ON HOLD     {len(s['onHold'])} chat(s) you put out of reach: {', '.join(str(t) for t in s['onHold'][:4])}")
-    L.append(f"\nwalked in {s['elapsedSecs']}s. Nothing was changed.")
+
+
+def _render_policy(s: dict, L: list[str]) -> None:
+    from lib import configlib
+
+    for p in s.get("policyProblems") or []:
+        L.append(f"\n⛔ POLICY     {p}")
+    if s.get("policyProblems"):
+        L.append("             nothing acts unattended until the policy file reads clean - "
+                 "`orch.py policy --doctor`")
+    if s.get("policy"):
+        L.append(f"\nPOLICY       {len(s['policy'])} knob(s) not at default: "
+                 + ", ".join(f"{k}={v}" for k, v in list(s["policy"].items())[:6]))
+    elif not configlib.CONFIG_PATH.exists():
+        # THE ONE-LINE NUDGE (owner, 2026-09-17: "it should ask which ... toggles, triggers,
+        # options the user wants on"). Said once, on a machine that has never been asked, and
+        # never again once a policy file exists - a prompt that repeats forever gets skimmed.
+        L.append("\nPOLICY       running on every default. `orch.py policy --wizard` picks your "
+                 "toggles (or --ask for an AI to).")
+
+
+def _render_timings(s: dict, L: list[str]) -> None:
+    if s.get("timings"):
+        slow = sorted(s["timings"].items(), key=lambda kv: -kv[1])[:3]
+        L.append(f"\nwalked in {s['elapsedSecs']}s (slowest: "
+                 + ", ".join(f"{k} {v}s" for k, v in slow) + "). Nothing was changed.")
+    else:
+        L.append(f"\nwalked in {s['elapsedSecs']}s. Nothing was changed.")
+
+
+def render_loop(s: dict) -> str:
+    L = ["DRY LOOP - every stage below is a plan. Nothing was touched.\n"]
+    _render_census(s, L)
+    _render_gate(s, L)
+    _render_accounts(s, L)
+    _render_lanes(s, L)
+    _render_naming(s, L)
+    _render_reconcile(s, L)
+    _render_judgment(s, L)
+    _render_policy(s, L)
+    _render_timings(s, L)
     return "\n".join(L)
 
 
@@ -388,14 +496,15 @@ def _cmd_arm(rest: list[str], tray_ps1: Path) -> int:
     # now, so the icon has lanes to resume. Idempotent - re-registering replaces.
     try:
         have = set(schedule_jobs.registered())
-        want = {n for job, spec in schedule_jobs.JOBS.items() for n in schedule_jobs.task_names(job, spec)}
+        want = {n for job, spec in schedule_jobs.configured_jobs().items()
+                for n in schedule_jobs.task_names(job, spec)}
         missing = sorted(want - have)
     except Exception as err:  # noqa: BLE001 - a registry read must never block the switch
         missing, err_note = [], str(err)[:120]
     else:
         err_note = ""
     if missing:
-        results = schedule_jobs.apply_jobs(schedule_jobs.JOBS)
+        results = schedule_jobs.apply_jobs(schedule_jobs.configured_jobs())
         bad = [r for r in results if not r.get("ok")]
         print(f"registered {len(missing)} missing lane(s): {', '.join(missing)}"
               + (f" - {len(bad)} did NOT register: " + "; ".join(str(r.get('detail'))[:80] for r in bad) if bad else ""))

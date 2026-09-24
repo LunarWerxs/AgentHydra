@@ -19,8 +19,15 @@
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { resolveAccount, resolveCliConfigDirToken, resolveInstanceToken } from './core/accounts'
+import {
+  type InstanceGrantToken,
+  resolveAccount,
+  resolveCliConfigDirToken,
+  resolveInstanceToken,
+  resolveInstanceTokens,
+} from './core/accounts'
 import { cliInstanceForDesktop, getCliInstance, listCliInstances } from './core/cli-instances'
+import { codexUsageSnapshot, localCodexAccount, resolveCodexAccount } from './core/codex-account'
 import { listInstances } from './core/instances'
 import { normalizeInstancePath } from './core/paths'
 import { listClaudeProcesses } from './core/process'
@@ -30,6 +37,7 @@ import type { AuthType, UsageCheckResult, UsageReason, UsageSnapshot } from './t
 import {
   checkUsage,
   dropCachedUsage,
+  getCachedUsage,
   isNoData,
   lastUsageApiFailure,
   parseUsageOutput,
@@ -94,6 +102,38 @@ export async function checkUsageAmbient(): Promise<UsageSnapshot> {
 
 // --- desktop instances --------------------------------------------------------
 
+/** HTTP statuses that describe ONE credential rather than the account or the network, so another
+ *  grant of the same profile can still get past them. A 429 is here on evidence: a revoked grant
+ *  answers the usage endpoint 429 while the live grant beside it answers 200 (see
+ *  compareGrantPreference in core/accounts.ts). */
+const CREDENTIAL_SPECIFIC_STATUSES = new Set([401, 403, 429])
+
+/**
+ * Read usage with a desktop profile's grants, most preferred first, until one answers.
+ *
+ * Stops early on a failure every grant would share (no network, a 5xx), so a dead connection costs
+ * one request, not one per grant. The failure handed back is the PREFERRED grant's: that is the
+ * credential the app itself keeps fresh, so its answer is the one that describes the account - a
+ * revoked leftover's 429 must not relabel a signed-out-of-date profile as "rate limited".
+ */
+export async function checkUsageWithGrants(
+  grants: InstanceGrantToken[],
+  label: string | null,
+): Promise<{ snapshot: UsageSnapshot | null; failure: ReturnType<typeof lastUsageApiFailure> }> {
+  let failure: ReturnType<typeof lastUsageApiFailure> = null
+  for (const [i, grant] of grants.entries()) {
+    const snap = await checkUsage({
+      account: label,
+      auth: { authType: 'oauth_token', secret: grant.token, scopes: grant.scopes },
+    })
+    if (!isNoData(snap)) return { snapshot: snap, failure: null }
+    const attempt = lastUsageApiFailure(label)
+    if (i === 0) failure = attempt
+    if (!attempt || !CREDENTIAL_SPECIFIC_STATUSES.has(attempt.status)) break
+  }
+  return { snapshot: null, failure }
+}
+
 /**
  * Cache key for a desktop instance's usage snapshot.
  *
@@ -114,6 +154,34 @@ export const cliKey = (id: string): string => `cli:${id}`
  *  CODEX_HOME is created by this app and never renamed, so there is no path-spelling problem to
  *  normalize away here. */
 export const codexKey = (id: string): string => `codex:${id}`
+
+/** Shared by manual refresh, the fleet sweep, and instance routes. */
+export async function checkUsageForCodex(
+  codexHome: string,
+  id: string,
+  refresh = true,
+): Promise<UsageCheckResult> {
+  const key = codexKey(id)
+  const local = localCodexAccount(codexHome)
+  if (local.authMode !== 'chatgpt') dropCachedUsage(key)
+  else if (!refresh) {
+    const cached = getCachedUsage(key)
+    if (cached?.codexAccountId === local.accountId && cached)
+      return { snapshot: cached, cached: true, key, reason: 'ok' }
+    dropCachedUsage(key)
+  }
+  const { account, usage } = await resolveCodexAccount(codexHome)
+  if (!usage) {
+    return {
+      snapshot: codexUsageSnapshot(null, account.label),
+      cached: false,
+      key,
+      reason: account.status === 'loggedout' ? 'not_logged_in' : 'check_failed',
+    }
+  }
+  setCachedUsage(key, usage)
+  return { snapshot: usage, cached: false, key, reason: 'ok' }
+}
 
 /**
  * Check a DESKTOP instance's usage, trying every credential that could speak for this account:
@@ -145,17 +213,11 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
     return { snapshot, cached: false, key, reason: 'ok', advice: usageAdvice(snapshot) }
   }
 
-  // 1) The instance's own token. The grant's SCOPES ride along: if we end up on the CLI-spawn
-  //    fallback, `claude` needs CLAUDE_CODE_OAUTH_SCOPES beside the token or `/usage` silently
-  //    returns no numbers (see DEFAULT_OAUTH_SCOPES in usage.ts).
-  const grant = await resolveInstanceToken(dir)
-  if (grant) {
-    const snap = await checkUsage({
-      account: label,
-      auth: { authType: 'oauth_token', secret: grant.token, scopes: grant.scopes },
-    })
-    if (!isNoData(snap)) return finish(snap)
-  }
+  // 1) The instance's own grants, preferred first (see checkUsageWithGrants). Each grant's SCOPES
+  //    ride along with its token (see DEFAULT_OAUTH_SCOPES in usage.ts).
+  const grants = await resolveInstanceTokens(dir)
+  const own = await checkUsageWithGrants(grants, label)
+  if (own.snapshot) return finish(own.snapshot)
 
   // 2) The linked CLI instance — same account, an independent login that may still be valid.
   const linkedCli = cliInstanceForDesktop(dir)
@@ -179,13 +241,15 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // cannot work. Measured 2026-09-07 - every RUNNING instance read fine, every closed one failed.
   // listClaudeProcesses is the lenient, cached enumeration on purpose: this decides a LABEL, and
   // an unanswerable scan should degrade to the generic message rather than invent a diagnosis.
+  const hadGrant = grants.length > 0
   const isRunning =
-    grant && account?.status !== 'loggedout'
+    hadGrant && account?.status !== 'loggedout'
       ? (await listClaudeProcesses()).some(
           (p) => p.dir && normalizeInstancePath(p.dir) === normalizeInstancePath(dir),
         )
       : true
-  const apiFail = lastUsageApiFailure(label)
+  // The preferred grant's failure first; a backup credential's only when one was actually asked.
+  const apiFail = own.failure ?? (linkedCli?.loggedIn || match ? lastUsageApiFailure(label) : null)
   // ORDER MATTERS, AND "WE NEVER ASKED" BEATS "THEY SAID NO".
   //
   // A rate limit only outranks the other explanations when a request was actually made, which
@@ -195,7 +259,7 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   const reason: UsageReason =
     account?.status === 'loggedout'
       ? 'logged_out'
-      : !grant
+      : !hadGrant
         ? 'no_token'
         : apiFail?.status === 429
           ? 'rate_limited'
@@ -209,9 +273,18 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // indefinitely. Signed out means we no longer know this account's quota, and a number we no
   // longer know is worse than a dash: it is indistinguishable from a current one.
   //
-  // Only on 'logged_out'. A failed check is ignorance, not absence - keeping the last good reading
-  // through a network blip is the right behaviour and must not be swept up in this.
-  if (reason === 'logged_out') dropCachedUsage(key)
+  // Only on 'logged_out' OR A DEFINITIVE 401 (the token itself was rejected - expired or
+  // REVOKED, e.g. Anthropic's own "OAuth access token has been revoked"). A failed check is
+  // ordinarily ignorance, not absence - keeping the last good reading through a network blip is
+  // the right behaviour - but a 401 is not a blip, it is the server naming this exact credential
+  // dead, and the account's last GOOD reading (cached from before it died) would otherwise sit in
+  // the cache forever: nothing else ever drops it, so fan_out's ranking (balance.py's
+  // usage_rows_with_fallback, which reads this same cache when the live survey is unavailable)
+  // could go on reading a REVOKED account's stale percentages as real room indefinitely (found
+  // live 2026-09-15: fan_out assigned a task to an account revoked the day before). Dropping the
+  // stale entry the moment the daemon itself notices is what makes "an unknown or stale reading
+  // is never room" true rather than merely documented.
+  if (reason === 'logged_out' || apiFail?.status === 401) dropCachedUsage(key)
   const snapshot = parseUsageOutput('', label)
   // Say WHAT failed, not just that something did. See UsageCheckResult.detail.
   // The server's own words FIRST (see usage-api.ts), plus the retry window when it gave one. Both,
@@ -232,7 +305,7 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // shipped to a user who would have acted on it. The disproof cost one command - re-read the
   // grants after it recovered. Ask what would have to be true for the theory to be WRONG, and go
   // look, before writing the explanation into the product.
-  const detail = !grant
+  const detail = !hadGrant
     ? 'no usable login found for this instance - nothing was asked of Anthropic'
     : apiFail
       ? apiFail.status === 429 && apiFail.retryAfterSec
@@ -281,14 +354,11 @@ export async function checkUsageForCliInstance(id: string): Promise<UsageCheckRe
 
   // 3) The linked desktop instance's token — same account, second auth store.
   if (inst.associatedDesktopDir) {
-    const grant = await resolveInstanceToken(inst.associatedDesktopDir)
-    if (grant) {
-      const snap = await checkUsage({
-        account: inst.name,
-        auth: { authType: 'oauth_token', secret: grant.token, scopes: grant.scopes },
-      })
-      if (!isNoData(snap)) return finish(snap)
-    }
+    const linked = await checkUsageWithGrants(
+      await resolveInstanceTokens(inst.associatedDesktopDir),
+      inst.name,
+    )
+    if (linked.snapshot) return finish(linked.snapshot)
   }
 
   const hasAnyCredential =

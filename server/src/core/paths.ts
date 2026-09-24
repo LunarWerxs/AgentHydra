@@ -62,8 +62,10 @@ export function claudeUserDataDir(): string {
   return path.join(xdg, DEFAULT_CLAUDE_DIR_NAME)
 }
 
-/** @deprecated Alias for {@link claudeUserDataDir} kept for any call-sites written against
- *  the earlier draft's longer name. Prefer `claudeUserDataDir` or `defaultClaudeDir`. */
+/** Alias for {@link claudeUserDataDir} — matches the longer name used by chat-store-scan.ts,
+ *  instance-sessions.ts and routes/sessions.ts (its heaviest call-sites). A thin re-export, same
+ *  pattern as `normalizePath` and `defaultClaudeDir` below, so all three naming conventions
+ *  resolve to one implementation. */
 export function defaultClaudeUserDataDir(): string {
   return claudeUserDataDir()
 }
@@ -83,6 +85,11 @@ export function instanceMetaFile(): string {
   return path.join(appDataDir(), 'instance-meta.json')
 }
 
+/** When each desktop instance was last launched, per machine; see core/instance-launches.ts. */
+export function instanceLaunchesFile(): string {
+  return path.join(appDataDir(), 'instance-launches.json')
+}
+
 /** Permanent instance NUMBERS (`#1`, `#2`, …), keyed by instance ref. The short handle a human
  *  says out loud and an MCP client passes around; see server/src/core/instance-numbers.ts. */
 export function instanceNumbersFile(): string {
@@ -94,6 +101,14 @@ export function instanceNumbersFile(): string {
  *  different ports (and therefore different browser origins); see server/src/core/ui-prefs.ts. */
 export function uiPrefsFile(): string {
   return path.join(appDataDir(), 'ui-prefs.json')
+}
+
+/** Where a chat record filed under a NO-LONGER-SIGNED-IN account is set aside when that chat is
+ *  re-homed into the signed-in account's folder (session-launch.ts setAsideStaleLoginRecords).
+ *  Kept, never deleted: the record is the chat's settings, and the move that set it aside can put
+ *  it back if the landing does not verify. */
+export function staleLoginBackupDir(): string {
+  return path.join(appDataDir(), 'backups', 'stale-login-records')
 }
 
 export function logFile(): string {

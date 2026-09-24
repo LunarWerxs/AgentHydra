@@ -28,6 +28,8 @@ import contextlib
 import io
 import json
 import sys
+import threading
+import tempfile
 import unittest
 import unittest.mock as mock
 from pathlib import Path
@@ -50,8 +52,15 @@ def _refused(chat: str, report: str) -> dict:
 
 
 class _StubLanding:
+    """A real _Landing always carries the three fields the naming phase reads (its target
+    account, the session id, and the title the caller asked for), so the stub carries them
+    too - a double that is missing what production always has tests a shape nothing ships."""
+
     def __init__(self, payload: dict) -> None:
         self.payload = payload
+        self.target = {"name": payload.get("to") or "blaarrrggghhh"}
+        self.session_id = payload.get("sessionId") or ""
+        self.chat_title = payload.get("title") or ""
 
 
 def _run(argv: list[str]) -> tuple[int, dict]:
@@ -70,6 +79,54 @@ def _run(argv: list[str]) -> tuple[int, dict]:
 
 
 class _BatchTest(unittest.TestCase):
+    def setUp(self):
+        """Every case here names chats "one"/"two"/"three", and `_archive_gate` (added
+        2026-09-13, test_migrate_batch.py's own BatchDriverTest.setUp carries the same fix)
+        resolves every name against the REAL fleet before a batch runs. Unstubbed, this file
+        reads THIS machine's actual chat store, where those short names can match real
+        archived titles - the gate then correctly refuses the whole batch, and every test
+        below that expects `move_only`/the courier/the terminate path to run instead sees an
+        empty `results` and no `resume` key at all. Empty rows = "none of these are archived",
+        which is what every case here has always assumed.
+        """
+        super().setUp()
+        self.patch(migrate_batch.hydralib, "sessions", lambda **k: [])
+        # ⛔ AND `chats`, WHICH IS WHAT THE GATE ACTUALLY READS NOW (2026-09-14). The gate moved
+        # off the collapsed session view onto hydralib.chats() - the per-store scan - so stubbing
+        # `sessions` alone stopped isolating this suite, and with a daemon running on the machine
+        # every case here read the OWNER'S REAL CHAT LIST. The moment one of his titles contained
+        # "one", "two" or "three" as a fragment, the gate refused every batch and thirteen cases
+        # failed at once, in a file none of them is about. A unit test must not be able to see the
+        # machine: test_migrate_batch.py's own driver stubs it the same way.
+        self.patch(migrate_batch.hydralib, "chats", lambda **k: [])
+        # ⛔ AND THE SIDEBAR (2026-09-17). The batch's naming verdict reads what the app is
+        # RENDERING - a real PowerShell UI read of the live desktop. Unstubbed, it came back
+        # without the fake chat "one", so two clean batches here exited PARTIAL ("landed but the
+        # app is NOT rendering it as 'one'") on any machine with the app open. "Could not read"
+        # is the neutral answer, never read as a miss.
+        import name_chats
+        self.patch(name_chats, "_run_list",
+                   lambda instance: (1, "unit test: the real sidebar is out of reach"))
+        # And the collateral watch, which would read every real chat store twice per batch.
+        self.patch(migrate_batch.archivewatchlib, "snapshot", lambda *a, **k: None)
+
+    def stub_scan(self, outstanding: bool = False, raises: bool = False) -> None:
+        """The resume window reads the landed chat's transcript for background jobs
+        (migrate_chat.quiet_window). Stubbed, so no case here reads a real transcript or asks
+        the live daemon where one is; the default is the common shape - scanned, nothing out."""
+        from lib import enginelib
+
+        def fake_quiet_window(match, now):
+            if raises:
+                raise OSError("transcript unreadable")
+            if outstanding:
+                return enginelib.IDLE_STOP_SECS, migrate_chat.gatelib_idle_after(), {
+                    "scanned": True, "outstanding": ["bg-1"]}
+            return enginelib.NOW_QUIET_SECS, enginelib.NOW_QUIET_SECS, {
+                "scanned": True, "outstanding": []}
+
+        self.patch(migrate_chat, "quiet_window", fake_quiet_window)
+
     def patch(self, obj, name: str, value) -> None:
         patcher = mock.patch.object(obj, name, value)
         patcher.start()
@@ -95,6 +152,18 @@ class _BatchTest(unittest.TestCase):
         self.patch(migrate_chat, "landed_meta_path", lambda land: "")
         self.patch(migrate_chat, "watch_bypass_many", lambda paths, **k: {})
         self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        # THE NAMING PHASE IS STUBBED, NOT SKIPPED. name_pass drives a REAL app's rename on the
+        # owner's screen, so a unit test must never reach it - but the wiring that decides which
+        # account and which intended titles it gets is exactly what this phase adds, and that is
+        # asserted from `self.naming_calls`.
+        import name_chats
+        self.naming_calls: list[tuple[str, dict]] = []
+
+        def fake_name_pass(instance, extra_titles=None, **kw):
+            self.naming_calls.append((instance, dict(extra_titles or {})))
+            return {"named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""}
+
+        self.patch(name_chats, "name_pass", fake_name_pass)
         return calls
 
 
@@ -111,9 +180,9 @@ class ResumeTest(_BatchTest):
             return entry
 
         def fake_run(max_deliveries, only, act, running_now=None, cap_exempt=False,
-                     hand_run=False):
+                     hand_run=False, idle_after=None):
             courier_calls.append({"max": max_deliveries, "only": set(only), "act": act,
-                                  "hand_run": hand_run})
+                                  "hand_run": hand_run, "idle_after": dict(idle_after or {})})
             results, skipped = [], []
             for did in sorted(only):
                 ok, why = courier_results.get(did, (True, "delivered"))
@@ -128,6 +197,7 @@ class ResumeTest(_BatchTest):
         self.patch(stage_reply, "gather_evidence", lambda match, sid: "the chat's own last words")
         self.patch(migrate_batch.deliverylib, "stage", fake_stage)
         self.patch(courier, "run", fake_run)
+        self.stub_scan()
         return staged, courier_calls
 
     def test_one_reply_per_landed_chat_delivered_by_hand_and_each_result_says_so(self):
@@ -154,12 +224,72 @@ class ResumeTest(_BatchTest):
         self.assertIn("courier --yes --only d-sid-two", two["retry"],
                       "a staged-not-delivered reply must name its own retry")
         self.assertNotIn("resume", by_chat["three"], "a refused chat has nothing to resume")
-        self.assertEqual(out["resume"], {"asked": 2, "delivered": 1, "staged": 1})
+        self.assertEqual(out["resume"],
+                         {"asked": 2, "delivered": 1, "staged": 1, "rejected": 0},
+                         "the tally always carries `rejected`, so a caller can read it "
+                         "without knowing whether this build classifies outcomes")
         self.assertIn("RESUME", out["report"])
+        # ⛔ THE HEADLINE CARRIES THE RESUME TALLY (2026-09-10). "2/3 landed" alone described a
+        # migration in which one chat was moved and never told to carry on, and the headline is
+        # the line people read. A landed chat is DORMANT until something types into it.
+        headline = out["report"].splitlines()[0]
+        self.assertIn("1/2 told to carry on", headline)
+        self.assertIn("DORMANT", headline)
+        # ⛔ THE LANDINGS ARE NAMED BEFORE THEY ARE STAMPED (2026-09-10). An import lands with a
+        # null title, and every by-name path then breaks - the permission picker gets an empty
+        # -Title and dies inside PowerShell's parameter validation. One pass per target account,
+        # carrying the intended title of each chat that actually landed; a refused chat is not
+        # in it, because nothing of it landed to name.
+        self.assertEqual(len(self.naming_calls), 1)
+        inst, titles = self.naming_calls[0]
+        self.assertEqual(inst, "blaarrrggghhh")
+        self.assertEqual(sorted(titles.values()), ["one", "two"])
         # The move verdict is unchanged by the resume phase: partial because three refused.
         self.assertEqual(code, migrate_batch.EXIT_PARTIAL)
         for argv in calls:
             self.assertNotIn("--resume", argv, "--resume is the batch's flag, not the move's")
+
+    def test_a_finished_landing_is_couriered_in_the_fast_window_not_the_standing_180s(self):
+        """THE RESUME HANG (2026-09-14, #63 -> #13): landing counts as activity, so under the
+        standing window every chat couriered within 180s of landing read as mid-turn and was
+        deferred, and the operation sat nine minutes before it was cancelled. A landed chat with
+        no background job outstanding is gated with the --now window instead."""
+        from lib import enginelib
+
+        self.stub_phases({})
+        staged, courier_calls = self.stub_resume({})
+        _run(["--chat", "one", "--chat", "two", "--to", "55", "--resume", "carry on"])
+        self.assertEqual(courier_calls[0]["idle_after"],
+                         {"d-sid-one": enginelib.NOW_QUIET_SECS,
+                          "d-sid-two": enginelib.NOW_QUIET_SECS})
+
+    def test_a_landing_with_a_background_job_outstanding_keeps_the_standing_window(self):
+        self.stub_phases({})
+        staged, courier_calls = self.stub_resume({})
+        self.stub_scan(outstanding=True)
+        _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+        self.assertEqual(courier_calls[0]["idle_after"],
+                         {"d-sid-one": migrate_chat.gatelib_idle_after()})
+
+    def test_an_unreadable_scan_is_no_proof_and_keeps_the_standing_window(self):
+        self.stub_phases({})
+        staged, courier_calls = self.stub_resume({})
+        self.stub_scan(raises=True)
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+        self.assertEqual(courier_calls[0]["idle_after"],
+                         {"d-sid-one": migrate_chat.gatelib_idle_after()})
+        self.assertTrue(out["results"][0]["resume"]["staged"], "a scan failure never costs the resume")
+
+    def test_the_resume_reuses_an_identical_copy_and_never_folds_into_other_words(self):
+        """A batch cancelled with its resume still staged, then fired again, used to leave two
+        staged copies of one resume behind (2026-09-14). The first staging now asks for the
+        narrow reuse: same words for the same chat come back as the row already there."""
+        self.stub_phases({})
+        staged, _calls = self.stub_resume({})
+        _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+        self.assertTrue(staged[0].get("reuse_identical"))
+        self.assertFalse(staged[0].get("dedupe"),
+                         "broad dedupe would deliver a person's staged reply in the resume's name")
 
     def test_no_resume_flag_means_no_staging_and_no_courier(self):
         self.stub_phases({})
@@ -185,6 +315,158 @@ class ResumeTest(_BatchTest):
         self.assertIn("ChatNotFound", by_chat["one"]["resume"]["why"])
         self.assertTrue(by_chat["two"]["resume"]["delivered"])
         self.assertEqual(courier_calls[0]["only"], {"d-sid-two"})
+
+
+class ResumeRetryTest(_BatchTest):
+    """A resume delivery that was ATTEMPTED and FAILED gets exactly one more go.
+
+    ⛔ WHY (lived through 2026-09-12). Three chats were migrated off an account that had hit
+    its 5-hour limit. One resume was delivered, one was left merely staged, and one FAILED -
+    and the one that failed was the chat that most needed it, having been cut off mid-task by
+    the very quota wall the move existed to escape. The batch had no retry, so that chat sat
+    dormant. Worse, the retry a person would reach for does not work: a failed row is no
+    longer `staged`, so `courier --yes --only <id>` answers "nothing staged - the courier has
+    nothing to deliver" and reads as success. A retry MUST re-stage first.
+
+    A SKIPPED row is the opposite case and must be left alone: the courier skips a chat whose
+    turn is in flight, and the breaker skips one that has failed repeatedly. Retrying those is
+    the futile cycle the breaker exists to stop."""
+
+    def stub_resume_with_failures(self, outcomes: dict[str, tuple[str, str]]):
+        """outcomes maps delivery id -> (kind, why) where kind is ok | fail | skip.
+
+        `fail` is a RESULT with ok False (the courier tried and could not), which is the case
+        the base harness cannot express and the one this whole class is about. Each call to
+        the courier pops the next outcome for that id, so a retry can differ from the first go."""
+        staged: list[dict] = []
+        courier_calls: list[dict] = []
+        pending = {k: list(v) if isinstance(v, list) else [v] for k, v in outcomes.items()}
+
+        def fake_stage(sid, text, **kw):
+            entry = {"id": f"d-{sid}", "session": sid, "text": text, **kw}
+            staged.append(entry)
+            return entry
+
+        def fake_run(max_deliveries, only, act, running_now=None, cap_exempt=False,
+                     hand_run=False, idle_after=None):
+            courier_calls.append({"only": set(only), "hand_run": hand_run,
+                                  "idle_after": dict(idle_after or {})})
+            results, skipped = [], []
+            for did in sorted(only):
+                queue = pending.get(did) or [("ok", "delivered")]
+                kind, why = queue.pop(0) if len(queue) > 1 else queue[0]
+                if kind == "ok":
+                    results.append({"id": did, "ok": True, "outcome": why, "detail": ""})
+                elif kind == "fail":
+                    results.append({"id": did, "ok": False, "outcome": why, "detail": why})
+                elif kind == "deferred":
+                    # The courier's NOT-YET: the row stays staged, and the result says so.
+                    results.append({"id": did, "ok": False, "outcome": why, "detail": why,
+                                    "deferred": True})
+                else:
+                    skipped.append({"id": did, "title": did, "why": why})
+            return {"planned": [], "skipped": skipped, "results": results, "staged": len(only)}
+
+        self.patch(migrate_batch.hydralib, "resolve_one",
+                   lambda q: {"cliSessionId": q, "title": q, "instance": "blaarrrggghhh"})
+        self.patch(stage_reply, "gather_evidence", lambda match, sid: "its own last words")
+        self.patch(migrate_batch.deliverylib, "stage", fake_stage)
+        self.patch(courier, "run", fake_run)
+        self.stub_scan()
+        return staged, courier_calls
+
+    def test_a_hard_failure_is_re_staged_and_retried_once_and_then_reads_delivered(self):
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": [("fail", "the daemon endpoint refused"), ("ok", "delivered")]})
+        code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        # RE-STAGED, not merely re-couriered: a failed row is no longer staged.
+        self.assertEqual(len(staged), 2, "the retry must stage the reply again")
+        self.assertEqual(staged[1]["by"], "migrate-resume-retry")
+        self.assertEqual(staged[1]["text"], "carry on", "the retry says the same thing")
+        self.assertTrue(staged[1].get("dedupe"),
+                        "the automatic retry must re-use a row still staged for the chat, "
+                        "never write a second wake")
+        self.assertEqual(len(calls), 2, "one first attempt, one retry")
+        self.assertTrue(all(c["hand_run"] for c in calls))
+        from lib import enginelib
+        self.assertEqual(calls[1]["idle_after"], {"d-sid-one": enginelib.NOW_QUIET_SECS},
+                         "the retry gates the landing with the same window as the first go")
+
+        verdict = out["results"][0]["resume"]
+        self.assertTrue(verdict["delivered"])
+        self.assertIn("retry", verdict["why"].lower())
+        self.assertNotIn("retry", verdict, "a delivered reply has no retry left to run")
+        self.assertEqual(out["resume"]["delivered"], 1)
+        self.assertEqual(out["resume"]["staged"], 0, "it is not still waiting - it went")
+        self.assertEqual(out["resume"].get("retried"), 1)
+
+    def test_a_skipped_row_is_never_retried(self):
+        """A deferral is a decision. Hammering a mid-turn chat or a tripped breaker is the
+        futile cycle the breaker exists to end."""
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": ("skip", "its turn is IN FLIGHT")})
+        _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(len(staged), 1, "a skip keeps its staged row - nothing to re-stage")
+        self.assertEqual(len(calls), 1, "no second courier run for a deliberate deferral")
+
+    def test_a_deferred_result_is_a_skip_not_a_hard_failure(self):
+        """FOUND WHILE FIXING THE COURIER (2026-09-14). A mid-turn chat's delivery is now kept
+        STAGED and its result tagged `deferred` - but it arrives in `results`, not `skipped`, so
+        the batch read it as attempted-and-failed, staged a SECOND copy of the resume and fired
+        the courier into the same live turn again. Two copies of one resume are two wakes."""
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": ("deferred", "peer did not confirm and the turn is in flight")})
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(len(staged), 1, "the deferred row is still staged - nothing to re-stage")
+        self.assertEqual(len(calls), 1, "no retry into a live turn")
+        verdict = out["results"][0]["resume"]
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("in flight", verdict["why"])
+        self.assertIn("courier --yes --only d-sid-one", verdict["retry"])
+
+    def test_a_retry_that_also_fails_says_so_and_still_hands_over_a_working_command(self):
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": ("fail", "the composer refused")})
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(len(calls), 2)
+        verdict = out["results"][0]["resume"]
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("retried once", verdict["why"])
+        self.assertIn("composer refused", verdict["why"])
+        self.assertIn("courier --yes --only d-sid-one", verdict["retry"],
+                      "the named retry must point at the row that is actually staged now")
+        self.assertEqual(out["resume"]["delivered"], 0)
+        self.assertEqual(out["resume"]["staged"], 1)
+
+    def test_a_failure_the_retry_cannot_even_re_stage_is_reported_not_swallowed(self):
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": ("fail", "the daemon endpoint refused")})
+
+        first = {"done": False}
+
+        def flaky_resolve(q):
+            if first["done"]:
+                raise RuntimeError("daemon went away")
+            first["done"] = True
+            return {"cliSessionId": q, "title": q, "instance": "blaarrrggghhh"}
+
+        self.patch(migrate_batch.hydralib, "resolve_one", flaky_resolve)
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(len(calls), 1, "nothing was re-staged, so there is nothing to run")
+        verdict = out["results"][0]["resume"]
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("could not re-stage", verdict["why"])
+        self.assertIn("RuntimeError", verdict["why"])
 
 
 class TerminateLiveTest(_BatchTest):
@@ -270,5 +552,138 @@ class TerminateLiveTest(_BatchTest):
         self.assertIn("no live engine", out["results"][0]["terminated"]["why"])
 
 
+class ResumePhaseTimeoutTest(_BatchTest):
+    """docs/todo/improvements/tooling/agenthydra-move-chats-resume-never-delivered-and-the-
+    call-times-out.md (2026-09-13): a landed chat's resume reply was staged but the courier
+    call that would confirm delivery could hang - the courier can wait on an engine it
+    believes is mid-turn - and NOTHING bounded that wait, so the whole move_chats MCP call
+    died on a bare transport timeout with no report: no per-chat result, no resume.delivered,
+    nothing. RESUME_PHASE_TIMEOUT_SECS + `_run_bounded` now give up WAITING on the resume
+    phase (never kill it - Python cannot safely do that mid subprocess/UI-automation wait) and
+    `_mark_unresumed_after_timeout` names the timeout on every chat that never got a verdict,
+    so the batch still answers instead of holding the caller hostage.
+    """
+
+    def test_a_resume_phase_that_blows_its_budget_is_reported_per_chat_not_awaited_forever(self):
+        self.stub_phases({})
+        self.patch(migrate_batch, "RESUME_PHASE_TIMEOUT_SECS", 0.02)
+        release = threading.Event()
+        entered, finished = threading.Event(), threading.Event()
+
+        def slow_resume_landed(items, text):
+            entered.set()
+            release.wait(10.0)
+            finished.set()
+            return {"asked": len(items), "delivered": 0, "staged": 0}
+
+        self.patch(migrate_batch, "_resume_landed", slow_resume_landed)
+        code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+        # ⛔ THE PROPERTY IS "IT DID NOT WAIT", NOT "IT FINISHED IN UNDER A SECOND". This used to
+        # assert a wall clock of 1.0s against a 0.02s budget, so it measured the WHOLE run - and
+        # went red on a loaded machine while the behaviour it pins was perfectly correct
+        # (2026-09-14, under a parallel suite). Whether main() gave up is a fact about the
+        # resume phase still being blocked when the report came back, and that is load-proof.
+        self.assertTrue(entered.is_set(), "the resume phase must actually have started")
+        self.assertFalse(finished.is_set(),
+                         "main() must give up at the budget, not await the courier's own pace")
+        release.set()  # let the daemon thread finish before the test process moves on
+        self.assertTrue(out["resume"]["timedOut"])
+        self.assertIn("did not finish within", out["resume"]["why"])
+        by_chat = {r["chat"]: r for r in out["results"]}
+        verdict = by_chat["one"]["resume"]
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("resume phase timed out", verdict["why"])
+        self.assertIn("resume NOT delivered", verdict["why"])
+        # the move itself is unaffected by a resume that could not be confirmed in time
+        self.assertTrue(by_chat["one"]["landed"])
+        self.assertEqual(code, migrate_batch.EXIT_OK)
+
+    def test_mark_unresumed_names_a_chat_that_never_even_got_staged(self):
+        """The timeout tripped before `_resume_landed`'s first pass could stage anything -
+        there is no `resume` block on the payload at all yet."""
+        item = migrate_batch._Item("one")
+        item.payload = {"landed": True, "sessionId": "sid-one"}
+        migrate_batch._mark_unresumed_after_timeout([item], budget=12.0)
+        verdict = item.payload["resume"]
+        self.assertFalse(verdict["staged"])
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("timed out after 12s", verdict["why"])
+        self.assertIn("resume NOT delivered", verdict["why"])
+
+    def test_mark_unresumed_fills_in_why_for_a_staged_but_unconfirmed_reply(self):
+        """THE SILENT-DORMANT SHAPE this whole fix closes: `_resume_landed`'s first pass ran
+        (so `staged` is already True) before the courier call that would confirm delivery was
+        abandoned - `why` must read as 'known: not confirmed', never stay blank."""
+        item = migrate_batch._Item("one")
+        item.payload = {"landed": True, "sessionId": "sid-one",
+                        "resume": {"staged": True, "delivered": False, "why": ""}}
+        migrate_batch._mark_unresumed_after_timeout([item], budget=9.0)
+        verdict = item.payload["resume"]
+        self.assertIn("timed out after 9s", verdict["why"])
+        self.assertIn("delivery was never confirmed", verdict["why"])
+
+    def test_mark_unresumed_never_overwrites_a_verdict_that_already_delivered(self):
+        item = migrate_batch._Item("one")
+        item.payload = {"landed": True, "sessionId": "sid-one",
+                        "resume": {"staged": True, "delivered": True, "why": "delivered"}}
+        migrate_batch._mark_unresumed_after_timeout([item], budget=9.0)
+        self.assertEqual(item.payload["resume"]["why"], "delivered")
+
+    def test_mark_unresumed_never_overwrites_an_already_explained_non_delivery(self):
+        """A SKIP (the courier's own deliberate deferral, e.g. 'its turn is IN FLIGHT') already
+        carries a real reason - the timeout sweep must not clobber it with a generic one."""
+        item = migrate_batch._Item("one")
+        item.payload = {"landed": True, "sessionId": "sid-one",
+                        "resume": {"staged": False, "delivered": False,
+                                    "why": "its turn is IN FLIGHT"}}
+        migrate_batch._mark_unresumed_after_timeout([item], budget=9.0)
+        self.assertEqual(item.payload["resume"]["why"], "its turn is IN FLIGHT")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResumeOutcomeTest(unittest.TestCase):
+    """Delivery is not continuation.
+
+    The 2026-09-18 Stackspire move reported `delivered: true ... and confirmed` and
+    `1/1 told to carry on`, while the chat's very next transcript line was "Prompt is too
+    long" - its context was full, so it could not accept ANY input. A migrated chat that
+    cannot continue reads exactly like one that is quietly busy unless something looks.
+    """
+
+    def _classify(self, tail, delivered=True):
+        item = mock.Mock()
+        item.payload = {"sessionId": "s1", "resume": {"delivered": delivered, "why": "delivered"}}
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "t.jsonl"
+            path.write_text(tail, encoding="utf-8")
+            with mock.patch.object(migrate_batch.hydralib, "resolve_one", return_value={}), \
+                 mock.patch.object(migrate_batch.gatelib, "transcript_for_match",
+                                   return_value=str(path)):
+                migrate_batch._classify_delivered_resumes({"d1": item})
+        return item.payload["resume"]
+
+    def test_prompt_is_too_long_is_a_rejection_not_a_success(self):
+        got = self._classify('{"type":"assistant","message":{"content":"Prompt is too long"}}\n')
+        self.assertEqual(got["outcome"], "rejected")
+        self.assertIn("REFUSED", got["why"])
+        self.assertIn("FRESH THREAD", got["remedy"])
+
+    def test_an_ordinary_continuation_stays_delivered(self):
+        got = self._classify('{"type":"assistant","message":{"content":"On it - reading the diff."}}\n')
+        self.assertEqual(got["outcome"], "delivered")
+        self.assertNotIn("remedy", got)
+
+    def test_a_chat_that_was_never_delivered_is_not_classified(self):
+        got = self._classify('{"type":"assistant","message":{"content":"Prompt is too long"}}\n', delivered=False)
+        self.assertNotIn("outcome", got)
+
+    def test_an_unreadable_transcript_leaves_the_couriers_verdict_alone(self):
+        item = mock.Mock()
+        item.payload = {"sessionId": "s1", "resume": {"delivered": True, "why": "delivered"}}
+        with mock.patch.object(migrate_batch.hydralib, "resolve_one",
+                               side_effect=RuntimeError("no daemon")):
+            migrate_batch._classify_delivered_resumes({"d1": item})
+        self.assertEqual(item.payload["resume"], {"delivered": True, "why": "delivered"})

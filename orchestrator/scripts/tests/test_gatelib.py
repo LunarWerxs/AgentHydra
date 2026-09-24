@@ -170,6 +170,37 @@ class GateTest(TranscriptCase):
         self.assertIsNotNone(v["idle"])
         self.assertEqual(v["idle"]["done_claim"], "yes")
 
+    def test_a_boot_hook_written_after_the_turn_does_not_make_a_finished_chat_mid_turn(self):
+        """FOUR UNDELIVERED RESUMES, 2026-09-14. Landing a chat boots its engine through
+        claude://resume, and that boot appends a user-role record the app marks `isMeta`. Judged
+        as the tail, it fails every test here - `completed` (user-role), `walled` (the banner is
+        no longer last), `resumed_silent` (it does not predate the engine) - so the chat read
+        "running, not idle" for as long as the landed engine lived and every courier wake was
+        refused as "a turn in flight", on transcripts last written hours earlier."""
+        boot = {**user("<session-start-hook>resumed</session-start-hook>"), "isMeta": True}
+        p = self.transcript([assistant(DONE_RECAP), boot], age_secs=600)
+        v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
+        self.assertEqual(v["state"], "running")
+        self.assertIsNotNone(v["idle"], "the turn before the hook is what ended this transcript")
+        self.assertEqual(v["idle"]["done_claim"], "yes")
+
+    def test_a_wall_still_reads_as_walled_behind_a_boot_hook(self):
+        """The same shape for the population that actually hit it: chats moved BECAUSE they were
+        parked at a usage wall. The wall is the last real record; the boot hook sits after it."""
+        boot = {**user("<session-start-hook>resumed</session-start-hook>"), "isMeta": True}
+        p = self.transcript(
+            [assistant("You've hit your session limit", api_error=True), boot], age_secs=600)
+        v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
+        self.assertIsNotNone(v["idle"])
+
+    def test_a_REAL_user_prompt_at_the_tail_is_still_a_turn_in_flight(self):
+        """The rail: only records the APP marked isMeta are seen past. A person's prompt (or any
+        ordinary user record) still ends the transcript mid-turn, whatever it says."""
+        p = self.transcript([assistant(DONE_RECAP), user("and now do the next thing")],
+                            age_secs=600)
+        v = gatelib.gate("s", p, {"pid": 123, "name": "x"})
+        self.assertIsNone(v["idle"], "an unanswered prompt is work in flight")
+
     def test_live_empty_dict_still_counts_as_a_writer(self):
         # Rule 2 hangs on this: {} must not be truthiness'd into "no writer".
         p = self.transcript([assistant(DONE_RECAP)], age_secs=600)
@@ -587,3 +618,51 @@ class UnknownEngineStartTest(unittest.TestCase):
             path, _ = self._orphan_transcript(tmp)
             v = gatelib.gate("s", path, {"pid": 999999})
             self.assertIsNone(v["idle"], "unknown must never be upgraded to idle - it stays in flight")
+
+
+class ResumedSilentEngineTest(TranscriptCase):
+    """⛔ A CHAT CUT OFF MID-TURN READ AS 'WORKING' FOREVER (live, 2026-09-11).
+
+    'Connections Architect burn-down resume' was cut off on its old account with a TOOL RESULT
+    as its last record - the assistant still owed a reply - and then re-landed elsewhere, where
+    the app booted a fresh engine for it. That engine wrote nothing for twenty minutes, but the
+    shape fit none of the idle cases: not `completed` (the last record is a user-type one), not
+    `orphaned` (no tool_use on it), not `walled`. So the gate said "alive and may be working",
+    migrate refused to move the chat again, and only terminate_live could shift it - AgentHydra
+    blocking its own follow-up move. The orphan rule's own evidence settles it: if the LAST
+    record of any kind predates the engine, that engine has produced nothing at all."""
+
+    def _cut_off(self, age_secs=20 * 60):
+        """A transcript that ends on a tool RESULT: the turn was interrupted, not finished."""
+        from datetime import datetime, timezone
+        written = time.time() - age_secs
+        stamp = datetime.fromtimestamp(written, timezone.utc).isoformat().replace("+00:00", "Z")
+        call = assistant("running it", tool_use="Bash")
+        call["timestamp"] = stamp
+        result = {"type": "user", "timestamp": stamp,
+                  "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
+        return self.transcript([call, result], age_secs=age_secs), written
+
+    def test_an_engine_that_has_written_nothing_since_it_booted_is_idle(self):
+        path, written = self._cut_off()
+        started_ms = int((written + 300) * 1000)  # booted five minutes AFTER the last record
+        v = gatelib.gate("s", path, {"pid": 123, "name": "x", "startedAt": started_ms})
+        self.assertEqual(v["state"], "running")
+        self.assertIsNone(v["stalled"])
+        self.assertIsNotNone(v["idle"], "an engine that never wrote is waiting, not working")
+        self.assertTrue(v["idle"]["resumed_silent"])
+        self.assertIn("written NOTHING since it started", v["cause"])
+
+    def test_the_same_transcript_under_its_OWN_engine_is_still_working(self):
+        # The engine that wrote those records may genuinely owe a reply - nothing here says
+        # otherwise, so it keeps the benefit of the doubt.
+        path, written = self._cut_off()
+        v = gatelib.gate("s", path, {"pid": 123, "name": "x",
+                                     "startedAt": int((written - 3600) * 1000)})
+        self.assertIsNone(v["idle"])
+        self.assertIn("a long quiet can be background work", v["cause"])
+
+    def test_an_unknown_engine_start_leaves_it_working_rather_than_guessing(self):
+        path, _ = self._cut_off()
+        v = gatelib.gate("s", path, {"pid": 999999, "name": "x"})
+        self.assertIsNone(v["idle"], "unknown must never be upgraded to idle")

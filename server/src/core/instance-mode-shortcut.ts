@@ -9,7 +9,12 @@
 import { existsSync } from 'node:fs'
 import { win32 } from 'node:path'
 import { APP_ROOT, IS_COMPILED } from '../config'
+import { capturePipedProc } from './process.ts'
 import type { CMActionResult } from './shared'
+
+/** Writing a .lnk is a COM call against WScript.Shell - instant, or stalled on something that
+ *  will not resolve itself. Twenty seconds is far past any healthy run. */
+const SHORTCUT_TIMEOUT_MS = 20_000
 
 const SHORTCUT_NAME = 'AgentHydra Instances'
 
@@ -162,11 +167,15 @@ export async function createInstanceModeShortcut(
   }
 
   try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
+    // Bounded (swept 2026-09-18), same reason as core/shortcut.ts: the drains and proc.exited
+    // together settle on the slowest, and WScript.Shell COM can stall with no way out.
+    const {
+      stdout,
+      stderr,
+      code: exitCode,
+    } = await capturePipedProc(proc, {
+      timeoutMs: SHORTCUT_TIMEOUT_MS,
+    })
     const shortcutPath = stdout.trim()
     if (exitCode === 0 && shortcutPath) {
       return {

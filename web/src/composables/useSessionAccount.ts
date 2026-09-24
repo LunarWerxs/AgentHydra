@@ -58,8 +58,8 @@ export function useSessionAccount(deps: {
   }
 
   /**
-   * The account behind the open session, or null when the chat has no desktop instance at all — a
-   * plain CLI transcript, or a Codex/OpenCode session, both of which carry `instance: null`.
+   * The account behind the open session, or null when the chat has no CLAUDE DESKTOP instance — a
+   * plain CLI transcript, or a session from another provider.
    *
    * `instance` is null while `label` is not whenever the label cannot be resolved: an instance
    * folder deleted since the chat ran, the regular non-isolated install simply not running (its row
@@ -72,6 +72,12 @@ export function useSessionAccount(deps: {
   const sessionAccount = computed<SessionAccount | null>(() => {
     const s = deps.selected.value
     if (!s?.instance) return null
+    // CLAUDE DESKTOP ONLY, and this guard is load-bearing since 2026-09-11. `instance` used to be
+    // null for everything else by construction, so the field alone was proof the row was Claude's.
+    // It is not any more: a Codex row now names its OWN instance (server/src/sessions.ts
+    // instanceFieldsFor), and resolving that name against the Claude desktop list would hand this
+    // panel a Codex account's label with a Claude "open this instance" button under it.
+    if (s.source !== 'claude') return null
     const inst = instanceForSessionLabel(instances.value, s.instance)
     return {
       label: s.instance,

@@ -41,6 +41,7 @@ const row = (over: Partial<ChatListRow>): ChatListRow => ({
   live: false,
   livePid: null,
   done: false,
+  staleLogin: false,
   ...over,
 })
 

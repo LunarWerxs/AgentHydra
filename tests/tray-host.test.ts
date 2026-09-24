@@ -55,12 +55,20 @@ test('a source checkout never gets a tray icon it did not ask for, even with the
   expect(trayHostDecision({ ...ready, compiled: false }).start).toBe(false)
 })
 
+// Every call below states `headless: false` outright. The kit's startTrayHostIfMissing answers
+// `reason: 'headless'` before it probes anything when it detects a build agent (CI, GITHUB_ACTIONS,
+// TF_BUILD, ...), because a runner has no desktop to put an icon on. That is the product behaviour;
+// these tests are about the desktop path, so they say which world they are in instead of inheriting
+// it from the environment - which is exactly how all four passed on every developer machine and
+// failed on every GitHub leg from 2026-09-11 (ec329bc) until 2026-09-12.
+
 test('startTrayHostIfMissing spawns the host from misc/ with the config by bare filename', async () => {
   const spawned: Array<{ exe: string; cwd: string }> = []
   const appRoot = join('C:', 'apps', 'AgentHydra')
   const result = await startTrayHostIfMissing({
     appRoot,
     compiled: true,
+    headless: false,
     hideTray: () => false,
     platform: 'win32',
     exists: () => true,
@@ -82,6 +90,7 @@ test('a host that is already running is left alone - the probe runs, the spawn d
   const result = await startTrayHostIfMissing({
     appRoot: 'C:/x',
     compiled: true,
+    headless: false,
     hideTray: () => false,
     platform: 'win32',
     exists: () => true,
@@ -103,6 +112,7 @@ test('structural blockers short-circuit BEFORE the process probe is paid for', a
   const missingToolkit = await startTrayHostIfMissing({
     appRoot: 'C:/x',
     compiled: true,
+    headless: false,
     hideTray: () => false,
     platform: 'win32',
     exists: () => false,
@@ -116,6 +126,7 @@ test('structural blockers short-circuit BEFORE the process probe is paid for', a
   const hidden = await startTrayHostIfMissing({
     appRoot: 'C:/x',
     compiled: true,
+    headless: false,
     hideTray: () => true,
     platform: 'win32',
     exists: () => true,
@@ -133,6 +144,7 @@ test('the toolkit means BOTH files: an exe without its config is not a toolkit',
   const result = await startTrayHostIfMissing({
     appRoot: 'C:/x',
     compiled: true,
+    headless: false,
     hideTray: () => false,
     platform: 'win32',
     exists: (p) => p.endsWith(TRAY_HOST_EXE),
@@ -142,4 +154,41 @@ test('the toolkit means BOTH files: an exe without its config is not a toolkit',
     },
   })
   expect(result).toMatchObject({ start: false, reason: 'no-tray-toolkit' })
+})
+
+test('a build agent never gets a tray host: headless wins before the toolkit or the probe is looked at', async () => {
+  let probes = 0
+  const result = await startTrayHostIfMissing({
+    appRoot: 'C:/x',
+    compiled: true,
+    headless: true,
+    hideTray: () => false,
+    platform: 'win32',
+    exists: () => true,
+    isRunning: async () => {
+      probes++
+      return false
+    },
+    spawnHost: () => {
+      throw new Error('must not spawn')
+    },
+  })
+  expect(result).toMatchObject({ start: false, reason: 'headless' })
+  expect(probes).toBe(0)
+})
+
+test('with no explicit answer, the environment decides: CI=1 reads as headless', async () => {
+  const result = await startTrayHostIfMissing({
+    appRoot: 'C:/x',
+    compiled: true,
+    env: { CI: '1' },
+    hideTray: () => false,
+    platform: 'win32',
+    exists: () => true,
+    isRunning: async () => false,
+    spawnHost: () => {
+      throw new Error('must not spawn')
+    },
+  })
+  expect(result).toMatchObject({ start: false, reason: 'headless' })
 })

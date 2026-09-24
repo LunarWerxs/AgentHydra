@@ -26,7 +26,7 @@
 // covered by the SECOND describe (added 2026-09-06 — it had no test at all until then), which
 // drives it through the isolatable runtime-pointer half; see its own header for why.
 
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import {
   existsSync,
@@ -34,6 +34,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -53,6 +54,20 @@ function findCsc(): string | null {
   return candidates.find((c) => existsSync(c)) ?? null
 }
 const CSC = win ? findCsc() : null
+
+// A single root for every scratch dir this file creates: at most one mkdtempSync may root
+// directly in the OS temp dir per file, so every test's work dir nests inside this one, and one
+// afterAll reaps all of them regardless of how the run ends.
+const INSTALL_TEST_ROOT = mkdtempSync(join(tmpdir(), 'ah-install-'))
+let installSeq = 0
+function workDir(name: string) {
+  const dir = join(INSTALL_TEST_ROOT, `${name}-${installSeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+afterAll(() => {
+  rmSync(INSTALL_TEST_ROOT, { recursive: true, force: true })
+})
 
 function psQuote(s: string): string {
   return s.replace(/'/g, "''")
@@ -177,7 +192,7 @@ function leftoverArtifacts(installDir: string): string[] {
 
 describe.skipIf(!win || !CSC)('install.ps1 transactional swap (AH-40)', () => {
   test('a fresh install lands all components', () => {
-    const work = mkdtempSync(join(tmpdir(), 'ah-install-fresh-'))
+    const work = workDir('fresh')
     const zip = buildReleaseZip(work, '0.20.0')
     const installDir = join(work, 'install')
 
@@ -201,7 +216,7 @@ describe.skipIf(!win || !CSC)('install.ps1 transactional swap (AH-40)', () => {
   }, 30_000)
 
   test('an upgrade replaces misc/ and orchestrator/ while orchestrator/state/ survives', () => {
-    const work = mkdtempSync(join(tmpdir(), 'ah-install-upgrade-'))
+    const work = workDir('upgrade')
     const installDir = join(work, 'install')
 
     const zipV1 = buildReleaseZip(work, '0.20.0', { miscRetired: true })
@@ -246,7 +261,7 @@ describe.skipIf(!win || !CSC)('install.ps1 transactional swap (AH-40)', () => {
   }, 30_000)
 
   test('an injected failure during the swap leaves the prior install intact', () => {
-    const work = mkdtempSync(join(tmpdir(), 'ah-install-rollback-'))
+    const work = workDir('rollback')
     const installDir = join(work, 'install')
 
     const zipV1 = buildReleaseZip(work, '0.21.0')
@@ -295,7 +310,7 @@ describe.skipIf(!win || !CSC)('install.ps1 transactional swap (AH-40)', () => {
   // 2026-09-06) the rollback restored an orchestrator/ whose state/ had gone with the staging
   // directory, silently destroying the scheduler's ledger in the one path built to protect it.
   test('a failure AFTER the orchestrator swap still leaves the scheduler ledger intact', () => {
-    const work = mkdtempSync(join(tmpdir(), 'ah-install-rollback-state-'))
+    const work = workDir('rollback-state')
     const installDir = join(work, 'install')
 
     const zipV1 = buildReleaseZip(work, '0.23.0')
@@ -342,7 +357,7 @@ describe.skipIf(!win || !CSC)('install.ps1 transactional swap (AH-40)', () => {
   }, 30_000)
 
   test('a version-mismatch canary refuses before touching the install', () => {
-    const work = mkdtempSync(join(tmpdir(), 'ah-install-mismatch-'))
+    const work = workDir('mismatch')
     const installDir = join(work, 'install')
 
     const zipV1 = buildReleaseZip(work, '0.22.0')
@@ -403,7 +418,7 @@ describe.skipIf(!win || !CSC)('install.ps1 refuses under a running instance (AH-
   }
 
   test('a live runtime pointer stops the install before anything on disk is touched', () => {
-    const work = mkdtempSync(join(tmpdir(), 'ah-install-running-'))
+    const work = workDir('running')
     const installDir = join(work, 'install')
 
     // An install that is already there, so "untouched" is something we can actually measure.
@@ -441,7 +456,7 @@ describe.skipIf(!win || !CSC)('install.ps1 refuses under a running instance (AH-
   }, 60_000)
 
   test('-Force is still the way past it, and it installs for real', () => {
-    const work = mkdtempSync(join(tmpdir(), 'ah-install-running-force-'))
+    const work = workDir('running-force')
     const installDir = join(work, 'install')
     const home = fakeHome(work, process.pid)
 
@@ -482,7 +497,7 @@ describe.skipIf(!win || !CSC)('install.ps1 refuses under a running instance (AH-
       return
     }
 
-    const work = mkdtempSync(join(tmpdir(), 'ah-install-dead-pid-'))
+    const work = workDir('dead-pid')
     const installDir = join(work, 'install')
 
     // A pid that has certainly exited: spawn, wait for it, then confirm it is gone rather than

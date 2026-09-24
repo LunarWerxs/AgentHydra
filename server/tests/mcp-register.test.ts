@@ -5,8 +5,8 @@
 // Every case drives an explicit `configPath` in a scratch dir, so no test can reach the real
 // ~/.claude.json - the file this module is otherwise designed to edit in place.
 
-import { expect, test } from 'bun:test'
-import { lstatSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -18,7 +18,15 @@ import {
   syncMcpRegistration,
 } from '../src/mcp-register'
 
-const scratch = () => mkdtempSync(join(tmpdir(), 'agenthydra-mcpreg-'))
+const scratchDirs: string[] = []
+afterAll(() => {
+  for (const d of scratchDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+const scratch = () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-mcpreg-'))
+  scratchDirs.push(dir)
+  return dir
+}
 const URL_ = 'http://127.0.0.1:7787'
 const read = (p: string) => JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>
 

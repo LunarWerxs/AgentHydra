@@ -60,6 +60,27 @@ class DedupeRaceTest(unittest.TestCase):
         self.assertEqual(len({r["id"] for r in results}), 1)
         self.assertEqual(sum(1 for r in results if r.get("reused")), 5)
 
+    def test_reuse_identical_returns_the_same_words_already_staged_and_nothing_else(self):
+        """A RE-FIRED BATCH (2026-09-14): a batch cancelled with its resume still staged, then
+        fired again, staged a second copy of every resume - two rows each for two chats. The
+        narrow rule reuses a staged row carrying exactly these words, and leaves a staged row
+        with DIFFERENT words alone rather than delivering it in the resume's name."""
+        first = deliverylib.stage(SID, "carry on", evidence=EVIDENCE, by="migrate-resume",
+                                  reuse_identical=True)
+        again = deliverylib.stage(SID, "carry on", evidence=EVIDENCE, by="migrate-resume",
+                                  reuse_identical=True)
+        self.assertEqual(again["id"], first["id"])
+        self.assertTrue(again.get("reused"))
+        self.assertEqual(len(deliverylib.pending(SID)), 1)
+
+    def test_reuse_identical_never_folds_the_resume_into_a_persons_different_reply(self):
+        person = deliverylib.stage(SID, "no, do it this way", evidence=EVIDENCE, by="person")
+        resume = deliverylib.stage(SID, "carry on", evidence=EVIDENCE, by="migrate-resume",
+                                   reuse_identical=True)
+        self.assertNotEqual(resume["id"], person["id"])
+        self.assertFalse(resume.get("reused"))
+        self.assertEqual(len(deliverylib.pending(SID)), 2)
+
     def test_a_persons_reply_is_still_never_folded_into_an_automatic_row(self):
         auto = deliverylib.stage(SID, "wake", evidence=EVIDENCE, dedupe=True)
         person = deliverylib.stage(SID, "no, do it this way", evidence=EVIDENCE, by="person")

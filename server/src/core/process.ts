@@ -266,52 +266,222 @@ function parseProcessRecord(
 // Shared spawn helper.
 // ----------------------------------------------------------------------------
 
-/** Runs a command via Bun.spawn and captures stdout as text. Never throws — returns `null`
- *  on spawn failure, non-zero exit, or timeout so callers can try the next strategy. */
-async function runCaptureStdout(
+/** What a bounded spawn came back with. `timedOut` true means the deadline fired and `code` is
+ *  whatever we knew at that moment — usually null, because the child never reported one. */
+export interface CapturedRun {
+  code: number | null
+  stdout: string
+  stderr: string
+  timedOut: boolean
+}
+
+/** Default deadline for a captured spawn. Every caller in this repo runs a short CLI — powershell,
+ *  taskkill, ps, security, secret-tool — so ten seconds is generous, not tight. */
+export const CAPTURE_TIMEOUT_MS = 10_000
+
+/**
+ * THE ONE BOUNDED SPAWN. Run a short command, capture what it said, and COME BACK — whatever the
+ * child or its descendants do.
+ *
+ * ⛔ WHY THIS IS CENTRAL AND NOT COPIED PER CALLER (swept 2026-09-18, after the orchestrator route
+ * wedged for the same reason). Sixteen sites in this server awaited a child's exit; eleven of them
+ * had no deadline at all, and they failed in three distinct ways that one helper closes for good:
+ *
+ *   1. NO DEADLINE. `await proc.exited` with nothing racing it hangs its caller forever if the
+ *      child never exits — and one of those sites was inside an HTTP route, so the route simply
+ *      never answered.
+ *   2. PIPE-AND-IGNORE, WHICH IS A DEADLOCK, NOT A LEAK. `keys.win.ts` opened `stderr: 'pipe'` and
+ *      never read it. A DPAPI `Unprotect` failure writes a multi-kilobyte .NET traceback; past the
+ *      pipe buffer the child BLOCKS on the write, so it never exits, so stdout never closes and
+ *      `proc.exited` never settles. That is the exact deadlock `realSpawn`'s own comment warns
+ *      about ("a child that fills one pipe while the other is unread"), in the credential-decrypt
+ *      path. So this helper DRAINS EVERY STREAM IT OPENS, always, whether the caller wants the
+ *      text or not.
+ *   3. THE CHILD'S EXIT IS NOT THE PIPE CLOSING. A grandchild that inherited the child's stdout
+ *      holds that pipe open for as long as IT lives, so a drain can outlive the process by
+ *      minutes. The deadline therefore kills the whole TREE (killProcessTree), not just the pid,
+ *      and the race settles even if a drain is still pending.
+ *
+ * Never throws: a spawn that cannot start, a non-zero exit and a timeout all come back as data, so
+ * a caller can try its next strategy without a try/catch of its own.
+ */
+export async function spawnCaptured(
   cmd: string[],
-  { timeoutMs = 10_000 }: { timeoutMs?: number } = {},
-): Promise<string | null> {
-  type CaptureProc = Bun.Subprocess<'ignore', 'pipe', 'ignore'>
-  let proc: CaptureProc | null = null
+  {
+    timeoutMs = CAPTURE_TIMEOUT_MS,
+    cwd,
+    env,
+    wantStderr = true,
+  }: {
+    timeoutMs?: number
+    cwd?: string
+    env?: Record<string, string | undefined>
+    /** false only when the caller genuinely does not want stderr text; it is still DRAINED. */
+    wantStderr?: boolean
+  } = {},
+): Promise<CapturedRun> {
+  let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   try {
     proc = Bun.spawn(cmd, {
       stdin: 'ignore',
       stdout: 'pipe',
-      stderr: 'ignore',
+      stderr: 'pipe',
       windowsHide: true,
-    }) as CaptureProc
+      ...(cwd ? { cwd } : {}),
+      ...(env ? { env } : {}),
+    }) as Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   } catch {
-    return null // command not found / spawn rejected outright
+    // Command not found / spawn rejected outright. Not a timeout: there was never a child.
+    return { code: null, stdout: '', stderr: '', timedOut: false }
   }
 
-  const activeProc = proc
+  return capturePipedProc(proc, { timeoutMs, wantStderr })
+}
+
+/**
+ * The same bound, applied to a child SOMEBODY ELSE spawned. Two call sites build their argv and
+ * env inside their own try/catch and carry their own failure messages (core/shortcut.ts,
+ * core/instance-mode-shortcut.ts); rewriting them to spawnCaptured would throw that away for no
+ * gain, so the bound is reachable on its own. One implementation, two doors.
+ *
+ * The child MUST have both streams piped — that is the whole thing being drained.
+ */
+export async function capturePipedProc(
+  proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>,
+  {
+    timeoutMs = CAPTURE_TIMEOUT_MS,
+    wantStderr = true,
+  }: { timeoutMs?: number; wantStderr?: boolean } = {},
+): Promise<CapturedRun> {
   let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs)
+  let timedOut = false
+  const deadline = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true
+      // The TREE, not the pid: a grandchild holding the pipes is exactly what makes a drain
+      // outlive the process, and it is the thing a bare proc.kill() cannot reach.
+      try {
+        if (proc.pid) killProcessTree(proc.pid)
+      } catch {
+        // already gone
+      }
+      resolve('timeout')
+    }, timeoutMs)
   })
 
+  // ⛔ READ INCREMENTALLY, NOT VIA `new Response(stream).text()`. That convenience cannot be
+  // CANCELLED, so on a timeout it keeps waiting for a pipe a grandchild is holding and hands back
+  // nothing — which loses exactly the diagnostic a killed run was about to give you. (Found by
+  // this file's own test: the pipe-holder case came back with empty stdout even though the child
+  // had printed and exited.) Accumulating as the bytes arrive means the text we already have is
+  // still ours the moment the deadline fires.
+  const held = { stdout: '', stderr: '' }
+  const drain = async (stream: ReadableStream<Uint8Array>, into: 'stdout' | 'stderr') => {
+    const reader = stream.getReader()
+    const decoder = new TextDecoder('utf-8')
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        held[into] += decoder.decode(value, { stream: true })
+      }
+      held[into] += decoder.decode()
+    } catch {
+      // Killed mid-write, or the pipe closed under us: what arrived is still the honest answer.
+    } finally {
+      try {
+        reader.releaseLock()
+      } catch {
+        // already released
+      }
+    }
+  }
+
+  // BOTH streams drained concurrently with the exit wait — never one at a time, or a child that
+  // fills the unread pipe deadlocks before either of them can finish.
+  const work = Promise.all([drain(proc.stdout, 'stdout'), drain(proc.stderr, 'stderr')])
+    .then(() => proc.exited)
+    .then((code) => ({ code }) as const)
+
+  try {
+    const settled = await Promise.race([work, deadline])
+    if (settled === 'timeout') {
+      // The kill above has fired; give the drains a moment to notice their pipe closed, then
+      // answer with whatever `held` accumulated. Waiting on them unconditionally is the bug this
+      // helper exists to close — but throwing away what they already read is the other one.
+      await Promise.race([work, new Promise<null>((r) => setTimeout(() => r(null), 2_000))])
+      return {
+        code: proc.exitCode,
+        stdout: held.stdout,
+        stderr: wantStderr ? held.stderr : '',
+        timedOut: true,
+      }
+    }
+    return {
+      code: settled.code,
+      stdout: held.stdout,
+      stderr: wantStderr ? held.stderr : '',
+      timedOut: false,
+    }
+  } catch {
+    return {
+      code: null,
+      stdout: held.stdout,
+      stderr: wantStderr ? held.stderr : '',
+      timedOut,
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
+    try {
+      if (proc.exitCode === null && !proc.killed && proc.pid) killProcessTree(proc.pid)
+    } catch {
+      // Already exited — ignore.
+    }
+  }
+}
+
+/**
+ * Wait for a child that has NO piped streams, bounded. For the `stdio: ['ignore','ignore','ignore']`
+ * spawns — taskkill, Set-Clipboard, osascript — where there is nothing to drain and the only defect
+ * is that `await proc.exited` has nothing racing it.
+ *
+ * Returns the exit code, or null when the deadline fired (in which case the tree has been killed).
+ */
+export async function awaitExitBounded(
+  proc: { exited: Promise<number>; pid?: number; exitCode: number | null; killed?: boolean },
+  timeoutMs = CAPTURE_TIMEOUT_MS,
+): Promise<number | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
-      (async () => {
-        const [stdout, exitCode] = await Promise.all([
-          new Response(activeProc.stdout).text(),
-          activeProc.exited,
-        ])
-        return exitCode === 0 ? stdout : null
-      })(),
-      timeout,
+      proc.exited,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => {
+          try {
+            if (proc.pid) killProcessTree(proc.pid)
+          } catch {
+            // already gone
+          }
+          resolve(null)
+        }, timeoutMs)
+      }),
     ])
   } catch {
     return null
   } finally {
     if (timer) clearTimeout(timer)
-    try {
-      activeProc.kill()
-    } catch {
-      // Already exited — ignore.
-    }
   }
+}
+
+/** Runs a command via Bun.spawn and captures stdout as text. Never throws — returns `null`
+ *  on spawn failure, non-zero exit, or timeout so callers can try the next strategy.
+ *  Thin wrapper over spawnCaptured so there is ONE bounded spawn in this file, not two. */
+async function runCaptureStdout(
+  cmd: string[],
+  { timeoutMs = CAPTURE_TIMEOUT_MS }: { timeoutMs?: number } = {},
+): Promise<string | null> {
+  const r = await spawnCaptured(cmd, { timeoutMs, wantStderr: false })
+  return r.code === 0 && !r.timedOut ? r.stdout : null
 }
 
 // ----------------------------------------------------------------------------
@@ -410,7 +580,10 @@ async function listWindowsProcessesViaCim(): Promise<WinProcRecord[] | null> {
 
 /** Fallback Windows strategy: `wmic process get ProcessId,CommandLine /format:list`. Used
  *  only if PowerShell itself is unavailable (rare on modern Windows, but `wmic` is
- *  deprecated/removed on newer builds too — this is genuinely best-effort). */
+ * arkitect-allow: no-bandaids wmic is absent on newer Windows builds; this probe is best-effort by design, not a fallback awaiting removal
+ *  deprecated/removed on newer builds too — this is genuinely best-effort).
+ *  arkitect-allow: no-bandaids permanent second-choice fallback for the older Windows builds
+ *  this app still supports where PowerShell itself is missing; not a stopgap awaiting removal. */
 async function listWindowsProcessesViaWmic(): Promise<WinProcRecord[] | null> {
   const stdout = await runCaptureStdout([
     'wmic',
@@ -448,8 +621,9 @@ async function listWindowsProcessesViaWmic(): Promise<WinProcRecord[] | null> {
     }
 
     if (pid !== null && Number.isFinite(pid)) {
-      // wmic's own CreationDate/WorkingSetSize columns are DMTF-formatted and column-truncated;
-      // this deprecated fallback stays memory/uptime-less (best-effort) rather than mis-parse them.
+      // arkitect-allow: no-bandaids permanent property of the wmic path, not a stopgap — wmic's
+      // own CreationDate/WorkingSetSize columns are DMTF-formatted and column-truncated; this
+      // fallback stays memory/uptime-less (best-effort) rather than mis-parse them.
       records.push({ pid, commandLine, workingSetSize: null, creationDate: null })
     }
   }
@@ -623,6 +797,79 @@ export function invalidateClaudeProcessCache(): void {
 }
 
 // ----------------------------------------------------------------------------
+// "Who just called me?" — the owner of a loopback TCP connection.
+// ----------------------------------------------------------------------------
+
+/**
+ * The pid of the process that owns the LOCAL TCP port `port` on this machine, or null.
+ *
+ * WHY THIS EXISTS: this daemon serves MCP over HTTP (`POST /api/mcp`, and mcp-register.ts
+ * registers exactly that transport), so `whoami` used to walk the DAEMON'S ancestry — the tray
+ * and whatever started it — and answer "this process does not look like it is running under
+ * Claude Code at all" for every caller alive. True of the daemon, useless to the agent asking,
+ * and it took `to: "here"` and check_my_usage down with it (2026-09-11). The caller is not
+ * unknowable: it opened a loopback socket, and the OS knows which process owns it. Resolve that
+ * pid and the EXISTING ancestry signals do the rest — the caller IS `claude.exe` under an
+ * instance dir.
+ *
+ * Never throws: every failure (no netstat, no lsof, unparseable output, two matching rows)
+ * resolves to null, which callers must treat as "could not tell", never as "nobody".
+ *
+ * ⛔ DELIBERATELY NOT CACHED. An ephemeral port is recycled, so a remembered answer can name a
+ * process that no longer owns that socket - and this answer decides which ACCOUNT an agent is,
+ * which is how `move_chats { to: "here" }` once landed 13 chats on the wrong one (2026-09-08,
+ * docs/AI_USAGE_SELFCHECK.md). A ~100ms table read per identity call is the cheap side of that
+ * trade; identity tools are called occasionally, not per tool call.
+ */
+export async function pidOwningLocalPort(port: number): Promise<number | null> {
+  if (!Number.isInteger(port) || port <= 0) return null
+  try {
+    return process.platform === 'win32' ? await windowsPortOwner(port) : await unixPortOwner(port)
+  } catch {
+    return null
+  }
+}
+
+/** The pid owning an ESTABLISHED TCP connection whose LOCAL port is `port`, read out of
+ *  `netstat -ano` output. Exported for its own test: this is a parser over another program's
+ *  text, which is exactly the kind of code that rots silently.
+ *
+ *  Exactly one owner or nothing. Two rows claiming one local port is a table we do not
+ *  understand, and guessing which one is the caller is how an identity answer becomes a lie. */
+export function netstatOwnerPid(stdout: string, port: number): number | null {
+  const pids = new Set<number>()
+  for (const line of stdout.split(/\r?\n/)) {
+    // "  TCP    127.0.0.1:54321   127.0.0.1:7787   ESTABLISHED   66800"
+    const m = /^\s*TCP\s+\S+:(\d+)\s+\S+:\d+\s+(\S+)\s+(\d+)\s*$/.exec(line)
+    if (!m || Number(m[1]) !== port || m[2] !== 'ESTABLISHED') continue
+    pids.add(Number(m[3]))
+  }
+  return pids.size === 1 ? [...pids][0]! : null
+}
+
+async function windowsPortOwner(port: number): Promise<number | null> {
+  const stdout = await runCaptureStdout(['netstat', '-ano', '-p', 'tcp'])
+  return stdout === null ? null : netstatOwnerPid(stdout, port)
+}
+
+async function unixPortOwner(port: number): Promise<number | null> {
+  const stdout = await runCaptureStdout([
+    'lsof',
+    '-nP',
+    `-iTCP:${port}`,
+    '-sTCP:ESTABLISHED',
+    '-Fp',
+  ])
+  if (stdout === null) return null
+  const pids = new Set<number>()
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = /^p(\d+)$/.exec(line.trim())
+    if (m) pids.add(Number(m[1]))
+  }
+  return pids.size === 1 ? [...pids][0]! : null
+}
+
+// ----------------------------------------------------------------------------
 // Ancestry walk — "which process launched me?" (core/self-identity.ts).
 // ----------------------------------------------------------------------------
 
@@ -652,17 +899,29 @@ const MAX_ANCESTRY_DEPTH = 12
  * (PowerShell absent, permission denied, malformed output, timeout) resolves to null, which
  * callers must treat as "could not enumerate", never as "no ancestors".
  */
-export async function processAncestry(startPid = process.pid): Promise<AncestorProcess[] | null> {
+export async function processAncestry(
+  startPid = process.pid,
+  opts: { includeSelf?: boolean } = {},
+): Promise<AncestorProcess[] | null> {
+  // `includeSelf` puts startPid itself at the head of the chain. The default is off because the
+  // original caller asks "who launched ME?" and already knows itself. It is on for the OTHER
+  // question this walk now answers - "who is the process that just called me?" (pidOwningLocalPort
+  // above, for MCP over HTTP), where the caller's OWN command line is the whole answer: it is the
+  // engine, `<instanceDir>/claude-code/<ver>/claude.exe`.
+  const includeSelf = opts.includeSelf === true
   try {
     return process.platform === 'win32'
-      ? await windowsAncestry(startPid)
-      : await unixAncestry(startPid)
+      ? await windowsAncestry(startPid, includeSelf)
+      : await unixAncestry(startPid, includeSelf)
   } catch {
     return null
   }
 }
 
-async function windowsAncestry(startPid: number): Promise<AncestorProcess[] | null> {
+async function windowsAncestry(
+  startPid: number,
+  includeSelf = false,
+): Promise<AncestorProcess[] | null> {
   // The loop lives in PowerShell so the whole chain costs ONE spawn (~300ms) instead of one per
   // hop. `$out` is forced to an array with @() — ConvertTo-Json serializes a single-element array
   // as a bare object otherwise, and the parse below would have to guess.
@@ -677,7 +936,8 @@ async function windowsAncestry(startPid: number): Promise<AncestorProcess[] | nu
     '  $proc = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$p"',
     '  if (-not $proc) { break }',
     '  $parent = $proc.ParentProcessId',
-    '  if ($i -gt 0) {',
+    // `-gt 0` skips the start process itself (the ancestors-only walk); `-ge 0` keeps it.
+    `  if ($i -${includeSelf ? 'ge' : 'gt'} 0) {`,
     '    $out += [pscustomobject]@{ ProcessId = $proc.ProcessId; Name = $proc.Name; ' +
       'ExecutablePath = $proc.ExecutablePath; CommandLine = $proc.CommandLine }',
     '  }',
@@ -715,7 +975,10 @@ async function windowsAncestry(startPid: number): Promise<AncestorProcess[] | nu
   }
 }
 
-async function unixAncestry(startPid: number): Promise<AncestorProcess[] | null> {
+async function unixAncestry(
+  startPid: number,
+  includeSelf = false,
+): Promise<AncestorProcess[] | null> {
   // One snapshot of every process, then walk the pid→ppid map in memory. `ps` has no ancestry
   // mode, and a per-hop `ps -p <pid>` would be a spawn each.
   const stdout = await runCaptureStdout(['ps', '-eo', 'pid=,ppid=,command='])
@@ -731,21 +994,26 @@ async function unixAncestry(startPid: number): Promise<AncestorProcess[] | null>
     })
   }
 
+  const entry = (pid: number, row: { command: string }): AncestorProcess => {
+    // `command` is the full argv; argv[0] is the executable path on both macOS and Linux.
+    const exe = row.command.split(/\s+/)[0] ?? null
+    return {
+      pid,
+      name: exe ? (exe.split('/').pop() ?? null) : null,
+      executablePath: exe,
+      commandLine: row.command,
+    }
+  }
   const out: AncestorProcess[] = []
   const seen = new Set<number>([startPid])
+  const self = byPid.get(startPid)
+  if (includeSelf && self) out.push(entry(startPid, self))
   let pid = byPid.get(startPid)?.ppid
   for (let i = 0; i < MAX_ANCESTRY_DEPTH && pid && !seen.has(pid); i++) {
     seen.add(pid)
     const row = byPid.get(pid)
     if (!row) break
-    // `command` is the full argv; argv[0] is the executable path on both macOS and Linux.
-    const exe = row.command.split(/\s+/)[0] ?? null
-    out.push({
-      pid,
-      name: exe ? (exe.split('/').pop() ?? null) : null,
-      executablePath: exe,
-      commandLine: row.command,
-    })
+    out.push(entry(pid, row))
     pid = row.ppid
   }
   return out

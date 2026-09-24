@@ -10,12 +10,16 @@
 // pgrep nor ps, and with the pgrep-only walk the first version of these tests failed there exactly
 // the way the bug they guard against fails - an empty tree, a surviving grandchild, and a route
 // that hung on its pipe until the test's own timeout (2026-09-05).
-import { expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { unixDescendants } from '../src/core/process'
 import { pythonBinary, runOrchestrator } from '../src/orchestrator'
+
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-orch-tree-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
 
 const unix = process.platform !== 'win32'
 const hasPython = (() => {
@@ -102,7 +106,7 @@ test.skipIf(!unix)(
 test.skipIf(!unix || !hasPython)(
   'a timed-out run kills the grandchild the script spawned, and the route still completes',
   async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-tree-'))
+    const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-tree-'))
     writeFileSync(
       join(dir, 'orch.py'),
       [

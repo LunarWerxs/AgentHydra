@@ -1,9 +1,10 @@
 import type { Context } from 'hono'
 
 // Dispatch-argv enums, validated SERVER-SIDE (the MCP/web schemas are advisory only). permission_mode
-// especially: it flows into `claude --permission-mode <v>` (dispatch.ts buildArgv), and
-// `bypassPermissions` runs every tool with no approval — so a garbage/unexpected value must be
-// rejected here, never passed through to the CLI. A null/absent value is fine (CLI default).
+// especially: it used to flow into `claude --permission-mode <v>` at spawn time, before headless
+// dispatch was permanently refused (headless-policy.ts) - and `bypassPermissions` runs every tool
+// with no approval, so a garbage/unexpected value must be rejected here regardless, never trusted
+// into the stored row. A null/absent value is fine (CLI default).
 export const VALID_PERMISSION_MODES = new Set([
   'default',
   'acceptEdits',

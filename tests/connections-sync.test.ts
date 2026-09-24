@@ -51,12 +51,12 @@ import {
 import { getSetting, setSetting } from '../server/src/db'
 
 const SETTINGS_KEY = 'connections_sync'
-const ISSUER = 'https://accounts.connections.icu'
+const ISSUER = 'https://accounts.connectionsapi.com'
 const CLIENT_ID = '9ea648d3125f59743f7e1f651108bb42'
 const TOKEN_ENDPOINT = `${ISSUER}/oauth/token`
 const USERINFO_ENDPOINT = `${ISSUER}/oauth/userinfo`
 const REVOKE_ENDPOINT = `${ISSUER}/oauth/revoke`
-const STORE_BASE = 'https://studio.connections.icu'
+const STORE_BASE = 'https://studio.connectionsapi.com'
 const DOC_URL = `${STORE_BASE}/v1/app-data/${encodeURIComponent(CLIENT_ID)}`
 const ORIGIN = 'http://127.0.0.1:7787'
 

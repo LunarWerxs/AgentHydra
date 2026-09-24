@@ -334,5 +334,100 @@ class MainGateTest(unittest.TestCase):
         self.assertNotIn("DISARMED", out)
 
 
+class UnreachablePaneTest(unittest.TestCase):
+    """⛔ AN APPROVAL THAT CANNOT REACH ITS PANE USED TO VANISH (2026-09-11, seen twice from
+    the standing overlord chat): `interview --apply` approved a queued escalation, the actuator
+    answered exit 4 on both passes, and all the person got back was "could not reach that
+    chat's pane". Three things were wrong at once - the person's own decision did not earn the
+    row selection (the 15-minute window is for LANES, not for someone answering about this very
+    chat), the actuator's own diagnosis was dropped into a field nothing printed, and nothing
+    counted the failures, so the same futile press re-queued forever."""
+
+    REFUSED = ("REFUSED: no sidebar row is named 'chat one' in C:/x/inst1 - a MATCH failure, "
+               "not a timing one: 4 rows are rendered right now. Rows: 'other' | 'another'")
+
+    def setUp(self):
+        self._state = tempfile.TemporaryDirectory()
+        os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
+
+    def tearDown(self):
+        os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
+        self._state.cleanup()
+
+    def _result(self, returncode=0, stdout="ok"):
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+    def _row(self, sid="esc-9"):
+        approvallib.queue_escalation(
+            sid, title="chat one", instance="inst1", instance_dir="C:/x/inst1",
+            verify="hi", command="npm install left-pad", tool_name="Bash",
+            reason="no pattern places it")
+        return approvallib.get_escalation(sid)
+
+    def test_a_persons_own_decision_earns_the_row_selection_at_once(self):
+        row = self._row()  # freshly queued: far inside SELECT_AFTER_SECS
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock), \
+             mock.patch.object(unblock_prompts.clilib, "run_text",
+                               side_effect=[self._result(returncode=4, stdout=self.REFUSED),
+                                            self._result()]) as run_mock:
+            got = unblock_prompts.press(row, always_select=True)
+        self.assertTrue(got["ok"], got["outcome"])
+        self.assertEqual(run_mock.call_count, 2)
+        self.assertIn("-Select", run_mock.call_args_list[1].args[0])
+
+    def test_a_lane_still_waits_for_its_window_before_flipping_the_view(self):
+        row = self._row("esc-10")
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock), \
+             mock.patch.object(unblock_prompts.clilib, "run_text",
+                               return_value=self._result(returncode=4, stdout=self.REFUSED)) as run_mock:
+            unblock_prompts.press(row)
+        run_mock.assert_called_once()
+
+    def test_an_unreachable_pane_reports_what_the_actuator_actually_saw(self):
+        row = self._row("esc-11")
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock), \
+             mock.patch.object(unblock_prompts.clilib, "run_text",
+                               return_value=self._result(returncode=4, stdout=self.REFUSED)):
+            got = unblock_prompts.press(row, always_select=True)
+        self.assertFalse(got["ok"])
+        self.assertIn("could not reach that chat's pane", got["outcome"])
+        self.assertIn("rows are rendered right now", got["outcome"])
+
+    def test_presses_that_keep_failing_are_counted_and_surfaced(self):
+        row = self._row("esc-12")
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock), \
+             mock.patch.object(unblock_prompts.clilib, "run_text",
+                               return_value=self._result(returncode=4, stdout=self.REFUSED)):
+            got = [unblock_prompts.press(row, always_select=True) for _ in range(3)]
+        self.assertEqual([g["failedStreak"] for g in got], [1, 2, 3])
+        self.assertNotIn("in a row", got[0]["outcome"])
+        self.assertIn("3 presses in a row have failed", got[2]["outcome"])
+
+    def test_a_prompt_that_had_already_cleared_is_not_a_failed_press(self):
+        # Exit 3 means there was nothing to press: the chat is fine and the row was stale.
+        # Counting it would file an incident about a healthy chat.
+        row = self._row("esc-14")
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock), \
+             mock.patch.object(unblock_prompts.clilib, "run_text",
+                               return_value=self._result(returncode=3, stdout="no prompt")):
+            got = [unblock_prompts.press(row, always_select=True) for _ in range(3)]
+        self.assertEqual([g["failedStreak"] for g in got], [0, 0, 0])
+        self.assertNotIn("in a row", got[2]["outcome"])
+
+    def test_a_press_that_lands_clears_the_count(self):
+        row = self._row("esc-13")
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock), \
+             mock.patch.object(unblock_prompts.clilib, "run_text",
+                               return_value=self._result(returncode=4, stdout=self.REFUSED)):
+            self.assertEqual(unblock_prompts.press(row, always_select=True)["failedStreak"], 1)
+        with mock.patch.object(unblock_prompts.windowlib, "instance_lock", _no_placement_lock), \
+             mock.patch.object(unblock_prompts.clilib, "run_text",
+                               return_value=self._result()):
+            landed = unblock_prompts.press(row, always_select=True)
+        self.assertTrue(landed["ok"])
+        self.assertEqual(landed["failedStreak"], 0)
+        self.assertEqual(ledgerlib.check("approval", "esc-13")["attempts"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

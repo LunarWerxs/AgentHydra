@@ -36,6 +36,7 @@ import json
 import sys
 
 from lib import armlib, clilib
+from lib import configlib
 from lib import bandlib
 from lib import clilib
 from lib import gatelib
@@ -45,11 +46,9 @@ from lib import ledgerlib
 
 # The owner's standing word for a chat that offered to carry on. Never invented work - it is
 # the continuation the chat itself proposed.
-WAKE_PROMPT = (
-    "Proceed with your recommendations - continue the work you proposed at the end of your "
-    "last turn. If something in it genuinely needs the owner (spend, live customers, public "
-    "exposure, another person's lane), do the rest and name that one thing in your recap."
-)
+# THE WORDS ARE THE OWNER'S NOW (2026-09-17): saturate.wake_prompt in the policy file, whose
+# default is this exact text. Change it there, not here, so an upgrade cannot overwrite it.
+WAKE_PROMPT = configlib.get("saturate.wake_prompt")
 
 
 def wake_reason(row: dict, staged_by_session: dict) -> tuple[str | None, dict | None]:
@@ -249,23 +248,73 @@ def execute(plan: dict) -> list[dict]:
     return results
 
 
+def _decide_act(argv: list[str]) -> bool:
+    """Whether this pass may actually wake anything: --yes, then the two brakes that can
+    still turn it back into a plan-only run."""
+    act = "--yes" in argv
+    # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
+    # window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so.
+    if act and not configlib.get("saturate.enabled"):
+        # THE MASTER SWITCH (2026-09-17). Planning and reporting continue - you still see
+        # which chats COULD be woken - but nothing is woken. Turn it back on with
+        # `orch.py policy --set saturate.enabled=on`.
+        print("PLAN ONLY - waking is switched OFF in your policy (saturate.enabled).")
+        return False
+    if act:
+        refusal = armlib.refuse_unless_armed(argv, "waking dormant chats")
+        if refusal:
+            print(refusal)
+            return False
+    return act
+
+
+def _wake_cap(argv: list[str]) -> int | None:
+    # PRECEDENCE: --max a person typed wins; otherwise the policy's cap (null = fill the
+    # whole deficit, which is the behaviour this always had).
+    cap = configlib.get("saturate.max_wakes")
+    if "--max" in argv:
+        cap = int(argv[argv.index("--max") + 1])
+    return cap
+
+
+def _render_plan(plan: dict, results: list[dict], act: bool) -> None:
+    """The human report: the deficit, then every row - planned when nothing was woken, with
+    its outcome when it was - then why the floor is still short."""
+    print(f"{plan['running']} running of a floor of {plan['floor']} "
+          f"(deficit {plan['deficit']}) - per account: {plan['runningPerInstance']}")
+    if not plan["deficit"]:
+        print("the machine is FULL - nothing to wake.")
+    for r in (results or plan["planned"]):
+        mark = ("OK " if r.get("ok") else "XX ") if results else "-  "
+        print(f"  {mark}[{r['instance']}] {r['title']}: {r['why']}"
+              + (f" -> {r.get('outcome')}" if results else ""))
+    if plan["shortfall"]:
+        _render_shortfall(plan)
+    if not act and plan["planned"]:
+        print("\nPLAN ONLY - nothing woken. Add --yes to fill the floor.")
+
+
+def _render_shortfall(plan: dict) -> None:
+    print(f"\n{plan['shortfall']} slot(s) still unfilled. Why, exactly:")
+    if plan["strandedOnHotAccounts"]:
+        print(f"  - {sum(plan['strandedOnHotAccounts'].values())} dormant chat(s) sit on "
+              f"an account that may take NO new work {plan['strandedOnHotAccounts']} - "
+              "they need MOVING, not waking (the groundskeeper's evacuation lane).")
+    if plan["heldBackByShare"]:
+        print(f"  - {sum(plan['heldBackByShare'].values())} more would all land on "
+              f"account(s) already at their share of {plan['perAccountShare']} "
+              f"{plan['heldBackByShare']} - spreading beats filling.")
+    print("  - the rest: held, genuinely done, or waiting on a person.")
+
+
 def main(argv: list[str]) -> int:
     clilib.use_utf8_console()
     if "--help" in argv or "-h" in argv:
         print(__doc__.strip())
         return 0
     as_json = "--json" in argv
-    act = "--yes" in argv
-    # THE ARMED WINDOW (owner order, 2026-09-01): unattended acting needs a person's open
-    # window (`python orch.py arm`) or --force. Disarmed: fall back to plan-only and say so.
-    if act:
-        refusal = armlib.refuse_unless_armed(argv, "waking dormant chats")
-        if refusal:
-            print(refusal)
-            act = False
-    cap = None
-    if "--max" in argv:
-        cap = int(argv[argv.index("--max") + 1])
+    act = _decide_act(argv)
+    cap = _wake_cap(argv)
 
     try:
         plan = build_plan(cap)
@@ -277,27 +326,7 @@ def main(argv: list[str]) -> int:
     if as_json:
         print(json.dumps({**plan, "results": results}, indent=2))
     else:
-        print(f"{plan['running']} running of a floor of {plan['floor']} "
-              f"(deficit {plan['deficit']}) - per account: {plan['runningPerInstance']}")
-        if not plan["deficit"]:
-            print("the machine is FULL - nothing to wake.")
-        for r in (results or plan["planned"]):
-            mark = ("OK " if r.get("ok") else "XX ") if results else "-  "
-            print(f"  {mark}[{r['instance']}] {r['title']}: {r['why']}"
-                  + (f" -> {r.get('outcome')}" if results else ""))
-        if plan["shortfall"]:
-            print(f"\n{plan['shortfall']} slot(s) still unfilled. Why, exactly:")
-            if plan["strandedOnHotAccounts"]:
-                print(f"  - {sum(plan['strandedOnHotAccounts'].values())} dormant chat(s) sit on "
-                      f"an account that may take NO new work {plan['strandedOnHotAccounts']} - "
-                      "they need MOVING, not waking (the groundskeeper's evacuation lane).")
-            if plan["heldBackByShare"]:
-                print(f"  - {sum(plan['heldBackByShare'].values())} more would all land on "
-                      f"account(s) already at their share of {plan['perAccountShare']} "
-                      f"{plan['heldBackByShare']} - spreading beats filling.")
-            print("  - the rest: held, genuinely done, or waiting on a person.")
-        if not act and plan["planned"]:
-            print("\nPLAN ONLY - nothing woken. Add --yes to fill the floor.")
+        _render_plan(plan, results, act)
     failed = [r for r in results if not r["ok"]]
     return 2 if failed else 0
 

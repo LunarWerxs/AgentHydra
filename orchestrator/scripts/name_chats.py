@@ -39,6 +39,9 @@ from pathlib import Path
 from lib import clilib, hydralib, windowlib
 
 PS1 = Path(__file__).resolve().parent / "actuator" / "rename_first.ps1"
+# The same actuator rename_chat.py drives, used here ONLY for its passive -List (what the app
+# is rendering right now). See rendered_titles().
+LIST_PS1 = Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"
 MAX_PASSES = 20
 PROBE_PREFIX = "naming pass probe"
 
@@ -77,9 +80,18 @@ def is_generic_title(title: object) -> bool:
     return not t or bool(_GENERIC.match(t))
 
 
-def _needs_probe(title: object) -> bool:
+def needs_a_real_name(title: object) -> bool:
+    """Is this stored title absent or one of the app's generic fallbacks? A row wearing one of
+    those cannot be aimed at by name: several land identical, and every actuator that takes a
+    -Title then refuses to guess. Public because callers OUTSIDE the pass need the same test to
+    verify their own landings (migrate_batch reads it back per chat rather than trusting any
+    pass's self-report)."""
     t = str(title or "").strip()
     return not t or bool(_PROBE_TARGETS.match(t))
+
+
+# The pass's own long-standing internal name for it.
+_needs_probe = needs_a_real_name
 
 
 def store_dir_for(instance: str) -> Path | None:
@@ -176,8 +188,70 @@ def _daemon_rename(sid: str, title: str) -> tuple[int, str]:
     return clilib.capture(rename_chat.main, [sid, "--to", title])
 
 
+def _run_list(instance: str) -> tuple[int, str]:
+    """The actuator's passive -List: every chat name the app is RENDERING. It activates
+    nothing and takes no lock of its own (the actuator exempts -List from focus), so it is
+    safe to call from inside this pass's lock and from a caller's verdict alike."""
+    r = clilib.run_text(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(LIST_PS1),
+         "-List", "-Instance", instance],
+        timeout=120,
+    )
+    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+
+
+def rendered_titles(instance: str, list_runner=None) -> list[str] | None:
+    """What the app SHOWS right now, or None when the read itself failed / nothing rendered.
+
+    ⛔ DISK IS NOT THE SURFACE THAT MATTERS, AND FOR A FRESH IMPORT IT ACTIVELY LIES (found
+    2026-09-15, after a 4-chat move reported 4/4 OK and left 3 chats nameless on screen).
+    The importer WRITES a title into the landed record and the daemon answers
+    `titled: true, titleDurable: false` - honest, because a RUNNING app re-saves that record
+    from its own memory minutes later and erases it. Everything in this pass that asked "is
+    anything nameless?" read the disk copy inside that window, saw real titles, and did
+    nothing; the app was rendering three identical no-name rows the whole time, so the
+    permission picker then had nothing to aim at and the bypass stamp fell back to disk-only.
+    A caller that KNOWS what it just landed (migrate_batch) can now say so with `require`,
+    and this is the surface that answers it.
+
+    Lines come back as '<localized more-options phrase> <title>' verbatim (RenderedKebabNames
+    refuses to guess which words are the phrase), so callers match by SUFFIX - exact and
+    language-independent.
+    """
+    code, out = (list_runner or _run_list)(instance)
+    if code != 0:
+        return None
+    rows = [ln.strip() for ln in out.splitlines() if ln.startswith("  ") and ln.strip()]
+    return rows or None
+
+
+def renders(rows: list[str] | None, title: str) -> bool:
+    """Is that exact title on screen? Unknown rows (None) are never read as a yes."""
+    t = str(title or "").strip()
+    return bool(t) and bool(rows) and any(r.endswith(t) for r in rows or [])
+
+
+def unrendered_requirements(instance: str, require: dict[str, str],
+                            list_runner=None) -> tuple[dict[str, str], str]:
+    """Which required titles the app is NOT showing, plus why the answer is what it is.
+
+    An unreadable sidebar (app closed, UIA refused) returns {} - "cannot prove a miss" is not
+    "found a miss", and probing on an unprovable requirement would loop forever against a
+    closed app.
+    """
+    if not require:
+        return {}, "nothing required"
+    rows = rendered_titles(instance, list_runner)
+    if rows is None:
+        return {}, f"could not read what '{instance}' is rendering - requirements not judged"
+    missing = {sid: t for sid, t in require.items() if not renders(rows, t)}
+    return missing, ("every required title is on screen" if not missing else
+                     f"{len(missing)} required title(s) not rendered")
+
+
 def _empty_pass_result(why: str) -> dict:
-    return {"named": [], "needsJudgment": [], "flakes": [], "remaining": None, "why": why}
+    return {"named": [], "needsJudgment": [], "flakes": [], "remaining": None,
+            "unrendered": [], "why": why}
 
 
 def _rename_quarantined_chats(store: Path, meta_cache: dict, titles: dict[str, str],
@@ -268,8 +342,16 @@ def name_pass(
     daemon_rename=None,
     store: Path | None = None,
     poll_secs: float = 20,
+    require: dict[str, str] | None = None,
+    list_runner=None,
 ) -> dict:
-    """Run the pass. Returns {named, needsJudgment, flakes, remaining, why}."""
+    """Run the pass. Returns {named, needsJudgment, flakes, remaining, unrendered, why}.
+
+    `require` is {cliSessionId: intended title} for chats the CALLER knows it just landed.
+    Those are judged on what the app RENDERS, not on the disk record - see rendered_titles()
+    for why a fresh import's disk title is a hint that the running app erases. Without it the
+    pass keeps its old disk-only behaviour exactly.
+    """
     probe_runner = probe_runner or _run_probe
     daemon_rename = daemon_rename or _daemon_rename
     store = store or store_dir_for(instance)
@@ -293,22 +375,32 @@ def name_pass(
         # between overlapping runs (review finding).
         stamp = f"{os.getpid()}-{uuid.uuid4().hex[:6]}"
 
+        want = dict(require or {})
+        unrendered, why_rendered = unrendered_requirements(instance, want, list_runner)
         for n in range(1, MAX_PASSES + 1):
-            if not nameless_rows(store, meta_cache):
+            if not nameless_rows(store, meta_cache) and not unrendered:
                 break
             probe = f"{PROBE_PREFIX} {stamp}-{n}"
             if _run_probe_round(instance, probe, store, meta_cache, titles, poll_secs,
                                  probe_runner, daemon_rename, state):
                 break
+            unrendered, why_rendered = unrendered_requirements(instance, want, list_runner)
 
         remaining = nameless_rows(store, meta_cache)
+        unrendered, why_rendered = unrendered_requirements(instance, want, list_runner)
+    clean = not remaining and not state.flakes and not unrendered
     return {
         "named": state.named,
         "needsJudgment": state.needs_judgment,
         "flakes": state.flakes,
         "remaining": remaining,
-        "why": ("clean" if not remaining and not state.flakes else
-                "some rows remain - collapsed/virtualized rows are out of UIA reach, or passes flaked; rerun, or scroll them into view"),
+        # THE VERDICT THAT MATTERS FOR A LANDING: required titles the app still is not showing.
+        # A caller reading only `remaining` reads the disk copy, which a running app is free to
+        # contradict (rendered_titles docstring).
+        "unrendered": sorted(unrendered.values()),
+        "why": ("clean" if clean else
+                (f"{why_rendered}; " if unrendered else "")
+                + "some rows remain - collapsed/virtualized rows are out of UIA reach, or passes flaked; rerun, or scroll them into view"),
     }
 
 
@@ -343,7 +435,8 @@ def main(argv: list[str]) -> int:
         # No store found, or another pass already holds the lock: the pass never ran, so
         # this is NOT "nothing nameless" - exit 1 per the docstring, not a false 0 (review finding).
         return 1
-    ok = not result["flakes"] and not result["remaining"] and not result["needsJudgment"]
+    ok = (not result["flakes"] and not result["remaining"] and not result["needsJudgment"]
+          and not result.get("unrendered"))
     return 0 if ok else 2
 
 

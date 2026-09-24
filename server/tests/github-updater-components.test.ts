@@ -6,7 +6,7 @@
 // the executable and overlaid misc/, but orchestrator/old-payload.txt stayed, new-payload.txt never
 // arrived, and misc/obsolete-component.txt survived. Everything here runs on scratch directories;
 // no real install, release or process is touched.
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import {
   existsSync,
   mkdirSync,
@@ -36,13 +36,22 @@ import {
 const ORCH = RELEASE_COMPONENTS.find((c) => c.name === 'orchestrator')!
 const MISC = RELEASE_COMPONENTS.find((c) => c.name === 'misc')!
 
+const SHARED_ROOT = mkdtempSync(join(tmpdir(), 'ah-components-'))
+afterAll(() => rmSync(SHARED_ROOT, { recursive: true, force: true }))
+let scratchSeq = 0
+function scratchRoot(): string {
+  const dir = join(SHARED_ROOT, `s${scratchSeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
 function put(root: string, rel: string, text: string): void {
   mkdirSync(join(root, rel, '..'), { recursive: true })
   writeFileSync(join(root, rel), text)
 }
 
 function fixture(): { root: string; bundle: string; install: string } {
-  const root = mkdtempSync(join(tmpdir(), 'ah-components-'))
+  const root = scratchRoot()
   const bundle = join(root, 'bundle', 'AgentHydra-9.9.9-windows-x64')
   const install = join(root, 'install')
   // The release ships the toolbox and the tray toolkit.
@@ -203,7 +212,7 @@ test('componentVersions reports null before stamping and the stamped version aft
 // catch block performs — was unguarded. Driven here with injected deps (ApplyUpdateDeps) against
 // scratch directories only: no real install, process, or network is touched.
 function applyFixture(): { root: string; bundle: string; install: string } {
-  const root = mkdtempSync(join(tmpdir(), 'ah-apply-'))
+  const root = scratchRoot()
   // bundleDirPath, as returned by the (mocked) downloadAndVerifyUpdate: the exe sits beside the
   // release-owned component folders, matching a real extracted archive's top level.
   const bundle = join(root, 'bundle')
@@ -322,7 +331,7 @@ test('applyUpdate rolls back the executable AND every already-swapped component 
 // install that day. These pin the fall-through that lets the current version be reinstalled.
 
 test('missingComponents names a component that is absent from a bundle install', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-missing-'))
+  const root = scratchRoot()
   try {
     put(root, 'AgentHydra.exe', 'exe')
     put(root, 'misc/lunarwerx-tray.exe', 'tray')
@@ -338,7 +347,7 @@ test('missingComponents names a component that is absent from a bundle install',
 // .zip only). Reading that as damage would offer every such user a "repair" that silently
 // converts their install into a bundle.
 test('an install with NO components at all is a bare .exe, not a damaged bundle', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-bare-'))
+  const root = scratchRoot()
   try {
     put(root, 'AgentHydra.exe', 'exe')
     expect(missingComponents(root, 'win32')).toEqual([])
@@ -352,7 +361,7 @@ test('an install with NO components at all is a bare .exe, not a damaged bundle'
 // "already up to date" unreachable and turned every apply into a reinstall + restart that could
 // never converge, because reconcile has no misc/ in the bundle to install.
 test('a healthy POSIX install is complete without misc/', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-posix-'))
+  const root = scratchRoot()
   try {
     put(root, 'agenthydra', 'exe')
     put(root, 'orchestrator/orch.py', 'driver')
@@ -369,7 +378,7 @@ test('a healthy POSIX install is complete without misc/', () => {
 // every tarball stages orchestrator/, so there is no download that yields a componentless POSIX
 // install - "all missing" on Unix is damage, not a deliberate single-file install.
 test('a POSIX install missing orchestrator/ is damage, not a bare binary', () => {
-  const root = mkdtempSync(join(tmpdir(), 'ah-posix-broken-'))
+  const root = scratchRoot()
   try {
     put(root, 'agenthydra', 'exe')
     expect(missingComponents(root, 'linux')).toEqual(['orchestrator'])

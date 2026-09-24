@@ -73,5 +73,21 @@ try {
 } finally {
   child.kill()
   await Promise.race([child.exited, Bun.sleep(5_000)])
-  rmSync(scratch, { recursive: true, force: true })
+  // ⛔ CLEANING UP MUST NOT FAIL THE SMOKE (measured 2026-09-15 on Windows: every check above
+  // printed its tick and the run still exited 1). A killed process keeps its cwd and its open
+  // files for a moment after `exited` resolves on Windows, so the `rm` lands on EBUSY - which
+  // is a temp directory nobody will miss, reported as "this release build is broken". Retry
+  // briefly, then say what was left behind and let the verdict stand on the checks.
+  let left: unknown = null
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      rmSync(scratch, { recursive: true, force: true })
+      left = null
+      break
+    } catch (err) {
+      left = err
+      await Bun.sleep(200)
+    }
+  }
+  if (left) console.warn(`release smoke: could not remove ${scratch} (${left}); leaving it`)
 }

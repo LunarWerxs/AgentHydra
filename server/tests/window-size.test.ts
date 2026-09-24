@@ -6,7 +6,7 @@
 // (web/src/lib/window-size-hint.ts). These tests pin the daemon's halves: the hint format,
 // the profile reader, and windowSizeHintFor's remembered/first-run/maximized decision.
 
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,9 +20,14 @@ import {
 const DASH = 'http://localhost:7787/'
 const INITIAL = { width: 1060, height: 800 }
 
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it,
+// and this is the outcome-independent backstop even where a test's own try/finally is not.
+const ROOT = mkdtempSync(join(tmpdir(), 'cc-winsize-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
 /** A scratch profile whose Preferences hold the given app_window_placement dict. */
 function profileWith(placements: unknown): string {
-  const dir = mkdtempSync(join(tmpdir(), 'cc-winsize-'))
+  const dir = mkdtempSync(join(ROOT, 'cc-winsize-'))
   mkdirSync(join(dir, 'Default'), { recursive: true })
   writeFileSync(
     join(dir, 'Default', 'Preferences'),
@@ -82,7 +87,7 @@ test("rememberedPlacement carries Chromium's maximized flag (restore bounds)", (
 })
 
 test('windowSizeHintFor: remembered beats first-run, junk falls back, maximized sends NO hint', () => {
-  const fresh = mkdtempSync(join(tmpdir(), 'cc-winsize-'))
+  const fresh = mkdtempSync(join(ROOT, 'cc-winsize-'))
   try {
     expect(windowSizeHintFor(fresh, DASH, INITIAL)).toBe('1060x800')
   } finally {

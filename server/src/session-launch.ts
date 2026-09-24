@@ -33,9 +33,18 @@
 // never a secret, and is left for the OS temp cleaner (deleting it too early would race the
 // terminal still starting up).
 
-import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
-import { join, sep } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import {
   applyCarriedSettings,
   buildColdImportRecord,
@@ -46,10 +55,11 @@ import {
 import { GENERIC_CHAT_TITLE, isGenericChatTitle, PLUMBING_CHAT_TITLE } from './chat-title'
 import { resolveInstanceToken } from './core/accounts'
 import { getCliInstance } from './core/cli-instances'
-import { resolveLaunchBinary } from './core/paths'
+import { readLoginUuid } from './core/login-state'
+import { resolveLaunchBinary, staleLoginBackupDir } from './core/paths'
 import { allMigratedSettings, db, pruneMigratedSettings } from './db'
 import { findDesktopChat, invalidateSessionMetaCache } from './instance-sessions'
-import { samePathKey } from './path-key'
+import { isInsideDir, samePathKey } from './path-key'
 
 /**
  * One lineage, one continuation. A done-marked session (session_marks.done = 1) was handed off,
@@ -514,7 +524,23 @@ export async function archiveDesktopChat(
       // Already in the requested state: report the hit without rewriting the file, so a
       // periodic sweep is idempotent instead of churning every metadata file every pass.
       if (meta.isArchived === archived) {
-        hits.push({ profile, wasRunning: false, changed: false })
+        // ⛔ `changed:false` MEANS "THE FILE ALREADY SAID SO", NOT "THERE IS NOTHING LEFT TO DO"
+        // (2026-09-18). This branch used to hard-code `wasRunning: false`, and the archive route
+        // gates its in-app click on `changed && wasRunning` - so the moment the flag was already
+        // true, EVERY retry became a no-op that reported nothing running. That is precisely the
+        // state a failed click leaves behind: flag written, row STILL ON SCREEN, and from then on
+        // unfixable by the tool that is supposed to fix it. Measured on #13, where the first
+        // attempt's last-moment re-aim guard refused (a blank name off a kebab the app had just
+        // rebuilt, not a moved sidebar - see Manage-DesktopChat.ps1 ReAimVerdict) and the next
+        // two calls could no longer even try.
+        //
+        // The idempotence this branch exists for is about NOT REWRITING THE FILE, which it still
+        // does not. Liveness is a fact about the machine, so report the fact.
+        hits.push({
+          profile,
+          wasRunning: await isInstanceRunning(profile).catch(() => false),
+          changed: false,
+        })
         continue
       }
       meta.isArchived = archived
@@ -828,11 +854,18 @@ async function importSessionToDesktopUnclaimed(opts: {
   /** The source chat's settings (chat-settings-carry.ts), merged onto the record the app creates.
    *  Absent for an import that is not a migration. */
   carried?: CarriedSettings
+  /** Seam for tests; the default moves stale-login records into the backup dir. */
+  setAsideStale?: (instanceDir: string, sessionId: string) => SetAsideRecord[]
+  /** Seam for tests; the default is awaitChatRecord (the signed-in folder only). */
+  awaitVisible?: typeof awaitChatRecord
 }): Promise<{
   ok: boolean
   reason?: string
   titled?: boolean
   titleDurable?: boolean
+  /** Backup paths of this chat's records that sat under a previous login of the target profile
+   *  and were moved out of the store so the landing is the only record left there. */
+  staleLoginSetAside?: string[]
   /** True when no import was performed because the chat already renders in that instance. */
   alreadyRendered?: boolean
   /** True when this call did no work of its own because another import of the same session into
@@ -890,11 +923,19 @@ async function importSessionToDesktopUnclaimed(opts: {
   const binary = await resolveLaunchBinary()
   if (!binary) return { ok: false, reason: 'desktop-binary-not-found' }
   const argv = buildImportPlan(process.platform, binary, opts.instanceDir, opts.sessionId)
+  // A record of this chat under a PREVIOUS login of this profile is set aside first (see
+  // setAsideStaleLoginRecords): the stamps below find the record by walking every account folder,
+  // and must find the one the app is about to create, not the invisible twin.
+  const setAside = (opts.setAsideStale ?? setAsideStaleLoginRecords)(
+    opts.instanceDir,
+    opts.sessionId,
+  )
   try {
     // A GUI hand-off spawn: windowsHide deliberately absent (this file is exempt from the
     // console-window guard for exactly this class of spawn).
     Bun.spawn(argv, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
   } catch (err) {
+    restoreSetAsideRecords(setAside)
     return { ok: false, reason: err instanceof Error ? err.message : 'spawn-failed' }
   }
   const titled = await stampImportedChat(
@@ -905,6 +946,19 @@ async function importSessionToDesktopUnclaimed(opts: {
     undefined,
     opts.carried,
   )
+  // Nothing landed where the app looks: put the set-aside records back, so the chat is exactly
+  // where it was (hidden, flagged staleLogin, retryable) instead of recorded nowhere. NOT the
+  // moment the stamp's 20s wait ends: a target app busy with the previous chat of a bulk move
+  // regularly takes longer than that, and a record restored then sits beside the landing that
+  // arrives a few seconds later as a stale twin. The same 25s grace the /migrate route's own
+  // read-back gives is spent here first, and only when something was set aside.
+  if (
+    setAside.length &&
+    !(await (opts.awaitVisible ?? awaitChatRecord)(opts.instanceDir, opts.sessionId, {
+      deadlineMs: 25_000,
+    }))
+  )
+    restoreSetAsideRecords(setAside)
   // The stamp just written measurably LOSES to the running app (and the guard above means the
   // app is always running here): the app re-saves this chat's metadata from memory — where the
   // import handler put 'acceptEdits' — on its first boot, which erases the stamp from disk and
@@ -919,7 +973,12 @@ async function importSessionToDesktopUnclaimed(opts: {
   // from outside a running instance is a hint, not a fact, and reporting `titled: true` for it was
   // a false success. The durable channel is the app's OWN rename (the reviewer's session-management
   // tool); the title janitor is the slow fallback for instances that are closed or later restart.
-  return { ok: true, titled, titleDurable: !running }
+  return {
+    ok: true,
+    titled,
+    titleDurable: !running,
+    ...(setAside.length ? { staleLoginSetAside: setAside.map((m) => m.to) } : {}),
+  }
 }
 
 /**
@@ -1010,7 +1069,15 @@ export async function coldImportSessionToDesktop(opts: {
   findRendered?: (sessionId: string) => { archived: boolean; path: string } | null
   chooseLeaf?: (instanceDir: string) => string | null
   now?: () => number
-}): Promise<{ ok: boolean; reason?: string; path?: string; alreadyRendered?: boolean }> {
+  /** Seam for tests; the default moves stale-login records into the backup dir. */
+  setAsideStale?: (instanceDir: string, sessionId: string) => SetAsideRecord[]
+}): Promise<{
+  ok: boolean
+  reason?: string
+  path?: string
+  alreadyRendered?: boolean
+  staleLoginSetAside?: string[]
+}> {
   if (isGenericChatTitle(opts.title))
     return {
       ok: false,
@@ -1034,11 +1101,20 @@ export async function coldImportSessionToDesktop(opts: {
     : renderedInStore(opts.instanceDir, opts.sessionId)
   if (alreadyRendersIn(rendered, opts.instanceDir)) return { ok: true, alreadyRendered: true }
   const leaf = (opts.chooseLeaf ?? chooseStoreLeaf)(opts.instanceDir)
-  if (!leaf)
+  if (!leaf) {
+    const login = readLoginUuid(opts.instanceDir)
+    const store = join(opts.instanceDir, 'claude-code-sessions')
     return {
       ok: false,
-      reason: 'no-session-store: this instance has never signed in; open it once and sign in first',
+      // Two different refusals: a profile that never signed in, and one signed into an account
+      // the app has not made a chat folder for yet. The second must not be told to sign in -
+      // and must not be "helped" by writing into another account's folder, which the app hides.
+      reason:
+        login && existsSync(store)
+          ? `no-session-store: this instance is signed into ${login}, which has no chat folder yet; open the app once so it creates one (writing into another account's folder would land the chat where the app does not show it)`
+          : 'no-session-store: this instance has never signed in; open it once and sign in first',
     }
+  }
   const record = buildColdImportRecord(
     opts.sourceMeta,
     opts.sessionId,
@@ -1046,6 +1122,12 @@ export async function coldImportSessionToDesktop(opts: {
     (opts.now ?? Date.now)(),
   )
   const path = join(leaf, `local_${opts.sessionId}.json`)
+  // Same as the hot import: a record under a previous login of this profile leaves the store
+  // before the landing is written, and comes back if the write fails.
+  const setAside = (opts.setAsideStale ?? setAsideStaleLoginRecords)(
+    opts.instanceDir,
+    opts.sessionId,
+  )
   try {
     // Write beside, then rename: the app must never read a half-written record if it starts
     // mid-write, and a rename is atomic on the same volume.
@@ -1053,10 +1135,15 @@ export async function coldImportSessionToDesktop(opts: {
     writeFileSync(tmp, JSON.stringify(record))
     renameSync(tmp, path)
   } catch (err) {
+    restoreSetAsideRecords(setAside)
     return { ok: false, reason: err instanceof Error ? err.message : 'write-failed' }
   }
   invalidateSessionMetaCache()
-  return { ok: true, path }
+  return {
+    ok: true,
+    path,
+    ...(setAside.length ? { staleLoginSetAside: setAside.map((m) => m.to) } : {}),
+  }
 }
 
 /**
@@ -1268,13 +1355,67 @@ export async function reassertChatAutomation(
 }
 
 /**
- * THE DURABLE FIX for the zombie-twin leak (owner ask, 2026-09-01). After a migrate archives
- * the SOURCE chat's meta on disk, a RUNNING source app holds its chat list in memory and
- * re-saves isArchived=false within seconds - resurrecting a visible stale twin that then makes
- * the chat ambiguous to resolve. This is the archive-flag twin of reassertChatAutomation: a
- * bounded watcher that re-writes isArchived=true whenever the app flips it back, scoped to the
- * SOURCE dir only (never the fresh target import), until the app's next boot reads the store
- * and the flag sticks for good - or the caps below fire. Non-throwing; returns restore count.
+ * Live `reassertChatArchive` watchers, keyed by profile+session, so a DELIBERATE unarchive can
+ * call one off (see cancelChatArchiveReassert). Without this the watcher is unreachable once
+ * fired: it is started fire-and-forget from two routes and nothing holds its handle.
+ */
+const archiveReassertWatchers = new Map<string, { cancelled: boolean }>()
+
+/** The one spelling of the registry key, so a cancel cannot miss a watcher over path case. */
+function archiveReassertKey(instanceDir: string, sessionId: string): string {
+  return `${instanceDir.toLowerCase()}::${sessionId}`
+}
+
+/**
+ * STOP the archive watcher for one chat, and say whether one was actually running.
+ *
+ * ⛔ WHY THIS EXISTS (measured live 2026-09-18 on instance 56 / chat d9fc4886). The route already
+ * refuses to FIRE the watcher on an unarchive - but an archive fired minutes earlier leaves one
+ * running for ten minutes, and that watcher destroys every later unarchive within ~1.5s while the
+ * caller is told `ok:true, changed:true`. Three `archive_desktop_chat {archived:false}` calls AND a
+ * hand-written JSON flip were all reverted, with four matching daemon lines. The guard against
+ * firing was never the whole hole; the hole is that a live watcher outlives the intent that armed
+ * it. An unarchive is the owner contradicting that intent, so it must be able to call it off.
+ */
+export function cancelChatArchiveReassert(instanceDir: string, sessionId: string): boolean {
+  const handle = archiveReassertWatchers.get(archiveReassertKey(instanceDir, sessionId))
+  if (!handle || handle.cancelled) return false
+  handle.cancelled = true
+  return true
+}
+
+/** The watcher's resolved knobs, defaults applied once. */
+interface ArchiveReassertConfig {
+  windowMs: number
+  intervalMs: number
+  maxRestores: number
+  maxMisses: number
+  sleep: (ms: number) => Promise<void>
+  now: () => number
+  isAppRunning?: () => boolean
+}
+
+/** The per-watcher mutable accounting, handed to every tick. */
+interface ArchiveReassertState {
+  metaPath: string | null
+  restores: number
+  misses: number
+}
+
+/** What one tick of the watcher resolved to. */
+type ArchiveReassertTick = 'continue' | 'stop'
+
+/** THE DURABLE FIX for the zombie-twin leak (owner ask, 2026-09-01). After a migrate archives
+ *  the SOURCE chat's meta on disk, a RUNNING source app holds its chat list in memory and
+ *  re-saves isArchived=false within seconds - resurrecting a visible stale twin that then makes
+ *  the chat ambiguous to resolve. This is the archive-flag twin of reassertChatAutomation: a
+ *  bounded watcher that re-writes isArchived=true whenever the app flips it back, scoped to the
+ *  SOURCE dir only (never the fresh target import), until the app's next boot reads the store
+ *  and the flag sticks for good - or the caps below fire. Non-throwing; returns restore count.
+ *
+ * CANCELLABLE since 2026-09-18: it registers itself for the life of the watch and checks that
+ * registration every tick, so `cancelChatArchiveReassert` can end it the moment the owner
+ * unarchives. A watcher that cannot be called off is indistinguishable from a bug.
  */
 export async function reassertChatArchive(
   instanceDir: string,
@@ -1286,41 +1427,90 @@ export async function reassertChatArchive(
     maxMisses?: number
     sleep?: (ms: number) => Promise<void>
     now?: () => number
+    /** Report whether the app is up. Only used to keep the log line HONEST - see below. */
+    isAppRunning?: () => boolean
   },
 ): Promise<number> {
-  const windowMs = opts?.windowMs ?? 10 * 60_000
-  const intervalMs = opts?.intervalMs ?? 1_500
-  const maxRestores = opts?.maxRestores ?? 8
-  const maxMisses = opts?.maxMisses ?? 40
-  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
-  const now = opts?.now ?? Date.now
-  const deadline = now() + windowMs
-  let restores = 0
-  let misses = 0
-  let metaPath: string | null = null
-  while (now() < deadline && restores < maxRestores) {
-    await sleep(intervalMs)
-    try {
-      if (!metaPath || !existsSync(metaPath)) metaPath = findChatMetaPath(instanceDir, sessionId)
-      if (!metaPath) {
-        if (++misses >= maxMisses) return restores
-        continue
-      }
-      misses = 0
-      const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
-      if (meta.isArchived === true) continue
-      meta.isArchived = true
-      writeFileSync(metaPath, JSON.stringify(meta))
-      invalidateSessionMetaCache()
-      restores++
-      console.log(
-        `[agenthydra] re-asserted archived on ${sessionId} in ${instanceDir} (the app's re-save resurrected the twin)`,
-      )
-    } catch {
-      // a contended or half-written pass says nothing about the next tick
-    }
+  const config: ArchiveReassertConfig = {
+    windowMs: opts?.windowMs ?? 10 * 60_000,
+    intervalMs: opts?.intervalMs ?? 1_500,
+    maxRestores: opts?.maxRestores ?? 8,
+    maxMisses: opts?.maxMisses ?? 40,
+    sleep: opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
+    now: opts?.now ?? Date.now,
+    isAppRunning: opts?.isAppRunning,
   }
-  return restores
+  const deadline = config.now() + config.windowMs
+  const key = archiveReassertKey(instanceDir, sessionId)
+  // A second watcher for the same chat would race the first and double its restores; the newest
+  // intent wins, so stand the old one down rather than running both.
+  const prior = archiveReassertWatchers.get(key)
+  if (prior) prior.cancelled = true
+  const handle = { cancelled: false }
+  archiveReassertWatchers.set(key, handle)
+  const state: ArchiveReassertState = { metaPath: null, restores: 0, misses: 0 }
+  try {
+    while (config.now() < deadline && state.restores < config.maxRestores) {
+      await config.sleep(config.intervalMs)
+      if (handle.cancelled) return state.restores
+      try {
+        if (reassertChatArchiveTick(state, instanceDir, sessionId, config) === 'stop') break
+      } catch {
+        // a contended or half-written pass says nothing about the next tick
+      }
+    }
+  } finally {
+    // Only retract OUR OWN registration: a newer watcher may already own the key.
+    if (archiveReassertWatchers.get(key) === handle) archiveReassertWatchers.delete(key)
+  }
+  return state.restores
+}
+
+/**
+ * ONE tick of the archive watcher: find the chat's meta file if it is not already in hand,
+ * re-assert isArchived=true when the app flipped it back, and account for a miss. Throws when a
+ * file cannot be read or written - the caller's guard treats that as "says nothing about the
+ * next tick". 'stop' means the miss cap is reached and the watch should end.
+ */
+function reassertChatArchiveTick(
+  state: ArchiveReassertState,
+  instanceDir: string,
+  sessionId: string,
+  config: ArchiveReassertConfig,
+): ArchiveReassertTick {
+  if (!state.metaPath || !existsSync(state.metaPath))
+    state.metaPath = findChatMetaPath(instanceDir, sessionId)
+  if (!state.metaPath) {
+    state.misses++
+    return state.misses >= config.maxMisses ? 'stop' : 'continue'
+  }
+  state.misses = 0
+  const metaPath = state.metaPath
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+  if (meta.isArchived === true) return 'continue'
+  meta.isArchived = true
+  writeFileSync(metaPath, JSON.stringify(meta))
+  invalidateSessionMetaCache()
+  state.restores++
+  logArchiveReassert(sessionId, instanceDir, config)
+  return 'continue'
+}
+
+/** ⛔ DO NOT blame the app unconditionally. This line read "(the app's re-save resurrected the
+ *  twin)" on every restore, and on 2026-09-18 it printed that three times for a CLOSED app while
+ *  the thing it had actually reverted was the owner's own unarchive - sending the reader after an
+ *  imaginary Electron re-save. Name what is known. */
+function logArchiveReassert(
+  sessionId: string,
+  instanceDir: string,
+  config: ArchiveReassertConfig,
+): void {
+  const appUp = config.isAppRunning?.()
+  const because =
+    appUp === false
+      ? 'the app is NOT running, so this was an external write - if it was deliberate, cancel this watcher instead of fighting it'
+      : "the app's re-save resurrected the twin"
+  console.log(`[agenthydra] re-asserted archived on ${sessionId} in ${instanceDir} (${because})`)
 }
 
 /**
@@ -1538,8 +1728,13 @@ function findChatMetaPathInDir(dir: string, sessionId: string): string | null {
 export function findChatMetaPath(instanceDir: string, sessionId: string): string | null {
   // Cached index first: it already knows this file's path under either naming shape, and the
   // walk below re-reads every metadata file in the store when the filename does not match.
+  //
+  // ⛔ CONTAINED, NOT startsWith (review, 2026-09-17). A bare prefix test also accepts a
+  // SIBLING profile whose name merely begins the same way - and twenty profiles here carry
+  // near-duplicate leaf names ('pap3r rotate' / 'pap3r rotate2'), so a lookup scoped to one
+  // account could answer with the other account's file, and the caller archives it.
   const hit = findDesktopChat(sessionId)
-  if (hit?.path?.startsWith(instanceDir)) return hit.path
+  if (hit?.path && isInsideDir(hit.path, instanceDir)) return hit.path
   const store = join(instanceDir, 'claude-code-sessions')
   try {
     for (const org of readdirSync(store, { withFileTypes: true })) {
@@ -1557,6 +1752,135 @@ export function findChatMetaPath(instanceDir: string, sessionId: string): string
 }
 
 /**
+ * ⛔ ON DISK IS NOT ON SCREEN (2026-09-18). The app files a chat under
+ * `claude-code-sessions/<accountUuid>/<orgUuid>/` and renders ONLY the folder of the account the
+ * profile is signed into now (config.json `lastKnownAccountUuid`). {@link findChatMetaPath} walks
+ * every account folder, which is right for a WRITE that must reach a record wherever it sits, and
+ * wrong for the two questions a move asks: "is it already here?" and "did it land?". Asked that
+ * way, a record left under a previous login answered yes to both - #12, 2026-09-18: four chats
+ * moved in at 22:16Z vanished when the profile was re-logged into another account at 22:50Z, and
+ * every move of them answered "nothing to do: already lives here" while the owner could not see
+ * one of them. This is the lookup for those two questions.
+ *
+ * An unknown signed-in account (signed out, unreadable config) cannot say which folder the app
+ * renders, so it answers exactly as findChatMetaPath does rather than calling every chat hidden.
+ */
+export function findVisibleChatMetaPath(instanceDir: string, sessionId: string): string | null {
+  const login = readLoginUuid(instanceDir)?.toLowerCase()
+  if (!login) return findChatMetaPath(instanceDir, sessionId)
+  const account = join(instanceDir, 'claude-code-sessions', login)
+  const hit = findDesktopChat(sessionId)
+  if (hit?.path && isInsideDir(hit.path, account)) return hit.path
+  try {
+    for (const org of readdirSync(account, { withFileTypes: true })) {
+      if (!org.isDirectory()) continue
+      const found = findChatMetaPathInDir(join(account, org.name), sessionId)
+      if (found) return found
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+/**
+ * This session's records in `instanceDir`'s store that are filed under an account the profile is
+ * NOT signed into: on disk, invisible in the app. Empty when the signed-in account is unknown.
+ */
+export function staleLoginChatRecords(instanceDir: string, sessionId: string): string[] {
+  const login = readLoginUuid(instanceDir)?.toLowerCase()
+  if (!login) return []
+  const store = join(instanceDir, 'claude-code-sessions')
+  const out: string[] = []
+  let accounts: string[]
+  try {
+    accounts = readdirSync(store, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name.toLowerCase() !== login)
+      .map((d) => d.name)
+  } catch {
+    return out
+  }
+  for (const account of accounts) {
+    try {
+      for (const org of readdirSync(join(store, account), { withFileTypes: true })) {
+        if (!org.isDirectory()) continue
+        const found = findChatMetaPathInDir(join(store, account, org.name), sessionId)
+        if (found) out.push(found)
+      }
+    } catch {
+      // one unreadable account folder says nothing about the others
+    }
+  }
+  return out
+}
+
+/** One record moved out of a store by {@link setAsideStaleLoginRecords}: where it was, where it went. */
+export interface SetAsideRecord {
+  from: string
+  to: string
+}
+
+/** Move a file, falling back to copy + delete when the backup root is on another volume. */
+function moveFile(from: string, to: string): void {
+  mkdirSync(dirname(to), { recursive: true })
+  try {
+    renameSync(from, to)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'EXDEV') throw err
+    copyFileSync(from, to)
+    unlinkSync(from)
+  }
+}
+
+/**
+ * RE-HOME, STEP ONE: move this session's stale-login records (see {@link staleLoginChatRecords})
+ * out of the store into a timestamped backup, BEFORE an import lands the chat in the signed-in
+ * account's folder. Why set aside rather than leave: every write path here (title, automation
+ * stamp, carried settings, archive) finds a chat's record with findChatMetaPath, which walks every
+ * account folder, so a stale twin left in place is a second record those writes can hit instead of
+ * the one the app shows. This is the same step that brought #12's four chats back by hand on
+ * 2026-09-18, made part of the move. Nothing is deleted: {@link restoreSetAsideRecords} puts the
+ * records back when the landing does not verify.
+ */
+export function setAsideStaleLoginRecords(
+  instanceDir: string,
+  sessionId: string,
+  opts: { backupRoot?: string; now?: () => number } = {},
+): SetAsideRecord[] {
+  const store = join(instanceDir, 'claude-code-sessions')
+  const stamp = new Date((opts.now ?? Date.now)()).toISOString().replace(/[:.]/g, '-')
+  const root = join(opts.backupRoot ?? staleLoginBackupDir(), stamp, basename(instanceDir))
+  const moved: SetAsideRecord[] = []
+  for (const from of staleLoginChatRecords(instanceDir, sessionId)) {
+    const to = join(root, relative(store, from))
+    try {
+      moveFile(from, to)
+      moved.push({ from, to })
+    } catch {
+      // A record that will not move stays where it was: still hidden, still flagged staleLogin.
+    }
+  }
+  if (moved.length) invalidateSessionMetaCache()
+  return moved
+}
+
+/** Put set-aside records back where they were (only where nothing has taken their place). */
+export function restoreSetAsideRecords(moved: SetAsideRecord[]): number {
+  let restored = 0
+  for (const m of moved) {
+    if (existsSync(m.from) || !existsSync(m.to)) continue
+    try {
+      moveFile(m.to, m.from)
+      restored++
+    } catch {
+      // left in the backup, which is where the caller's report says it is
+    }
+  }
+  if (restored) invalidateSessionMetaCache()
+  return restored
+}
+
+/**
  * Does `instanceDir`'s OWN store hold a record for this session, and is it on screen? Read off
  * that store directly, never off the cross-profile index: the index keeps one preferred entry
  * per session id and prefers the newest file, so a chat that is live on two profiles reports
@@ -1568,7 +1892,9 @@ export function renderedInStore(
   instanceDir: string,
   sessionId: string,
 ): { archived: boolean; path: string } | null {
-  const path = findChatMetaPath(instanceDir, sessionId)
+  // The SIGNED-IN account's folder only: a record under a previous login is not on screen, and
+  // answering "already renders here" for it is what skipped the import that would have fixed it.
+  const path = findVisibleChatMetaPath(instanceDir, sessionId)
   if (!path) return null
   try {
     const meta = JSON.parse(readFileSync(path, 'utf8')) as { isArchived?: unknown }
@@ -1604,7 +1930,9 @@ export async function awaitChatRecord(
   const now = opts?.now ?? Date.now
   const deadline = now() + deadlineMs
   for (;;) {
-    const path = findChatMetaPath(instanceDir, sessionId)
+    // Landed means landed WHERE THE APP LOOKS: a stale-login twin already on disk would otherwise
+    // "verify" a landing that never happened.
+    const path = findVisibleChatMetaPath(instanceDir, sessionId)
     if (path) return path
     if (now() >= deadline) return null
     await sleep(intervalMs)

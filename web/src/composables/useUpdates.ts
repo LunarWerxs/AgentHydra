@@ -49,12 +49,14 @@ const latestVersion = computed(() => availability.value?.latestVersion ?? null)
  * dismissal that survives a restart is a dismissal you never see again — the dot would go quiet for
  * good on the first click and stop being a signal. Living only in memory means it clears itself
  * when the app is next opened, which is exactly the intended lifetime: "yes, I've seen it, stop
- * nagging me for now."
+ * nagging me for this session."
  *
  * It deliberately does NOT record WHICH version was dismissed. Availability is re-read hourly, so a
  * newer release arriving mid-session would otherwise have to fight a flag set for the previous one;
  * on the next launch the dot returns for whatever is current, which is the simpler promise.
  */
+// arkitect-allow: no-bandaids session-scoped by design, not a stopgap — restarting the app is the
+// intended and only reset point for the dismissal (see doc comment above).
 const updateDotDismissed = ref(false)
 
 /** What the header should actually draw. Separate from {@link updateAvailable} so the FACT (there

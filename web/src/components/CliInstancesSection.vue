@@ -30,6 +30,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.vue'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
+import CopyResetDate from '@/components/CopyResetDate.vue'
 import DeleteCliInstanceDialog from '@/components/DeleteCliInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
@@ -65,6 +66,7 @@ import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
+import { nameOverflowTitle, shortDisplayName } from '@/lib/instance-appearance'
 import { bindingWeeklyPct, usageReasonMessageKey } from '@/lib/usage'
 import {
   msUntilReset,
@@ -461,7 +463,7 @@ onUnmounted(stopPolling)
         >
           <Plus class="shrink-0" />
           <span
-            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ml-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ml-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
+            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
           >{{ $t('cliInstances.createInstance') }}</span>
         </Button>
       </div>
@@ -480,14 +482,14 @@ onUnmounted(stopPolling)
                 <ArrowDown v-else-if="indicatorFor('loggedIn') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('name')">
+            <TableHead class="w-44 cursor-pointer select-none" @click="toggleSort('name')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('cliInstances.colName') }}
                 <ArrowUp v-if="indicatorFor('name') === 'asc'" class="size-3" />
                 <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('account')">
+            <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('cliInstances.colAccount') }}
                 <ArrowUp v-if="indicatorFor('account') === 'asc'" class="size-3" />
@@ -505,15 +507,17 @@ onUnmounted(stopPolling)
                 <ArrowDown v-else-if="indicatorFor('configDir') === 'desc'" class="size-3" />
               </span>
             </TableHead>
+            <!-- Fixed widths, matching InstancesView and CodexInstancesSection — see the comment on
+                 the desktop table's quota headers for why all three tables pin these. -->
             <template v-else>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('session')">
+              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colSession') }}
                   <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
                   <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
                 </span>
               </TableHead>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('weekly')">
+              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colWeekly') }}
                   <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
@@ -523,7 +527,7 @@ onUnmounted(stopPolling)
             </template>
             <TableHead
               v-if="usageMode"
-              class="cursor-pointer select-none"
+              class="w-24 cursor-pointer select-none"
               @click="toggleSort('usageSession')"
             >
               <span class="inline-flex items-center gap-0.5">
@@ -532,14 +536,14 @@ onUnmounted(stopPolling)
                 <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('usage')">
+            <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('cliInstances.colUsage') }}
                 <ArrowUp v-if="indicatorFor('usage') === 'asc'" class="size-3" />
                 <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="text-right">{{ $t('cliInstances.colActions') }}</TableHead>
+            <TableHead class="text-end">{{ $t('cliInstances.colActions') }}</TableHead>
           </TableRow>
         </TableHeader>
         <!-- visibleRows, not unlinkedCliInstances: with the usage filter set to hide, this table can
@@ -607,7 +611,12 @@ onUnmounted(stopPolling)
                    that guarantee stops being obvious. -->
               <div class="flex items-center gap-1.5">
                 <InstanceNumber :num="inst.num" />
-                <span>{{ inst.name }}</span>
+                <!-- Capped to the column like the desktop table's name, with the full name on
+                     hover: these are names a person typed, so nothing stops one being a sentence,
+                     and table layout is auto — one long name widens this column and the three
+                     stacked tables stop lining up. Native title, not IconTooltip: this cell has no
+                     other hover to extend, and the row above it already reveals its path this way. -->
+                <span :title="nameOverflowTitle(inst.name)">{{ shortDisplayName(inst.name) }}</span>
               </div>
             </TableCell>
             <TableCell>
@@ -634,13 +643,14 @@ onUnmounted(stopPolling)
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
               <TableCell class="text-xs">
-                <UsageBar
-                  v-if="weeklyResetFor(inst)"
-                  :fill-pct="weeklyRemaining(inst)"
-                  :variant="weeklyWait(inst)"
-                  :label="weeklyResetFor(inst) ?? ''"
-                  :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
-                />
+                <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
+                  <UsageBar
+                    :fill-pct="weeklyRemaining(inst)"
+                    :variant="weeklyWait(inst)"
+                    :label="weeklyResetFor(inst) ?? ''"
+                    :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
+                  />
+                </CopyResetDate>
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
             </template>

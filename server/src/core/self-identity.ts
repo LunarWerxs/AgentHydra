@@ -529,31 +529,122 @@ async function checkProcessAncestrySignal(
  * everything cheaper has come up empty. That ordering matters because `check_my_usage` is
  * advertised as a ~300ms call an agent can make mid-task without thinking about it.
  */
+function defaultReadDirEntries(p: string): string[] | null {
+  try {
+    return readdirSync(p, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+  } catch {
+    return null
+  }
+}
+
+function defaultMtimeMs(p: string): number | null {
+  try {
+    return statSync(p).mtimeMs
+  } catch {
+    return null
+  }
+}
+
+/** Runs the env-signal checks in order, adding a matched clue or its ruled-out reason. */
+function checkEnvSignals(
+  env: Record<string, string | undefined>,
+  exists: (p: string) => boolean,
+  add: (clue: SelfIdentityClue) => void,
+  ruledOut: string[],
+): void {
+  for (const result of [
+    checkCodexHomeSignal(env),
+    checkClaudeConfigDirSignal(env),
+    checkExecPathSignal(env, exists),
+  ]) {
+    if (result.clue) add(result.clue)
+    else ruledOut.push(result.ruledOut)
+  }
+}
+
+/** Records the host-session-file signal, plus the note/storeConflict/staleHostSession
+ *  side-findings a human will want to see — never folded into the `exact` verdict. */
+function recordHostSessionSignal(
+  hostSignal: ReturnType<typeof checkHostSessionSignal>,
+  add: (clue: SelfIdentityClue) => void,
+  ruledOut: string[],
+): { disambiguated?: string; storeConflict?: string; staleHostSession?: string } {
+  if (hostSignal.clue) add(hostSignal.clue)
+  else ruledOut.push(hostSignal.ruledOut)
+  const disambiguated = hostSignal.note
+  if (disambiguated) ruledOut.push(disambiguated)
+  const storeConflict = hostSignal.storeConflict
+  if (storeConflict) ruledOut.push(storeConflict)
+  const staleHostSession = hostSignal.staleHostSession
+  if (staleHostSession) ruledOut.push(staleHostSession)
+  return { disambiguated, storeConflict, staleHostSession }
+}
+
+/** The process-ancestry stage only runs when nothing cheaper answered — it is the one step
+ *  that spawns a process, and paying ~300ms to confirm an env var already trusted is waste. */
+async function checkAncestryIfNeeded(
+  clues: SelfIdentityClue[],
+  deps: SelfIdentityDeps,
+  exists: (p: string) => boolean,
+  add: (clue: SelfIdentityClue) => void,
+  ruledOut: string[],
+): Promise<void> {
+  if (clues.length !== 0) {
+    ruledOut.push('process ancestry not walked (a cheaper signal already identified this process)')
+    return
+  }
+  const ancestrySignal = await checkProcessAncestrySignal(deps, exists)
+  if (ancestrySignal.clue) add(ancestrySignal.clue)
+  else ruledOut.push(ancestrySignal.ruledOut)
+}
+
+/** The fallback verdict once nothing named a credential store: the plain ~/.claude login by
+ *  elimination when we are demonstrably inside Claude Code, else fully unknown. */
+function fallbackVerdict(
+  env: Record<string, string | undefined>,
+  defaultCfg: () => string,
+  ruledOut: string[],
+): SelfIdentityDetection {
+  if (!(env.CLAUDECODE === '1' || env.CLAUDE_CODE_ENTRYPOINT)) {
+    return {
+      configDir: null,
+      kind: 'unknown',
+      method: null,
+      confidence: 'none',
+      clues: [],
+      ruledOut,
+      conflict: false,
+    }
+  }
+  const dir = defaultCfg()
+  return {
+    configDir: dir,
+    kind: 'default-login',
+    method: 'default-login',
+    confidence: 'assumed',
+    clues: [
+      {
+        method: 'default-login',
+        kind: 'default-login',
+        configDir: dir,
+        proof:
+          'no instance signal matched; falling back to the plain ~/.claude login by elimination',
+      },
+    ],
+    ruledOut,
+    conflict: false,
+  }
+}
+
 export async function detectSelfIdentity(
   deps: SelfIdentityDeps = {},
 ): Promise<SelfIdentityDetection> {
   const env = deps.env ?? (process.env as Record<string, string | undefined>)
   const exists = deps.exists ?? ((p: string) => existsSync(p))
-  const readDir =
-    deps.readDir ??
-    ((p: string) => {
-      try {
-        return readdirSync(p, { withFileTypes: true })
-          .filter((e) => e.isDirectory())
-          .map((e) => e.name)
-      } catch {
-        return null
-      }
-    })
-  const mtimeMs =
-    deps.mtimeMs ??
-    ((p: string) => {
-      try {
-        return statSync(p).mtimeMs
-      } catch {
-        return null
-      }
-    })
+  const readDir = deps.readDir ?? defaultReadDirEntries
+  const mtimeMs = deps.mtimeMs ?? defaultMtimeMs
   const rootOf = deps.instancesRoot ?? instancesRoot
   const defaultUdd = deps.defaultUserDataDir ?? claudeUserDataDir
   const defaultCfg = deps.defaultConfigDir ?? defaultClaudeConfigDir
@@ -563,14 +654,7 @@ export async function detectSelfIdentity(
   const add = (clue: SelfIdentityClue) => clues.push(clue)
 
   // --- 1-3. Env signals — CODEX_HOME / CLAUDE_CONFIG_DIR / CLAUDE_CODE_EXECPATH. ------------------
-  for (const result of [
-    checkCodexHomeSignal(env),
-    checkClaudeConfigDirSignal(env),
-    checkExecPathSignal(env, exists),
-  ]) {
-    if (result.clue) add(result.clue)
-    else ruledOut.push(result.ruledOut)
-  }
+  checkEnvSignals(env, exists, add, ruledOut)
 
   // --- 4. CLAUDE_CODE_HOST_SESSION_ID → the instance dir that holds this session's own file. -----
   const collectChatsFn = deps.collectChats ?? collectChats
@@ -583,30 +667,14 @@ export async function detectSelfIdentity(
     mtimeMs,
     collectChatsFn,
   )
-  if (hostSignal.clue) add(hostSignal.clue)
-  else ruledOut.push(hostSignal.ruledOut)
-  // A choice among equals is recorded where a human will read it, never folded into "exact".
-  const disambiguated = hostSignal.note
-  if (disambiguated) ruledOut.push(disambiguated)
-  // The chat store disagrees with this filename hit — never report that as `exact` (see
-  // storeConflict on SelfIdentityDetection).
-  const storeConflict = hostSignal.storeConflict
-  if (storeConflict) ruledOut.push(storeConflict)
-  // The host-session env is a frozen leftover pointing at a dead (archived) chat — never `exact`
-  // either (see staleHostSession on SelfIdentityDetection).
-  const staleHostSession = hostSignal.staleHostSession
-  if (staleHostSession) ruledOut.push(staleHostSession)
+  const { disambiguated, storeConflict, staleHostSession } = recordHostSessionSignal(
+    hostSignal,
+    add,
+    ruledOut,
+  )
 
   // --- 5. Process ancestry — the last resort, and the only one that survives a stripped env. -----
-  // Skipped entirely when something above already answered: it is the one step that spawns a
-  // process, and paying ~300ms to confirm an env var we already trust is waste.
-  if (clues.length === 0) {
-    const ancestrySignal = await checkProcessAncestrySignal(deps, exists)
-    if (ancestrySignal.clue) add(ancestrySignal.clue)
-    else ruledOut.push(ancestrySignal.ruledOut)
-  } else {
-    ruledOut.push('process ancestry not walked (a cheaper signal already identified this process)')
-  }
+  await checkAncestryIfNeeded(clues, deps, exists, add, ruledOut)
 
   // --- verdict -----------------------------------------------------------------------------------
   const winner = clues[0] ?? null
@@ -636,36 +704,7 @@ export async function detectSelfIdentity(
 
   // Nothing named a credential store. If we are demonstrably inside Claude Code, the default login
   // is the only remaining candidate — but that is an ASSUMPTION, and it is labelled as one.
-  if (env.CLAUDECODE === '1' || env.CLAUDE_CODE_ENTRYPOINT) {
-    const dir = defaultCfg()
-    return {
-      configDir: dir,
-      kind: 'default-login',
-      method: 'default-login',
-      confidence: 'assumed',
-      clues: [
-        {
-          method: 'default-login',
-          kind: 'default-login',
-          configDir: dir,
-          proof:
-            'no instance signal matched; falling back to the plain ~/.claude login by elimination',
-        },
-      ],
-      ruledOut,
-      conflict: false,
-    }
-  }
-
-  return {
-    configDir: null,
-    kind: 'unknown',
-    method: null,
-    confidence: 'none',
-    clues,
-    ruledOut,
-    conflict: false,
-  }
+  return fallbackVerdict(env, defaultCfg, ruledOut)
 }
 
 /** Ancestry via core/process.ts, imported lazily so the common (env-answered) path never loads the

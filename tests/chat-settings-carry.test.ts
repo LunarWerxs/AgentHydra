@@ -6,8 +6,8 @@
 // connector ids never cross accounts; a cold record is the source minus its account and its moment,
 // re-identified as an import; and the store leaf chosen is the account signed in NOW.
 
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -17,6 +17,20 @@ import {
   chooseStoreLeaf,
   pickCarriedSettings,
 } from '../server/src/chat-settings-carry'
+
+// A single root for every scratch dir this file creates: at most one mkdtempSync may root
+// directly in the OS temp dir per file, so every other scratch dir nests inside this one, and one
+// afterAll reaps all of them regardless of how a test ends.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-'))
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true })
+})
+let leafSeq = 0
+function leafRoot(name: string) {
+  const dir = join(ROOT, `${name}-${leafSeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
 
 const source = {
   sessionId: 'app-own-id-123',
@@ -54,6 +68,8 @@ test("pickCarriedSettings takes the person's settings and nothing else", () => {
     sessionSettings: { ultracode: true },
     alwaysAllowedReasons: ['x'],
     sessionPermissionUpdates: [{ tool: 'Bash' }],
+    cwd: 'C:\\repo',
+    originCwd: 'C:\\repo',
   })
   // permissionMode is the bypass stamp's, not ours; connector ids are the source account's.
   expect('permissionMode' in carried).toBe(false)
@@ -82,6 +98,27 @@ test('applyCarriedSettings writes over the target without touching what it does 
   expect(out.enabledMcpTools).toEqual(['srv-b:tool9'])
   // never mutates its input
   expect(target.sessionSettings).toEqual({ ultracode: false, somethingTargetSide: 1 })
+})
+
+// The measured failure, 2026-09-16: a chat moved to a RUNNING target landed in a scratch workspace
+// inside the account it left, because the app derives a resumed chat's folder from the transcript's
+// first cwd and that chat had opened without a project hours before it was given the repo. The
+// folder a person reads on the source record is the one that must follow the chat.
+test("the landed record takes the chat's real folder, not the app's guess", () => {
+  const landed = {
+    cliSessionId: 'abc-123',
+    permissionMode: 'bypassPermissions',
+    cwd: 'c:\\users\\me\\.claude-instances\\test9\\scratch-workspaces\\de69a9aa\\scratch-2026-09-16',
+    originCwd:
+      'c:\\users\\me\\.claude-instances\\test9\\scratch-workspaces\\de69a9aa\\scratch-2026-09-16',
+  }
+  const carried = pickCarriedSettings(source)
+  const out = applyCarriedSettings(landed, carried)
+  expect(out.cwd).toBe('C:\\repo')
+  expect(out.originCwd).toBe('C:\\repo')
+  // and the sweep keeps it there when the running app re-saves its own guess over the record
+  expect(carriedSettingsMatch(landed, carried)).toBe(false)
+  expect(carriedSettingsMatch(out, carried)).toBe(true)
 })
 
 test('carriedSettingsMatch is the sweep\'s "nothing to do"', () => {
@@ -128,7 +165,7 @@ test('buildColdImportRecord: the source minus its account and its moment, re-ide
 })
 
 test('chooseStoreLeaf picks the account signed in NOW, i.e. the leaf touched last', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-'))
+  const profile = leafRoot('now')
   const old = join(profile, 'claude-code-sessions', 'org-old', 'user-old')
   const cur = join(profile, 'claude-code-sessions', 'org-cur', 'user-cur')
   mkdirSync(old, { recursive: true })
@@ -145,21 +182,21 @@ test('chooseStoreLeaf picks the account signed in NOW, i.e. the leaf touched las
 })
 
 test('chooseStoreLeaf: an empty leaf still counts (a freshly signed-in profile has exactly that)', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-empty-'))
+  const profile = leafRoot('empty')
   const leaf = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(leaf, { recursive: true })
   expect(chooseStoreLeaf(profile)).toBe(leaf)
 })
 
 test('chooseStoreLeaf: a profile that never signed in has nowhere the app would look', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-none-'))
+  const profile = leafRoot('none')
   expect(chooseStoreLeaf(profile)).toBeNull()
   mkdirSync(join(profile, 'claude-code-sessions'), { recursive: true })
   expect(chooseStoreLeaf(profile)).toBeNull()
 })
 
 test('chooseStoreLeaf: records without lastActivityAt rank by file time', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-leaf-mtime-'))
+  const profile = leafRoot('mtime')
   const a = join(profile, 'claude-code-sessions', 'org-1', 'user-a')
   const b = join(profile, 'claude-code-sessions', 'org-1', 'user-b')
   mkdirSync(a, { recursive: true })

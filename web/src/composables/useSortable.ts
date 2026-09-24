@@ -2,7 +2,7 @@
 // Generic over the row type; each column declares its own accessor so callers don't need
 // to pre-shape their data. Kept tiny and dependency-free so it's easy to reuse on other
 // tables (Sessions/Queue) later, per PLAN.md §4.
-import { computed, ref } from 'vue'
+import { computed, type Ref, ref, type WritableComputedRef } from 'vue'
 
 export type SortDirection = 'asc' | 'desc' | null
 
@@ -14,14 +14,49 @@ export interface SortableColumn<Row> {
 }
 
 /**
+ * Where a table keeps its sort when it should outlive the component: two plain string refs, in the
+ * shape a persisted preference already has (see composables/useUiPrefs.ts). `''` means "no sort" in
+ * both, because a remembered value round-trips through storage as a string and `null` does not.
+ */
+export interface PersistedSort {
+  key: Ref<string>
+  direction: Ref<string>
+}
+
+/**
  * Click-to-sort state machine for a table. Cycles a column through
  * asc -> desc -> none (back to the original/unsorted `rows` order) on repeated clicks.
+ *
+ * Pass `persisted` to have the table remember its sort. A remembered key that no longer names a
+ * column (one was renamed or removed since it was saved), or a direction that is not asc/desc,
+ * reads as "unsorted" instead of leaving the table in a state no header can show or undo.
  */
-export function useSortable<Row>(rows: () => readonly Row[], columns: SortableColumn<Row>[]) {
-  const sortKey = ref<string | null>(null)
-  const sortDirection = ref<SortDirection>(null)
-
+export function useSortable<Row>(
+  rows: () => readonly Row[],
+  columns: SortableColumn<Row>[],
+  persisted?: PersistedSort,
+) {
   const columnsByKey = new Map(columns.map((c) => [c.key, c]))
+
+  const sortKey: Ref<string | null> | WritableComputedRef<string | null> = persisted
+    ? computed({
+        get: () => (columnsByKey.has(persisted.key.value) ? persisted.key.value : null),
+        set: (value) => {
+          persisted.key.value = value ?? ''
+        },
+      })
+    : ref<string | null>(null)
+  const sortDirection: Ref<SortDirection> | WritableComputedRef<SortDirection> = persisted
+    ? computed({
+        get: () => {
+          const value = persisted.direction.value
+          return sortKey.value && (value === 'asc' || value === 'desc') ? value : null
+        },
+        set: (value) => {
+          persisted.direction.value = value ?? ''
+        },
+      })
+    : ref<SortDirection>(null)
 
   function toggleSort(key: string) {
     if (!columnsByKey.has(key)) return
@@ -63,7 +98,13 @@ export function useSortable<Row>(rows: () => readonly Row[], columns: SortableCo
     if (!col) return source
     const copy = source.slice()
     copy.sort((a, b) => {
-      const cmp = compareValues(col.accessor(a), col.accessor(b))
+      const left = col.accessor(a)
+      const right = col.accessor(b)
+      // A missing value sorts LAST in both directions, as the column contract promises. Negating
+      // it with the rest put every never-launched or stopped row at the TOP of a descending sort,
+      // which is exactly the wrong end for "most recent first" or "biggest first".
+      if (left == null || right == null) return compareValues(left, right)
+      const cmp = compareValues(left, right)
       return dir === 'asc' ? cmp : -cmp
     })
     return copy

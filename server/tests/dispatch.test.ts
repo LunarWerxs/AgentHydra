@@ -1,10 +1,12 @@
-// Integration tests for the detached-dispatch pipeline (server/src/dispatch.ts + dispatch-runner.ts).
-// These drive the REAL flow with the fake `claude` stand-in (AGENTHYDRA_FAKE): dispatchItem writes
-// a spec, launches the detached runner (WMI on win32 / setsid on POSIX), which runs the fake CLI and
-// appends its stream-json to a per-run log; the daemon tails that log, records run_events, and
-// finalizes the DB row. Locks in complete / cancel / reattach, plus the property the whole detached
-// design exists for: the runner does NOT hang off the daemon, so quitting the app cannot take a run
-// with it (see 'the runner escapes...' below).
+// Tests for server/src/dispatch.ts. Headless dispatch is now permanently refused
+// (headlessRunsAllowed() in headless-policy.ts is a hardcoded false), so dispatchItem() never
+// spawns anything any more - the detached-runner pipeline this file used to drive end to end
+// (a spec write, a WMI/setsid-launched supervisor, a fake `claude` stand-in) is gone along with the
+// files that implemented it. What's left to test: the refusal law itself, and the reattach/finalize
+// machinery that still has a live job - finishing runs that were ALREADY dispatched (their log and
+// status files already on disk) before this ban took effect. Those tests write the on-disk log
+// files by hand, standing in for what a real run would have left behind; nothing here spawns a
+// process.
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -13,31 +15,15 @@ import { db } from '../src/db'
 import * as dispatch from '../src/dispatch'
 import { invalidateSessionMetaCache } from '../src/instance-sessions'
 
-// AGENTHYDRA_DB / AGENTHYDRA_HOME / AGENTHYDRA_RUN_LOG_DIR are isolated by the preload
-// (tests/setup.ts); AGENTHYDRA_FAKE is read at dispatch-CALL time, so setting it here (before any
-// dispatchItem call) makes buildArgv use the harmless fake `claude` stand-in.
-process.env.AGENTHYDRA_FAKE = '1'
-// THE PIPELINE TESTS NEED A PIPELINE. Since 2026-08-27 the dispatch chokepoint refuses every
-// headless run outright (owner law, see headless-policy.ts), which is the correct product
-// behaviour and would leave every test below asserting nothing but the refusal. So the escape
-// hatch is opened here, for the tests that exercise spec-writing, the detached runner, cancel,
-// reattach and rate-limit classification. The tests of the LAW ITSELF close it again, one by one,
-// so they can never pass just because this line exists.
-// The instance store the surface-purity guard searches, isolated by the preload (tests/setup.ts)
-// so this file's "does this session live in a desktop app?" checks see a world it controls
-// rather than the developer's real fleet.
+// AGENTHYDRA_DB / AGENTHYDRA_HOME / AGENTHYDRA_RUN_LOG_DIR / AGENTHYDRA_INSTANCES_ROOT are isolated
+// by the preload (tests/setup.ts). INSTANCES_ROOT is the instance store the no-headless tests below
+// write into, so their "does this session live in a desktop app?" setup sees a world the test
+// controls rather than the developer's real fleet.
 const INSTANCES_ROOT = process.env.AGENTHYDRA_INSTANCES_ROOT as string
 const RUN_LOG_DIR = process.env.AGENTHYDRA_RUN_LOG_DIR as string
-const dir = tmpdir() // a real cwd for the fake run; nothing is written to it
+const dir = tmpdir() // a real cwd for makeItem's queue rows; nothing is ever spawned into it
 
-// FAKE_SLEEP_MS is how the slow-run tests below keep a runner alive long enough to inspect or
-// cancel it, and `bun test` shares ONE process across every file. Each of those tests used to clear
-// it on its LAST line, which is the success path only: one failed assertion and the value survives
-// into unrelated tests, where the fake CLI (which reads `FAKE_SLEEP_MS ?? 120` at spawn time) is
-// suddenly an order of magnitude slower for no visible reason. Clearing it here means a red test
-// stays one red test instead of dragging its neighbours down with it.
 afterEach(() => {
-  delete process.env.FAKE_SLEEP_MS
   // See the seam's own comment in dispatch.ts: never let one test's override leak into the next.
   dispatch.__setCompletionEvidenceCheckForTests(null)
 })
@@ -224,14 +210,15 @@ test('an unknown failure (pid vanished, no exit code) is never auto-retried, and
   expect(events.some((e) => e.text.includes('will not be auto-retried'))).toBe(true)
 })
 
-// --- transient overload (529) vs the user's quota ---------------------------------------------
+// --- the transient-retry sweep's own gating (dispatchDueRetries) -------------------------------
 //
-// The incident (2026-07-16): a real run whose only two events were "session started" and
+// Background (2026-07-16): a real run whose only two events were "session started" and
 // "API Error: 529 Overloaded... usually temporary" was finalized status='rate_limited' — parked as
-// though the user's 5-hour window were spent. It wasn't; the same message went through from the
-// desktop app moments later, because a 529 clears in seconds. One pattern list covered both walls,
-// so the daemon could not tell them apart. These drive the real pipeline (fake CLI dying the way
-// the real one does, via FAKE_ERROR_MODE) and pin that they now finalize to different places.
+// though the user's 5-hour window were spent. It wasn't; a 529 clears in seconds and is a different
+// wall than the user's own quota (see classifyLimit in rate-limit-signal.ts, which is what actually
+// tells them apart at finalize() time). The tests below don't drive that classification - they pin
+// dispatchDueRetries' own gating in front of it: which due rows it will (or won't) hand to
+// dispatchItem at all, by boot-readiness, backoff, and retry_attempts alone.
 
 /** The attempt/backoff bookkeeping the retry sweep reads. */
 const _retryStateOf = (id: string) =>
@@ -426,8 +413,9 @@ test('a brand-new chat and an explicit allow_headless override are BOTH refused 
 
 test('nothing is spawned when a run is refused', () =>
   withHeadlessBanned(async () => {
-    // The refusal has to happen BEFORE the spec is written and the detached runner launched, or
-    // "refused" would only mean "killed slightly later", with a real child having briefly existed.
+    // dispatchItem() has no spawn code path left at all - the headless-policy refusal is the last
+    // statement in the function (see its doc comment in dispatch.ts). This pins that regression: no
+    // run-log file ever appears for a refused item.
     const item = makeItem({ new_chat: true })
     await dispatch.dispatchItem(item)
     expect(statusOf(item.id)?.status).toBe('failed')

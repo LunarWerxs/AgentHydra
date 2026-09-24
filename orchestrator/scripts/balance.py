@@ -40,6 +40,7 @@ import sys
 from datetime import datetime, timezone
 
 from lib import clilib, hydralib
+from lib import configlib
 
 # THE USAGE BANDS (owner, 2026-08-31): keep every account AT OR UNDER 85% on BOTH windows
 # (5-hour and weekly); 90% is the HARD GATE - an account caught past it gets its movable
@@ -47,10 +48,10 @@ from lib import clilib, hydralib
 # take migrations and simpler new work so paid capacity is not wasted - with plan-sized
 # leeway on how close to the target to fill, because 1% of a Max 20x is far more tokens
 # than 1% of Pro. The daemon's own shouldOffload still outranks a raw number.
-SOFT_TARGET_PCT = 85
-HARD_GATE_PCT = 90
+SOFT_TARGET_PCT = configlib.get("bands.soft_target_pct")
+HARD_GATE_PCT = configlib.get("bands.hard_gate_pct")
 # A usage reading older than this is STALE: shown, never planned on.
-FRESH_HOURS = 48
+FRESH_HOURS = configlib.get("bands.fresh_hours")
 
 _PLAN_WEIGHT = [("max 20", 3), ("max 5", 2), ("pro", 1)]
 # fill ceiling = SOFT_TARGET_PCT minus this per-plan leeway: how much margin to keep under

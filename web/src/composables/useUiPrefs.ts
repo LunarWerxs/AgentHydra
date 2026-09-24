@@ -65,6 +65,14 @@ const desktopOpen = useStorage('agenthydra.instances.desktopOpen', true)
 const cliOpen = useStorage('agenthydra.instances.cliOpen', true)
 const codexOpen = useStorage('agenthydra.instances.codexOpen', true)
 
+// --- Instances: how the desktop table is sorted ------------------------------------------------
+// Which column, and which way. The table used to forget its sort on every reload, which on a
+// long-lived tray window means every update, restart or stray F5 threw away the ordering someone
+// had chosen. Strings, with '' for "unsorted", so the value round-trips through the daemon's
+// flat string store untouched; useSortable turns a stale column name back into "unsorted".
+const desktopSortKey = useStorage('agenthydra.instances.desktopSortKey', '')
+const desktopSortDirection = useStorage('agenthydra.instances.desktopSortDirection', '')
+
 // --- Sessions: transcript verbosity, search case, sidebar width ---------------------------------
 
 /** Verbose mode: also show tool_use / tool_result events (off = responses only). */
@@ -116,6 +124,12 @@ registerSharedPref(APP_VIEW_KEY, storedView, APP_VIEWS)
 registerSharedPref('agenthydra.instances.desktopOpen', desktopOpen)
 registerSharedPref('agenthydra.instances.cliOpen', cliOpen)
 registerSharedPref('agenthydra.instances.codexOpen', codexOpen)
+registerSharedPref('agenthydra.instances.desktopSortKey', desktopSortKey)
+registerSharedPref('agenthydra.instances.desktopSortDirection', desktopSortDirection, [
+  '',
+  'asc',
+  'desc',
+])
 registerSharedPref('agenthydra.sessions.showTools', showTools)
 registerSharedPref('agenthydra.sessions.showThinking', showThinking)
 registerSharedPref('agenthydra.sessions.humanOnly', humanOnly)
@@ -133,6 +147,8 @@ export function useUiPrefs() {
     desktopOpen,
     cliOpen,
     codexOpen,
+    desktopSortKey,
+    desktopSortDirection,
     showTools,
     showThinking,
     humanOnly,

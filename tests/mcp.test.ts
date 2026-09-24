@@ -91,6 +91,8 @@ describe('tools/list', () => {
       'focus_codex_desktop_instance',
       'quit_codex_desktop_instance',
       'check_update',
+      'check_versions',
+      'sync_versions',
     ]) {
       expect(names).toContain(expected)
     }
@@ -128,6 +130,22 @@ describe('tools/call', () => {
     expect(payload[0]!.session_id).toBe('abc')
     expect(calls.length).toBe(1)
     expect(calls[0]!.url).toBe(`${daemonBase()}/api/sessions`)
+  })
+
+  test('check_versions reads GET /api/versions; sync_versions POSTs /api/versions/sync', async () => {
+    stubResponse = { flags: [] }
+    for (const name of ['check_versions', 'sync_versions']) {
+      await handleRpc(
+        { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: {} } },
+        ctx,
+      )
+    }
+    expect(calls.map((c) => c.url)).toEqual([
+      `${daemonBase()}/api/versions`,
+      `${daemonBase()}/api/versions/sync`,
+    ])
+    expect(calls[0]!.init?.method ?? 'GET').toBe('GET')
+    expect(calls[1]!.init?.method).toBe('POST')
   })
 
   test('list_sessions passes a limit query param', async () => {

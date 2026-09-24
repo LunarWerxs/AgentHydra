@@ -5,7 +5,7 @@
 // contributes NOTHING rather than throwing, and no adapter ever invents a token count, because none
 // of these tools records one.
 
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +16,7 @@ import {
 } from '../src/foreign-sessions'
 
 const root = mkdtempSync(join(tmpdir(), 'agenthydra-foreign-'))
+afterAll(() => rmSync(root, { recursive: true, force: true }))
 const write = (path: string, body: string) => {
   mkdirSync(join(path, '..'), { recursive: true })
   writeFileSync(path, body)

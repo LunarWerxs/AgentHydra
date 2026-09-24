@@ -32,6 +32,7 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import ClaudeNativeSettings from '@/components/ClaudeNativeSettings.vue'
 import ProviderRows from '@/components/ProviderRows.vue'
 import UsageRefreshRows from '@/components/UsageRefreshRows.vue'
 import { Badge } from '@/components/ui/badge'
@@ -1011,6 +1012,15 @@ defineExpose({ save })
       <ProviderRows />
     </SettingsGroup>
 
+    <SettingsGroup
+      :ref="(el: unknown) => setSectionEl('claude-native', el)"
+      :class="flashSection === 'claude-native' ? 'settings-flash' : ''"
+      :label="$t('settings.claudeNativeTitle')"
+      :description="$t('settings.claudeNativeHint')"
+    >
+      <ClaudeNativeSettings />
+    </SettingsGroup>
+
     <!-- MCP: the agent-facing half of the app. On by default, because the alternative was a
          documented command that only worked from a source checkout. -->
     <SettingsGroup :label="$t('settings.mcpTitle')" :description="$t('settings.mcpHint')">
@@ -1099,7 +1109,7 @@ defineExpose({ save })
             <template #control>
               <div class="flex items-center gap-1">
                 <Input
-                  class="h-7 w-16 text-right"
+                  class="h-7 w-16 text-end"
                   type="number"
                   min="0"
                   max="100"
@@ -1123,7 +1133,7 @@ defineExpose({ save })
             <template #control>
               <div class="flex items-center gap-1">
                 <Input
-                  class="h-7 w-16 text-right"
+                  class="h-7 w-16 text-end"
                   type="number"
                   min="0"
                   max="100"
@@ -1163,7 +1173,7 @@ defineExpose({ save })
                 <template #control>
                   <div class="flex items-center gap-1">
                     <Input
-                      class="h-7 w-16 text-right"
+                      class="h-7 w-16 text-end"
                       type="number"
                       min="1"
                       max="1440"
@@ -1181,7 +1191,7 @@ defineExpose({ save })
                 <template #control>
                   <div class="flex items-center gap-1">
                     <Input
-                      class="h-7 w-16 text-right"
+                      class="h-7 w-16 text-end"
                       type="number"
                       min="0"
                       max="200"
@@ -1239,7 +1249,7 @@ defineExpose({ save })
               <SettingsRow :icon="Cloud" :label="$t('notifications.smtpPort')">
                 <template #control>
                   <Input
-                    class="h-7 w-20 text-right"
+                    class="h-7 w-20 text-end"
                     type="number"
                     min="1"
                     max="65535"

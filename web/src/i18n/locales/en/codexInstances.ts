@@ -9,6 +9,12 @@ export default {
   colAccount: 'Account',
   colUsage: 'Usage',
   colPlan: 'Plan',
+  noSessionLimit:
+    'This account does not report a main five-hour limit. Separate model limits are listed below when available.',
+  moveDescription:
+    'Copy each active local chat into the destination account, keeping its conversation and working folder. Archive each original after its copy is verified. Archived chats stay on the source. This does not transfer cloud chats or start a new turn.',
+  moveCloseSource:
+    'Close the source Codex desktop and its CLI sessions before moving. You can keep the destination open; refresh or reopen it to see the moved chats.',
   colHome: 'CODEX_HOME',
   colActions: 'Actions',
   /** "x of y" for a heading whose table is showing fewer rows than it has — the filter is hiding
@@ -24,10 +30,17 @@ export default {
   desktopStopped: 'Desktop stopped',
   loggedIn: 'Logged in',
   loggedOut: 'Not logged in',
-  loggedInShort: 'signed in',
+  /** The account column's fallback when nothing is signed in. There is deliberately no "signed in"
+   *  twin: an account cell that HAS a name/address already says so, and the status dot's title
+   *  carries the long-form `loggedIn` for both states. */
   loggedOutShort: 'signed out',
-  openDesktop: 'Open desktop',
+  /** The row's PRIMARY button, so it reads exactly like the Claude desktop table's: one word, and
+   *  which surface it opens is already obvious from the table you are looking at. The kebab menu
+   *  keeps the long forms below, where several actions sit side by side and need telling apart. */
+  openDesktop: 'Open',
   focusDesktop: 'Focus',
+  /** The primary button when the desktop surface is switched off — matches the CLI table's. */
+  launch: 'Launch',
   quitDesktop: 'Quit desktop',
   launchCli: 'Launch CLI',
   moreActions: 'More actions',

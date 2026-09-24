@@ -130,15 +130,15 @@ describe('the other stores keyed to a deleted account', () => {
   const snapshot = (pct: number, at: string): UsageSnapshot => ({
     account: 'Account A',
     session: null,
-    weekAll: { pct, resets: 'Aug 9, 3:59am', resetsAt: '2026-08-09T03:59:00.000Z' },
+    weekAll: { pct, resets: 'Aug 9, 3:59am', resetsAt: '2024-08-09T03:59:00.000Z' },
     weekModel: null,
     capturedAt: at,
     source: 'api',
   })
 
   test('dropCachedUsage forgets the account’s reading and leaves every other key alone', () => {
-    setCachedUsage(`acct:${ACCOUNT_A}`, snapshot(42, '2026-08-01T00:00:00.000Z'))
-    setCachedUsage(`acct:${ACCOUNT_B}`, snapshot(7, '2026-08-01T00:00:00.000Z'))
+    setCachedUsage(`acct:${ACCOUNT_A}`, snapshot(42, '2024-08-01T00:00:00.000Z'))
+    setCachedUsage(`acct:${ACCOUNT_B}`, snapshot(7, '2024-08-01T00:00:00.000Z'))
 
     dropCachedUsage(`acct:${ACCOUNT_A}`)
 
@@ -148,9 +148,9 @@ describe('the other stores keyed to a deleted account', () => {
   })
 
   test('dropUsageHistory drops the whole series, not just the newest sample', () => {
-    recordUsageSample(`acct:${ACCOUNT_A}`, snapshot(10, '2026-08-01T00:00:00.000Z'))
-    recordUsageSample(`acct:${ACCOUNT_A}`, snapshot(20, '2026-08-01T01:00:00.000Z'))
-    recordUsageSample(`acct:${ACCOUNT_B}`, snapshot(30, '2026-08-01T01:00:00.000Z'))
+    recordUsageSample(`acct:${ACCOUNT_A}`, snapshot(10, '2024-08-01T00:00:00.000Z'))
+    recordUsageSample(`acct:${ACCOUNT_A}`, snapshot(20, '2024-08-01T01:00:00.000Z'))
+    recordUsageSample(`acct:${ACCOUNT_B}`, snapshot(30, '2024-08-01T01:00:00.000Z'))
     expect(usageSamples(`acct:${ACCOUNT_A}`)).toHaveLength(2)
 
     dropUsageHistory(`acct:${ACCOUNT_A}`)

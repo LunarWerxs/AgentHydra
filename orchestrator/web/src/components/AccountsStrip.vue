@@ -100,7 +100,7 @@ const verdictColor = computed(() => {
         <div
           v-for="(m, i) in data.moves"
           :key="`move-${i}`"
-          class="rounded-r-lg border-l-[3px] border-warning bg-muted/30 px-2.5 py-1.5 text-[13px]"
+          class="rounded-e-lg border-s-[3px] border-warning bg-muted/30 px-2.5 py-1.5 text-[13px]"
         >
           <b>MOVE</b> "{{ m.title }}" — {{ m.from.instance }} ({{ m.from.email ?? '?' }}, {{ m.from.bindingPct ?? '?' }}%)
           → <b>{{ m.to.instance }}</b> ({{ m.to.email }}, {{ m.to.bindingPct }}%)
@@ -111,7 +111,7 @@ const verdictColor = computed(() => {
         <div
           v-for="(c, i) in data.consoleStrays"
           :key="`stray-${i}`"
-          class="rounded-r-lg border-l-[3px] border-primary bg-muted/30 px-2.5 py-1.5 text-[13px]"
+          class="rounded-e-lg border-s-[3px] border-primary bg-muted/30 px-2.5 py-1.5 text-[13px]"
         >
           <b>LAND IN DESKTOP (required)</b> "{{ c.title }}" — {{ c.why }}
           <div v-if="c.command"><span class="cmd">{{ c.command }}</span></div>

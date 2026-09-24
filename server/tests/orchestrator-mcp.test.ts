@@ -69,12 +69,16 @@ describe('what each tool sends to the daemon', () => {
       script: 'migrate_chat',
       args: ['Odin', '--to', '3claude'],
       timeoutMs: 90_000,
+      // `background` gained an explicit false rather than being omitted (mcp.ts, 2026-09-09):
+      // a run's sync/async shape is a decision the route should read off the body, not infer
+      // from an absent key. Asserted, not loosened - the value is part of the contract.
+      async: false,
     })
   })
 
   test('orchestrator_run with no args and no timeout sends an empty argv and no deadline', async () => {
     await tool('orchestrator_run').run({ script: 'census' })
-    expect(calls[0]!.body).toEqual({ script: 'census', args: [] })
+    expect(calls[0]!.body).toEqual({ script: 'census', args: [], async: false })
   })
 
   test('orchestrator_run never lets a non-array args through as argv', async () => {
@@ -110,5 +114,86 @@ describe('what each tool sends to the daemon', () => {
       /action must be one of/,
     )
     expect(calls).toHaveLength(0)
+  })
+})
+
+// ⛔ A LONG BLOCKING RUN LOSES ITS OWN REPORT (2026-09-11). `sweep --all --yes` with
+// timeout_secs 1200 answered only "The operation timed out" while the sweep ran five minutes to
+// completion in the daemon - no stdout, no exit code, and no operationId to re-attach to, so a
+// finished verdict was unreachable. The detached path already existed; nobody could be expected to
+// know to ask for it the first time, so a declared-long run now detaches itself.
+describe('a run that will outlive the caller detaches instead of losing its report', () => {
+  test('a declared timeout past the ceiling is sent async, with the id and how to poll it', async () => {
+    const out = (await tool('orchestrator_run').run({
+      script: 'sweep',
+      args: ['--all', '--yes'],
+      timeout_secs: 1200,
+    })) as Record<string, unknown>
+    expect((calls[0]!.body as { async: boolean }).async).toBe(true)
+    expect(out.started).toBe(true)
+    expect(String(out.poll)).toContain('orchestrator_operation')
+    expect(String(out.note)).toContain('Detached automatically')
+  })
+
+  test('a short run still blocks, exactly as before', async () => {
+    const out = (await tool('orchestrator_run').run({
+      script: 'census',
+      timeout_secs: 60,
+    })) as Record<string, unknown>
+    expect((calls[0]!.body as { async: boolean }).async).toBe(false)
+    expect(out.started).toBeUndefined()
+    expect(out.poll).toBeUndefined()
+  })
+
+  test('an explicit background:false is a person choosing to wait, and is honoured', async () => {
+    const out = (await tool('orchestrator_run').run({
+      script: 'sweep',
+      timeout_secs: 3000,
+      background: false,
+    })) as Record<string, unknown>
+    expect((calls[0]!.body as { async: boolean }).async).toBe(false)
+    expect(out.poll).toBeUndefined()
+  })
+
+  test('an explicit background:true still says how to read the result', async () => {
+    const out = (await tool('orchestrator_run').run({
+      script: 'sweep',
+      background: true,
+    })) as Record<string, unknown>
+    expect((calls[0]!.body as { async: boolean }).async).toBe(true)
+    expect(String(out.poll)).toContain('orchestrator_operation')
+    expect(String(out.note)).toContain('Poll the id above')
+  })
+})
+
+// orchestrator_cancel: the stop half of the pair whose read half is orchestrator_operation. Added
+// 2026-09-13 after a 25-chat migrate_batch launched with the wrong scope could only be stopped by
+// finding the pid by hand and killing it - the daemon has had cancelOrchestratorOperation and its
+// route all along, and only the MCP surface was missing.
+describe('orchestrator_cancel stops a run that is still going', () => {
+  test('it is registered, and says outright that it is not an undo', () => {
+    const t = tool('orchestrator_cancel')
+    expect((t.inputSchema as { type: string }).type).toBe('object')
+    expect((t.inputSchema as { required: string[] }).required).toEqual(['id'])
+    expect(t.description).toContain('MUTATES')
+    expect(t.description).toContain('NOT AN UNDO')
+  })
+
+  test('it POSTs the cancel route for that id, and encodes it', async () => {
+    await tool('orchestrator_cancel').run({ id: 'op 1/2' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.method).toBe('POST')
+    expect(calls[0]!.url).toMatch(/\/api\/orchestrator\/operations\/op%201%2F2\/cancel$/)
+  })
+
+  test('a blank id is refused here rather than POSTed as a cancel of nothing', async () => {
+    const out = (await tool('orchestrator_cancel').run({ id: '   ' })) as Record<string, unknown>
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('id is required')
+    expect(calls).toHaveLength(0)
+  })
+
+  test('orchestrator_operation no longer claims nothing can cancel a run', () => {
+    expect(tool('orchestrator_operation').description).toContain('orchestrator_cancel')
   })
 })

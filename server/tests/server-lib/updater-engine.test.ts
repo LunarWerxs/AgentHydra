@@ -89,14 +89,21 @@ function failableCmd(logPath: string, label: string, failFlag: string): string[]
 
 /** A `bun -e` step that logs, then exits non-zero on calls whose 1-based call number is in
  *  `failOnCalls` (call count persisted in `countFile`, which — unlike the git-tracked tree —
- *  survives a `git reset --hard`). */
-function failsOnCallsCmd(logPath: string, label: string, countFile: string, failOnCalls: number[]): string[] {
+ *  survives a `git reset --hard`). `stderr` may be multiline, to stand in for a real runner's
+ *  output where the first line is the echoed command and the reason is further down. */
+function failsOnCallsCmd(
+  logPath: string,
+  label: string,
+  countFile: string,
+  failOnCalls: number[],
+  stderr = "boom",
+): string[] {
   const script = [
     `const fs = require("fs")`,
     `const n = (fs.existsSync(${JSON.stringify(countFile)}) ? Number(fs.readFileSync(${JSON.stringify(countFile)}, "utf8")) : 0) + 1`,
     `fs.writeFileSync(${JSON.stringify(countFile)}, String(n))`,
     `fs.appendFileSync(${JSON.stringify(logPath)}, ${JSON.stringify(label)} + "\\n")`,
-    `if (${JSON.stringify(failOnCalls)}.includes(n)) { console.error("boom"); process.exit(1); }`,
+    `if (${JSON.stringify(failOnCalls)}.includes(n)) { console.error(${JSON.stringify(stderr)}); process.exit(1); }`,
   ].join("; ");
   return [process.execPath, "-e", script];
 }
@@ -157,7 +164,17 @@ test("applyUpdate rolls back the checkout when build fails after the code swap",
   // reinstall pass), so this test isolates a clean rollback from the reinstall-also-fails case.
   const updater = updaterFor(local, loggingCmd(log, "install"), failsOnCallsCmd(log, "build", buildCount, [1]));
 
-  await expect(updater.applyUpdate()).rejects.toThrow("boom; rolled back to the previous version");
+  const failure = (await updater.applyUpdate().then(
+    () => null,
+    (e: unknown) => e,
+  )) as (Error & { output?: string[] }) | null;
+  expect(failure?.message).toContain("boom; rolled back to the previous version");
+  // The transcript rides on the rejection (RepoYeti issue #24): the pull, the failed build with its
+  // stderr, and the rollback steps, in order. Before, it only ever reached a caller on success.
+  const transcript = (failure?.output ?? []).join("\n");
+  expect(transcript).toContain("git pull --ff-only");
+  expect(transcript).toContain("boom");
+  expect(transcript).toContain("git reset --hard");
 
   // Checkout state, not just the log message: HEAD is back at the pre-update commit, the
   // pulled-in file change is gone, and the tree is clean (no half-applied swap left behind).
@@ -171,6 +188,41 @@ test("applyUpdate rolls back the checkout when build fails after the code swap",
   const status = await updater.checkForUpdate();
   expect(status.currentCommit).toBe(preUpdateCommit);
   expect(status.dirty).toBe(false);
+}, 30_000); // real git+install+build — see the happy-path test's note on the widened timeout.
+
+test("a failed build reports the underlying error, not the command line the runner echoed", async () => {
+  const remote = await remoteRepo();
+  const local = await cloneRepo(remote);
+  await advanceRemote(remote, "0.2.0");
+
+  const scratch = scratchDir("ue-scratch-");
+  const log = join(scratch, "steps.log");
+  const buildCount = join(scratch, "build.count");
+  // Exactly the shape reported in RepoYeti issue #24: `bun run build` opens by ECHOING the script
+  // it is about to run, so the reason the build failed is several lines down. Taking stderr line 1
+  // showed the user the command and dropped the cause; the dashboard has no other copy to fall back
+  // on, because `output` is only returned on the success path.
+  const buildStderr = [
+    "$ node scripts/i18n-check.mjs && vue-tsc -b && vite build --outDir dist-next",
+    "",
+    "vite v5.4.11 building for production...",
+    'Failed to resolve import "./button-variants" from "src/components/ui/button/index.ts". Does the file exist?',
+  ].join("\n");
+  // Build fails on the forward pass only, so this isolates the message from the reinstall-also-failed case.
+  const updater = updaterFor(
+    local,
+    loggingCmd(log, "install"),
+    failsOnCallsCmd(log, "build", buildCount, [1], buildStderr),
+  );
+
+  const message = await updater.applyUpdate().then(
+    () => "applyUpdate unexpectedly succeeded",
+    (e: unknown) => (e instanceof Error ? e.message : String(e)),
+  );
+
+  expect(message).toContain('Failed to resolve import "./button-variants"');
+  expect(message).not.toContain("node scripts/i18n-check.mjs");
+  expect(message).toContain("rolled back to the previous version");
 }, 30_000); // real git+install+build — see the happy-path test's note on the widened timeout.
 
 test("rollback message distinguishes a clean revert from a revert whose reinstall also fails", async () => {
@@ -316,7 +368,12 @@ test("a diverged checkout is reported as an update that cannot fast-forward, and
   await expect(updater.applyUpdate()).rejects.toThrow(/diverged/);
   expect((await $`git -C ${local} rev-parse HEAD`.text()).trim()).toBe(headBefore);
   expect(existsSync(logPath)).toBe(false); // install/build never ran
-});
+  // real git — same widened timeout every spawning test in this file carries. ⛔ These last two
+  // tests shipped without it (2026-09-11): the kit has no repo-wide `bun test --timeout`, so the
+  // omission was invisible here and turned DevWebUI's "subprocess tests must set an explicit
+  // timeout" guardrail red the moment a sync carried them downstream. The kit is less strict than
+  // its consumers, and that asymmetry is exactly what sync.mjs warns about.
+}, 30_000);
 
 test("a local branch with no remote counterpart follows the remote's HEAD branch, and apply pulls THAT branch", async () => {
   const remote = await remoteRepo();
@@ -337,4 +394,4 @@ test("a local branch with no remote counterpart follows the remote's HEAD branch
   expect((await $`git -C ${local} rev-parse HEAD`.text()).trim()).toBe(remoteHead);
   // Line endings normalised: a Windows clone with core.autocrlf checks the marker out as CRLF.
   expect(readFileSync(join(local, "marker.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("0.3.0\n");
-});
+}, 30_000); // real git+install+build — see the note on the test above.

@@ -50,12 +50,12 @@ import sys
 
 import archive_chat
 import automation_chat
-from lib import armlib, clilib
+from lib import armlib, clilib, configlib
 from lib import clilib
 from lib import hydralib
 import migrate_chat
 
-DEFAULT_MAX_PER_LANE = 5
+DEFAULT_MAX_PER_LANE = configlib.get("lanes.max_per_lane")
 
 
 def build_batch(allow_pending: bool, max_per_lane: int,
@@ -107,6 +107,17 @@ def build_batch(allow_pending: bool, max_per_lane: int,
     moves = [{"sessionId": m["sessionId"], "title": m["title"], "to": m["to"]["instance"],
               "why": m["why"], "argv": [m["sessionId"], "--to", m["to"]["instance"], "--stop-idle"]}
              for m in bal["moves"] if m["sessionId"] not in held_ids]
+    # ⛔ A SESSION THAT IS NOT A CLAUDE CHAT CAN NEVER BE LANDED IN THE DESKTOP (found
+    # 2026-09-17). Since 0.42.0 the daemon surfaces zswarm jobs, OpenCode sessions and DSH
+    # sessions as sessions too - a good thing everywhere else, and wrong here. Measured that
+    # day: of 113 "console strays" the land lane wanted, 67 were job.json / opencode.db /
+    # session.v3.jsonl.zstd records, so the lane carried 99 over its cap and would have spent
+    # passes, forever, on rows no actuator can act on, with the 46 real chats queued behind
+    # them. The gate already knows - it refuses them with "unsupported transcript format" -
+    # so the lane asks the gate instead of trying and failing on the clock.
+    not_claude = {ch["sessionId"] for ch in plan["chats"]
+                  if ch["decision"]["kind"] == "cannot"
+                  and "unsupported transcript format" in (ch["decision"]["detail"] or "")}
     # Owner mandate: EVERY console stray gets landed, whatever its state - then dispositioned
     # in the desktop (archive on a later sweep, resume note, or an answer). A HELD stray is
     # the one exception: the hold is the owner's word too, and it wins.
@@ -114,7 +125,8 @@ def build_batch(allow_pending: bool, max_per_lane: int,
               "to": c["to"]["instance"] if c.get("to") else None,
               "argv": [c["sessionId"], "--to", c["to"]["instance"], "--stop-idle"] if c.get("to") else None}
              for c in bal["consoleStrays"]
-             if c["sessionId"] not in held_ids and c.get("kind") != "on-hold"]
+             if c["sessionId"] not in held_ids and c.get("kind") != "on-hold"
+             and c["sessionId"] not in not_claude]
 
     def cap(lane):
         return {"rows": lane[:max_per_lane], "overCap": max(0, len(lane) - max_per_lane)}
@@ -140,6 +152,11 @@ def build_batch(allow_pending: bool, max_per_lane: int,
             "deliver": cap(deliveries),
         },
         "deliverySkipped": delivery_plan["skipped"],
+        # NAMED, NOT SILENTLY DROPPED. A lane that quietly shrinks is a lane nobody can audit:
+        # this is how many "console strays" were excluded because they are not Claude chats at
+        # all, and the count is what tells you whether the land lane's backlog is real work or
+        # someone else's session records.
+        "landNotClaude": len(not_claude & {c["sessionId"] for c in bal["consoleStrays"]}),
         "onHold": on_hold,  # a person's hands-off switch - never in any lane
         "judgmentQueue": judgment,  # THE AI'S - the sweep never touches these
     }
@@ -154,7 +171,7 @@ def build_batch(allow_pending: bool, max_per_lane: int,
 # this pass rather than burning through every remaining row on a cause retrying will not
 # clear. A different signature - or an ok row, including deferred/held, which are not
 # failures - resets the streak; the breaker never fires across mixed causes.
-DEFAULT_BREAKER_THRESHOLD = 3
+DEFAULT_BREAKER_THRESHOLD = configlib.get("lanes.breaker_threshold")
 
 
 def _outcome_word(code: int, deferred: bool, held: bool) -> str:
@@ -242,6 +259,10 @@ def render(batch: dict, executed: dict | None, acting_lanes: list[str],
         L.append(f"{label}: {len(rows)} act(s) {mode}" + (f" (+{over} over the per-run cap)" if over else ""))
         for r in rows:
             L.append(f"  - {r['title']}" + (f"  -> {r['to']}" if r.get("to") else ""))
+    if batch.get("landNotClaude"):
+        L.append(f"  ({batch['landNotClaude']} 'console stray(s)' excluded - they are zswarm "
+                 "jobs / OpenCode / DSH sessions, not Claude chats, and no actuator can land "
+                 "one. They are visible in the fleet; they are not work.)")
     if batch.get("onHold"):
         L.append(f"{len(batch['onHold'])} chat(s) ON HOLD - untouched by every lane, by your own word:")
         for h in batch["onHold"]:
@@ -276,17 +297,38 @@ def render(batch: dict, executed: dict | None, acting_lanes: list[str],
     return "\n".join(L)
 
 
+LANE_FLAGS = (("archive", "--archive", "lanes.archive"),
+              ("moves", "--moves", "lanes.moves"),
+              ("landConsole", "--land-console", "lanes.land_console"),
+              ("deliver", "--deliver", "lanes.deliver"))
+
+
 def parse_lanes(argv: list[str]) -> list[str]:
-    """Which acting lanes this invocation asked for, in the sweep's fixed order."""
-    lanes = []
-    if "--archive" in argv or "--all" in argv:
-        lanes.append("archive")
-    if "--moves" in argv or "--all" in argv:
-        lanes.append("moves")
-    if "--land-console" in argv or "--all" in argv:
-        lanes.append("landConsole")
-    if "--deliver" in argv or "--all" in argv:
-        lanes.append("deliver")
+    """Which acting lanes this invocation asked for, in the sweep's fixed order.
+
+    PRECEDENCE (2026-09-17, the policy file): a lane NAMED on the command line always runs -
+    that is a person's own word and a config file must never overrule one. `--all` means
+    "every lane my policy has switched on", so turning a lane off in the policy is how you
+    change what the scheduled, unattended pass does without editing anything.
+
+    The one exception is archive.enabled, the fleet-wide master switch that even --force does
+    not lift: with it OFF the archive lane is dropped even when named, because archive_chat
+    would refuse every row, and three identical refusals trip the shared-cause breaker and
+    file an incident for a decision the owner made on purpose (review, 2026-09-17)."""
+    lanes, off = [], []
+    for lane, flag, key in LANE_FLAGS:
+        if flag in argv:
+            lanes.append(lane)
+        elif "--all" in argv:
+            (lanes if configlib.get(key) else off).append(lane)
+    if off:
+        print(f"(policy: lane(s) {', '.join(off)} are switched OFF - `orch.py policy --list "
+              "lanes` to change that, or name the lane explicitly to run it once.)")
+    if "archive" in lanes and not configlib.get("archive.enabled"):
+        lanes.remove("archive")
+        print("(policy: archiving is switched OFF fleet-wide (archive.enabled) - the archive "
+              "lane does not run, even when named. `orch.py policy --set archive.enabled=on` "
+              "turns it back on.)")
     return lanes
 
 
@@ -350,8 +392,12 @@ def run_acting_lanes(batch: dict, lanes: list[str],
     """Executes the requested lanes, then the naming and doctrine passes that always
     follow an acting sweep (naming only when landConsole actually ran)."""
     executed = execute(batch, lanes, breaker_threshold=breaker_threshold)
-    naming = run_naming_pass(batch, executed) if "landConsole" in lanes else None
-    doctrine = run_doctrine_pass()
+    # Both follow-on passes are policy knobs since 2026-09-17, default ON (today's
+    # behaviour). They are the two things an acting sweep did that nobody asked for per-run,
+    # so they are exactly what someone turning the fleet down wants to switch off first.
+    naming = (run_naming_pass(batch, executed)
+              if "landConsole" in lanes and configlib.get("lanes.naming_pass") else None)
+    doctrine = run_doctrine_pass() if configlib.get("lanes.doctrine_pass") else None
     return executed, naming, doctrine
 
 

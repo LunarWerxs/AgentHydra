@@ -26,8 +26,14 @@ chats are stamped too (a hold blocks work on a chat, never its configuration), a
 chats are left alone, and every row reports which stamp it was missing and whether its
 app's re-save can lag the result. The single-target path below applies the same rule.
 
-Usage: python automation_chat.py <title fragment | session id> [--force] [--json]
+Usage: python automation_chat.py <title fragment | session id> [--force] [--title "name"] [--json]
        python automation_chat.py --all [--yes] [--json]     # fleet-wide: plan, then enforce
+
+--title supplies the name to aim the picker at directly, skipping this script's own title
+lookup (the dossier, a disk read no fresher than list_chats' own). Pass it when a CALLER already
+verified the rendered name - migrate_batch's own remedy does, for exactly the reason title_for_row
+documents: a RUNNING app can erase a disk title in the gap between that verification and a
+by-hand run of this remedy.
 
 --force on ONE chat drives the target app's OWN permission picker (set_mode_via_app), which
 is the only thing that can set the mode of a chat in a RUNNING app - a disk stamp is invisible
@@ -46,11 +52,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
 
 from lib import clilib, holdlib
+from lib import configlib
 from lib import hydralib
 from lib import ledgerlib
 from lib import stamplib
@@ -93,6 +101,10 @@ REQUIRED_MODE = "Bypass permissions"  # the app's own label for bypassPermission
 # One picker attempt per chat per this long (the attempt selects the chat's row, which flips
 # the owner's view of that window); the lane itself runs every two minutes.
 MODE_RETRY_SECS = 10 * 60
+# How sure the rendered-name retry must be before it aims at a row the app named itself:
+# a clear score AND a clear gap to the runner-up (see best_rendered_alias).
+ALIAS_MIN_SCORE = 0.75
+ALIAS_MIN_MARGIN = 0.15
 # THE APP IS THE TRUTH FOR A RUNNING APP (owner, 2026-09-01: "I have a ton of chats set to
 # manual or accept edits, so it's clear you're not changing all of the chats"). A running app
 # holds every chat's mode in memory and never re-reads the file, so the disk stamp this lane
@@ -203,6 +215,83 @@ def _verify_text_for_row(row: dict, fleet: dict) -> str:
     return "|||".join(alts)
 
 
+def title_for_row(row: dict) -> str:
+    """The name the APP RENDERS, which is the only thing the picker can aim by.
+
+    ⛔ AN IMPORTED CHAT'S DISK META RECORD CARRIES NO TITLE (found 2026-09-09, still live
+    2026-09-10). The app derives a landed chat's display name from its transcript at render
+    time, so `meta["title"]` is None while the sidebar shows a perfectly good name. Every row
+    builder here reads that field, so `-Title ""` reached PowerShell and approve_prompt.ps1's
+    [ValidateNotNullOrEmpty] killed the whole pipeline with
+    `ParameterArgumentValidationErrorEmptyStringNotAllowed` - which reads like a permissions or
+    environment fault and is neither. The remedy `--force` prints for a `disk-only` landing
+    could therefore never work on the one population it exists to serve.
+
+    ⛔ THE DAEMON FALLBACK BELOW IS NOT A STRONGER SOURCE, JUST A SECOND DISK READ (corrected
+    2026-09-15, after a remedy invocation hit BOTH this row's empty disk title and an equally
+    empty fallback on the exact chat 307125f's rendered-title check exists for). hydralib.
+    resolve_one queries /api/chats/dossier, a fresh scan of the SAME meta.json list_chats
+    reads via /api/chats - not the app's live render state (name_chats.rendered_titles is the
+    only thing that asks the app itself, via the actuator's passive -List). So this fallback
+    only helps when the two reads land on opposite sides of a re-save race; it cannot recover a
+    title a running app has already erased on disk. The reliable fix is a CALLER that already
+    verified the real name passing it explicitly - see main()'s --title.
+    """
+    title = str(row.get("title") or "").strip()
+    if title:
+        return title
+    sid = str(row.get("sessionId") or "")
+    if not sid:
+        return ""
+    try:
+        return str((hydralib.resolve_one(sid) or {}).get("title") or "").strip()
+    except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError):
+        return ""
+
+
+_ROWS_MARK = ". Rows: "
+
+
+def rendered_rows(line: str) -> list[str]:
+    """The sidebar names the actuator says it CAN see right now, read out of its own
+    MATCH-failure refusal ("no sidebar row is named 'X' ... Rows: 'a' | 'b'"). Any other
+    line - a timing refusal, an ambiguity, a success - yields nothing, so a caller can only
+    ever act on rows the app actually rendered."""
+    if "no sidebar row is named" not in (line or "") or _ROWS_MARK not in line:
+        return []
+    tail = line.split(_ROWS_MARK, 1)[1]
+    return [m.group(1) for m in re.finditer(r"'([^']*)'", tail) if m.group(1).strip()]
+
+
+def best_rendered_alias(title: str, rows: list[str]) -> str | None:
+    """The ONE rendered row that is this chat under a different name, or None.
+
+    ⛔ THE APP RENAMES A LANDED CHAT UNDER US (live, 2026-09-11). migrate_batch moved six
+    chats; two came back `disk-only` because the picker aimed at the title the record
+    carried ('QuickDictate listening stops intermittently', 'Resume Stackspire project')
+    while the sidebar had already re-rendered them as 'QuickDictate' and 'Stackspire' - the
+    app derives a landed chat's display name from its transcript and re-saves it on its own
+    clock, so the disk title and the rendered name disagree for as long as that takes. The
+    refusal is honest ("a MATCH failure, not a timing one") and no amount of waiting fixes
+    it; automation_chat --force by hand fixed both on the first try minutes later, once the
+    record had caught up. That manual remedy is the defect: a move should not need it.
+
+    Scored in BOTH directions because either name may be the shorter one, and deliberately
+    refused unless ONE row stands clear: a rename is a near-certainty to recognise, never a
+    guess to make. Ambiguity keeps the original refusal, which is the honest answer."""
+    from migrate_chat import fuzzy_title_score  # local: migrate_chat imports this module too
+
+    scored = sorted(
+        ((max(fuzzy_title_score(r, title), fuzzy_title_score(title, r)), r) for r in rows),
+        key=lambda pair: pair[0], reverse=True,
+    )
+    if not scored or scored[0][0] < ALIAS_MIN_SCORE:
+        return None
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < ALIAS_MIN_MARGIN:
+        return None
+    return scored[0][1]
+
+
 def _actuator_args(row: dict, inst_dir: str, verify: str) -> list[str]:
     args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(MODE_ACTUATOR),
             "-Title", str(row.get("title") or ""), "-Instance", inst_dir,
@@ -295,10 +384,20 @@ def set_mode_via_app(row: dict, fleet: dict, force: bool = False) -> str:
         return "actuator missing"
 
     sid = str(row.get("sessionId") or "")
+    # THE NAME FIRST, AND NEVER AN EMPTY ONE (see title_for_row). An empty -Title is not a
+    # weaker attempt, it is a PowerShell parameter-validation crash that never reaches the
+    # picker at all - and it surfaces as an error message about argument validation, which
+    # sent a whole session's reader after an environment fault that did not exist.
+    title = title_for_row(row)
+    if not title:
+        return ("REFUSED: this chat has no name to aim at - its desktop record carries no title "
+                "and the daemon cannot supply the rendered one either, so the picker has nothing "
+                "to select. Nothing was driven; land or re-title the chat first.")
+    row = {**row, "title": title}
     retry = None if force else _mode_retry_status(sid)
     if retry is not None:
         return retry
-    ledgerlib.note("mode", sid, note=f"picker -> {REQUIRED_MODE} for '{row.get('title') or ''}'")
+    ledgerlib.note("mode", sid, note=f"picker -> {REQUIRED_MODE} for '{title}'")
 
     inst = hydralib.resolve_instance(fleet, str(row.get("instance") or "")) or {}
     inst_dir = str(inst.get("dir") or row.get("instance") or "")
@@ -311,8 +410,33 @@ def set_mode_via_app(row: dict, fleet: dict, force: bool = False) -> str:
     returncode, said = outcome
     said = _record_chip_lines(said, row)
     last = said[-1][:160] if said else f"exit {returncode}"
+    if returncode != 0:
+        # The app may simply be showing this chat under a name of its own (see
+        # best_rendered_alias). Aim once at that name before giving up, so a move never
+        # has to be finished by hand.
+        retried = _retry_under_rendered_name(row, inst_dir, verify, title, said)
+        if retried is not None:
+            returncode, last = retried
     _finalize_mode_attempt(sid, returncode, last)
     return last
+
+
+def _retry_under_rendered_name(row: dict, inst_dir: str, verify: str, title: str,
+                               said: list[str]) -> tuple[int, str] | None:
+    """One more press, aimed at the name the app itself rendered. Returns the retry's
+    (returncode, last line) or None when there was nothing to retry - an unambiguous
+    rename is the only case that qualifies, and the retry's own verdict stands on its own
+    (a failed retry reports the retry's words, never the first refusal's)."""
+    alias = best_rendered_alias(title, rendered_rows(said[-1] if said else ""))
+    if not alias or alias == title:
+        return None
+    outcome = _run_actuator(_actuator_args({**row, "title": alias}, inst_dir, verify), inst_dir)
+    if isinstance(outcome, str):
+        return None
+    returncode, retried = outcome
+    retried = _record_chip_lines(retried, row)
+    last = retried[-1][:160] if retried else f"exit {returncode}"
+    return returncode, f"{last} [the app renders this chat as '{alias}', not '{title}']"
 
 
 def _fetch_live_ids(fleet: dict) -> set:
@@ -329,7 +453,9 @@ def _maybe_ensure_allow_all(act: bool) -> dict:
     """THE ENGINE-SIDE HALF, programmatic and ungated (stamplib.ensure_allow_all): allow rules
     in the user settings pre-approve every tool in every mode, so a chat the app still runs
     as 'Accept edits' stops stalling on prompts without any window being touched."""
-    if act:
+    # THE ONE LANE THAT EDITS FILES OUTSIDE THE FLEET (your global Claude settings'
+    # allow-list and default mode). A knob since 2026-09-17, default ON = today's behaviour.
+    if act and configlib.get("doctrine.ensure_allow_all"):
         return stamplib.ensure_allow_all()
     return {"changed": False, "added": [], "rules": 0, "error": None}
 
@@ -451,7 +577,12 @@ def enforce_all(act: bool, as_json: bool, ui_ok: bool = False) -> int:
     # chats are precisely the ones he sits in and has to fix by hand. So they are stamped too,
     # and nothing else about them is touched.
     held = [r for r in rows if r["sessionId"] and holdlib.why_blocked(r["sessionId"])]
-    todo = list(rows)
+    # ...unless the owner says otherwise (doctrine.stamp_held_chats, default ON = the
+    # behaviour described just above). OFF means a HOLD puts a chat out of reach of EVERY
+    # lane including this one, which is what some people mean by "hold".
+    held_ids = {r["sessionId"] for r in held}
+    todo = (list(rows) if configlib.get("doctrine.stamp_held_chats")
+            else [r for r in rows if r["sessionId"] not in held_ids])
     settings = _maybe_ensure_allow_all(act)
     results = _stamp_rows(todo) if act else []
 
@@ -498,6 +629,76 @@ def _run_fleet_pass(argv: list[str], as_json: bool) -> int:
     return enforce_all(act="--yes" in argv, as_json=as_json, ui_ok=ui_ok)
 
 
+def _stamp_missing_meta_refusal(title, as_json: bool) -> int:
+    return out(
+        {
+            "ok": False,
+            "report": (
+                f"REFUSED (deterministic): '{title}' has no desktop meta record to stamp "
+                "(console-only, or the dossier gave no metaPath). Land it with "
+                "migrate_chat.py - the landing stamps it."
+            ),
+        },
+        as_json,
+        3,
+    )
+
+
+def _stamp_app_running(match: dict, fleet: dict) -> bool:
+    return any(
+        str(i.get("name", "")).lower() == str(match.get("instance", "")).lower()
+        and i.get("isRunning")
+        for i in fleet.get("instances", [])
+    )
+
+
+def _stamp_drive_picker(match: dict, fleet: dict, session_id: str, title, meta_path,
+                         app_running: bool, force: bool) -> tuple[str, bool]:
+    """⛔ --force ON ONE CHAT DRIVES THE APP'S OWN PICKER, because for a RUNNING app nothing
+    else can set the mode (set_mode_via_app). Without this the single-target path could only
+    ever write disk and then print a caveat saying so, which made it useless as the remedy
+    migrate_chat points at - the caller ran it, got exit 0, and the chat still opened on a
+    prompting mode. Gated on --force for the same reason the fleet pass gates its picker on
+    the icon: -Select flips what the owner is looking at, so it takes a by-hand act."""
+    drove_picker = bool(app_running and force)
+    if not drove_picker:
+        return "", False
+    via_app = set_mode_via_app(
+        {"sessionId": session_id, "title": title,
+         "instance": match.get("instance") or "", "metaPath": meta_path},
+        fleet, force=True)
+    return via_app, True
+
+
+def _stamp_caveat(app_running: bool, app_confirmed: bool, via_app: str, force: bool) -> str:
+    if not app_running:
+        return ""
+    if app_confirmed:
+        return f" APP-CONFIRMED via its own picker ({via_app})."
+    if force:
+        return (f" ⚠ its app is RUNNING and the picker did not confirm ({via_app}) - disk is "
+                "stamped, the live chat may still open on a prompting mode.")
+    return (" CAVEAT: its app is RUNNING, so the in-memory record can re-save over these until "
+            "the app next re-reads its store - disk is stamped, the live chat may lag. Pass "
+            "--force to drive the app's own picker, the only thing that sets a live chat.")
+
+
+def _stamp_field_line(label: str, already: bool, ok: bool, err) -> str:
+    if already:
+        return f"{label} already set"
+    if ok:
+        return f"{label} stamped"
+    return f"{label} FAILED ({str(err)[:120]})"
+
+
+def _stamp_exit_code(ok: bool, bypass_ok: bool, uc_ok: bool) -> int:
+    if ok:
+        return 0
+    if bypass_ok or uc_ok:
+        return 2
+    return 1
+
+
 def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = False) -> int:
     """The single-chat doctrine stamp (both halves, one disk write) plus the daemon's own
     primitive as a best-effort extra - the same shape as the fleet pass's `_stamp_rows`, for
@@ -507,18 +708,7 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
 
     meta_path = match.get("metaPath")
     if not match.get("instance") or not meta_path:
-        return out(
-            {
-                "ok": False,
-                "report": (
-                    f"REFUSED (deterministic): '{title}' has no desktop meta record to stamp "
-                    "(console-only, or the dossier gave no metaPath). Land it with "
-                    "migrate_chat.py - the landing stamps it."
-                ),
-            },
-            as_json,
-            3,
-        )
+        return _stamp_missing_meta_refusal(title, as_json)
 
     # (No icon gate here either - see the --all path: configuration runs autonomously.)
 
@@ -527,11 +717,7 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
     # below are CONFIGURATION, so a hold is reported, never a reason to refuse the stamp.
     hold_why = holdlib.why_blocked(session_id)
 
-    app_running = any(
-        str(i.get("name", "")).lower() == str(match.get("instance", "")).lower()
-        and i.get("isRunning")
-        for i in fleet.get("instances", [])
-    )
+    app_running = _stamp_app_running(match, fleet)
 
     ledgerlib.note("automation", session_id, note=f"stamp '{title}'")
 
@@ -555,34 +741,14 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
         pass
     got = {"error": got_disk.get("error") or "disk stamp did not verify"}
 
-    # ⛔ --force ON ONE CHAT DRIVES THE APP'S OWN PICKER, because for a RUNNING app nothing
-    # else can set the mode (set_mode_via_app). Without this the single-target path could only
-    # ever write disk and then print a caveat saying so, which made it useless as the remedy
-    # migrate_chat points at - the caller ran it, got exit 0, and the chat still opened on a
-    # prompting mode. Gated on --force for the same reason the fleet pass gates its picker on
-    # the icon: -Select flips what the owner is looking at, so it takes a by-hand act.
-    via_app = ""
-    drove_picker = bool(app_running and force)
-    if drove_picker:
-        via_app = set_mode_via_app(
-            {"sessionId": session_id, "title": title,
-             "instance": match.get("instance") or "", "metaPath": meta_path},
-            fleet, force=True)
+    via_app, drove_picker = _stamp_drive_picker(
+        match, fleet, session_id, title, meta_path, app_running, force)
     # If the picker ran, THIS run's line is the verdict (see picker_line_ok). Only fall back
     # to the ledger when no picker ran this time - there, "has it ever been confirmed" really
     # is the question, and the caveat below says the app is running and may have drifted.
     app_confirmed = picker_line_ok(via_app) if drove_picker else (session_id in load_confirmed())
 
-    caveat = (
-        (f" APP-CONFIRMED via its own picker ({via_app})." if app_confirmed else
-         (f" ⚠ its app is RUNNING and the picker did not confirm ({via_app}) - disk is "
-          "stamped, the live chat may still open on a prompting mode." if force else
-          " CAVEAT: its app is RUNNING, so the in-memory record can re-save over these until "
-          "the app next re-reads its store - disk is stamped, the live chat may lag. Pass "
-          "--force to drive the app's own picker, the only thing that sets a live chat."))
-        if app_running
-        else ""
-    )
+    caveat = _stamp_caveat(app_running, app_confirmed, via_app, force)
     held_note = (
         f" [HELD: {hold_why} - stamped anyway, a hold covers the chat's work, not its "
         "permission mode]"
@@ -593,9 +759,8 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
     # before we looked was not "stamped" by us (live smoke, 2026-09-01: the report claimed a
     # change the disk never saw).
     parts = [
-        "bypassPermissions " + ("already set" if uc["already"] else "stamped" if bypass_ok
-                                else f"FAILED ({str(got)[:120]})"),
-        "ultracode " + ("already set" if uc["already"] else "stamped" if uc_ok else f"FAILED ({uc['error']})"),
+        _stamp_field_line("bypassPermissions", uc["already"], bypass_ok, got),
+        _stamp_field_line("ultracode", uc["already"], uc_ok, uc["error"]),
     ]
     ok = bypass_ok and uc_ok
     if ok:
@@ -611,8 +776,26 @@ def _stamp_single_target(match: dict, fleet: dict, as_json: bool, force: bool = 
             "report": f"'{title}'{held_note}: {'; '.join(parts)}.{caveat}",
         },
         as_json,
-        0 if ok else 2 if (bypass_ok or uc_ok) else 1,
+        _stamp_exit_code(ok, bypass_ok, uc_ok),
     )
+
+
+def _extract_title_arg(argv: list[str]) -> tuple[str | None, list[str]]:
+    """Pull `--title VALUE` out of argv before the plain `--`-prefix filter below runs - VALUE
+    itself never starts with `--` in practice, so left in place it would be misread as the
+    positional chat query. Returns (title or None, argv with the flag and its value removed)."""
+    title: str | None = None
+    rest: list[str] = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--title" and i + 1 < len(argv):
+            title = argv[i + 1]
+            i += 2
+            continue
+        rest.append(a)
+        i += 1
+    return title, rest
 
 
 def main(argv: list[str]) -> int:
@@ -621,6 +804,7 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip())
         return 0
     as_json = "--json" in argv
+    explicit_title, argv = _extract_title_arg(argv)
     if "--all" in argv:
         return _run_fleet_pass(argv, as_json)
     args = [a for a in argv if not a.startswith("--")]
@@ -635,6 +819,15 @@ def main(argv: list[str]) -> int:
         return out({"ok": False, "report": f"REFUSED (deterministic): {err}"}, as_json, 3)
     except hydralib.DaemonError as err:
         return out({"ok": False, "report": f"automation stamp FAILED: {err}"}, as_json, 1)
+
+    if explicit_title and explicit_title.strip():
+        # ⛔ NEVER RE-DERIVE A TITLE A CALLER ALREADY VERIFIED (found 2026-09-15). match["title"]
+        # came from the dossier - a disk read exactly like list_chats', taken fresh THIS call -
+        # and a RUNNING app can have re-saved its in-memory record over that disk title in the
+        # gap between when a caller (migrate_chat's own remedy) last verified it and now
+        # (titleDurable: false). title_for_row's daemon fallback re-reads the SAME kind of stale
+        # source, so without this a caller that already knows the real name still lost the race.
+        match = {**match, "title": explicit_title.strip()}
 
     return _stamp_single_target(match, fleet, as_json, force="--force" in argv)
 

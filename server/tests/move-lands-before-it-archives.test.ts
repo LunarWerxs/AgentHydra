@@ -39,9 +39,15 @@ afterEach(() => {
   expect(spawnAttempts).toBe(0)
 })
 
+const scratchDirs: string[] = []
+afterEach(() => {
+  for (const d of scratchDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
 /** A scratch instance dir with one store leaf; returns the dir and the leaf. */
 function scratchInstance(): { dir: string; leaf: string } {
   const dir = mkdtempSync(join(tmpdir(), 'ah-lands-first-'))
+  scratchDirs.push(dir)
   const leaf = join(dir, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(leaf, { recursive: true })
   return { dir, leaf }

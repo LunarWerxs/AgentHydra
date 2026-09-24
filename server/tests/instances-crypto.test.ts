@@ -15,7 +15,7 @@
 // 4. Defensive/synthetic tests using throwaway instance dirs — proving every fallback path
 //    returns a well-formed CMAccount and never throws, independent of any real machine state.
 
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path, { join } from 'node:path'
@@ -57,6 +57,16 @@ function goldenTokenBlob(): string | null {
 
 const goldenAvailable = process.platform === 'win32' && goldenTokenBlob() !== null
 
+/** The `!goldenAvailable` skip branches exist so an unusable fixture reads as a SKIP rather than
+ *  as a silent pass. The one real assertion such a branch can make is the reason it was skipped,
+ *  so this re-reads the fixture at run time instead of trusting the module-load gate: off Windows
+ *  the platform alone stands the vector down, and on Windows the token blob really is missing
+ *  (instance absent, or present-but-signed-out — the case goldenTokenBlob() exists to catch). */
+function expectGoldenFixtureUnusable(): void {
+  const tokenBlobOnThisPlatform = process.platform === 'win32' ? goldenTokenBlob() : null
+  expect(tokenBlobOnThisPlatform).toBeNull()
+}
+
 describe('decryptSafeStorage — Windows golden vector', () => {
   test.if(goldenAvailable)(
     'decrypts the real lunarwerx oauth:tokenCacheV2 -> contains sk-ant-oat01',
@@ -78,7 +88,7 @@ describe('decryptSafeStorage — Windows golden vector', () => {
   test.if(!goldenAvailable)(
     'skipped: golden fixture not available on this platform/machine',
     () => {
-      expect(true).toBe(true)
+      expectGoldenFixtureUnusable()
     },
   )
 })
@@ -204,7 +214,7 @@ describe('resolveAccount — golden noNetwork vector (local decrypt/cache only, 
   test.if(!goldenAvailable)(
     'skipped: golden fixture not available on this platform/machine',
     () => {
-      expect(true).toBe(true)
+      expectGoldenFixtureUnusable()
     },
   )
 
@@ -252,7 +262,13 @@ describe('resolveAccount — golden LIVE network vector (gated: CM_TEST_LIVE_ACC
   test.if(!(goldenAvailable && liveFlagSet))(
     'skipped: set CM_TEST_LIVE_ACCOUNT=1 on a Windows machine with the lunarwerx fixture to run the live vector',
     () => {
-      expect(true).toBe(true)
+      // Two independent inputs can stand this vector down, and their remedies differ ("sign in" vs
+      // "set the flag"), so assert the one that actually fired rather than restating the gate.
+      if (goldenAvailable) {
+        expect(liveFlagSet).toBe(false)
+      } else {
+        expectGoldenFixtureUnusable()
+      }
     },
   )
 })
@@ -275,6 +291,21 @@ describe('resolveAccount — defensive synthetic instance dirs (no real machine 
       }
     }
   }
+
+  // Outcome-independent backstop: the try/finally in each test below already calls cleanup(), but
+  // that try/finally lives in the caller, not around makeInstanceDir()'s own mkdtempSync — this
+  // afterEach guarantees the reap even if a future test forgets its own finally. The reap is
+  // spelled out in the hook itself rather than `afterEach(cleanup)` so the hook that owns the
+  // directory is the hook that removes it.
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+      } catch {
+        // best-effort
+      }
+    }
+  })
 
   test("missing instanceDir (empty string) -> status 'unknown', never throws", async () => {
     const account = await resolveAccount('')

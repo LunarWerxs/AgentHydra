@@ -223,6 +223,10 @@ export interface CMInstance {
   isRunning: boolean
   pid: number | null
   startTime: string | null
+  /** When this profile was last started ON THIS PC (ISO), whether from AgentHydra's Open or from
+   *  anywhere else the process scan saw it running; null = never seen launched on this machine.
+   *  Survives the instance being closed, unlike `startTime`. See core/instance-launches.ts. */
+  lastLaunchedAt: string | null
   sizeBytes: number | null
   /** Live resident memory (summed working set across the instance's whole process tree —
    *  Electron main + renderer/gpu/utility children). Null when the instance isn't running or

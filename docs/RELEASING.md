@@ -7,6 +7,24 @@ against `origin/main`. There is no separate publish step for that path: as soon 
 every instance with auto-update enabled will fast-forward to it on its next check. Treat a push to
 `main` as user-facing, not as a staging step.
 
+## The pre-push gate
+
+`.githooks/pre-push` (enabled by `core.hooksPath`, which `bun install`'s `prepare` sets) runs on
+every push and enforces two rules that used to be memory only:
+
+1. **A public remote is announced and refused.** The hook looks the remote up on GitHub; when it
+   is public, or cannot be proven private (not GitHub, a timeout, a rate limit), it prints
+   `# WARNING: THIS REPOSITORY IS **PUBLIC**` with the refs and stops. When the owner has decided
+   the push goes out, re-run the same command with `AGENTHYDRA_PUSH_PUBLIC=1`: it prints the
+   heading again and pushes. Announce, then do. Never `--no-verify`.
+2. **A `v*.*.*` tag is refused while `docs/todo/TODO.md` has an open section.** Nothing pending
+   ships past a release. There is no override: finish the item and delete its section, or the
+   owner deletes it. The queue is gitignored, so this can only fire on a machine that holds it.
+
+A commit whose subject starts with `wip: bundle` must also list every file in it under `Mine:` and
+`Swept:` (`.githooks/commit-msg`); `bun run save:bundle -- --mine <paths>` writes that message
+from the dirty tree. Both hooks have suites under `.githooks/tests/`.
+
 ## Recipe
 
 1. **Bump the version.** Update `version` in `package.json`.
@@ -51,6 +69,16 @@ every instance with auto-update enabled will fast-forward to it on its next chec
 
    **If a tag does end up on a red commit,** do not move a published tag. Fix the failure, bump to
    the next patch version, and release that immutable version instead.
+7. **Once the Release run is green, tell the site.** The download buttons on
+   `agenthydra.github.io` link the versioned release FILES, and its static HTML (what crawlers,
+   AI answer engines and no-JS visitors read) only moves when its sync workflow runs. It runs
+   daily on its own; this makes it the same minute:
+   ```sh
+   gh workflow run sync-version.yml --repo AgentHydra/agenthydra.github.io
+   ```
+   The release job cannot do this itself - a cross-repo trigger from Actions needs a PAT the
+   default token does not carry - but whoever pushed the tag has a `gh` login that can, which is
+   how SageThumbs' `release.ps1` has always done it.
 
 ## The install script depends on SHA256SUMS.txt
 

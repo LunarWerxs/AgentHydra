@@ -38,12 +38,28 @@ from lib import windowlib
 # through the daemon's /rename route, i.e. AgentHydra's copy of the same actuator - which
 # counts the open chat's HEADER menu beside its sidebar menu and refuses every chat that is
 # currently open as ambiguous (3 of 3 renames failed). The copy here carries the fix.
-ACTUATOR = Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"
+ACTUATOR = Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"
 
 
 def out(payload: dict, as_json: bool, code: int) -> int:
     print(json.dumps(payload, indent=2) if as_json else payload["report"])
     return code
+
+
+def _one_live_chat_named(instance: str, title: str) -> bool:
+    """Does exactly ONE unarchived chat in `instance` carry this exact title? Answered from the
+    daemon's dossier, never from the render tree - see _drive_rename's -AllowDuplicateRows.
+    A failed read answers False, which only leaves the actuator's own refusal in place."""
+    try:
+        rows = hydralib.dossier(title)
+    except Exception:
+        return False
+    inst = str(instance).lower()
+    live = [r for r in rows
+            if str(r.get("title") or "") == title
+            and not r.get("archived")
+            and str(r.get("instance") or "").lower().endswith(inst.rsplit("\\", 1)[-1])]
+    return len(live) == 1
 
 
 def _drive_rename(instance: str, old_title: str, new_title: str) -> tuple[int, str]:
@@ -52,17 +68,22 @@ def _drive_rename(instance: str, old_title: str, new_title: str) -> tuple[int, s
     is not rendered in that instance - 7 the window is busy (another lane is driving it)."""
     if not ACTUATOR.exists():
         return 1, f"the UIA actuator is missing at {ACTUATOR}"
+    args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR),
+            "-Title", str(old_title), "-Instance", str(instance),
+            "-Action", "Rename", "-NewTitle", str(new_title)]
+    # ONE CHAT DRAWN TWICE IS NOT AN AMBIGUITY. The app can render one chat's row in two places
+    # (measured 2026-09-15 on a chat seconds old: two kebabs with the IDENTICAL name, and the
+    # rename refused something there was no doubt about). Identical names cannot be two chats to
+    # choose between, but only the STORE can say the title is unique, so the actuator acts on a
+    # duplicate only when this says so.
+    if _one_live_chat_named(instance, old_title):
+        args.append("-AllowDuplicateRows")
     with windowlib.instance_lock(instance, wait_secs=60) as mine:
         if not mine:
             return 7, ("REFUSED: that instance's window is busy - another lane is driving it "
                        "right now; retry next pass")
         with windowlib.keep_placement(instance):
-            r = clilib.run_text(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR),
-                 "-Title", str(old_title), "-Instance", str(instance),
-                 "-Action", "Rename", "-NewTitle", str(new_title)],
-                timeout=240,
-            )
+            r = clilib.run_text(args, timeout=240)
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 
@@ -246,7 +267,11 @@ def main(argv: list[str]) -> int:
 
     # chatId is the verify key: the dossier record we re-read after the act.
     chat_id = match.get("chatId") or ""
-    old_title = str(match.get("title") or "")
+    # A freshly imported chat lands with title: null on disk (the daemon's dossier passes that
+    # straight through), and the running app renders a titleless import as 'Untitled' - so that
+    # is the name the actuator must be asked for. Forwarding "" instead used to fail the
+    # actuator's mandatory -Title before it ever looked for a row ("-Title is required").
+    old_title = str(match.get("title") or "Untitled")
     if old_title == new_title:
         return out(
             {"renamed": False, "report": f"nothing to do: the chat is already titled '{new_title}'"},

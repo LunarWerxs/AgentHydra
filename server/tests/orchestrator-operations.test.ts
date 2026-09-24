@@ -5,23 +5,29 @@
 // timeout gave the client ECONNRESET, a retry answered "busy", and the original finished with
 // nobody to tell. The registry here lets a retry with the same idempotency key get THE SAME
 // operation (no second act), lets a caller poll by id, and lets a running operation be cancelled.
-import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, afterEach, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   cancelOrchestratorOperation,
   getOrchestratorOperation,
   listOrchestratorOperations,
+  orchestratorBusy,
   pythonBinary,
   resetOrchestratorOperationsForTests,
+  runOrchestrator,
   startOrchestratorOperation,
 } from '../src/orchestrator'
 
 afterEach(() => resetOrchestratorOperationsForTests())
 
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-orch-ops-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
 function fakeToolbox(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-ops-'))
+  const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-ops-'))
   writeFileSync(join(dir, 'orch.py'), '# fake driver\n')
   return dir
 }
@@ -33,6 +39,38 @@ function deferred() {
   })
   return { gate, release }
 }
+
+test('the test seam releases the ROUTE LOCK too, not just the operation records', async () => {
+  // ⛔ Both halves, or a file leaks a lock into the next one. `bun test` runs every file in one
+  // process, so a spawn stubbed never to settle leaves an immortal lock behind; clearing only the
+  // operation records left the route held by a run that no longer exists, and the next file's
+  // migrate_batch was refused busy by it (GitHub CI, Linux, 2026-09-14 - green on Windows purely
+  // because readdir listed the files the other way round).
+  const dir = fakeToolbox()
+  void runOrchestrator(
+    { script: 'migrate_batch', timeoutMs: 600_000 },
+    { dir, spawn: () => new Promise<never>(() => {}) },
+  )
+  await Bun.sleep(10)
+  expect(orchestratorBusy()).toBe(true)
+
+  resetOrchestratorOperationsForTests()
+
+  expect(orchestratorBusy()).toBe(false)
+  let ran = false
+  const after = await runOrchestrator(
+    { script: 'migrate_batch', timeoutMs: 600_000 },
+    {
+      dir,
+      spawn: async () => {
+        ran = true
+        return { code: 0, stdout: '', stderr: '', timedOut: false }
+      },
+    },
+  )
+  expect('busy' in after && after.busy).toBeFalsy()
+  expect(ran).toBe(true)
+})
 
 test('a retry with the same idempotency key joins the running operation and spawns nothing', async () => {
   const dir = fakeToolbox()
@@ -66,6 +104,75 @@ test('a retry with the same idempotency key joins the running operation and spaw
   const later = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k1', deps })
   expect(later.reused).toBe(true)
   expect((await later.promise).status).toBe('done')
+  expect(spawns).toBe(1)
+})
+
+test('a failed run does not pin its idempotency key: the retry starts a fresh operation', async () => {
+  // Regression for docs/todo/TODO.md "Overnight orchestration run" item 3: `move_chats` re-fired
+  // with the same key kept answering the OLD failed operation (`reused: true`), because the old
+  // check treated any run that had actually spawned - `ran` - as pinning, whether it succeeded or
+  // not. A deterministic failure (bad title, refused precondition, ...) can never be worked
+  // around by retrying with the same arguments, so the fix must free the key on failure.
+  const dir = fakeToolbox()
+  let spawns = 0
+  const deps = {
+    dir,
+    spawn: async () => {
+      spawns++
+      return { code: 1, stdout: '', stderr: 'deterministic refusal', timedOut: false }
+    },
+  }
+  const first = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k3', deps })
+  const firstDone = await first.promise
+  expect(firstDone.status).toBe('failed')
+  expect(firstDone.ran).toBe(true)
+  expect(spawns).toBe(1)
+
+  // Same key, same args, after the failure: a NEW operation, not the old failed one.
+  const retry = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k3', deps })
+  expect(retry.reused).toBe(false)
+  expect(retry.op.id).not.toBe(first.op.id)
+  const retryDone = await retry.promise
+  expect(retryDone.status).toBe('failed')
+  expect(spawns).toBe(2)
+})
+
+test('same key while the first run is still going is reused, not restarted', async () => {
+  const dir = fakeToolbox()
+  const { gate, release } = deferred()
+  let spawns = 0
+  const deps = {
+    dir,
+    spawn: async () => {
+      spawns++
+      await gate
+      return { code: 0, stdout: '', stderr: '', timedOut: false }
+    },
+  }
+  const first = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k4', deps })
+  const again = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k4', deps })
+  expect(again.reused).toBe(true)
+  expect(again.op.id).toBe(first.op.id)
+  expect(spawns).toBe(1)
+  release()
+  await first.promise
+})
+
+test('same key after a success is reused, not restarted', async () => {
+  const dir = fakeToolbox()
+  let spawns = 0
+  const deps = {
+    dir,
+    spawn: async () => {
+      spawns++
+      return { code: 0, stdout: 'VERDICT: fine\n', stderr: '', timedOut: false }
+    },
+  }
+  const first = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k5', deps })
+  expect((await first.promise).status).toBe('done')
+  const again = startOrchestratorOperation({ script: 'chats' }, { idempotencyKey: 'k5', deps })
+  expect(again.reused).toBe(true)
+  expect(again.op.id).toBe(first.op.id)
   expect(spawns).toBe(1)
 })
 
@@ -150,7 +257,7 @@ const hasPython = (() => {
 test.skipIf(!hasPython)(
   'cancelling a real running script kills it well before its deadline',
   async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-ops-real-'))
+    const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-ops-real-'))
     writeFileSync(
       join(dir, 'orch.py'),
       'import time\nprint("started", flush=True)\ntime.sleep(120)\n',

@@ -7,6 +7,7 @@ import {
   Monitor,
   Moon,
   Power,
+  RotateCw,
   Settings2,
   Sun,
 } from '@lucide/vue'
@@ -34,6 +35,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { useData } from '@/composables/useData'
 import { useNotifications } from '@/composables/useNotifications'
 import { usePanels } from '@/composables/usePanels'
+import { useRunningCode } from '@/composables/useRunningCode'
 import { SHELL_BASE_MAX, SHELL_WIDE_MAX, useShellWidth } from '@/composables/useShellWidth'
 import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
@@ -43,7 +45,6 @@ import { pendingSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
-import SettingsPanel from '@/shell/SettingsPanel.vue'
 import Sidebar from '@/shell/Sidebar.vue'
 import { usePushPanel } from '@/shell/usePushPanel'
 
@@ -156,8 +157,8 @@ const { side, containerStyle, widthPx } = usePushPanel(anyPanelOpen, {
 // The header shares the panel shift but must keep its own 16px (px-4) of breathing room
 // on top of it; a bare containerStyle would put the buttons flush against the panel edge.
 const headerStyle = computed(() =>
-  containerStyle.value.paddingRight
-    ? { paddingRight: `calc(${containerStyle.value.paddingRight} + 1rem)` }
+  containerStyle.value.paddingInlineEnd
+    ? { paddingInlineEnd: `calc(${containerStyle.value.paddingInlineEnd} + 1rem)` }
     : {},
 )
 
@@ -253,6 +254,27 @@ onMounted(showRebrandNoticeOnce)
 // Reads the daemon's LAST background check — a memory read, no network from the daemon's side and
 // nothing that delays boot. See composables/useUpdates.ts.
 onMounted(startAvailabilityPolling)
+// "The daemon is older than its folder": see composables/useRunningCode.ts.
+const {
+  restartNeeded,
+  bootCommit,
+  diskCommit,
+  restarting,
+  restartError,
+  restart: restartDaemonNow,
+  start: startRunningCodePolling,
+  stop: stopRunningCodePolling,
+} = useRunningCode()
+onMounted(startRunningCodePolling)
+onUnmounted(stopRunningCodePolling)
+const restartTitle = computed(() =>
+  restartError.value
+    ? t('app.restartFailed', { reason: restartError.value })
+    : t('app.restartNeededHint', {
+        boot: bootCommit.value?.slice(0, 7) ?? '?',
+        disk: diskCommit.value?.slice(0, 7) ?? '?',
+      }),
+)
 onUnmounted(stopAvailabilityPolling)
 </script>
 
@@ -281,7 +303,7 @@ onUnmounted(stopAvailabilityPolling)
       </div>
 
       <!-- view tabs -->
-      <nav class="ml-2 flex items-center gap-1">
+      <nav class="ms-2 flex items-center gap-1">
         <Button
           v-for="n in nav"
           :key="n.id"
@@ -295,7 +317,7 @@ onUnmounted(stopAvailabilityPolling)
         </Button>
       </nav>
 
-      <div class="ml-auto flex items-center gap-2">
+      <div class="ms-auto flex items-center gap-2">
         <!-- always-on "is it working?" indicator: scheduler state + live run / next-run -->
         <SchedulerStatus />
         <!-- New run lives inside the queue drawer's toolbar (QueueView) now, so the header
@@ -314,11 +336,25 @@ onUnmounted(stopAvailabilityPolling)
           <span class="hidden sm:inline">{{ $t('app.queue') }}</span>
           <span
             v-if="runningCount > 0"
-            class="ml-0.5 inline-flex size-4 items-center justify-center rounded-full text-[0.625rem] font-semibold"
+            class="ms-0.5 inline-flex size-4 items-center justify-center rounded-full text-[0.625rem] font-semibold"
             :class="queueOpen ? 'bg-info/15 text-info' : 'bg-primary-foreground/25 text-primary-foreground'"
           >
             {{ runningCount }}
           </span>
+        </Button>
+        <!-- Only when the daemon is serving older code than its folder (a commit or pull without a
+             restart): new routes and tools are missing until it restarts, and nothing else on
+             screen would say why. One click relaunches it in place and reloads the page. -->
+        <Button
+          v-if="restartNeeded"
+          variant="outline"
+          size="sm"
+          :disabled="restarting"
+          :title="restartTitle"
+          @click="restartDaemonNow"
+        >
+          <RotateCw :class="restarting ? 'animate-spin' : ''" />
+          <span class="hidden sm:inline">{{ $t(restarting ? 'app.restarting' : 'app.restartNeeded') }}</span>
         </Button>
         <!-- The update hint lives HERE, on the button that leads to the update controls, rather
              than as a banner or a toast. A newer version is not urgent — it does not want the
@@ -372,10 +408,10 @@ onUnmounted(stopAvailabilityPolling)
 
     <!-- settings: the shared push-in panel. Custom header carries the theme picker + shut-down
          icons beside the panel's ✕ (owner request). -->
-    <SettingsPanel v-model:open="settingsOpen" :side="side" :title="$t('app.settings')" :width-px="widthPx">
+    <Sidebar v-model:open="settingsOpen" :side="side" :title="$t('app.settings')" :width-px="widthPx">
       <template #header>
         <span class="text-xs font-semibold">{{ $t('app.settings') }}</span>
-        <div class="ml-auto flex items-center gap-0.5">
+        <div class="ms-auto flex items-center gap-0.5">
           <!-- theme picker (moved out of the Appearance section) -->
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
@@ -414,7 +450,7 @@ onUnmounted(stopAvailabilityPolling)
           <Button size="sm" @click="saveSettings">{{ $t('settings.saveSettings') }}</Button>
         </div>
       </template>
-    </SettingsPanel>
+    </Sidebar>
 
     <!-- close-button: vue-sonner defaults it OFF, which left every toast in the app dismissable
          only by waiting it out or clicking its body. The plain ones showed it worst — an

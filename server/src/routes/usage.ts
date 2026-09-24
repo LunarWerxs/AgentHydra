@@ -11,11 +11,8 @@ import {
   renameCliInstance,
   setCliInstanceUsage,
 } from '../core/cli-instances'
-import {
-  codexUsageSnapshot,
-  redeemCodexResetCredit,
-  resolveCodexAccount,
-} from '../core/codex-account'
+import { redeemCodexResetCredit, resolveCodexAccount } from '../core/codex-account'
+import { moveCodexChat, planCodexChatMove } from '../core/codex-chat-move'
 import {
   createCodexInstance,
   deleteCodexInstance,
@@ -52,10 +49,11 @@ import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
 import {
   checkUsageForAccount,
   checkUsageForCliInstance,
+  checkUsageForCodex,
   checkUsageForDesktop,
-  codexKey,
   surveyUsage,
 } from '../usage-service'
+import { deepseekBalance } from '../zswarm-cost'
 
 /** Resolve an `account` query param that may be an account id OR a free-text label. */
 function resolveAccountParam(param: string): { id: string; label: string } | null {
@@ -85,33 +83,6 @@ const wantsRefresh = (c: Context): boolean => {
 // never stampedes real `claude` processes; `?refresh=1` forces a fresh probe. A no-data snapshot
 // (all-null) is returned honestly — never faked as "0% used".
 
-/** A Codex instance's quota, cache-aware. Extracted from the route so `/api/usage?instance=N` can
- *  reach the Codex family through the same code the Codex route uses, rather than a second copy of
- *  the "signed out vs read failed" reasoning that would inevitably drift from it. */
-async function codexUsageResult(
-  codexHome: string,
-  id: string,
-  refresh: boolean,
-): Promise<UsageCheckResult> {
-  const key = codexKey(id)
-  if (!refresh) {
-    const cached = getCachedUsage(key)
-    if (cached) return { snapshot: cached, cached: true, key, reason: 'ok' }
-  }
-  const { account, usage } = await resolveCodexAccount(codexHome)
-  if (!usage) {
-    // Distinguish "not signed in" from "signed in but the read failed", exactly as the Claude
-    // routes do — a bare "—" with no reason reads as a bug.
-    const reason: UsageCheckResult['reason'] =
-      account.status === 'loggedout' ? 'not_logged_in' : 'check_failed'
-    // codexUsageSnapshot(null, …) is the all-null shape — the same "checked, nothing to report"
-    // snapshot the Claude paths return, so the chip renders "—" with a reason rather than "0%".
-    return { snapshot: codexUsageSnapshot(null, account.label), cached: false, key, reason }
-  }
-  setCachedUsage(key, usage)
-  return { snapshot: usage, cached: false, key, reason: 'ok' }
-}
-
 app.get('/api/usage', async (c) => {
   const account = c.req.query('account')
   const configDir = c.req.query('configDir')
@@ -134,7 +105,7 @@ app.get('/api/usage', async (c) => {
               key: hit.ref,
               reason: 'check_failed',
             })
-          : await codexUsageResult(hit.configDir, hit.handle, refresh)
+          : await checkUsageForCodex(hit.configDir, hit.handle, refresh)
     // Echo WHICH instance answered. Without it a caller that passed a name has no confirmation it
     // reached the account it meant — and that is the whole failure mode numbers exist to prevent.
     return c.json({
@@ -209,9 +180,16 @@ app.get('/api/usage/cache', (c) =>
 // ("which of my accounts has headroom?") and what the auto-refresh sweep exposes on demand. Each row
 // carries the advisory verdict too, so a caller never has to re-derive "is 98% bad".
 app.get('/api/usage/survey', async (c) => {
-  const rows = await surveyUsage()
+  // Concurrent, not sequential: the DeepSeek balance is a THIRD PARTY call with its own timeout
+  // (zswarm-cost.ts bounds it to 3s and never throws), and awaiting it after the Claude/Codex sweep
+  // would make a slow DeepSeek endpoint add straight to every survey's latency instead of hiding
+  // behind the same round trip.
+  const [rows, deepseek] = await Promise.all([surveyUsage(), deepseekBalance()])
   return c.json({
     rows: rows.map((r) => ({ ...r, advice: usageAdvice(r.result.snapshot) })),
+    // The DeepSeek zswarm's account balance, beside the Claude/Codex quotas above - see
+    // zswarm-cost.ts's deepseekBalance for why this can never fail the survey itself.
+    deepseek,
     lastAutoRefreshAt: lastAutoRefreshAt(),
   })
 })
@@ -240,7 +218,7 @@ app.get('/api/usage/budget', async (c) => {
       ? await checkUsageForDesktop(hit.handle)
       : hit.kind === 'cli'
         ? await checkUsageForCliInstance(hit.handle)
-        : await codexUsageResult(hit.configDir, hit.handle, true)
+        : await checkUsageForCodex(hit.configDir, hit.handle, true)
     : dir
       ? await checkUsageForDesktop(dir)
       : account
@@ -414,6 +392,40 @@ app.get('/api/cli-instances/:id/usage', async (c) => {
 
 // --- Codex CLI instances ----------------------------------------------------
 app.get('/api/codex-instances', async (c) => c.json(await listCodexInstances()))
+app.get('/api/codex-instances/:id/move-chats', async (c) => {
+  const targetId = c.req.query('targetId')
+  if (!targetId) return c.json({ error: 'targetId is required' }, 400)
+  try {
+    return c.json(await planCodexChatMove(c.req.param('id'), targetId))
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Could not list Codex chats.' },
+      400,
+    )
+  }
+})
+app.post('/api/codex-instances/:id/move-chat', async (c) => {
+  const body = await jsonBody(c)
+  if (
+    typeof body.targetId !== 'string' ||
+    typeof body.threadId !== 'string' ||
+    typeof body.updatedAt !== 'number' ||
+    !Number.isFinite(body.updatedAt) ||
+    !(typeof body.sourceAccountId === 'string' || body.sourceAccountId === null) ||
+    !(typeof body.targetAccountId === 'string' || body.targetAccountId === null)
+  ) {
+    return c.json({ error: 'A reviewed source chat and destination account are required.' }, 400)
+  }
+  return c.json(
+    await moveCodexChat(c.req.param('id'), {
+      targetId: body.targetId,
+      threadId: body.threadId,
+      updatedAt: body.updatedAt,
+      sourceAccountId: body.sourceAccountId,
+      targetAccountId: body.targetAccountId,
+    }),
+  )
+})
 // Identity, on demand. The LIST already carries a local identity for every row (auth.json is plain
 // JSON, so that read is nearly free), so this route exists for the LIVE refresh: it re-reads the
 // plan from the server-computed value rather than the token's mint-time claim.
@@ -432,7 +444,7 @@ app.get('/api/codex-instances/:id/usage', async (c) => {
   const id = c.req.param('id')
   const inst = await findCodexInstance(id)
   if (!inst) return c.json({ error: 'Codex instance not found' }, 404)
-  return c.json(await codexUsageResult(inst.codexHome, id, wantsRefresh(c)))
+  return c.json(await checkUsageForCodex(inst.codexHome, id, wantsRefresh(c)))
 })
 app.post('/api/codex-instances', async (c) => {
   const body = await jsonBody(c)
@@ -474,7 +486,7 @@ app.post('/api/codex-instances/:id/redeem-reset-credit', async (c) => {
   const body = await jsonBody(c)
   const result = await redeemCodexResetCredit(inst.codexHome, { force: body.force === true })
   if (result.ok) {
-    const usage = await codexUsageResult(inst.codexHome, id, true)
+    const usage = await checkUsageForCodex(inst.codexHome, id, true)
     return c.json({ ...result, usage: usage.snapshot })
   }
   return c.json(result)

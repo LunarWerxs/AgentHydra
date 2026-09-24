@@ -92,7 +92,7 @@ class ArchiveChatTest(unittest.TestCase):
         hits = [{"profile": "temp1", "wasRunning": was_running, "changed": True}]
         resp = {"ok": True, "hits": hits}
         if was_running:
-            resp["visibleNow"] = False
+            resp["stillOnScreen"] = True
             resp["note"] = "the flag is written, but that app is RUNNING..."
         stub.routes[f"/api/sessions/{SID}/desktop-archive"] = resp
         return tp
@@ -151,7 +151,7 @@ class ArchiveChatTest(unittest.TestCase):
                                return_value=(0, "Archive done for 'T'")) as ui:
             code = self.archive_chat.main([SID, "--no-preserve"])
         # the actuator was driven; the daemon's flag endpoint was NOT touched
-        ui.assert_called_once_with("temp1", "T", False)
+        ui.assert_called_once_with("temp1", "T", False, session_id=SID)
         self.assertFalse(self.acted())
         # verify happens via the dossier; our stub flips archived after ANY desktop-archive
         # POST, which never came - so verify honestly fails and nothing is overclaimed
@@ -190,6 +190,22 @@ class ArchiveChatTest(unittest.TestCase):
         self.assertTrue(self.acted())
         # the attempt STAYS on the ledger - a repeat pass must count toward the cap
         self.assertEqual(len(self.ledgerlib._load()), 1)
+
+    def test_a_daemon_that_settled_the_click_itself_is_not_sent_round_again(self):
+        # The same race as above, answered by a daemon that finished the job. Since 2026-09-17
+        # the desktop-archive route drives the app's OWN Archive control when it writes a flag
+        # under a running app, and reports stillOnScreen: False when the row has left the
+        # sidebar. That is durable, so this run verifies and finishes - sending the caller
+        # round again would be asking it to redo work that is already done, which is exactly
+        # the hand-cranking the owner ruled out on 2026-09-17.
+        self.wire(was_running=True, flip_after_post=True)
+        settled = dict(self.stub.routes[f"/api/sessions/{SID}/desktop-archive"])
+        settled["stillOnScreen"] = False
+        settled["uiArchive"] = [{"profile": "temp1", "clicked": True, "verified": True}]
+        self.stub.routes[f"/api/sessions/{SID}/desktop-archive"] = settled
+        self.assertEqual(self.archive_chat.main([SID, "--no-preserve"]), 0)
+        self.assertTrue(self.acted())
+        self.assertEqual(self.ledgerlib._load(), [])  # verified success cleared the attempt
 
     def test_verify_failure_is_reported_not_swallowed(self):
         self.wire(flip_after_post=False)  # daemon says ok but dossier never flips

@@ -54,7 +54,9 @@ import {
 import { createChatGptContextPack } from './context-pack'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
+import { createRunningCodeProbe, restartNeededMessage } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
+import { crashRecordLine, exitRecordLine } from './crash-record'
 import { getSetting, setSetting } from './db'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import {
@@ -70,7 +72,11 @@ import { app } from './http-app'
 import {
   clearInstanceInfo,
   findLiveInstance,
+  findLiveOnDefaultPort,
+  instanceFilePath,
+  POINTER_DIR,
   readInstanceInfo,
+  reassertInstancePointer,
   singleInstanceProbeAttempts,
   updateInstanceInfo,
   writeInstanceInfo,
@@ -80,16 +86,18 @@ import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
 import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   SERVER_INFO as MCP_SERVER_INFO,
-  TOOLS as MCP_TOOLS,
+  toolsForCaller as mcpToolsForCaller,
+  withDaemonWarning as mcpWithDaemonWarning,
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import {
+  createMcpReasserter,
   mcpRegisterEnabled,
   mcpRegistrationStatus,
   setMcpRegisterEnabled,
   syncMcpRegistration,
 } from './mcp-register'
-import { handleRpc as handleMcpRpc } from './mcp-stdio.mjs'
+import { handleRpc as handleMcpRpc, type McpEngineTool } from './mcp-stdio.mjs'
 import { startMonitor } from './monitor'
 import { sendOsNotification } from './notify-os'
 import {
@@ -111,15 +119,18 @@ import {
 } from './reset-watch'
 import { jsonBody } from './route-helpers'
 import { warmSessionScanCache } from './sessions'
+import { sideRunHeader, sideRunHealthFields } from './side-run'
 import { isRelaunchSuccessor, RELAUNCH_FLAG, skipSingleInstanceGuard } from './single-instance'
 import { startTitleSweep } from './title-sweep'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
 import { startTrayInvariant } from './tray-invariant'
+import { materializeTrayToolkit } from './tray-toolkit'
 import { updateProgress } from './update-progress'
 import { applyUpdate, checkForUpdate } from './updater'
 import { getUsageSettings, setUsageSettings, startUsageRefresh } from './usage-refresh'
 import { checkUsageForCliInstance, checkUsageForDesktop } from './usage-service'
+import { startVersionDriftWatch } from './version-drift'
 import { WINDOW_SIZE_HINT_PARAM, windowSizeHintFor } from './window-size'
 
 // Persist console output to <CONFIG_DIR>/logs/daemon.log BEFORE anything else can throw, so the
@@ -135,13 +146,46 @@ initFileLogging(CONFIG_DIR)
 // it; the console.error here is teed to daemon.log (above), so the reason is on disk even after
 // the process is gone. process.exit is safe here; the daemon already exits deliberately in its
 // own clean-shutdown paths below (unlike ReDesign, whose entry avoids it for undici's sake).
+//
+// ⛔ THIS ALONE WAS NOT ENOUGH (found 2026-09-15, docs/todo/TODO.md "Overnight orchestration run").
+// The daemon died silently three times overnight - 09:14:17Z, and 01:10Z / 04:23Z the same night,
+// pids 79360 -> 61040 on the last one - with NO line at all in daemon.log, not even one of the
+// two below: the file jumps straight from a routine INFO line to the next boot's banner. That
+// means neither handler ran; something outside the JS process model (a hard TerminateProcess, an
+// OOM kill, the machine itself) ended the process before either could fire. Nothing here can catch
+// an untrappable kill, but the gap in that log is itself hard to tell apart from "the handler ran
+// and the write was lost" without a positive record of every exit this process DOES see - so the
+// unconditional 'exit' listener below exists to make the two cases distinguishable after the fact:
+// its absence for a given death now means the kill, not a logging failure.
+//
+// The line format itself lives in ./crash-record.ts, not here - this file cannot be imported by a
+// test without booting the whole daemon (db open, port bind, the works), and the format is exactly
+// the part worth a regression test (pid/uptime present, a stack flattened to one line).
+function fatalExit(reason: string, detail: unknown, code: number): never {
+  console.error(crashRecordLine(reason, detail))
+  process.exit(code)
+}
+
 process.on('uncaughtException', (err) => {
-  console.error('[agenthydra] uncaught exception:', err)
-  process.exit(1)
+  fatalExit('uncaughtException', err, 1)
 })
 process.on('unhandledRejection', (reason) => {
-  console.error('[agenthydra] unhandled rejection:', reason)
-  process.exit(1)
+  fatalExit('unhandledRejection', reason, 1)
+})
+// SIGBREAK (Windows Ctrl+Break) and SIGHUP carry no clean-shutdown meaning for this daemon the way
+// SIGINT/SIGTERM do (see the graceful pair registered later, near the listen call) - nothing here
+// asked for a tidy stop, so receiving one is treated as fatal: record it, then go, the same as an
+// uncaught throw.
+for (const sig of ['SIGBREAK', 'SIGHUP'] as const)
+  process.on(sig, () => fatalExit(`signal:${sig}`, new Error(`process received ${sig}`), 1))
+
+// The unconditional record described above: one line for every way this process ends, including a
+// path none of the handlers above anticipated. Registered first (of this process's 'exit'
+// listeners - see clearInstanceInfo's below) so it still runs even if a later listener throws.
+// Synchronous only, per Node's 'exit' contract; log-file.mjs's writes are synchronous too, so this
+// reaches disk before the process actually leaves.
+process.on('exit', (code) => {
+  console.error(exitRecordLine(code))
 })
 
 // --- portable mode (server/src/db.ts settings table; see server/src/portable-window.mjs) ---
@@ -189,6 +233,30 @@ function computeAllowedApiOrigins(port: number): string[] {
  */
 let daemonSelfUrl = `http://127.0.0.1:${PORT}`
 
+/** The commit this daemon booted on, against the one its checkout names now (core/running-code.ts).
+ *  Created at module load, which IS boot, so "the code I am running" is recorded before anything
+ *  can change it. */
+const runningCode = createRunningCodeProbe({ root: APP_ROOT, compiled: IS_COMPILED })
+
+/** Every MCP tool result says so when this daemon is older than its checkout: an agent whose new
+ *  tool or route "does not exist" is otherwise told nothing about why. */
+function withRestartWarning(tools: McpEngineTool[]): McpEngineTool[] {
+  return tools.map((t) => ({
+    ...t,
+    run: async (args: Record<string, unknown>, signal?: AbortSignal) => {
+      const value = await t.run(args, signal)
+      const warning = restartNeededMessage(runningCode.status())
+      return warning && value && typeof value === 'object' && !Array.isArray(value)
+        ? { daemonRestartNeeded: warning, ...(value as Record<string, unknown>) }
+        : value
+    },
+  }))
+}
+
+/** Keeps Claude Code's MCP entry pointing at THIS daemon: at boot, on the settings toggle, and
+ *  once a minute while registration is on (see createMcpReasserter for why once is not enough). */
+const mcpReasserter = createMcpReasserter({ daemonUrl: () => daemonSelfUrl })
+
 // CORS narrowed to the exact allowlist above (defense-in-depth for cross-origin READABILITY); the
 // actual cross-site protection is loopbackGuard below, which rejects the REQUEST — see
 // loopback-guard.mjs for why a CORS allowlist alone is insufficient (the "simple request"
@@ -212,6 +280,9 @@ app.use(
     onError: (c) => c.json({ error: 'request body exceeds 2 MiB' }, 413),
   }),
 )
+// A daemon with a relocated store stamps every answer with that store (side-run.ts), so no client
+// can mistake a scratch database for the fleet's.
+app.use('/api/*', sideRunHeader())
 
 // --- health (also the single-instance probe: body.service must equal SERVICE_NAME) ---
 // `dataDir`/`dbPath` are here for one reason: a daemon started from a checkout and the installed
@@ -228,6 +299,19 @@ app.get('/api/health', (c) =>
     dataDir: DATA_DIR,
     dbPath: DB_PATH,
     dataDirNotice: DATA_DIR_NOTICE,
+    // `pid`, `sideRun`, `pointerFile`: which process this is, whether its store is the machine's,
+    // and where it recorded itself - the three facts a stale-pointer investigation needs first.
+    ...sideRunHealthFields(),
+    // Whether Claude Code's config points at this daemon, as of the last sync (at most a minute
+    // old). A client with a stale entry has NO agenthydra tools and nothing in it says why, so the
+    // state has to be readable from here rather than only from the Settings panel.
+    // Whether this daemon is serving older code than its checkout (a source install that was
+    // committed to or pulled without a restart). The app header offers the restart when it is.
+    runningCode: runningCode.status(),
+    mcpRegistration: (() => {
+      const last = mcpReasserter.last()
+      return last ? { enabled: last.enabled, registered: last.registered, error: last.error } : null
+    })(),
     ts: Date.now(),
   }),
 )
@@ -237,6 +321,22 @@ app.get('/api/health', (c) =>
 // (and why it cannot drift from the stdio server, and why it is stateless) is in mcp-http.mjs.
 // It lives under /api/* deliberately: that is where the loopback CSRF guard is mounted, and this
 // is the route where it matters most, because `tools/call` can launch instances and move chats.
+/** The pid of the process that sent this request, or null when it cannot be told. Bun exposes the
+ *  peer address through the server object Hono passes as `c.env`; everything after that is the OS
+ *  connection table. Every failure answers null - "could not tell" is a fine answer here, and a
+ *  guessed pid would become a confidently wrong identity. */
+async function callerPidOf(c: { env: unknown; req: { raw: Request } }): Promise<number | null> {
+  try {
+    const server = c.env as { requestIP?: (r: Request) => { port?: number } | null } | null
+    const port = typeof server?.requestIP === 'function' ? server.requestIP(c.req.raw)?.port : null
+    if (!port) return null
+    const { pidOwningLocalPort } = await import('./core/process')
+    return await pidOwningLocalPort(Number(port))
+  } catch {
+    return null
+  }
+}
+
 app.post('/api/mcp', async (c) => {
   let body: unknown
   try {
@@ -244,7 +344,17 @@ app.post('/api/mcp', async (c) => {
   } catch {
     body = PARSE_ERROR
   }
-  const ctx = { serverInfo: MCP_SERVER_INFO, tools: MCP_TOOLS, instructions: MCP_INSTRUCTIONS }
+  // WHO IS ASKING. Over HTTP the identity tools cannot read the caller from their own process -
+  // that process is this daemon - but the socket knows: Bun hands us the peer's port, and the OS
+  // maps it to the pid that opened it (core/process.ts). Resolved LAZILY, so only whoami and
+  // check_my_usage ever pay for the lookup, and cached per port so a keep-alive client pays once.
+  // Wrapped here, not inside toolsForCaller: that function's contract is "identity tools rebound,
+  // everything else the same object", and the side-run warning (side-run.ts) is a transport concern.
+  const ctx = {
+    serverInfo: MCP_SERVER_INFO,
+    tools: withRestartWarning(mcpWithDaemonWarning(mcpToolsForCaller(() => callerPidOf(c)))),
+    instructions: MCP_INSTRUCTIONS,
+  }
   const { status, json } = await handleMcpHttp(body, ctx, handleMcpRpc)
   return json === null ? c.body(null, status as 202) : c.json(json, status as 200)
 })
@@ -329,6 +439,48 @@ app.post('/api/update/apply', async (c) => {
   return c.json(result)
 })
 
+// RESTART THE DAEMON ON DEMAND (2026-09-10) - the GRACEFUL restart, in-process.
+//
+// ⛔ THIS IS NOT misc/Restart-Daemon.ps1, AND NEITHER REPLACES THE OTHER. Read the difference
+// before adding a third door:
+//   · Restart-Daemon.ps1 is the REBUILD SLEDGEHAMMER (owner directive, 2026-07-15: "a rebuild
+//     must NEVER leave you on old code"). It kills the daemon AND the tray host by identity from
+//     OUTSIDE, then relaunches. It is what you run when you do not trust the running process, and
+//     it needs a human at a shell.
+//   · This route is the daemon relaunching ITSELF, the same relaunchDaemon() every auto-update
+//     already exercises: the successor is spawned first, waits for the port, and takes over the
+//     SAME port; the tray is untouched. Nothing is killed - the predecessor exits on its own once
+//     a replacement exists, so there is never a window with no daemon.
+// The gap it closes: relaunchDaemon() was reachable only through /api/update/apply, gated on
+// IS_COMPILED, so a SOURCE build (what this fleet runs) had no graceful path at all - a change in
+// server/src/ sat inert until someone remembered the .ps1. Restarting and updating are different
+// acts, and only one of them had a door.
+app.post('/api/daemon/restart', async (c) => {
+  const body = await jsonBody(c)
+  // ⛔ IN-FLIGHT DISPATCH RUNS ARE THE ONE REASON TO SAY NO, and it is the same reason the
+  // auto-update loop already refuses (setAutoUpdateHooks.hasActiveRuns below). A person who knows
+  // what they are restarting past may say so; the runs are detached and reattached at boot, so
+  // this is a courtesy rather than data loss - but it must be a DECISION, never a surprise.
+  const active = activeCount()
+  if (active > 0 && body.force !== true)
+    return c.json(
+      {
+        ok: false,
+        error: `${active} dispatch run(s) in flight - pass force:true to restart past them`,
+        activeRuns: active,
+      },
+      409,
+    )
+  const ok = relaunchDaemon()
+  return c.json({
+    ok,
+    activeRuns: active,
+    detail: ok
+      ? 'successor spawned; this daemon frees the port in ~800ms - poll /api/health until it answers'
+      : 'the successor could not be spawned, so this daemon is STAYING UP (nothing was restarted)',
+  })
+})
+
 // --- auto-update settings (background loop; see server/src/auto-update.ts) -------------------
 app.get('/api/update/settings', (c) =>
   c.json({ enabled: autoUpdateEnabled(), intervalSecs: getAutoUpdateIntervalSecs() }),
@@ -393,11 +545,7 @@ app.post('/api/settings', async (c) => {
   // already. The sync writes the entry (or removes it) and reports through the same GET below.
   if (typeof body.mcpRegisterClaudeCode === 'boolean') {
     setMcpRegisterEnabled(body.mcpRegisterClaudeCode)
-    const reg = syncMcpRegistration({
-      daemonUrl: daemonSelfUrl,
-      enabled: body.mcpRegisterClaudeCode,
-    })
-    if (reg.error) console.warn(`[agenthydra] MCP registration: ${reg.error}`)
+    mcpReasserter.run(body.mcpRegisterClaudeCode)
   }
   if (typeof body.transcriptEditor === 'string')
     setSetting('transcript_editor', body.transcriptEditor.trim())
@@ -592,6 +740,7 @@ await import('./routes/usage')
 await import('./routes/monitor-fleet')
 await import('./routes/desktop-sessions')
 await import('./routes/session-message')
+await import('./routes/versions')
 
 // --- portable window (opens this daemon's own UI in a chromeless app window) -------------------
 app.post('/api/portable-window', async (c) => {
@@ -772,10 +921,19 @@ if (!skipSingleInstanceGuard()) {
   // Attempts are chosen from the pointer rather than fixed at 3: a pointer whose process is gone
   // is a tombstone, and re-probing it only buys 500ms of setTimeout on the boot right after a
   // crash. See singleInstanceProbeAttempts in instance.ts.
-  const live = await findLiveInstance(2000, singleInstanceProbeAttempts(3))
+  // Then, if the pointer said nothing useful, ask the DEFAULT port directly (2026-09-12): a pointer
+  // that is missing, stale or was written by a pre-fix side-run says "nothing running" while the
+  // real daemon answers on 7787, and trusting it here is what makes the second daemon.
+  const live =
+    (await findLiveInstance(2000, singleInstanceProbeAttempts(3))) ??
+    (await findLiveOnDefaultPort(2000))
   if (live) {
+    const how = live.foundOnDefaultPort
+      ? `\n  (found on the default port; ${instanceFilePath()} did not name it - missing, stale, or` +
+        `\n   written by a side-run. Left alone here: the running daemon re-asserts its own pointer.)`
+      : ''
     console.log(
-      `\n  AgentHydra is already running  →  ${live.url}\n  Not starting a second instance.\n`,
+      `\n  AgentHydra is already running  →  ${live.url}${how}\n  Not starting a second instance.\n`,
     )
     if (releaseDoubleClick && !noAutoOpen()) openUi(live.url)
     process.exit(0)
@@ -802,6 +960,36 @@ writeInstanceInfo(boundPort, {
   portableMode: portableModeEnabled(),
   hideTrayIcon: hideTrayIconEnabled(),
 })
+// THE POINTER HEALS ITSELF (2026-09-12). Once a minute: if runtime.json is gone, or names another
+// pid whose url no longer answers as this service, write ours again. A pointer naming a LIVE other
+// daemon (a hopped successor, an update relaunch mid-handover) is that daemon's and is left alone.
+// Until this, a pointer deleted by hand or overwritten by a pre-fix probe stayed wrong for as long
+// as this daemon lived, and every client on the machine dialled a dead port.
+// A tick that fails is a tick skipped (timer-callback-can-kill-the-daemon.mjs): the process exits
+// on an unhandled rejection, so the chain ends in .catch and the next tick is a minute away.
+const POINTER_REASSERT_MS = 60_000
+// The handle is held, not dropped, so the graceful shutdown below can clear the ticker. `.unref()`
+// on the next line is separate and still needed: it keeps this repeating timer from being a reason
+// for the process to stay alive, which it must never be.
+const pointerReassertTimer = setInterval(() => {
+  reassertInstancePointer(boundPort, () => ({
+    portableMode: portableModeEnabled(),
+    hideTrayIcon: hideTrayIconEnabled(),
+  }))
+    .then((verdict) => {
+      if (verdict === 'rewritten')
+        console.warn(
+          `[agenthydra] ${instanceFilePath()} was missing or named a dead daemon; re-asserted it for this one (pid ${process.pid}, port ${boundPort})`,
+        )
+    })
+    .catch(() => {})
+  // The MCP entry goes stale the same way the pointer does (another process rewrites the file it
+  // lives in), so it is re-asserted on the same cadence. Only while registration is ON: with it
+  // off, boot and the settings toggle remove the entry exactly as before, and a minute timer has
+  // no business removing an entry someone wrote by hand in between. Synchronous, never throws.
+  if (mcpRegisterEnabled()) mcpReasserter.run()
+}, POINTER_REASSERT_MS)
+pointerReassertTimer.unref()
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
 // port, not the configured one, so a hop off a busy 7787 does not leave the Python side talking
 // to whatever answers there. See orchestratorChildEnv.
@@ -811,32 +999,41 @@ setOrchestratorDaemonUrl(daemonSelfUrl)
 // after the port is bound, because the entry carries the URL: registering before the hop is
 // resolved would write a URL nothing is listening on. Runs on every boot so a hop cannot leave a
 // stale one behind, writes only when the entry actually differs, and never throws.
-{
-  const reg = syncMcpRegistration({ daemonUrl: daemonSelfUrl })
-  if (reg.error) console.warn(`[agenthydra] MCP registration: ${reg.error}`)
-  else if (reg.action === 'added' || reg.action === 'updated' || reg.action === 'removed')
-    console.log(`[agenthydra] MCP registration ${reg.action} in ${reg.configPath}`)
-}
+mcpReasserter.run()
 // AH-11: now that boundPort (and the runtime pointer) are known, resolve the exact-origin
 // allowlist the cors() and loopbackGuard() callbacks above read on every request. This runs well
 // before Bun.serve() starts accepting connections, so no request can observe the empty initial []
 // declared above.
 allowedApiOrigins = computeAllowedApiOrigins(boundPort)
-// Say ONCE that this build has no tray icon. The single-file .exe carries no misc\ sidecar, so
-// misc\lunarwerx-tray.exe cannot exist and no tray icon can ever appear whatever the in-app
-// setting says (release.yml's asset table states this, but only on the Releases page - the .exe
-// is the bigger, more obvious download and nothing at the moment of RUNNING it admits the
-// difference). The build is also --windows-hide-console, so a console.log here reaches nobody;
-// an OS toast is the only channel that actually lands. Gated three ways so it stays quiet:
-// IS_COMPILED is false in every dev and test run, so this is a true no-op under `bun test`;
-// isRelaunchSuccessor() skips the auto-update hop, which happens every few days; and the settings
-// flag means a person who knows and doesn't care is told exactly once, never again.
-if (IS_COMPILED && !isRelaunchSuccessor() && !existsSync(join(APP_ROOT, 'misc'))) {
+// EVERY BUILD CARRIES ITS TRAY (owner, 2026-09-11: a compiled exe without one "needs to be
+// fixed"). The single-file exe has no misc\ sidecar, so it writes the host, its config and its icon
+// out of its own binary on first run (tray-toolkit.ts) and the rest of this file treats that copy
+// exactly like a sidecar. This used to be the place that told the person their download had no tray
+// icon and to go fetch a different artifact - a toast instead of a feature.
+const trayToolkit = await materializeTrayToolkit({
+  appRoot: APP_ROOT,
+  compiled: IS_COMPILED,
+  stateDir: DATA_DIR,
+  version: VERSION,
+  exePath: process.execPath,
+})
+if (trayToolkit.wrote.length > 0)
+  console.log(
+    `[agenthydra] placed the tray toolkit in ${trayToolkit.dir} (${trayToolkit.wrote.join(', ')})`,
+  )
+// The ONLY honest toast left: a compiled build that could not place it. The binary is
+// --windows-hide-console, so a console.log reaches nobody; gated on the settings flag so a person
+// who cannot fix it is told once, not every boot.
+if (IS_COMPILED && !isRelaunchSuccessor() && trayToolkit.dir === null) {
+  console.error(
+    `[agenthydra] no tray host available: ${trayToolkit.reason}`,
+    trayToolkit.error ?? '',
+  )
   if (getSetting('no_tray_build_notified') !== '1') {
     setSetting('no_tray_build_notified', '1')
     void sendOsNotification({
-      title: 'AgentHydra has no tray icon in this build',
-      body: 'This is the single-file .exe. For the tray icon and the auto-restart supervisor, download the .zip release instead.',
+      title: 'AgentHydra could not start its tray icon',
+      body: `The tray host could not be placed (${trayToolkit.reason}). The app is running, but it has no icon and no Quit - see the log beside it.`,
     })
   }
 }
@@ -851,6 +1048,7 @@ void startTrayHostIfMissing({
   appRoot: APP_ROOT,
   compiled: IS_COMPILED,
   hideTray: hideTrayIconEnabled,
+  toolkitDir: trayToolkit.dir,
 })
   .then((r) => {
     if (r.start) console.log(`[agenthydra] started the tray host (${r.exe}) - nothing else had`)
@@ -872,7 +1070,10 @@ void startTrayHostIfMissing({
 // ambiguity resolves towards staying alive - see tray-invariant.ts.
 startTrayInvariant({
   compiled: IS_COMPILED,
-  hasTrayToolkit: existsSync(join(APP_ROOT, 'misc')),
+  // A single-file build now HAS a toolkit (materialized above), so this invariant covers it too -
+  // which is the point: before, `existsSync(APP_ROOT/misc)` was false for every compiled exe, so
+  // the one build most people run was exempt from "never run without an icon".
+  hasTrayToolkit: trayToolkit.dir !== null,
   hideTray: hideTrayIconEnabled,
   trayRunning: trayHostRunning,
   restartTray: async () => {
@@ -880,6 +1081,7 @@ startTrayInvariant({
       appRoot: APP_ROOT,
       compiled: IS_COMPILED,
       hideTray: hideTrayIconEnabled,
+      toolkitDir: trayToolkit.dir,
     })
   },
   graceMs: 5_000,
@@ -898,6 +1100,9 @@ clearShutdownRequest()
 process.on('exit', () => clearInstanceInfo())
 for (const sig of ['SIGINT', 'SIGTERM'] as const)
   process.on(sig, async () => {
+    // Stop the pointer ticker first: the re-assert it performs is worth nothing once we are going
+    // away, and a tick landing after clearInstanceInfo() would write the pointer back.
+    clearInterval(pointerReassertTimer)
     await flushConnectionsBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
@@ -907,6 +1112,14 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
 const moved = boundPort !== PORT ? `  (port ${PORT} was busy)` : ''
 console.log(`[agenthydra] http://${HOST}:${boundPort}${moved}`)
 console.log(`[agenthydra] state: ${DB_PATH}`)
+// A side-run says so, out loud, on the line after its state: its store is somewhere else, so it
+// deliberately did NOT take the machine-wide pointer every client resolves the daemon through, and
+// no tool on this machine will find it. That is the correct behaviour and it is also surprising, so
+// it is printed rather than left for someone to deduce. See IS_PRIMARY_INSTALL in instance.ts.
+if (POINTER_DIR !== CONFIG_DIR)
+  console.log(
+    `[agenthydra] side-run: this daemon's pointer is ${join(POINTER_DIR, 'runtime.json')}, and the machine-wide one was left alone`,
+  )
 // Loud on purpose. This line only prints when a second state directory exists, and the whole cost
 // of that situation is someone not knowing about it (see resolveDataDir in config.ts).
 if (DATA_DIR_NOTICE) console.warn(`[agenthydra] WARNING: ${DATA_DIR_NOTICE}`)
@@ -1070,6 +1283,11 @@ startAutomationStampSweep()
 // floor beneath it, and it is also the caller the title janitor lost when the v1 orchestrator was
 // retired - see title-sweep.ts.
 startTitleSweep()
+
+// Every 10 minutes: flags any open instance or live chat on an older Claude than the rest of the
+// fleet, stages the current Claude Code into closed profiles and keeps the CLI install in step.
+// See version-drift.ts.
+startVersionDriftWatch()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

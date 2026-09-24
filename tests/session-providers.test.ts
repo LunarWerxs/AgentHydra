@@ -51,7 +51,7 @@ test('Codex injected runtime blocks are not rendered as human messages', () => {
   ).toBe(true)
   expect(
     codexEventToTailEvents({
-      timestamp: '2026-07-23T12:00:00Z',
+      timestamp: '2021-07-23T12:00:00Z',
       type: 'response_item',
       payload: {
         type: 'message',
@@ -65,9 +65,9 @@ test('Codex injected runtime blocks are not rendered as human messages', () => {
 test('Codex sidebar index supplies authoritative chat titles and tolerates malformed rows', () => {
   const entries = parseCodexSessionIndex(
     [
-      '{"id":"chat-1","thread_name":"Old generated title","updated_at":"2026-07-25T01:00:00Z"}',
+      '{"id":"chat-1","thread_name":"Old generated title","updated_at":"2021-07-25T01:00:00Z"}',
       'not json',
-      '{"id":"chat-1","thread_name":"Investigate chat splitting behavior","updated_at":"2026-07-26T01:00:00Z"}',
+      '{"id":"chat-1","thread_name":"Investigate chat splitting behavior","updated_at":"2021-07-26T01:00:00Z"}',
       '{"id":"chat-2","thread_name":"Audit analytics and Heimdall","updated_at":"invalid"}',
       '{"id":"missing-title"}',
     ].join('\n'),
@@ -75,7 +75,7 @@ test('Codex sidebar index supplies authoritative chat titles and tolerates malfo
 
   expect(entries.get('chat-1')).toEqual({
     title: 'Investigate chat splitting behavior',
-    updatedAt: Date.parse('2026-07-26T01:00:00Z'),
+    updatedAt: Date.parse('2021-07-26T01:00:00Z'),
   })
   expect(entries.get('chat-2')).toEqual({
     title: 'Audit analytics and Heimdall',
@@ -86,7 +86,7 @@ test('Codex sidebar index supplies authoritative chat titles and tolerates malfo
 
 test('Codex rollout messages and tools map to the shared tail model', () => {
   const message = codexEventToTailEvents({
-    timestamp: '2026-07-23T12:00:00Z',
+    timestamp: '2021-07-23T12:00:00Z',
     type: 'response_item',
     payload: {
       type: 'message',
@@ -100,7 +100,7 @@ test('Codex rollout messages and tools map to the shared tail model', () => {
       kind: 'text',
       text: 'Fixed the issue.',
       tool_name: null,
-      timestamp: '2026-07-23T12:00:00Z',
+      timestamp: '2021-07-23T12:00:00Z',
     },
   ])
 

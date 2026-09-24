@@ -25,7 +25,7 @@ const snap = (parts: Partial<UsageSnapshot> = {}): UsageSnapshot => ({
   session: null,
   weekAll: null,
   weekModel: null,
-  capturedAt: '2026-08-05T12:00:00.000Z',
+  capturedAt: '2021-08-05T12:00:00.000Z',
   ...parts,
 })
 /** The default rule: weekly on at 80, the 5-hour window off. */

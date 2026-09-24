@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
-import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { scanSessionAnalytics } from '../src/analytics'
@@ -223,9 +223,16 @@ describe('a Hermes store: sessions, transcript mapping, search and usage', () =>
   })
 })
 
+const hermesHomes: string[] = []
+afterAll(() => {
+  for (const h of hermesHomes.splice(0)) rmSync(h, { recursive: true, force: true })
+})
+
 describe('listHermesStores: the root store plus its profiles', () => {
   function makeHome(): string {
-    return mkdtempSync(join(tmpdir(), 'agenthydra-hermes-home-'))
+    const dir = mkdtempSync(join(tmpdir(), 'agenthydra-hermes-home-'))
+    hermesHomes.push(dir)
+    return dir
   }
 
   test('the root store and every profile that actually has a database', () => {

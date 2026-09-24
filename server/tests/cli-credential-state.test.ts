@@ -5,16 +5,25 @@
 //
 // So the rule is: answer 'dead' only on PROOF. These pin every branch, including the ones where
 // ignorance must not be mistaken for proof.
-import { expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cliConfigDirCredentialState } from '../src/core/accounts'
 
 const HOUR = 3_600_000
 
+const CRED_ROOT = mkdtempSync(join(tmpdir(), 'ah-cred-'))
+afterAll(() => rmSync(CRED_ROOT, { recursive: true, force: true }))
+let credScratchSeq = 0
+function credScratchDir(): string {
+  const dir = join(CRED_ROOT, `d${credScratchSeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
 function dirWith(creds: unknown | null): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ah-cred-'))
+  const dir = credScratchDir()
   if (creds !== null) writeFileSync(join(dir, '.credentials.json'), JSON.stringify(creds))
   return dir
 }
@@ -59,11 +68,11 @@ test('an unknown refresh expiry is never proof of death', () => {
 })
 
 test('unreadable, empty, or malformed credentials answer ABSENT, never DEAD', () => {
-  const bad = mkdtempSync(join(tmpdir(), 'ah-cred-'))
+  const bad = credScratchDir()
   writeFileSync(join(bad, '.credentials.json'), '{not json')
   expect(cliConfigDirCredentialState(bad)).toBe('absent')
 
-  const empty = mkdtempSync(join(tmpdir(), 'ah-cred-'))
+  const empty = credScratchDir()
   writeFileSync(join(empty, '.credentials.json'), '   ')
   expect(cliConfigDirCredentialState(empty)).toBe('absent')
 

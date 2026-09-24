@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Callable
@@ -19,22 +20,49 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from lib import configlib
+
 DEFAULT_PORT = 7787
+
+
+def _runtime_pointer_path(env, home: Path | None) -> Path:
+    """<config dir>/runtime.json - the config dir is AGENTHYDRA_HOME when set, else ~/.agenthydra,
+    the same rule the daemon's own config.ts applies."""
+    root = (env.get("AGENTHYDRA_HOME") or "").strip()
+    base = Path(root) if root else (home or Path.home()) / ".agenthydra"
+    return base / "runtime.json"
 
 
 def _runtime_pointer_url(env, home: Path | None) -> str:
     """The URL the daemon recorded in <config dir>/runtime.json when it bound its port, or ''.
-    The config dir is AGENTHYDRA_HOME when set, else ~/.agenthydra - the same rule the daemon's
-    own config.ts applies. A missing or unreadable pointer is simply '' (the caller falls back);
-    a stale one from a crashed daemon is caught by the first request failing, as it is for MCP."""
-    root = (env.get("AGENTHYDRA_HOME") or "").strip()
-    base = Path(root) if root else (home or Path.home()) / ".agenthydra"
+    A missing or unreadable pointer is simply '' (the caller falls back); a STALE one - a crash, a
+    hard kill or a pre-fix side-run left it naming a port nothing listens on - is caught by the
+    first request failing, and _send then says so and asks the default port (2026-09-12)."""
     try:
-        info = json.loads((base / "runtime.json").read_text(encoding="utf-8"))
+        info = json.loads(_runtime_pointer_path(env, home).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
     url = info.get("url") if isinstance(info, dict) else None
     return str(url).rstrip("/") if isinstance(url, str) and url.startswith("http") else ""
+
+
+def resolve_base(env=None, home: Path | None = None) -> tuple[str, str, str]:
+    """(url, source, pointer_path): where the daemon is, and HOW that was decided - 'url' or
+    'port' for an explicit AGENTHYDRA_URL / AGENTHYDRA_PORT, 'pointer' for the runtime.json the
+    daemon wrote when it bound its port, 'default' for 7787. The source matters the moment the
+    url refuses a connection: a pointer can be stale, the caller's own word never is."""
+    env = os.environ if env is None else env
+    pointer_path = str(_runtime_pointer_path(env, home))
+    url = (env.get("AGENTHYDRA_URL") or "").strip()
+    if url:
+        return url.rstrip("/"), "url", pointer_path
+    port = (env.get("AGENTHYDRA_PORT") or "").strip()
+    if port.isdigit():
+        return f"http://127.0.0.1:{int(port)}", "port", pointer_path
+    pointer = _runtime_pointer_url(env, home)
+    if pointer:
+        return pointer, "pointer", pointer_path
+    return f"http://127.0.0.1:{DEFAULT_PORT}", "default", pointer_path
 
 
 def resolve_base_url(env=None, home: Path | None = None) -> str:
@@ -48,20 +76,15 @@ def resolve_base_url(env=None, home: Path | None = None) -> str:
     while every fleet read failed - or, with an older daemon still on 7787, read the wrong one.
     The daemon now also pins AGENTHYDRA_URL into the children it spawns; this is the standalone
     half, for a script run from a shell."""
-    env = os.environ if env is None else env
-    url = (env.get("AGENTHYDRA_URL") or "").strip()
-    if url:
-        return url.rstrip("/")
-    port = (env.get("AGENTHYDRA_PORT") or "").strip()
-    if port.isdigit():
-        return f"http://127.0.0.1:{int(port)}"
-    pointer = _runtime_pointer_url(env, home)
-    if pointer:
-        return pointer
-    return f"http://127.0.0.1:{DEFAULT_PORT}"
+    return resolve_base(env, home)[0]
 
 
-BASE = resolve_base_url()
+BASE, _BASE_SOURCE, _POINTER_PATH = resolve_base()
+# The url the pointer named at import. The stale-pointer fallback in _send fires ONLY while BASE is
+# still that url: a caller (or a test) that reassigns BASE has made its own decision.
+_POINTER_BASE = BASE if _BASE_SOURCE == "pointer" else ""
+_DEFAULT_BASE = f"http://127.0.0.1:{DEFAULT_PORT}"
+_SIDE_RUN_ANNOUNCED = False
 TIMEOUT_SECS = float(os.environ.get("AGENTHYDRA_TIMEOUT_SECS", "30"))
 
 # THE TEST SEAM, AND WHY THE SUITE NEEDS ONE (measured 2026-09-05). The unit tests' stub daemon
@@ -109,10 +132,64 @@ class AmbiguousChat(LookupError):
         self.matches = matches
 
 
-def _send(method: str, path: str, data: bytes | None, timeout: float) -> tuple[int, bytes]:
+def _stale_pointer_note() -> str:
+    """The sentence for a pointer-named BASE that refused, or '' when BASE is anyone else's word
+    (an explicit env, the default, or a caller's own reassignment)."""
+    if not _POINTER_BASE or BASE != _POINTER_BASE or BASE == _DEFAULT_BASE:
+        return ""
+    return (
+        f"{_POINTER_PATH} names {BASE}, nothing is listening there, and it may be stale "
+        "(a daemon that exits cleanly deletes it; a crash, a hard kill or a side-run leaves it behind)"
+    )
+
+
+def _default_port_answers() -> bool:
+    """One /api/health probe of the default port AS this service: in-process when a stub owns that
+    base (INPROC), else on the wire with a short timeout. Anything but an ok answer is False."""
+    inproc = INPROC.get(_DEFAULT_BASE)
+    try:
+        if inproc is not None:
+            status, raw = inproc("GET", "/api/health", None)
+        else:
+            req = urllib.request.Request(
+                f"{_DEFAULT_BASE}/api/health", headers={"accept": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=1.5) as res:
+                status, raw = res.status, res.read()
+        body = json.loads(raw) if status == 200 else None
+        return bool(isinstance(body, dict) and body.get("ok") and body.get("service") == "agenthydra")
+    except Exception:
+        return False
+
+
+def _note_side_run(store) -> None:
+    """The daemon stamps every answer with x-agenthydra-side-run: <store> when its store is not the
+    machine's (server/src/side-run.ts). Say so ONCE, loudly, on stderr: a script that silently
+    reads or writes a scratch database is worse than one that fails, because it looks like it
+    worked. Wire-only by construction - an in-process stub carries no headers."""
+    global _SIDE_RUN_ANNOUNCED
+    if not store or _SIDE_RUN_ANNOUNCED:
+        return
+    _SIDE_RUN_ANNOUNCED = True
+    sys.stderr.write(
+        f"hydralib: SIDE-RUN DAEMON at {BASE} serves {store}, which is NOT this machine's fleet "
+        "store; every read and write here goes to that store. Set AGENTHYDRA_URL to the real daemon "
+        "if that is what you meant.\n"
+    )
+
+
+def _send(method: str, path: str, data: bytes | None, timeout: float,
+          *, retry_stale_pointer: bool = True) -> tuple[int, bytes]:
     """(HTTP status, raw body) for one request to BASE - over the wire, or from the in-process
     stub registered for BASE (INPROC above). Only a transport failure raises here; the status is
-    the caller's to judge, so both transports feed the same mapping in _request."""
+    the caller's to judge, so both transports feed the same mapping in _request.
+
+    A REFUSED CONNECTION TO A POINTER-NAMED PORT IS NOT "THE DAEMON IS DOWN" (2026-09-12). A probe
+    daemon left ~/.agenthydra/runtime.json naming a dead 7799 while the real daemon answered on
+    7787, and this function said "is the daemon running?" - the advice that starts a second one. So
+    when BASE is the pointer's word and it refuses: say the pointer may be stale, in those words,
+    ask the default port once, and switch to it for the rest of the process if it answers as us."""
+    global BASE
     inproc = INPROC.get(BASE)
     if inproc is not None:
         try:
@@ -129,6 +206,7 @@ def _send(method: str, path: str, data: bytes | None, timeout: float) -> tuple[i
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as res:
+            _note_side_run(res.headers.get("x-agenthydra-side-run"))
             return res.status, res.read()
     except urllib.error.HTTPError as e:
         try:
@@ -137,6 +215,23 @@ def _send(method: str, path: str, data: bytes | None, timeout: float) -> tuple[i
             detail = b""
         return e.code, detail
     except (urllib.error.URLError, TimeoutError, OSError) as e:
+        if not retry_stale_pointer:
+            raise DaemonError(path, None, f"{e} - mutation was not retried") from None
+        stale = _stale_pointer_note()
+        if stale and retry_stale_pointer and _default_port_answers():
+            sys.stderr.write(
+                f"hydralib: {stale}; the default port answers as agenthydra, so this process uses "
+                f"{_DEFAULT_BASE} from here on. Do NOT start another daemon.\n"
+            )
+            BASE = _DEFAULT_BASE
+            return _send(method, path, data, timeout)
+        if stale:
+            raise DaemonError(
+                path,
+                None,
+                f"{e} - {stale}, and the default port did not answer either. Is the daemon "
+                f"running? try: curl {_DEFAULT_BASE}/api/health",
+            ) from None
         raise DaemonError(path, None, f"{e} - is the daemon running? try: curl {BASE}/api/health") from None
 
 
@@ -162,6 +257,19 @@ def api_post(path: str, body: dict | None = None, timeout: float | None = None) 
     then WATCHES for a result - and the message endpoint does exactly that, so the caller
     has to say so (see courier's send, and the 2026-09-01 note there)."""
     return _request("POST", path, body if body is not None else {}, timeout=timeout)
+
+
+def api_post_once(path: str, body: dict, timeout: float | None = None) -> dict | list:
+    """One mutation request, without retrying an uncertain POST at another daemon."""
+    status, raw = _send("POST", path, json.dumps(body).encode(),
+                        timeout if timeout is not None else TIMEOUT_SECS,
+                        retry_stale_pointer=False)
+    if status >= 400:
+        raise DaemonError(path, status, raw.decode(errors="replace")[:500])
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise DaemonError(path, None, f"non-JSON response: {raw[:200]!r}") from None
 
 
 def health() -> dict:
@@ -252,6 +360,56 @@ def sessions_all(archived: str = "include", page_size: int = CENSUS_PAGE) -> lis
         offset += len(page)
 
 
+CHATS_PAGE = 1000  # the endpoint's own ceiling per request
+
+
+def chats(instance: str | None = None, archived: str = "include",
+          page_size: int = CHATS_PAGE) -> list[dict]:
+    """GET /api/chats - what a desktop account HOLDS, read off the stores themselves.
+
+    ⛔ WHY THIS EXISTS BESIDE sessions() (the archive sweep, 2026-09-13). Minutes after a
+    killed batch, `migrate_batch --from 56 --all-unarchived` reported "0 unarchived desktop
+    chat(s)" while `list_chats` showed THREE on that same account, and naming the three ids
+    by hand then moved them cleanly. Two enumerators disagreed about what one account held,
+    and the one that said zero is the reading that silently does nothing.
+
+    The difference is not a filter, it is the QUESTION each endpoint answers. /api/sessions
+    resolves a session id to ONE owning profile (instance-sessions.ts's setPreferred: live
+    beats archived, else newest mtime), which is right for "where is this chat now" and wrong
+    for "what does this account hold" - a half-moved chat exists on two accounts at once, and
+    collapsing it hides it from the account it is still sitting on. /api/chats is a fresh
+    per-instance store scan with no collapsing, which is the same read `list_chats` serves.
+
+    Rows carry: instance, sessionId, chatId, title, archived, isArchived, lastActivityAt (ISO),
+    live, done. A 200 whose body does not carry `rows` RAISES rather than returning [] - an
+    enumerator that answers "empty" on a degraded payload is the failure this docstring opens
+    with.
+
+    ⛔ A CENSUS BY DEFAULT: EVERY ROW, ARCHIVED INCLUDED, EVERY PAGE (review finding, 2026-09-14).
+    The endpoint's own defaults are a UI's - `archived=hide` and `limit=200` - and the first cut
+    of this function took them. That silently DISABLED migrate_batch's archive gate, which asks
+    this list "is the chat you named archived?" and was being handed a list with every archived
+    chat removed; and it capped the answer at 200 rows, on a fleet whose archive alone is
+    thousands. Callers filter locally, exactly as sessions_all's contract already says.
+    """
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        params = {"archived": archived, "limit": page_size, "offset": offset}
+        if instance:
+            params["instance"] = str(instance)
+        path = "/api/chats?" + urllib.parse.urlencode(params)
+        got = api_get(path)
+        if not (isinstance(got, dict) and isinstance(got.get("rows"), list)):
+            raise DaemonError(path, None, f"unexpected response shape: {str(got)[:200]!r}")
+        page = got["rows"]
+        rows.extend(page)
+        offset += len(page)
+        total = got.get("total")
+        if not page or len(page) < page_size or (isinstance(total, int) and offset >= total):
+            return rows
+
+
 def dossier(query: str) -> list[dict]:
     """GET /api/chats/dossier?q= - the one query for 'what is the state of chat X'.
 
@@ -293,6 +451,14 @@ def choose_match(query: str, matches: list[dict]) -> dict:
         alive = [m for m in matches if not m.get("archived")]
         if len(alive) == 1:
             return alive[0]
+        # ⛔ ON DISK IS NOT ON SCREEN (2026-09-18). An un-archived record filed under an account
+        # its profile is no longer signed into (`staleLogin`) is invisible in the app, so when
+        # exactly one un-archived copy is the one the owner can actually see, that one IS the
+        # chat - picking the invisible twin by recency would move the chat away from where it
+        # shows. Unknown (None) counts as on screen, the same as before this flag existed.
+        on_screen = [m for m in alive if m.get("staleLogin") is not True]
+        if alive and len(on_screen) == 1:
+            return on_screen[0]
         # ONE LINEAGE, MANY RECORDS is the zombie-twin shape (a running app resurrects the
         # archived source row after every migrate/reimport), not ambiguity: every record IS
         # the same chat, so the newest one - current title, current metaPath - answers for
@@ -456,10 +622,10 @@ def usage_cache() -> dict:
 # hit that limit we just pause and come back - cycling round robin"). Anything that WAKES a
 # chat (a delivery, a native revive, a compact turn) checks running_count() first; a
 # deferred wake stays staged and the 5-minute cycle retries it - that IS the round robin.
-MAX_RUNNING_CHATS = 18
+MAX_RUNNING_CHATS = configlib.get("bands.max_running_chats")
 
 
-def _live_endpoint() -> dict | None:
+def _live_endpoint(lineage: bool = False) -> dict | None:
     """Raw GET /api/sessions/live, shape-checked: {count: int, sessions: list}.
 
     The validated lookup shared by running_count() and running_by_instance() (extracted
@@ -467,9 +633,13 @@ def _live_endpoint() -> dict | None:
     checking, so a malformed 200 would have silently answered with no live sessions at all -
     the exact 'unknown reads as room under the cap' failure this file forbids everywhere else).
     Returns None on a 404 (older daemon: caller falls back to _live_ids_via_walk()). Any other
-    failure, or a 200 missing either field, RAISES - unknown must never read as empty."""
+    failure, or a 200 missing either field, RAISES - unknown must never read as empty.
+
+    `lineage=True` asks for `?lineage=1`: every row then carries `lineageIds` and the answer
+    carries `lineage: true`. A daemon older than that parameter ignores it, and the missing
+    flag is how a caller tells - never the absence of aliases, which is also a real answer."""
     try:
-        got = api_get("/api/sessions/live")
+        got = api_get("/api/sessions/live" + ("?lineage=1" if lineage else ""))
         if isinstance(got, dict) and isinstance(got.get("count"), int) and isinstance(got.get("sessions"), list):
             return got
         raise DaemonError("/api/sessions/live", None,
@@ -666,6 +836,93 @@ def running_by_instance() -> tuple[set[str], dict[str, int]]:
         if row.get("session_id") in live and row.get("instance"):
             per[row["instance"]] = per.get(row["instance"], 0) + 1
     return live, per
+
+
+#: Key prefix for the transcript-path half of a live index. Two keyspaces in one dict beats
+#: two dicts every caller has to remember to check.
+LIVE_PATH_KEY = "path::"
+
+
+def live_index() -> dict[str, dict] | None:
+    """LIVENESS FOR THE WHOLE FLEET IN ONE CALL - the plan's 90%, measured 2026-09-17.
+
+    build_plan asked the daemon `live_for(sid)` once PER CHAT: 668ms each, 128 chats, 86 of
+    the dry loop's 132 seconds, and every consumer of the plan (the sweep, the groundskeeper,
+    the dashboard, the courier) paid it again. The gate itself costs under a millisecond per
+    chat; the wait was entirely one HTTP round trip per row against a registry the daemon
+    will hand over in full for one request.
+
+    Returns session_id -> that chat's live block ({pid,name,startedAt,cwd}), plus a
+    `LIVE_PATH_KEY + transcript_path` entry for each, so a caller can attribute a process by
+    transcript when the id has rotated. A chat ABSENT from the returned index is not live:
+    /api/sessions/live reads the same pid-checked registry the dossier's `live` field answers
+    from, so the two cannot disagree (that is running_count()'s standing claim, not a new
+    one). Returns None when the fleet's liveness cannot be established in full - an older
+    daemon with no endpoint, or a failed lineage read - and None means "use the slow
+    per-chat path", never "nothing is live".
+
+    ⛔ THE LINEAGE HOLE: EVERY ALIAS OF EVERY LIVE ENGINE IS INDEXED. Identity rotates: a
+    chat that rolled its cli session id keeps a transcript row under the OLD id while its
+    engine runs under the NEW one, and an index keyed on the engine's own id would read the
+    old row as 'not live' - the one mistake this file forbids everywhere. So the aliases of
+    every live engine (the chat's cliSessionId, lineageIds, priorCliSessionIds) all map to it:
+      - a daemon that answers `?lineage=1` hands them over in the same call;
+      - an older one gets one dossier lookup PER LIVE ENGINE, every one of them (13 engines,
+        about a second each, measured 2026-09-17) - slower, and still no walk over 165 chats.
+    The first version skipped that lookup for any engine whose own id or transcript was
+    already a known row. That is exactly the case where the OLD row is the one at risk, and
+    on the live fleet it skipped all 13 engines, so the correction never ran (review,
+    2026-09-17). Nothing is skipped now.
+    """
+    got = _live_endpoint(lineage=True)
+    if got is None:
+        return None  # older daemon: the caller keeps live_for() per chat
+    joined = got.get("lineage") is True and all(
+        isinstance(r.get("lineageIds"), list) for r in got["sessions"])
+    index: dict[str, dict] = {}
+    own: dict[str, dict] = {}
+    for r in got["sessions"]:
+        block = {"pid": r.get("pid"), "name": r.get("name"),
+                 "startedAt": r.get("startedAt"), "cwd": r.get("cwd")}
+        sid = str(r.get("sessionId") or "")
+        path = str(r.get("transcriptPath") or "")
+        if sid:
+            own[sid] = block
+        if path:
+            index[LIVE_PATH_KEY + path] = block
+        for alias in (r.get("lineageIds") or []) if joined else []:
+            if alias:
+                index[str(alias)] = block
+    if not joined:
+        for sid in own:
+            try:
+                matches = dossier(sid)
+            except DaemonError:
+                # Liveness we could not finish establishing is UNKNOWN, and unknown must never
+                # be served as 'not live'. Hand the caller back to the slow, per-chat path.
+                return None
+            for m in matches:
+                ids = ([m.get("cliSessionId")] + list(m.get("lineageIds") or [])
+                       + list(m.get("priorCliSessionIds") or []))
+                block = m.get("live") or (own[sid] if sid in ids else None)
+                if not block:
+                    continue
+                for alias in ids:
+                    if alias:
+                        index[str(alias)] = block
+    # An engine's own id always answers with its own block, whatever an alias said.
+    index.update(own)
+    return index
+
+
+def live_from_index(index: dict[str, dict], session_id: str,
+                    transcript_path: str = "") -> dict | None:
+    """One chat's live block out of a live_index(), by id then by transcript. The single
+    place that knows the index has two keyspaces."""
+    hit = index.get(session_id)
+    if hit is not None:
+        return hit
+    return index.get(LIVE_PATH_KEY + transcript_path) if transcript_path else None
 
 
 def live_for(session_id: str, matches: list[dict] | None = None) -> dict | None:

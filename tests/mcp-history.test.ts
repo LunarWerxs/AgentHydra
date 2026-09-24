@@ -95,7 +95,17 @@ describe('list_sessions', () => {
     // 'foreign' is the shared reader for Cursor, Windsurf, Zed, Copilot CLI and the rest. Leaving it
     // out of the enum made a whole class of local history unaddressable over MCP.
     // 'hermes' joined on 2026-09-04: Hermes Agent's own SQLite store, read by hermes-sessions.ts.
-    expect(source?.enum).toEqual(['claude', 'codex', 'opencode', 'hermes', 'foreign'])
+    // 'dsh' joined on 2026-09-12: DeepSeek Harness's per-session zstd logs, read by dsh-sessions.ts.
+    // 'zswarm' joined on 2026-09-15: the DeepSeek zswarm's per-job job.json, read by zswarm-sessions.ts.
+    expect(source?.enum).toEqual([
+      'claude',
+      'codex',
+      'opencode',
+      'hermes',
+      'dsh',
+      'zswarm',
+      'foreign',
+    ])
   })
 })
 

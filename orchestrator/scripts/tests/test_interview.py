@@ -126,11 +126,21 @@ class InterviewTest(unittest.TestCase):
         bad = interview.apply_answers({"answers": [{"sessionId": SID, "decision": "hold"}]})
         self.assertFalse(bad[0]["ok"])
 
-    def test_archive_answer_runs_the_real_rails_with_the_persons_word(self):
+    def test_archive_answer_runs_the_real_rails_without_lifting_a_hold(self):
+        """⛔ An AI's 'archive' answer used to run archive_chat --force, and --force is also the
+        flag that lifts a HOLD the owner placed by hand (fixed 2026-09-17). By default it now
+        runs the plain rails; only archive.ai_decision_uses_force puts --force back."""
         with mock.patch("archive_chat.main", return_value=0) as m:
             results = interview.apply_answers({"answers": [{"sessionId": SID, "decision": "archive"}]})
-        m.assert_called_once_with([SID, "--force"])
+        m.assert_called_once_with([SID])
         self.assertTrue(results[0]["ok"])
+        real_get = interview.configlib.get
+        with mock.patch("archive_chat.main", return_value=0) as m, \
+                mock.patch.object(interview.configlib, "get",
+                                  side_effect=lambda k, *a: k == "archive.ai_decision_uses_force"
+                                  or real_get(k, *a)):
+            interview.apply_answers({"answers": [{"sessionId": SID, "decision": "archive"}]})
+        m.assert_called_once_with([SID, "--force"])
 
     def test_a_refused_archive_is_named_not_swallowed(self):
         with mock.patch("archive_chat.main", return_value=4):

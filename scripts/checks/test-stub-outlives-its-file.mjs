@@ -48,6 +48,22 @@ const MODULE_MOCK = /(?<![\w$.])mock\.module\s*\(/g
 const BEFORE_HOOK = /(?<![\w$.])(?:beforeAll|beforeEach)\s*\(/g
 const AFTER_HOOK = /(?<![\w$.])(?:afterAll|afterEach)\s*\(/g
 
+// RULE C, a stub that outlives its file by way of the code under test's OWN module state, added
+// 2026-09-14 after it took GitHub's Linux runner red. The orchestrator keeps one route lock per
+// script name in a module-level Map, and that map is as process-wide as globalThis is. A spawn
+// stubbed never to settle - which is how orchestrator-stale-lock.test.ts pins "a young lock still
+// blocks a second caller" - leaves the lock behind FOREVER: the run that holds it can never reach
+// the `finally` that releases it. Every later file's run of that script is then refused `409 busy`
+// by a run that does not exist. It cost the preempt suite three red tests on ubuntu and green on
+// windows, off nothing but which file readdir listed first, and the red named the innocent file.
+// So: a test that parks a never-settling orchestrator run must hand the module state back in an
+// after hook. An executor taking NO parameter is the provable case - nothing can ever settle it;
+// a stub that keeps its resolve (new Promise((r) => …)) can be released by the test itself and is
+// not reported, which keeps this rule free of the false reds that get a check ignored.
+const ORCH_CALL = /(?<![\w$.])(?:runOrchestrator|startOrchestratorOperation)\s*\(/g
+const NEVER_SETTLES = /(?<![\w$.])new\s+Promise\s*(?:<[^>(]*>\s*)?\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)/g
+const ORCH_RESET = /(?<![\w$.])resetOrchestratorOperationsForTests\s*\(/g
+
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'tmp', '.arkitect', 'coverage', 'build'])
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/
 
@@ -250,16 +266,80 @@ export function findViolations(text) {
     hits.push({ index: k.index, kind: 'module', name: k.spec })
   }
 
+  // Rule C: a never-settling spawn parked in the orchestrator's route lock, with nothing in an
+  // after hook to hand it back. The reset must be INSIDE the hook: a test that fails or times out
+  // never reaches the rest of its own body, which is the same reason rule A demands a hook.
+  ORCH_CALL.lastIndex = 0
+  ORCH_RESET.lastIndex = 0
+  const callsOrchestrator = [...code.matchAll(ORCH_CALL)].length > 0
+  const releasesInAfterHook = [...code.matchAll(ORCH_RESET)].some((m) => within(after, m.index))
+  if (callsOrchestrator && !releasesInAfterHook) {
+    NEVER_SETTLES.lastIndex = 0
+    for (const m of code.matchAll(NEVER_SETTLES)) hits.push({ index: m.index, kind: 'orchestrator-lock', name: 'the route lock' })
+  }
+
   return hits.sort((a, b) => a.index - b.index)
 }
 
 const lineAt = (text, index) => text.slice(0, index).split('\n').length
 
-const CHEAP_REJECT = /mock\.module|(?:globalThis|global|window)\.fetch\s*=|Bun\.spawn(?:Sync)?\s*=/
+const CHEAP_REJECT =
+  /mock\.module|(?:globalThis|global|window)\.fetch\s*=|Bun\.spawn(?:Sync)?\s*=|runOrchestrator|startOrchestratorOperation/
+
+/** The three rules' user-facing text, keyed by hit kind, so a new rule cannot be added without
+ *  saying what it found, why it matters and what to do - the half a check is actually read for. */
+function explain(hit) {
+  if (hit.kind === 'global')
+    return {
+      what: `${hit.name} stubbed, never restored`,
+      message:
+        `This file stubs ${hit.name} at module scope or in a before* hook and never assigns ` +
+        'it back in afterAll/afterEach. bun test runs every file in one process, so the ' +
+        "stub is what the NEXT file's code calls: three probe tests that did this to fetch " +
+        "on 2026-09-05 made instance-pointer's findLiveInstance probe its own server " +
+        'through a fake and count 0 hits, in a file nobody had touched.',
+      fix:
+        `Keep the original (const real = ${hit.name === 'fetch' ? 'globalThis.fetch' : hit.name}) ` +
+        'and assign it back in afterAll, or stub inside the test with a try/finally restore ' +
+        'the way web/tests/resource-status.test.ts does.',
+    }
+  if (hit.kind === 'module')
+    return {
+      what: `mock.module(${hit.name}) never re-mocked`,
+      message:
+        `mock.module(${JSON.stringify(hit.name)}) is global for the whole bun test run and ` +
+        'mock.restore() does not undo it: every file that loads this module after this one ' +
+        'gets the fake. request-generations.test.ts did this to web/src/lib/api on ' +
+        '2026-09-05 and resource-status.test.ts, next in the serial order, waited 5s three ' +
+        'times on a getQueue nothing would ever resolve.',
+      fix:
+        'Copy the real exports BEFORE installing the fake - ' +
+        '`const realApi = { ...(await import(SPEC)) }` - and re-mock to that copy in afterAll: ' +
+        '`afterAll(() => { mock.module(SPEC, () => realApi) })`. A copy taken after the fake ' +
+        "is a copy of the fake, because mock.module rewrites the namespace's live bindings. " +
+        'Better still, inject the dependency and mock nothing (tests/monitor.test.ts).',
+    }
+  return {
+    what: 'a never-settling orchestrator run leaves its route lock behind',
+    message:
+      'This file parks an orchestrator run on a spawn stub that can never settle, so the run ' +
+      'never reaches the `finally` that releases its route lock - and that lock lives in a ' +
+      'module-level Map, which is as process-wide as globalThis is. Every LATER file that runs ' +
+      'the same script is refused `409 busy` by a run that does not exist. On 2026-09-14 that ' +
+      'took three preempt tests red on ubuntu and left them green on windows, off nothing but ' +
+      'which file readdir listed first, and the red named a file nobody had touched.',
+    fix:
+      'Call resetOrchestratorOperationsForTests() inside afterEach/afterAll (it clears the ' +
+      'operation registry AND the route locks) - the shape ' +
+      'server/tests/orchestrator-stale-lock.test.ts ships. Inside the after hook, not at the end ' +
+      'of a test body: a test that fails or times out never reaches the rest of its own body.',
+  }
+}
 
 export const audit = {
   id: ID,
-  title: 'a test file must put back every global it stubs and every module it mocks before it ends',
+  title:
+    'a test file must put back every global it stubs, every module it mocks, and every route lock it parks before it ends',
   category: 'custom',
   domain: 'code',
   requires: {},
@@ -288,29 +368,7 @@ export const audit = {
           file: rel,
           line: lineAt(text, hit.index),
           severity: 'error',
-          what: hit.kind === 'global' ? `${hit.name} stubbed, never restored` : `mock.module(${hit.name}) never re-mocked`,
-          message:
-            hit.kind === 'global'
-              ? `This file stubs ${hit.name} at module scope or in a before* hook and never assigns ` +
-                'it back in afterAll/afterEach. bun test runs every file in one process, so the ' +
-                "stub is what the NEXT file's code calls: three probe tests that did this to fetch " +
-                "on 2026-09-05 made instance-pointer's findLiveInstance probe its own server " +
-                'through a fake and count 0 hits, in a file nobody had touched.'
-              : `mock.module(${JSON.stringify(hit.name)}) is global for the whole bun test run and ` +
-                'mock.restore() does not undo it: every file that loads this module after this one ' +
-                'gets the fake. request-generations.test.ts did this to web/src/lib/api on ' +
-                '2026-09-05 and resource-status.test.ts, next in the serial order, waited 5s three ' +
-                'times on a getQueue nothing would ever resolve.',
-          fix:
-            hit.kind === 'global'
-              ? `Keep the original (const real = ${hit.name === 'fetch' ? 'globalThis.fetch' : hit.name}) ` +
-                'and assign it back in afterAll, or stub inside the test with a try/finally restore ' +
-                'the way web/tests/resource-status.test.ts does.'
-              : 'Copy the real exports BEFORE installing the fake - ' +
-                '`const realApi = { ...(await import(SPEC)) }` - and re-mock to that copy in afterAll: ' +
-                '`afterAll(() => { mock.module(SPEC, () => realApi) })`. A copy taken after the fake ' +
-                "is a copy of the fake, because mock.module rewrites the namespace's live bindings. " +
-                'Better still, inject the dependency and mock nothing (tests/monitor.test.ts).',
+          ...explain(hit),
         })
       }
     }
@@ -320,8 +378,9 @@ export const audit = {
       ? `Found ${findings.length} stub(s) that outlive their test file:\n${findings
           .map((f) => `- ${f.file}:${f.line} (${f.what})`)
           .join('\n')}`
-      : `Every module-scope or before-hook global stub and every mock.module in the test tree is ` +
-        `put back in an after hook (${filesScanned} stubbing file(s) scanned). ✓`
+      : `Every module-scope or before-hook global stub, every mock.module and every parked ` +
+        `orchestrator route lock in the test tree is put back in an after hook ` +
+        `(${filesScanned} stubbing file(s) scanned). ✓`
 
     return { failed, findings, report }
   },

@@ -65,7 +65,9 @@ Usage: python migrate_chat.py <title fragment | session id> --to <instance num|n
 Exit:  0 landed and verified - 3 deterministic refusal (chat/instance not resolvable,
        superseded, or a 400 the daemon will repeat) - 4 live writer (import rewrites the
        transcript; never overridden) - 5 breaker - 6 the chat is HELD (--force overrides) -
-       7 the chat is ARCHIVED (--archived includes it) - 1 daemon failure or verify failed.
+       7 the chat is ARCHIVED (--archived includes it) - 1 daemon failure or verify failed -
+       2 landed, but a chat OUTSIDE the move was archived while it ran (`collateral`, and
+       the report says which; lib/archivewatchlib).
 
 Without --title, the chat's CURRENT title (just read from the dossier) is restated as
 confirm_title - the daemon's naming door demands a real title or exactly that proof of a
@@ -90,16 +92,19 @@ from __future__ import annotations
 import difflib
 import json
 import re
+import shlex
 import time
 import sys
 from dataclasses import dataclass
 from pathlib import Path as _Path
 
+from lib import archivewatchlib
 from lib import clilib, holdlib
 from lib import hydralib
 from lib import windowlib
 from lib import ledgerlib
 from lib import mutationlib
+from lib import nativearchivelib
 from lib import stamplib
 
 
@@ -297,6 +302,61 @@ def _row_to_match(row: dict) -> dict:
     }
 
 
+def _refuse_if_only_elsewhere(query: str, all_matches: list[dict], matches: list[dict],
+                               source_name: str | None) -> None:
+    """Only a retired twin sits on the named account: the chat itself lives elsewhere. Say
+    where, rather than moving a chat off an account the caller did not name - and this is a
+    final answer, not a miss for the table fallback to second-guess."""
+    if not (source_name and matches and all(m.get("archived") for m in matches)):
+        return
+    elsewhere = sorted({str(m.get("instance")) for m in all_matches
+                        if not m.get("archived") and not _in_source(m.get("instance"), source_name)})
+    if elsewhere:
+        raise hydralib.ChatNotFound(
+            f"{query} - only an archived copy is on {source_name}; its live copy is on "
+            f"{', '.join(elsewhere)}")
+
+
+def _fallback_table_hits(query: str, source_name: str | None) -> list[dict]:
+    # RESOLUTION ASKS THE COMPLETE QUESTION (2026-09-05). The default 7d window measured
+    # 21 rows against 500 for all+archived and hid six unarchived chats, one of them live
+    # that morning - so a windowed scan here answers "no such chat" for a chat that
+    # plainly exists, which is the most misleading refusal this script can produce. Find
+    # everything; let _check_archived_or_raise decide whether it may MOVE. A guard that
+    # names the real reason always beats a lookup that pretends the chat is not there.
+    rows = [r for r in hydralib.sessions(period="all", archived="include")
+            if _in_source(r.get("instance"), source_name)]
+    hits = [r for r in rows if r.get("session_id") == query]
+    if hits:
+        return hits
+    q = query.lower()
+    hits = [r for r in rows if q in str(r.get("title") or "").lower()]
+    if hits:
+        return hits
+    return _fuzzy_pick(query, rows)
+
+
+def _match_from_table_hits(query: str, source_name: str | None, hits: list[dict]) -> dict:
+    if len(hits) > 1:
+        raise hydralib.AmbiguousChat(
+            query,
+            [{"instance": h.get("instance"), "title": h.get("title"),
+              "cliSessionId": h.get("session_id")} for h in hits],
+        ) from None
+    row = hits[0]
+    sid = str(row.get("session_id") or "")
+    if sid and sid != query:
+        # Found by title: the dossier may well know this chat under its id even though
+        # the misspelled fragment found nothing - prefer its answer (live block, metaPath).
+        try:
+            by_id = [m for m in hydralib.dossier(sid) if _in_source(m.get("instance"), source_name)]
+            if by_id:
+                return hydralib.choose_match(sid, by_id)
+        except hydralib.DaemonError:
+            pass  # the table row is still a real answer; the daemon's import gates liveness
+    return _row_to_match(row)
+
+
 def resolve_for_migrate(query: str, source_name: str | None = None) -> dict:
     """Resolve the chat to migrate. The dossier only knows chats that ALREADY have a desktop
     record - which is exactly what a console-only session lacks, and landing those is this
@@ -317,63 +377,24 @@ def resolve_for_migrate(query: str, source_name: str | None = None) -> dict:
     neither, and moving on it would post an import against a possibly-live engine)."""
     all_matches = hydralib.dossier(query)
     matches = [m for m in all_matches if _in_source(m.get("instance"), source_name)]
-    if source_name and matches and all(m.get("archived") for m in matches):
-        # Only a retired twin sits on the named account: the chat itself lives elsewhere. Say
-        # where, rather than moving a chat off an account the caller did not name - and this
-        # is a final answer, not a miss for the table fallback to second-guess.
-        elsewhere = sorted({str(m.get("instance")) for m in all_matches
-                            if not m.get("archived") and not _in_source(m.get("instance"), source_name)})
-        if elsewhere:
-            raise hydralib.ChatNotFound(
-                f"{query} - only an archived copy is on {source_name}; its live copy is on "
-                f"{', '.join(elsewhere)}")
+    _refuse_if_only_elsewhere(query, all_matches, matches, source_name)
     try:
         return hydralib.choose_match(query, matches)
     except hydralib.ChatNotFound:
-        # RESOLUTION ASKS THE COMPLETE QUESTION (2026-09-05). The default 7d window measured
-        # 21 rows against 500 for all+archived and hid six unarchived chats, one of them live
-        # that morning - so a windowed scan here answers "no such chat" for a chat that
-        # plainly exists, which is the most misleading refusal this script can produce. Find
-        # everything; let _check_archived_or_raise decide whether it may MOVE. A guard that
-        # names the real reason always beats a lookup that pretends the chat is not there.
-        rows = [r for r in hydralib.sessions(period="all", archived="include")
-                if _in_source(r.get("instance"), source_name)]
-        hits = [r for r in rows if r.get("session_id") == query]
-        if not hits:
-            q = query.lower()
-            hits = [r for r in rows if q in str(r.get("title") or "").lower()]
-        if not hits:
-            hits = _fuzzy_pick(query, rows)
+        hits = _fallback_table_hits(query, source_name)
         if not hits:
             raise
-        if len(hits) > 1:
-            raise hydralib.AmbiguousChat(
-                query,
-                [{"instance": h.get("instance"), "title": h.get("title"),
-                  "cliSessionId": h.get("session_id")} for h in hits],
-            ) from None
-        row = hits[0]
-        sid = str(row.get("session_id") or "")
-        if sid and sid != query:
-            # Found by title: the dossier may well know this chat under its id even though
-            # the misspelled fragment found nothing - prefer its answer (live block, metaPath).
-            try:
-                by_id = [m for m in hydralib.dossier(sid) if _in_source(m.get("instance"), source_name)]
-                if by_id:
-                    return hydralib.choose_match(sid, by_id)
-            except hydralib.DaemonError:
-                pass  # the table row is still a real answer; the daemon's import gates liveness
-        return _row_to_match(row)
+        return _match_from_table_hits(query, source_name, hits)
 
 
 # The instance resolver lives in hydralib (shared judgment); this alias keeps migrate's own
 # call sites readable without other scripts importing THIS module for it.
 resolve_instance = hydralib.resolve_instance
 
-_ACTUATOR = _Path(__file__).resolve().parent / "actuator" / "manage_desktop_chat.ps1"  # relocated 2026-09-01
+_ACTUATOR = _Path(__file__).resolve().parents[2] / "misc" / "Manage-DesktopChat.ps1"  # one copy since 2026-09-17
 
 
-def _settle_source(instance: str, title: str) -> tuple[int, str]:
+def _settle_source(instance: str, title: str, session_id: str = "") -> tuple[int, str]:
     """Archive the SUPERSEDED source row through its RUNNING app's own control.
 
     `instance` should be the SOURCE fleet row's unique profile DIR, not its bare name
@@ -398,6 +419,10 @@ def _settle_source(instance: str, title: str) -> tuple[int, str]:
     The yielded False is HONOURED, never ignored: another lane held the window past the
     wait, so the actuator is not driven at all and exit 75 tells the caller to fall back to
     the disk flag rather than claim a settle that never happened."""
+    if session_id:
+        native = nativearchivelib.try_archive(session_id, instance)
+        if native is not None:
+            return native
     with windowlib.instance_lock(instance, wait_secs=60) as mine:
         if not mine:
             return 75, (f"another lane held {instance}'s window past the wait - the source "
@@ -408,6 +433,15 @@ def _settle_source(instance: str, title: str) -> tuple[int, str]:
             timeout=240,
         )
         return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+
+
+def _acted_row(said: str) -> str:
+    """The row the actuator says it acted on, as a report fragment. Empty when it said nothing
+    (an older materialized copy of the script, or a settle that went down the disk-flag path)."""
+    for line in (said or "").splitlines():
+        if line.strip().startswith("acting on row:"):
+            return "; the app's own row read " + line.split(":", 1)[1].strip()
+    return ""
 
 
 def _source_still_visible(session_id: str, src_instance: str, fleet_data: dict | None = None) -> bool:
@@ -727,12 +761,30 @@ def _resolve_target_or_raise(fleet: dict, to: str, match: dict, session_id: str,
             },
             3,
         )
-    if str(match.get("instance", "")).lower() == str(target.get("name", "")).lower():
+    # ⛔ "ALREADY LIVES HERE" MEANS ON SCREEN HERE (2026-09-18). A record filed under an account
+    # the target profile is no longer signed into (`staleLogin`) is on the target's disk and NOT in
+    # its app: #12 was re-logged into another account twenty minutes after four chats were moved
+    # in, and every move of them answered "nothing to do" while the owner could not see one. Such
+    # a chat is RE-HOMED instead - the import sets the stale record aside and lands the chat in the
+    # signed-in account's folder (session-launch.ts setAsideStaleLoginRecords).
+    if _same_instance(match, target) and match.get("staleLogin") is not True:
         raise _MigrateRefusal(
             {"landed": False, "report": f"nothing to do: '{chat_title}' already lives in {target.get('name')}"},
             0,
         )
     return target
+
+
+def _same_instance(m: dict, target: dict) -> bool:
+    return str(m.get("instance", "")).lower() == str((target or {}).get("name", "")).lower()
+
+
+def _on_screen_in(m: dict, target: dict) -> bool:
+    """A dossier row that puts the chat WHERE THE TARGET'S APP LOOKS: the target instance AND
+    not filed under a previous login of it. The landing check and the stamp's path both ask
+    this, never the bare instance name, or a stale-login twin already on disk would "verify" a
+    re-home that never happened and take the stamps meant for the real landing."""
+    return _same_instance(m, target) and m.get("staleLogin") is not True
 
 
 def _check_archived_or_raise(match: dict, include_archived: bool) -> None:
@@ -1098,9 +1150,7 @@ def _verify_landing_or_raise(session_id: str, target: dict, chat_title, result: 
             },
             1,
         ) from err
-    landed = any(
-        str(m.get("instance", "")).lower() == str(target.get("name", "")).lower() for m in after
-    )
+    landed = any(_on_screen_in(m, target) for m in after)
     if not landed:
         ledgerlib.verify(
             "migrate", session_id, False,
@@ -1151,6 +1201,50 @@ def _settle_source_row(match: dict, target: dict, fleet: dict, session_id: str,
     return note, state
 
 
+def source_still_visible(session_id: str, src_instance: str, fleet_data: dict | None = None) -> bool:
+    """Public name for `_source_still_visible` - the re-read a caller takes AFTER a delay to see
+    whether a running source app wrote its un-archived copy back over a settled row."""
+    return _source_still_visible(session_id, src_instance, fleet_data)
+
+
+def clear_resurrected_source_record(session_id: str, src_instance: str, target: dict,
+                                    fleet_data: dict | None = None) -> str | None:
+    """Re-run the tombstone for one settled source row, clearing a record the source app has
+    re-saved from memory since. Idempotent by construction (see
+    `_tombstone_source_session_file`): nothing left to find returns None.
+
+    ⛔ A RESURRECTION IS NOT ONLY AN UN-ARCHIVED ROW. The 2026-09-18 pair came back ARCHIVED -
+    the app re-saved its in-memory copy, archived flag and all - so `source_still_visible` was
+    false for both and a caller checking only that would have called it clean. What came back
+    was the stale `local_<id>.json` NAME, which is the whole thing the tombstone exists to
+    remove, so the re-check runs this whatever the visible test said."""
+    return _tombstone_source_session_file(session_id, src_instance, target, fleet_data)
+
+
+def source_app_running(match: dict, target: dict, fleet: dict) -> bool:
+    """Was the SOURCE account's app running when we settled it?
+
+    ⛔ A SETTLE AGAINST A RUNNING APP IS PROVISIONAL, AND ONE WAS REPORTED AS FINAL (2026-09-18).
+    A two-chat `move_chats` off a running #15 landed both chats and settled both source rows;
+    `list_chats {instance:15}` read `all: 200, unarchived: 0` and the move was reported to the
+    owner as settled. Seventy-five minutes later the same call read `all: 202` - the app had
+    held both chats in memory the whole time and re-saved them over the records the settle had
+    tombstoned. The owner archived them by hand.
+
+    That resurrection is not new and not a bug in the tombstone: `_tombstone_source_session_file`
+    documents it and clears the duplicate - ON A LATER CALL. Nothing fired a later call, because
+    the move had already written its terminal `stamped` phase and stopped being anybody's
+    business. So the fact is recorded HERE, the journal stays owed (`phase_stamp`), and the
+    report says the verdict is provisional - a disk read taken seconds after a settle cannot
+    prove what a running app will write next.
+    """
+    src_name = str(match.get("instance") or "")
+    if not src_name or src_name.lower() == str(target.get("name", "")).lower():
+        return False
+    src_inst = resolve_instance(fleet, src_name)
+    return bool(src_inst and src_inst.get("isRunning"))
+
+
 def _settle_source_row_core(match: dict, target: dict, fleet: dict, session_id: str,
                        chat_title, sw=None) -> tuple[str, str]:
     """Settle the superseded SOURCE row (_settle_source docstring).
@@ -1186,9 +1280,19 @@ def _settle_source_row_core(match: dict, target: dict, fleet: dict, session_id: 
     src_dir = str(src_inst.get("dir") or "") if src_inst else ""
     settle_instance = src_dir or src_name
     dir_note = "" if src_dir else f" (no dir on record for {src_name}; settled by name)"
-    code_s, out_s = _settle_source(settle_instance, str(chat_title))
+    code_s, out_s = _settle_source(settle_instance, str(chat_title), session_id=session_id)
     if sw is not None:
         sw.lap("settle-drive")  # the actuator alone; the read-back below is the next lap
+    if code_s == nativearchivelib.NATIVE_VERIFIED:
+        return (f" Source row archived in {src_name}; the exact native session state and "
+                "unchanged bystander archive flags were verified by the running app.", "settled")
+    if code_s == nativearchivelib.NATIVE_TERMINAL:
+        native = nativearchivelib.result(out_s)
+        reason = str(native.get("reason") or "native archive not confirmed")
+        ledgerlib.annotate("migrate", session_id,
+                           f"source native archive not confirmed: {reason}", failure=True)
+        return (f" Source row in {src_name} is NOT confirmed settled: {reason}. "
+                "No UI or disk fallback was attempted; inspect the native result before retrying.", "visible")
     # DOUBLE-CHECK, NEVER ASSUME (owner, 2026-09-01: "it can't do it blind; it must always
     # double check, confirm"). Exit 3 used to be read as "already settled"; a row the app
     # virtualized off-screen is not rendered AND still visible when scrolled. So the source
@@ -1204,8 +1308,12 @@ def _settle_source_row_core(match: dict, target: dict, fleet: dict, session_id: 
                        SETTLE_CONFIRM_SECS, step_secs=DOCTRINE_RESTAMP_POLL_SECS):
             time.sleep(0.5)
             if not _source_still_visible(session_id, src_name, fleet):
+                # The actuator names the row it actually acted on (re-read off the kebab at the
+                # last moment, 2026-09-17); carry that into the report rather than restating
+                # what was INTENDED, which is what a mis-aimed archive would also have said.
+                acted = _acted_row(out_s)
                 return (" Source row settled through its app's own control (verified on "
-                        f"disk).{dir_note}", "settled")
+                        f"disk{acted}).{dir_note}", "settled")
         # ⛔ NEVER LEAVE THE SOURCE VISIBLE (owner, 2026-09-01) - and this branch used to do
         # exactly that: it warned and stopped, so a window that renders no rows (minimized,
         # collapsed, virtualized) returned exit 3 and every move off it left a twin nobody
@@ -1328,7 +1436,23 @@ def watch_bypass_many(meta_paths: list[str], watch_secs: float = BYPASS_WATCH_SE
     return state
 
 
-BYPASS_REMEDY_CMD = "python automation_chat.py {sid} --force"
+def _bypass_remedy_cmd(session_id: str, chat_title) -> str:
+    """The printed remedy for a bypass verdict that needs a by-hand act - carries the TITLE
+    THIS RUN ALREADY VERIFIED, not just the id.
+
+    ⛔ RE-DERIVING THE TITLE IS THE BUG, NOT A WEAKER FIX (found 2026-09-15). automation_chat.py's
+    own title lookup for a bare session id goes through hydralib.resolve_one -> the dossier
+    endpoint, a fresh disk read exactly like list_chats' - so when a human runs the bare-sid
+    remedy MINUTES after this batch verified the title, a RUNNING app can have already re-saved
+    its in-memory record and erased it (titleDurable: false), and the remedy fails with "no name
+    to aim at" on the exact chat it exists to fix. This batch already knows the real title - hand
+    it over so the remedy never has to ask a source that can have gone stale in the meantime.
+    """
+    args = f"{session_id} --force"
+    title = str(chat_title or "").strip()
+    if title:
+        args += f" --title {shlex.quote(title)}"
+    return f"python scripts/automation_chat.py {args}"
 
 
 def confirm_bypass_in_app(row: dict, fleet: dict) -> str:
@@ -1392,7 +1516,7 @@ def _adjudicate_bypass(session_id: str, chat_title, target: dict, meta_path: str
       unknown         the record could not be read; claim nothing.
     """
     mode = watched["mode"]
-    remedy = BYPASS_REMEDY_CMD.format(sid=session_id)
+    remedy = _bypass_remedy_cmd(session_id, chat_title)
     if mode is None:
         return "unknown", "the landed record could not be read back", remedy
     if not watched["stable"]:
@@ -1444,11 +1568,7 @@ def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
         stamped = False
         stamp_note = f"automation stamp failed ({err}) - stamp bypassPermissions before it boots"
 
-    landed_match = next(
-        (m for m in after
-         if str(m.get("instance", "")).lower() == str(target.get("name", "")).lower()),
-        {},
-    )
+    landed_match = next((m for m in after if _on_screen_in(m, target)), {})
     meta_path = landed_match.get("metaPath")
     if meta_path:
         # ⛔ BOTH STAMPS ON DISK, AND STAMPED TWICE (owner, 2026-09-01: "I am getting sick of
@@ -1524,7 +1644,7 @@ def _stamp_automation_doctrine(session_id: str, target: dict, after: list[dict],
         uc_ok = False
         mode = None
         verdict, evidence = "unknown", "the dossier gave no metaPath"
-        remedy = BYPASS_REMEDY_CMD.format(sid=session_id)
+        remedy = _bypass_remedy_cmd(session_id, chat_title)
         uc_note = "not stamped - the dossier gave no metaPath; run automation_chat.py on it"
     return {"stamped": stamped, "stampNote": stamp_note, "ultracode": uc_ok, "note": uc_note,
             "mode": mode, "verdict": verdict, "evidence": evidence, "remedy": remedy}
@@ -1551,7 +1671,7 @@ class _Landing:
 
     __slots__ = ("parsed", "sw", "notes", "match", "fleet", "target", "session_id",
                  "chat_title", "src_instance", "result", "after", "settle_note",
-                 "source_row", "doctrine")
+                 "source_row", "doctrine", "mutation_id", "source_app_running")
 
     def __init__(self, **kw) -> None:
         for slot in _Landing.__slots__:
@@ -1648,15 +1768,22 @@ def move_only(argv: list[str]) -> _MoveOutcome:
     # ⛔ AND IT IS RECORDED HERE, IN PHASE ONE, NOT WHEN THE MOVE IS "FINISHED". The chat has
     # already moved by this line. A batch that dies between phases must leave a ledger that
     # says so, or the undo path has no record of a mutation that really happened.
+    #
+    # The row also carries HOW FAR the move got, starting at "imported": the phases below
+    # advance it. A batch killed between phases leaves a per-chat record of exactly which
+    # ones were left half-moved, which is what migrate_reconcile.py reads (see the archive
+    # sweep of 2026-09-13, where 14 chats sat imported-and-unsettled with nothing to say so).
     src_instance = str(match.get("instance") or "")
-    mutationlib.record("migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
-                       before={"instance": src_instance}, after={"instance": target.get("name")},
-                       undoable=True)
+    mutation_id = mutationlib.record(
+        "migrate", session_id, instance=target.get("name") or "", title=str(chat_title),
+        before={"instance": src_instance}, after={"instance": target.get("name")},
+        undoable=True, phase="imported")
 
     return _MoveOutcome(
         landing=_Landing(parsed=parsed, sw=sw, notes=notes, match=match, fleet=fleet,
                          target=target, session_id=session_id, chat_title=chat_title,
-                         src_instance=src_instance, result=result, after=after),
+                         src_instance=src_instance, result=result, after=after,
+                         mutation_id=mutation_id),
         as_json=parsed.as_json)
 
 
@@ -1667,24 +1794,33 @@ def landed_meta_path(land: _Landing) -> str:
     the alternative - letting each chat's stamp find its own path and watch it alone - is the
     8s-times-N wait that made a batch feel slow.
     """
-    landed = next(
-        (m for m in (land.after or [])
-         if str(m.get("instance", "")).lower() == str((land.target or {}).get("name", "")).lower()),
-        {},
-    )
+    landed = next((m for m in (land.after or []) if _on_screen_in(m, land.target or {})), {})
     return str(landed.get("metaPath") or "")
 
 
 def phase_settle(land: _Landing) -> None:
     """PHASE TWO: settle the SOURCE row, so the account it left stops showing it."""
     land.sw.resume()
+    # Read BEFORE the settle: the actuator can close nothing, but a settle that takes several
+    # seconds must not be judged against a fleet read taken after it.
+    land.source_app_running = source_app_running(land.match, land.target, land.fleet)
     land.settle_note, land.source_row = _settle_source_row(
         land.match, land.target, land.fleet, land.session_id, land.chat_title, sw=land.sw)
+    if land.source_app_running and land.source_row in ("settled", "flagged"):
+        land.settle_note += (
+            f" ⚠ PROVISIONAL: {land.match.get('instance')}'s app was RUNNING, and a running app "
+            "re-saves chats it holds in memory - one did exactly that 75 minutes after a move on "
+            "2026-09-18, resurrecting both settled rows. Re-read the source before calling this "
+            "final; `migrate_reconcile` still owes this row and `--finish` re-settles it.")
     # Two laps, not one: 'settle-drive' is the actuator driving the source app's own archive
     # control, 'settle-confirm' is the disk read-back that proves it. A single 'settle-source'
     # number could not say which half a slow settle was spending (2026-09-06: ~7.5s per chat
     # and no way to tell the window drive from the confirm poll).
     land.sw.lap("settle-confirm")
+    # The journal takes the SETTLE'S OWN VERDICT, not the word "settled": 'visible' means the
+    # twin is still on screen, which is a half-move that reconcile must still see as one.
+    if land.mutation_id:
+        mutationlib.advance_phase(land.mutation_id, f"settle-{land.source_row}")
     if land.source_row != "visible":
         ledgerlib.clear("migrate", land.session_id)  # a clean move: the brake is for futility
 
@@ -1700,6 +1836,26 @@ def phase_stamp(land: _Landing, watched: dict | None = None) -> None:
         land.session_id, land.target, land.after, land.fleet, land.chat_title, watched=watched,
         sw=land.sw)
     land.sw.lap("stamp")  # whatever is left after the two laps the doctrine records itself
+    if land.mutation_id:
+        # ⛔ NOT "stamped" WHILE THE SOURCE TWIN IS STILL VISIBLE (review finding, 2026-09-14). The
+        # stamp runs whatever the settle said, so writing the finished phase here unconditionally
+        # overwrote 'settle-visible' - a real half-move - with the one phase migrate_reconcile
+        # treats as owing nothing, and the duplicate became invisible to the tool built to find it.
+        # ⛔ AND NOT "stamped" WHILE THE SOURCE APP IS STILL RUNNING (2026-09-18, see
+        # source_app_running). `stamped` is migrate_reconcile's DONE_PHASE: writing it closes the
+        # row forever, and a row closed forever is a row nothing re-reads when the app writes its
+        # in-memory copy back ten minutes later. `stamped-source-running` keeps the move owed
+        # until reconcile has re-checked the CHAT'S CURRENT STATE - which is the one read that
+        # can tell a settle that held from one the app undid. Reconcile advances it to `settled`
+        # itself once the source row is provably archived or gone, so a move off a running app
+        # that stayed settled stops being re-checked after exactly one pass.
+        if land.source_row == "visible":
+            phase = "stamped-settle-visible"
+        elif land.source_app_running:
+            phase = "stamped-source-running"
+        else:
+            phase = "stamped"
+        mutationlib.advance_phase(land.mutation_id, phase)
     # The verdict outlives the tool call. This incident had to be reconstructed from file
     # mtimes because nothing about the stamp was ever persisted (2026-09-05).
     mutationlib.record("setmode", land.session_id, instance=land.target.get("name") or "",
@@ -1735,7 +1891,7 @@ def landing_payload(land: _Landing) -> dict:
         "stamped": False, "stampNote": "the stamp phase did not run", "ultracode": False,
         "note": "the stamp phase did not run", "mode": None, "verdict": "unknown",
         "evidence": "the stamp phase did not run",
-        "remedy": BYPASS_REMEDY_CMD.format(sid=land.session_id),
+        "remedy": _bypass_remedy_cmd(land.session_id, land.chat_title),
     }
     source_row = land.source_row or "unknown"
     settle_note = land.settle_note if land.settle_note is not None else (
@@ -1758,6 +1914,13 @@ def landing_payload(land: _Landing) -> dict:
         # sourceRow is the machine half; sourceSettled stays for older readers.
         "sourceRow": source_row,
         "sourceSettled": source_row in ("settled", "flagged", "none"),
+        # ⛔ THE HALF A DISK READ CANNOT ANSWER (2026-09-18). True means the source app was
+        # RUNNING when this row was settled, so the settle is provisional: that app holds the
+        # chat in memory and may write the record back minutes later. A caller must NOT report
+        # this move as settled on the strength of a `list_chats` taken right afterwards - re-read
+        # the source after a delay, or let `migrate_reconcile` do it (the journal stays owed).
+        "sourceRowProvisional": bool(land.source_app_running
+                                     and source_row in ("settled", "flagged")),
         "daemon": land.result,
         "secs": land.sw.total(),
         "timings": land.sw.phases,
@@ -1778,13 +1941,43 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip())
         return 0
 
+    # THE COLLATERAL WATCH (lib/archivewatchlib, 2026-09-17): every chat record is read before
+    # the move and after it, and a chat outside the move that went archived meanwhile is named.
+    # Not for a usage error or a dry run, neither of which touches anything.
+    parsed = _parse_migrate_argv(argv)
+    if isinstance(parsed, int):
+        return parsed
+    before = None if parsed.dry_run else archivewatchlib.snapshot()
     outcome = move_only(argv)
     if outcome.landing is None:
         if outcome.payload is None:
             return outcome.code  # a usage error the parser already reported on stderr
         return out(outcome.payload, outcome.as_json, outcome.code)
     finish_move(outcome.landing)
-    return out(landing_payload(outcome.landing), outcome.as_json, 0)
+    payload = landing_payload(outcome.landing)
+    land = outcome.landing
+    if flag_collateral(payload, before,
+                       archivewatchlib.ids_for_match(land.match, land.session_id),
+                       f"migrate_chat {land.session_id}"):
+        return out(payload, outcome.as_json, 2)
+    return out(payload, outcome.as_json, 0)
+
+
+def flag_collateral(payload: dict, before: dict | None, moved_ids: set[str], what: str) -> bool:
+    """Read the stores again, and when a chat outside the move went archived while it ran,
+    put it on the payload and at the top of the report, file an incident, and mark the move
+    not-ok. Returns True when there was collateral. Shared with migrate_batch."""
+    if before is None:
+        return False
+    rows = archivewatchlib.collateral(before, archivewatchlib.snapshot(), moved_ids)
+    if not rows:
+        return False
+    incident = archivewatchlib.file_incident(rows, what)
+    payload["collateral"] = rows
+    payload["ok"] = False
+    payload["report"] = "\n".join(
+        archivewatchlib.report_lines(rows, incident) + [str(payload.get("report") or "")])
+    return True
 
 
 def _dry_run_plan(match: dict, target: dict, session_id: str, chat_title, now: bool,

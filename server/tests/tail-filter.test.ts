@@ -14,7 +14,7 @@ import type { TailEvent } from '../src/types'
 
 const assistant = (...content: unknown[]) => ({
   type: 'assistant',
-  timestamp: '2026-08-13T10:00:00.000Z',
+  timestamp: '2024-08-13T10:00:00.000Z',
   message: { role: 'assistant', content },
 })
 

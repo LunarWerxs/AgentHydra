@@ -5,11 +5,15 @@
 // cap afterwards, so a verbose or runaway script had the daemon hold its entire output in memory
 // first. drainBounded keeps the LAST `cap` characters as the bytes arrive and counts what it
 // dropped; runOrchestrator folds that count into the one truncation header.
-import { expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { drainBounded, MAX_OUTPUT_CHARS, pythonBinary, runOrchestrator } from '../src/orchestrator'
+
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-orch-bounded-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
 
 function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
   const enc = new TextEncoder()
@@ -52,7 +56,7 @@ test('drainBounded decodes a multi-byte character split across chunks', async ()
 })
 
 test('the truncation header reports what the adapter dropped plus any final trim', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-bounded-'))
+  const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-bounded-'))
   writeFileSync(join(dir, 'orch.py'), '# fake driver\n')
   const r = await runOrchestrator(
     { script: 'chats' },
@@ -96,7 +100,7 @@ const hasPython = (() => {
 test.skipIf(!hasPython)(
   'a real child printing megabytes on both streams comes back bounded, verdict intact',
   async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-bounded-real-'))
+    const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-bounded-real-'))
     writeFileSync(
       join(dir, 'orch.py'),
       [

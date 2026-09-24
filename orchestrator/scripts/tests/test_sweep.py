@@ -160,7 +160,7 @@ class SweepTest(unittest.TestCase):
              "account": {"email": "cold@x.com", "planLabel": "Max 20×"}},
         ]}
 
-        def fake_ui(instance, title, unarchive):
+        def fake_ui(instance, title, unarchive, session_id=""):
             self.archived[title] = not unarchive  # titles == sids in this fixture
             return 0, f"Archive done for '{title}'"
 

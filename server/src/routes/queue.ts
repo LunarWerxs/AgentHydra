@@ -57,11 +57,12 @@ const RUNNER_OWNED_FIELDS = [
 ] as const
 
 /**
- * Fields that define WHAT a run executes — the spec dispatch.ts reads at spawn time (buildArgv,
- * account/instance resolution). Editable while an item is only PLANNED (queued, not yet dispatched);
- * locked once the row is active or recovering, because the in-memory runner already captured the old
+ * Fields that define WHAT a run would execute - account/instance resolution and the argv a spawn
+ * used to build from them, before headless dispatch was permanently refused (headless-policy.ts).
+ * Editable while an item is only PLANNED (queued, not yet dispatched); locked once the row is
+ * active or recovering, because a reattached run's in-memory runner already captured the old
  * values — a PATCH here would leave the persisted row describing a different run than the one
- * actually executing or being reattached (AH-13).
+ * being reattached (AH-13).
  */
 const IDENTITY_FIELDS = [
   'session_id',
@@ -199,13 +200,16 @@ app.post('/api/queue', async (c) => {
   // runner then passes it as `--session-id` — so exempting new_chat let
   // `{new_chat: true, session_id: <an existing desktop chat>}` write headless turns into that
   // chat. The question is about the ID, never about the caller's label for the request.
+  // arkitect-allow: no-bandaids documents the permanent NO-HEADLESS enforcement chain (this route
+  // check plus the dispatch.ts chokepoint); the "old behaviour" it replaced is gone with no escape
+  // left, this is the current and final policy, not a check awaiting supersession.
   // NO HEADLESS (owner law 2026-08-27), refused at the point of ASKING rather than only at the
   // point of running. The chokepoint in dispatch.ts is still the enforcement and still refuses
   // every one of these; without this the route would happily accept the row and hand back an id,
   // and the caller would find out only when it failed later. Queueing work into something that
   // cannot run it is a dead end with a receipt. The two paragraphs above describe the narrower
-  // check this replaces, whose `force` escape is also gone: an override that defeats "never" is
-  // the old behaviour behind a flag.
+  // check this replaces, whose `force` escape opens nothing any more: the refusal two lines down
+  // is unconditional, so an override that defeats "never" cannot get past it.
   if (!headlessRunsAllowed()) return c.json({ error: NO_HEADLESS_REASON }, 409)
   const allowHeadless = body.force === true
   if (!allowHeadless && (await desktopHomeFor(sessionId)))

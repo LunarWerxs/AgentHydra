@@ -1,34 +1,24 @@
-import { spawn as nodeSpawn } from 'node:child_process'
-import {
-  closeSync,
-  existsSync,
-  openSync,
-  readFileSync,
-  readSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { isDispatchReady } from './boot-state'
-import { DB_PATH, IS_COMPILED, RUN_LOG_DIR, resolveClaudeExe } from './config'
-import { getCliInstance } from './core/cli-instances'
+import { RUN_LOG_DIR } from './config'
 import { killProcessTree } from './core/process'
 import { coerceQueueItem, db } from './db'
-import { buildDetachedSpawn } from './detached-spawn.mjs'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
 import { deliverIncidentNotification, recordIncident } from './incidents'
 import { classifyLimit, isApiErrorEvent, type LimitKind } from './rate-limit-signal'
 import { eventToTailEvents, findTranscriptAsync } from './transcript'
 import type { ImportState, QueueItem, RunEvent } from './types'
 
-// A dispatched `claude` run must OUTLIVE the daemon: quitting AgentHydra (or an auto-update
-// relaunch) tree-kills the daemon (`taskkill /T`), and killing in-flight work with it is exactly
-// what we refuse to do. So the daemon does NOT spawn `claude` directly. It spawns a DETACHED
-// supervisor (dispatch-runner.ts) that owns `claude` and appends its output to a per-run log file;
-// the daemon merely TAILS that log. When the daemon dies, the runner + `claude` keep running to
-// completion; the next daemon reattaches by re-reading the log (reattachRuns). Design verified
-// end-to-end 2026-07-12 (see dispatch-runner.ts header + server-lib/detached-spawn.mjs).
+// This module used to launch a DETACHED supervisor (dispatch-runner.ts) for every dispatched
+// `claude` run, so the run could OUTLIVE the daemon (quitting AgentHydra, or an auto-update
+// relaunch, tree-kills the daemon via `taskkill /T`). Headless dispatch is now permanently refused
+// (headlessRunsAllowed() in headless-policy.ts, enforced in dispatchItem() below) - the daemon never
+// spawns `claude`, detached or otherwise, so that supervisor and its spawn machinery are gone.
+// What remains is read-only bookkeeping for runs that were ALREADY dispatched before this ban: the
+// log/status/spec file paths, tailRun and reattachRuns replay an existing on-disk log to its
+// terminal marker, and finalize() records the outcome - the same machinery a live reattach still
+// needs, none of it able to start a new run.
 
 // --- transient-overload retry ------------------------------------------------
 //
@@ -159,34 +149,6 @@ export function getRunEvents(id: string): RunEvent[] {
     .all(id)
 }
 
-// --- argv --------------------------------------------------------------------
-
-export function buildArgv(item: QueueItem): string[] {
-  const useFake = !!process.env.AGENTHYDRA_FAKE
-  // Compiled binaries can't spawn sibling .ts files (import.meta.dir is virtual inside the exe);
-  // the exe re-spawns itself with the __fake_claude subcommand instead (server/src/main.ts).
-  const argv: string[] = useFake
-    ? IS_COMPILED
-      ? [process.execPath, '__fake_claude']
-      : [process.execPath, join(import.meta.dir, 'fake-claude.ts')]
-    : [resolveClaudeExe()]
-
-  if (!useFake) {
-    if (item.new_chat) {
-      argv.push('--session-id', item.session_id)
-    } else {
-      argv.push('--resume', item.session_id)
-      if (item.fork) argv.push('--fork-session')
-    }
-    if (item.model) argv.push('--model', item.model)
-    if (item.effort) argv.push('--effort', item.effort)
-    if (item.permission_mode) argv.push('--permission-mode', item.permission_mode)
-    argv.push('--verbose', '--output-format', 'stream-json', '--print')
-  }
-  argv.push(item.prompt)
-  return argv
-}
-
 // --- line handling -----------------------------------------------------------
 
 // A normal `claude` stream-json line. Runner marker lines ({"__dispatch":…}) are peeled off by the
@@ -264,15 +226,6 @@ function handleLine(id: string, line: string) {
 
 // --- per-run files (owned by the detached runner; the daemon reads them) ------
 
-const DISPATCH_RUNNER = join(import.meta.dir, 'dispatch-runner.ts')
-
-/** The argv that spawns the detached runner in either mode: a source checkout spawns
- *  `bun dispatch-runner.ts <spec>`; a compiled exe re-spawns ITSELF with the __dispatch_runner
- *  subcommand (server/src/main.ts) — the sibling .ts file doesn't exist on disk there. */
-const runnerArgv = (specPath: string): string[] =>
-  IS_COMPILED
-    ? [process.execPath, '__dispatch_runner', specPath]
-    : [process.execPath, DISPATCH_RUNNER, specPath]
 const logPathFor = (id: string) => join(RUN_LOG_DIR, `${id}.stream.jsonl`)
 const statusPathFor = (id: string) => join(RUN_LOG_DIR, `${id}.status.json`)
 const specPathFor = (id: string) => join(RUN_LOG_DIR, `${id}.spec.json`)
@@ -307,78 +260,6 @@ function parseMarker(
     // a real claude line that merely contains the substring "__dispatch" — fall through to normal handling
   }
   return null
-}
-
-/**
- * Launch the detached runner (`bun dispatch-runner.ts <spec>`) so it OUTLIVES the daemon.
- *
- * The hard part is Windows. The Bun daemon puts every process it spawns — via Bun.spawn OR
- * node:child_process (which Bun implements on the same primitive) — into a job object, and even the
- * `cmd /c start` hand-off's grandchild stays in it (verified 2026-07-12: such runners died on a
- * daemon `process.exit()`, a `taskkill /T`, AND a graceful shutdown — only a bare `taskkill /F` of
- * the daemon spared them). The ONLY reliable escape is to have the OS create the process for us,
- * OUTSIDE the daemon's job: Win32_Process.Create (WMI). The created runner is a child of WmiPrvSE,
- * jobless, and runs as the current user with the user profile env (HOME/APPDATA/PATH — what `claude`
- * needs), which is why the runner reads everything else (child argv, cwd, DB path, account) from the
- * spec rather than the daemon's env. POSIX has no such problem: a plain `detached:true` (setsid) is a
- * genuine session detach.
- *
- * `AGENTHYDRA_RUNNER_LAUNCH` (documented in .env.example) overrides the per-OS default:
- *   'wmi'   win32 default — survives Quit (needs PowerShell + WMI).
- *   'start' escape hatch for a box where WMI/PowerShell is blocked: launch via `cmd /c start`
- *           instead. Dispatch still works, but a run will NOT survive Quit (it stays in the job).
- *           'startb' is the same via `start /b`.
- *   'posix' macOS/Linux default — plain detached setsid.
- */
-function launchDetachedRunner(specPath: string): void {
-  const method =
-    process.env.AGENTHYDRA_RUNNER_LAUNCH || (process.platform === 'win32' ? 'wmi' : 'posix')
-
-  if (process.platform !== 'win32' || method === 'posix') {
-    const { argv } = buildDetachedSpawn(process.platform, runnerArgv(specPath))
-    nodeSpawn(argv[0]!, argv.slice(1), {
-      stdio: 'ignore',
-      detached: true,
-      windowsHide: true,
-    }).unref()
-    return
-  }
-
-  if (method === 'wmi') {
-    // Each argv element double-quoted for CreateProcess; single-quotes escaped for the PS string.
-    const cmdline = runnerArgv(specPath)
-      .map((s) => `"${s}"`)
-      .join(' ')
-    // ProcessStartupInformation is NOT optional polish: Win32_Process.Create applies DEFAULT
-    // STARTUPINFO, and `bun` is a console-subsystem exe, so the runner gets a REAL, VISIBLE console
-    // window on the user's desktop for the whole run — the daemon's own `windowsHide: true` (below)
-    // only hides the short-lived powershell.exe, never the WMI-created grandchild. Worse than ugly:
-    // closing that stray window sends CTRL_CLOSE_EVENT to everything on its console, killing the
-    // runner AND `claude` mid-turn with no exit marker (the run then finalizes as a bare "failed,
-    // exit -1"). SW_HIDE (0) keeps the console allocated — the runner still redirects the child's
-    // stdout/stderr to the log, so nothing needs a window — but never shows it.
-    // Verified 2026-07-15 by probing GetConsoleWindow/IsWindowVisible from INSIDE a WMI-created
-    // process: without this, VISIBLE; with it, hidden. (CreateFlags=CREATE_NO_WINDOW is not an
-    // option here — Win32_ProcessStartup rejects that flag with ReturnValue 21, "invalid parameter".)
-    const ps =
-      `$s = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }; ` +
-      `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${cmdline.replace(/'/g, "''")}'; ProcessStartupInformation = $s } | Out-Null`
-    nodeSpawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
-      stdio: 'ignore',
-      windowsHide: true,
-    }).unref()
-    return
-  }
-
-  // `start` / `start /b` escape hatch (AGENTHYDRA_RUNNER_LAUNCH): launches without WMI for a box
-  // where it's blocked. The run works but will NOT survive Quit (a console child stays in the
-  // daemon's job object) — that trade-off is documented on the setting in .env.example.
-  const b = method === 'startb' ? ['/b'] : []
-  nodeSpawn('cmd', ['/c', 'start', '', ...b, ...runnerArgv(specPath)], {
-    stdio: 'ignore',
-    windowsHide: true,
-    detached: true,
-  }).unref()
 }
 
 // --- dispatch ----------------------------------------------------------------
@@ -503,6 +384,9 @@ async function killTree(pid: number): Promise<void> {
  * a deadline; this one did not.
  */
 const PROBE_TIMEOUT_MS = 15_000
+/** After the probe's kill, how long its drain is given to hand back what it already read
+ *  before the answer comes back empty. A stranger holding the pipe must not extend the probe. */
+const PROBE_DRAIN_GRACE_MS = 2_000
 
 async function isRunnerAlive(id: string): Promise<boolean> {
   // Item ids are uuids/simple slugs (no WQL/regex metacharacters), so the needle needs no escaping.
@@ -511,18 +395,28 @@ async function isRunnerAlive(id: string): Promise<boolean> {
     proc: { exited: Promise<number>; kill: () => void },
     read: Promise<string>,
   ) => {
-    const killer = setTimeout(() => {
-      try {
-        proc.kill()
-      } catch {
-        /* already gone */
-      }
-    }, PROBE_TIMEOUT_MS)
+    // ⛔ THE KILLER BOUNDS THE PROCESS, NOT THE READ (tightened 2026-09-18). `proc.kill()` makes
+    // `proc.exited` settle, but the drain finishes only when the PIPE closes - and any grandchild
+    // that inherited this child's stdout holds it open for as long as IT lives, so `Promise.all`
+    // could sit past PROBE_TIMEOUT_MS on a process that was already dead. That is the exact shape
+    // that wedged the orchestrator route for a full hour. So the read is raced too, and an
+    // unfinished drain answers empty rather than waiting on a stranger.
+    let killer: ReturnType<typeof setTimeout> | undefined
+    const givenUp = new Promise<string>((resolve) => {
+      killer = setTimeout(() => {
+        try {
+          proc.kill()
+        } catch {
+          /* already gone */
+        }
+        // A beat for the drain to hand back what it already had, then answer regardless.
+        setTimeout(() => resolve(''), PROBE_DRAIN_GRACE_MS)
+      }, PROBE_TIMEOUT_MS)
+    })
     try {
-      const [out] = await Promise.all([read, proc.exited])
-      return out
+      return await Promise.race([Promise.all([read, proc.exited]).then(([out]) => out), givenUp])
     } finally {
-      clearTimeout(killer)
+      if (killer) clearTimeout(killer)
     }
   }
   try {
@@ -1207,17 +1101,17 @@ async function tailRun(id: string, entry: ActiveEntry): Promise<void> {
 }
 
 /** Fail a queue item BEFORE it's ever registered in `active` (finalize() no-ops until active.set,
- *  so the terminal state has to be written directly here — same fields finalize() sets). Used for
- *  every pre-launch instance-pinning failure: a pinned run must NEVER silently fall back to Ambient
- *  credentials, so an instance_ref that doesn't resolve to a real, live instance fails loudly here
- *  instead of reaching the runner with desktopDir/cliConfigDir both null.
+ *  so the terminal state has to be written directly here - same fields finalize() sets). Its one
+ *  caller is the headless-policy refusal in dispatchItem(): the item never reaches a runner, so
+ *  nothing downstream of the refusal would ever write its terminal row.
  *
  *  `skipIncident` exists for exactly one caller: the headless-policy refusal below. That refusal is
  *  a permanent, hardcoded "no" (headlessRunsAllowed() is a constant false), not a failure a human can
  *  act on, so every queue item's every dispatch attempt would otherwise open (and, on the first
  *  attempt or any later resolve, page for) an incident that can never actually be fixed - the exact
- *  alert noise this module exists to prevent. The other three call sites (a stale instance_ref) stay
- *  incident-tracked: those ARE fixable, by repointing or clearing the pin. */
+ *  alert noise this module exists to prevent. Incident-tracked callers are the fixable kind (a stale
+ *  instance_ref, repointed or cleared) - the pre-launch pinning failures that used to pass false
+ *  went with the unreachable spawn path, so today the only caller passes true. */
 function failPreLaunch(
   item: QueueItem,
   message: string,
@@ -1237,9 +1131,9 @@ function failPreLaunch(
   runtime.delete(item.id)
 }
 
-/** Spawn one queue item. Resolves when the run finalizes (or immediately if its session is busy).
- *  Registers the run in `active` SYNCHRONOUSLY before the first await, so callers (run-due,
- *  scheduler) that check isActive/isSessionActive right after see it as running. */
+/** Dispatch one queue item. Refuses immediately if its session is already running, and otherwise
+ *  refuses on the headless-policy guard below, so every call ends in a terminal 'failed' row: this
+ *  program has no headless run path left to spawn into. */
 export async function dispatchItem(item: QueueItem): Promise<void> {
   // authoritative session lock (callers pre-check for a friendly error; this closes the race):
   // two concurrent --resume of the same session would interleave transcript writes.
@@ -1258,7 +1152,7 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // It deliberately does NOT exempt new_chat, though a genuinely new chat always passes it (a
   // freshly minted uuid has no desktop entry, so the lookup returns null). An adversarial audit
   // found the exemption was a real hole rather than a free optimisation: the create route lets a
-  // caller supply the session id even when new_chat is true, and buildArgv then passes it as
+  // caller supply the session id even when new_chat is true, which then reached the CLI as
   // `--session-id <id>`, so `{new_chat: true, session_id: <an existing desktop chat>}` wrote
   // headless turns straight into that chat's transcript with the check skipped at both layers.
   // Reachable from the MCP tool too. Asking the question about
@@ -1271,127 +1165,21 @@ export async function dispatchItem(item: QueueItem): Promise<void> {
   // orphaned CLI thread or a scheduled run is just as unwatchable as a hijacked desktop chat.
   //
   // `allow_headless` no longer buys a way past. An override that defeats "never" is not an
-  // override, it is the old behaviour behind a flag. The column stays so existing queue rows still
-  // read back, it simply cannot authorise a run any more. See headless-policy.ts for the one
-  // remaining switch and why its default is off.
+  // override. The column stays so existing queue rows still read back, it simply cannot authorise
+  // a run any more: this refusal is reached first, on every call, whatever the row carries. See
+  // headless-policy.ts for the one remaining switch and why its default is off.
   // ⛔ EVERY headless dispatch stops here, unconditionally. There is no setting left to check -
-  // headlessRunsAllowed() returns false as a constant (owner, 2026-08-31: "I have zero interest
-  // of you ever using headless"). Everything below this line is therefore unreachable, and is
-  // kept only until the queue subsystem it belongs to is demolished deliberately rather than
-  // half-removed in passing.
+  // headlessRunsAllowed() returns false as a constant (owner, 2026-08-31: "I have zero interest of
+  // you ever using headless"). This refusal is therefore the LAST statement in the function: the
+  // spawn path it used to fall through to (spec write, detached-runner launch, log tail) could
+  // never execute and has been deleted, rather than kept around reading as a capability this
+  // program still has.
   if (!headlessRunsAllowed()) {
     // skipIncident: this refusal is permanent and identical on every attempt (see failPreLaunch's
     // doc comment) - it is not an incident, it is the policy working as designed.
     failPreLaunch(item, NO_HEADLESS_REASON, { skipIncident: true })
     return
   }
-
-  // fresh run: clear prior events + any stale files from an earlier run of this item.
-  db.query('delete from run_events where queue_item_id = ?').run(item.id)
-  runtime.set(item.id, freshRuntime())
-  try {
-    rmSync(logPathFor(item.id), { force: true })
-  } catch {
-    /* best-effort */
-  }
-  try {
-    rmSync(statusPathFor(item.id), { force: true })
-  } catch {
-    /* best-effort */
-  }
-
-  // Instance-derived run identity (instance_ref = 'desktop:<dir>' | 'cli:<id>'): the spec carries
-  // only PATHS — the runner extracts the instance's OAuth token value-blind at spawn time
-  // (core/accounts.ts), so no credential ever touches the spec file, same discipline as accountId.
-  // The cli id → configDir lookup happens HERE because the store read is daemon state; the dir is
-  // not a secret.
-  let desktopDir: string | null = null
-  let cliConfigDir: string | null = null
-  if (item.instance_ref?.startsWith('desktop:')) {
-    desktopDir = item.instance_ref.slice('desktop:'.length) || null
-    // Existence check (parallel to the 'cli:' branch's getCliInstance lookup below): a deleted
-    // desktop instance's dir must fail HERE, pre-launch, not reach the runner. An isolated desktop
-    // instance dir is a real folder on disk (Electron's --user-data-dir), so existsSync is sound.
-    if (desktopDir && !existsSync(desktopDir)) {
-      failPreLaunch(
-        item,
-        `run-as desktop instance not found (${desktopDir}) — it may have been deleted`,
-      )
-      return
-    }
-  } else if (item.instance_ref?.startsWith('cli:')) {
-    cliConfigDir = getCliInstance(item.instance_ref.slice('cli:'.length))?.configDir ?? null
-    if (!cliConfigDir) {
-      failPreLaunch(
-        item,
-        `run-as CLI instance not found (${item.instance_ref}) — it may have been deleted`,
-      )
-      return
-    }
-  }
-  // A non-null instance_ref that resolved to NEITHER a desktopDir NOR a cliConfigDir is malformed
-  // (an empty suffix like 'desktop:'/'cli:', an unrecognized prefix like 'garbage:foo', or a bare
-  // 'desktop' with no colon) — it must fail loudly here, not fall through and silently dispatch as
-  // Ambient. This is the other half of the pinning guarantee: a pinned run never runs unpinned.
-  if (item.instance_ref && !desktopDir && !cliConfigDir) {
-    failPreLaunch(
-      item,
-      `run-as instance reference is malformed (${item.instance_ref}) — expected 'desktop:<dir>' or 'cli:<id>'`,
-    )
-    return
-  }
-
-  const spec = {
-    itemId: item.id,
-    childArgv: buildArgv(item),
-    cwd: item.cwd,
-    accountId: item.account_id ?? null,
-    desktopDir,
-    cliConfigDir,
-    dbPath: DB_PATH,
-    envExtra: {
-      ...(process.env.AGENTHYDRA_FAKE ? { FAKE_SESSION_ID: item.session_id } : {}),
-      // FAKE_SLEEP_MS is a test-only knob; forward it so a fake run launched via WMI (which does
-      // NOT inherit the daemon's env) can still be slowed down for the survive/reattach tests.
-      ...(process.env.FAKE_SLEEP_MS ? { FAKE_SLEEP_MS: process.env.FAKE_SLEEP_MS } : {}),
-      // Same deal: makes the stand-in fail the way the real CLI does, so the 529 retry path can be
-      // driven end to end rather than unit-tested around.
-      ...(process.env.FAKE_ERROR_MODE ? { FAKE_ERROR_MODE: process.env.FAKE_ERROR_MODE } : {}),
-    },
-    logPath: logPathFor(item.id),
-    statusPath: statusPathFor(item.id),
-  }
-  writeFileSync(specPathFor(item.id), JSON.stringify(spec))
-
-  const entry: ActiveEntry = {
-    sessionId: item.session_id,
-    canceled: false,
-    childPid: null,
-    killed: false,
-    // We are spawning the runner ourselves right now, so the status file it is about to write is
-    // ours by construction — there is no stale-pid question for a fresh run.
-    runnerLive: true,
-  }
-  active.set(item.id, entry) // SYNC: before the first await
-
-  db.query(
-    'update queue_items set status = ?, pid = null, started_at = ?, finished_at = null, exit_code = null where id = ?',
-  ).run('running', new Date().toISOString(), item.id)
-  publish(item.id, {
-    type: 'status',
-    data: { id: item.id, status: 'running', exit_code: null, pid: null },
-  })
-
-  // Launch the DETACHED runner so it survives the daemon exiting / being tree-killed.
-  try {
-    launchDetachedRunner(specPathFor(item.id))
-  } catch (err) {
-    recordEvent(item.id, 'system', 'meta', `failed to launch runner: ${String(err)}`, null)
-    await finalize(item.id, -1)
-    return
-  }
-
-  await tailRun(item.id, entry)
 }
 
 /** Cancel a running item: kill `claude` (the runner then writes the terminal marker, so the tail

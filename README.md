@@ -37,9 +37,13 @@ shows all of that local history at once. You alt-tab to remember which account i
 session is still going, and what you asked it to do.
 
 AgentHydra is a local dashboard for AI coding agents that brings your Claude Code, Codex, and
-OpenCode session history into one browser tab, lets you queue and schedule Claude Code runs, tracks
-cost and usage across models and projects, and manages isolated Claude Desktop and Codex Desktop
-accounts, all without a cloud service or account signup. It is not a Claude client and does not
+OpenCode session history into one browser tab, lets you reply into a running chat or move one
+between accounts, tracks cost and usage across models and projects, and manages isolated Claude
+Desktop and Codex Desktop accounts, all without a cloud service or account signup. It does not run
+a chat you cannot see: the run queue and scheduler are still in the code and still readable as a
+record, but every attempt to start a new headless run is refused, on purpose (see [Reply, fan out,
+or move a session, never headless](#reply-fan-out-or-move-a-session-never-headless) below). It is
+not a Claude client and does not
 replace one: it is the dashboard the CLI and the desktop app do not come with.
 
 ## Every session, in one list
@@ -69,7 +73,7 @@ database rather than exposed as a raw file.
 
 AgentHydra does not run a `claude` chat you cannot see. There is no headless queue or scheduler:
 every run happens in a real desktop app window, on purpose, so nothing is ever working away in a
-process with no chat for you to open. Three things actually work today:
+process with no chat for you to open. Four things actually work today:
 
 - **Reply straight into a session's own desktop chat.** The composer at the bottom of a session
   types your message into that chat's own app window (the same delivery `fan_out_send` uses over
@@ -78,6 +82,10 @@ process with no chat for you to open. Three things actually work today:
 - **Fan a task list out across your other signed-in accounts** with the MCP `fan_out` tool, one
   visible chat per account, then steer the whole group with `fan_out_send`.
 - **Import a session into a desktop app** so it becomes a real chat you can continue by hand.
+- **Move a chat onto another signed-in account** in one call with the MCP `move_chat` tool, or
+  `move_chats` for several at once, which is the one to reach for whenever more than a single chat
+  is moving. The chat keeps its history and lands ready to continue. See
+  [Moving chats between accounts](docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md).
 
 The **run queue** view still exists as a record of past runs: every historical item, its prompt,
 model, exit code and live output, stays inspectable and editable, but creating or dispatching a
@@ -111,6 +119,15 @@ and uptime.
 You can open, focus, quit, create and delete them from here, give each one a name, an icon and a
 colour so they stop looking identical, and see your isolated CLI logins alongside the desktop
 instance that shares their account.
+
+**Claude native control:** open **Settings → General → Claude native control** and enable
+**Start debugger automatically** for a desktop account. Its next **Open** through AgentHydra
+starts the local connection automatically; saving does not open or restart an app. Configured
+accounts use the native session manager for archive and migration-source cleanup, without
+sidebar menus or Lua/UI automation for those steps. Other migration steps still use the existing
+guarded pipeline. New profiles need their own setting. See the
+[native-control operating guide](docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md) for the programmatic
+configuration API, supported build, exact-profile routing and failure rules.
 
 The same view manages Codex Desktop and CLI together. Each Codex instance gets its own `CODEX_HOME`
 and desktop profile, so work and personal OpenAI logins can run in separate Codex windows. Open,
@@ -171,13 +188,14 @@ On Windows, run the versioned `AgentHydra-…-windows-x64.exe` directly; it is a
 executable with the web app embedded and no console window. Linux and macOS builds remain
 one-executable archives. No Bun is needed.
 
-**Want the system-tray icon?** Take the Windows ZIP instead of the bare `.exe`. The icon comes from a
-small separate launcher (`misc\lunarwerx-tray.exe`) that ships in the ZIP's `misc\` folder, and the
-daemon starts it for you when it finds it there and nothing else has, so double-clicking
-`AgentHydra.exe` out of the ZIP gets you the icon too. `misc\Create-Shortcut.ps1` still makes a
-proper shortcut that launches through the tray host directly, and the installer above creates that
-same shortcut in the Start Menu. The single-file `.exe` has no `misc\`, so it can never show one, and
-says so once when it starts. The ZIP doubles as the automatic-update transport.
+**The system-tray icon comes with both downloads.** The icon is drawn by a small separate launcher
+(`misc\lunarwerx-tray.exe`), and the daemon starts it for you when nothing else has. The ZIP ships
+that launcher in its `misc\` folder; the single-file `.exe` carries it INSIDE the binary and writes
+it out beside its own state on first run, so double-clicking either one gets you the icon, Quit, and
+the auto-restart supervisor. (Before 0.41.0 the single file had no tray at all and said so with a
+notification - a limitation, written down as though it were a decision.) `misc\Create-Shortcut.ps1`
+still makes a proper shortcut that launches through the tray host directly, and the installer above
+creates that same shortcut in the Start Menu. The ZIP doubles as the automatic-update transport.
 
 **Or from source**, with [Bun](https://bun.sh):
 
@@ -189,10 +207,10 @@ bun run build && bun run start
 
 Either way the UI is at <http://localhost:7787>.
 
-> **Just trying it?** Set `AGENTHYDRA_FAKE=1` and dispatch uses a harmless stand-in for the `claude`
-> CLI, so nothing touches your quota or your repos. The scheduler is off by default. Note that
-> instance actions (open / quit / create / delete) act on **real** Claude Desktop instances; delete
-> asks you to type the name.
+> **Just trying it?** Headless dispatch (queueing a run for `claude` to execute unattended) is
+> disabled outright, so nothing ever spends your quota without you watching it happen in an app.
+> The scheduler is off by default. Note that instance actions (open / quit / create / delete) act
+> on **real** Claude Desktop instances; delete asks you to type the name.
 
 There is no cloud service behind this and no account to sign up for. It reads the local stores
 your tools already write and talks to `localhost`; optional external handoffs open the provider
@@ -212,8 +230,10 @@ telemetry.
 - **[Bun](https://bun.sh)** if running from source.
 - The **`claude` CLI** for dispatch, and/or **Claude Desktop** for Claude instance management.
 - Optional: **Codex Desktop/CLI** for isolated Codex windows, CLI launch/login, and local rollout
-  history; **OpenCode** for local OpenCode history. Their sessions appear automatically when their
-  standard local stores exist.
+  history; **OpenCode** for local OpenCode history; **Hermes Agent** and the **DeepSeek Harness**
+  (`@deepseek-ai/dsh`) for theirs. Their sessions appear automatically when their standard local
+  stores exist: `~/.dsh` for the harness, or wherever `DSH_HOME` points. The harness can also be
+  launched, opened and stopped from the Instances tab, one row per home.
 - **Windows** for the tray launcher. macOS and Linux builds exist and the instance-account code is
   written for them, but they are not verified there yet.
 - **Windows instance management needs the classic Claude Desktop build** (the ~217 MB Squirrel
@@ -235,6 +255,12 @@ sweep, moving chats between accounts, archiving, naming, the tray-icon switch) -
 under [`orchestrator/`](orchestrator/README.md) and is driven through the same MCP server
 (`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch`), so an agent
 never has to be told there is a second program. Nothing there acts unless the tray icon is up.
+
+How it behaves is yours to set: `orch.py policy` is one file of 86 switches - the gate's timings and
+its four archive signals, what each sweep lane does, the caps, the wake prompt, every scheduled lane
+- and every default is exactly what was hardcoded before it existed, so installing it changes
+nothing. `orch.py policy --wizard` walks through them; `orch.py dryrun` runs the read-only loop N
+times and proves the switches actually steer it.
 
 ## More
 
@@ -279,9 +305,9 @@ and OpenCode are read-only. Claude Desktop and Codex Desktop instances are manag
 the Instances view.
 
 **Can I try it without risking my Claude quota?**
-Yes. Set `AGENTHYDRA_FAKE=1` and dispatch uses a harmless stand-in for the `claude` CLI, so nothing
-touches your quota or your repos. The scheduler stays off by default either way. Note that instance
-actions (open, quit, create, delete) still act on real Claude Desktop instances.
+Yes. Headless dispatch is disabled outright - AgentHydra never spawns `claude` against your quota
+without you watching it happen in an app. The scheduler stays off by default either way. Note that
+instance actions (open, quit, create, delete) still act on real Claude Desktop instances.
 
 Made by [LunarWerx Studios](https://lunarwerx.com). Also see
 [RepoYeti](https://repoyeti.com), [DevWebUI](https://devwebui.lunarwerx.com), and
@@ -290,3 +316,7 @@ Made by [LunarWerx Studios](https://lunarwerx.com). Also see
 ## License
 
 [MIT](LICENSE).
+
+## Star history
+
+<a href="https://www.star-history.com/?repos=lunarwerxs%2Fagenthydra&type=date&legend=bottom-right"><img src="https://api.star-history.com/svg?repos=lunarwerxs%2Fagenthydra&type=Date&theme=dark&legend=bottom-right" width="100%" alt="AgentHydra GitHub stars over time"></a>

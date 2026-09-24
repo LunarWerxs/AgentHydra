@@ -193,7 +193,7 @@ watch(
           <h1 class="text-lg font-semibold tracking-tight">Orchestrator</h1>
           <span class="rounded-full border border-border bg-input/20 px-2 py-0.5 text-[11px] text-muted-foreground">read-only · acts stay in the terminal</span>
         </div>
-        <div class="ml-auto flex items-center gap-2">
+        <div class="ms-auto flex items-center gap-2">
           <ArmSwitch />
           <Button variant="outline" size="icon" title="Refresh every reading" @click="refresh">
             <RefreshCw :class="{ 'animate-spin': dash.plan.loading || dash.accounts.loading }" />

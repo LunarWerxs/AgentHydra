@@ -15,12 +15,13 @@
 // The grouping key is the FIRST message's uuid. A uuid is unique, so two transcripts whose first
 // message is the same message necessarily share that history — no content comparison needed, and
 // no reliance on the title, which two genuinely different chats routinely share.
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const home = mkdtempSync(join(tmpdir(), 'agenthydra-copies-'))
+afterAll(() => rmSync(home, { recursive: true, force: true }))
 const projectDir = join(home, '.claude', 'projects', 'D--demo')
 mkdirSync(projectDir, { recursive: true })
 mkdirSync(join(home, '.codex', 'sessions'), { recursive: true })

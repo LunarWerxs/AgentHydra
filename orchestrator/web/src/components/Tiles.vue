@@ -31,7 +31,7 @@ const DOT: Record<string, string> = {
       v-for="kind in ORDER"
       :key="kind"
       type="button"
-      class="min-w-[130px] rounded-lg border bg-card px-3.5 py-2.5 text-left transition-colors hover:border-muted-foreground/40"
+      class="min-w-[130px] rounded-lg border bg-card px-3.5 py-2.5 text-start transition-colors hover:border-muted-foreground/40"
       :class="filter === kind ? 'border-primary ring-1 ring-primary' : 'border-border'"
       :aria-pressed="filter === kind"
       @click="emit('select', kind)"
@@ -45,7 +45,7 @@ const DOT: Record<string, string> = {
 
     <button
       type="button"
-      class="min-w-[130px] rounded-lg border bg-card px-3.5 py-2.5 text-left transition-colors hover:border-muted-foreground/40"
+      class="min-w-[130px] rounded-lg border bg-card px-3.5 py-2.5 text-start transition-colors hover:border-muted-foreground/40"
       :class="filter === null ? 'border-primary ring-1 ring-primary' : 'border-border'"
       :aria-pressed="filter === null"
       @click="emit('select', null)"

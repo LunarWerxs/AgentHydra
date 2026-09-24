@@ -120,6 +120,11 @@ export interface ChatListRow {
    *  migrated. The migrate route refuses a done chat as superseded, so a move planned from this
    *  list leaves these out rather than collecting a column of refusals. */
   done: boolean
+  /** ⛔ ON DISK, NOT IN THE APP: filed under an account this profile is no longer signed into,
+   *  so the desktop app does not show it (see DossierChat.staleLogin). Null = the signed-in
+   *  account is unknown. A move to this same instance RE-HOMES such a chat into the signed-in
+   *  account's folder instead of answering "already lives here". */
+  staleLogin: boolean | null
 }
 
 export interface ChatListResult {
@@ -127,7 +132,15 @@ export interface ChatListResult {
   /** Chats matching the filter BEFORE limit/offset — so a capped page never reads as the whole set. */
   total: number
   /** The whole account, unfiltered by archive scope: the "how big is this thing" answer. */
-  counts: { all: number; unarchived: number; archived: number; live: number }
+  counts: {
+    all: number
+    unarchived: number
+    archived: number
+    live: number
+    /** Unarchived chats filed under an account the profile is no longer signed into: present on
+     *  disk, INVISIBLE in the app. Anything above zero is chats the owner has lost sight of. */
+    staleLogin: number
+  }
   /** Every instance label the scan saw, so a mistyped `instance` is obvious rather than empty. */
   instances: string[]
 }
@@ -141,6 +154,36 @@ export interface ListChatsOptions {
   q?: string
   limit?: number
   offset?: number
+}
+
+/**
+ * Every id each LIVE engine's chat answers to, keyed by the engine's own session id
+ * (2026-09-17). The orchestrator reads liveness for the whole fleet in one call, and a bare
+ * session id is not enough for that: a chat that rolled its cli id has an old transcript row
+ * under the OLD id while its engine runs under the NEW one, so the old row read as "not live"
+ * unless something walked the lineage. This is that walk, done once on the side that owns the
+ * chat store, with the same rule the dossier's `live` field uses - a chat is live when any id
+ * in its lineage is a registered engine - so the two answers cannot disagree.
+ *
+ * Archived chats are included on purpose: an extra alias can only make a row read MORE live,
+ * never less, and "not live" is the verdict that lets something act on a chat.
+ */
+export function liveLineage(
+  liveSessionIds: string[],
+  chats: DossierChat[] = collectChats(),
+): Map<string, string[]> {
+  const live = new Set(liveSessionIds)
+  const out = new Map<string, Set<string>>()
+  for (const id of live) out.set(id, new Set([id]))
+  for (const c of chats) {
+    const ids = lineageIdsOf(c)
+    for (const id of ids) {
+      if (!live.has(id)) continue
+      const aliases = out.get(id)
+      for (const alias of ids) aliases?.add(alias)
+    }
+  }
+  return new Map([...out].map(([id, aliases]) => [id, [...aliases]]))
 }
 
 /** Session ids with a live engine, read ONCE. The dossier's per-chat liveFor re-reads the
@@ -176,6 +219,7 @@ export function listChats(
     unarchived: scoped.filter((c) => !c.isArchived).length,
     archived: scoped.filter((c) => c.isArchived).length,
     live: scoped.filter((c) => lineageIdsOf(c).some((id) => live.has(id))).length,
+    staleLogin: scoped.filter((c) => !c.isArchived && c.staleLogin === true).length,
   }
 
   const matched = scoped
@@ -211,6 +255,7 @@ export function listChats(
       live: pid !== undefined,
       livePid: pid ?? null,
       done: markFor(lineage)?.done === true,
+      staleLogin: c.staleLogin,
     }
   })
 

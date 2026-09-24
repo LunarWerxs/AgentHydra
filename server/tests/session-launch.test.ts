@@ -4,8 +4,8 @@
 // and quote-riddled, and the first design (inline quoting through `cmd /c start`) is exactly
 // how arguments get silently mangled. These tests pin that the plan reads the file, keeps the
 // window open on failure, and never interpolates the prompt text itself into argv.
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../src/db'
@@ -27,6 +27,10 @@ import {
   stampImportedChat,
   sweepUntitledDesktopChats,
 } from '../src/session-launch'
+
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-session-launch-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
 
 function markDone(sessionId: string, done: boolean): void {
   db.query(
@@ -91,7 +95,7 @@ test('the desktop import plan targets one instance via its profile dir', () => {
 })
 
 test('import refuses a non-running instance instead of booting it', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-import-guard-'))
+  const dir = mkdtempSync(join(ROOT, 'agenthydra-import-guard-'))
   const r = await importSessionToDesktop({
     title: 'A real guard-test title',
     sessionId: 'no-such-session',
@@ -141,7 +145,7 @@ test('alreadyRendersIn only claims residency for a live chat under that instance
 })
 
 test('import skips the spawn when the chat already renders in that instance', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-import-dup-'))
+  const dir = mkdtempSync(join(ROOT, 'agenthydra-import-dup-'))
   const r = await importSessionToDesktop({
     title: 'A real duplicate-guard title',
     sessionId: 'already-there',
@@ -155,7 +159,7 @@ test('import skips the spawn when the chat already renders in that instance', as
 })
 
 test('applyDesktopChatTitle writes the same field pair the app itself writes', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-title-'))
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-title-'))
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   const metaPath = join(store, 'local_sess-t1.json')
@@ -168,7 +172,7 @@ test('applyDesktopChatTitle writes the same field pair the app itself writes', (
 })
 
 test('the title janitor names untitled chats, respects real names, skips generic candidates', () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-janitor-'))
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-janitor-'))
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   writeFileSync(
@@ -207,7 +211,7 @@ test('imported chats are stamped bypassPermissions, not left to deadlock on a sh
   // Measured 2026-08-26: the app creates an imported chat with permissionMode 'acceptEdits',
   // which auto-approves EDITS but prompts on every shell command - so five revived chats each
   // ran one Bash call and froze forever at an approval the remote owner could never click.
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-perm-'))
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-perm-'))
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   const metaPath = join(store, 'local_sess-perm-1.json')
@@ -228,7 +232,7 @@ test('an UNTITLED import is still stamped bypassPermissions', async () => {
   // deadlocked on its first shell call with nobody there to approve it. Both import routes can
   // pass an empty title, and no test reached this code because every other import test stops at a
   // guard long before the spawn. Measured 2026-08-28 moving 13 chats between accounts.
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-untitled-'))
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-untitled-'))
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   const metaPath = join(store, 'local_sess-untitled.json')
@@ -263,7 +267,7 @@ test('the stamp survives the app boot re-save: the watcher rewrites what the app
   // the metadata from memory — 'acceptEdits' again — and the chat froze forever at its first
   // PowerShell approval prompt. The watcher must restore the stamp after the flip, so the file
   // stops testifying to the wrong mode at the app's next store read.
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-reassert-'))
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-reassert-'))
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   const metaPath = join(store, 'local_sess-boot-1.json')
@@ -301,7 +305,7 @@ test('the stamp survives the app boot re-save: the watcher rewrites what the app
 })
 
 test('the watcher is bounded: a restore cap against a hostile flipper, a miss cap for a chat that never appears', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-reassert-bound-'))
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-reassert-bound-'))
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   const metaPath = join(store, 'local_sess-fight.json')
@@ -343,7 +347,7 @@ test('reassertAutomationStamps restamps clobbered imports only, never app-create
   // moment a daemon write provably enters the app's memory (same window 4499079 proved for
   // archive flags). Import shape = file named after the CLI id; an app-created chat is filed
   // under the app's own id and its mode may be the owner's deliberate UI choice.
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-restamp-'))
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-restamp-'))
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   const read = (n: string) => JSON.parse(readFileSync(join(store, n), 'utf8'))
@@ -376,7 +380,7 @@ test('reassertAutomationStamps restamps clobbered imports only, never app-create
 })
 
 test('stampImportedChat gives up at its deadline instead of blocking forever', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-stamp-deadline-'))
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-stamp-deadline-'))
   mkdirSync(join(profile, 'claude-code-sessions', 'org-1', 'user-1'), { recursive: true })
   let slept = 0
   const titled = await stampImportedChat(profile, 'never-created', 'x', 1200, async (ms) => {
@@ -387,7 +391,7 @@ test('stampImportedChat gives up at its deadline instead of blocking forever', a
 })
 
 test('archiveDesktopChat flips the metadata flag by filename across profiles', async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-archive-'))
+  const profile = mkdtempSync(join(ROOT, 'agenthydra-archive-'))
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   const metaPath = join(store, 'local_sess-arch-1.json')
@@ -417,7 +421,7 @@ test('archiveDesktopChat flips the metadata flag by filename across profiles', a
 })
 
 test('bundledClaudeExe picks the numerically newest version, not the lexicographic one', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-bundled-'))
+  const dir = mkdtempSync(join(ROOT, 'agenthydra-bundled-'))
   const exeName = process.platform === 'win32' ? 'claude.exe' : 'claude'
   // 2.1.9 vs 2.1.237: lexicographic sort would pick 2.1.9. The real store hit exactly this shape.
   for (const v of ['2.1.9', '2.1.237']) {

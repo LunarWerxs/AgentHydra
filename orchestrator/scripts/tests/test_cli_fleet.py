@@ -86,11 +86,21 @@ class PeerChannelTest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _publish(self, pid, sid, token="tok"):
+    def _publish(self, pid, sid, token="tok", socket="live"):
+        """Publish one registry record. `socket` is the session's own messaging socket:
+        "live" writes a path that EXISTS (a live session's pipe answers), "dead" writes one
+        that does not (the session crashed and only its record survives), None omits the field
+        entirely (a record from a CLI too old to carry one)."""
         d = self.cfg / "sessions"
-        (d / f"{pid}.json").write_text(json.dumps(
-            {"pid": str(pid), "sessionId": sid, "cwd": "D:/x", "startedAt": "1",
-             "messagingSocketPath": r"\\.\pipe\LOCAL\cc-msg-abc"}), encoding="utf-8")
+        rec = {"pid": str(pid), "sessionId": sid, "cwd": "D:/x", "startedAt": "1"}
+        if socket == "live":
+            # Existence is the whole signal, so any real path stands in for the pipe.
+            sock = self.cfg / f"sock-{pid}"
+            sock.write_text("", encoding="utf-8")
+            rec["messagingSocketPath"] = str(sock)
+        elif socket == "dead":
+            rec["messagingSocketPath"] = str(self.cfg / f"gone-{pid}")
+        (d / f"{pid}.json").write_text(json.dumps(rec), encoding="utf-8")
         if token:
             (d / f"{pid}.hash.key").write_text(json.dumps({"peerToken": token}),
                                                encoding="utf-8")
@@ -107,6 +117,21 @@ class PeerChannelTest(unittest.TestCase):
         self._publish(4242, "s-1")
         with mock.patch.object(peerlib, "_pid_alive", return_value=False):
             self.assertEqual(peerlib.live_sessions(self.cfg), [])
+
+    def test_a_recycled_pid_is_not_a_live_session(self):
+        # Measured 2026-09-13: a crashed session's record outlived it and the OS handed its pid
+        # to an unrelated instance's renderer, so the chat read as LIVE and --terminate-live
+        # would have killed a stranger's process tree. The pid is alive here - that is the
+        # point - and only the session's own vanished socket can tell the truth.
+        self._publish(4242, "s-1", socket="dead")
+        with mock.patch.object(peerlib, "_pid_alive", return_value=True):
+            self.assertEqual(peerlib.live_sessions(self.cfg), [])
+
+    def test_a_record_too_old_to_carry_a_socket_falls_back_to_the_pid(self):
+        # Narrowing liveness must not blind the fleet to an older CLI's sessions.
+        self._publish(4242, "s-1", socket=None)
+        with mock.patch.object(peerlib, "_pid_alive", return_value=True):
+            self.assertEqual(len(peerlib.live_sessions(self.cfg)), 1)
 
     def test_a_record_without_a_key_cannot_be_messaged_and_says_so(self):
         self._publish(99, "s-2", token=None)

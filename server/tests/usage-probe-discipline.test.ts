@@ -67,7 +67,7 @@ test('a refused probe hands back the last REAL reading, never a fresh no-data', 
     session: { usedPct: 42, resets: null },
     weekAll: null,
     weekModel: null,
-    capturedAt: '2026-09-07T00:00:00.000Z',
+    capturedAt: '2024-09-07T00:00:00.000Z',
   }
   rememberCliProbe('acct-a', t0, real as never)
   const gate = cliProbeGate('acct-a', t0 + 30_000)

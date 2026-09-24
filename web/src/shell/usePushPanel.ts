@@ -31,7 +31,7 @@ import { contributeContentInset } from "@/lib/content-inset";
  *   const open = ref(false);
  *   const { side, containerStyle } = usePushPanel(open, { shellMaxWidth: () => 1000 });
  *   // <div class="transition-[padding] duration-300 ease-in-out" :style="containerStyle"> ... </div>
- *   // <SettingsPanel v-model:open="open" :side="side"> ... </SettingsPanel>
+ *   // <Sidebar v-model:open="open" :side="side"> ... </Sidebar>
  */
 export type PushPanelSide = "right" | "bottom";
 
@@ -83,8 +83,8 @@ export function usePushPanel(open: Ref<boolean>, options: UsePushPanelOptions = 
     const gap = Math.max(0, (vw - Math.min(vw, shellMax)) / 2);
     return Math.max(0, width - gap);
   });
-  const containerStyle = computed<{ paddingRight?: string }>(() => ({
-    paddingRight: shiftPx.value ? `${shiftPx.value}px` : undefined,
+  const containerStyle = computed<{ paddingInlineEnd?: string }>(() => ({
+    paddingInlineEnd: shiftPx.value ? `${shiftPx.value}px` : undefined,
   }));
 
   // A docked panel covers the viewport's right edge — publish the shift so centered

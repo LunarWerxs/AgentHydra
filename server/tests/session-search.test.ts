@@ -22,7 +22,7 @@ afterAll(() => {
 const say = (role: 'user' | 'assistant', text: string) =>
   JSON.stringify({
     type: role,
-    timestamp: '2026-08-10T12:00:00.000Z',
+    timestamp: '2024-08-10T12:00:00.000Z',
     message: { role, content: [{ type: 'text', text }] },
   })
 

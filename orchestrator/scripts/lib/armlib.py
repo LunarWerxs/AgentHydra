@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 
 from lib import clilib
+from lib import configlib
 from lib import ledgerlib
 
 ARM_CMD = "python orch.py arm"
@@ -212,6 +213,17 @@ def refuse_unless_armed(argv: list[str], what: str) -> str | None:
     when the caller passed --force (a person's word, by hand, for this one act)."""
     if "--force" in (argv or []):
         return None
+    # ⛔ A POLICY NOBODY CAN READ STOPS UNATTENDED ACTING (review, 2026-09-17). An unreadable
+    # config.json, or a value that failed its check, falls back to the DEFAULT - and a lane
+    # acting on a default where the owner wrote the opposite (archive.enabled off, a lane
+    # off) undoes his decision with no one watching. Armed or not, nothing acts until the
+    # file reads clean; a person's --force above still runs one act by hand.
+    bad = configlib.problems()
+    if bad:
+        return (f"POLICY FILE UNREADABLE - {what}: planned only, nothing acted. "
+                f"{len(bad)} problem(s) in {configlib.CONFIG_PATH}, first: {bad[0]}. Acting on "
+                "defaults could undo a switch you turned off. `python orch.py policy --doctor` "
+                "names them all (or --force for this one run by hand).")
     st = status()
     if st["armed"]:
         return None

@@ -33,10 +33,13 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstancesSection from '@/components/CliInstancesSection.vue'
 import CodexInstancesSection from '@/components/CodexInstancesSection.vue'
+import CopyResetDate from '@/components/CopyResetDate.vue'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
+import DshInstancesSection from '@/components/DshInstancesSection.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
 import ExpandArea from '@/components/ExpandArea.vue'
+import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceSectionsMenu from '@/components/InstanceSectionsMenu.vue'
@@ -94,7 +97,7 @@ import {
   getSession,
   migrateSession,
 } from '@/lib/api'
-import { baseName, formatBytes, formatUptime, timeAgo } from '@/lib/format'
+import { formatBytes, formatUptime, timeAgo } from '@/lib/format'
 import {
   accountDisplayName,
   accountEmail,
@@ -105,6 +108,7 @@ import {
   labelDisagreesWithAccount,
   resolveColorKey,
   resolveIconKey,
+  shortDisplayName,
 } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
 import { type MovePlan, moveTargets, planMove } from '@/lib/move-chats'
@@ -148,6 +152,7 @@ const {
   snapshotFor,
   isChecking,
   checkDesktop,
+  checkCodex,
   reasonFor,
   hydrated: usageHydrated,
   startPolling: startUsagePolling,
@@ -186,6 +191,9 @@ function weeklyWait(inst: CMInstance) {
   return waitSeverity(weeklyRemaining(inst))
 }
 
+// The sort survives a reload: persisted through useUiPrefs like the table's collapse state.
+const { desktopSortKey, desktopSortDirection } = useUiPrefs()
+
 const { sortedRows, toggleSort, indicatorFor } = useSortable(
   () => instances.value,
   [
@@ -217,8 +225,26 @@ const { sortedRows, toggleSort, indicatorFor } = useSortable(
     },
     { key: 'usageSession', accessor: (i: CMInstance) => usageFor(i)?.session?.pct ?? undefined },
     { key: 'plan', accessor: (i: CMInstance) => i.account?.planLabel ?? undefined },
+    // By the instant, not the "3h ago" text, so the order is true across units.
+    {
+      key: 'lastLaunched',
+      accessor: (i: CMInstance) => (i.lastLaunchedAt ? Date.parse(i.lastLaunchedAt) : undefined),
+    },
   ],
+  { key: desktopSortKey, direction: desktopSortDirection },
 )
+
+/** "3h ago" for the last launch on this PC. Reads the shared clock so the cell ticks with the tab. */
+function lastLaunchedLabel(inst: CMInstance): string {
+  void now.value
+  return timeAgo(inst.lastLaunchedAt)
+}
+/** The exact local time behind the relative label, for the hover. */
+function lastLaunchedExact(inst: CMInstance): string | undefined {
+  if (!inst.lastLaunchedAt) return undefined
+  const at = Date.parse(inst.lastLaunchedAt)
+  return Number.isFinite(at) ? new Date(at).toLocaleString() : undefined
+}
 
 // --- filter -----------------------------------------------------------------------------------
 // "Show me the rows I'm after" (composables/useInstanceFilter.ts): open or closed, which plan, how
@@ -281,6 +307,28 @@ const editOpen = ref(false)
 const editTarget = ref<CMInstance | null>(null)
 const editing = ref(false)
 const editError = ref<string | null>(null)
+
+// What the name cell PRINTS: the row's name, cut to the column's width (see shortDisplayName).
+// Sorting, filtering, the move submenu and every dialog keep using displayName() — the cut is for
+// this one cell, and a truncated name must never become a value anything acts on.
+function nameCellText(inst: CMInstance): string {
+  return shortDisplayName(displayName(inst))
+}
+
+// The name cell's hover, and the only place the FULL name is readable once the cell elides it
+// (owner directive, 2026-09-11: cap the name, hover for the rest).
+//
+// Three facts compete for two lines here, so the cut decides the order. A name that fits keeps the
+// hover exactly as it was — folder on top, "click to focus" under it — because repeating text the
+// cell is already showing in full is noise. A name that was cut leads with the full name and pushes
+// the other two down a line each; `detail` on IconTooltip exists for that third line.
+function nameTooltip(inst: CMInstance): { label: string; description?: string; detail?: string } {
+  const full = displayName(inst)
+  const focus = inst.isRunning ? t('instances.focusHint') : undefined
+  return nameCellText(inst) === full
+    ? { label: inst.dir, description: focus }
+    : { label: full, description: inst.dir, detail: focus }
+}
 
 // The account cell identifies the LOGIN, so it shows the email handle and nothing else — see
 // accountHandle for why it is no longer accountName. The account's own label is the last resort so
@@ -460,6 +508,11 @@ async function onRefreshAllUsage() {
     await Promise.all([
       ...(showDesktopInstances.value ? instances.value.map((i) => checkDesktop(i.dir)) : []),
       ...(showCliInstances.value ? cliInstances.value.map((i) => checkCliUsage(i.id)) : []),
+      ...(codexDesktopEnabled.value || codexCliEnabled.value
+        ? codexInstances.value
+            .filter((i) => i.account?.authMode === 'chatgpt')
+            .map((i) => checkCodex(i.id))
+        : []),
     ])
   } finally {
     refreshingAllUsage.value = false
@@ -698,98 +751,19 @@ function onEditClosed(isOpen: boolean) {
 const rowMenuOpen = ref<string | null>(null)
 
 // --- what chats are ON this account ------------------------------------------------------------
-// The read that used to require opening the account (owner, 2026-09-07). The move submenu answers
-// "send them somewhere"; this answers the question you have to settle FIRST on a fleet of near
-// -identically named rows - which account is holding the chat you are looking for.
-//
-// Deliberately reads /api/chats, the account's own store, and NOT the session list: a session
-// listing is scoped by period and by the instance NAME a transcript happens to record, so a chat
-// nobody has touched this week simply is not in it. That would make an account with twenty chats
-// look empty, which is the one wrong answer this panel must never give.
-const chatsFor = ref<CMInstance | null>(null)
-const chatsBusy = ref(false)
-const chatsError = ref<string | null>(null)
-const chatsRows = ref<ChatListRow[]>([])
-const chatsTotal = ref(0)
-const chatsCounts = ref<{ all: number; unarchived: number; archived: number; live: number } | null>(
-  null,
-)
-// Archived is the resting state of a Claude Desktop chat and therefore the majority of any
-// account, so the list opens on the active ones and says how many it is not showing.
-const chatsShowArchived = ref(false)
-const CHATS_PAGE = 200
-
-// Which load is the current one. Guarding by instance dir alone is not enough: toggling "Include
-// archived" twice quickly issues two loads for the SAME row, and the store scan is slow enough
-// (~1300 files) that they can land in either order - so the list could settle on the reply that
-// disagrees with the checkbox. A monotonic id means only the newest load may write.
-let chatsRequest = 0
-
-async function loadChats(inst: CMInstance) {
-  const seq = ++chatsRequest
-  const mine = () => chatsRequest === seq && chatsFor.value?.dir === inst.dir
-  chatsBusy.value = true
-  chatsError.value = null
-  try {
-    // `desktop:<dir>` is the one spelling that cannot be ambiguous: a label and an account name
-    // are both user-editable and two rows may share either. The server maps it to the chat-store
-    // label, including the default install's literal `default` (see chatStoreLabel in
-    // server/src/routes/sessions.ts).
-    const got = await getInstanceChats(
-      `desktop:${inst.dir}`,
-      chatsShowArchived.value ? 'include' : 'hide',
-      CHATS_PAGE,
-    )
-    // A slower reply for a row the user has since closed or swapped, or for a filter they have
-    // since changed, must not overwrite the one they are looking at now.
-    if (!mine()) return
-    chatsRows.value = got.rows
-    chatsTotal.value = got.total
-    chatsCounts.value = got.counts
-  } catch (e) {
-    if (!mine()) return
-    chatsRows.value = []
-    chatsTotal.value = 0
-    chatsCounts.value = null
-    chatsError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    if (mine()) chatsBusy.value = false
-  }
-}
-
+// The read that used to require opening the account (owner, 2026-09-07). The panel lives in its
+// own component (InstanceChatsDialog.vue) because it owns a slow store scan with its own staleness
+// guard; this file only says WHICH row to open it for.
+const chatsOpen = ref(false)
+const chatsTarget = ref<CMInstance | null>(null)
 function openChats(inst: CMInstance) {
   rowMenuOpen.value = null
-  chatsFor.value = inst
-  chatsRows.value = []
-  chatsTotal.value = 0
-  chatsCounts.value = null
-  // Reset the filter BEFORE the load, and let the watcher below own the fetch when this actually
-  // changes the value: setting it and then loading here as well means an open with the toggle
-  // left on pays for two identical full store scans.
-  if (chatsShowArchived.value) chatsShowArchived.value = false
-  else void loadChats(inst)
+  chatsTarget.value = inst
+  chatsOpen.value = true
 }
-
-function closeChats() {
-  chatsFor.value = null
-  chatsBusy.value = false
-  // Nothing in flight may write into the next dialog that opens.
-  chatsRequest++
-}
-
-// Re-reads on the toggle rather than filtering what is already loaded: the archived chats were
-// never fetched, and a client-side filter over a 200-row page would silently under-report an
-// account holding two hundred of them.
-watch(chatsShowArchived, () => {
-  const inst = chatsFor.value
-  if (inst) void loadChats(inst)
-})
-
-/** A chat in the list, clicked: land on it in Sessions. Only reachable for a chat that HAS a CLI
- *  transcript - a Desktop-only row has no session for Sessions to show. */
-function openChatFromList(row: ChatListRow) {
+/** A chat clicked inside the panel: land on it in Sessions (the tab switch happens in App.vue). */
+function onChatsOpenRow(row: ChatListRow) {
   if (!row.sessionId) return
-  closeChats()
   requestSessionJump({ session_id: row.sessionId, source: 'claude' })
 }
 
@@ -1087,7 +1061,7 @@ onUnmounted(() => {
         >
           <Plus class="shrink-0" />
           <span
-            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ml-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ml-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
+            class="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/create:ms-1.5 group-hover/create:max-w-[9rem] group-hover/create:opacity-100 group-focus-visible/create:ms-1.5 group-focus-visible/create:max-w-[9rem] group-focus-visible/create:opacity-100"
           >{{ $t('instances.createInstance') }}</span>
         </Button>
       </div>
@@ -1124,8 +1098,10 @@ onUnmounted(() => {
 
     <!-- gap-10, not a divider: the two tables used to abut with a hairline between them, which read
          as one continuous table whose last rows happened to have different columns. A flex gap only
-         applies BETWEEN children, so hiding either table leaves no orphan space behind it. -->
-    <div class="flex flex-col gap-10">
+         applies BETWEEN children, so hiding either table leaves no orphan space behind it.
+         pb-16: with every section shown, the last one (DeepSeek) sat flush against the bottom edge
+         of the scroll area, its last row half-hidden behind the window chrome (owner, 2026-09-20). -->
+    <div class="flex flex-col gap-10 pb-16">
       <!-- Both tables are hideable (Settings → Providers): plenty of people use only the desktop app,
            or only the CLI, and shouldn't have to look at an empty table for the other. -->
       <!-- ExpandArea, not the kit's ExpandTransition: this table's header is `sticky top-0`, and
@@ -1150,7 +1126,7 @@ onUnmounted(() => {
                  do these names even come from?" — one row's Name can be a label you typed, the
                  next row's the account it is signed into, the next its folder, and nothing said
                  which. The rule is now written down where the question gets asked. -->
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('name')">
+            <TableHead class="w-44 cursor-pointer select-none" @click="toggleSort('name')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colName') }}
                 <InfoHint :text="$t('instances.colNameHint')" @click.stop />
@@ -1158,7 +1134,7 @@ onUnmounted(() => {
                 <ArrowDown v-else-if="indicatorFor('name') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('account')">
+            <TableHead class="w-40 cursor-pointer select-none" @click="toggleSort('account')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colAccount') }}
                 <InfoHint :text="$t('instances.colAccountHint')" @click.stop />
@@ -1192,15 +1168,21 @@ onUnmounted(() => {
             </template>
             <!-- … swapped one-for-one for the quota columns in usage mode, so the table keeps its
                  shape and only its subject changes. -->
+            <!-- The quota columns carry FIXED widths (w-28 / w-24) here and in the CLI and Codex
+                 tables, which is the one thing that makes the three stacked tables actually line
+                 up. Auto table layout sizes each table's columns from its own content, so the same
+                 "Weekly" column came out 110px here and 78px below — the bars for one kind of fact
+                 were different lengths depending on which table you read them in. Change a width
+                 here and you must change the matching one in the other two. -->
             <template v-else>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('session')">
+              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('session')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colSession') }}
                   <ArrowUp v-if="indicatorFor('session') === 'asc'" class="size-3" />
                   <ArrowDown v-else-if="indicatorFor('session') === 'desc'" class="size-3" />
                 </span>
               </TableHead>
-              <TableHead class="cursor-pointer select-none" @click="toggleSort('weekly')">
+              <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('weekly')">
                 <span class="inline-flex items-center gap-0.5">
                   {{ $t('instances.colWeekly') }}
                   <ArrowUp v-if="indicatorFor('weekly') === 'asc'" class="size-3" />
@@ -1210,7 +1192,7 @@ onUnmounted(() => {
             </template>
             <TableHead
               v-if="usageMode"
-              class="cursor-pointer select-none"
+              class="w-24 cursor-pointer select-none"
               @click="toggleSort('usageSession')"
             >
               <span class="inline-flex items-center gap-0.5">
@@ -1219,21 +1201,32 @@ onUnmounted(() => {
                 <ArrowDown v-else-if="indicatorFor('usageSession') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('usage')">
+            <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('usage')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colUsage') }}
                 <ArrowUp v-if="indicatorFor('usage') === 'asc'" class="size-3" />
                 <ArrowDown v-else-if="indicatorFor('usage') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="cursor-pointer select-none" @click="toggleSort('plan')">
+            <TableHead class="w-24 cursor-pointer select-none" @click="toggleSort('plan')">
               <span class="inline-flex items-center gap-0.5">
                 {{ $t('instances.colPlan') }}
                 <ArrowUp v-if="indicatorFor('plan') === 'asc'" class="size-3" />
                 <ArrowDown v-else-if="indicatorFor('plan') === 'desc'" class="size-3" />
               </span>
             </TableHead>
-            <TableHead class="text-right">{{ $t('instances.colActions') }}</TableHead>
+            <!-- After Plan, before Actions, in both column modes: when an account was last opened
+                 is as true in usage mode as in process mode, and placing it right of every other
+                 column keeps the fixed-width quota columns aligned with the tables below. -->
+            <TableHead class="w-28 cursor-pointer select-none" @click="toggleSort('lastLaunched')">
+              <span class="inline-flex items-center gap-0.5">
+                {{ $t('instances.colLastLaunched') }}
+                <InfoHint :text="$t('instances.colLastLaunchedHint')" @click.stop />
+                <ArrowUp v-if="indicatorFor('lastLaunched') === 'asc'" class="size-3" />
+                <ArrowDown v-else-if="indicatorFor('lastLaunched') === 'desc'" class="size-3" />
+              </span>
+            </TableHead>
+            <TableHead class="text-end">{{ $t('instances.colActions') }}</TableHead>
           </TableRow>
         </TableHeader>
         <!-- visibleRows, not instances: with "hide" on, the filter can empty a table that still has
@@ -1241,9 +1234,10 @@ onUnmounted(() => {
              that landing as a blank tbody with no explanation. -->
         <TableBody v-if="visibleRows.length === 0" class="[&>tr]:transition-colors [&>tr]:duration-200">
           <!-- Usage mode swaps three process columns for two quota ones and adds the 5-hour
-               usage chip, which lands back on nine either way. Kept as an expression rather than a
-               literal so a future column change cannot silently desync the span from the header. -->
-          <TableEmpty v-if="!loading" :colspan="usageMode ? 9 : 9">
+               usage chip, which lands back on ten either way (Last launched shows in both). Kept as
+               an expression rather than a literal so a future column change cannot silently desync
+               the span from the header. -->
+          <TableEmpty v-if="!loading" :colspan="usageMode ? 10 : 10">
             <div class="flex flex-col items-center gap-1 text-center">
               <component :is="allHiddenByFilter ? Funnel : Boxes" class="mb-1 size-6 opacity-40" />
               <p class="font-medium text-foreground">
@@ -1282,6 +1276,7 @@ onUnmounted(() => {
             </template>
             <TableCell><Skeleton class="h-5 w-14" /></TableCell>
             <TableCell><Skeleton class="h-5 w-16" /></TableCell>
+            <TableCell><Skeleton class="h-3 w-14" /></TableCell>
             <TableCell>
               <div class="flex justify-end"><Skeleton class="h-6 w-20" /></div>
             </TableCell>
@@ -1331,26 +1326,25 @@ onUnmounted(() => {
                    every row two lines tall to show a path nobody reads at rest. It moved into the
                    tooltip, where it is one hover away and costs no height. The tooltip is on EVERY
                    row now, not just running ones, because the folder is what it is really for; the
-                   focus hint rides along as the description when clicking would actually focus. -->
+                   focus hint rides along as the description when clicking would actually focus.
+                   A name too long for the column takes the first line instead, and pushes both of
+                   those down one — see nameTooltip. -->
               <div class="flex items-center gap-1.5">
                 <!-- The permanent number sits BEFORE the name because the name is the untrustworthy
                      half: a profile signed into a different account than the folder it was named
                      after keeps showing the old name, and the number never drifts. -->
                 <InstanceNumber :num="inst.num" />
-                <IconTooltip
-                  :label="inst.dir"
-                  :description="inst.isRunning ? $t('instances.focusHint') : undefined"
-                >
+                <IconTooltip v-bind="nameTooltip(inst)">
                   <button
                     v-if="inst.isRunning"
                     type="button"
-                    class="cursor-pointer text-left hover:underline"
+                    class="cursor-pointer text-start hover:underline"
                     :disabled="isBusy(inst)"
                     @click="onFocus(inst)"
                   >
-                    {{ displayName(inst) }}
+                    {{ nameCellText(inst) }}
                   </button>
-                  <span v-else class="cursor-default">{{ displayName(inst) }}</span>
+                  <span v-else class="cursor-default">{{ nameCellText(inst) }}</span>
                 </IconTooltip>
                 <Badge v-if="inst.isExternal" variant="outline">{{ $t('instances.external') }}</Badge>
                 <!-- The name you typed no longer matches the account this profile is signed into.
@@ -1470,13 +1464,14 @@ onUnmounted(() => {
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
               <TableCell class="text-xs">
-                <UsageBar
-                  v-if="weeklyResetFor(inst)"
-                  :fill-pct="weeklyRemaining(inst)"
-                  :variant="weeklyWait(inst)"
-                  :label="weeklyResetFor(inst) ?? ''"
-                  :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
-                />
+                <CopyResetDate v-if="weeklyResetFor(inst)" :limit="usageFor(inst)?.weekAll">
+                  <UsageBar
+                    :fill-pct="weeklyRemaining(inst)"
+                    :variant="weeklyWait(inst)"
+                    :label="weeklyResetFor(inst) ?? ''"
+                    :aria-label="$t('instances.resetsIn', { when: weeklyResetFor(inst) })"
+                  />
+                </CopyResetDate>
                 <span v-else class="text-muted-foreground">—</span>
               </TableCell>
             </template>
@@ -1504,6 +1499,16 @@ onUnmounted(() => {
               <Badge v-if="inst.account?.planLabel" variant="outline">
                 {{ inst.account.planLabel }}
               </Badge>
+              <span v-else class="text-xs text-muted-foreground">—</span>
+            </TableCell>
+            <TableCell>
+              <span
+                v-if="inst.lastLaunchedAt"
+                class="text-xs tabular-nums"
+                :title="tooltipsEnabled ? lastLaunchedExact(inst) : undefined"
+              >
+                {{ lastLaunchedLabel(inst) }}
+              </span>
               <span v-else class="text-xs text-muted-foreground">—</span>
             </TableCell>
             <TableCell>
@@ -1753,87 +1758,19 @@ onUnmounted(() => {
         :desktop-enabled="codexDesktopEnabled"
         :cli-enabled="codexCliEnabled"
       />
+      <!-- No settings toggle gating this one, matching OpenCode and Hermes rather than Codex: the
+           section lists what is on the machine and shows an empty state when the harness is not
+           installed, so there is nothing for a switch to protect against. -->
+      <DshInstancesSection />
     </div>
 
     <!-- "Chats": this one account's chats, read-only. No action on the account itself, so it
          closes on any outside click and its only control is the archived toggle. -->
-    <Dialog :open="chatsFor !== null" @update:open="(v) => { if (!v) closeChats() }">
-      <DialogContent class="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>
-            {{ $t('instances.chatsTitle', { name: chatsFor ? instLabel(chatsFor) : '' }) }}
-          </DialogTitle>
-          <DialogDescription>
-            <template v-if="chatsCounts">
-              {{ $t('instances.chatsCounts', chatsCounts) }}
-              <template v-if="chatsCounts.live > 0">
-                · {{ $t('instances.chatsLiveCount', { n: chatsCounts.live }) }}
-              </template>
-            </template>
-            <template v-else-if="chatsBusy">{{ $t('instances.chatsLoading') }}</template>
-          </DialogDescription>
-        </DialogHeader>
-
-        <label class="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-          <input v-model="chatsShowArchived" type="checkbox" class="size-3.5 accent-current" />
-          {{ $t('instances.chatsShowArchived') }}
-        </label>
-
-        <p v-if="chatsError" class="text-xs text-destructive">
-          {{ $t('instances.chatsFailed', { name: chatsFor ? instLabel(chatsFor) : '' }) }}
-          {{ chatsError }}
-        </p>
-        <div v-else-if="chatsBusy" class="space-y-2">
-          <Skeleton v-for="n in 4" :key="n" class="h-9 w-full" />
-        </div>
-        <p v-else-if="chatsRows.length === 0" class="text-xs text-muted-foreground">
-          {{ chatsShowArchived ? $t('instances.chatsEmptyArchived') : $t('instances.chatsEmpty') }}
-        </p>
-        <ul v-else class="scroll-slim max-h-80 space-y-1 overflow-y-auto text-xs">
-          <li
-            v-for="row in chatsRows"
-            :key="row.chatId ?? row.sessionId ?? row.title ?? ''"
-            class="rounded border border-border px-2 py-1.5"
-          >
-            <div class="flex items-center gap-2">
-              <span class="min-w-0 flex-1 truncate" :title="row.title ?? undefined">
-                {{ row.title || $t('instances.chatsNoTitle') }}
-              </span>
-              <Badge v-if="row.live" variant="outline" class="shrink-0">
-                {{ $t('instances.chatsLive') }}
-              </Badge>
-              <Badge v-if="row.isArchived" variant="secondary" class="shrink-0">
-                {{ $t('instances.chatsArchivedBadge') }}
-              </Badge>
-              <!-- Absent, not disabled, for a Desktop-only chat: there is no session to open. -->
-              <button
-                v-if="row.sessionId"
-                type="button"
-                class="shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                :aria-label="$t('instances.chatsOpen')"
-                :title="$t('instances.chatsOpen')"
-                @click="openChatFromList(row)"
-              >
-                <ArrowRightLeft class="size-3.5" />
-              </button>
-            </div>
-            <div class="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span v-if="row.cwd" class="truncate" :title="row.cwd">{{ baseName(row.cwd) }}</span>
-              <span class="ml-auto shrink-0">
-                {{ row.lastActivityAt ? timeAgo(row.lastActivityAt) : $t('instances.chatsNeverActive') }}
-              </span>
-            </div>
-          </li>
-        </ul>
-        <p v-if="chatsRows.length && chatsTotal > chatsRows.length" class="text-[11px] text-muted-foreground">
-          {{ $t('instances.chatsTruncated', { shown: chatsRows.length, total: chatsTotal }) }}
-        </p>
-
-        <DialogFooter>
-          <Button variant="ghost" @click="closeChats">{{ $t('instances.chatsClose') }}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <InstanceChatsDialog
+      v-model:open="chatsOpen"
+      :instance="chatsTarget"
+      @open-chat="onChatsOpenRow"
+    />
 
     <!-- "Move all chats" confirmation: the count, both accounts, the list, and a second click. -->
     <Dialog :open="moveAll !== null" @update:open="(v) => { if (!v) moveAll = null }">
@@ -1867,7 +1804,7 @@ onUnmounted(() => {
               <li v-for="s in g.sessions" :key="s.sessionId">
                 <button
                   type="button"
-                  class="w-full truncate rounded border border-border px-2 py-1 text-left hover:bg-accent"
+                  class="w-full truncate rounded border border-border px-2 py-1 text-start hover:bg-accent"
                   @click="openChatFromMoveDialog(s)"
                 >
                   {{ s.title || $t('instances.chatsNoTitle') }}

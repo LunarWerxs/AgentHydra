@@ -129,6 +129,48 @@ class PlanTest(FanOutBase):
         self.assertEqual([t["name"] for t in r2["targets"]], ["charlie", "alice", "bob", "erin"])
         self.assertTrue(r2["targets"][-1]["mustOpen"])
 
+    def _app_log(self, name, minutes_ago, line):
+        """A fake instance dir whose app log holds one line stamped `minutes_ago` (local time)."""
+        inst = self.root / "instances" / name
+        (inst / "logs").mkdir(parents=True)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - minutes_ago * 60))
+        (inst / "logs" / "main.log").write_text(
+            "2026-09-01 03:00:27 [info] Failed to set title bar overlay\n"
+            f"{stamp} [info] {line}\n", encoding="utf-8")
+        return str(inst)
+
+    def test_an_account_a_person_is_working_in_is_not_room_unless_named(self):
+        # The 2026-09-15 incident: the owner had sent messages in #37's app minutes earlier; the
+        # spawned chat landed there and he stopped and deleted it. Room was the only question asked.
+        send = "LocalSessions.sendMessage: sessionId=local_fd6b378e, messageLength=540, priority=next"
+        inst_dir = self._app_log("charlie", 3, send)
+        # The survey row and the fleet row name the same dir, the way the real ones do: the
+        # overview pairs an account to its instance by that dir.
+        self.stub.routes["/api/fleet"]["instances"][2]["dir"] = inst_dir
+        row = self.stub.routes["/api/usage/survey"]["rows"][2]
+        row["id"] = inst_dir
+        row["result"]["key"] = f"desktop:{inst_dir}"
+        r = fan_out.rank_targets()
+        self.assertEqual([t["name"] for t in r["targets"]], ["alice", "bob"])
+        why = {s.get("instance"): s["why"] for s in r["skipped"]}["#3 charlie"]
+        self.assertIn("a person is working in it", why)
+        self.assertIn("3 min ago", why)
+        # --only naming it is a person's word and still reaches it.
+        r = fan_out.rank_targets(only=["charlie"])
+        self.assertEqual([t["name"] for t in r["targets"]], ["charlie"])
+
+    def test_a_click_into_a_chat_counts_but_old_activity_and_other_log_lines_do_not(self):
+        click = "[CCD] LocalSessions.setFocusedSession: sessionId=local_02e52be1"
+        self.assertIsNotNone(fan_out.hands_on_secs_ago(self._app_log("recent-click", 1, click)))
+        self.assertIsNone(fan_out.hands_on_secs_ago(self._app_log("old-click", 25, click)))
+        # Focus cleared (sessionId=null) and background noise are not a hand on a chat.
+        self.assertIsNone(fan_out.hands_on_secs_ago(self._app_log(
+            "null-focus", 1, "[CCD] LocalSessions.setFocusedSession: sessionId=null")))
+        self.assertIsNone(fan_out.hands_on_secs_ago(self._app_log(
+            "noise", 1, "[updater] Checking for updates")))
+        self.assertIsNone(fan_out.hands_on_secs_ago(str(self.root / "no-such-instance")))
+        self.assertIsNone(fan_out.hands_on_secs_ago(None))
+
     def test_only_and_exclude_filter_by_number_name_or_email_and_a_bad_ref_refuses(self):
         r = fan_out.rank_targets(exclude=["3"])
         self.assertEqual([t["name"] for t in r["targets"]], ["alice", "bob"])
@@ -183,6 +225,17 @@ class SpawnTest(FanOutBase):
         self.assertEqual([m["state"] for m in saved["members"]], ["spawned"] * 3)
         # spawn_chat's OWN duplicate check is lifted (this loop ran the fleet check itself)
         self.assertTrue(all(s["force"] for s in self.spawned))
+
+    def test_group_id_is_taken_verbatim_when_given_not_generated(self):
+        # The MCP `fan_out` tool mints this id itself and hands it back to ITS OWN caller before
+        # spawning finishes (defect 2, 2026-09-15: a blocking MCP call died on the client's own
+        # transport timeout with no id anyone had ever seen). It must be the id fan_out.py
+        # actually uses, or a caller polling fan_out_status by that id would find nothing.
+        code, out, _ = run_cli(fan_out.main,
+                               ["--spec", self.spec(1), "--group-id", "fo-mcp-abc123", "--json"])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["id"], "fo-mcp-abc123")
+        self.assertIsNotNone(fan_out.find_group("fo-mcp-abc123"))
 
     def test_more_tasks_than_accounts_leaves_the_rest_unassigned_with_exit_4(self):
         code, out, _ = run_cli(fan_out.main, ["--spec", self.spec(4), "--json"])

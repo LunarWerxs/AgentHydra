@@ -1,6 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { pickCarriedSettings } from '../chat-settings-carry'
 import { resolveRequiredTitle } from '../chat-title'
+import { tryNativeArchiveChat } from '../claude-native-archive'
+import {
+  getClaudeNativeSettings,
+  parseClaudeNativeProfileConfig,
+  setClaudeNativeProfileConfig,
+} from '../claude-native-settings'
 import { listInstances } from '../core/instances'
 import { rememberMigratedSettings } from '../db'
 import { app } from '../http-app'
@@ -18,9 +24,11 @@ import {
   archiveDesktopChat,
   archiveRootsForMove,
   awaitChatRecord,
+  cancelChatArchiveReassert,
   coldImportSessionToDesktop,
   desktopChatCarriers,
   desktopHomeFor,
+  findChatMetaPath,
   importSessionToDesktop,
   isSessionSuperseded,
   launchTerminalSession,
@@ -30,6 +38,7 @@ import {
   unarchiveChatRecord,
 } from '../session-launch'
 import { getSession } from '../sessions'
+import { type UiArchiveOutcome, uiArchiveChat } from '../ui-archive'
 
 /** Screenshot capture, launching a visible terminal session, and the desktop-chat lifecycle
  *  operations (import, automation stamp, archive, migrate). See index.ts for the app-wide
@@ -129,11 +138,36 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
   // THE NAMING REQUIREMENT (owner directive, 2026-08-29): a chat must not land with a generic
   // name. The caller supplies a real title, or restates the current one exactly (proof of a
   // programmatic review) - chat-title.ts is the one definition of both doors.
+  //
+  // A CHAT HAS TWO CURRENT NAMES here too, same as /migrate below: the session list's
+  // transcript-derived title (`imported.title`) and the desktop record's own on-disk title
+  // (the sidebar / Instances "Chats" name a caller who read the DOSSIER actually restates).
+  // Checking only the former meant a chat renamed in the app, or a migrate_chat run that
+  // restated the dossier's title as `confirm_title` (its documented, expected behaviour), was
+  // refused 400 "confirm_title does not match the current title" even though the caller had
+  // genuinely reviewed and restated a real, current name (2026-09-15 overnight run, session
+  // 7e1fa278: daemon title "Your market still looks like ..." vs desktop meta "Logos for
+  // Connections products"). Read the on-disk record the same way /migrate does, so either
+  // name restated exactly is accepted here too.
   const imported = await getSession(sessionId, 'claude')
+  const sourceRendered = findDesktopChatMeta(sessionId)
+  let recordTitle: string | null = null
+  try {
+    if (sourceRendered?.path) {
+      const sourceMeta = JSON.parse(readFileSync(sourceRendered.path, 'utf8')) as Record<
+        string,
+        unknown
+      >
+      if (typeof sourceMeta.title === 'string') recordTitle = sourceMeta.title
+    }
+  } catch {
+    // an unreadable source record just means no second name to check against
+  }
   const titled = resolveRequiredTitle({
     title: body.title,
     confirmTitle: body.confirm_title,
     currentTitle: imported?.title ?? null,
+    recordTitle,
   })
   if (!titled.ok) return c.json({ ok: false, error: titled.error }, 400)
   const result = await importSessionToDesktop({
@@ -165,9 +199,101 @@ app.post('/api/sessions/:id/automation', async (c) => {
   )
 })
 // Archive (or unarchive) a chat in the DESKTOP app by flipping its metadata flag across every
-// profile that carries it. Honest caveat in the response: for a profile whose app was running,
-// the change shows only after that instance next restarts (and could be re-saved away by the
-// running app; the AgentHydra done-mark is the immediate signal either way).
+// profile that carries it - and, for an ARCHIVE under a RUNNING app, by driving that app's own
+// Archive control so the row leaves the sidebar now (see uiArchiveWithinBudget below). The
+// response says which of those happened: `stillOnScreen` false means retired, true means the
+// flag is written and waiting for that instance's next restart, with the reason the click did
+// not settle. UNARCHIVE has no in-app control to drive and still waits for the restart.
+/** How long the archive route waits for the app's own Archive click before answering
+ *  without it. Under hydralib's 30s POST default, with room for the answer itself. */
+const UI_ARCHIVE_BUDGET_MS = 20_000
+
+/**
+ * Drive the app's own Archive control for one profile, bounded, and never throwing.
+ *
+ * Bounded because this route's callers are bounded: archive_chat.py posts here on hydralib's
+ * 30s default. A measured click is nowhere near that (listing 32 rendered rows took 1.6s on
+ * 2026-09-17, the click a few seconds more), but ui-archive's own spawn guard is 90s, and a UIA
+ * call that hangs on a closing window would turn a working endpoint into a caller-side timeout -
+ * the worst shape, because the caller then cannot tell what happened. Losing the race is not a
+ * failure to hide: the flag is written, the reassert watcher is already running, and the caller
+ * is told the click did not settle. The timer is cleared either way, so no archive leaves a
+ * 20s timer armed behind it.
+ */
+async function uiArchiveWithinBudget(
+  profile: string,
+  sessionId: string,
+): Promise<UiArchiveOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      uiArchiveChat(profile, sessionId),
+      new Promise<UiArchiveOutcome>((resolve) => {
+        timer = setTimeout(
+          () =>
+            resolve({
+              clicked: false,
+              verified: false,
+              reason: `the app's own Archive control did not finish within ${UI_ARCHIVE_BUDGET_MS / 1000}s`,
+            }),
+          UI_ARCHIVE_BUDGET_MS,
+        )
+      }),
+    ])
+  } catch (e) {
+    return {
+      clicked: false,
+      verified: false,
+      reason: `the app's own Archive control could not be driven: ${e instanceof Error ? e.message : String(e)}`,
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+// Connections are opt-in per profile. launchDebugger applies on the next ordinary Open;
+// saving configuration does not launch or restart a desktop instance.
+app.get('/api/claude-native/settings', (c) => c.json(getClaudeNativeSettings()))
+app.put('/api/claude-native/settings', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.profile !== 'string' || !('config' in body))
+    return c.json({ ok: false, error: 'profile and config are required' }, 400)
+  try {
+    setClaudeNativeProfileConfig(
+      body.profile,
+      body.config === null ? null : parseClaudeNativeProfileConfig(body.config),
+    )
+    return c.json({ ok: true, settings: getClaudeNativeSettings() })
+  } catch (error) {
+    return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400)
+  }
+})
+
+// A capability attempt for orchestrator callers. Explicit unavailability permits their old
+// guarded path; a refusal or lost reply is terminal and must never become a title-based retry.
+app.post('/api/sessions/:id/native-archive', async (c) => {
+  const body = await jsonBody(c)
+  const profile =
+    typeof body.instance_ref === 'string' && body.instance_ref.startsWith('desktop:')
+      ? body.instance_ref.slice('desktop:'.length)
+      : ''
+  if (!/^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|\/)/i.test(profile))
+    return c.json(
+      {
+        available: true,
+        ok: false,
+        verified: false,
+        dispatch: 'not-sent',
+        reason: 'instance_ref must be desktop:<full profile directory>',
+      },
+      400,
+    )
+  const result = await tryNativeArchiveChat(profile, c.req.param('id'))
+  if (result.kind === 'unavailable')
+    return c.json({ ...result, available: false, ok: false, verified: false })
+  return c.json({ ...result, available: true }, result.ok ? 200 : 409)
+})
+
 app.post('/api/sessions/:id/desktop-archive', async (c) => {
   const body = await jsonBody(c)
   const sessionId = c.req.param('id')
@@ -180,10 +306,12 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
       ? body.instance_ref.trim()
       : null
   let roots: string[] | undefined
+  let nativeProfile: string | undefined
   if (scopeRef) {
     if (!scopeRef.startsWith('desktop:'))
       return c.json({ ok: false, error: "instance_ref must be 'desktop:<dir>'" }, 400)
     roots = [scopeRef.slice('desktop:'.length)]
+    nativeProfile = roots[0]
   } else {
     // AMBIGUITY IS A REFUSAL, the same rule the chat actuator applies to titles. Only when the
     // caller did not name a scope: an explicit target is always honoured.
@@ -200,6 +328,28 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
         },
         409,
       )
+    if (carriers.length === 1) nativeProfile = carriers[0]
+  }
+  // Native state decides whether THIS copy is busy. A migrated destination can be running
+  // while its source is safely idle. Run this before both the global live guard and disk writes.
+  if (wantArchived && nativeProfile) {
+    const native = await tryNativeArchiveChat(nativeProfile, sessionId)
+    if (native.kind === 'result') {
+      return c.json(
+        {
+          ...native,
+          available: true,
+          nativeArchive: native,
+          stillOnScreen: native.verified ? false : null,
+          uiArchive: [],
+          note: native.verified
+            ? 'Archived through the running app’s native session manager; no UI action or restart needed.'
+            : (native.reason ??
+              'Native archive was not verified; no disk or UI fallback was attempted.'),
+        },
+        native.ok ? 200 : 409,
+      )
+    }
   }
   // Never hide a chat whose engine is running, unless a caller says so outright.
   if (wantArchived && body.force !== true && liveSessionEntry(sessionId))
@@ -213,34 +363,163 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
       },
       409,
     )
+  // ⛔ CALL OFF ANY LIVE ARCHIVE WATCHER **BEFORE** WRITING (2026-09-18, measured on instance 56 /
+  // chat d9fc4886). The `wantArchived` guard below stops this route FIRING a watcher on an
+  // unarchive - but it never addressed the watcher an EARLIER archive already left running, and
+  // that one lives for ten minutes. Inside that window every unarchive was reverted within ~1.5s
+  // while this route answered ok:true / changed:true: three tool calls and a hand-written flip of
+  // the JSON all lost, with four daemon lines claiming "the app's re-save" for an app that was
+  // CLOSED. An unarchive is the owner contradicting the intent that armed the watcher, so it
+  // stands the watcher down first - cancelling after the write would just lose a race.
+  const cancelledWatchers: string[] = []
+  if (!wantArchived) {
+    for (const profile of roots ?? desktopChatCarriers(sessionId)) {
+      if (cancelChatArchiveReassert(profile, sessionId)) cancelledWatchers.push(profile)
+    }
+  }
   const result = await archiveDesktopChat(sessionId, wantArchived, roots)
   // SAY when the flag landed under a running app, rather than returning a bare ok:true for a
   // chat the owner can still see. Measured 2026-08-26 by asking the app itself right after
   // this call: disk said archived, the app still reported isArchived:false, and the chat
   // stayed in the sidebar. Reporting that as success is how "archived" came to mean "still
   // there".
-  const underRunningApp = (result.hits ?? []).some((h) => h.changed && h.wasRunning)
+  // ⛔ NOT `h.changed && h.wasRunning` (fixed 2026-09-18). This decides whether the response
+  // carries `stillOnScreen` and the `uiArchive` outcome at all - and that question is "does a
+  // RUNNING app hold this chat's list?", which has nothing to do with whether THIS call happened
+  // to write the flag. With the old test, the retry after a failed click ran the click (the gate
+  // below is fixed too) and then fell through to a bare fallback return that dropped the outcome
+  // on the floor: the caller saw `{ok, hits, flagOnDisk: []}` and no sign a click had been
+  // attempted. `retiredInApp` still distinguishes "the row is gone" from "it is still there", so
+  // widening this cannot report a retired row as on-screen.
+  const underRunningApp = (result.hits ?? []).some((h) => h.wasRunning)
+  // ⛔ `changed:true` MEANS "I WROTE IT", NOT "IT STUCK" - and for ten minutes after any archive
+  // those were different facts, silently. READ THE FLAG BACK. This is the same disk-vs-reality
+  // lesson as `stillOnScreen`, one layer down: there the write was real and the SCREEN disagreed;
+  // here the write was real and the FILE disagreed a second later. A caller cannot tell either
+  // from `ok:true`, so the route says what is actually on disk now.
+  const flagOnDisk: Array<{ profile: string; isArchived: boolean | null }> = []
+  for (const hit of result.hits ?? []) {
+    if (!hit.changed) continue
+    let seen: boolean | null = null
+    try {
+      const metaPath = findChatMetaPath(hit.profile, sessionId)
+      if (metaPath) seen = JSON.parse(readFileSync(metaPath, 'utf8')).isArchived === true
+    } catch {
+      // an unreadable file is "cannot say", never a quiet "it worked"
+      seen = null
+    }
+    flagOnDisk.push({ profile: hit.profile, isArchived: seen })
+  }
+  const flagStuck = flagOnDisk.length > 0 && flagOnDisk.every((f) => f.isArchived === wantArchived)
+  /** Facts every response below carries, so no exit path can drop them. */
+  const writeTruth = {
+    flagOnDisk,
+    flagStuck,
+    ...(cancelledWatchers.length ? { cancelledWatchers } : {}),
+    ...(flagOnDisk.length && !flagStuck
+      ? {
+          flagWarning:
+            'the write was made and the flag on disk does NOT match what was asked. Something ' +
+            'else is writing this record - check for a reassertChatArchive watcher still ' +
+            'running for this chat, and for the app re-saving its in-memory copy.',
+        }
+      : {}),
+  }
   // THE DURABLE FIX BELONGS HERE TOO (owner, 2026-09-01: "it's also duplicating chats"). A
   // RUNNING app re-saves isArchived=false within seconds and resurrects the row it was just
   // told to put away — so a chat archived on its old account came back and appeared in BOTH
   // apps at once. /migrate already fired this watcher; this route did not, and this route is
   // what every archive and every account move actually goes through. Fire-and-forget: it must
   // not delay the response, and its own caps bound it.
-  for (const hit of result.hits ?? []) {
-    if (!hit.changed || !hit.wasRunning) continue
-    void reassertChatArchive(hit.profile, sessionId).catch(() => {})
+  //
+  // ⛔ ARCHIVE ONLY, AND THE `wantArchived` GUARD IS THE WHOLE POINT (measured live 2026-09-17).
+  // reassertChatArchive writes isArchived=TRUE - that is all it does, for ten minutes or eight
+  // restores. Fired after an UNARCHIVE it does not defend the caller's write, it DESTROYS it:
+  // the flag went to false, the watcher put it back within ~1.5s, and the route had just told
+  // the caller "the flag is written ... until that instance next restarts", which by then was
+  // false twice over. Observed by unarchiving a chat under a running app and reading the
+  // dossier back: archived was true again, and the next archive answered changed:false.
+  if (wantArchived) {
+    for (const hit of result.hits ?? []) {
+      if (!hit.changed || !hit.wasRunning) continue
+      void reassertChatArchive(hit.profile, sessionId).catch(() => {})
+    }
   }
+  // ⛔ FINISH THE JOB HERE, rather than telling the caller to go run a script. Owner ruling,
+  // 2026-09-17, after archiving 17 chats by hand: when a built-in does not do the thing it says
+  // it does, the built-in gets fixed - nobody should be writing a one-off script to finish a
+  // basic operation. The server-side click has existed in ui-archive.ts since 2026-08-30 and
+  // NOTHING called it: every
+  // caller of this route got a flag, a paragraph explaining the flag was not enough, and a
+  // homework assignment. Its own rails decide whether clicking is safe (it refuses when another
+  // LIVE chat shares the rendered title), so the worst case here is the old behaviour plus a
+  // reason. Awaited on purpose: a fast answer that leaves the chat on screen is the bug.
+  const uiOutcomes: Array<{
+    profile: string
+    clicked: boolean
+    verified: boolean
+    reason?: string
+  }> = []
+  if (wantArchived) {
+    for (const hit of result.hits ?? []) {
+      // ⛔ NOT `!hit.changed || !hit.wasRunning` (fixed 2026-09-18). The click's job is to remove
+      // the ROW, and a row can be on screen whether or not THIS call wrote the flag - in fact the
+      // state that needs it most is "flag already true, row still rendered", which is exactly what
+      // a failed click leaves behind. Gating on `changed` made the first attempt the only attempt:
+      // if its last-moment re-aim guard refused (it always did then: the app rebuilds a row's
+      // kebab on its first menu open, and the old guard re-read the stale handle's blank name -
+      // it re-aims by identity now, see Manage-DesktopChat.ps1 ReAimVerdict), every
+      // retry answered `changed:false, wasRunning:false` and did nothing, forever. Measured on
+      // #13. A running app is the whole precondition; `uiArchiveWithinBudget` is already bounded,
+      // and a row the sidebar no longer renders is its own cheap no-op.
+      if (!hit.wasRunning) continue
+      const outcome = await uiArchiveWithinBudget(hit.profile, sessionId)
+      uiOutcomes.push({ profile: hit.profile, ...outcome })
+    }
+  }
+  const retiredInApp = uiOutcomes.length > 0 && uiOutcomes.every((o) => o.verified)
+  if (underRunningApp && retiredInApp)
+    return c.json({
+      ...result,
+      ...writeTruth,
+      stillOnScreen: false,
+      uiArchive: uiOutcomes,
+      // ⛔ SAY WHICH OF THE TWO SETTLED IT (2026-09-17). `verified` is true down two different
+      // paths - the control was driven, or there was no rendered row left to drive because the
+      // chat was already retired - and this note claimed the first one for both. A caller
+      // reading "the control was driven" beside `clicked: false` is reading a contradiction,
+      // and the whole point of this route's rename to `stillOnScreen` was that a verdict must
+      // not be readable two ways.
+      note: uiOutcomes.some((o) => o.clicked)
+        ? "the flag is written AND the app's own Archive control was driven, so the row has left " +
+          'the sidebar now - no restart needed.'
+        : 'the flag is written and no rendered row is left to retire (the chat was already off ' +
+          'the sidebar), so nothing needed clicking - no restart needed.',
+    })
   if (underRunningApp)
     return c.json({
       ...result,
-      visibleNow: false,
+      ...writeTruth,
+      stillOnScreen: true,
+      ...(uiOutcomes.length ? { uiArchive: uiOutcomes } : {}),
       note:
-        'the flag is written, but that app is RUNNING and holds its chat list in memory, so ' +
-        'the chat is STILL ON SCREEN until that instance next restarts. To retire it ' +
-        "immediately, archive it through the app's own UI - misc/Manage-DesktopChat.ps1 " +
-        'automates exactly that click and verifies it landed.',
+        'the flag is written, but that app is RUNNING and holds its chat list in memory, so the ' +
+        `chat is STILL ${wantArchived ? 'ON SCREEN' : 'HIDDEN'} until that instance next ` +
+        'restarts. ' +
+        (wantArchived
+          ? `The in-app click was attempted and did not settle it: ${
+              uiOutcomes
+                .map((o) => o.reason)
+                .filter(Boolean)
+                .join(' | ') || 'no rendered row to click'
+            }.`
+          : // UNARCHIVE has no in-app control to drive: the app's row menu offers Archive, not a
+            // way to put a hidden chat back, so there is nothing to click and saying a click was
+            // attempted would be a lie. Only that instance's restart re-reads the store.
+            "unarchiving has no in-app control to drive - the app's row menu can archive a chat, " +
+            'not restore one, so only that restart brings it back.'),
     })
-  return c.json(result, result.ok ? 200 : 404)
+  return c.json({ ...result, ...writeTruth }, result.ok ? 200 : 404)
 })
 // The default first message a migrated chat receives when the caller supplies no prompt.
 const MIGRATION_NOTICE =
@@ -380,6 +659,9 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     (i) => i.isRunning && samePathKey(i.dir, targetDir),
   )
   let landing: 'hot' | 'cold'
+  // Records of this chat under a PREVIOUS login of the target, moved into the backup dir so the
+  // landing is the only record there (session-launch.ts setAsideStaleLoginRecords).
+  let staleLoginSetAside: string[] = []
   if (targetRunning) {
     landing = 'hot'
     const imported = await importSessionToDesktop({
@@ -390,6 +672,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       carried,
     })
     if (!imported.ok) return c.json({ ok: false, error: imported.reason ?? 'import failed' }, 422)
+    staleLoginSetAside = imported.staleLoginSetAside ?? []
     if (Object.keys(carried).length) rememberMigratedSettings(sessionId, targetDir, carried)
   } else {
     landing = 'cold'
@@ -401,6 +684,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
       force: body.force === true,
     })
     if (!cold.ok) return c.json({ ok: false, error: cold.reason ?? 'cold import failed' }, 422)
+    staleLoginSetAside = cold.staleLoginSetAside ?? []
   }
   // The proof: the target's store holds the record. The hot import already waited up to 20s for
   // it; this grants the app another 25s (a bulk move keeps it busy) before the move is called
@@ -476,6 +760,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     verified: true,
     landedPath,
     targetUnarchived,
+    ...(staleLoginSetAside.length ? { staleLoginSetAside } : {}),
     sourceArchived: (archived0?.hits ?? []).filter((h) => h.changed).map((h) => h.profile),
     carried: Object.keys(carried),
     stoppedLive: !!live,

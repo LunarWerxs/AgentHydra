@@ -28,6 +28,55 @@ def _rows(n: int, archived_first: int) -> list[dict]:
     return out
 
 
+class ChatsCensusTest(unittest.TestCase):
+    """hydralib.chats - the per-store read migrate_batch's movable list AND archive gate use.
+
+    ⛔ Its first cut took /api/chats' UI defaults (archived=hide, limit=200). That silently
+    DISABLED the archive gate - it asks "is the chat you named archived?" of a list with every
+    archived chat removed - and capped the census at 200 rows (review finding, 2026-09-14)."""
+
+    def setUp(self):
+        self.stub = StubDaemon()
+        self._base = hydralib.BASE
+        hydralib.BASE = self.stub.url
+        self.asked: list[dict] = []
+        rows = [{"sessionId": f"c{i:04d}", "instance": "inst1", "archived": i % 2 == 0,
+                 "isArchived": i % 2 == 0, "title": f"chat {i}"} for i in range(2500)]
+
+        def route(method, path, query, body):
+            q = {k: v[0] for k, v in parse_qs(query).items()}
+            self.asked.append(q)
+            scope = q.get("archived", "hide")
+            kept = [r for r in rows if scope == "include" or not r["isArchived"]]
+            limit = int(q.get("limit", "200"))
+            offset = int(q.get("offset", "0"))
+            return {"rows": kept[offset:offset + min(limit, 1000)], "total": len(kept),
+                    "counts": {"all": len(rows)}, "instances": ["inst1"]}
+
+        self.stub.routes["/api/chats"] = route
+
+    def tearDown(self):
+        self.stub.close()
+        hydralib.BASE = self._base
+
+    def test_it_asks_for_archived_rows_and_pages_to_the_end(self):
+        got = hydralib.chats()
+        self.assertEqual(len(got), 2500, "every row, not the endpoint's 200-row page")
+        self.assertTrue(any(r["isArchived"] for r in got),
+                        "an archive gate handed a list with no archived rows is switched off")
+        self.assertTrue(all(a.get("archived") == "include" for a in self.asked))
+        self.assertEqual([int(a["offset"]) for a in self.asked], [0, 1000, 2000])
+
+    def test_an_instance_scope_is_passed_through(self):
+        hydralib.chats("inst1")
+        self.assertEqual(self.asked[0].get("instance"), "inst1")
+
+    def test_a_degraded_page_raises_rather_than_returning_a_short_census(self):
+        self.stub.routes["/api/chats"] = {"error": "shape changed"}
+        with self.assertRaises(hydralib.DaemonError):
+            hydralib.chats()
+
+
 class CensusTest(unittest.TestCase):
     def setUp(self):
         self.stub = StubDaemon()

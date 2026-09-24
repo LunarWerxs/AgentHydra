@@ -8,7 +8,7 @@ const snap = (over: Partial<UsageSnapshot> = {}): UsageSnapshot => ({
   session: { pct: 13, resets: 'Aug 5, 4:59pm' },
   weekAll: { pct: 92, resets: 'Aug 6, 4:59am' },
   weekModel: { pct: 4, resets: 'Aug 6, 4:59am', label: 'Fable' },
-  capturedAt: '2026-08-05T12:00:00.000Z',
+  capturedAt: '2021-08-05T12:00:00.000Z',
   ...over,
 })
 
@@ -33,6 +33,13 @@ test('a window with no reading is "—", never "0%"', () => {
   expect(usageCellLabel(snap({ session: null }), 'session')).toBe('—')
   expect(usageCellLabel(snap({ weekAll: null }))).toBe('—')
   expect(usagePctFor(snap({ session: null }), 'session')).toBeNull()
+})
+
+test('a confirmed absent Codex five-hour cap is N/A, separate from an unchecked window', () => {
+  expect(usageCellLabel(snap({ session: null, sessionLimitUnavailable: true }), 'session')).toBe(
+    'N/A',
+  )
+  expect(usageCellLabel(snap({ session: null, sessionLimitUnavailable: true }), 'week')).toBe('92%')
 })
 
 test('a snapshot with nothing in it at all is "—" for either scope', () => {

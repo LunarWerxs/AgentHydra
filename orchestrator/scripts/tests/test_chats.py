@@ -58,6 +58,19 @@ class ChatsTest(unittest.TestCase):
         self.assertEqual(by["s4"]["origin"], "console")
         self.assertIsNone(by["s4"]["email"])
 
+    def test_a_headless_run_is_never_listed_as_a_homeless_chat(self):
+        # 2026-09-18: ~220 zswarm/bench jobs sat in "console-only - no desktop home", an agent
+        # read that list as orphaned chats, and 25 old chats were moved nobody asked for.
+        self.stub.routes["/api/sessions"].append(
+            {"session_id": "20260918-223854-25cc", "title": "bench-api_deepseek-flash-r1",
+             "instance": None, "archived": False, "last_activity_at": 40, "source": "zswarm"})
+        console = chats.collect(False, None, None, None, True)
+        self.assertEqual([r["sessionId"] for r in console], ["s4"])
+        every = {r["sessionId"]: r for r in chats.collect(False, None, None, None, False)}
+        self.assertEqual(every["20260918-223854-25cc"]["origin"], "zswarm")
+        self.assertIn("(headless zswarm runs - never a desktop chat)",
+                      chats.render([every["20260918-223854-25cc"]]))
+
     def test_filters(self):
         self.assertEqual([r["sessionId"] for r in chats.collect(False, "a@x.com", None, None, False)], ["s1"])
         self.assertEqual([r["sessionId"] for r in chats.collect(False, None, "beta", None, False)], ["s2"])

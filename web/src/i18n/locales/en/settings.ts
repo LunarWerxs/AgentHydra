@@ -75,6 +75,32 @@ export default {
   usageToastFailed: 'Failed to save usage setting.',
 
   // provider surfaces
+  claudeNativeTitle: 'Claude native control',
+  claudeNativeHint:
+    'A direct local connection for archiving chats and cleaning up the source after a move. Other migration steps may still use desktop controls.',
+  claudeNativeAccount: 'Claude Desktop account',
+  claudeNativeAccountLabel: '#{n} {name}',
+  claudeNativeRefresh: 'Refresh native control settings',
+  claudeNativeLoading: 'Loading accounts…',
+  claudeNativeNoAccounts: 'No Windows Claude Desktop accounts found',
+  claudeNativeAutoLabel: 'Start debugger automatically',
+  claudeNativeAutoHint:
+    'Open this account through AgentHydra with its native control connection ready.',
+  claudeNativeAutomaticStatus: 'Automatic startup is enabled for this account.',
+  claudeNativeManualStatus:
+    'Automatic startup is off. Native control still requires a manually started debugger. Use standard controls below to turn native control off completely.',
+  claudeNativeStandardStatus: 'This account uses standard desktop controls.',
+  claudeNativeNextOpen:
+    'Saved changes apply the next time you open this account from AgentHydra. Running desktops are not restarted.',
+  claudeNativePort: 'Local connection: 127.0.0.1:{port}',
+  claudeNativeReset: 'Use standard controls',
+  claudeNativeEnabledAccounts: 'Automatic startup: {accounts}',
+  claudeNativeNoAutomaticAccounts: 'Automatic startup is not enabled for any account.',
+  claudeNativeSupport:
+    'Automatic startup uses a separate managed copy of Claude, rebuilt from whatever Windows Claude is installed. An executable it cannot verify is refused.',
+  claudeNativeSaving: 'Saving…',
+  claudeNativeSaved: 'Native control settings saved for {account}.',
+  claudeNativeSaveFailed: 'Could not save native control settings.',
   providersTitle: 'Providers',
   providersHint:
     'Choose which desktop, CLI, and external AI surfaces AgentHydra shows. Disabling a surface hides its controls; it does not uninstall the provider or delete an account.',

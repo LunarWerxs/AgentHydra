@@ -209,7 +209,16 @@ export function instanceForSessionLabel<T extends Pick<CMInstance, 'name' | 'isD
 }
 
 /** The name to show for an instance: the user's own label, else the ACCOUNT it is signed into
- *  (by its email handle — see accountDisplayName), else the folder name.
+ *  (its Anthropic profile NAME — "kestrel" — falling back to the email handle when the account has
+ *  no name, see accountName), else the folder name.
+ *
+ *  ⛔ THE NAME COLUMN SHOWS THE PROFILE NAME, NOT THE EMAIL HANDLE (owner directive, 2026-09-11:
+ *  "the name column should pull the account's name", i.e. the profile name over the email handle).
+ *  The identifying
+ *  handle still lives in its own Account column and the row's tooltip, so nothing is lost by
+ *  naming this column after the person — which is the friendlier answer the owner wants here. This
+ *  is why displayName reaches for accountName (name-first) and not accountDisplayName (handle-first,
+ *  which the Account column keeps).
  *
  *  The account comes before the folder because the folder name is a lie the moment you sign a
  *  profile into a different account than the one you named it after — and nothing stops that
@@ -218,7 +227,57 @@ export function instanceForSessionLabel<T extends Pick<CMInstance, 'name' | 'isD
  *  resolved identity at all. Two profiles on the same account will share a name — the dir shown
  *  beneath it is what tells them apart. */
 export function displayName(inst: Pick<CMInstance, 'name' | 'label' | 'account'>): string {
-  return inst.label?.trim() || accountDisplayName(inst.account) || inst.name
+  return inst.label?.trim() || accountName(inst.account) || inst.name
+}
+
+/** How many characters of a name the Name column shows before it elides the rest.
+ *
+ *  Sized to the column, not picked for looks: all three stacked tables give Name `w-44` (176px),
+ *  and the cell spends ~32px of that on the permanent #N chip and its gap before a letter is
+ *  drawn, leaving ~144px — about 18 characters of 14px medium-weight text, with the external /
+ *  stale-label / linked-CLI markers still to fit after it. */
+export const NAME_DISPLAY_MAX = 18
+
+/**
+ * A name cut to {@link NAME_DISPLAY_MAX} with an ellipsis, or unchanged when it already fits.
+ *
+ * ⛔ THIS IS A DISPLAY CUT ONLY. Never store it, never compare it, never hand it to anything that
+ * matches or copies — a truncated name is not an identifier, and two accounts can share a prefix.
+ * The full name belongs in the hover (owner directive, 2026-09-11): the Name column began showing
+ * the ACCOUNT behind a row rather than its folder, and an Anthropic profile name or a long email
+ * handle is routinely wider than the column. Table layout is auto, so `w-44` is a hint a long cell
+ * simply overruns — one long name therefore widened the Name column and knocked the desktop, CLI
+ * and Codex tables out of the alignment their fixed widths exist to guarantee.
+ *
+ * Counted in CODE POINTS (`Array.from`), not UTF-16 units, so a cut never lands between the halves
+ * of a surrogate pair and leaves a replacement glyph on the row — profile names carry emoji and
+ * non-BMP characters. A multi-code-point grapheme (a ZWJ family, a flag) can still be split at the
+ * boundary; that is a cosmetic edge the browser renders as its parts, not as broken text.
+ *
+ * The ellipsis counts toward the budget, and trailing whitespace is dropped before it so a cut
+ * landing after a space does not read as " …".
+ */
+export function shortDisplayName(name: string, max: number = NAME_DISPLAY_MAX): string {
+  const trimmed = name.trim()
+  const chars = Array.from(trimmed)
+  if (chars.length <= max) return trimmed
+  // max < 1 would otherwise slice(0, -1), dropping the last character of the whole name and
+  // returning something LONGER than asked for. An ellipsis is the smallest honest answer.
+  if (max < 1) return '…'
+  const kept = chars.slice(0, max - 1).join('')
+  return `${kept.trimEnd()}…`
+}
+
+/** Native `title` for a name cell that has no rich tooltip to hang the full name on — the CLI and
+ *  Codex tables. Undefined when nothing was cut, so a cell showing the whole name does not sprout a
+ *  hover box repeating itself. The desktop table uses IconTooltip instead (it already has a hover
+ *  carrying the profile folder), which is why this returns a string rather than rendering. */
+export function nameOverflowTitle(
+  name: string,
+  max: number = NAME_DISPLAY_MAX,
+): string | undefined {
+  const trimmed = name.trim()
+  return shortDisplayName(trimmed, max) === trimmed ? undefined : trimmed
 }
 
 /**

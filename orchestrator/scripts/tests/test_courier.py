@@ -150,6 +150,33 @@ class LedgerTest(unittest.TestCase):
         self.assertIsNone(deliverylib.recent_delivery(SID, 180, now_ms=now_ms))
 
 
+class TransientRefusalTest(unittest.TestCase):
+    """A closed target app is not a failed delivery (measured 2026-09-10: 42 `failed` rows, 41
+    of them with a single attempt, nearly all of them one of these two shapes)."""
+
+    def _err(self, status, detail):
+        return hydralib.DaemonError("/api/sessions/x/message", status, detail)
+
+    def test_a_closed_target_app_is_transient(self):
+        self.assertTrue(courier._is_transient(
+            self._err(409, '{"ok":false,"error":"instance \'temp1\' is not running - open it first"}')))
+
+    def test_a_dropped_socket_is_transient(self):
+        # No HTTP status at all: the socket died before an answer (the WinError 10054 shape).
+        self.assertTrue(courier._is_transient(
+            self._err(None, "[WinError 10054] An existing connection was forcibly closed")))
+
+    def test_mid_turn_with_no_pipe_is_transient(self):
+        self.assertTrue(courier._is_transient(
+            self._err(409, '{"error":"peer_only: no peer pipe for this session"}')))
+
+    def test_a_real_refusal_is_NOT_transient(self):
+        """The wrong-chat guard firing is a genuine failure and must still burn the row -
+        a deferral there would retry a blind type forever."""
+        self.assertFalse(courier._is_transient(
+            self._err(422, "no verify snippet derivable from the transcript - refusing to type blind")))
+
+
 class RunActuatorTest(unittest.TestCase):
     """A hung actuator must read as an ordinary (code, why) failure - never an uncaught
     subprocess.TimeoutExpired that would skip mark_failed and the results row entirely."""
@@ -167,6 +194,10 @@ class RunActuatorTest(unittest.TestCase):
 class CourierRailTest(unittest.TestCase):
     def setUp(self):
         self.stub = StubDaemon()
+        # RESTORED in tearDown. It was not, so every later class in the same process that
+        # reached the daemon got this class's CLOSED stub URL - or, run alone, the LIVE daemon
+        # on 7787 - and failed for a reason that had nothing to do with it (found 2026-09-14).
+        self._base = hydralib.BASE
         hydralib.BASE = self.stub.url
         self._tmp = tempfile.TemporaryDirectory()
         self._state = tempfile.TemporaryDirectory()
@@ -196,6 +227,7 @@ class CourierRailTest(unittest.TestCase):
 
     def tearDown(self):
         self.stub.close()
+        hydralib.BASE = self._base
         os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
         self._tmp.cleanup()
         self._state.cleanup()
@@ -220,19 +252,133 @@ class CourierRailTest(unittest.TestCase):
         self.assertTrue(ok, why)
         self.assertEqual(match["cliSessionId"], SID)
 
-    def test_never_into_a_turn_in_flight(self):
+    def test_a_live_chat_mid_turn_goes_PEER_and_is_never_deferred(self):
+        """Rail 4 guards the COMPOSER, not the chat (fixed 2026-09-10).
+
+        The gate used to run before the channel was chosen, so every live chat - the exact
+        population the peer channel serves - was refused with the composer's wording, and a
+        chat in a continuous work loop never became idle and never got its reply at all.
+        A live session enqueues natively and drains after the turn, so it is deliverable;
+        what rides along is `peer_only`, which forbids every composer path downstream.
+        """
         self._write_tail("working on it", age=5, tool_use=True)
         self.live = {"pid": 99, "name": "w"}
         e = self._stage()
-        ok, why, _ = courier.deliverable(e)
+        ok, why, match = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertTrue(match["peer_only"])
+
+    def test_never_TYPES_into_a_turn_in_flight_when_there_is_no_peer_pipe(self):
+        """The other half of rail 4: no live block means no pipe, so the composer is the only
+        route - and that one is still never pointed at a turn in flight."""
+        self._write_tail("working on it", age=5, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        with mock.patch.object(courier.gatelib, "gate_match",
+                               return_value={"state": "running", "idle": None,
+                                             "cause": "process 99 is alive"}):
+            self.live = None          # the dossier no longer reports a pipe
+            ok, why, _ = courier.deliverable(e)
         self.assertFalse(ok)
         self.assertIn("IN FLIGHT", why)
+
+    def test_an_idle_live_chat_is_not_marked_peer_only(self):
+        """peer_only is the mid-turn rail. An idle chat may take either route, so it must not
+        carry a flag that would refuse the composer for no reason."""
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        ok, why, match = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertFalse(match["peer_only"])
+
+    def test_a_chat_landed_under_180s_ago_on_a_FINISHED_turn_is_not_peer_only_in_the_fast_window(self):
+        """THE RESUME HANG, PINNED LIVE 2026-09-14 (#63 -> #13). Landing stamps the chat's activity,
+        so a chat couriered under IDLE_AFTER_SECS after it landed read as `running` whatever its
+        transcript said: peer_only, a dead-lettered peer write, deferred as "mid-turn". Four of
+        five resumes went that way while every transcript ended on a finished turn. The one
+        couriered 194s after landing was delivered. The caller that has proved the turn is over
+        passes a short window, and the same tail then reads idle."""
+        self._write_tail(DONE_WAITING, age=60)          # finished turn, quiet 60s: < 180
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        ok, why, standing = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertTrue(standing["peer_only"], "the standing window is what made this hang")
+        ok, why, fast = courier.deliverable(e, idle_after_secs=15)
+        self.assertTrue(ok, why)
+        self.assertFalse(fast["peer_only"])
+
+    def test_a_chat_the_daemon_says_is_parked_at_a_usage_wall_is_never_mid_turn(self):
+        """THE SHARPER HALF OF THE RESUME HANG (2026-09-14, reproduced past the 180s window and so
+        NOT a timing question). Landing boots the engine through claude://resume, which appends a
+        record of its own - so the limit banner is no longer the LAST record and gatelib's `walled`
+        test stops firing, while `completed` and `resumed_silent` cannot fire either. Four wakes
+        were refused at 3-8 minutes past landing, on transcripts last written three hours earlier.
+        enginelib.idle_report had them right off the daemon's own limit_stop, and this is that
+        rail: a chat that cannot write until its account resets is not a turn in flight."""
+        self._write_tail("working on it", age=5, tool_use=True)   # the tail says "mid-turn"
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        ok, why, match = courier.deliverable(e)
+        self.assertTrue(match["peer_only"], "without the wall this really is a turn in flight")
+
+        self.stub.routes[f"/api/sessions/{SID}"] = {
+            "session_id": SID, "transcript_path": str(self.tp),
+            "limit_stop": {"pending": True, "notice": "You've hit your session limit"}}
+        ok, why, match = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertFalse(match["peer_only"],
+                         "parked at a wall, it cannot be writing - the composer is allowed")
+
+    def test_the_fast_window_never_makes_a_WORKING_tail_idle(self):
+        """The window only shortens how long the gate waits before reading the tail. A tail that
+        still owes a tool result is a turn in flight, and a short window must not wave it past."""
+        self._write_tail("working on it", age=60, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        ok, why, match = courier.deliverable(e, idle_after_secs=15)
+        self.assertTrue(ok, why)
+        self.assertTrue(match["peer_only"])
+
+    def test_run_hands_each_rows_window_to_the_gate_and_a_fresh_landing_is_not_deferred(self):
+        """End to end through run(): the shape that hung, with the peer channel dead-lettering as
+        it did live. Without a window the row is deferred as mid-turn (the composer forbidden);
+        with the resume's window it is not peer_only, so the dead letter falls through to the
+        composer - which is how the one 194s landing was delivered."""
+        self._write_tail(DONE_WAITING, age=60)
+        self.live = {"pid": 99, "name": "w"}
+        self.stub.routes[f"/api/sessions/{SID}/message"] = (
+            422, {"error": "peer wrote-but-no-transcript-growth",
+                  "detail": "peer channel did not confirm (wrote-but-no-transcript-growth)"})
+        e = self._stage()
+        with mock.patch.object(courier, "_run_actuator") as act:
+            report = courier.run(5, {e["id"]}, act=True, hand_run=True, idle_after={e["id"]: 15})
+        self.assertFalse(any(r.get("deferred") for r in report["results"]),
+                         f"a finished landing must not be deferred as mid-turn: {report['results']}")
+        act.assert_called()   # not peer_only: the composer is a legitimate fallback here
 
     def test_an_idle_live_chat_is_the_normal_target(self):
         self.live = {"pid": 99, "name": "w"}   # alive but quiet, turn completed
         e = self._stage()
         ok, why, _ = courier.deliverable(e)
         self.assertTrue(ok, why)
+
+    def test_a_reply_whose_chat_changed_accounts_is_EXPIRED_not_delivered(self):
+        """Found 2026-09-07: three staged notices read "this chat was migrated from Andreea to
+        Joel" for the same three chats that had just been migrated back the other way. Arming
+        the tray would have told each chat it was on an account it was not on."""
+        e = deliverylib.stage(SID, "You were moved to another account.", title="A waiting chat",
+                              instance="another_meh", evidence=DONE_WAITING)
+        ok, why, _ = courier.deliverable(e)     # the dossier says this chat is on temp1 now
+        self.assertFalse(ok)
+        self.assertIn("premise is void", why)
+        self.assertEqual(deliverylib.get(e["id"])["state"], "expired")
+
+    def test_a_reply_staged_on_the_same_account_is_untouched(self):
+        e = self._stage()
+        ok, why, _ = courier.deliverable(e)
+        self.assertTrue(ok, why)
+        self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
 
     def test_never_without_a_verify_snippet(self):
         e = deliverylib.stage(SID, "go", title="A waiting chat", evidence="")
@@ -306,6 +452,150 @@ class CourierRailTest(unittest.TestCase):
         act.assert_not_called()
         self.assertFalse(report["results"][0]["ok"])
         self.assertEqual(deliverylib.get(e["id"])["state"], "failed")
+
+    # --- A DEFERRAL MUST SURVIVE TO ITS NEXT ATTEMPT -------------------------------------
+    # Found live 2026-09-12. `courier --yes --only <id>` refused, correctly, to type into a
+    # chat mid-turn ("peer did not confirm and the turn is in flight - not typing") - and then
+    # marked the row FAILED on that one attempt, so the same command a minute later answered
+    # "nothing staged - the courier has nothing to deliver". The refusal was right and its
+    # bookkeeping said the opposite of the truth; the message had to be re-staged by hand.
+
+    PEER_DEAD = (422, {"error": "peer wrote-but-no-transcript-growth",
+                       "detail": "peer channel did not confirm (wrote-but-no-transcript-growth)"})
+
+    def _mid_turn_peer_refusal(self):
+        """Stage a reply for a chat that is MID-TURN (so rail 4 makes it peer_only) and answer
+        its send with the daemon's dead-peer 422. Returns (entry, report)."""
+        self._write_tail("working on it", age=5, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        self.stub.routes[f"/api/sessions/{SID}/message"] = self.PEER_DEAD
+        with mock.patch.object(courier, "_run_actuator") as act:
+            report = courier.run(5, None, act=True)
+        act.assert_not_called()   # rail 4: the composer is never the fallback for a live turn
+        return e, report
+
+    def test_a_mid_turn_peer_refusal_stays_STAGED_and_is_counted_as_a_deferral(self):
+        e, report = self._mid_turn_peer_refusal()
+        self.assertFalse(report["results"][0]["ok"])
+        self.assertIn("turn is in flight", report["results"][0]["outcome"])
+        row = deliverylib.get(e["id"])
+        self.assertEqual(row["state"], "staged",
+                         "a refusal to interrupt a turn is NOT-YET, never a burned row")
+        self.assertEqual(row["deferrals"], 1)
+        self.assertIn("mid-turn", row["lastError"])
+
+    def test_the_same_command_a_minute_later_still_finds_the_row(self):
+        """The whole point: re-running `--only <id>` must not answer 'nothing staged'."""
+        e, _ = self._mid_turn_peer_refusal()
+        self.assertIn(e["id"], [r["id"] for r in deliverylib.pending()])
+        report = courier.run(5, {e["id"]}, act=False, hand_run=True)
+        self.assertEqual(report["notStaged"], [])
+        self.assertEqual([p["id"] for p in report["planned"]], [e["id"]])
+
+    def test_a_mid_turn_deferral_still_ENDS_at_the_ceiling(self):
+        """NOT-YET IS NOT FOREVER. A chat that never leaves its turn must stop being retried
+        (deliverylib.MAX_DEFERRALS) - and end readable, with the reason, never as a row that
+        quietly disappeared. This is the guard that makes defer() safe to use here at all."""
+        self._write_tail("working on it", age=5, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+        deliverylib._update(e["id"], deferrals=deliverylib.MAX_DEFERRALS - 1)
+        self.stub.routes[f"/api/sessions/{SID}/message"] = self.PEER_DEAD
+        with mock.patch.object(courier, "_run_actuator"):
+            courier.run(5, None, act=True)
+        row = deliverylib.get(e["id"])
+        self.assertEqual(row["state"], "expired")
+        self.assertIn("deferred", row["lastError"])
+        named = courier.run(5, {e["id"]}, act=False, hand_run=True)["notStaged"][0]
+        self.assertEqual(named["state"], "expired",
+                         "and the CLI can still say which state the row ended in")
+
+    def test_a_deferral_is_tagged_so_the_caller_can_tell_it_from_a_failure(self):
+        _, report = self._mid_turn_peer_refusal()
+        self.assertTrue(report["results"][0]["deferred"])
+
+    def test_a_turn_that_ENDED_since_the_plan_is_delivered_not_deferred_again(self):
+        """⛔ THE STALE REFUSAL (found live 2026-09-17, operation b2576cf1). `peer_only` is
+        decided when the batch PLANS, and a batch's resume phase plans every chat and then
+        delivers them one at a time - so the dead-letter arrives minutes later. Chat 44b8262a
+        finished its own turn at 17:05:41 and was still being deferred as "the turn is in
+        flight" at 17:08:14, on a flag nothing re-read. The refusal is re-gated at the moment it
+        is made now: a chat that has since finished takes the composer, which is the whole
+        point of the fallback."""
+        self._write_tail("working on it", age=5, tool_use=True)
+        self.live = {"pid": 99, "name": "w"}
+        e = self._stage()
+
+        self.stub.routes[f"/api/sessions/{SID}/message"] = self.PEER_DEAD
+        real_before = courier._capture_before_state
+
+        def turn_ends_before_the_send(session_id):
+            # The turn ends AFTER the plan and BEFORE the send, which is why the size captured
+            # here already includes it: the duplicate guard sees no growth, and the only thing
+            # still saying "mid-turn" is the stale flag from the plan.
+            self._write_tail(DONE_WAITING, age=400)
+            return real_before(session_id)
+
+        with mock.patch.object(courier, "_capture_before_state",
+                               side_effect=turn_ends_before_the_send), \
+                mock.patch.object(courier, "_run_actuator",
+                                  return_value=(0, "TYPED and verified")) as act:
+            report = courier.run(5, None, act=True)
+        act.assert_called_once()
+        self.assertNotIn("turn is in flight", report["results"][0]["outcome"])
+        self.assertNotEqual(deliverylib.get(e["id"])["state"], "staged",
+                            "a finished turn must not be deferred a second time")
+
+    def test_a_turn_still_in_flight_at_the_refusal_is_still_deferred(self):
+        """The other half: re-gating must not become a way around rail 4."""
+        _, report = self._mid_turn_peer_refusal()
+        self.assertIn("turn is in flight", report["results"][0]["outcome"])
+
+    def test_a_deferral_burns_no_breaker_attempt_and_files_no_incident(self):
+        """The breaker counts futility, not restraint. Before this, four correct mid-turn
+        refusals would suppress the very chat the courier was being careful with, and file
+        an incident each time - a queue of alarms raised by the machinery behaving properly."""
+        from lib import incidentlib
+
+        self._mid_turn_peer_refusal()
+        self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 0)
+        self.assertEqual(incidentlib.list_incidents(), [])
+
+    def test_a_deferral_forgives_only_its_own_attempt(self):
+        """discount(), not clear(): a real failure that came BEFORE must still be counted."""
+        ledgerlib.note("deliver", SID, note="an earlier attempt that really did fail")
+        self._mid_turn_peer_refusal()
+        self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 1)
+
+    def test_a_transient_refusal_is_tagged_deferred_the_same_way(self):
+        """The sibling NOT-YET branch (a closed target app) already defer()ed; the rule is
+        uniform now, so its result carries the same tag and takes back its attempt too."""
+        e = self._stage()
+        self.stub.routes[f"/api/sessions/{SID}/message"] = (
+            409, {"error": "instance temp1 is not running - open it first"})
+        with mock.patch.object(courier, "_run_actuator") as act:
+            report = courier.run(5, None, act=True)
+        act.assert_not_called()
+        self.assertTrue(report["results"][0]["deferred"])
+        self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
+        self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 0)
+
+    def test_a_REAL_refusal_is_still_a_failure_with_an_incident(self):
+        """The rail that must NOT have moved: a 422 that is not the dead-peer shape is a
+        delivery that went wrong, and it still burns the row and raises the alarm."""
+        from lib import incidentlib
+
+        e = self._stage()
+        self.stub.routes[f"/api/sessions/{SID}/message"] = (
+            422, {"error": "not rendered in any searched running instance"})
+        with mock.patch.object(courier, "_run_actuator") as act:
+            report = courier.run(5, None, act=True)
+        act.assert_not_called()
+        self.assertFalse(report["results"][0].get("deferred"))
+        self.assertEqual(deliverylib.get(e["id"])["state"], "failed")
+        self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 1)
+        self.assertTrue(incidentlib.list_incidents())
 
     def test_the_courier_never_posts_migrate(self):
         # 2026-09-01, the hard way: /migrate delivers NO prompt - it kills and reimports the
@@ -429,7 +719,7 @@ class CourierRailTest(unittest.TestCase):
         e = self._stage()
         activity = {"n": 0}
 
-        def fake_actuator(title, instance, message, verify):
+        def fake_actuator(title, instance, message, verify, deadline=None):
             self.activity = "T2"   # the chat moved
             activity["n"] += 1
             return 0, "delivered"
@@ -489,7 +779,7 @@ class CourierRailTest(unittest.TestCase):
 
         calls = {"n": 0}
 
-        def flaky_actuator(title, instance, message, verify):
+        def flaky_actuator(title, instance, message, verify, deadline=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("boom - a bug in the send path, not a refusal")
@@ -516,7 +806,7 @@ class CourierRailTest(unittest.TestCase):
         self.assertTrue(report["results"][0]["ok"])
 
     def _moving_actuator(self):
-        def fake(title, instance, message, verify):
+        def fake(title, instance, message, verify, deadline=None):
             self.activity = "T-moved"
             return 0, "delivered"
 
@@ -690,6 +980,48 @@ class WalledChatIsWakeableTest(unittest.TestCase):
         self.assertEqual(ev, self.REAL)
         self.assertNotEqual(deliverylib._verify_snippet(ev), "",
                             "with no usable snippet the courier refuses and the chat stays stuck")
+
+    def test_real_words_beyond_the_tail_window_are_still_found(self):
+        """THE THIRD ROUTE TO THE SAME DEAD END (found live 2026-09-12, on a chat walled
+        after eleven minutes of tool work). The walk-back was bounded by the window it read:
+        the chat's last real words were older than _TAIL_BYTES of tool records, so the only
+        assistant text inside the window was the banner - and skipping that correctly left
+        nothing at all. Evidence collapsed, the snippet came out empty, and the actuator died
+        on an empty -VerifyText, exactly as before the walk-back existed."""
+        import stage_reply
+        pad = "x" * 20_000
+        with open(self.tp, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "assistant",
+                                "message": {"content": [{"type": "text",
+                                                        "text": self.REAL}]}}) + "\n")
+            written = 0
+            while written < stage_reply._TAIL_BYTES * 2:
+                rec = json.dumps({"type": "user",
+                                  "message": {"content": [{"type": "tool_result",
+                                                          "content": pad}]}}) + "\n"
+                f.write(rec)
+                written += len(rec)
+            f.write(json.dumps({"type": "assistant",
+                                "message": {"content": [{"type": "text",
+                                                        "text": self.BANNER}]}}) + "\n")
+        self.assertGreater(self.tp.stat().st_size, stage_reply._TAIL_BYTES,
+                           "the fixture must outgrow one window or it proves nothing")
+        with mock.patch.object(stage_reply.hydralib, "session_row",
+                               return_value={"transcript_path": str(self.tp)}):
+            got = stage_reply.last_rendered_text("any-sid")
+        self.assertEqual(got, self.REAL,
+                         "the scan must widen past the tail window, not stop at it")
+        self.assertNotEqual(deliverylib._verify_snippet(got), "")
+
+    def test_the_widening_scan_terminates_when_there_are_no_real_words(self):
+        """The widening must END. A transcript that never says anything but the banner
+        returns empty instead of looping, and the ceiling keeps a pathological file out of
+        memory."""
+        import stage_reply
+        self._write(self.BANNER)
+        with mock.patch.object(stage_reply.hydralib, "session_row",
+                               return_value={"transcript_path": str(self.tp)}):
+            self.assertEqual(stage_reply.last_rendered_text("any-sid"), "")
 
 
 class ClaimProofOfDeathTest(unittest.TestCase):

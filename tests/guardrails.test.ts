@@ -12,8 +12,8 @@
 // findViolations, prove it actually fires on the broken shape it claims to catch and stays quiet on
 // the fixed one. A guardrail that cannot fail is not a guardrail.
 
-import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -116,6 +116,30 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       beforeAll(() => { globalThis.fetch = (async () => new Response('{}')) as typeof fetch })
       test('x', () => { expect(1).toBe(1) })
       `,
+      // Rule C, orchestrator-stale-lock.test.ts as it shipped until 2026-09-14: the run it parks
+      // can never settle, so it never reaches the finally that releases the route lock, and the
+      // NEXT file's migrate_batch was refused busy by it. Three preempt tests red on ubuntu,
+      // green on windows, and the red named the wrong file.
+      `
+      import { expect, test } from 'bun:test'
+      import { orchestratorBusy, runOrchestrator } from '../src/orchestrator'
+      const never = () => new Promise<never>(() => {})
+      test('a young lock still blocks a second caller', async () => {
+        void runOrchestrator({ script: 'migrate_batch', timeoutMs: 600_000 }, { dir, spawn: never })
+        expect(orchestratorBusy()).toBe(true)
+      })
+      `,
+      // The reset exists but sits in the TEST BODY, which a test that fails or times out never
+      // reaches - the same reason rule A demands a hook rather than a trailing statement.
+      `
+      import { expect, test } from 'bun:test'
+      import { resetOrchestratorOperationsForTests, startOrchestratorOperation } from '../src/orchestrator'
+      test('x', async () => {
+        startOrchestratorOperation({ script: 'migrate_batch', timeoutMs: 600_000 }, { deps: { dir, spawn: () => new Promise(() => {}) } })
+        expect(1).toBe(1)
+        resetOrchestratorOperationsForTests()
+      })
+      `,
     ],
     fixed: [
       // resource-status.test.ts's shape: stubbed inside the test through a helper, restored in finally.
@@ -151,6 +175,40 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       // never mock.module('node:child_process') here: it is global for the whole run, and
       // globalThis.fetch = fake at module scope leaks the same way.
       test('x', () => { expect(1).toBe(1) })
+      `,
+      // Rule C, the shape orchestrator-stale-lock.test.ts ships today: the lock it parks is handed
+      // back in an after hook, so the file cannot poison whatever runs next.
+      `
+      import { afterEach, expect, test } from 'bun:test'
+      import { orchestratorBusy, resetOrchestratorOperationsForTests, runOrchestrator } from '../src/orchestrator'
+      const never = () => new Promise<never>(() => {})
+      afterEach(() => resetOrchestratorOperationsForTests())
+      test('a young lock still blocks a second caller', async () => {
+        void runOrchestrator({ script: 'migrate_batch', timeoutMs: 600_000 }, { dir, spawn: never })
+        expect(orchestratorBusy()).toBe(true)
+      })
+      `,
+      // Precision: a promise the test KEEPS THE RESOLVE OF is not a parked lock. This is
+      // orchestrator-operations.test.ts's deferred() shape, released by the test itself, and
+      // reporting it would be the false red that gets a check ignored.
+      `
+      import { expect, test } from 'bun:test'
+      import { runOrchestrator } from '../src/orchestrator'
+      let release!: () => void
+      const gate = new Promise<void>((r) => { release = r })
+      test('x', async () => {
+        void runOrchestrator({ script: 'chats', timeoutMs: 600_000 }, { dir, spawn: () => gate })
+        release()
+        expect(1).toBe(1)
+      })
+      `,
+      // A never-settling promise with no orchestrator run behind it parks no lock at all.
+      `
+      import { expect, test } from 'bun:test'
+      test('x', async () => {
+        const pending = new Promise(() => {})
+        expect(pending).toBeTruthy()
+      })
       `,
     ],
   },
@@ -603,11 +661,17 @@ for (const file of CHECK_FILES) {
 describe('spawn-test-without-timeout.mjs — repo-wide timeout stand-down', () => {
   const load = () => import(pathToFileURL(join(CHECKS_DIR, 'spawn-test-without-timeout.mjs')).href)
 
+  const guardrailRoots: string[] = []
   const withRoot = (files: Record<string, string>): string => {
     const dir = mkdtempSync(join(tmpdir(), 'agenthydra-guardrail-'))
+    guardrailRoots.push(dir)
     for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body)
     return dir
   }
+
+  afterEach(() => {
+    for (const dir of guardrailRoots.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
 
   test('a --timeout in the test script stands the check down', async () => {
     const { audit, globalTimeoutMs } = await load()

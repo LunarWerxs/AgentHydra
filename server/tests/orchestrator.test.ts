@@ -6,8 +6,8 @@
 // exercised through an injected fake so the suite never needs python or a fleet, plus one real run
 // of the interpreter (skipped where none is installed) proving the argv actually lands unquoted.
 
-import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -20,10 +20,15 @@ import {
   orchestratorDir,
   orchestratorStatus,
   pythonBinary,
+  routeLockKey,
   runOrchestrator,
   runOriginAllowed,
   validateInvocation,
 } from '../src/orchestrator'
+
+// One root under the OS temp dir for the whole file; every scratch dir below nests inside it.
+const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-orch-test-root-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
 
 describe('validateInvocation - the only grammar that reaches orch.py', () => {
   test('a menu name with string args and the default deadline', () => {
@@ -101,7 +106,7 @@ describe('resolution', () => {
     // 2026-09-06: `bun run dist`, then dist/AgentHydra.exe launched as the daemon. APP_ROOT
     // became dist/ and every orchestrator-backed tool died with "no orch.py under
     // app\dist\orchestrator" while the tree sat one level up.
-    const root = mkdtempSync(join(tmpdir(), 'ah-orch-'))
+    const root = mkdtempSync(join(ROOT, 'ah-orch-'))
     const dist = join(root, 'dist')
     mkdirSync(dist)
     // No toolbox anywhere: the sibling is still reported, so the error names where it looked.
@@ -137,7 +142,7 @@ describe('resolution', () => {
 
 /** A toolbox with a driver that can be spawned - or not - depending on the test. */
 function fakeToolbox(withDriver = true): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-'))
+  const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-'))
   if (withDriver) writeFileSync(join(dir, 'orch.py'), '# fake driver\n')
   return dir
 }
@@ -236,6 +241,59 @@ describe('runOrchestrator - argv in, verdict out', () => {
       { dir, spawn: async () => ({ code: 0, stdout: '', stderr: '', timedOut: false }) },
     )
     expect('ok' in third && third.ok).toBe(true)
+  })
+
+  test('routeLockKey: fan_out status/list take no lock; every other fan_out call keeps one', () => {
+    expect(routeLockKey('fan_out', ['status', '--json'])).toBeNull()
+    expect(routeLockKey('fan_out', ['status', 'g1', '--json'])).toBeNull()
+    expect(routeLockKey('fan_out', ['list', '--json'])).toBeNull()
+    expect(routeLockKey('fan_out', ['--spec', 'x.json', '--json'])).toBe('fan_out')
+    expect(routeLockKey('fan_out', ['send', 'g1', '--text', 'x'])).toBe('fan_out')
+    expect(routeLockKey('fan_out', ['delete', 'g1'])).toBe('fan_out')
+    expect(routeLockKey('migrate_batch', ['status'])).toBe('migrate_batch')
+  })
+
+  test('fan_out status/list are never refused by a fan_out spawn already in flight (2026-09-15)', async () => {
+    // Found live: `fan_out_status` (read-only by its own MCP description) answered `409 fan_out
+    // is already running through this route` three times while a spawn ran, because the route
+    // locked by SCRIPT NAME alone and a spawn and a status read share the name "fan_out".
+    const dir = fakeToolbox()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const patientSpawn = async () => {
+      await gate
+      return { code: 0, stdout: '{"members":[]}', stderr: '', timedOut: false }
+    }
+    const spawning = runOrchestrator(
+      { script: 'fan_out', args: ['--spec', 'x.json', '--json'] },
+      { dir, spawn: patientSpawn },
+    )
+    // The spawn is still in flight (the gate has not been released) - a status read must go
+    // straight through, never queued behind it.
+    const status = await runOrchestrator(
+      { script: 'fan_out', args: ['status', '--json'] },
+      {
+        dir,
+        spawn: async () => ({ code: 0, stdout: '{"members":[]}', stderr: '', timedOut: false }),
+      },
+    )
+    expect('busy' in status).toBe(false)
+    expect('ok' in status && status.ok).toBe(true)
+    // A SECOND spawn (a write, same as the first) is still refused - reads got their own lock,
+    // not NO lock for the whole script.
+    const secondSpawn = await runOrchestrator(
+      { script: 'fan_out', args: ['--spec', 'y.json', '--json'] },
+      {
+        dir,
+        spawn: async () => ({ code: 0, stdout: '{"members":[]}', stderr: '', timedOut: false }),
+      },
+    )
+    expect('busy' in secondSpawn && secondSpawn.busy).toBe(true)
+    release()
+    const done = await spawning
+    expect('ok' in done && done.ok).toBe(true)
   })
 
   test('a timed-out run is never ok, whatever the code says', async () => {
@@ -376,7 +434,7 @@ const hasPython = (() => {
 test.skipIf(!hasPython)(
   'a real python sees each arg intact, spaces and all',
   async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agenthydra-orch-real-'))
+    const dir = mkdtempSync(join(ROOT, 'agenthydra-orch-real-'))
     writeFileSync(join(dir, 'orch.py'), 'import sys, json\nprint(json.dumps(sys.argv[1:]))\n')
     const r = await runOrchestrator(
       { script: 'chats', args: ['--instance', 'pap3r rotate'], timeoutMs: 15_000 },

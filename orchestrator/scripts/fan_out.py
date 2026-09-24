@@ -52,7 +52,7 @@ first - so a probe fan-out leaves nothing in any account.
 
 Usage: python fan_out.py --spec <file.json | '{"tasks":[...]}'> [--per-account N]
                          [--exclude <inst>]... [--only <inst>]... [--open-closed]
-                         [--dry-run] [--force] [--json]
+                         [--group-id <id>] [--dry-run] [--force] [--json]
        python fan_out.py list [--json]
        python fan_out.py status [<group>] [--json]          # the latest group when omitted
        python fan_out.py send <group> --text "..." [--only <sessionId>]... [--force] [--json]
@@ -197,6 +197,52 @@ def parse_spec(raw: str) -> dict:
 
 # --- the targets -----------------------------------------------------------------------------
 
+# ⛔ A PERSON AT THE KEYBOARD IS NOT ROOM (found live 2026-09-15). A three-task fan-out put its one
+# spawned chat on #37 while the owner was working in that very app: its log shows him sending
+# three messages to his own chats and clicking between them from 02:52 to 02:57 local, the spawn
+# taking the focus at 02:59:26, and him coming back at 03:00:22 to find a chat he had not started,
+# stop it (`[Request interrupted by user]`, 55 s in) and delete it through the app. The account
+# had quota room, which is all the ranking asked. The app's own main.log records every chat a
+# hand sends to or clicks into, so an app that did either within HANDS_ON_SECS is skipped with
+# the reason; `--only` naming it is a person's word and still reaches it. A lane's own UI acts
+# log the same lines, so a just-spawned account also reads as hands-on for a while - which only
+# spreads the next fan-out wider, the direction this script is meant to err in.
+HANDS_ON_SECS = 10 * 60
+HANDS_ON_TAIL_BYTES = 512 * 1024
+_HANDS_ON_LINE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[info\] "
+    r"(?:LocalSessions\.sendMessage:|\[CCD\] LocalSessions\.setFocusedSession: sessionId=local_)")
+
+
+def hands_on_secs_ago(inst_dir: str | None, now: float | None = None) -> float | None:
+    """Seconds since the desktop app in `inst_dir` last logged a message sent to, or a click
+    into, one of its chats - or None when that was longer than HANDS_ON_SECS ago, or there is no
+    readable log. The log's timestamps are local wall-clock time; only its tail is read."""
+    if not inst_dir:
+        return None
+    try:
+        with open(Path(inst_dir) / "logs" / "main.log", "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - HANDS_ON_TAIL_BYTES))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    latest = None
+    for line in tail.splitlines():
+        m = _HANDS_ON_LINE.match(line)
+        if not m:
+            continue
+        try:
+            at = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+        except ValueError:
+            continue
+        latest = at if latest is None else max(latest, at)
+    if latest is None:
+        return None
+    age = (time.time() if now is None else now) - latest
+    return max(0.0, age) if age <= HANDS_ON_SECS else None
+
+
 def _resolve_nums(fleet_data: dict, refs: list[str]) -> set:
     """Instance refs (number, name, dir, label, email) -> the set of instance nums. An
     unresolvable ref is a ValueError: a filter that silently matches nothing is how work
@@ -241,6 +287,12 @@ def rank_targets(exclude: list[str] | None = None, only: list[str] | None = None
             continue
         if acct.get("mustOpen") and not open_closed:
             skipped.append({"instance": label, "why": "closed (pass --open-closed to use it)"})
+            continue
+        hands_on = hands_on_secs_ago(inst.get("dir"))
+        if hands_on is not None and num not in only_nums:
+            skipped.append({"instance": label, "why": (
+                f"a person is working in it: its app logged a message sent or a chat opened "
+                f"{int(hands_on // 60)} min ago (name it with --only to use it anyway)")})
             continue
         targets.append({
             "num": num, "name": inst.get("name"), "dir": inst.get("dir"),
@@ -339,11 +391,16 @@ def _spawn_state(res: dict) -> tuple[str, str | None]:
 
 
 def spawn_group(spec: dict, assignments: list[dict], force: bool = False,
-                dry_run: bool = False) -> dict:
+                dry_run: bool = False, group_id: str | None = None) -> dict:
     """Spawn every assigned task, one at a time, recording the group after each so a crash
-    half-way still leaves a readable record. Dry run: the plan only, nothing written."""
+    half-way still leaves a readable record. Dry run: the plan only, nothing written.
+
+    `group_id` lets a caller (the MCP `fan_out` tool) mint the id itself and hand it in, so it
+    can return that SAME id to its own caller before this function has spawned anything -
+    otherwise the id exists only inside this process and cannot be known until the whole spawn
+    (30-90s per chat) has finished. Defaults to a fresh one, exactly as before."""
     group = {
-        "id": _new_group_id(), "name": spec.get("group"), "createdAt": _now_iso(),
+        "id": group_id or _new_group_id(), "name": spec.get("group"), "createdAt": _now_iso(),
         "dryRun": bool(dry_run), "members": [_member(a) for a in assignments], "sends": [],
     }
     if dry_run:
@@ -687,7 +744,7 @@ def _take_value(argv: list[str], flag: str) -> str | None:
 
 def _positional(argv: list[str]) -> list[str]:
     """Words that are neither flags nor a flag's value."""
-    valued = {"--spec", "--per-account", "--exclude", "--only", "--text"}
+    valued = {"--spec", "--per-account", "--exclude", "--only", "--text", "--group-id"}
     out = []
     i = 0
     while i < len(argv):
@@ -827,7 +884,9 @@ def _cmd_spawn(argv: list[str], force: bool, as_json: bool) -> int:
         print(f"REFUSED: {err}", file=sys.stderr)
         return 3
     assignments = plan(spec["tasks"], ranking["targets"], per_account)
-    group = spawn_group(spec, assignments, force=force, dry_run="--dry-run" in argv)
+    group_id = _take_value(argv, "--group-id")
+    group = spawn_group(spec, assignments, force=force, dry_run="--dry-run" in argv,
+                        group_id=group_id)
     if as_json:
         print(json.dumps({**group, "targets": ranking["targets"],
                           "skippedTargets": ranking["skipped"],

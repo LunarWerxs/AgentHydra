@@ -42,6 +42,8 @@ import contextlib
 import io
 import json
 import sys
+import threading
+import time
 import unittest
 import unittest.mock as mock
 from pathlib import Path
@@ -59,11 +61,19 @@ def _payload(chat: str, landed: bool, code: int = 0, **extra) -> dict:
 
 
 class _StubLanding:
-    """Stands in for migrate_chat._Landing. The batch only ever hands one back to the phase
-    functions, and those are stubbed below, so the payload it carries is the whole of it."""
+    """Stands in for migrate_chat._Landing. The batch hands one back to the phase functions,
+    and those are stubbed below - but the NAMING phase (2026-09-10) reads three real fields off
+    it rather than going through a stubbed call, so the double carries them: a landing always
+    knows its target account, its session id and the title the caller asked for."""
 
     def __init__(self, payload: dict) -> None:
         self.payload = payload
+        self.target = {"name": payload.get("to") or "target"}
+        # A real landing ALWAYS has a session id - it is what was moved - so the double must
+        # too, or the naming phase silently skips every chat and the order test would pass by
+        # testing nothing. Derived from the title when the fixture payload omits it.
+        self.session_id = payload.get("sessionId") or f"sid-{payload.get('title') or ''}"
+        self.chat_title = payload.get("title") or ""
 
 
 def _run(argv: list[str]) -> tuple[int, dict]:
@@ -84,6 +94,22 @@ class _MigrateBatchTest(unittest.TestCase):
     `self.patch` is monkeypatch.setattr's equivalent - mock.patch.object started immediately
     and stopped by addCleanup, so an attribute is restored even when the test raises, which is
     the property the fixtures relied on."""
+
+    def setUp(self):
+        """⛔ NO CASE HERE MAY READ THE REAL SIDEBAR (2026-09-17). The batch's naming verdict
+        reads what each account's app is RENDERING (name_chats.rendered_titles), and that is a
+        real PowerShell UI read of the live desktop. Unstubbed, the two bounded-phase cases below
+        spent over a second in it and failed their 1.0s budget - which read as "load-flaky" -
+        and on a machine with the app open the read came back without the fake chat's title,
+        so a clean batch was reported unfinished. "Could not read the sidebar" is the neutral
+        answer (never read as a miss); the naming-verdict cases patch rendered_titles
+        themselves to say what is on screen."""
+        super().setUp()
+        import name_chats
+        self.patch(name_chats, "_run_list",
+                   lambda instance: (1, "unit test: the real sidebar is out of reach"))
+        # And the collateral watch, which would read every real chat store twice per batch.
+        self.patch(migrate_batch.archivewatchlib, "snapshot", lambda *a, **k: None)
 
     def patch(self, obj, name: str, value) -> None:
         patcher = mock.patch.object(obj, name, value)
@@ -125,6 +151,12 @@ class _MigrateBatchTest(unittest.TestCase):
         self.patch(migrate_chat, "landed_meta_path", lambda land: "")
         self.patch(migrate_chat, "watch_bypass_many", lambda paths, **k: {})
         self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        # The naming phase drives a REAL app's rename on the owner's screen - stubbed, never
+        # reached from a unit test. Its wiring is asserted in test_migrate_batch_resume.
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
         return calls
 
     def fake_move(self) -> tuple[list[list[str]], dict]:
@@ -134,6 +166,17 @@ class _MigrateBatchTest(unittest.TestCase):
 
 
 class BatchDriverTest(_MigrateBatchTest):
+    def setUp(self):
+        """These cases name chats "one"/"two"/"three", and the archive stopgap resolves every
+        name against the fleet before the batch runs. Unstubbed it reads the REAL machine, where
+        "one" is a substring of plenty of archived titles and of none of the ~29 unarchived ones
+        - so the gate correctly called them archived and refused, and nine driver tests went red
+        against a live laptop. Empty rows = "none of these are archived", which is what every
+        case here has always assumed. The gate's own behaviour is pinned in ArchiveGateTest.
+        """
+        super().setUp()
+        self.patch(migrate_batch.hydralib, "chats", lambda **k: [])
+
     def test_a_refused_chat_does_not_stop_the_batch_and_is_never_counted_as_moved(self):
         """The failure that would matter most: a partial batch reading as a success.
 
@@ -150,6 +193,32 @@ class BatchDriverTest(_MigrateBatchTest):
         assert out["ok"] is False
         assert code == migrate_batch.EXIT_PARTIAL, "partial must not share an exit code with clean"
         assert "two" in out["report"] and "live engine" in out["report"]
+
+    def test_a_bystander_archived_while_the_batch_ran_is_named_and_fails_the_batch(self):
+        """⛔ The 2026-09-16 incident: every chat in the batch landed and settled, and chats
+        OUTSIDE it went archived in the same minutes - one in an account the batch never named.
+        The batch's own source rows going archived is its job; anything else is collateral."""
+        self.fake_move()
+
+        def rec(archived, sid, title, inst):
+            return {"archived": archived, "ids": {sid}, "sessionId": sid, "title": title,
+                    "instance": inst}
+
+        before = {"s1": rec(False, "sid-one", "one", "src"), "s2": rec(False, "sid-two", "two", "src"),
+                  "by": rec(False, "b0bcbaf3", "Odin production readiness scoring", "#55")}
+        after = {"s1": rec(True, "sid-one", "one", "src"), "s2": rec(True, "sid-two", "two", "src"),
+                 "by": rec(True, "b0bcbaf3", "Odin production readiness scoring", "#55")}
+        snaps = iter([before, after])
+        self.patch(migrate_batch.archivewatchlib, "snapshot", lambda *a, **k: next(snaps))
+        self.patch(migrate_batch.archivewatchlib, "file_incident", lambda rows, what: "inc-9")
+        code, out = _run(["--chat", "one", "--chat", "two", "--to", "8"])
+
+        assert out["moved"] == 2, "the batch's own chats still moved"
+        assert [r["title"] for r in out["collateral"]] == ["Odin production readiness scoring"]
+        assert out["ok"] is False
+        assert code == migrate_batch.EXIT_PARTIAL
+        assert out["report"].startswith("⛔ COLLATERAL")
+        assert "inc-9" in out["report"]
 
     def test_every_chat_runs_the_real_per_chat_path_with_the_shared_flags(self):
         """Rails are per chat, not per batch: each move gets the whole single-move argv."""
@@ -253,10 +322,21 @@ class BatchDriverTest(_MigrateBatchTest):
         self.patch(migrate_chat, "watch_bypass_many",
                    lambda paths, **k: (order.append(f"watch:{len(paths)}"), {})[-1])
         self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: (
+                       order.append(f"name:{len(extra_titles or {})}"),
+                       {"named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                        "why": ""})[-1])
 
         _run(["--chat", "one", "--chat", "two", "--chat", "three", "--to", "8"])
+        # ⛔ NAMING SITS BETWEEN SETTLING AND STAMPING, ONCE FOR THE WHOLE BATCH (2026-09-10).
+        # It must come BEFORE the stamp, because the permission picker aims by the chat's
+        # rendered name and an import lands with none; and once, not per chat, because the pass
+        # takes the target window's lock and walks that account's whole store either way.
         assert order == ["move:one", "move:two", "move:three",
                          "settle:one", "settle:two", "settle:three",
+                         "name:3",
                          "watch:3",
                          "stamp:one", "stamp:two", "stamp:three"]
 
@@ -334,43 +414,66 @@ class AllUnarchivedTest(_MigrateBatchTest):
     def two_accounts(self) -> list[list[str]]:
         self.patch(migrate_batch.hydralib, "fleet", lambda: self._FLEET)
         self.patch(
-            migrate_batch.hydralib, "sessions",
-            lambda period="7d", archived=None: [
-                {"session_id": "aaa", "instance": "anothuh1", "archived": False,
-                 "last_activity_at": 3},
-                {"session_id": "ddd", "instance": "work", "archived": False,
-                 "last_activity_at": 2},
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [
+                {"sessionId": "aaa", "instance": "anothuh1", "archived": False,
+                 "lastActivityAt": "2026-09-13T03:00:00Z"},
+                {"sessionId": "ddd", "instance": "work", "archived": False,
+                 "lastActivityAt": "2026-09-13T02:00:00Z"},
             ],
         )
         return self.stub_phases()
 
-    def test_all_unarchived_takes_only_movable_chats_and_resolves_them_by_session_id(self):
-        """--all-unarchived must ask for the CENSUS (period=all, archived=include) and then
-        filter locally; the windowed default hid six unarchived chats the day it was measured.
-        It must also hand migrate_chat SESSION IDS, never titles: two accounts can share a
-        title."""
-        asked: dict = {}
+    def test_all_unarchived_reads_the_same_endpoint_list_chats_does(self):
+        """⛔ THE TWO ENUMERATORS MUST NOT DISAGREE (2026-09-13). Minutes after a killed batch,
+        --all-unarchived reported "0 unarchived desktop chat(s)" on an account list_chats showed
+        THREE on, and naming those three ids by hand moved them cleanly. /api/sessions resolves a
+        session id to ONE owning profile, so a half-moved chat - which exists on two accounts at
+        once - is hidden from the account it is still sitting on. /api/chats scans each store, so
+        this batch must read that, and it must hand migrate_chat SESSION IDS, never titles: two
+        accounts can share a title."""
+        asked: list = []
 
-        def fake_sessions(period="7d", archived=None):
-            asked.update(period=period, archived=archived)
+        def fake_chats(instance=None):
+            asked.append(instance)
             return [
-                {"session_id": "aaa", "instance": "pap3r", "archived": False,
-                 "last_activity_at": 30},
-                {"session_id": "bbb", "instance": "pap3r", "archived": True,
-                 "last_activity_at": 40},
-                {"session_id": "ccc", "instance": "", "archived": False, "last_activity_at": 50},
-                {"session_id": "ddd", "instance": "anutha", "archived": False,
-                 "last_activity_at": 20},
+                {"sessionId": "aaa", "instance": "pap3r", "archived": False,
+                 "lastActivityAt": "2026-09-13T00:30:00Z"},
+                {"sessionId": "bbb", "instance": "pap3r", "archived": True,
+                 "lastActivityAt": "2026-09-13T00:40:00Z"},
+                {"sessionId": "ccc", "instance": "", "archived": False,
+                 "lastActivityAt": "2026-09-13T00:50:00Z"},
+                {"sessionId": "ddd", "instance": "anutha", "archived": False,
+                 "lastActivityAt": "2026-09-13T00:20:00Z"},
             ]
 
-        self.patch(migrate_batch.hydralib, "sessions", fake_sessions)
+        self.patch(migrate_batch.hydralib, "chats", fake_chats)
         calls = self.stub_phases()
         _run(["--all-unarchived", "--to", "8"])
 
-        assert asked == {"period": "all", "archived": "include"}, "an enumerator must ask for all"
+        # The archive gate reads the same endpoint again (it asks a different question of the
+        # same rows), so what matters is that every read went to /api/chats unscoped here.
+        assert asked and all(a is None for a in asked), \
+            "unscoped by --from, so the whole fleet's stores are read"
         moved = [c[0] for c in calls]
         assert moved == ["aaa", "ddd"], "archived and non-desktop rows are not movable"
         assert "bbb" not in moved and "ccc" not in moved
+
+    def test_a_chat_with_no_session_id_is_not_offered_as_movable(self):
+        """/api/chats reports a store row that has no CLI session id yet; migrate resolves BY
+        session id, so offering one would queue a chat nothing can then resolve."""
+        self.patch(
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [
+                {"sessionId": None, "instance": "pap3r", "archived": False,
+                 "lastActivityAt": "2026-09-13T05:00:00Z"},
+                {"sessionId": "aaa", "instance": "pap3r", "archived": False,
+                 "lastActivityAt": "2026-09-13T04:00:00Z"},
+            ],
+        )
+        calls = self.stub_phases()
+        _run(["--all-unarchived", "--to", "8"])
+        assert [c[0] for c in calls] == ["aaa"]
 
     def test_from_scopes_all_unarchived_to_one_account(self):
         self.patch(
@@ -379,12 +482,12 @@ class AllUnarchivedTest(_MigrateBatchTest):
                                    {"num": 2, "name": "anutha", "dir": "c:/x/anutha"}]},
         )
         self.patch(
-            migrate_batch.hydralib, "sessions",
-            lambda period="7d", archived=None: [
-                {"session_id": "aaa", "instance": "pap3r", "archived": False,
-                 "last_activity_at": 3},
-                {"session_id": "ddd", "instance": "anutha", "archived": False,
-                 "last_activity_at": 2},
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [
+                {"sessionId": "aaa", "instance": "pap3r", "archived": False,
+                 "lastActivityAt": "2026-09-13T03:00:00Z"},
+                {"sessionId": "ddd", "instance": "anutha", "archived": False,
+                 "lastActivityAt": "2026-09-13T02:00:00Z"},
             ],
         )
         calls = self.stub_phases()
@@ -405,12 +508,12 @@ class AllUnarchivedTest(_MigrateBatchTest):
                 # Each spelling gets its own stubs, since addCleanup only fires between TESTS.
                 with mock.patch.object(migrate_batch.hydralib, "fleet", lambda: self._FLEET), \
                      mock.patch.object(
-                         migrate_batch.hydralib, "sessions",
-                         lambda period="7d", archived=None: [
-                             {"session_id": "aaa", "instance": "anothuh1", "archived": False,
-                              "last_activity_at": 3},
-                             {"session_id": "ddd", "instance": "work", "archived": False,
-                              "last_activity_at": 2},
+                         migrate_batch.hydralib, "chats",
+                         lambda instance=None: [
+                             {"sessionId": "aaa", "instance": "anothuh1", "archived": False,
+                              "lastActivityAt": "2026-09-13T03:00:00Z"},
+                             {"sessionId": "ddd", "instance": "work", "archived": False,
+                              "lastActivityAt": "2026-09-13T02:00:00Z"},
                          ]):
                     calls = self.stub_phases()
                     _run(["--all-unarchived", "--from", spelling, "--to", "15"])
@@ -436,7 +539,7 @@ class AllUnarchivedTest(_MigrateBatchTest):
         """"0 unarchived desktop chat(s) on anothuh1" is an ANSWER; "name chats with --chat" is a
         complaint that the caller did the thing it just did."""
         self.patch(migrate_batch.hydralib, "fleet", lambda: self._FLEET)
-        self.patch(migrate_batch.hydralib, "sessions", lambda period="7d", archived=None: [])
+        self.patch(migrate_batch.hydralib, "chats", lambda instance=None: [])
         code, out = _run(["--all-unarchived", "--from", "27", "--to", "15"])
         assert code == migrate_batch.EXIT_NONE
         assert "0 unarchived desktop chat(s) on anothuh1" in out["report"]
@@ -444,10 +547,12 @@ class AllUnarchivedTest(_MigrateBatchTest):
 
     def test_limit_takes_the_most_recent_and_says_so(self):
         self.patch(
-            migrate_batch.hydralib, "sessions",
-            lambda period="7d", archived=None: [
-                {"session_id": "old", "instance": "p", "archived": False, "last_activity_at": 1},
-                {"session_id": "new", "instance": "p", "archived": False, "last_activity_at": 9},
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [
+                {"sessionId": "old", "instance": "p", "archived": False,
+                 "lastActivityAt": "2026-09-13T01:00:00Z"},
+                {"sessionId": "new", "instance": "p", "archived": False,
+                 "lastActivityAt": "2026-09-13T09:00:00Z"},
             ],
         )
         calls = self.stub_phases()
@@ -463,6 +568,51 @@ class AllUnarchivedTest(_MigrateBatchTest):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             code = migrate_batch.main(["--chat", "a", "--chat", "b", "--title", "One name"])
         assert code == 2
+
+
+# --- --chat-title: move_chats' per-chat door around a confirm_title mismatch ----------------
+# TODO item 1 (2026-09-15): move_chats had no way to name ONE chat's own real title, so a
+# caller with no way to read the daemon's row directly had no way past a confirm_title refusal.
+# --chat-title binds to the --chat named right before it and reaches migrate_chat as that
+# chat's own --title, which the naming door always accepts (a real new name, never restated).
+
+class PerChatTitleTest(_MigrateBatchTest):
+    def setUp(self):
+        super().setUp()
+        self.patch(migrate_batch.hydralib, "chats", lambda **k: [])
+
+    def test_chat_title_becomes_that_chats_own_title_flag(self):
+        calls = self.stub_phases()
+        _run(["--chat", "a", "--chat-title", "Real name for a", "--chat", "b", "--to", "8"])
+        assert calls[0] == ["a", "--to", "8", "--title", "Real name for a"], calls[0]
+        assert calls[1] == ["b", "--to", "8"], "a chat with no --chat-title carries no --title"
+
+    def test_chat_title_wins_even_when_the_two_current_names_disagree(self):
+        """The exact overnight scenario: the daemon's row title and the desktop record's title
+        differ (session 7e1fa278, 'Your market still looks like ...' vs 'Logos for Connections
+        products'). --chat-title sidesteps the confirm_title comparison entirely - migrate_chat
+        never has to guess which of the two names the door wants."""
+        calls = self.stub_phases()
+        _run(["--chat", "7e1fa278", "--chat-title", "Logos for Connections products",
+              "--to", "8"])
+        assert calls[0][-2:] == ["--title", "Logos for Connections products"]
+
+    def test_a_chat_title_with_no_preceding_chat_is_a_usage_error(self):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = migrate_batch.main(["--chat-title", "orphaned", "--to", "8"])
+        assert code == 2
+
+    def test_all_unarchived_carries_no_per_chat_title(self):
+        """chat_titles is rebuilt in lockstep with the fresh chats list --all-unarchived
+        resolves, never left over from whatever --chat-title happened to precede it."""
+        self.patch(
+            migrate_batch.hydralib, "chats",
+            lambda instance=None: [{"sessionId": "s1", "instance": "p", "archived": False,
+                                     "lastActivityAt": "2026-09-13T09:00:00Z"}],
+        )
+        calls = self.stub_phases()
+        _run(["--all-unarchived", "--to", "8"])
+        assert "--title" not in calls[0]
 
 
 # --- the naming door restates the DAEMON'S title, never the record's -----------------------
@@ -605,6 +755,421 @@ class DoctrineRestampTest(_MigrateBatchTest):
         got = _run_stamp()
         assert got["ultracode"] is False
         assert clock.total >= migrate_chat.DOCTRINE_RESTAMP_SECS, "the 4s ceiling must still be paid"
+
+
+class ArchiveGateTest(unittest.TestCase):
+    """THE ARCHIVE STOPGAP (added 2026-09-13).
+
+    migrate_chat has refused archived chats per chat since 2026-09-05, and it was not enough:
+    that gate only asks "was --archived set?", and on 2026-09-13 an agent asked to migrate an
+    account set it for itself and queued all 22 of that account's archived chats behind the 3
+    that were actually wanted. A boolean cannot distinguish the human's instruction from the
+    agent's own initiative. A COUNT can, because stating it requires having enumerated the
+    archive, and the number reaches the human before anything moves.
+
+    Three keys, each pinned below: the flag, a MATCHING count, and archived-only batches.
+    """
+
+    def setUp(self):
+        self.rows = [
+            {"sessionId": "aaaa1111-0000-0000-0000-000000000000",
+             "title": "an archived one", "archived": True},
+            {"sessionId": "bbbb2222-0000-0000-0000-000000000000",
+             "title": "a live one", "archived": False},
+        ]
+        patcher = mock.patch.object(migrate_batch.hydralib, "chats",
+                                    lambda **k: list(self.rows))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _args(self, chats, passthrough=(), count=-1):
+        a = migrate_batch._BatchArgs()
+        a.chats = list(chats)
+        a.passthrough = list(passthrough)
+        a.archived_count = count
+        return a
+
+    def test_an_archived_chat_without_the_flag_is_refused_whole(self):
+        a = self._args(["aaaa1111-0000-0000-0000-000000000000"])
+        got = migrate_batch._archive_gate(a)
+        assert got is not None, "an archived chat must never move on a bare --chat"
+        code, report = got
+        assert code == migrate_batch.EXIT_REFUSED
+        assert "ARCHIVED" in report and "--archived-count 1" in report, report
+
+    def test_the_flag_alone_is_not_enough_the_count_must_match(self):
+        a = self._args(["aaaa1111-0000-0000-0000-000000000000"], ["--archived"])
+        code, report = migrate_batch._archive_gate(a)
+        assert code == migrate_batch.EXIT_REFUSED
+        assert "not stated" in report, report
+        b = self._args(["aaaa1111-0000-0000-0000-000000000000"], ["--archived"], count=7)
+        code, report = migrate_batch._archive_gate(b)
+        assert code == migrate_batch.EXIT_REFUSED
+        assert "was 7" in report, report
+
+    def test_a_matching_count_on_an_archived_only_batch_is_allowed(self):
+        a = self._args(["aaaa1111-0000-0000-0000-000000000000"], ["--archived"], count=1)
+        assert migrate_batch._archive_gate(a) is None, "the deliberate path must still work"
+
+    def test_archived_and_unarchived_may_not_ride_in_one_batch(self):
+        """The incident's exact shape: 3 wanted chats with 22 archived ones swept in behind."""
+        a = self._args(["aaaa1111-0000-0000-0000-000000000000",
+                        "bbbb2222-0000-0000-0000-000000000000"], ["--archived"], count=1)
+        code, report = migrate_batch._archive_gate(a)
+        assert code == migrate_batch.EXIT_REFUSED
+        assert "MIXES" in report, report
+
+    def test_an_ordinary_unarchived_batch_is_untouched_and_a_stray_flag_is_stripped(self):
+        """A flag that reaches a gate it did not have to is the shape that eventually opens
+        one, so an inert --archived is removed rather than forwarded to every per-chat move."""
+        a = self._args(["bbbb2222-0000-0000-0000-000000000000"], ["--now", "--archived"])
+        assert migrate_batch._archive_gate(a) is None
+        assert a.passthrough == ["--now"], a.passthrough
+
+    def test_a_fleet_that_cannot_be_read_refuses_rather_than_guessing(self):
+        with mock.patch.object(migrate_batch.hydralib, "chats",
+                               side_effect=OSError("store unreadable")):
+            blind = self._args(["aaaa1111-0000-0000-0000-000000000000"], ["--archived"], count=1)
+            code, report = migrate_batch._archive_gate(blind)
+            assert code == migrate_batch.EXIT_REFUSED
+            assert "could not read the fleet" in report, report
+            # ...but an ordinary unarchived move must not be held hostage by that same failure.
+            plain = self._args(["bbbb2222-0000-0000-0000-000000000000"])
+            assert migrate_batch._archive_gate(plain) is None
+
+
+class _BoundedStubLanding:
+    """Like the module's own `_StubLanding` above, but also carries the two fields
+    `_mark_settle_timeout` / `_mark_stamp_timeout` read - `source_row` and `doctrine` -
+    defaulted to None exactly as a real `migrate_chat._Landing`'s `__init__` defaults every
+    slot to None. Without this, a stub that never got a settle/stamp verdict raises
+    AttributeError instead of reading as 'never got a verdict', which is the one case these
+    tests exist to exercise."""
+
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+        self.target = {"name": payload.get("to") or "target"}
+        self.session_id = payload.get("sessionId") or f"sid-{payload.get('title') or ''}"
+        self.chat_title = payload.get("title") or ""
+        self.source_row = None
+        self.settle_note = None
+        self.doctrine = None
+
+
+class BoundedPhaseTest(_MigrateBatchTest):
+    """docs/todo/improvements/tooling/agenthydra-move-chats-resume-never-delivered-and-the-
+    call-times-out.md (2026-09-13): a ONE-chat move_chats batch ran 15+ minutes past its
+    documented 15-25s budget and the MCP call died on a bare transport timeout with NO report
+    at all - no per-chat result, no bypassVerdict, no resume.delivered. The settle and stamp
+    phases (module-level SETTLE_PHASE_TIMEOUT_SECS / STAMP_PHASE_TIMEOUT_SECS, `_run_bounded`)
+    are the fix: a phase that blows its budget is ABANDONED rather than awaited forever, and
+    the chat it belongs to is named in the report instead of the whole run hanging. The
+    resume phase's own bound is pinned separately in test_migrate_batch_resume.py, next to
+    the rest of --resume's contract.
+    """
+
+    def test_run_bounded_returns_true_when_the_phase_finishes_inside_its_budget(self):
+        called = []
+        assert migrate_batch._run_bounded("t", 5.0, lambda: called.append(1)) is True
+        assert called == [1]
+
+    def test_run_bounded_gives_up_waiting_once_the_budget_is_spent_not_the_fns_own_pace(self):
+        release = threading.Event()
+
+        def slow():
+            release.wait(2.0)
+
+        started = time.time()
+        assert migrate_batch._run_bounded("t", 0.05, slow) is False
+        elapsed = time.time() - started
+        assert elapsed < 1.0, f"must give up at the BUDGET ({elapsed:.2f}s took too long)"
+        release.set()  # let the daemon thread finish before the process moves on
+
+    def test_run_bounded_reraises_a_failure_that_happened_inside_the_budget(self):
+        def boom():
+            raise ValueError("the phase itself failed")
+
+        with self.assertRaises(ValueError) as ctx:
+            migrate_batch._run_bounded("t", 5.0, boom)
+        assert "the phase itself failed" in str(ctx.exception)
+
+    def test_mark_settle_timeout_names_only_the_chats_still_unsettled(self):
+        done = migrate_batch._Item("done")
+        done.landing = _BoundedStubLanding(_payload("done", True))
+        done.landing.source_row = "settled"
+        stuck = migrate_batch._Item("stuck")
+        stuck.landing = _BoundedStubLanding(_payload("stuck", True))
+        migrate_batch._mark_settle_timeout([done, stuck], budget=42.0)
+        assert done.errors == []
+        assert len(stuck.errors) == 1
+        assert "settle phase timed out after 42s" in stuck.errors[0]
+        assert "do not re-move it" in stuck.errors[0]
+
+    def test_mark_stamp_timeout_names_only_the_chats_still_unadjudicated(self):
+        done = migrate_batch._Item("done")
+        done.landing = _BoundedStubLanding(_payload("done", True))
+        done.landing.doctrine = {"verdict": "bypassPermissions"}
+        stuck = migrate_batch._Item("stuck")
+        stuck.landing = _BoundedStubLanding(_payload("stuck", True, sessionId="sid-stuck"))
+        migrate_batch._mark_stamp_timeout([done, stuck], budget=77.0)
+        assert done.errors == []
+        assert len(stuck.errors) == 1
+        assert "stamp phase timed out after 77s" in stuck.errors[0]
+        assert "sid-stuck" in stuck.errors[0], "the remedy command must name the stuck chat"
+
+    def test_run_phases_reports_a_settle_phase_that_blows_its_budget_without_blocking(self):
+        self.patch(migrate_batch, "SETTLE_PHASE_TIMEOUT_SECS", 0.02)
+        self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        self.patch(migrate_chat, "watch_bypass_many", lambda paths, **k: {})
+        self.patch(migrate_chat, "phase_stamp", lambda land, watched=None: None)
+        self.patch(migrate_chat, "landed_meta_path", lambda land: "")
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                  lambda instance, extra_titles=None, **k: {
+                      "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+
+        release = threading.Event()
+
+        def slow_settle(land):
+            release.wait(2.0)
+            land.source_row = "settled"
+
+        self.patch(migrate_chat, "phase_settle", slow_settle)
+
+        item = migrate_batch._Item("one")
+        item.landing = _BoundedStubLanding(_payload("one", True))
+        started = time.time()
+        migrate_batch._run_phases([item])
+        elapsed = time.time() - started
+        release.set()
+        assert elapsed < 1.0, f"must give up at the budget, not the settle's own pace ({elapsed:.2f}s)"
+        assert any("settle phase timed out" in e for e in item.errors)
+        assert item.payload["ok"] is False
+        assert item.payload["landed"] is True, "still landed - never re-report as unmoved"
+        assert "settle phase timed out" in item.payload["report"]
+        assert any("settle phase timed out" in u for u in item.payload["unfinished"])
+
+    def test_run_phases_reports_a_stamp_phase_that_blows_its_budget_without_blocking(self):
+        self.patch(migrate_batch, "STAMP_PHASE_TIMEOUT_SECS", 0.02)
+        # stamp_budget also adds migrate_chat.BYPASS_WATCH_SECS (the shared watch's own real
+        # 8s floor) - pin that to 0 too, or this test would have to wait past 8s to prove
+        # anything and would be exactly the slow, flaky test this fix exists to avoid needing.
+        self.patch(migrate_chat, "BYPASS_WATCH_SECS", 0.0)
+        self.patch(migrate_chat, "landing_payload", lambda land: dict(land.payload))
+        self.patch(migrate_chat, "phase_settle",
+                  lambda land: setattr(land, "source_row", "settled"))
+        self.patch(migrate_chat, "landed_meta_path", lambda land: "")
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                  lambda instance, extra_titles=None, **k: {
+                      "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+
+        release = threading.Event()
+
+        def slow_watch(paths, **k):
+            release.wait(2.0)
+            return {}
+
+        self.patch(migrate_chat, "watch_bypass_many", slow_watch)
+        # phase_stamp itself never even runs - the shared watch it waits on first is what
+        # blows the budget - so it is left at the module's real implementation on purpose.
+
+        item = migrate_batch._Item("one")
+        item.landing = _BoundedStubLanding(_payload("one", True))
+        started = time.time()
+        migrate_batch._run_phases([item])
+        elapsed = time.time() - started
+        release.set()
+        assert elapsed < 1.0, f"must give up at the budget, not the watch's own pace ({elapsed:.2f}s)"
+        assert any("stamp phase timed out" in e for e in item.errors)
+        assert item.payload["ok"] is False
+        assert item.payload["landed"] is True, "still landed - never re-report as unmoved"
+        assert "stamp phase timed out" in item.payload["report"]
+
+
+class NamingPassVerdictTest(_MigrateBatchTest):
+    """THE FALSE GREEN THAT COST TWO CHATS THEIR NAMES (found 2026-09-13, in the wild).
+
+    A 4-chat drain reported `4/4 landed` with every chat `ok: true`, and two of them had landed
+    NAMELESS. name_pass returns `remaining: None` for "the pass never ran" - no store found, or
+    another lane already holds the instance lock, which it asks for with wait_secs=0 - and the
+    batch's test was `if got.get("needsJudgment") or got.get("remaining")`. None is falsy, so
+    "never ran" was read as "clean". name_chats.main() had always drawn the distinction in so
+    many words ("this is NOT 'nothing nameless' - exit 1, not a false 0"); this path never did.
+
+    It does not stop at a name. A nameless chat renders as a generic row, several land
+    identical, and every actuator that takes a -Title refuses to guess between them - so the
+    bypass stamp failed on the same two chats, and the `disk-only` remedy the move itself
+    printed failed for the same reason. One silent None, four broken outcomes.
+    """
+
+    def _live(self, title: str = "Real name", instance: str = "target") -> list:
+        item = migrate_batch._Item(title)
+        item.landing = _BoundedStubLanding(_payload(title, True, to=instance))
+        return [item]
+
+    def _no_readback(self) -> None:
+        # The read-back is exercised on its own below; here the pass verdict is the subject.
+        self.patch(migrate_chat, "landed_meta_path", lambda land: "")
+
+    def _screen(self, rows) -> None:
+        """What the app is rendering. None = unreadable, which is never read as a miss - and
+        which is also what keeps every DISK-subject test in this class off the real actuator."""
+        import name_chats
+        self.patch(name_chats, "rendered_titles", lambda instance, list_runner=None: rows)
+
+    def setUp(self):  # noqa: D102 - the base class does the real work
+        super().setUp()
+        self._screen(None)
+
+    def test_a_landing_the_app_does_not_render_by_name_is_reported(self):
+        """⛔ THE SECOND FALSE GREEN (found live 2026-09-15). Disk said 'Android gameplay
+        harness'; the sidebar said 'Untitled', because the importer's title is a hint a RUNNING
+        app erases. Disk-only read-back passed, the batch printed OK, and the permission picker
+        had nothing to aim at - `bypass: disk-only` on three of four chats."""
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                       "unrendered": [], "why": ""})
+        self._screen(["more options Untitled", "more options Something else"])
+        with self.tmp_meta({"title": "Real name"}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1, "a landing the app renders generically must be reported"
+        assert "NOT rendering it as 'Real name'" in live[0].errors[0]
+
+    def test_a_landing_the_app_renders_by_name_is_not_reported(self):
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                       "unrendered": [], "why": ""})
+        self._screen(["more options Real name"])
+        with self.tmp_meta({"title": "Real name"}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert live[0].errors == []
+
+    def test_the_pass_is_told_what_this_batch_landed(self):
+        """`require` is the whole fix: without it the pass asks the disk, which is exactly the
+        surface that lies right after an import."""
+        import name_chats
+        seen = {}
+
+        def spy(instance, extra_titles=None, **k):
+            seen.update(k)
+            return {"named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                    "unrendered": [], "why": ""}
+
+        self.patch(name_chats, "name_pass", spy)
+        self._no_readback()
+        migrate_batch._name_landings(self._live())
+        assert "Real name" in (seen.get("require") or {}).values(), \
+            "the batch must hand the pass the titles it just landed"
+
+    def test_an_unrendered_report_from_the_pass_is_not_read_as_clean(self):
+        import name_chats
+        self._no_readback()
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [],
+                       "unrendered": ["Real name"], "why": "1 required title(s) not rendered"})
+        live = self._live()
+        migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1
+        assert "not rendered under their real name" in live[0].errors[0]
+
+    def test_a_pass_that_never_ran_is_reported_not_read_as_clean(self):
+        import name_chats
+        self._no_readback()
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": None,
+                       "why": "another lane is already driving 'target'"})
+        live = self._live()
+        migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1, "a pass that never ran must not pass silently"
+        assert "NEVER RAN" in live[0].errors[0]
+        assert "another lane" in live[0].errors[0], "the pass's own reason must survive"
+
+    def test_a_pass_that_never_ran_is_retried_before_it_is_called_a_failure(self):
+        import name_chats
+        self._no_readback()
+        self.patch(migrate_batch, "NAMING_RETRY_WAIT_SECS", 0.0)
+        calls = []
+
+        def flaky(instance, extra_titles=None, **k):
+            calls.append(instance)
+            if len(calls) < 2:  # the lock is usually transient
+                return {"named": [], "needsJudgment": [], "flakes": [], "remaining": None,
+                        "why": "locked"}
+            return {"named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""}
+
+        self.patch(name_chats, "name_pass", flaky)
+        live = self._live()
+        migrate_batch._name_landings(live)
+        assert len(calls) == 2, f"must retry a never-ran pass, called {len(calls)}x"
+        assert live[0].errors == [], "a retry that succeeded is not a failure"
+
+    def test_a_pass_that_really_ran_and_found_nothing_stays_silent(self):
+        import name_chats
+        self._no_readback()
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+        live = self._live()
+        migrate_batch._name_landings(live)
+        assert live[0].errors == []
+
+    def test_a_landing_still_nameless_on_disk_is_reported_whatever_the_pass_believed(self):
+        """The verdict that does not trust the pass. The running app can re-save a title away
+        AFTER the pass verified it (`titleDurable: false`), so the record is read back."""
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+        with self.tmp_meta({"title": None}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1, "a nameless landing must be reported by read-back"
+        assert "landed NAMELESS" in live[0].errors[0]
+        assert "Real name" in live[0].errors[0], "the remedy must carry the intended title"
+
+    def test_the_app_s_own_generic_fallback_counts_as_nameless(self):
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+        # This is the literal name the app rendered for both broken chats.
+        with self.tmp_meta({"title": "General coding session"}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert len(live[0].errors) == 1
+        assert "landed NAMELESS" in live[0].errors[0]
+
+    def test_a_properly_named_landing_is_not_reported(self):
+        import name_chats
+        self.patch(name_chats, "name_pass",
+                   lambda instance, extra_titles=None, **k: {
+                       "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
+        with self.tmp_meta({"title": "Michael todo burndown"}) as path:
+            self.patch(migrate_chat, "landed_meta_path", lambda land: path)
+            live = self._live()
+            migrate_batch._name_landings(live)
+        assert live[0].errors == []
+
+    @contextlib.contextmanager
+    def tmp_meta(self, meta: dict):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "local_x.json"
+            p.write_text(json.dumps(meta), encoding="utf-8")
+            yield str(p)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,9 @@ import {
   instanceForSessionLabel,
   labelDisagreesWithAccount,
   loginChanged,
+  NAME_DISPLAY_MAX,
+  nameOverflowTitle,
+  shortDisplayName,
 } from '../src/lib/instance-appearance'
 
 /** A CMAccount is 12 fields and these functions read exactly two — build from a base so each test
@@ -120,6 +123,17 @@ describe('displayName', () => {
     expect(name).toBe('6claude')
   })
 
+  test('the account NAME wins over its email handle — the profile-name-over-handle case', () => {
+    // Owner directive 2026-09-11: the Name column should read the person's name, not the email
+    // fragment. The handle still lives in the Account column, so this loses nothing.
+    const name = displayName({
+      name: 'pap3r rotate2',
+      label: null,
+      account: account({ name: 'kestrel', email: 't.mercer@example.com' }),
+    })
+    expect(name).toBe('kestrel')
+  })
+
   test('the folder name is the last resort, not the first choice', () => {
     expect(displayName({ name: 'work', label: null, account: null })).toBe('work')
     // Logged out is still "no identity" — fall through to the folder rather than showing a label
@@ -144,6 +158,70 @@ describe('displayName', () => {
     const shared = account({ name: '4claude', email: '4claude@lunarwerx.com' })
     expect(displayName({ name: 'a', label: null, account: shared })).toBe('4claude')
     expect(displayName({ name: 'b', label: null, account: shared })).toBe('4claude')
+  })
+})
+
+// The cut only ever happens on the way to the screen: the Name column is 176px wide in all three
+// instance tables, and since it started naming rows after the ACCOUNT behind them, an Anthropic
+// profile name or a long email handle routinely does not fit. Everything else — sorting, filtering,
+// the move submenu, the dialogs — keeps using the full displayName(), so these two functions are
+// deliberately pure and know nothing about instances.
+describe('shortDisplayName', () => {
+  test('a name that fits is returned untouched — no ellipsis, no padding', () => {
+    expect(shortDisplayName('kestrel')).toBe('kestrel')
+    expect(shortDisplayName('  kestrel  ')).toBe('kestrel')
+  })
+
+  test('the boundary: exactly the budget stays whole, one past it is cut', () => {
+    const exact = 'x'.repeat(NAME_DISPLAY_MAX)
+    expect(shortDisplayName(exact)).toBe(exact)
+    const over = 'x'.repeat(NAME_DISPLAY_MAX + 1)
+    expect(shortDisplayName(over)).toBe(`${'x'.repeat(NAME_DISPLAY_MAX - 1)}…`)
+  })
+
+  test('the ellipsis counts toward the budget, so the result never exceeds it', () => {
+    const cut = shortDisplayName('Alexandrina Featherstonehaugh', 12)
+    expect(Array.from(cut).length).toBe(12)
+    expect(cut).toBe('Alexandrina…')
+  })
+
+  test('a cut landing after a space does not read as " …"', () => {
+    expect(shortDisplayName('Michael Griswold-Thorne', 9)).toBe('Michael…')
+  })
+
+  test('counted in code points, so a surrogate pair is never split in half', () => {
+    // A rocket is ONE code point and TWO UTF-16 units. Slicing by .length would cut three of them
+    // as "six units", leaving half a pair on the row that the browser draws as a replacement
+    // glyph. Array.from counts each as one, so the budget means what it says.
+    const rocket = '\u{1F680}'
+    const cut = shortDisplayName(`${rocket.repeat(6)}tail`, 4)
+    expect(cut).toBe(`${rocket.repeat(3)}…`)
+    // Every unit that survived still pairs up — no lone high/low surrogate anywhere.
+    expect(cut.codePointAt(0)).toBe(0x1f680)
+    expect(Array.from(cut).length).toBe(4)
+  })
+
+  test('a nonsense budget returns an ellipsis, never a longer string than asked for', () => {
+    expect(shortDisplayName('anything', 0)).toBe('…')
+    expect(shortDisplayName('anything', -5)).toBe('…')
+    // An empty name has nothing to elide, so it stays empty rather than becoming a lone ellipsis.
+    expect(shortDisplayName('   ', 0)).toBe('')
+  })
+})
+
+describe('nameOverflowTitle', () => {
+  test('undefined when nothing was cut — a whole name must not sprout a hover repeating itself', () => {
+    expect(nameOverflowTitle('kestrel')).toBeUndefined()
+  })
+
+  test('the FULL name when the cell elided it, trimmed the same way the cell trims', () => {
+    const long = '  Alexandrina Featherstonehaugh  '
+    expect(nameOverflowTitle(long)).toBe('Alexandrina Featherstonehaugh')
+  })
+
+  test('it agrees with shortDisplayName about the same budget', () => {
+    expect(nameOverflowTitle('Michael Griswold', 9)).toBe('Michael Griswold')
+    expect(nameOverflowTitle('Michael Griswold', 40)).toBeUndefined()
   })
 })
 
@@ -353,13 +431,27 @@ describe('accountDisplayName', () => {
 })
 
 describe('displayName follows the login', () => {
-  test('a profile called something else does not rename the row', () => {
-    // The regression this pins: the row used to read "Toby" for the 6claude login.
+  test('the profile name is what names the row (owner directive 2026-09-11)', () => {
+    // Reversed on purpose: the owner wants the Name column to read the person's name — "kestrel",
+    // "Toby" — not the email fragment. The handle did not vanish; it moved to the Account column
+    // (accountDisplayName, still handle-first, above) and the row tooltip. So this shows the name
+    // and loses no identifying information.
     expect(
       displayName({
         name: '6claude',
         label: null,
         account: account({ name: 'Toby', email: '6claude@lunarwerx.com' }),
+      }),
+    ).toBe('Toby')
+  })
+
+  test('with no profile name, the email handle still names the row', () => {
+    // accountName falls back to the handle, so a nameless account is unchanged from before.
+    expect(
+      displayName({
+        name: 'claude',
+        label: null,
+        account: account({ email: '6claude@lunarwerx.com' }),
       }),
     ).toBe('6claude')
   })

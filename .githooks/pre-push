@@ -1,0 +1,36 @@
+#!/bin/sh
+# AgentHydra pre-push gate. Enabled by `git config core.hooksPath .githooks` (package.json's
+# prepare does this).
+#
+# 1. Refuse a push to a PUBLIC remote unless AGENTHYDRA_PUSH_PUBLIC=1 is set for this command.
+#    The heading is printed either way; the rule is announce-then-do.
+# 2. Refuse a release tag (v*.*.*) while docs/todo/TODO.md has an open section. No override.
+#
+# Both rules and their history live in .githooks/check-public-push.mjs. Git hands this hook the
+# remote's name and URL as arguments and the refs on stdin; both are passed straight through.
+#
+# FAIL CLOSED. The kit-sync and Biome pre-commit guards step aside when their runtime is missing,
+# because a commit is local and cheap to redo. A push is neither, so with no node and no bun on
+# PATH this refuses rather than guessing, and says how to proceed.
+remote="$1"
+url="$2"
+
+if command -v node >/dev/null 2>&1; then
+  runner=node
+elif command -v bun >/dev/null 2>&1; then
+  runner=bun
+else
+  echo "" >&2
+  echo "# WARNING: THIS REPOSITORY IS **PUBLIC**" >&2
+  echo "" >&2
+  echo "  pre-push: neither node nor bun is on PATH, so the public-push guard cannot look up" >&2
+  echo "  whether $remote ($url) is public. Treated as public and refused." >&2
+  if [ "$AGENTHYDRA_PUSH_PUBLIC" = "1" ]; then
+    echo "  AGENTHYDRA_PUSH_PUBLIC=1 is set for this command: announced, proceeding." >&2
+    exit 0
+  fi
+  echo "  Install node, or if the owner has decided this push goes out: AGENTHYDRA_PUSH_PUBLIC=1 git push ..." >&2
+  exit 1
+fi
+
+"$runner" .githooks/check-public-push.mjs "$remote" "$url" || exit 1

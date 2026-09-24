@@ -246,6 +246,19 @@ def _notification(task_id: str, ts: str) -> dict:
                                              f"<status>completed</status>\n</task-notification>"}]}}
 
 
+def _task_output(task_id: str, ts: str) -> dict:
+    """An assistant turn that COLLECTS a background job with TaskOutput(block: true).
+
+    This is the shape that writes no <task-notification> at all: the output comes back inline
+    to this very call, so a scan that only watches for notifications sees the job as
+    outstanding forever.
+    """
+    return {"type": "assistant", "timestamp": ts,
+            "message": {"content": [{"type": "tool_use", "name": "TaskOutput",
+                                     "input": {"task_id": task_id, "block": True,
+                                               "timeout": 420000}}]}}
+
+
 LAUNCH = "Command running in background with ID: {id}. Output is being written to: C:\\x\\{id}.output. You will be notified when it completes."
 MOVED = "Command did not complete within its 120s timeout and was moved to the background (ID: {id}). Output is being written to: C:\\x\\{id}.output."
 WORKFLOW = "Workflow launched in background. Task ID: {id}\nSummary: rank things"
@@ -292,6 +305,52 @@ class BackgroundWorkTest(unittest.TestCase):
     def test_a_finished_agents_id_is_not_a_launch(self):
         _write_transcript(self.path, [_tool_result(AGENT_DONE.format(id="a0178ab05b4bf4940"), "2026-09-05T01:10:00Z")])
         self.assertEqual(self.bg()["outstanding"], [])
+
+    def test_a_job_collected_with_taskoutput_is_reported_back(self):
+        """The 2026-09-18 Stackspire refusal: harvested inline, so never notified.
+
+        A chat that collects its own jobs with `TaskOutput({task_id, block: true})` produces no
+        <task-notification> ever. Before this, `notified` stayed at 0, `outstanding` never
+        drained, the quiet window stayed pinned at 300s, and the chat could not be migrated at
+        all - three attempts, all refused, while it worked productively all night.
+        """
+        _write_transcript(self.path, [
+            _tool_result(LAUNCH.format(id="b22w9pp2v"), "2026-09-05T01:10:00Z"),
+            _task_output("b22w9pp2v", "2026-09-05T01:14:00Z"),
+        ])
+        got = self.bg()
+        self.assertEqual(got["outstanding"], [])
+        self.assertEqual((got["launched"], got["notified"]), (1, 1))
+        self.assertEqual(got["why"], "no background job outstanding")
+
+    def test_taskoutput_only_clears_the_id_it_names(self):
+        """Harvesting one job must not vouch for its siblings."""
+        _write_transcript(self.path, [
+            _tool_result(LAUNCH.format(id="bharvested"), "2026-09-05T01:10:00Z"),
+            _tool_result(LAUNCH.format(id="bstillrunning"), "2026-09-05T01:10:01Z"),
+            _task_output("bharvested", "2026-09-05T01:14:00Z"),
+        ])
+        self.assertEqual(self.bg()["outstanding"], ["bstillrunning"])
+
+    def test_the_two_end_signals_agree_rather_than_double_count(self):
+        """A job both notified AND harvested is one job, reported once."""
+        _write_transcript(self.path, [
+            _tool_result(LAUNCH.format(id="bboth"), "2026-09-05T01:10:00Z"),
+            _notification("bboth", "2026-09-05T01:12:00Z"),
+            _task_output("bboth", "2026-09-05T01:13:00Z"),
+        ])
+        got = self.bg()
+        self.assertEqual(got["outstanding"], [])
+        self.assertEqual((got["launched"], got["notified"]), (1, 1))
+
+    def test_a_taskoutput_with_no_task_id_is_not_an_end_signal(self):
+        """A malformed call must not silently clear the whole queue."""
+        ev = _task_output("ignored", "2026-09-05T01:14:00Z")
+        ev["message"]["content"][0]["input"] = {"block": True}
+        _write_transcript(self.path, [
+            _tool_result(LAUNCH.format(id="b0439z7jg"), "2026-09-05T01:10:00Z"), ev,
+        ])
+        self.assertEqual(self.bg()["outstanding"], ["b0439z7jg"])
 
     def test_a_job_of_a_previous_engine_is_dead_not_outstanding(self):
         _write_transcript(self.path, [_tool_result(LAUNCH.format(id="bold"), "2026-09-05T00:30:00Z"),

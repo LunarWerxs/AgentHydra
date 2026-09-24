@@ -17,7 +17,7 @@ function snap(patch: Partial<UsageSnapshot> = {}): UsageSnapshot {
     session: { pct: 0, resets: '' },
     weekAll: { pct: 10, resets: 'Sep 9, 3:00am' },
     weekModel: null,
-    capturedAt: '2026-09-06T12:00:00.000Z',
+    capturedAt: '2024-09-06T12:00:00.000Z',
     ...patch,
   }
 }
@@ -32,7 +32,7 @@ describe('windowRunning', () => {
     expect(windowRunning(snap({ session: { pct: 12, resets: 'Sep 6, 5:00pm' } }))).toBe(true)
     expect(
       windowRunning(
-        snap({ session: { pct: 12, resets: '', resetsAt: '2026-09-06T17:00:00.000Z' } }),
+        snap({ session: { pct: 12, resets: '', resetsAt: '2024-09-06T17:00:00.000Z' } }),
       ),
     ).toBe(true)
   })

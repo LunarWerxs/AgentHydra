@@ -1,13 +1,40 @@
 # misc/Manage-DesktopChat.ps1 - manage a RUNNING Claude desktop app's chats (archive,
-# unarchive, rename, list) WITHOUT stealing
-# focus and WITHOUT moving the mouse, by invoking the app's own sidebar controls through the
-# Windows UI Automation patterns they expose.
+# unarchive, rename, list) WITHOUT moving the mouse, by invoking the app's own sidebar
+# controls through the Windows UI Automation patterns they expose.
+#
+# ⛔ THIS IS THE ONE COPY. There were two until 2026-09-17: this one, which the DAEMON runs
+# (ui-archive.ts -> misc-assets.ts CHAT_MANAGER_FILE, and therefore every archive_desktop_chat
+# / chat_rename call), and orchestrator/scripts/actuator/manage_desktop_chat.ps1, which the
+# Python toolbox ran (archive_chat, rename_chat, delete_chat, migrate_chat, audit_twins,
+# name_chats). They were forked from one file on 2026-09-01 and then DRIFTED, and the drift was
+# not cosmetic - the daemon's copy was the older one, so every archive the MCP performed ran
+# WITHOUT: window activation (a minimized app reports "not rendered"), the exact -Instance match
+# and the refusal to act with a blank one (a bare -Instance fanned out over every running
+# account), taking the app's REAL window instead of the first one FindFirst returned, the
+# last-moment re-aim that refuses when the sidebar re-orders under an open menu, InPrimaryPane
+# (the open chat renders a second kebab, so every open chat read as AMBIGUOUS), folding the
+# sidebar groups back the way they were found, and the locale-independent CSS-palette fallback
+# (a non-English app refused every archive). All of that is here now, plus the two flags only
+# the old copy had (-AllowDuplicateRows, -All) and its rename stale-element retry. The toolbox
+# resolves THIS path. ⛔ Do not fork it again: the compiled build embeds misc\ by name
+# (RUNTIME_MISC_FILES), so a second copy anywhere is a copy the daemon cannot run.
+#
+# ⛔ IT DOES ACTIVATE THE WINDOW, AND THAT IS NOT NEGOTIABLE (corrected 2026-09-07). This
+# header used to promise "zero focus theft", and every -Action run now briefly restores and
+# activates the target window before reading its tree, handing the previous foreground window
+# back on the way out. The claim was not free: a MINIMIZED window renders nothing, this script
+# reads only what is rendered, and so it failed with two confident and completely wrong
+# diagnoses - "collapsed group or virtualized out" from the kebab hunt, and an EMPTY
+# "menu opened but no 'Archive' item matched a known label. Menu showed: ." from the archive
+# path. Neither names the real cause and both send the reader after an imaginary
+# virtualization or locale bug. -List is still passive and never activates anything.
+# If you are here to restore the no-focus promise: it costs correctness. Do not.
 #
 # WHY THIS EXISTS (owner directive, Michael, 2026-08-29): a running Electron app holds its chat
 # list in memory, so a flag flipped on DISK stays on screen until the app restarts - and
 # restarting is not an option. The app's OWN archive action is the one channel that is both
 # immediate AND durable (the app makes the write, so its later memory->disk re-saves cannot undo
-# it). This drives that action with zero focus theft.
+# it). This drives that action through the app's own controls (see the header on activation).
 #
 # THE MECHANISM, measured 2026-08-29 (do not "simplify" back to cursor clicks):
 #   - The row's kebab (localized: "More options for <Title>" / "Weitere Optionen fur <Title>")
@@ -16,8 +43,9 @@
 #   - The "Archive" context-menu item exposes InvokePattern. `Invoke()` fires it - focus-free,
 #     and it targets that EXACT element, so unlike a coordinate click it can never land on the
 #     "Delete" item that sits directly beneath Archive. No point-verification needed.
-#   - Neither call moves the mouse or calls SetForegroundWindow. (A cursor-and-foreground variant
-#     was the first cut; this replaced it - it is both safer and genuinely focus-free.)
+#   - Neither call moves the mouse. (A cursor-CLICK variant was the first cut; invoking the
+#     exact element replaced it and is strictly safer - it cannot land on the neighbouring
+#     Delete item. The window IS activated first, see the header.)
 #   - Chromium/Electron builds its accessibility tree LAZILY. A UIA query alone sees only bare
 #     panes; the MSAA poke (AccessibleObjectFromWindow on each Chrome_RenderWidgetHostHWND) is
 #     what switches the full tree on. Without it every Find returns nothing.
@@ -39,17 +67,37 @@
 # USAGE
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "Exact chat title"
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Instance 5claude
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -All        # every row with that name
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Unarchive   # (only reaches
 #                                              a currently-rendered archived row)
 #   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Rename -NewTitle "Real name"
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action Delete   # row menu Delete +
+#                                              the app's own confirm button, both by label
 #   powershell -File misc/Manage-DesktopChat.ps1 -List -Instance 5claude          # rendered rows
+#   powershell -File misc/Manage-DesktopChat.ps1 -Title "..." -Action DumpMenu    # every menu item
+#                            with the properties that do NOT localize; invokes nothing. START HERE
+#                            when an -Action fails on an app whose UI is not in English.
+#
+# LOCALE: menu items are matched by known label FIRST, then by the app's own CSS palette, which
+# does not localize (see $ACTION_LABELS and StructuralMenuItem). ⚠ THAT STRUCTURAL FALLBACK
+# COVERS ARCHIVE AND DELETE ONLY - Delete is the one item carrying the danger palette, and
+# Archive is what remains once Delete is positively excluded. For those two, do NOT "fix" a
+# failure on a non-English app by appending that language to $ACTION_LABELS: it only defers the
+# same break to the next locale, and the structural path already handles them in any language.
+# RENAME and UNARCHIVE have NO structural signature, so for them a label IS the only route and
+# the refusal below asks for one - add it OBSERVED via -Action DumpMenu, never translated.
+# (Narrowed 2026-09-09: this header used to say "do not append a locale" with no carve-out
+# while the code had always required one for Rename, so the two disagreed and the code was
+# right - 'Cambiar nombre' sat in the table for weeks matching nothing; the app says
+# 'Renombrar'. A per-locale table is still the wrong answer wherever shape can do the job:
+# approve_prompt.ps1's RAIL 2 now reads a chat's title off its own row/kebab pair instead.)
 #
 # RENAME (piece 6 of the rebuild, proven live 2026-08-29): the app's own Rename control is the
 # ONE write a running app cannot undo (v1 measured every outside metadata write being re-saved
 # away), so this is how a landed chat's DISPLAYED name is fixed immediately. Mechanics: the
 # Rename menu item Invokes; the inline editor is an Edit named 'Rename' exposing ValuePattern
-# (SetValue is focus-free); the commit is a posted WM_KEYDOWN Enter to the render widget - no
-# global focus, no cursor. After committing, the app re-saves the metadata itself, so disk and
+# (SetValue needs no typing); the commit is a posted WM_KEYDOWN Enter to the render widget -
+# no cursor, and the window is activated first so the key is not dropped. After committing, the app re-saves the metadata itself, so disk and
 # app memory AGREE on the name (verified). -NewTitle must be a real name: generic non-names are
 # refused here with the same patterns chat-title.ts owns (that file is canonical; keep in sync).
 #
@@ -59,11 +107,53 @@
 param(
   [string]$Title,
   [string]$Instance = '',
-  [ValidateSet('Archive', 'Unarchive', 'Rename')][string]$Action = 'Archive',
+  # DELETE (2026-09-04, owner rule: a probe chat must be deleted afterwards, not left in the
+  # account): the row's own Delete item, then the app's own confirm button - both by label.
+  [ValidateSet('Archive', 'Unarchive', 'Rename', 'Delete', 'DumpMenu')][string]$Action = 'Archive',
   [string]$NewTitle = '',
-  [switch]$List
+  # RENAME ONLY: when several rendered rows carry the same title, take the Nth from the top
+  # (1-based). A rename is reversible and lands on a row that wears this very title, so a
+  # position is an acceptable tie-break there - the caller verifies through the dossier which
+  # chat took the name and corrects. NEVER honoured for Archive/Unarchive (a wrong row there
+  # is the one mistake this script exists to make impossible).
+  [int]$Ordinal = 0,
+  [switch]$List,
+  # The CALLER has established on disk that exactly one live chat in this instance carries
+  # $Title, so rows rendering that identical name are one chat drawn twice, not two chats to
+  # choose between. Only then may a duplicate-name ambiguity be acted on. See KebabFor.
+  # ui-archive.ts's uiArchiveChat passes this on every archive, having counted the disk first.
+  [switch]$AllowDuplicateRows,
+  # -All is the OTHER duplicate case, and it is the opposite claim: SEVERAL REAL CHATS share
+  # this title and EVERY one of them is to be actioned (measured 2026-09-17 cleaning up 17
+  # fan-out judge chats, of which three were titled 'Blogitech showcase design critique' and two
+  # 'Critic judge instructions batch b002'). -AllowDuplicateRows would be a lie there - it
+  # asserts one chat drawn twice - so the caller was left to loop outside the tool, which is
+  # exactly the one-off scripting this file exists to stop. Archive only: a rename or an
+  # unarchive of N same-named rows has no single sensible meaning.
+  [switch]$All,
+  # Internal: the recursion depth of an -All sweep, so a pass can archive the next row without
+  # re-deriving the loop. Never passed by a human.
+  [int]$AllPass = 0
 )
 $ErrorActionPreference = 'Stop'
+# ⛔ UTF-8 ON THE WAY OUT, OR A NON-ASCII TITLE COMES BACK AS QUESTION MARKS (2026-09-10).
+# This script's stdout is a PIPE, read by the daemon (Bun) and by the Python toolbox. PowerShell
+# encodes a piped stream with [Console]::OutputEncoding, which defaults to the machine's OEM code
+# page rather than UTF-8 - so a chat titled 'Alcancé mi límite' left this process as
+# 'Alcanc? mi l?mite'. The accents were destroyed HERE, and a literal '?' is perfectly valid
+# UTF-8, so NO reader can detect the loss or recover from it: clilib.decode_console is already
+# UTF-8-first with an OEM fallback and still saw question marks. The visible symptom was a
+# refusal naming a chat that does not exist ("no sidebar row is named 'Alcanc? mi l?mite'"),
+# which reads as a missing chat rather than an encoding fault - and any non-Latin title (CJK,
+# Cyrillic, emoji) degrades to a row of question marks the same way.
+# $OutputEncoding is the mirror of the same setting for anything piped INTO a native exe.
+# Best-effort: a console handle that refuses the assignment must not take down a UIA act, which
+# is what this script is actually for - mojibake is a bad answer, no answer is a worse one.
+try {
+  $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+  [Console]::OutputEncoding = $OutputEncoding
+} catch { }
+
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $src = @'
 using System;using System.Runtime.InteropServices;using System.Collections.Generic;using System.Text;
@@ -72,6 +162,31 @@ public static class Ax{
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int m);
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [In,Out,MarshalAs(UnmanagedType.IUnknown)] ref object p);
   [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool f);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr p);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  // ⛔ A MINIMIZED WINDOW DOES NOT RENDER, AND THIS SCRIPT ONLY EVER READS WHAT IS RENDERED
+  // (measured 2026-09-07). Against an iconic window the kebab hunt reports "not rendered in
+  // any searched running instance (collapsed group or virtualized out - scroll it into view)"
+  // and the archive path reports "menu opened but no 'Archive' item matched a known label.
+  // Menu showed: ." with an EMPTY menu - two confident, specific, WRONG diagnoses that send
+  // the reader after a virtualization or locale problem that is not there. Same root cause as
+  // approve_prompt.ps1's picker; the evidence table lives in that file's header. Restore and
+  // activate before searching, hand the person's window back afterwards.
+  public static bool Foreground(IntPtr h) {
+    if (IsIconic(h)) ShowWindow(h, 9);
+    uint tgt = GetWindowThreadProcessId(h, IntPtr.Zero);
+    uint me = GetCurrentThreadId();
+    if (tgt == me) return SetForegroundWindow(h);
+    AttachThreadInput(me, tgt, true);
+    bool ok = SetForegroundWindow(h);
+    AttachThreadInput(me, tgt, false);
+    return ok;
+  }
   delegate bool EnumFunc(IntPtr h, IntPtr l);
   static List<IntPtr> widgets(IntPtr top){
     var ws = new List<IntPtr>();
@@ -85,23 +200,89 @@ public static class Ax{
       PostMessageW(w, 0x0101, (IntPtr)0x0D, unchecked((IntPtr)(long)0xC01C0001));
     }
   }
-  public static void Wake(IntPtr top){
+  // Returns HOW MANY render widgets were poked. Zero is not "nothing to do", it is the
+  // chicken-and-egg below: the poke is what switches the tree on, and it has nothing to poke.
+  public static int Wake(IntPtr top){
     Guid g = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
     var ws = new List<IntPtr>();
     EnumChildWindows(top, (h,l) => { var sb = new StringBuilder(256); GetClassName(h, sb, 256); if (sb.ToString().Contains("Chrome_RenderWidgetHostHWND")) ws.Add(h); return true; }, IntPtr.Zero);
     foreach (var w in ws) { object a = null; AccessibleObjectFromWindow(w, 0xFFFFFFFC, ref g, ref a); }
+    return ws.Count;
+  }
+  // ⛔ COLD WINDOWS ONLY, AND THAT RESTRICTION IS LOAD-BEARING (measured 2026-09-17). An MSAA
+  // request against the TOP-LEVEL window is what makes Chromium create the legacy a11y HWND
+  // that Wake above needs to find - but it also makes it re-serve the tree, which INVALIDATES
+  // every AutomationElement already held. Calling it on the warm path broke the archive's
+  // last-moment re-aim: the cached kebab's Name came back as '' and the run refused a row that
+  // had not moved at all ("the row under this menu is no longer '<title>' (it reads '')").
+  // So it is only ever called when there is nothing else to poke. (CORRECTED 2026-09-18: that
+  // blank name persisted after this was made cold-only. Its real cause is the app REBUILDING the
+  // kebab on its row's first menu open - measured, see ReAimVerdict - which is why the re-aim now
+  // goes by identity. The cold-only rule stays: a re-served tree still invalidates held elements.)
+  public static void WakeTop(IntPtr top){
+    Guid g = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
+    object a = null;
+    AccessibleObjectFromWindow(top, 0xFFFFFFFC, ref g, ref a);
   }
 }
 '@
 Add-Type -TypeDefinition $src
 
+# Whatever the person was working in, handed back on the way out. Captured once, on the first
+# grab, so a run that activates several times still returns to where it started.
+$script:PriorFg = [IntPtr]::Zero
+function Restore-Foreground {
+  if ($script:PriorFg -ne [IntPtr]::Zero) {
+    [void][Ax]::Foreground($script:PriorFg)
+    $script:PriorFg = [IntPtr]::Zero
+  }
+}
+# Covers every `exit N` path below without wrapping the script in a try/finally.
+[void](Register-EngineEvent PowerShell.Exiting -Action { Restore-Foreground })
+
 $root = [System.Windows.Automation.AutomationElement]::RootElement
 $TREE = [System.Windows.Automation.TreeScope]::Descendants
 $BTN = [System.Windows.Automation.ControlType]::Button
+# 2026-09-06: push ControlType filtering into a PropertyCondition (see MenuItemFor) instead of
+# walking TrueCondition and filtering client-side - same pattern KebabFor already uses for $BTN.
+$MENUITEM = [System.Windows.Automation.ControlType]::MenuItem
 
-function Wake([IntPtr]$hwnd) { [Ax]::Wake($hwnd); Start-Sleep -Milliseconds 800; return [System.Windows.Automation.AutomationElement]::FromHandle($hwnd) }
+# ⛔ A COLD APP HAS NO a11y HWND TO POKE, AND A SINGLE POKE THEN DOES NOTHING AT ALL (measured
+# live 2026-09-17 on a just-launched instance whose sidebar plainly showed one chat). The MSAA
+# poke is aimed at each Chrome_RenderWidgetHostHWND child - but Chromium creates that legacy
+# window LAZILY, on demand, in response to accessibility requests. On a freshly launched app
+# EnumChildWindows finds only 'Intermediate D3D Window', so there is nothing to poke, the tree
+# never switches on, and every Find returns nothing. The visible symptom is the worst kind:
+# -List prints an EMPTY chat list and an -Action exits 3 with "not rendered ... collapsed group
+# or virtualized out", which reads as a missing chat and sends the reader to scroll a sidebar
+# that is already showing the row. Measured on the same window: 0 widgets at launch, 1 after
+# repeated requests. So ask repeatedly, and let the caller SEE that nothing answered.
+$script:LastWakeWidgets = -1
+function Wake([IntPtr]$hwnd) {
+  $n = [Ax]::Wake($hwnd)
+  Start-Sleep -Milliseconds 800
+  # ⛔ ONLY A COLD WINDOW ENTERS THIS LOOP, and a warm one must not: WakeTop re-serves the tree
+  # and invalidates every element already held (see its own comment). A warm window answers
+  # n>0 on the first pass and falls straight through, leaving the warm path exactly the single
+  # poke + 800ms wait it has always been.
+  for ($i = 0; $i -lt 8 -and $n -eq 0; $i++) {
+    [Ax]::WakeTop($hwnd)
+    # The tree read is part of the ask: a UIA descendant query is itself an accessibility
+    # request, and it is the pair (query + MSAA poke) that has been seen to bring the legacy
+    # window into existence. Failures are irrelevant here - this is a nudge, not a read.
+    try { [void][System.Windows.Automation.AutomationElement]::FromHandle($hwnd).FindFirst($TREE, [System.Windows.Automation.Condition]::TrueCondition) } catch { }
+    Start-Sleep -Milliseconds 700
+    $n = [Ax]::Wake($hwnd)
+    Start-Sleep -Milliseconds 300
+  }
+  $script:LastWakeWidgets = $n
+  return [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+}
 function ByName($scope, $name) { $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name); return $scope.FindFirst($TREE, $c) }
 function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch { return $null } }
+# An element's UIA RuntimeId as one string, '' when it cannot be read. This is how two elements are
+# told apart by IDENTITY rather than by name: the Delete confirm diff and the archive re-aim.
+function RuntimeKey($e) { try { return (($e.GetRuntimeId() | ForEach-Object { [string]$_ }) -join '.') } catch { return '' } }
 
 # THE KEBAB IS LOCALIZED (found live 2026-08-30 on a German-locale app: the row menu reads
 # 'Weitere Optionen für <title>', not 'More options for <title>'). Matching the English prefix
@@ -119,14 +300,23 @@ function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch 
 $ACTION_LABELS = @{
   'Archive'   = @('Archive', 'Archivieren', 'Archiver', 'Archivar', 'Archiviare', 'Archiveren')
   'Unarchive' = @('Unarchive', 'Nicht mehr archivieren', 'Désarchiver', 'Desarchivar', 'Dearchiviare', 'Dearchiveren')
-  'Rename'    = @('Rename', 'Umbenennen', 'Renommer', 'Cambiar nombre', 'Rinomina', 'Hernoemen')
+  # 'Renombrar' observed live on a Spanish app 2026-09-09 (menu read: Abrir en | Renombrar | Vista
+  # de transcripcion | Estilo de salida | Bifurcar | Archivar | Eliminar) - 'Cambiar nombre' was a
+  # guess and never matched. Rename is the one action with NO structural fallback, so the LOCALE
+  # note above ("do not append a language") does not reach it: a label is the only route, and the
+  # refusal itself asks for one. Add labels OBSERVED via -Action DumpMenu, never translated ones.
+  'Rename'    = @('Rename', 'Umbenennen', 'Renommer', 'Renombrar', 'Cambiar nombre', 'Rinomina', 'Hernoemen')
+  'Delete'    = @('Delete', 'Löschen', 'Supprimer', 'Eliminar', 'Elimina', 'Verwijderen')
 }
 function MenuItemFor($cond, $action) {
   $wanted = $ACTION_LABELS[$action]
   $seen = @()
+  # 2026-09-06: ControlType filtering pushed into the FindAll condition itself (matches KebabFor's
+  # $BTN PropertyCondition above) instead of walking TrueCondition and discarding non-MenuItems
+  # client-side.
+  $mic = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $MENUITEM)
   foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
-    foreach ($e in $t.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
-      if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.MenuItem') { continue }
+    foreach ($e in $t.FindAll($TREE, $mic)) {
       $n = $e.Current.Name
       if (-not $n) { continue }
       $seen += $n
@@ -136,10 +326,81 @@ function MenuItemFor($cond, $action) {
   return @{ Item = $null; Seen = $seen }
 }
 
+# --- LOCALE-INDEPENDENT FALLBACK (2026-09-08) -------------------------------------------------
+# $ACTION_LABELS only ever covered six languages, so a Portuguese app ("Arquivar" / "Apagar")
+# refused every archive - and the fix is NOT to keep bolting on languages (owner, 2026-09-08:
+# "should be generic, not requiring multilingual labels"). The app's own CSS classes are the
+# generic key: they are its styling hooks, NOT display strings, so they are identical in every
+# locale (the same reasoning InPrimaryPane already relies on).
+#
+# The measured shape of the row kebab menu, dumped from a pt-BR app:
+#   Open in / Pin / Mark unread / Rename / Fork / Move to group / Archive / DELETE
+# Only DELETE carries the danger palette (menu-danger, text-danger, bg-fill-danger); every other
+# item is text-primary. The two submenu items (Open in, Move to group) are the only ones carrying
+# a popup-open class. So Delete is identified POSITIVELY in any language - which removes the exact
+# hazard that made guessing unsafe ("Delete sits next to Archive") - and once it is excluded, every
+# remaining item is non-destructive and Archive is the last of them.
+function MenuEntries($cond) {
+  $out = @()
+  $mic = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $MENUITEM)
+  foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+    foreach ($e in $t.FindAll($TREE, $mic)) {
+      try {
+        if (-not $e.Current.Name) { continue }
+        $out += @{ El = $e; Name = [string]$e.Current.Name; Class = [string]$e.Current.ClassName }
+      } catch { continue }
+    }
+  }
+  return $out
+}
+function IsDangerItem($c) { return ($c -match 'menu-danger|text-danger|bg-fill-danger') }
+function IsSubmenuItem($c) { return ($c -match 'data-\[popup-open\]') }
+
+# Returns @{ Item; Why } or @{ Item = $null }. Only Archive and Delete are resolvable this way:
+# Rename/Unarchive have no structural signature and keep requiring a known label.
+function StructuralMenuItem($cond, $action) {
+  $all = @(MenuEntries $cond)
+  if ($all.Count -eq 0) { return @{ Item = $null } }
+  $danger = @($all | Where-Object { IsDangerItem $_.Class })
+  # EXACTLY ONE danger item is the proof that this menu has the shape described above. Zero means
+  # the palette changed and the exclusion is worthless; more than one means it is ambiguous. Either
+  # way, refuse rather than guess - that is the whole point of this function.
+  if ($danger.Count -ne 1) { return @{ Item = $null } }
+  if ($action -eq 'Delete') {
+    return @{ Item = $danger[0].El; Why = "the only item carrying the danger palette ('" + $danger[0].Name + "')" }
+  }
+  if ($action -eq 'Archive') {
+    $safe = @($all | Where-Object { -not (IsDangerItem $_.Class) -and -not (IsSubmenuItem $_.Class) })
+    if ($safe.Count -lt 1) { return @{ Item = $null } }
+    $pick = $safe[$safe.Count - 1]
+    return @{ Item = $pick.El; Why = ("the last non-destructive, non-submenu item ('" + $pick.Name +
+      "'), with the danger item ('" + $danger[0].Name + "') positively excluded by its CSS palette") }
+  }
+  return @{ Item = $null }
+}
+
 # AMBIGUITY IS A REFUSAL: a suffix match means 'Notes' also matches the row for 'My Notes',
 # and taking the first hit in tree order would archive the WRONG chat (review-confirmed). If
 # several menus end with the title, only an exact-suffix-after-the-phrase match can break the
 # tie; otherwise return $null and let the caller report it not-found rather than guess.
+# Is this element inside the primary pane (the open chat's own header), rather than the
+# sidebar? Walks up the control tree: a 'dframe-pane-primary' class or a 'Primary pane' name
+# on any ancestor says yes; reaching the sidebar (dframe-sidebar / 'Sidebar') or the root
+# says no. Class names are the app's own CSS hooks, so they do not localize.
+function InPrimaryPane($el) {
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $node = $el
+  for ($i = 0; $i -lt 40 -and $node; $i++) {
+    try { $node = $walker.GetParent($node) } catch { return $false }
+    if (-not $node) { return $false }
+    $cls = ''; $nm = ''
+    try { $cls = [string]$node.Current.ClassName; $nm = [string]$node.Current.Name } catch { continue }
+    if ($cls -like '*pane-primary*' -or $nm -eq 'Primary pane') { return $true }
+    if ($cls -like '*sidebar*' -or $nm -eq 'Sidebar') { return $false }
+  }
+  return $false
+}
+
 function KebabFor($scope, $title) {
   $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
   $hits = @()
@@ -147,12 +408,44 @@ function KebabFor($scope, $title) {
     $n = $b.Current.Name
     if ($n -and $n.EndsWith($title) -and (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern))) { $hits += $b }
   }
+  # THE OPEN CHAT HAS TWO KEBABS (live smoke, 2026-09-01): the chat showing in the primary
+  # pane renders a second 'More options for <title>' in its HEADER (Group 'Primary pane',
+  # class dframe-pane-primary) beside the sidebar row's own. Counting both made every chat
+  # that was currently open read as AMBIGUOUS, so the one chat a person (or the doctrine
+  # lane's picker) had just selected could never be archived or renamed through the app -
+  # 4 of 4 archive attempts on the smoke chat. The row menu we want lives in the sidebar
+  # (Group 'Sidebar', class dframe-sidebar); a hit whose ancestors include the primary pane
+  # is the header copy. Drop those first; the duplicate-title refusal below still applies to
+  # what is left.
+  if ($hits.Count -gt 1) {
+    $side = @($hits | Where-Object { -not (InPrimaryPane $_) })
+    if ($side.Count -ge 1) { $hits = $side }
+  }
   if ($hits.Count -le 1) { return $hits | Select-Object -First 1 }
+  if ($Ordinal -ge 1 -and $Action -eq 'Rename') {
+    $exact = @($hits | Where-Object { $_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title } |
+              Sort-Object { $_.Current.BoundingRectangle.Y })
+    if ($Ordinal -le $exact.Count) { return $exact[$Ordinal - 1] }
+    $script:KebabAmbiguity = "AMBIGUOUS: asked for row #$Ordinal of '$title' but only $($exact.Count) rendered"
+    return $null
+  }
   # Prefer the one whose title is preceded by a space (i.e. the whole trailing word matches,
   # not a longer title that merely ends the same way).
   $clean = @($hits | Where-Object { $_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title })
   $others = @($hits | Where-Object { -not ($_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title) })
   if ($clean.Count -eq 1 -and $others.Count -eq 0) { return $clean[0] }
+  # ONE CHAT DRAWN TWICE IS NOT AN AMBIGUITY (measured 2026-09-15 proving the 0.42.0 build: a
+  # chat spawned seconds earlier rendered two kebabs with the IDENTICAL name, and the rename
+  # refused a chat there was never any doubt about; ui-archive.ts has documented the same
+  # double-render since 2026-08). Identical names cannot name two different chats to choose
+  # between - only the DISK can say whether the title is unique, so this acts only when the
+  # caller passed -AllowDuplicateRows, having counted exactly one live chat with it.
+  $distinct = @($hits | ForEach-Object { $_.Current.Name } | Sort-Object -Unique)
+  if ($AllowDuplicateRows -and $distinct.Count -eq 1) { return $hits[0] }
+  # -All: the caller means every one of them, so take them one at a time (the sweep below
+  # re-runs until no row carries the title). This is a DELIBERATE claim about several chats,
+  # not the one-chat-drawn-twice assumption above, which is why it is its own switch.
+  if ($All) { return $hits[0] }
   # THE REFUSAL MESSAGE MUST NOT GO TO THE OUTPUT STREAM. A PowerShell function returns
   # EVERYTHING written to stdout, so a Write-Output here made KebabFor return the two-element
   # array @('AMBIGUOUS: ...', $null). The caller's `if (-not $kebab)` then saw a non-empty
@@ -184,6 +477,146 @@ function RenderedKebabNames($scope) {
   return $out
 }
 
+# --- THE RE-AIM, BY IDENTITY (2026-09-18) --------------------------------------------------------
+# ⛔ THE KEBAB IS REBUILT THE FIRST TIME ITS MENU OPENS, SO A HANDLE TAKEN BEFORE THAT GOES BLANK
+# FOR GOOD. Measured on instance 13 (temp1), two rows, both on the first open of an app session:
+#   'GlimmerAC collector enablement'  kebab ...4.664 -> ...4.1452, its raw-view parent ...4.663 kept
+#   'SageThumbs'                      kebab ...4.693 -> ...4.1662, its raw-view parent ...4.692 kept
+# The old element answers Name = null and every pattern call throws. It is not a transient read
+# failure that a wait could outlast (three spaced reads all came back empty, four runs in a row),
+# and it is not the tree being "re-served" around the same elements: the kebab is a new element
+# with a new RuntimeId. Its wrapper, the row button beside it and the rest of the sidebar keep
+# theirs. Once rebuilt, the kebab keeps its new id through later opens (...4.1452 survived two
+# more rounds), so the rebuild happens once per row per app session - which is exactly the open
+# every real archive does, and why the re-aim refused every archive it ever saw.
+#
+# So the re-aim is by IDENTITY, the row's identity: the kebab's own RuntimeId, or failing that the
+# RuntimeId of the element the rebuilt kebab still hangs off. A NAME is never used to find it. A
+# name-only re-resolve while a menu is open is how you end up aimed at a NEIGHBOURING row, and
+# archiving the wrong chat is the one mistake this guard exists to prevent.
+
+$RAW = [System.Windows.Automation.TreeWalker]::RawViewWalker
+# The raw-view parent's identity: the per-row wrapper the kebab hangs off. The RAW view on purpose -
+# the control view skips these unnamed wrappers and hands back the whole sidebar as the parent,
+# which is shared by every row and so identifies none of them.
+function RowKeyOf($e) { try { $p = $RAW.GetParent($e); if ($p) { return (RuntimeKey $p) } } catch { } ; return '' }
+
+# Every ExpandCollapse button in $scope, as plain records the verdict below can judge. El is kept
+# only so a caller can collapse the one the verdict picked; the verdict never reads it.
+function ExpandableButtons($scope) {
+  $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
+  $out = @()
+  foreach ($b in $scope.FindAll($TREE, $c)) {
+    $p = TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    if (-not $p) { continue }
+    $st = ''; try { $st = [string]$p.Current.ExpandCollapseState } catch { }
+    $nm = ''; try { $nm = [string]$b.Current.Name } catch { }
+    $out += [pscustomobject]@{ Key = (RuntimeKey $b); ParentKey = (RowKeyOf $b); State = $st; Name = $nm; El = $b }
+  }
+  return $out
+}
+
+# Every Menu open in this process right now, with the identities of the items inside it.
+function OpenMenus($cond) {
+  $mc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Menu)
+  $mic = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $MENUITEM)
+  $out = @()
+  foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+    foreach ($mnu in $t.FindAll($TREE, $mc)) {
+      $keys = @()
+      try { foreach ($i in $mnu.FindAll($TREE, $mic)) { $keys += (RuntimeKey $i) } } catch { }
+      $out += [pscustomobject]@{ Key = (RuntimeKey $mnu); ItemKeys = $keys }
+    }
+  }
+  return $out
+}
+
+# THE DECISION, kept free of UI Automation so it can be tested on its own
+# (orchestrator/scripts/tests/test_actuator_reaim_identity.py runs THIS text, not a copy of it).
+# May the menu item about to be invoked act on the row titled $Title? Every rule below is a
+# refusal; only a menu that passes all of them is acted on.
+#   $AimKey / $RowKey  the kebab's RuntimeId and its raw-view parent's, both read BEFORE the menu
+#                      opened. Neither readable = nothing can prove which row the menu belongs to.
+#   $Kebabs            every ExpandCollapse button in the window NOW: Key, ParentKey, State, Name.
+#   $MenusBefore       the Menu ids that were open before this run opened one.
+#   $Menus             every Menu open NOW: Key, ItemKeys.
+#   $ItemKey           the menu item about to be invoked.
+# Retry = $true only where a short wait could change the answer (the tree still settling); a
+# readable wrong answer is final.
+function ReAimVerdict {
+  param(
+    [string]$Title,
+    [string]$AimKey,
+    [string]$RowKey,
+    [object[]]$Kebabs = @(),
+    [string[]]$MenusBefore = @(),
+    [object[]]$Menus = @(),
+    [string]$ItemKey = ''
+  )
+  if (-not $AimKey -and -not $RowKey) {
+    return @{ Ok = $false; Retry = $false; Aimed = ''; Kebab = $null
+      Why = "the row's identity could not be read before its menu opened" }
+  }
+  # IDENTITY ONLY. The same kebab, or the kebab the app rebuilt under the same parent. A kebab
+  # that merely carries the right NAME is not a candidate - that is the neighbour this guards.
+  $mine = @($Kebabs | Where-Object { $_ -and (($AimKey -and $_.Key -eq $AimKey) -or ($RowKey -and $_.ParentKey -eq $RowKey)) })
+  if ($mine.Count -eq 0) {
+    return @{ Ok = $false; Retry = $true; Aimed = ''; Kebab = $null
+      Why = "no kebab carries this row's identity any more (the row left the rendered sidebar, or was rebuilt whole)" }
+  }
+  # The menu belongs to the kebab the app marks Expanded, so this row's must be that one.
+  $open = @($mine | Where-Object { $_.State -eq 'Expanded' })
+  if ($open.Count -eq 0) {
+    return @{ Ok = $false; Retry = $true; Aimed = ''; Kebab = $null
+      Why = "this row's kebab is not the one holding the open menu" }
+  }
+  if ($open.Count -gt 1) {
+    return @{ Ok = $false; Retry = $false; Aimed = ''; Kebab = $null
+      Why = ("" + $open.Count + " expanded kebabs carry this row's identity, so which one owns the menu is unknown") }
+  }
+  $aimed = [string]$open[0].Name
+  if (-not $aimed) {
+    return @{ Ok = $false; Retry = $true; Aimed = ''; Kebab = $open[0]
+      Why = "this row's kebab was found by identity but its name could not be read" }
+  }
+  # The assertion the re-aim always made, now read from the element identity found.
+  if (-not $aimed.EndsWith($Title)) {
+    return @{ Ok = $false; Retry = $false; Aimed = $aimed; Kebab = $open[0]
+      Why = "the row this menu belongs to no longer reads that title - the sidebar moved while the menu opened" }
+  }
+  # And the item must come from the menu THIS run opened. MenuItemFor searches every menu in the
+  # process, so a menu an earlier run left open would otherwise offer ITS row's Archive first.
+  $new = @($Menus | Where-Object { $_ -and $MenusBefore -notcontains $_.Key })
+  if ($new.Count -ne 1) {
+    return @{ Ok = $false; Retry = $false; Aimed = $aimed; Kebab = $open[0]
+      Why = ("" + $new.Count + " new menus are open where exactly one, the row's own, is required - which menu the item came from cannot be proven") }
+  }
+  if (-not $ItemKey -or @($new[0].ItemKeys) -notcontains $ItemKey) {
+    return @{ Ok = $false; Retry = $false; Aimed = $aimed; Kebab = $open[0]
+      Why = "the item about to be invoked is not in the menu this run opened" }
+  }
+  return @{ Ok = $true; Retry = $false; Aimed = $aimed; Kebab = $open[0]; Why = '' }
+}
+
+# Close THIS row's menu. The handle taken before the menu opened cannot do it once the kebab has
+# been rebuilt (its Collapse throws), which is how every refusal of the old name re-aim left its
+# menu standing open. So collapse the Expanded kebab carrying the row's identity, and only that
+# one - never a neighbour's - falling back to the old handle for the kebab that was not rebuilt.
+function CloseRowMenu([IntPtr]$hwnd, [string]$rowKey, [string]$aimKey, $fallback) {
+  $closed = $false
+  try {
+    foreach ($k in (ExpandableButtons ([System.Windows.Automation.AutomationElement]::FromHandle($hwnd)))) {
+      if ($k.State -ne 'Expanded') { continue }
+      if (($aimKey -and $k.Key -eq $aimKey) -or ($rowKey -and $k.ParentKey -eq $rowKey)) {
+        $p = TryPattern $k.El ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+        if ($p) { try { $p.Collapse(); $closed = $true } catch { } }
+      }
+    }
+  } catch { }
+  if (-not $closed -and $fallback) { try { $fallback.Collapse(); $closed = $true } catch { } }
+  return $closed
+}
+
 # Running Claude desktop instances: a main process (no --type=) with --user-data-dir is a
 # managed instance; one WITHOUT the flag is the DEFAULT %APPDATA%\Claude install (piece-10
 # review: the default profile was structurally invisible here, so the most common app - the
@@ -206,14 +639,31 @@ $mains = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
     $dir = if ($m.Success) { $m.Groups[1].Value.Trim() } else { Join-Path $env:APPDATA 'Claude' }
     [pscustomobject]@{ ProcId = $_.ProcessId; Dir = $dir }
   }
+# AIM BY IDENTITY, NEVER POSITION (owner rule, 2026-09-06, after an actuator clicked the project
+# selector in the wrong account's window): twenty profiles exist with near-duplicate leaf names
+# ('pap3r rotate' / 'pap3r rotate2'), so a substring match can select either one. A bare -Instance
+# now matches the profile dir's LEAF folder name EXACTLY (case-insensitive), never '-like *name*'.
+# A path-shaped hint (contains a slash) still matches the dir EXACTLY, as before.
+$allMains = $mains
+# Any action that clicks/types/invokes a chat (everything except a pure -List scan) REQUIRES
+# -Instance - a blank -Instance used to silently fan out across every running account, which is
+# exactly how the wrong window gets clicked. Listing may still omit it (it only reads).
+if (-not $List -and -not $Instance) {
+  Write-Output "FAIL: -Instance is required for -Action $Action (blank -Instance is only allowed with -List)"
+  exit 1
+}
 if ($Instance) {
-  # A path-shaped hint (contains a slash) must match the dir EXACTLY - an unanchored substring
-  # let '...\i1' also match '...\i10' (piece-10 review), and a wrong instance means a wrong
-  # chat archived. Short names keep the convenient substring match for manual use.
   $mains = @($mains | Where-Object {
     if ($Instance -match '[\\/]') { $_.Dir.TrimEnd('\') -eq $Instance.TrimEnd('\') }
-    else { $_.Dir -like "*$Instance*" }
+    else { (Split-Path -Leaf $_.Dir.TrimEnd('\')) -eq $Instance }
   })
+  # ZERO or MORE THAN ONE match is a refusal, never "take the first" - print every candidate dir
+  # so the caller can see exactly what -Instance would need to be.
+  if ($mains.Count -ne 1) {
+    Write-Output "FAIL: -Instance '$Instance' matched $($mains.Count) running instance(s), need exactly 1. Candidates:"
+    foreach ($cand in $allMains) { Write-Output ("  " + $cand.Dir) }
+    exit 1
+  }
 }
 if (-not $mains) { Write-Output "FAIL: no running Claude desktop instance matches '$Instance'"; exit 1 }
 
@@ -229,15 +679,69 @@ if ($Action -eq 'Rename') {
   $NewTitle = $canon
 }
 
+# LEAVE THE SIDEBAR AS IT WAS FOUND (owner, 2026-09-04: "something keeps clicking interface
+# buttons on my Claude desktop, like the repo names or whatever"). Hunting for a row expands the
+# collapsed project groups, and nothing ever folded them back - so every archive, rename and
+# delete that had to look left his sidebar rearranged. Every group THIS run opens is remembered
+# and collapsed again on the way out, whatever the outcome (`exit` runs the finally).
+$script:OpenedGroups = @()
+function RestoreGroups {
+  $n = 0
+  foreach ($ecp in $script:OpenedGroups) { try { $ecp.Collapse(); $n++ } catch { } }
+  $script:OpenedGroups = @()
+  if ($n -gt 0) { Write-Output "collapsed $n sidebar group(s) back the way they were" }
+}
+try {
+# EXACTLY ONE CANDIDATE WINDOW before any action loop runs (2026-09-06 audit): the -Instance
+# gate above already forces this for every non-List action, but the check is repeated here,
+# at the point of entry to the loop that actually clicks/types, as a second, structural
+# guarantee - if more than one running window is in scope, STOP and report every (Dir, Title)
+# rather than acting on the first one found.
+if (-not $List -and $mains.Count -ne 1) {
+  Write-Output "FAIL: $($mains.Count) candidate window(s) in scope for -Action $Action, need exactly 1. Candidates:"
+  foreach ($cand in $mains) { Write-Output ("  " + $cand.Dir) }
+  exit 1
+}
 foreach ($m in $mains) {
   $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$m.ProcId)
-  $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+  # ⛔ THE APP'S REAL WINDOW, NOT THE FIRST ONE (2026-09-17). An Electron process owns several
+  # top-level windows - a hidden helper, a zero-size utility window, the real one - and
+  # FindFirst answered with whichever came first in tree order. Reading a hidden one finds no
+  # rows and reports the chat as "not rendered", which a settle reads as "already settled" and
+  # leaves the twin on screen. Take the biggest window that is actually on screen, and fall
+  # back to first-found only when none of them is (a minimized app: the activation below
+  # restores it, and the row hunt then re-reads the tree).
+  $wins = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond))
+  $win = @($wins | Where-Object {
+      try { $r = $_.Current.BoundingRectangle
+            -not $_.Current.IsOffscreen -and -not $r.IsEmpty -and $r.Width -gt 0 -and $r.Height -gt 0 }
+      catch { $false }
+    } | Sort-Object { try { $_.Current.BoundingRectangle.Width * $_.Current.BoundingRectangle.Height } catch { 0 } } -Descending |
+    Select-Object -First 1)
+  if (-not $win) { $win = $wins | Select-Object -First 1 }
   if (-not $win) { continue }
+  # Restore + activate BEFORE the first tree read (see Ax::Foreground). -List is exempt: it
+  # only reports what happens to be rendered and must never yank a window onto the screen.
+  if (-not $List) {
+    if ($script:PriorFg -eq [IntPtr]::Zero) {
+      $fgNow = [Ax]::GetForegroundWindow()
+      if ($fgNow -ne [IntPtr]$win.Current.NativeWindowHandle) { $script:PriorFg = $fgNow }
+    }
+    [void][Ax]::Foreground([IntPtr]$win.Current.NativeWindowHandle)
+    Start-Sleep -Milliseconds 300
+  }
   $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
 
   if ($List) {
     Write-Output "== $($m.Dir) (pid $($m.ProcId)) rendered chats =="
-    $bc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
+    # ⛔ AN EMPTY LIST HAS TWO CAUSES AND THEY ARE NOTHING ALIKE: no chats are rendered, or
+    # nothing in this window is READABLE (see Wake - a cold app exposes no accessibility tree,
+    # and every reader of this list, ui-archive.ts's listRenderedTitles included, would take the
+    # silence for "the sidebar is empty"). Say which. The marker starts at column 0 on purpose:
+    # parseListOutput takes only the two-space-indented rows, so this can never be read as a title.
+    if ($script:LastWakeWidgets -eq 0) {
+      Write-Output "NOTE: this app exposed NO accessibility tree (zero render widgets after repeated MSAA requests) - the list below is EMPTY BECAUSE NOTHING WAS READABLE, not because the sidebar is empty."
+    }
     foreach ($t in RenderedKebabNames $el) { '  ' + $t }
     continue
   }
@@ -280,7 +784,7 @@ foreach ($m in $mains) {
         $ec = TryPattern $e ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
         if (-not $ec) { continue }
         if ($ec.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Collapsed) { continue }
-        $ec.Expand(); Start-Sleep -Milliseconds 250
+        $ec.Expand(); $script:OpenedGroups += $ec; Start-Sleep -Milliseconds 250
       } catch { continue }
     }
     $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
@@ -292,22 +796,193 @@ foreach ($m in $mains) {
   Write-Output "found '$Title' in $($m.Dir)"
   $ec = TryPattern $kebab ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
   if (-not $ec) { Write-Output 'FAIL: kebab does not expose ExpandCollapse (app UI changed?)'; exit 1 }
-  $ec.Expand()
+  # THE ROW'S IDENTITY, TAKEN BEFORE ITS MENU OPENS - the re-aim below proves the menu belongs to
+  # this row by these two ids and nothing else (see ReAimVerdict). Neither readable means no later
+  # step could prove it, so refuse now, before there is a menu to leave open.
+  $aimKey = RuntimeKey $kebab
+  $rowKey = RowKeyOf $kebab
+  if (-not $aimKey -and -not $rowKey) {
+    Write-Output ("FAIL: the identity of the row '$Title' could not be read, so nothing could prove " +
+      "afterwards which row its menu belongs to; refusing before opening it")
+    exit 1
+  }
+  $hwndWin = [IntPtr]$win.Current.NativeWindowHandle
+  # ⛔ A MENU THIS SCRIPT ALREADY OPENED POISONS EVERY LATER RUN (measured 2026-09-17). Expand()
+  # on an element that is ALREADY expanded throws InvalidOperationException, and under
+  # $ErrorActionPreference='Stop' that ended the run with a bare
+  # "+ FullyQualifiedErrorId : InvalidOperationException" - no chat named, no cause, and it is
+  # what the daemon relayed to its caller. It is reachable in normal use: any refusal after the
+  # menu opens (the re-aim rail, a label miss) can leave the popup up if its Collapse is itself
+  # refused, and then the NEXT archive of that chat dies here rather than on anything real.
+  # Already open is not an error - but it is not proof either (2026-09-18): the re-aim only acts
+  # on a menu THIS run opened, so a menu found standing open is closed and opened again. If it
+  # will not close, the re-aim refuses and says so rather than trusting a menu of unknown origin.
+  $state = try { $ec.Current.ExpandCollapseState } catch { [System.Windows.Automation.ExpandCollapseState]::Collapsed }
+  if ($state -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+    try { $ec.Collapse() } catch { }
+    Start-Sleep -Milliseconds 500
+    $state = try { $ec.Current.ExpandCollapseState } catch { [System.Windows.Automation.ExpandCollapseState]::Collapsed }
+  }
+  $menusBefore = @(OpenMenus $cond | ForEach-Object { $_.Key })
+  if ($state -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+    try {
+      $ec.Expand()
+    } catch {
+      # Re-read rather than trust the pre-read: the menu can open between the two.
+      $now = try { $ec.Current.ExpandCollapseState } catch { $null }
+      if ($now -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+        Write-Output ("FAIL: the row menu for '$Title' would not open - $($_.Exception.Message)")
+        exit 1
+      }
+    }
+  }
+  # ⛔ A FLAT WAIT, ON PURPOSE (measured 2026-09-06). This was briefly a 150ms poll that invoked
+  # the menu item the moment it appeared in the tree - and the rename drill FAILED every time
+  # ("rename editor did not open") while the same chat renamed fine with this flat wait. The
+  # item is observable in the accessibility tree BEFORE the menu is interactive, so "found" is
+  # not "ready"; the adversarial review said exactly this and was right. Do not poll here.
   Start-Sleep -Milliseconds 800
+
+  # ⛔ RE-POKE THE ACCESSIBILITY TREE AFTER THE MENU OPENS - the popup is built LAZILY too
+  # (measured 2026-09-17, on a build whose row menu reads Open in / Pin / Mark as unread /
+  # Rename / Fork / Move to group / Archive / Delete). The Wake before KebabFor materializes
+  # the SIDEBAR; the menu Chromium renders after Expand() is a fresh subtree that no UIA query
+  # can see until MSAA is poked again, so the search below found ZERO MenuItems and the script
+  # reported `menu opened but no 'Archive' item matched a known label. Menu showed: ` with an
+  # EMPTY list - which reads as a locale gap (add a label!) when the labels were never the
+  # problem. An empty Seen list means NOT RENDERED; a non-empty one means a real label gap.
+  [void](Wake ([IntPtr]$win.Current.NativeWindowHandle))
+
+  # DIAGNOSTIC: print every rendered menu item with the properties that do NOT localize, so a
+  # locale-independent selector can be found instead of adding yet another language's labels.
+  # Invokes nothing and always exits.
+  if ($Action -eq 'DumpMenu') {
+    $mic2 = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $MENUITEM)
+    $idx = 0
+    foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+      foreach ($e in $t.FindAll($TREE, $mic2)) {
+        try {
+          $c = $e.Current
+          if (-not $c.Name) { continue }
+          $acc = ''
+          try { $acc = [string]$e.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::AccessKeyProperty) } catch { }
+          $help = ''
+          try { $help = [string]$c.HelpText } catch { }
+          Write-Output ("[$idx] Name='" + $c.Name + "' AutomationId='" + $c.AutomationId +
+            "' ClassName='" + $c.ClassName + "' AccessKey='" + $acc + "' HelpText='" + $help + "'")
+          $idx++
+        } catch { continue }
+      }
+    }
+    if ($idx -eq 0) { Write-Output 'FAIL: menu opened but no MenuItem elements were rendered' }
+    [void](CloseRowMenu $hwndWin $rowKey $aimKey $ec)
+    exit 0
+  }
 
   $found = MenuItemFor $cond $Action
   $item = $found.Item
   if (-not $item) {
-    try { $ec.Collapse() } catch { }
-    Write-Output ("FAIL: menu opened but no '$Action' item matched a known label. Menu showed: " +
+    # No known label - fall back to the locale-independent CSS-palette rule rather than failing
+    # (or, worse, growing $ACTION_LABELS by one more language every time).
+    $struct = StructuralMenuItem $cond $Action
+    if ($struct.Item) {
+      $item = $struct.Item
+      Write-Output ("NOTE: no known label matched for '$Action' in this app's locale (menu showed: " +
+        ($found.Seen -join ' | ') + "); selected " + $struct.Why + ".")
+    }
+  }
+  if (-not $item) {
+    [void](CloseRowMenu $hwndWin $rowKey $aimKey $ec)
+    Write-Output ("FAIL: menu opened but no '$Action' item matched a known label, and the " +
+      "locale-independent CSS-palette fallback could not identify it either. Menu showed: " +
       ($found.Seen -join ' | ') +
-      ". Add this locale's label to `$ACTION_LABELS - refusing rather than guessing by position, because Delete sits next to Archive.")
+      ". Refusing rather than guessing by position, because Delete sits next to Archive.")
     exit 1
   }
   $inv = TryPattern $item ([System.Windows.Automation.InvokePattern]::Pattern)
   if (-not $inv) { Write-Output "FAIL: '$Action' item does not expose Invoke"; exit 1 }
+  # ⛔ RE-AIM AT THE LAST MOMENT, AND SAY WHICH ROW (2026-09-17, after a move ran alongside three
+  # chats going archived that nobody asked for). The kebab was resolved, then a menu was opened
+  # and waited on - and a sidebar re-orders under its own app while a batch lands chat after
+  # chat. So the row this menu belongs to is read back HERE, immediately before the item fires:
+  # a name that no longer ends with the title means the tree moved, and the only safe answer is
+  # to refuse (the caller falls back to the disk flag) rather than archive a neighbour. The name
+  # is printed either way, so the report says what was acted on instead of what was intended.
+  #
+  # ⛔ BY IDENTITY, NEVER BY THE HANDLE'S NAME AND NEVER BY A NAME SEARCH (2026-09-18). This used to
+  # read $kebab.Current.Name - the handle taken before the menu opened - and that handle goes blank
+  # for good on a row's first open, because the app REBUILDS the kebab then (measured; see the
+  # block above ReAimVerdict). So every archive was refused: four runs in a row on instance 13,
+  # with three spaced re-reads each, all empty. The row is now found again by the ids taken before
+  # the menu opened, the title is read from THAT element, and the old name check is still the
+  # assertion. Retries re-run the whole identity proof, never a looser one.
+  $itemKey = RuntimeKey $item
+  $verdict = $null
+  foreach ($waitMs in 0, 600, 900) {
+    if ($waitMs) { Start-Sleep -Milliseconds $waitMs }
+    $verdict = ReAimVerdict -Title $Title -AimKey $aimKey -RowKey $rowKey `
+      -Kebabs @(ExpandableButtons ([System.Windows.Automation.AutomationElement]::FromHandle($hwndWin))) `
+      -MenusBefore $menusBefore -Menus @(OpenMenus $cond) -ItemKey $itemKey
+    if ($verdict.Ok -or -not $verdict.Retry) { break }
+  }
+  if (-not $verdict.Ok) {
+    $closed = CloseRowMenu $hwndWin $rowKey $aimKey $ec
+    $reads = if ($verdict.Aimed) { " (it reads '" + $verdict.Aimed + "')" } else { '' }
+    $left = if ($closed) { '' } else { ', and its menu could not be closed' }
+    Write-Output ("FAIL: could not prove the open menu belongs to the row '$Title'" + $reads + " - " +
+      $verdict.Why + $left + "; refusing to $Action rather than risk a neighbouring row")
+    exit 1
+  }
+  $aimed = $verdict.Aimed
+  if ($verdict.Kebab.Key -ne $aimKey) {
+    Write-Output ("re-aimed by identity: the kebab was rebuilt as its menu opened (" + $aimKey + " -> " +
+      $verdict.Kebab.Key + "), under the same row element " + $rowKey)
+  }
+  Write-Output "acting on row: '$aimed'"
+  # DELETE: the confirm button is identified by DIFFERENCE, never by name alone (review
+  # 2026-09-05: a Button called 'Delete …' can exist anywhere in a rendered conversation, and
+  # a name match across the whole window could Invoke that one). Snapshot every Delete-labelled
+  # Button BEFORE the menu item fires; afterwards only a button that was NOT there before is the
+  # app's confirm. Zero new buttons = no dialog (the row check decides); more than one = refuse.
+  function DeleteButtons($cond) {
+    $out = @()
+    foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+      foreach ($e in $t.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+        try {
+          if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.Button') { continue }
+          $n = ([string]$e.Current.Name).Trim()
+          if (-not $n) { continue }
+          $hit = $false
+          foreach ($lbl in $ACTION_LABELS['Delete']) { if ($n -eq $lbl -or $n.StartsWith($lbl + ' ')) { $hit = $true; break } }
+          if ($hit -and (TryPattern $e ([System.Windows.Automation.InvokePattern]::Pattern))) { $out += $e }
+        } catch { continue }
+      }
+    }
+    return $out
+  }
+  $beforeDelete = @{}
+  if ($Action -eq 'Delete') { foreach ($b in (DeleteButtons $cond)) { $beforeDelete[(RuntimeKey $b)] = $true } }
   $inv.Invoke()
   Start-Sleep -Milliseconds 1200
+
+  if ($Action -eq 'Delete') {
+    $hwndTop = [IntPtr]$win.Current.NativeWindowHandle
+    [Ax]::Wake($hwndTop); Start-Sleep -Milliseconds 700
+    $fresh = @((DeleteButtons $cond) | Where-Object { -not $beforeDelete.ContainsKey((RuntimeKey $_)) })
+    if ($fresh.Count -gt 1) {
+      Write-Output ("FAIL: " + $fresh.Count + " new Delete-labelled buttons appeared after the menu item (" +
+        (($fresh | ForEach-Object { "'" + $_.Current.Name + "'" }) -join ', ') + ") - refusing to guess which is the confirm")
+      exit 1
+    }
+    if ($fresh.Count -eq 1) {
+      $confirm = $fresh[0]
+      (TryPattern $confirm ([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+      Start-Sleep -Milliseconds 1500
+      Write-Output "confirmed the app's own delete dialog ('$($confirm.Current.Name)')"
+    } else {
+      Write-Output 'no confirmation dialog appeared after Delete - reading the row to decide'
+    }
+  }
 
   if ($Action -eq 'Rename') {
     # The inline editor: an Edit named 'Rename' exposing ValuePattern. SetValue is focus-free;
@@ -327,17 +1002,21 @@ foreach ($m in $mains) {
     # ⛔ The Wake above this block is load-bearing: Chromium materialises the editor lazily,
     # and without a fresh MSAA poke after the menu Invoke the element simply is not in the
     # tree yet - which is what made rename look permanently broken on non-English builds.
-    $edit = $null
-    foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
-      foreach ($e in $t.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
-        if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.Edit') { continue }
-        $v = TryPattern $e ([System.Windows.Automation.ValuePattern]::Pattern)
-        if (-not $v -or $v.Current.IsReadOnly) { continue }
-        $held = try { $v.Current.Value } catch { '' }
-        if ($held -eq $Title) { $edit = $e; break }
+    function Find-RenameEditBox {
+      # Factored out so a stale-element write below can re-run exactly this search, never a
+      # hand-kept copy of it.
+      foreach ($t in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
+        foreach ($e in $t.FindAll($TREE, [System.Windows.Automation.Condition]::TrueCondition)) {
+          if ($e.Current.ControlType.ProgrammaticName -ne 'ControlType.Edit') { continue }
+          $v = TryPattern $e ([System.Windows.Automation.ValuePattern]::Pattern)
+          if (-not $v -or $v.Current.IsReadOnly) { continue }
+          $held = try { $v.Current.Value } catch { '' }
+          if ($held -eq $Title) { return $e }
+        }
       }
-      if ($edit) { break }
+      return $null
     }
+    $edit = Find-RenameEditBox
     if (-not $edit) {
       Write-Output "FAIL: rename editor did not open (no writable Edit holding '$Title')"
       exit 1
@@ -346,9 +1025,32 @@ foreach ($m in $mains) {
     if (-not $vp) { Write-Output 'FAIL: rename editor exposes no ValuePattern'; exit 1 }
     # Commit loop: SetValue, verify the editor actually holds the new text, post Enter, check
     # the row; retry up to 3 times (a posted keystroke can race the editor's first paint).
+    # ⛔ A STALE ELEMENT MID-WRITE (2026-09-15): the app can re-render the row while this runs,
+    # which invalidates $edit/$vp and makes SetValue throw ElementNotAvailableException even
+    # though the editor is still open on screen, under a fresh element. Uncaught, that crashed
+    # the whole script ($ErrorActionPreference = 'Stop') and left the chat 'Untitled' with
+    # nothing reported. Catch it, re-acquire the edit box, retry the write ONCE - a second
+    # throw after re-acquiring is a real FAIL, reported, never swallowed into a false OK.
     $renamed = $false
     for ($try = 1; $try -le 3 -and -not $renamed; $try++) {
-      $vp.SetValue($NewTitle)
+      try {
+        $vp.SetValue($NewTitle)
+      } catch {
+        $edit = Find-RenameEditBox
+        if (-not $edit) {
+          Write-Output ("FAIL: rename editor went stale and did not re-render (no writable " +
+            "Edit holding '$Title') - $($_.Exception.Message)")
+          exit 1
+        }
+        $vp = TryPattern $edit ([System.Windows.Automation.ValuePattern]::Pattern)
+        if (-not $vp) { Write-Output 'FAIL: rename editor exposes no ValuePattern after re-acquiring'; exit 1 }
+        try {
+          $vp.SetValue($NewTitle)
+        } catch {
+          Write-Output "FAIL: rename editor write failed again after re-acquiring - $($_.Exception.Message)"
+          exit 1
+        }
+      }
       Start-Sleep -Milliseconds 500
       $held = try { $vp.Current.Value } catch { '' }
       if ($held -ne $NewTitle) { Start-Sleep -Milliseconds 500; continue }
@@ -358,16 +1060,49 @@ foreach ($m in $mains) {
       $renamed = [bool](KebabFor $el $NewTitle)
     }
     if (-not $renamed) { Write-Output 'RENAME INVOKED but the row does not render the new name - report this'; exit 2 }
-    Write-Output "Rename done: '$Title' -> '$NewTitle' (focus-free; committed through the app, so disk and app memory agree)"
+    Write-Output "Rename done: '$Title' -> '$NewTitle' (committed through the app, so disk and app memory agree)"
     exit 0
   }
 
   $el = Wake ([IntPtr]$win.Current.NativeWindowHandle)
   $still = [bool](KebabFor $el $Title)
-  if ($Action -eq 'Archive' -and $still) { Write-Output 'INVOKED but row still present - report this, do not blind-retry'; exit 2 }
-  Write-Output "$Action done for '$Title' (focus-free: no SetForegroundWindow, no cursor)"
+  if (($Action -eq 'Archive' -or $Action -eq 'Delete') -and $still -and -not $All) { Write-Output 'INVOKED but row still present - report this, do not blind-retry'; exit 2 }
+  Write-Output "$Action done for '$Title' (driven through the app's own controls, not synthetic clicks)"
+
+  # -All SWEEP: one pass archived one row; if another row still carries this title, do it again.
+  # Re-invoking this same script (rather than looping in place) keeps the single-action path the
+  # ONLY path that opens a menu and invokes an item - one code path to trust, one to maintain -
+  # and each pass re-reads the tree from scratch, which is what a virtualized sidebar needs
+  # anyway. The cap is a runaway guard: 25 same-named rows in one sidebar is already absurd.
+  if ($All -and $Action -eq 'Archive' -and $still) {
+    if ($AllPass -ge 25) { Write-Output "STOPPED: -All hit its 25-pass cap with rows still named '$Title'"; exit 2 }
+    $next = & powershell -NoProfile -File $PSCommandPath -Instance $Instance -Title $Title -Action Archive -All -AllPass ($AllPass + 1)
+    $code = $LASTEXITCODE
+    $next | ForEach-Object { Write-Output $_ }
+    exit $code
+  }
   exit 0
 }
+} finally { RestoreGroups }
 if ($List) { exit 0 }
-Write-Output "FAIL: '$Title' not rendered in any searched running instance (collapsed group or virtualized out - scroll it into view, then retry)"
+# Name what was searched, so "not rendered" can be told from "read the wrong window" without a
+# second run (2026-09-17, the same fault the permission picker's refusal now names).
+$searched = ($mains | ForEach-Object {
+  $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$_.ProcId)
+  $n = @([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $c)).Count
+  "$($_.Dir) (pid $($_.ProcId), $n top-level window(s))"
+}) -join '; '
+# ⛔ AN EMPTY ACCESSIBILITY TREE IS NOT A MISSING CHAT, AND SAYING SO SENDS THE READER THE WRONG
+# WAY (2026-09-17, see Wake). When the last wake found ZERO render widgets, nothing in that
+# window was readable at all, so "collapsed group or virtualized out" is a guess about a sidebar
+# nobody managed to look at. Name the real state instead - it is the difference between "scroll
+# the row into view" and "that app has not built its accessibility tree yet".
+if ($script:LastWakeWidgets -eq 0) {
+  Write-Output ("FAIL: '$Title' could not be looked for - the app exposed NO accessibility tree " +
+    "(zero Chrome_RenderWidgetHostHWND windows after repeated MSAA requests), so no row of any " +
+    "name was readable. This is a cold or non-responding app, NOT a missing chat. Searched: $searched")
+  exit 3
+}
+Write-Output ("FAIL: '$Title' not rendered in any searched running instance (collapsed group or " +
+  "virtualized out - scroll it into view, then retry). Searched: $searched")
 exit 3

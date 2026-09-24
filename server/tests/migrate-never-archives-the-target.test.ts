@@ -13,10 +13,11 @@
 // that behaviour rests on: an excluded profile is genuinely untouched, and the failure rollback
 // restores only what this call flipped.
 
-import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isInsideDir } from '../src/path-key'
 import {
   archiveDesktopChat,
   archiveRootsForMove,
@@ -27,8 +28,17 @@ import {
 const notRunning = async () => false
 const SID = 'sess-move-target'
 
+const SHARED_ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-move-'))
+afterAll(() => rmSync(SHARED_ROOT, { recursive: true, force: true }))
+let scratchSeq = 0
+function scratchProfile(): string {
+  const dir = join(SHARED_ROOT, `p${scratchSeq++}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
 function profileHolding(sessionId: string, archived: boolean): string {
-  const profile = mkdtempSync(join(tmpdir(), 'agenthydra-move-'))
+  const profile = scratchProfile()
   const store = join(profile, 'claude-code-sessions', 'org-1', 'user-1')
   mkdirSync(store, { recursive: true })
   writeFileSync(
@@ -100,6 +110,21 @@ test('a failed landing restores only the rows this move flipped', async () => {
   expect(isArchived(stranger, SID)).toBe(true)
 })
 
+test('a profile-scoped lookup never accepts a SIBLING profile whose name shares a prefix', () => {
+  // findChatMetaPath used to accept the cached index hit on `hit.path.startsWith(instanceDir)`.
+  // Twenty profiles here carry near-duplicate leaf names, so a lookup scoped to 'pap3r rotate'
+  // accepted 'pap3r rotate2''s file - and archive/stamp/rename act on the path they are handed.
+  const base = join(SHARED_ROOT, 'accounts')
+  const rotate = join(base, 'pap3r rotate')
+  const rotate2 = join(base, 'pap3r rotate2')
+  const theirs = join(rotate2, 'claude-code-sessions', 'org-1', 'user-1', 'local_x.json')
+  expect(isInsideDir(theirs, rotate)).toBe(false)
+  expect(isInsideDir(theirs, rotate2)).toBe(true)
+  expect(isInsideDir(join(rotate, 'x.json').replace(/\\/g, '/'), rotate)).toBe(true)
+  expect(isInsideDir(rotate, rotate)).toBe(true)
+  expect(isInsideDir(theirs, '')).toBe(false)
+})
+
 test('desktopProfileRoots lists real profile dirs, so the route can filter one out', () => {
   const roots = desktopProfileRoots()
   expect(Array.isArray(roots)).toBe(true)
@@ -117,7 +142,7 @@ test('desktopProfileRoots lists real profile dirs, so the route can filter one o
 test('desktopChatCarriers names every profile holding the session, so an unscoped archive can refuse', () => {
   const source = profileHolding(SID, false)
   const target = profileHolding(SID, false)
-  const stranger = mkdtempSync(join(tmpdir(), 'agenthydra-move-')) // no store at all
+  const stranger = scratchProfile() // no store at all
 
   const carriers = desktopChatCarriers(SID, [source, target, stranger])
   expect(carriers.sort()).toEqual([source, target].sort())

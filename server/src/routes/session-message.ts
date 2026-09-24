@@ -1,9 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { APP_ROOT } from '../config'
 import { app } from '../http-app'
 import { findTranscriptById } from '../live-registry'
+import { DELIVERY_ACTUATOR_FILE, resolveMiscAsset } from '../misc-assets'
 import { samePathKey } from '../path-key'
 import { jsonBody } from '../route-helpers'
 import { desktopHomeFor, liveSessionEntry } from '../session-launch'
@@ -88,6 +88,24 @@ app.post('/api/sessions/:id/message', async (c) => {
           detail: `peer channel did not confirm (${peer.reason})`,
         },
         422,
+      )
+    // PEER_ONLY - THE CALLER'S MID-TURN RAIL, HONOURED HERE BECAUSE HERE IS WHERE THE CHANNEL
+    // IS CHOSEN (2026-09-10). The composer fallback below TYPES, and typing into a chat whose
+    // turn is in flight is the one thing the courier's rail 4 forbids. A caller that knows the
+    // turn is in flight sets peer_only, and then "no pipe" is a refusal, never a downgrade to
+    // the route that would interrupt. Without this the courier could only obey rail 4 by
+    // refusing every live chat up front - which is exactly the bug it was fixed out of.
+    if (body.peer_only === true)
+      return c.json(
+        {
+          ok: false,
+          route: 'peer',
+          delivered: false,
+          error: 'peer_only: no peer pipe for this session, and its turn is in flight',
+          detail:
+            'the composer is the only route left and it types - refusing to interrupt a live turn. Retry when the chat is idle.',
+        },
+        409,
       )
     // 'not-live' => no pipe (dormant/crashed): fall through to the composer, which boots it.
   }
@@ -174,13 +192,24 @@ app.post('/api/sessions/:id/message', async (c) => {
     )
 
   const { spawnSync } = await import('node:child_process')
-  // APP_ROOT, never process.cwd(): the daemon's working directory is wherever it was
-  // started from (a daemon launched in server/ looked for server/misc/ and every delivery
-  // failed with 'delivery actuator missing'), and APP_ROOT is also what makes this resolve
-  // beside the executable in a compiled bundle.
-  const actuator = join(APP_ROOT, 'misc', 'Deliver-DesktopChat.ps1')
-  if (!existsSync(actuator))
-    return c.json({ ok: false, error: `delivery actuator missing at ${actuator}` }, 500)
+  // ⛔ TWO WAYS THIS PATH HAS BEEN WRONG, so it is resolved in one place now and never joined
+  // here. It was process.cwd() once: a daemon started in server/ looked for server/misc/ and
+  // every delivery failed. It was join(APP_ROOT, 'misc', ...) after that, which is right for a
+  // checkout and wrong for a COMPILED build, where APP_ROOT is the directory of the exe and the
+  // build had never put misc\ beside it - so every delivery on every compiled install failed
+  // with 'delivery actuator missing', by BOTH routes, since the peer channel is refused here
+  // too. resolveMiscAsset prefers a real misc\ and otherwise writes the embedded copy out of
+  // the binary. See server/src/misc-assets.ts.
+  const resolved = await resolveMiscAsset(DELIVERY_ACTUATOR_FILE)
+  const actuator = resolved.path
+  if (!actuator)
+    return c.json(
+      {
+        ok: false,
+        error: `delivery actuator unavailable (${resolved.reason}): ${resolved.error ?? ''}`,
+      },
+      500,
+    )
   const type = () =>
     spawnSync(
       'powershell',

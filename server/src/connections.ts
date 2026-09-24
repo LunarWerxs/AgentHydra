@@ -4,7 +4,7 @@
 // AgentHydra is a single-user local daemon, so the daemon IS the BFF: it runs the
 // OIDC login (Authorization Code + PKCE, public client — no secret), holds the
 // owner's refresh token server-side, mints access tokens, and calls the Connections
-// settings-sync store (studio.connections.icu/v1/app-data/{clientId}). The browser
+// settings-sync store (studio.connectionsapi.com/v1/app-data/{clientId}). The browser
 // never holds a token.
 //
 // Mirrors DevWebUI's server/src/connections.ts (the family-standard shape) adapted to
@@ -44,7 +44,7 @@ import type { SyncStatus } from './types'
  *  is namespaced to itself. Self-registered once via @cnct/connect's registerApp() (RFC 7591
  *  dynamic client registration — no console needed); safe to embed (public client). */
 const OAUTH = {
-  issuer: 'https://accounts.connections.icu',
+  issuer: 'https://accounts.connectionsapi.com',
   clientId: '9ea648d3125f59743f7e1f651108bb42',
   scopes: ['openid', 'profile', 'email'],
 }

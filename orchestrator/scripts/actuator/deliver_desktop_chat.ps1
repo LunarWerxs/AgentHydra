@@ -52,6 +52,24 @@ param(
   [switch]$SearchByContent
 )
 $ErrorActionPreference = 'Stop'
+# ⛔ UTF-8 ON THE WAY OUT, OR A NON-ASCII TITLE COMES BACK AS QUESTION MARKS (2026-09-10).
+# This script's stdout is a PIPE, read by the daemon (Bun) and by the Python toolbox. PowerShell
+# encodes a piped stream with [Console]::OutputEncoding, which defaults to the machine's OEM code
+# page rather than UTF-8 - so a chat titled 'Alcancé mi límite' left this process as
+# 'Alcanc? mi l?mite'. The accents were destroyed HERE, and a literal '?' is perfectly valid
+# UTF-8, so NO reader can detect the loss or recover from it: clilib.decode_console is already
+# UTF-8-first with an OEM fallback and still saw question marks. The visible symptom was a
+# refusal naming a chat that does not exist ("no sidebar row is named 'Alcanc? mi l?mite'"),
+# which reads as a missing chat rather than an encoding fault - and any non-Latin title (CJK,
+# Cyrillic, emoji) degrades to a row of question marks the same way.
+# $OutputEncoding is the mirror of the same setting for anything piped INTO a native exe.
+# Best-effort: a console handle that refuses the assignment must not take down a UIA act, which
+# is what this script is actually for - mojibake is a bad answer, no answer is a worse one.
+try {
+  $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+  [Console]::OutputEncoding = $OutputEncoding
+} catch { }
+
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $src = @'
 using System;using System.Runtime.InteropServices;using System.Collections.Generic;using System.Text;

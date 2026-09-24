@@ -11,6 +11,7 @@ import {
   collectChats,
   lineageIdsOf,
   listChats,
+  liveLineage,
 } from '../src/chat-dossier'
 
 function fixtureRoot(): { dir: string; label: string } {
@@ -94,6 +95,36 @@ describe('chat-dossier', () => {
   })
 })
 
+describe('liveLineage', () => {
+  const chats = collectChats([fixtureRoot()])
+
+  test('an engine running under the CURRENT id carries every id its chat ever had', () => {
+    // ⛔ THE HOLE THIS CLOSES (2026-09-17). The chat rolled from prior-id-a to current-id, so
+    // an old transcript row still sits under prior-id-a. Its engine registers as current-id,
+    // and a liveness read keyed on that id alone would call the prior-id-a row "not live" -
+    // the one verdict that lets the orchestrator act on a chat with a writer.
+    const got = liveLineage(['current-id'], chats)
+    expect(got.get('current-id')?.sort()).toEqual([
+      'chat-one',
+      'current-id',
+      'prior-id-a',
+      'prior-id-b',
+    ])
+  })
+
+  test('an engine registered under a ROLLED-AWAY id is joined the same way', () => {
+    expect(liveLineage(['prior-id-b'], chats).get('prior-id-b')).toContain('current-id')
+  })
+
+  test('an engine no chat claims still answers to its own id, and nothing else leaks in', () => {
+    const got = liveLineage(['stray-engine', 'other-id'], chats)
+    expect(got.get('stray-engine')).toEqual(['stray-engine'])
+    // chat-two's lineage is its own: the rolling chat's ids must not bleed into it.
+    expect(got.get('other-id')?.sort()).toEqual(['chat-two', 'other-id'])
+    expect(got.size).toBe(2)
+  })
+})
+
 describe('listChats', () => {
   const root = fixtureRoot()
   // `done` reads the marks table by default; a fixture must never touch this machine's real DB.
@@ -114,7 +145,7 @@ describe('listChats', () => {
     const included = listChats({ archived: 'include' }, opts)
     const only = listChats({ archived: 'only' }, opts)
     for (const got of [hidden, included, only])
-      expect(got.counts).toEqual({ all: 2, unarchived: 1, archived: 1, live: 0 })
+      expect(got.counts).toEqual({ all: 2, unarchived: 1, archived: 1, live: 0, staleLogin: 0 })
     expect(included.rows.length).toBe(2)
     expect(only.rows.map((r) => r.title)).toEqual(['Rolling thread'])
   })

@@ -21,17 +21,32 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from lib import hydralib
+from lib import archivewatchlib, hydralib
+
+# ⛔ A STUBBED DAEMON MEANS A STUBBED MACHINE (2026-09-17). The move scripts' collateral watch
+# (lib/archivewatchlib) reads every chat store on this machine before and after a move - the
+# REAL default app's included, whatever the stub's fleet says. A test must never read the
+# owner's stores, and a chat he archives while the suite runs would read as collateral and turn
+# a clean test red. So while any stub daemon is up, the watch answers "no snapshot", which is
+# never a claim either way. The archivewatchlib tests call the real function directly.
+REAL_SNAPSHOT = archivewatchlib.snapshot
+_OPEN = [0]
 
 
 class StubDaemon:
     def __init__(self):
+        _OPEN[0] += 1
+        archivewatchlib.snapshot = lambda *a, **k: None
         # path (without query) -> response body (dict/list) OR (status, body) tuple.
         # A callable value is invoked with (method, path, query, body) per request - use it
         # to change answers between calls (e.g. archived flips true after the POST).
         self.routes: dict[str, object] = {}
         self.posts: list[tuple[str, dict]] = []  # (path, body) of every POST received
         self.gets: list[tuple[str, str]] = []  # (path, query) of every GET received
+        # When set, every HTTP answer carries x-agenthydra-side-run: <store>, the way a daemon with
+        # a relocated store answers (server/src/side-run.ts). Wire-only: the in-process path has
+        # no headers, so a test of the announcement must pop INPROC[self.url] first.
+        self.side_run: str | None = None
 
         stub = self
 
@@ -47,6 +62,8 @@ class StubDaemon:
                 status, data = stub.dispatch(method, self.path, raw)
                 self.send_response(status)
                 self.send_header("content-type", "application/json")
+                if stub.side_run:
+                    self.send_header("x-agenthydra-side-run", stub.side_run)
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -91,6 +108,9 @@ class StubDaemon:
         hydralib.INPROC.pop(self.url, None)
         self._server.shutdown()
         self._server.server_close()
+        _OPEN[0] = max(0, _OPEN[0] - 1)
+        if _OPEN[0] == 0:
+            archivewatchlib.snapshot = REAL_SNAPSHOT
 
 
 def dossier_query(query_string: str) -> str:

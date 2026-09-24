@@ -15,7 +15,9 @@
 
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
+import { ensureClaudeNativeProfileConfig } from '../claude-native-settings'
 import { linkCliInstanceToDesktop, listCliInstances } from './cli-instances'
+import { deleteInstanceLaunch } from './instance-launches'
 import { deleteInstanceMeta } from './instance-meta'
 import { isDefaultClaudeDir, openInstance } from './instances'
 import { instancesRoot, isPathInside, normalizePath } from './paths'
@@ -249,8 +251,19 @@ export async function createInstance(
 
   // Start blank: a name reused after a prior instance's folder vanished out-of-band (Explorer
   // delete, or a swallowed deleteInstanceMeta write) could otherwise resurrect the old
-  // label/icon/color, since UI metadata is keyed by dir and survives the folder.
+  // label/icon/color, since UI metadata is keyed by dir and survives the folder. The same goes
+  // for the old folder's launch history: a new account was never launched.
   deleteInstanceMeta(newDir)
+  deleteInstanceLaunch(newDir)
+  // A new account starts on native control (2026-09-20), so the settings panel shows it from
+  // the moment it exists, not only after its first Open.
+  if (process.platform === 'win32') {
+    try {
+      ensureClaudeNativeProfileConfig(newDir)
+    } catch {
+      // openInstance re-tries on every Open; a settings hiccup must not fail the create.
+    }
+  }
 
   let launched = false
   if (options.launch) {
@@ -420,8 +433,9 @@ export async function removeInstance(
     }
   }
 
-  // Drop any UI metadata (label/icon/color) so the meta file doesn't accrete orphan entries.
+  // Drop any UI metadata (label/icon/color) and launch history so neither file accretes orphans.
   deleteInstanceMeta(normDir)
+  deleteInstanceLaunch(normDir)
 
   // Clear the link on any CLI instance associated with this desktop dir. Left alone, a linked CLI
   // instance would become a ghost: still "linked" (so CliInstancesSection's unlinkedCliInstances

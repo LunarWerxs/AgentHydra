@@ -14,12 +14,27 @@
 // Nothing here throws for expected failure conditions (missing dirs, no processes found, spawn
 // failures, permission errors); every public function returns a status-carrying result instead.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { existsSync, readdirSync, statSync } from 'node:fs'
+import { basename } from 'node:path'
+import {
+  assertClaudeInspectorPortAvailable,
+  prepareClaudeNativeLaunch,
+} from '../claude-native-launch'
+import {
+  beginNativeLaunchRegistryGuard,
+  type NativeLaunchRegistryResult,
+} from '../claude-native-launch-registry'
+import { captureNativeLaunchLogCursor, waitForNativeLaunchReady } from '../claude-native-ready'
+import {
+  ensureClaudeNativeProfileConfig,
+  getClaudeNativeProfileConfig,
+} from '../claude-native-settings'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { detectDesktopInstall } from './desktop-install'
+import { recordInstanceLaunches } from './instance-launches'
 import { readInstanceMetaMap } from './instance-meta'
 import { instanceNumbers, instanceRef } from './instance-numbers'
+import { readLoginUuid } from './login-state'
 import {
   currentPlatform,
   defaultClaudeDir,
@@ -34,8 +49,18 @@ import {
   invalidateClaudeProcessCache,
   type ListClaudeProcessesOptions,
   listClaudeProcesses,
+  scanClaudeProcesses,
 } from './process'
+import { awaitExitBounded, spawnCaptured } from './process.ts'
 import type { CMActionResult, CMInstance } from './shared'
+
+/** `taskkill` signals and exits; it does not wait for the target to die. A run that has not
+ *  returned in ten seconds is wedged, and the caller's next step (a forced kill, a re-scan) is
+ *  strictly better than waiting on it forever. */
+const TASKKILL_TIMEOUT_MS = 10_000
+
+/** A window-focus poke is instant or the desktop is not answering. */
+const FOCUS_TIMEOUT_MS = 15_000
 
 // ----------------------------------------------------------------------------
 // Discovery
@@ -105,59 +130,7 @@ function dirSizeBytes(dir: string): number | undefined {
   }
 }
 
-/**
- * Which account an instance is signed into right now: `<dir>/config.json`'s `lastKnownAccountUuid`
- * (null when signed out, unreadable, or malformed).
- *
- * This is the ONLY part of account identity cheap enough to ship with every list response — the
- * rest needs a safeStorage decrypt and a profile call (core/accounts.ts). It exists so the UI can
- * notice that an instance was re-logged into a DIFFERENT account and re-resolve, instead of
- * showing the identity it resolved once forever.
- *
- * Deliberately un-memoized: these files run 3–9 KB, so re-reading one per instance per poll tick
- * is far cheaper than the staleness a stat-keyed cache would risk (an account switch rewrites
- * config.json to the SAME size, since one uuid is exactly as long as another). Identity only —
- * never reads or returns a token. Never throws.
- */
-export function readLoginUuid(instanceDir: string): string | null {
-  return readLoginState(instanceDir).uuid
-}
-
-/**
- * ⛔ 'SIGNED OUT' AND 'I COULD NOT READ THE PROFILE' ARE DIFFERENT PROBLEMS, and `readLoginUuid`
- * answers null to both. That single boolean is what the fleet reports, so a config.json that a
- * crash left half-written is announced to the owner as "instance #N is signed out - sign it in",
- * sending him to fix a login that was never broken while the real fault (a damaged profile) goes
- * unnamed. The uuid is unchanged for every existing caller; this just keeps the reason.
- *
- * `no-config` is separated from `unreadable` on purpose too: a directory with no config.json yet
- * is a NEW instance that has never been signed in, which is ordinary, while a config.json that
- * exists and will not parse is damage.
- */
-export type LoginState =
-  | { uuid: string; reason: 'signed-in' }
-  | { uuid: null; reason: 'signed-out' | 'no-config' | 'unreadable' }
-
-export function readLoginState(instanceDir: string): LoginState {
-  if (!instanceDir?.trim()) return { uuid: null, reason: 'unreadable' }
-  let raw: string
-  try {
-    raw = readFileSync(join(instanceDir, 'config.json'), 'utf8')
-  } catch (err) {
-    // Nothing there yet vs. something there we cannot read - only the second one is damage.
-    const missing = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
-    return { uuid: null, reason: missing ? 'no-config' : 'unreadable' }
-  }
-  if (!raw?.trim()) return { uuid: null, reason: 'unreadable' }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    return typeof parsed.lastKnownAccountUuid === 'string'
-      ? { uuid: parsed.lastKnownAccountUuid, reason: 'signed-in' }
-      : { uuid: null, reason: 'signed-out' }
-  } catch {
-    return { uuid: null, reason: 'unreadable' }
-  }
-}
+export { type LoginState, readLoginState, readLoginUuid } from './login-state'
 
 export interface ListInstancesOptions {
   /** Attach account identity (slow path: decrypt + one network call per instance). */
@@ -224,6 +197,15 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
   // One read of the presentation-metadata file (label/icon/color), keyed by normalized dir.
   const metaMap = readInstanceMetaMap()
 
+  // When each profile was last started on this PC. Every running main process is folded in with
+  // its OWN start time before the read, so an instance opened outside AgentHydra (Start menu,
+  // taskbar, Claude's shortcut) counts the same as one opened from here. Writes only on change.
+  const launches = recordInstanceLaunches(
+    [...runningByDir.entries()]
+      .map(([dir, proc]) => ({ dir, at: proc.startTime ? Date.parse(proc.startTime) : Number.NaN }))
+      .filter((launch) => Number.isFinite(launch.at)),
+  )
+
   // …and one read of the number registry for the WHOLE fleet, which also assigns a number to any
   // instance seen for the first time. Bulk rather than per-row: this list runs on a refresh timer.
   const numbers = instanceNumbers([...known.values()].map((m) => instanceRef('desktop', m.dir)))
@@ -237,6 +219,7 @@ export async function listInstances(options: ListInstancesOptions = {}): Promise
         memoryByDir,
         metaMap,
         numbers,
+        launches,
       }),
     )
   }
@@ -288,9 +271,10 @@ async function buildInstanceRow(
     memoryByDir: Map<string, number>
     metaMap: ReturnType<typeof readInstanceMetaMap>
     numbers: Map<string, number>
+    launches: Record<string, number>
   },
 ): Promise<CMInstance> {
-  const { options, running, memoryByDir, metaMap, numbers } = ctx
+  const { options, running, memoryByDir, metaMap, numbers, launches } = ctx
   let account: CMInstance['account'] = null
   if (options.includeAccount && options.resolveAccount) {
     try {
@@ -311,6 +295,7 @@ async function buildInstanceRow(
     isRunning: Boolean(running),
     pid: running?.pid ?? null,
     startTime: running?.startTime ?? null,
+    lastLaunchedAt: launches[meta.dir] ? new Date(launches[meta.dir]).toISOString() : null,
     sizeBytes,
     memoryBytes,
     account,
@@ -368,14 +353,70 @@ export function buildInstanceLaunch(
  * that returns an "already running" success result (focusing the existing window
  * is left to the shell layer (out of scope for this app's browser+tray shell).
  */
+const nativeInstanceOpens = new Map<string, Promise<CMActionResult>>()
+// Packaged Electron startup rewrites per-user protocol/browser registrations. Serialize managed
+// startups so one profile cannot snapshot another profile's temporary registration as its baseline.
+let nativeInstanceOpenQueue: Promise<void> = Promise.resolve()
+
 export async function openInstance(dir: string): Promise<CMActionResult> {
   const normDir = normalizePath(dir)
+  let nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>
+  try {
+    // Every desktop profile runs native control unless a person opted it out (2026-09-20).
+    // Scoped to AgentHydra's own profiles; the machine's default Claude login is never touched.
+    nativeConfig =
+      (currentPlatform() === 'win32' && isPathInside(instancesRoot(), normDir)
+        ? ensureClaudeNativeProfileConfig(normDir)
+        : null) ?? getClaudeNativeProfileConfig(normDir)
+  } catch (error) {
+    return {
+      ok: false,
+      action: 'open',
+      dir: normDir,
+      message: `Invalid native launch configuration: ${error instanceof Error ? error.message : String(error)}`,
+      data: {},
+    }
+  }
+  if (!nativeConfig?.launchDebugger) return openConfiguredInstance(normDir, nativeConfig)
+  const pending = nativeInstanceOpens.get(normDir)
+  if (pending) return pending
+  const operation = nativeInstanceOpenQueue.then(() =>
+    openConfiguredInstance(normDir, nativeConfig),
+  )
+  nativeInstanceOpenQueue = operation.then(
+    () => undefined,
+    () => undefined,
+  )
+  nativeInstanceOpens.set(normDir, operation)
+  try {
+    return await operation
+  } finally {
+    if (nativeInstanceOpens.get(normDir) === operation) nativeInstanceOpens.delete(normDir)
+  }
+}
 
+/**
+ * Is this profile's app already up? Returns the "already running" success result when it is,
+ * the native-config failure result when the freshness check itself failed on a managed profile
+ * (the caller cannot decide), and `undefined` when nothing is running.
+ *
+ * Split out of openConfiguredInstance so its freshness scan + its two-shaped failure path do not
+ * nest inside the launch dispatch below. Behaviour is unchanged.
+ */
+async function probeRunningInstance(
+  normDir: string,
+  nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
+): Promise<CMActionResult | undefined> {
   try {
     // fresh: this decides whether to LAUNCH. A cached snapshot a poll tick old could miss an
     // instance that just started (→ a second copy on the same profile) or still show one the
     // user just quit (→ a click that silently does nothing).
-    const procs = await listClaudeProcesses({ fresh: true })
+    let procs: CMProcessInfo[]
+    if (nativeConfig?.launchDebugger) {
+      const scan = await scanClaudeProcesses({ fresh: true })
+      if (!scan.ok) throw Error('Could not verify that the native Claude profile is closed')
+      procs = scan.processes
+    } else procs = await listClaudeProcesses({ fresh: true })
     const running = procs.find((p) => p.dir && normalizePath(p.dir) === normDir)
     if (running) {
       return {
@@ -386,73 +427,263 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
         data: { pid: running.pid },
       }
     }
-  } catch {
+  } catch (error) {
+    if (nativeConfig?.launchDebugger) {
+      return {
+        ok: false,
+        action: 'open',
+        dir: normDir,
+        message: error instanceof Error ? error.message : String(error),
+        data: {},
+      }
+    }
     // Best-effort; if we can't determine running state, still attempt the launch
     // rather than silently failing here.
   }
+  return undefined
+}
 
-  let binary: string | null = null
+/** The launch binary, or null when it could not be resolved (the caller still answers a result). */
+async function resolveLaunchBinaryOrNull(): Promise<string | null> {
   try {
-    binary = await resolveLaunchBinary()
+    return await resolveLaunchBinary()
   } catch {
-    binary = null
+    return null
   }
+}
 
-  if (!binary) {
-    // Say WHY when we can: on Windows the usual culprit is the MSIX build (not launchable
-    // with --user-data-dir, see core/desktop-install.ts), so the failure toast becomes
-    // actionable instead of a dead end.
-    let message = 'No Claude launch binary could be resolved.'
-    try {
-      const install = await detectDesktopInstall()
-      if (install.platform === 'win32') {
-        message = install.msixDetected
-          ? 'Only the MSIX (Windows Apps) build of Claude Desktop is installed; it cannot be launched with an isolated profile. Install the classic Windows installer.'
-          : 'No Claude Desktop installation was found. Install the classic Windows installer.'
-      }
-    } catch {
-      // Detection is best-effort; keep the generic message.
-    }
-    return {
-      ok: false,
-      action: 'open',
-      dir: normDir,
-      message,
-      data: {},
-    }
-  }
-
+/**
+ * The failure result for "no binary": say WHY when we can, because on Windows the usual culprit
+ * is the MSIX build (not launchable with --user-data-dir, see core/desktop-install.ts), so the
+ * failure toast becomes actionable instead of a dead end.
+ */
+async function noLaunchBinaryResult(normDir: string): Promise<CMActionResult> {
+  let message = 'No Claude launch binary could be resolved.'
   try {
-    const { argv, detached } = buildInstanceLaunch(process.platform, binary, launchArgs(normDir))
-    const proc = Bun.spawn(argv, {
-      stdin: 'ignore',
-      stdout: 'ignore',
-      stderr: 'ignore',
-      ...(detached ? { detached: true } : {}),
+    const install = await detectDesktopInstall()
+    if (install.platform === 'win32') {
+      message = install.msixDetected
+        ? 'Only the MSIX (Windows Apps) build of Claude Desktop is installed; it cannot be launched with an isolated profile. Install the classic Windows installer.'
+        : 'No Claude Desktop installation was found. Install the classic Windows installer.'
+    }
+  } catch {
+    // Detection is best-effort; keep the generic message.
+  }
+  return {
+    ok: false,
+    action: 'open',
+    dir: normDir,
+    message,
+    data: {},
+  }
+}
+
+async function openConfiguredInstance(
+  normDir: string,
+  nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
+): Promise<CMActionResult> {
+  const running = await probeRunningInstance(normDir, nativeConfig)
+  if (running) return running
+
+  const binary = await resolveLaunchBinaryOrNull()
+  if (!binary) return await noLaunchBinaryResult(normDir)
+
+  return dispatchConfiguredLaunch(normDir, binary, nativeConfig)
+}
+
+/** The scratch one launch attempt carries: what we spawned (so a partial failure can name it) and
+ *  whether a process actually got started. */
+interface LaunchAttempt {
+  dispatched: boolean
+  nativeData?: Record<string, unknown>
+}
+
+/** What a launch that reached verification reports: the pid to answer with, and the registry
+ *  restoration that was performed (null when this profile needed no guard). */
+interface VerifiedLaunch {
+  pid: number
+  registryRestoration: NativeLaunchRegistryResult | null
+}
+
+type NativeLaunchPlan = Awaited<ReturnType<typeof prepareClaudeNativeLaunch>>
+
+/**
+ * Spawn the launch, wait for a managed profile to report ready, restore the registry guard, and
+ * answer either the launch result or the (possibly partial) failure. Split out of
+ * openConfiguredInstance; the spawn/verify/restore order and every side effect are unchanged.
+ */
+async function dispatchConfiguredLaunch(
+  normDir: string,
+  binary: string,
+  nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
+): Promise<CMActionResult> {
+  const attempt: LaunchAttempt = { dispatched: false }
+  try {
+    const plan = await prepareClaudeNativeLaunch(binary, nativeConfig)
+    if (plan.nativeDebugger)
+      attempt.nativeData = { binary: plan.binary, nativeDebugger: plan.nativeDebugger }
+    const { argv, detached } = buildInstanceLaunch(process.platform, plan.binary, [
+      ...plan.extraArgs,
+      ...launchArgs(normDir),
+    ])
+    const registryGuard = plan.nativeDebugger
+      ? await beginNativeLaunchRegistryGuard(plan.binary, normDir)
+      : null
+    const verified = await spawnVerifyAndRestore({
+      normDir,
+      plan,
+      argv,
+      detached,
+      registryGuard,
+      attempt,
     })
-    proc.unref()
     // The world just changed under the cached snapshot — drop it so the poll tick that follows
     // this click shows the row as running instead of waiting out the TTL.
     invalidateClaudeProcessCache()
-    return {
-      ok: true,
-      action: 'open',
-      dir: normDir,
-      message: 'launched',
-      // NOTE: on win32/darwin `proc.pid` is the transient hand-off process (cmd/open), not the
-      // instance; the instance's real PID is (re)discovered by the next listInstances() scan.
-      data: { binary, pid: proc.pid },
-    }
+    return launchedResult(normDir, plan, verified)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return {
       ok: false,
       action: 'open',
       dir: normDir,
-      message: `Failed to launch: ${message}`,
-      data: {},
+      message:
+        attempt.nativeData && attempt.dispatched
+          ? `Claude launch dispatched, but startup verification failed: ${message}`
+          : `Failed to launch: ${message}`,
+      data: attempt.nativeData
+        ? {
+            ...attempt.nativeData,
+            launchDispatched: attempt.dispatched,
+            nativeDebuggerReady: false,
+          }
+        : {},
     }
   }
+}
+
+/** The success result for a verified launch. */
+function launchedResult(
+  normDir: string,
+  plan: NativeLaunchPlan,
+  verified: VerifiedLaunch,
+): CMActionResult {
+  return {
+    ok: true,
+    action: 'open',
+    dir: normDir,
+    message: 'launched',
+    // Stock win32/darwin launches return the transient hand-off PID; managed launches return
+    // the real instance PID verified through its own inspector after startup.
+    data: {
+      binary: plan.binary,
+      pid: verified.pid,
+      ...(plan.nativeDebugger
+        ? {
+            nativeDebugger: plan.nativeDebugger,
+            nativeDebuggerReady: true,
+            registryRestoration: verified.registryRestoration,
+          }
+        : {}),
+    },
+  }
+}
+
+/**
+ * Spawn and (for a managed profile) wait for readiness, and ALWAYS restore the registry guard
+ * afterwards - whether or not any of that worked - then report or throw the accumulated failure.
+ */
+async function spawnVerifyAndRestore(args: {
+  normDir: string
+  plan: NativeLaunchPlan
+  argv: string[]
+  detached: boolean
+  registryGuard: { restore(): Promise<NativeLaunchRegistryResult> } | null
+  attempt: LaunchAttempt
+}): Promise<VerifiedLaunch> {
+  const { normDir, plan, argv, detached, registryGuard, attempt } = args
+  let pid = 0
+  let launchError: unknown
+  let restorationError: unknown
+  let registryRestoration: NativeLaunchRegistryResult | null = null
+  try {
+    pid = await spawnAndAwaitReady(normDir, plan, argv, detached, attempt)
+  } catch (error) {
+    launchError = error
+  } finally {
+    if (registryGuard) {
+      try {
+        registryRestoration = await registryGuard.restore()
+      } catch (error) {
+        restorationError = error
+      }
+      if (attempt.nativeData) attempt.nativeData.registryRestoration = registryRestoration
+    }
+  }
+  const failures = launchFailures(launchError, restorationError, registryRestoration, attempt)
+  if (failures.length) throw Error(failures.join('; '))
+  return { pid, registryRestoration }
+}
+
+/** Every reason this attempt must be answered as a failure, in the order they were found. */
+function launchFailures(
+  launchError: unknown,
+  restorationError: unknown,
+  registryRestoration: NativeLaunchRegistryResult | null,
+  attempt: LaunchAttempt,
+): string[] {
+  const failures: string[] = []
+  if (launchError)
+    failures.push(launchError instanceof Error ? launchError.message : String(launchError))
+  if (restorationError) {
+    const reason =
+      restorationError instanceof Error ? restorationError.message : String(restorationError)
+    failures.push(`Registration restoration failed: ${reason}`)
+    if (attempt.nativeData) attempt.nativeData.registryRestorationError = reason
+  }
+  if (registryRestoration?.errors.length) {
+    failures.push(`Registration restoration failed: ${registryRestoration.errors.join('; ')}`)
+  }
+  return failures
+}
+
+/** Spawn the argv and, for a managed profile, wait until its inspector answers; returns the pid to
+ *  report. Split out so the guard/restore bookkeeping above is not nested inside the spawn. */
+async function spawnAndAwaitReady(
+  normDir: string,
+  plan: NativeLaunchPlan,
+  argv: string[],
+  detached: boolean,
+  attempt: LaunchAttempt,
+): Promise<number> {
+  if (plan.nativeDebugger) {
+    await assertClaudeInspectorPortAvailable(plan.nativeDebugger.port)
+  }
+  const startupLogCursor = plan.nativeDebugger
+    ? await captureNativeLaunchLogCursor(normDir)
+    : undefined
+  const proc = Bun.spawn(argv, {
+    stdin: 'ignore',
+    stdout: 'ignore',
+    stderr: 'ignore',
+    ...(detached ? { detached: true } : {}),
+  })
+  proc.unref()
+  attempt.dispatched = true
+  // Stamped at spawn, not at readiness: the app WAS started on this PC even if the managed
+  // handshake that follows fails, and the process scan will confirm or refine the time.
+  recordInstanceLaunches([{ dir: normDir, at: Date.now() }])
+  invalidateClaudeProcessCache()
+  if (attempt.nativeData) attempt.nativeData.handoffPid = proc.pid
+  if (!plan.nativeDebugger) return proc.pid
+  const ready = await waitForNativeLaunchReady({
+    profileDir: normDir,
+    binary: plan.binary,
+    port: plan.nativeDebugger.port,
+    startupLogCursor,
+  })
+  if (attempt.nativeData) attempt.nativeData.pid = ready.pid
+  return ready.pid
 }
 
 // ----------------------------------------------------------------------------
@@ -503,7 +734,9 @@ async function forceKillPid(pid: number): Promise<void> {
         stderr: 'ignore',
         windowsHide: true,
       })
-      await proc.exited
+      // Bounded (swept 2026-09-18): `await proc.exited` with nothing racing it hangs the caller
+      // forever if taskkill itself wedges, and this sits on the quit path.
+      await awaitExitBounded(proc, TASKKILL_TIMEOUT_MS)
     } catch {
       // Best-effort; process may have already exited between scan and kill.
     }
@@ -525,7 +758,9 @@ async function gracefulKillPid(pid: number): Promise<void> {
         stderr: 'ignore',
         windowsHide: true,
       })
-      await proc.exited
+      // Bounded (swept 2026-09-18): `await proc.exited` with nothing racing it hangs the caller
+      // forever if taskkill itself wedges, and this sits on the quit path.
+      await awaitExitBounded(proc, TASKKILL_TIMEOUT_MS)
     } catch {
       // Ignore; we'll force-kill on timeout regardless.
     }
@@ -685,34 +920,22 @@ async function focusWindowByPid(pid: number): Promise<'focused' | 'no-window' | 
     '}',
   ].join('\n')
 
-  type CaptureProc = Bun.Subprocess<'ignore', 'pipe', 'pipe'>
-  let proc: CaptureProc | null = null
-  try {
-    proc = Bun.spawn(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      windowsHide: true,
-    }) as CaptureProc
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err)
-  }
-
-  try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
-    const trimmed = stdout.trim()
-    if (trimmed.includes('FOCUSED')) return 'focused'
-    if (trimmed.includes('NO_WINDOW')) return 'no-window'
-    if (trimmed.includes('FOREGROUND_DENIED')) return 'foreground denied by Windows'
-    if (exitCode !== 0) return stderr.trim() || `powershell exited with code ${exitCode}`
-    return 'no-window'
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err)
-  }
+  // Bounded, and through the one bounded spawn (swept 2026-09-18). The hand-rolled version here
+  // awaited both drains AND proc.exited, which settles on the SLOWEST of the three - and this
+  // script's `Add-Type` makes powershell spawn the C# compiler, a grandchild that inherits these
+  // pipes and can hold them open after powershell itself is gone. A focus click is not worth a
+  // route that never answers.
+  const r = await spawnCaptured(
+    ['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
+    { timeoutMs: FOCUS_TIMEOUT_MS },
+  )
+  if (r.timedOut) return `focus timed out after ${FOCUS_TIMEOUT_MS / 1000}s`
+  const trimmed = r.stdout.trim()
+  if (trimmed.includes('FOCUSED')) return 'focused'
+  if (trimmed.includes('NO_WINDOW')) return 'no-window'
+  if (trimmed.includes('FOREGROUND_DENIED')) return 'foreground denied by Windows'
+  if (r.code !== 0) return r.stderr.trim() || `powershell exited with code ${r.code}`
+  return 'no-window'
 }
 
 /**

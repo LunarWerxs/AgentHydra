@@ -24,6 +24,8 @@ export const SOURCE_LABEL: Record<SessionSourceScope, string> = {
   codex: 'sessions.sourceCodex',
   opencode: 'sessions.sourceOpenCode',
   hermes: 'sessions.sourceHermes',
+  dsh: 'sessions.sourceDsh',
+  zswarm: 'sessions.sourceZswarm',
   foreign: 'sessions.sourceOther',
 }
 
@@ -70,6 +72,8 @@ export const TOOL_NAME: Record<string, string> = {
   mimocode: 'MiMo',
   icodemate: 'IcodeMate',
   hermes: 'Hermes',
+  'deepseek-harness': 'DeepSeek',
+  zswarm: 'zswarm',
   grok: 'Grok',
   kimi: 'Kimi',
   zed: 'Zed',
@@ -77,11 +81,66 @@ export const TOOL_NAME: Record<string, string> = {
   'vscode-copilot': 'VS Code Copilot',
 }
 
+/**
+ * Does one session of this source have a FILE of its own on disk?
+ *
+ * The three "file actions" (open in an editor, copy the file, copy its location) and the raw-file
+ * download all rest on there being one. A shared database has no such file, and the daemon says so
+ * with a 409 (`/api/sessions/:id/file` and friends in server/src/routes/sessions.ts) — so an
+ * offered action there is an error toast waiting to be clicked. It was one, for Hermes: the
+ * template hid these behind `source !== 'opencode'` alone, and Hermes joined the shared-store side
+ * afterwards without the guard following it.
+ *
+ * A Record over the union rather than another literal in a v-if, so the next source has to ANSWER
+ * this question instead of silently inheriting whichever answer the last one had. DeepSeek Harness
+ * is true: one zstd log per session, which is a real file you can copy, locate and hand to someone
+ * — it is only an EDITOR that cannot make prose of it, which is what the readable exports beside
+ * these actions are for.
+ */
+export const SOURCE_HAS_FILE: Record<SessionSource, boolean> = {
+  claude: true,
+  codex: true,
+  opencode: false,
+  hermes: false,
+  dsh: true,
+  // A zswarm job's `job.json` is a real file per job, same as DSH's log per session.
+  zswarm: true,
+  foreign: true,
+}
+
+/**
+ * Is that file TEXT an editor can show?
+ *
+ * "Open the transcript in an editor" is only a kindness when the editor can render what it opens.
+ * A DeepSeek Harness log is a real file worth copying and locating — and it is Zstandard frames, so
+ * handing it to an editor produces a screen of binary and a user who thinks the session is
+ * corrupted. The readable path for those is the export beside this action, which renders the same
+ * conversation as Markdown or JSON.
+ *
+ * Separate from {@link SOURCE_HAS_FILE} because the two questions have different answers: OpenCode
+ * and Hermes have NO file (nothing to copy, locate or open), while DSH has one that is simply not
+ * prose. Collapsing them would take away copy-the-file from a source that supports it perfectly.
+ */
+export const SOURCE_FILE_IS_TEXT: Record<SessionSource, boolean> = {
+  claude: true,
+  codex: true,
+  opencode: false,
+  hermes: false,
+  dsh: false,
+  // Unlike DSH's zstd log, job.json is plain JSON - an editor renders it fine.
+  zswarm: true,
+  foreign: true,
+}
+
 export const SOURCE_BADGE_CLASS: Record<SessionSource, string> = {
   claude: 'border-[#D97757]/40 bg-[#D97757]/10 text-[#B85D3D] dark:text-[#E9A287]',
   codex: 'border-[#10A37F]/40 bg-[#10A37F]/10 text-[#087D62] dark:text-[#65D4B3]',
   opencode: 'border-[#5B6EF5]/40 bg-[#5B6EF5]/10 text-[#4053D6] dark:text-[#9AA6FF]',
   hermes: 'border-[#F5A623]/40 bg-[#F5A623]/10 text-[#B4750E] dark:text-[#F5C067]',
+  // DeepSeek's own blue, the same way each reader above wears its product's colour.
+  dsh: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#3A51C7] dark:text-[#9DB0FF]',
+  // Same DeepSeek blue as dsh above - it is the same vendor, a different product.
+  zswarm: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#3A51C7] dark:text-[#9DB0FF]',
   // Neutral on purpose: five products share this reader, so a single hue would imply one identity.
   foreign: 'border-border bg-muted text-muted-foreground',
 }

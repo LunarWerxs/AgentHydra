@@ -123,6 +123,83 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
     return url ? { remote: url, remoteArg: name } : { remote: null, remoteArg: null };
   }
 
+  async function isGitCheckout() {
+    if (!existsSync(join(appRoot, ".git"))) return false;
+    return (await gitText(["rev-parse", "--is-inside-work-tree"])) === "true";
+  }
+
+  async function gatherLocalStatus(base) {
+    const currentCommit = await gitText(["rev-parse", "HEAD"]);
+    const branch = await gitText(["branch", "--show-current"]);
+    const upstream = await currentUpstream();
+    const remote = await remoteForCheck(upstream.remoteName);
+    const dirty = !!(await gitText(["status", "--porcelain"]));
+    const status = { ...base, currentCommit, branch, upstream: upstream.upstream, remote: remote.remote, dirty };
+    return { status, upstream, remote };
+  }
+
+  // The remote branch the update would actually pull. `compareBranch` is what was ASKED for;
+  // when the remote has no such branch the check falls back to the remote's HEAD, and apply
+  // must then pull THAT branch, not the local name. It used to pull the local name, so a
+  // checkout on a branch the remote lacks was told an update existed and then failed to apply
+  // it with "couldn't find remote ref", every cycle.
+  async function resolveRemoteCommit(remoteArg, compareBranch, localBranch) {
+    let remoteBranch = compareBranch || null;
+    let remoteCommit = null;
+    let branch = localBranch;
+    if (compareBranch) {
+      const ref = await git(["ls-remote", remoteArg, `refs/heads/${compareBranch}`]);
+      if (ref.ok) remoteCommit = parseLsRemoteCommit(ref.stdout);
+    }
+    if (!remoteCommit) {
+      const head = await git(["ls-remote", "--symref", remoteArg, "HEAD"]);
+      if (head.ok) {
+        const parsed = parseRemoteHead(head.stdout);
+        remoteCommit = parsed.commit;
+        remoteBranch = parsed.branch;
+        branch = branch || parsed.branch;
+      }
+    }
+    return { remoteCommit, remoteBranch, branch };
+  }
+
+  // A differing remote SHA is NOT enough: on a dev checkout the local branch is routinely
+  // AHEAD of the update remote (committed-but-unpushed work). ls-remote gives us the SHA
+  // without fetching, and when we're ahead that commit already exists locally, so
+  // merge-base --is-ancestor can prove it's behind us (exit 0). A genuinely new remote
+  // commit is an unknown object locally (exit 128) or a non-ancestor (exit 1), both of
+  // which correctly read as "update available". Without this, an enabled auto-update
+  // loop on an ahead checkout would ff-pull a no-op and reinstall + rebuild every cycle.
+  //
+  // "Newer" is not "applicable". `pull --ff-only` succeeds only when HEAD is an ancestor of
+  // the remote commit; a checkout that has DIVERGED (local commits the remote lacks AND remote
+  // commits it lacks) used to be advertised as an update that apply then refused, every
+  // cycle. So the fast-forward is proven before it is advertised: fetch just that branch into
+  // FETCH_HEAD (no local branch and no working file moves) and ask git the ancestry question.
+  // A failed fetch is reported as its own reason rather than guessed either way.
+  async function evaluateFastForward(remoteCommit, currentCommit, remoteBranch, remoteArg) {
+    if (!remoteCommit || remoteCommit === currentCommit) return { remoteIsAncestor: false, fastForward: "n/a" };
+    const remoteIsAncestor = (await git(["merge-base", "--is-ancestor", remoteCommit, "HEAD"])).ok;
+    if (remoteIsAncestor || !remoteBranch) return { remoteIsAncestor, fastForward: "n/a" };
+    const fetched = await git(["fetch", "--quiet", "--no-tags", remoteArg, remoteBranch], APPLY_TIMEOUT_MS);
+    if (!fetched.ok) return { remoteIsAncestor, fastForward: "unknown" };
+    const fastForward = (await git(["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"])).ok ? "yes" : "no";
+    return { remoteIsAncestor, fastForward };
+  }
+
+  function reasonForStatus({ newer, dirty, fastForward, remoteBranch, remoteCommit, remoteIsAncestor }) {
+    if (newer) {
+      if (dirty) return "local changes must be committed or stashed before updating";
+      if (fastForward === "no")
+        return "local checkout has diverged from the update remote; a fast-forward is not possible (merge or rebase at your desk)";
+      if (fastForward === "unknown") return "could not fetch the update remote to verify the update";
+      if (!remoteBranch) return "could not determine the remote branch to pull";
+      return null;
+    }
+    if (remoteCommit) return remoteIsAncestor ? "local checkout is ahead of the update remote" : "up to date";
+    return "could not read remote commit";
+  }
+
   async function checkForUpdate() {
     const base = {
       ok: true,
@@ -140,86 +217,36 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
       reason: null,
     };
 
-    if (!existsSync(join(appRoot, ".git"))) return { ...base, ok: false, reason: "not a git checkout" };
-    if ((await gitText(["rev-parse", "--is-inside-work-tree"])) !== "true")
-      return { ...base, ok: false, reason: "not a git checkout" };
+    if (!(await isGitCheckout())) return { ...base, ok: false, reason: "not a git checkout" };
 
-    const currentCommit = await gitText(["rev-parse", "HEAD"]);
-    const branch = await gitText(["branch", "--show-current"]);
-    const upstream = await currentUpstream();
-    const remote = await remoteForCheck(upstream.remoteName);
-    const dirty = !!(await gitText(["status", "--porcelain"]));
-    const status = { ...base, currentCommit, branch, upstream: upstream.upstream, remote: remote.remote, dirty };
-
-    if (!currentCommit) return { ...status, ok: false, reason: "could not read current commit" };
+    const { status, upstream, remote } = await gatherLocalStatus(base);
+    if (!status.currentCommit) return { ...status, ok: false, reason: "could not read current commit" };
     if (!remote.remoteArg) return { ...status, ok: false, reason: "no update remote configured" };
 
-    const compareBranch = upstream.remoteBranch || branch;
-    // The remote branch the update would actually pull. `compareBranch` is what was ASKED for;
-    // when the remote has no such branch the check falls back to the remote's HEAD, and apply
-    // must then pull THAT branch, not the local name. It used to pull the local name, so a
-    // checkout on a branch the remote lacks was told an update existed and then failed to apply
-    // it with "couldn't find remote ref", every cycle.
-    let remoteBranch = compareBranch || null;
-    let remoteCommit = null;
-    if (compareBranch) {
-      const ref = await git(["ls-remote", remote.remoteArg, `refs/heads/${compareBranch}`]);
-      if (ref.ok) remoteCommit = parseLsRemoteCommit(ref.stdout);
-    }
-    if (!remoteCommit) {
-      const head = await git(["ls-remote", "--symref", remote.remoteArg, "HEAD"]);
-      if (head.ok) {
-        const parsed = parseRemoteHead(head.stdout);
-        remoteCommit = parsed.commit;
-        remoteBranch = parsed.branch;
-        status.branch = status.branch || parsed.branch;
-      }
-    }
+    const compareBranch = upstream.remoteBranch || status.branch;
+    const resolved = await resolveRemoteCommit(remote.remoteArg, compareBranch, status.branch);
+    status.branch = resolved.branch;
+    status.remoteCommit = resolved.remoteCommit;
+    status.remoteBranch = resolved.remoteBranch;
 
-    status.remoteCommit = remoteCommit;
-    status.remoteBranch = remoteBranch;
-    // A differing remote SHA is NOT enough: on a dev checkout the local branch is routinely
-    // AHEAD of the update remote (committed-but-unpushed work). ls-remote gives us the SHA
-    // without fetching, and when we're ahead that commit already exists locally, so
-    // merge-base --is-ancestor can prove it's behind us (exit 0). A genuinely new remote
-    // commit is an unknown object locally (exit 128) or a non-ancestor (exit 1), both of
-    // which correctly read as "update available". Without this, an enabled auto-update
-    // loop on an ahead checkout would ff-pull a no-op and reinstall + rebuild every cycle.
-    let remoteIsAncestor = false;
-    // "Newer" is not "applicable". `pull --ff-only` succeeds only when HEAD is an ancestor of
-    // the remote commit; a checkout that has DIVERGED (local commits the remote lacks AND remote
-    // commits it lacks) used to be advertised as an update that apply then refused, every
-    // cycle. So the fast-forward is proven before it is advertised: fetch just that branch into
-    // FETCH_HEAD (no local branch and no working file moves) and ask git the ancestry question.
-    // A failed fetch is reported as its own reason rather than guessed either way.
-    let fastForward = "n/a"; // "yes" | "no" | "unknown" | "n/a"
-    if (remoteCommit && remoteCommit !== currentCommit) {
-      remoteIsAncestor = (await git(["merge-base", "--is-ancestor", remoteCommit, "HEAD"])).ok;
-      if (!remoteIsAncestor && remoteBranch) {
-        const fetched = await git(["fetch", "--quiet", "--no-tags", remote.remoteArg, remoteBranch], APPLY_TIMEOUT_MS);
-        if (!fetched.ok) fastForward = "unknown";
-        else fastForward = (await git(["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"])).ok ? "yes" : "no";
-      }
-    }
-    const newer = !!(remoteCommit && remoteCommit !== currentCommit && !remoteIsAncestor);
+    const { remoteIsAncestor, fastForward } = await evaluateFastForward(
+      resolved.remoteCommit,
+      status.currentCommit,
+      resolved.remoteBranch,
+      remote.remoteArg,
+    );
+    const newer = !!(resolved.remoteCommit && resolved.remoteCommit !== status.currentCommit && !remoteIsAncestor);
     status.updateAvailable = newer;
     status.diverged = newer && fastForward === "no";
-    status.canApply = newer && fastForward === "yes" && !dirty && !!remoteBranch;
-    status.reason = newer
-      ? dirty
-        ? "local changes must be committed or stashed before updating"
-        : fastForward === "no"
-          ? "local checkout has diverged from the update remote; a fast-forward is not possible (merge or rebase at your desk)"
-          : fastForward === "unknown"
-            ? "could not fetch the update remote to verify the update"
-            : !remoteBranch
-              ? "could not determine the remote branch to pull"
-              : null
-      : remoteCommit
-        ? remoteIsAncestor
-          ? "local checkout is ahead of the update remote"
-          : "up to date"
-        : "could not read remote commit";
+    status.canApply = newer && fastForward === "yes" && !status.dirty && !!resolved.remoteBranch;
+    status.reason = reasonForStatus({
+      newer,
+      dirty: status.dirty,
+      fastForward,
+      remoteBranch: resolved.remoteBranch,
+      remoteCommit: resolved.remoteCommit,
+      remoteIsAncestor,
+    });
     return status;
   }
 
@@ -228,18 +255,135 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
     const suffix = result.timedOut ? "timed out" : result.ok ? "ok" : `exit ${result.code ?? "unknown"}`;
     return `$ ${args.join(" ")}\n${text || suffix}`;
   }
+  /** Lines that name a failure, so the excerpt below can prefer them over surrounding noise. */
+  const ERRORISH =
+    /\berror\b|\bfailed\b|\bfailure\b|cannot |can't |could not |not found|unable to|unresolved|does the file exist|ENOENT|EACCES|✗|✘/i;
+  const STEP_ERROR_LINES = 4;
+  const STEP_ERROR_CHARS = 400;
+
+  /**
+   * The user-facing reason a step failed.
+   *
+   * Taking `stderr.split("\n")[0]` looked right and was not: a `bun run <script>` failure begins by
+   * ECHOING the script it is about to run, so the dashboard showed people the command
+   * (`$ node scripts/i18n-check.mjs && vue-tsc -b && …`) and threw away the line that mattered
+   * (`Failed to resolve import "./button-variants"`), which is several lines further down. The full
+   * transcript is not a fallback either: `output` is only returned on the SUCCESS path, so on a
+   * failure this message is the only thing the user ever sees. (RepoYeti issue #24.)
+   *
+   * So: drop echoed commands and blank lines, prefer the lines that actually name a failure, and
+   * cap the result — this lands in a toast description, and an unbounded build log is not readable
+   * there. The command itself is not lost: `commandSummary` already recorded it in `output`.
+   */
+  function stepFailureMessage(args, result) {
+    const lines = `${result.stderr}\n${result.stdout}`
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("$ "));
+    const errorish = lines.filter((line) => ERRORISH.test(line));
+    const picked = (errorish.length ? errorish : lines).slice(0, STEP_ERROR_LINES);
+    const msg = picked.join(" · ");
+    if (!msg) return result.timedOut ? `${args[0]} timed out` : `${args[0]} failed`;
+    return msg.length > STEP_ERROR_CHARS ? `${msg.slice(0, STEP_ERROR_CHARS - 1)}…` : msg;
+  }
+
   async function runStep(args, timeoutMs, output) {
     const result = await runCommand(args, timeoutMs);
     output.push(commandSummary(args, result));
-    if (!result.ok) {
-      const msg = result.stderr.trim() || result.stdout.trim() || `${args[0]} failed`;
-      throw new Error(msg.split("\n")[0] ?? "update step failed");
+    if (!result.ok) throw new Error(stepFailureMessage(args, result));
+  }
+
+  // The stash is taken against the NEW commit, so popping it onto the rolled-back tree can
+  // conflict where the update also touched the same file; the edit is intact either way and
+  // `git stash show -p` / `git checkout stash@{0} -- <file>` recover it file by file.
+  async function stashChangedFiles(changedDuring, msg, output) {
+    if (!changedDuring.length) return null;
+    const stashName = `${serviceName}-update-rollback-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    const stashArgs = ["git", "stash", "push", "--include-untracked", "-m", stashName];
+    const stash = await runCommand(stashArgs, APPLY_TIMEOUT_MS);
+    output.push(commandSummary(stashArgs, stash));
+    if (!stash.ok) {
+      throw new Error(
+        `${msg}; ${changedDuring.length} file(s) changed in the checkout during the update and could not be stashed, so it was NOT rolled back (a reset would have deleted them): it is at the new commit with a failed install/build; recover by hand - changed: ${changedDuring.join(", ")}`,
+      );
+    }
+    return stashName;
+  }
+
+  async function resetAndRebuild(currentCommit, output) {
+    const resetArgs = ["git", "reset", "--hard", currentCommit];
+    const reset = await runCommand(resetArgs, APPLY_TIMEOUT_MS);
+    output.push(commandSummary(resetArgs, reset));
+    let restored = false;
+    if (reset.ok) {
+      restored = true;
+      for (const cmd of [installCmd, buildCmd]) {
+        const r = await runCommand(cmd, BUILD_TIMEOUT_MS);
+        output.push(commandSummary(cmd, r));
+        if (!r.ok) {
+          restored = false;
+          break;
+        }
+      }
+    }
+    return { reset, restored };
+  }
+
+  function buildRollbackMessage(msg, reset, restored, stashName, changedCount) {
+    const preserved = stashName
+      ? `; ${changedCount} file(s) changed during the update were saved to git stash "${stashName}" (git stash pop brings them back; resolve any conflict against the rolled-back files)`
+      : "";
+    if (!reset.ok) return `${msg}; rollback failed; the checkout may be partially updated${preserved}`;
+    if (restored) return `${msg}; rolled back to the previous version${preserved}`;
+    return `${msg}; code was rolled back, but reinstalling/rebuilding it failed; the previous version may not run until this is fixed${preserved}`;
+  }
+
+  // Unattended self-update: a failed install/build must never leave the checkout
+  // half-upgraded (new code, stale deps/build). Reset back to the pre-update commit
+  // (the pull was ff-only), then best-effort reinstall + rebuild the previous version so
+  // the running daemon stays consistent.
+  //
+  // BUT THE TREE WAS ONLY PROVEN CLEAN BEFORE THE PULL. Install + build run for minutes,
+  // and a developer editing the checkout meanwhile (this is a source install - the same
+  // tree they work in) has changes the clean check never saw. `git reset --hard` erases
+  // them without a trace. So the tree is re-read here: anything that changed since is
+  // moved into a named git stash BEFORE the reset, and the message says so. If the tree
+  // cannot be inspected, or the stash fails, the reset does NOT run - a half-updated
+  // checkout is recoverable by hand; a deleted edit is not. Always throws.
+  async function rollbackAfterFailedUpdate(err, before, output) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const statusArgs = ["git", "status", "--porcelain"];
+    const statusNow = await runCommand(statusArgs, CHECK_TIMEOUT_MS);
+    output.push(commandSummary(statusArgs, statusNow));
+    if (!statusNow.ok) {
+      throw new Error(
+        `${msg}; the checkout could not be inspected afterwards (git status failed), so it was NOT rolled back: it is at the new commit with a failed install/build; inspect it by hand`,
+      );
+    }
+    const changedDuring = statusNow.stdout.split(/\r?\n/).filter(Boolean);
+    const stashName = await stashChangedFiles(changedDuring, msg, output);
+    const { reset, restored } = await resetAndRebuild(before.currentCommit, output);
+    throw new Error(buildRollbackMessage(msg, reset, restored, stashName, changedDuring.length));
+  }
+
+  // Every failure carries the transcript. `output` used to reach a caller only on SUCCESS: each
+  // failure path threw a bare Error and the array died with the frame, so a user reporting a failed
+  // update could paste one line and never the build output that explained it (RepoYeti issue #24).
+  // The rejection is still an Error whose message is the one-line reason; `err.output` holds every
+  // step recorded before it, rollback steps included, for the host to log and offer as details.
+  async function applyUpdate() {
+    const output = [];
+    try {
+      return await applyRecording(output);
+    } catch (err) {
+      const failure = err instanceof Error ? err : new Error(String(err));
+      failure.output = output;
+      throw failure;
     }
   }
 
-  async function applyUpdate() {
+  async function applyRecording(output) {
     const before = await checkForUpdate();
-    const output = [];
     if (!before.updateAvailable) {
       return {
         ok: true,
@@ -268,68 +412,7 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
       await runStep(installCmd, BUILD_TIMEOUT_MS, output);
       await runStep(buildCmd, BUILD_TIMEOUT_MS, output);
     } catch (err) {
-      // Unattended self-update: a failed install/build must never leave the checkout
-      // half-upgraded (new code, stale deps/build). Reset back to the pre-update commit
-      // (the pull was ff-only), then best-effort reinstall + rebuild the previous version so
-      // the running daemon stays consistent.
-      //
-      // BUT THE TREE WAS ONLY PROVEN CLEAN BEFORE THE PULL. Install + build run for minutes,
-      // and a developer editing the checkout meanwhile (this is a source install - the same
-      // tree they work in) has changes the clean check never saw. `git reset --hard` erases
-      // them without a trace. So the tree is re-read here: anything that changed since is
-      // moved into a named git stash BEFORE the reset, and the message says so. If the tree
-      // cannot be inspected, or the stash fails, the reset does NOT run - a half-updated
-      // checkout is recoverable by hand; a deleted edit is not.
-      const msg = err instanceof Error ? err.message : String(err);
-      const statusArgs = ["git", "status", "--porcelain"];
-      const statusNow = await runCommand(statusArgs, CHECK_TIMEOUT_MS);
-      output.push(commandSummary(statusArgs, statusNow));
-      if (!statusNow.ok) {
-        throw new Error(
-          `${msg}; the checkout could not be inspected afterwards (git status failed), so it was NOT rolled back: it is at the new commit with a failed install/build; inspect it by hand`,
-        );
-      }
-      const changedDuring = statusNow.stdout.split(/\r?\n/).filter(Boolean);
-      let stashName = null;
-      if (changedDuring.length) {
-        stashName = `${serviceName}-update-rollback-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-        const stashArgs = ["git", "stash", "push", "--include-untracked", "-m", stashName];
-        const stash = await runCommand(stashArgs, APPLY_TIMEOUT_MS);
-        output.push(commandSummary(stashArgs, stash));
-        if (!stash.ok) {
-          throw new Error(
-            `${msg}; ${changedDuring.length} file(s) changed in the checkout during the update and could not be stashed, so it was NOT rolled back (a reset would have deleted them): it is at the new commit with a failed install/build; recover by hand - changed: ${changedDuring.join(", ")}`,
-          );
-        }
-      }
-      const resetArgs = ["git", "reset", "--hard", before.currentCommit];
-      const reset = await runCommand(resetArgs, APPLY_TIMEOUT_MS);
-      output.push(commandSummary(resetArgs, reset));
-      let restored = false;
-      if (reset.ok) {
-        restored = true;
-        for (const cmd of [installCmd, buildCmd]) {
-          const r = await runCommand(cmd, BUILD_TIMEOUT_MS);
-          output.push(commandSummary(cmd, r));
-          if (!r.ok) {
-            restored = false;
-            break;
-          }
-        }
-      }
-      // The stash was taken against the NEW commit, so popping it onto the rolled-back tree can
-      // conflict where the update also touched the same file; the edit is intact either way and
-      // `git stash show -p` / `git checkout stash@{0} -- <file>` recover it file by file.
-      const preserved = stashName
-        ? `; ${changedDuring.length} file(s) changed during the update were saved to git stash "${stashName}" (git stash pop brings them back; resolve any conflict against the rolled-back files)`
-        : "";
-      throw new Error(
-        (reset.ok
-          ? restored
-            ? `${msg}; rolled back to the previous version`
-            : `${msg}; code was rolled back, but reinstalling/rebuilding it failed; the previous version may not run until this is fixed`
-          : `${msg}; rollback failed; the checkout may be partially updated`) + preserved,
-      );
+      await rollbackAfterFailedUpdate(err, before, output);
     }
 
     return {

@@ -1,0 +1,16 @@
+#!/bin/sh
+# AgentHydra commit-msg gate. Enabled by `git config core.hooksPath .githooks` (package.json's
+# prepare does this). Bypass a single commit with: git commit --no-verify
+#
+# A commit whose subject starts with `wip: bundle` must name every file it swept from another
+# session under `Mine:` / `Swept:` blocks, so the author finds out from the log rather than by
+# accident. Ordinary commits are not touched. Rationale in .githooks/check-bundle-message.mjs.
+#
+# Like the pre-commit gate, this steps aside when no runtime is on PATH: a commit is local and
+# cheap to redo, and a hook that blocks the first commit on a fresh machine is a hook people turn
+# off. The pre-push gate is the one that fails closed.
+if command -v node >/dev/null 2>&1; then
+  node .githooks/check-bundle-message.mjs "$1" || exit 1
+elif command -v bun >/dev/null 2>&1; then
+  bun .githooks/check-bundle-message.mjs "$1" || exit 1
+fi

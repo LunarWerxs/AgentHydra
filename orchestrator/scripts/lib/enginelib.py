@@ -155,9 +155,16 @@ def idle_report(match: dict, min_quiet_secs: int = IDLE_STOP_SECS,
         return {"idle": False, "reason": R_TOO_SOON,
                 "why": f"idle for only {quiet}s (needs {min_quiet_secs}s) - giving it time",
                 "quiet_secs": quiet, "needs_secs": int(min_quiet_secs)}
-    return {"idle": True, "reason": R_IDLE,
-            "why": (f"idle: finished its turn and quiet {quiet}s"
-                    + (" (pending call predates this engine)" if idle.get("orphaned_tool_call") else "")),
+    # SAY WHICH IDLE THIS IS. "finished its turn" is false for a chat that was cut off
+    # mid-turn and re-landed: its engine simply never wrote anything, which is a different
+    # (and, for a move, more reassuring) fact than a turn that ended cleanly.
+    if idle.get("resumed_silent"):
+        why = (f"idle: its engine has written nothing since it started - the whole transcript "
+               f"predates it, so nothing is in flight; quiet {quiet}s")
+    else:
+        why = (f"idle: finished its turn and quiet {quiet}s"
+               + (" (pending call predates this engine)" if idle.get("orphaned_tool_call") else ""))
+    return {"idle": True, "reason": R_IDLE, "why": why,
             "quiet_secs": quiet, "needs_secs": int(min_quiet_secs)}
 
 
@@ -270,6 +277,24 @@ _BG_AGENT_ID = re.compile(r"\bagentId:\s*([A-Za-z0-9_-]{6,})")
 _BG_AGENT_WORKING = re.compile(r"agent is (?:still )?working|will be notified|notified when", re.IGNORECASE)
 _BG_NOTIFIED = re.compile(r"<task-notification>.{0,200}?<task-id>\s*([A-Za-z0-9_-]+)\s*</task-id>",
                           re.DOTALL)
+# THE OTHER WAY A JOB ENDS, and the one this scan was blind to until 2026-09-20.
+#
+# A notification is what the CLI writes when the engine was waiting passively. An engine that
+# collects its own jobs with `TaskOutput({task_id, block: true})` gets the output returned
+# INLINE to that tool call, so no <task-notification> is ever written and `notified` sits at 0
+# forever. The chat looks permanently busy to this scan.
+#
+# That is not cosmetic. A non-empty `outstanding` pins the quiet window at 300s and denies the
+# chat the --now 15s path, so a chat that harvests this way can NEVER be migrated - the gate
+# defeats the one job the gate exists to enable. Measured on the overnight run of 2026-09-18:
+# the chat "Stackspire" was refused three times with 9 ids outstanding, woke every ~286s
+# (event-driven, each job completing), and 286s is permanently just under the 300s the gate
+# wants, so its window never opened and an account at 84% weekly could not be shed.
+#
+# A `TaskOutput` call naming an id is evidence at least as strong as a notification: the
+# launcher did not merely hear that the job finished, it went and took the result. The
+# notification stays the primary signal; this is the second one.
+_BG_HARVEST_TOOLS = {"taskoutput"}
 # A transcript bigger than this is read from its tail only: a job launched megabytes ago and
 # never reported is possible, but so is a scan that takes longer than the wait it replaces.
 BG_SCAN_MAX_BYTES = 24 * 1024 * 1024
@@ -313,9 +338,32 @@ def _locate_transcript(match: dict, transcript_path: str | None) -> tuple[str | 
     return transcript_path, None
 
 
+def _harvested_ids(ev: dict) -> list[str]:
+    """Task ids this event COLLECTED with a TaskOutput call - see `_BG_HARVEST_TOOLS`.
+
+    Read off the `tool_use` block's own input rather than out of prose, because the id is
+    structured there and a text scan would also match the engine merely talking about a job.
+    """
+    msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
+    content = msg.get("content") if msg else None
+    ids: list[str] = []
+    for b in content if isinstance(content, list) else []:
+        if not isinstance(b, dict) or str(b.get("type") or "") != "tool_use":
+            continue
+        if str(b.get("name") or "").strip().lower() not in _BG_HARVEST_TOOLS:
+            continue
+        inp = b.get("input")
+        tid = inp.get("task_id") if isinstance(inp, dict) else None
+        if isinstance(tid, str) and tid.strip():
+            ids.append(tid.strip())
+    return ids
+
+
 def _record_background_event(ev: dict, engine_started, launched: dict, notified: set) -> int:
     """Fold one transcript event into launched/notified; returns 1 for an unparsed job, else 0."""
     unparsed = 0
+    # Collected inline counts as reported back, exactly like a notification.
+    notified.update(_harvested_ids(ev))
     for kind, text in _blocks_text(ev):
         for nid in _BG_NOTIFIED.findall(text):
             notified.add(nid)
@@ -372,7 +420,13 @@ def background_work(match: dict, transcript_path: str | None = None) -> dict:
                 f.seek(size - BG_SCAN_MAX_BYTES)
                 f.readline()  # drop the partial first line
             for raw in f:
-                if b"background" not in raw and b"task-notification" not in raw and b"agentId:" not in raw:
+                # A cheap byte prefilter so a megabyte transcript is not JSON-parsed line by
+                # line. Every signal this scan reads must appear here or it is invisible:
+                # "TaskOutput" was missing until 2026-09-20, so a harvested job's collection
+                # was dropped before `_record_background_event` could ever see it, which is
+                # the whole reason a harvesting chat looked busy forever.
+                if (b"background" not in raw and b"task-notification" not in raw
+                        and b"agentId:" not in raw and b"TaskOutput" not in raw):
                     continue
                 try:
                     ev = json.loads(raw.decode("utf-8", errors="replace"))

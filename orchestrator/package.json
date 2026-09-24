@@ -20,7 +20,6 @@
     "loop": "python orch.py loop",
     "smoke": "python scripts/smoke.py",
     "test": "python -m unittest discover -s scripts/tests",
-    "test:reference-note": "echo the TS under src/ and tests/ is non-running reference material lifted from AgentHydra - see README",
     "//remote": "THE REMOTE FRONT-END (web/ + server/): a Bun+Hono gateway that serves the Vue dashboard, gates it behind Sign in with Connections, and opens a Cloudflare tunnel - RepoYeti's remote-access stack, vendored. The Python toolbox stays stdlib-only; this is the one TypeScript surface, because the auth stack lives there.",
     "remote": "bun run server/src/main.ts",
     "remote:dev": "bun run --cwd web dev",

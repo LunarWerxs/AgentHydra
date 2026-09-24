@@ -32,20 +32,21 @@ import re
 import time
 from pathlib import Path
 
+from lib import configlib
 from lib import joblocklib
 
 # How long a live chat must be quiet AFTER a completed turn before it counts as idle rather
 # than thinking. Three minutes: long enough that a model pausing between tool calls is never
 # mistaken for an idle chat, short enough that the fleet is worked while the owner watches.
-IDLE_AFTER_SECS = 180
+IDLE_AFTER_SECS = configlib.get("gate.idle_after_secs")
 
 # Below this a quiet unanswered shell call is just a command running. Thirty minutes, and the
 # threshold is the ENTIRE discriminator between busy and stuck: measured over 1,504 real
 # transcripts the shape alone matched 11, one of which was the healthy session doing the
 # measuring. (Banked in shared memory: a-stall-detector-is-only-as-good-as-its-quiet-threshold.)
-STALL_QUIET_SECS = 30 * 60
+STALL_QUIET_SECS = configlib.get("gate.stall_quiet_secs")
 
-EVIDENCE_CAP = 2000
+EVIDENCE_CAP = configlib.get("gate.evidence_cap")
 RECAP_HEADER = re.compile(r"##\s*Am I 100% done\?", re.IGNORECASE)
 # THE FOURTH SIGNAL (owner, 2026-09-01: "I strongly feel chats are being archived when they are
 # not completely done - I need some sort of guard in there"). A recap that still RECOMMENDS
@@ -330,9 +331,39 @@ def parse_tail_records(text: str, whole_file: bool) -> list[dict]:
                     isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks
                 ),
                 "local_command": local_kind(ev, txt),
+                # The APP's own marker for a user-role record that is NOT a prompt anyone is
+                # expected to answer: the local-command caveat, an injected cross-session
+                # message, a session-start hook. Kept verbatim so a caller can see past such a
+                # record without having to recognise its text - see _judgeable_tail.
+                "meta": ev.get("isMeta") is True,
             }
         )
     return strip_local_tail(out)
+
+
+def _judgeable_tail(records: list[dict]) -> list[dict]:
+    """`records` without the trailing user-role records the app marked `isMeta`.
+
+    ⛔ WHY, AND IT COST FOUR UNDELIVERED RESUMES (2026-09-14). A migrate re-lands a chat and
+    boots its engine through `claude://resume`, and that boot APPENDS a user-role record of its
+    own. Every test in _idle_verdict then fails on the newest record rather than on the turn:
+    `completed` is false (it is user-role), `walled` is false (the limit banner is no longer
+    last), and `resumed_silent` is false (the new record does NOT predate the engine). So the
+    verdict was "running, not idle" for as long as the landed engine lived, and every courier
+    wake was refused - four of them 3-8 minutes after landing, two on transcripts last written
+    three HOURS earlier, all deferred as "a turn in flight" when nothing was in flight at all.
+
+    strip_local_tail already drops the families it can recognise by TEXT (`<local-command-*>`,
+    the caveat, a compaction summary, an answered slash command). This is the same idea keyed on
+    the app's own flag instead, which is what catches a record shape this toolbox has never seen
+    before. Deliberately NOT folded into strip_local_tail: that feeds the archive lanes and the
+    stall detector too, and the question here is narrower - "has the turn ended" - so the wider
+    blast radius has to be earned separately.
+    """
+    end = len(records)
+    while end > 0 and records[end - 1]["type"] == "user" and records[end - 1].get("meta"):
+        end -= 1
+    return records[:end]
 
 
 def first_user_prompt(path: str, max_bytes: int = 256 * 1024) -> str:
@@ -652,7 +683,9 @@ def _idle_verdict(
     gate() alongside _stall_verdict; the caller only calls this when not already stalled."""
     if quiet < idle_after_secs:
         return None
-    records = read_records(transcript_path)
+    # The tail the turn actually ended on: a boot hook or an injected message written AFTER it
+    # is not the turn (see _judgeable_tail).
+    records = _judgeable_tail(read_records(transcript_path))
     last = records[-1] if records else None
     completed = (
         last
@@ -677,10 +710,30 @@ def _idle_verdict(
     # on its own, and moving a chat that is about to resume rewrites a live transcript.
     walled = bool(last and last["api_error"]
                   and classify_limit(last["text"]) == "quota")
-    if not (completed or orphaned or walled):
+    # AN ENGINE THAT HAS WRITTEN NOTHING SINCE IT BOOTED IS NOT WORKING (2026-09-11).
+    # The orphan rule above says a PENDING TOOL CALL older than the engine is not in flight.
+    # The same evidence proves more than that: if the transcript's LAST record of any kind
+    # predates this engine, the engine has produced nothing at all since it started - no
+    # user turn was queued into it, no tool was called - so there is nothing in flight to
+    # lose. Only the shape differed live: 'Connections Architect burn-down resume' was cut
+    # off on its old account with a TOOL RESULT as the last record (the assistant still owed
+    # a reply), which is neither `completed` (type == user) nor `orphaned` (no tool_use on
+    # that record) nor `walled`. It read "alive and may be working" for the whole 20 minutes
+    # its freshly landed engine sat silent, so migrate refused to move it again and only
+    # terminate_live could - AgentHydra blocking its own follow-up move, for a chat whose
+    # every record was written hours earlier on another machine account.
+    #
+    # Tri-state-safe like the orphan rule: _predates() is False whenever either time is
+    # unknown, so an unreadable engine start leaves the chat WORKING rather than guessing.
+    resumed_silent = bool(
+        last and not completed and not orphaned and not walled
+        and _predates(last, engine_started)
+    )
+    if not (completed or orphaned or walled or resumed_silent):
         return None
     fe = _finished_evidence(records)
     return {"quiet_secs": quiet, "orphaned_tool_call": orphaned, "usage_wall": walled,
+            "resumed_silent": resumed_silent,
             **{k: fe[k] for k in (
                 "done_claim", "ends_with_question", "recap_present",
                 "last_assistant_text")}}
@@ -700,6 +753,10 @@ def _running_cause(pid, quiet: int, stalled: dict | None, idle: dict | None) -> 
     if idle.get("usage_wall"):
         return (f"process {pid} is alive but IDLE - it is parked at a USAGE WALL, so it cannot "
                 f"write until the account resets; quiet {idle['quiet_secs']}s")
+    if idle.get("resumed_silent"):
+        return (f"process {pid} is alive but IDLE - it has written NOTHING since it started, so "
+                f"the whole transcript predates it and nothing is in flight; quiet "
+                f"{idle['quiet_secs']}s and waiting for its next instruction")
     return (f"process {pid} is alive but IDLE - it finished its turn and has been quiet "
             f"{idle['quiet_secs']}s, so it is waiting for its next instruction, not working")
 
@@ -749,28 +806,52 @@ def _gate_running(
     }
 
 
+# THE FOUR SIGNALS, EACH NOW SWITCHABLE (owner, 2026-09-17: "it should ask which ... toggles,
+# triggers, options the user wants on"). All four default ON, which is exactly the behaviour
+# the owner asked for on 2026-09-01 - this changes nothing until someone deliberately turns
+# one off, and turning one off can only make archiving MORE eager, never less. The policy
+# menu says that in those words rather than leaving it to be discovered.
+ARCHIVE_SIGNALS = (
+    ("done_claim", "gate.signal_done_claim", lambda fe: fe.get("done_claim") != "yes"),
+    ("question", "gate.signal_no_question", lambda fe: bool(fe.get("ends_with_question"))),
+    ("offer", "gate.signal_no_offer_to_continue", lambda fe: bool(fe.get("offers_to_continue"))),
+    ("recommendations", "gate.signal_no_open_recommendations",
+     lambda fe: bool(fe.get("open_recommendations"))),
+)
+
+
+def archive_dissent(fe: dict, include_disabled: bool = False) -> list[str]:
+    """Which ENABLED signals disagree that this chat is finished-and-done. Empty = every
+    signal the owner left switched on agrees, which is the only way a chat reaches the
+    archive lane. A disabled signal cannot dissent; it also cannot protect.
+
+    `include_disabled` answers what the signals would say with every one switched on - the
+    plan records that, so dryrun.py can predict which chats a switched-off signal must
+    release and fail a knob that releases none of them."""
+    return [name for name, key, dissents in ARCHIVE_SIGNALS
+            if (include_disabled or configlib.get(key)) and dissents(fe)]
+
+
 def _finished_turn_lane(fe: dict) -> str:
-    """archive-candidate when all four independent signals agree the chat is done and
-    dormant; needs-input-review otherwise. See gate()'s docstring for why all four must
-    agree."""
-    return (
-        "archive-candidate"
-        if (fe["done_claim"] == "yes" and not fe["ends_with_question"]
-            and not fe["offers_to_continue"] and not fe["open_recommendations"])
-        else "needs-input-review"
-    )
+    """archive-candidate when every enabled signal agrees the chat is done and dormant;
+    needs-input-review otherwise. See gate()'s docstring for why they must all agree."""
+    return "needs-input-review" if archive_dissent(fe) else "archive-candidate"
 
 
 def _finished_turn_cause(lane: str, fe: dict) -> str:
     """The human-readable explanation for a completed-turn verdict. Linear ifs rather than
     the nested ternary gate() used to build this inline - same strings, easier to scan."""
     if lane == "archive-candidate":
-        return "completed turn, recap says done, nothing asked, nothing recommended"
-    if fe["done_claim"] != "yes":
+        off = [name for name, key, _ in ARCHIVE_SIGNALS if not configlib.get(key)]
+        return ("completed turn, recap says done, nothing asked, nothing recommended"
+                + (f" (signal(s) {', '.join(off)} are switched OFF in your policy, so they "
+                   "were not checked)" if off else ""))
+    dissent = archive_dissent(fe)
+    if "done_claim" in dissent:
         detail = f"the recap does not claim done ({fe['done_claim']})"
-    elif fe["offers_to_continue"]:
+    elif "offer" in dissent:
         detail = "it OFFERS TO CARRY ON and is waiting to be told to - answer it, do not archive it"
-    elif fe["ends_with_question"]:
+    elif "question" in dissent:
         detail = "it ends on a question"
     else:
         detail = (f"it still RECOMMENDS {len(fe['open_recommendations'])} thing(s) - a chat with "

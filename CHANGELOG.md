@@ -62,6 +62,1567 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   straight into a closed account's store for the app to find at its next start. One of the two sat
   eleven lines above a comment saying the exact opposite.
 
+## [1.1.0] - 2026-09-22
+
+### Added
+
+- **The app says when AgentHydra is running older code than its folder, and restarts it in one
+  click.** A source install kept serving the code it started with after a commit or a pull, so
+  routes and tools added since simply went missing (a new MCP tool answered with the web page)
+  and nothing anywhere said the daemon was just old. The daemon records the commit it booted on
+  and compares it with its checkout (read from git's own files, no process); when they differ the
+  header shows "Restart to load new code", every MCP tool result carries `daemonRestartNeeded`,
+  and `/api/health` reports `runningCode`. The restart is the existing in-place relaunch, on the
+  same port.
+- **The Instances table shows when each account was last launched on this PC**, and sorts by it.
+  It counts AgentHydra's own Open (stamped the moment the app is spawned) and, on Windows, any
+  launch from anywhere else that the process scan sees running (Start menu, taskbar, Claude
+  itself), keeping the later of the two. Entries are kept per machine, so a data folder shared
+  between PCs never shows another PC's launch as a local one, and they are cleared when an
+  instance is deleted. An account shows a dash until it is next seen starting: there was no
+  record before this.
+- **The Instances table remembers how it was sorted**, across reloads, restarts and the daemon's
+  port hops, through the same mirrored preference store as its collapse state. A remembered
+  column that no longer exists reads as unsorted.
+
+### Changed
+
+- **Native control no longer pins a Claude Desktop version, so a Claude update stops breaking
+  it.** The supported version, both executable hashes, the Electron inspector-fuse offset and
+  the two bundle chunks the inspector program uses were constants in this repo, and a Claude
+  update invalidated all of them: 2.2553.13 (the first build that runs Opus 5.5) refused to
+  start under native control until a person re-measured the new binary by hand. All of it is
+  derived from whatever is installed now. The guarantees that replace the pins are structural:
+  exactly one Electron fuse wire with the expected layout and the inspector fuse off, a managed
+  copy that differs from the original by that single byte with every other file hashed into its
+  manifest, and, inside the running app, the session manager and preview manager found among
+  already-loaded modules by the exports and method surface they must have, with anything
+  ambiguous failing closed. Which bundle answered is now recorded as evidence in the result
+  rather than compared against a constant. A new account gets
+  `native-only` with the debugger launched on the first free port when it is created or next
+  opened, so it never falls back to Lua/UIA. Choosing "Use standard controls" is remembered and
+  never undone.
+- **`move_chats` kills a live chat on its own when the source account is at 98% or more** of its
+  5-hour or weekly usage (owner's standing order, 2026-09-20). Below that, `terminate_live` is
+  still a person's word; an unreadable usage row never triggers it.
+- **A move whose source row was only disk-flagged is reported as not finished**, because the
+  running source app still shows it. The report leads with it and `sourceStillShown` lists it.
+
+### Fixed
+
+- **The permission picker reported working chats as unapproved.** Right after a chat was moved,
+  it said two sidebar rows had the chat's name ("ambiguous:2") and then that the chat was not open,
+  while one row existed and the chat was running in bypass. Claude Desktop now puts the composer's
+  model button at the right of the message box, and the picker used that button to find where the
+  sidebar ends, so it counted the open chat's own header button as a second sidebar row and never
+  looked for it in the pane. The sidebar's edge is now measured off its own chat rows, which works
+  in any language and layout; checked read-only against three open windows.
+- **Claude Code sessions lost AgentHydra's tools when another Claude app rewrote its config.**
+  AgentHydra registered itself in `~/.claude.json` once, at startup. Every running Claude client
+  rewrites that whole file from its own copy, so one that was already open reverted the entry,
+  and a different session hours later found an MCP server with no tools and nothing saying why.
+  The entry is now re-checked every minute while registration is on and restored if it drifted
+  (an unchanged file costs one read), a failure that persists is logged once rather than every
+  minute, and `/api/health` reports whether the registration currently points at this daemon.
+- **A table sort put missing values first when descending.** Stopped instances (no memory, no
+  uptime) and never-launched ones jumped to the top of any descending sort, contrary to the
+  column contract that they sort last. They now sort last in both directions.
+- **A managed Claude copy made while Squirrel was still installing an update was trusted
+  forever.** Squirrel extracts straight into the new app folder, and the newest folder is now the
+  one used, so a launch during that window could copy a complete `claude.exe` with other files
+  missing and name the copy after the same executable as the finished install. The copy is now
+  checked against the installed folder's file list and sizes right after copying and on every
+  reuse; one made from an unfinished install is moved aside and rebuilt, and a refused copy no
+  longer leaves a full-size staging folder behind.
+- **The inspector program now checks the Claude code it relies on before an archive.** With no
+  hash pinning the bundle, it reads the loaded code to confirm that archive still forwards
+  `cleanupWorktree` (which keeps a checkout's files) and that preview cleanup still matches
+  worktrees by prefix (which its preview guard models), and refuses a build that changed either.
+  Module discovery is also scoped to the app folder itself rather than any path sharing its
+  prefix, and a second preview manager in the hinted module now counts as ambiguity.
+
+## [1.0.0] - 2026-09-20
+
+### Fixed
+
+- **Sign-in and settings sync reached a domain that no longer exists.** The `.icu` registry
+  suspended `connections.icu` on 2026-09-18 and the whole zone went NXDOMAIN - no DNS record at
+  all - so every call to it failed at resolution from that date. Nothing reported it, because a
+  name with no record returns no status code and writes no log; it fails inside the same path a
+  flaky network uses. The daemon now signs in against `accounts.connectionsapi.com` and its
+  update check asks `studio.connectionsapi.com`.
+
+  Settings sync needed a second fix and it is the one worth knowing about: the issuer covers
+  sign-in, but the data locker is a SEPARATE base URL that came from `@cnct/connect`'s own
+  default - so sync kept failing while sign-in looked fine. That default is fixed in
+  `@cnct/connect@1.5.2`, which this release takes.
+
+- **The analytics pixel on agenthydra.lunarwerx.com stopped recording** for the same reason, and
+  now loads from `analytics.connectionsapi.com`. The privacy answer in the site's FAQ, which
+  names the host the update check talks to, was updated with it.
+
+### Changed
+
+- **The version line moves to 1.x.** The package now declares 1.0.0 (was 0.43.0), so the next release is 1.0.0 rather than another 0.x (owner directive, 2026-09-18: no public project stays on a zero major).
+
+### Fixed
+
+- **A re-login hid every chat filed under the previous account, and every tool kept saying they
+  were there.** The desktop app files one record per chat under
+  `claude-code-sessions/<accountUuid>/<orgUuid>/` and shows ONLY the folder of the account the
+  profile is signed into (`config.json` `lastKnownAccountUuid`). On 2026-09-18 instance #12 was
+  re-logged into another account twenty minutes after four chats were moved in; the four vanished
+  from the app while `list_chats` and `chat_dossier` reported them unarchived on #12 and every move
+  of them answered "nothing to do: already lives in pap3r rotate2", because every scan globbed
+  `*/*/local_*.json` across all account folders.
+  - Every chat record now carries `accountUuid`, `loginUuid` and `staleLogin`
+    (`core/chat-store-scan.ts`); `list_chats` flags each row and counts the hidden ones in
+    `counts.staleLogin`, and the Instances "Chats" panel shows them in red as "hidden by a
+    re-login". The signed-in-account read moved to `core/login-state.ts` so the side-effect-free
+    scan can share it.
+  - "Already here" and "did it land" ask only the signed-in account's folder
+    (`findVisibleChatMetaPath`: `renderedInStore`, `awaitChatRecord`), so a stale record neither
+    skips an import nor verifies one.
+  - A move to the SAME instance re-homes such a chat: the import sets the old record aside to
+    `~/.agenthydra/backups/stale-login-records/` (never deleted), lands the chat where the app
+    looks, and puts the old record back if nothing lands within 45s. `migrate_chat` no longer
+    short-circuits, verifies, or stamps on a stale-login row, and `choose_match` prefers the copy
+    that is actually on screen.
+  - A cold landing goes into the signed-in account's folder instead of "whichever leaf was touched
+    last" (`chooseStoreLeaf`), which minutes after a re-login is the previous account's.
+- **`chats --console` listed ~220 zswarm and bench jobs as homeless chats.** Only a Claude Code
+  session with no desktop home is a console chat now; other sources are grouped as "headless
+  <source> runs - never a desktop chat". An agent asked for "orphaned chats" read the old list as
+  the orphans and moved 25 old chats nobody asked for.
+
+- **An in-app archive or rename was refused EVERY time, because the app rebuilds a row's menu
+  button the first time its menu opens** (`misc/Manage-DesktopChat.ps1`). The actuator's
+  last-moment re-aim re-read the Name of the kebab handle it took BEFORE opening the menu, to prove
+  it was still aimed at the right row. Measured on instance 13, on two rows, both on the first open
+  of an app session: the kebab is replaced by a NEW element with a new RuntimeId (`...4.664 ->
+  ...4.1452`, `...4.693 -> ...4.1662`), the old handle answers `Name = null` and every pattern call
+  on it throws, and the element it hangs off keeps its id (`...4.663`, `...4.692`). Every real
+  archive is a first open, so every one was refused ("it reads ''"), and because the stale
+  handle's `Collapse()` throws too, every refusal left its menu standing open. The earlier
+  diagnoses ("the sidebar moved", "the tree was re-served, re-read and it will answer") were both
+  wrong, and so was the proposed fix of matching the kebab's own RuntimeId: that id is exactly what
+  does not survive.
+  - The re-aim is by IDENTITY now (`ReAimVerdict`): the kebab's id or its raw-view parent's, both
+    taken before the menu opens, must find exactly one kebab, which must be the Expanded one
+    holding the menu; the title is read from THAT element and the old name check stays the
+    assertion; and the item about to be invoked must sit in the one menu THIS run opened, so a
+    menu an earlier run left open can no longer hand over its row's Archive. A kebab that merely
+    carries the right NAME is never a candidate. Anything unreadable or unfound refuses.
+  - Every exit after the menu opens closes it through the kebab that carries the row's identity
+    (`CloseRowMenu`), never a neighbour's, and a menu found already open is closed and reopened
+    rather than trusted.
+  - `orchestrator/scripts/tests/test_actuator_reaim_identity.py` runs the SHIPPED function's own
+    text (parsed out with PowerShell's parser) through 18 cases, including the measured rebuild
+    and an identically named neighbour holding the open menu, and asserts that nothing between
+    opening the menu and invoking the item looks a row up by name or reads the stale handle's
+    name. Proven against eleven mutants (the old script fails 22 of 23; a name-only re-resolve
+    fails 5; the kebab-id-only match fails 13); the UIA readers were checked read-only on a live
+    Chromium tree. ⛔ NOT YET PROVEN END TO END: the owner stopped all instance launches for the
+    night before one `archive_desktop_chat` could run on a rendered row.
+- **A refused in-app archive reported its tidy-up note instead of the refusal**
+  (`server/src/ui-archive.ts`, `verdictLineOf`). The daemon relayed the actuator's LAST line as the
+  reason, and whenever the run had expanded a sidebar group to find the row, that line was
+  "collapsed N sidebar group(s) back the way they were", printed by the script's `finally` AFTER
+  its `FAIL:` line. The reason is now the last line that starts with one of the actuator's own
+  verdict words (FAIL, AMBIGUOUS, STOPPED, INVOKED), else the last line as before. Proven red on
+  the old logic, green on the new.
+
+- **ELEVEN more unbounded waits on a child process, swept out after the orchestrator one**
+  (`server/src/core/process.ts` and ten call sites). Every `.exited` await in `server/src` was
+  audited; sixteen sites, eleven with no deadline at all, failing in three distinct ways. There is
+  now ONE bounded spawn - `spawnCaptured` / `capturePipedProc` / `awaitExitBounded` in
+  `core/process.ts` - and every site goes through it. What it fixes:
+  - ⛔ **A DEADLOCK in the Windows credential path.** `core/crypto/keys.win.ts` opened
+    `stderr: 'pipe'` and never read it. A DPAPI `Unprotect` failure writes a multi-kilobyte .NET
+    traceback; past the pipe buffer PowerShell BLOCKS on that write, so it never exits, so stdout
+    never closes and `proc.exited` never settles - and nothing anywhere had a deadline to break it.
+    It is the same "child fills one pipe while the other is unread" deadlock the orchestrator
+    adapter's own comment warns about, reached in the file that decrypts account tokens. The helper
+    DRAINS every stream it opens, always, whether the caller wants the text or not.
+  - **An HTTP route that could never answer:** the clipboard copy in `routes/sessions.ts` awaited
+    `proc.exited` with nothing racing it, so a `Set-Clipboard` wedged on a locked or RDP session
+    meant the route simply never replied.
+  - **No deadline on the kill paths themselves:** the graceful and FORCED `taskkill` awaits in
+    `core/codex-desktop.ts` and `core/instances.ts`, so a wedged kill hung the quit it was meant to
+    guarantee. Also bounded: the keychain and `secret-tool` credential reads (both of which prompt
+    a human and can wait forever), the window-focus poke, both shortcut writers, the screen
+    capture, and the port-owner lookup.
+  - **The deadline now kills the TREE, not the pid**, because a grandchild holding the pipe is the
+    thing a bare `proc.kill()` cannot reach; and the drain reads INCREMENTALLY rather than through
+    `new Response(stream).text()`, which cannot be cancelled - so a timed-out run hands back what
+    it already read instead of nothing. (That last one was found by this change's own test, which
+    caught the first cut of the helper losing output on exactly the path it exists for.)
+  `dispatch.ts`'s probe had a killer bounding the process but not the read, so it too could sit
+  past its own timeout on a process that was already dead; the read is raced now as well. Proven by
+  `spawn-captured-bounded.test.ts`: a child that never exits, one that floods the previously-unread
+  stream, and one whose grandchild holds the pipe.
+- **Four MORE of the same shape, found because the first sweep's own grep was truncated**
+  (`ui-archive.ts`, `usage.ts`, `session-keepalive.ts`, and the kit's `tray-bootstrap.mjs`). Three
+  had a timer that killed the PROCESS while the `await` sat on the DRAIN - which ends when the pipe
+  closes, not when the child does - so the chat actuator, the usage probe and the keepalive probe
+  could each outlive their own declared deadline. The fourth had no deadline of any kind.
+- ⛔ **The tray-host probe was unbounded IN EVERY APP THAT VENDORS THE KIT** (fixed at source in
+  `lunarwerx-ui` 62212dd, synced here and into ReDesign). `trayHostProcessState` awaited the stdout
+  drain and then `proc.exited` with nothing racing either, so anything the probe spawned that
+  inherited the handle held it open for as long as it lived. One unbounded await, copied into four
+  products. DevWebUI and RepoYeti still carry the old copy - they had another session's uncommitted
+  work in their trees, so they were left alone; `node ../../lunarwerx-ui/sync.mjs --app <name>`
+  picks it up.
+
+- ⛔ **`reassertChatArchive` could not be called off, so for TEN MINUTES after any archive every
+  unarchive of that chat was silently reverted** - while `archive_desktop_chat` still answered
+  `ok: true, changed: true`. The route already refused to FIRE the watcher on an unarchive
+  (2026-09-17); what nobody handled is the watcher an EARLIER archive left running. Measured live
+  on instance #56 / chat `d9fc4886`: three `archive_desktop_chat {archived:false}` calls **and** a
+  hand-written flip of the JSON, all reverted within ~1.5s, with four `daemon.log` lines reading
+  `re-asserted archived ... (the app's re-save resurrected the twin)` **while the app was CLOSED** -
+  the log blamed Electron for the owner's own write. Proof it was only ever the watcher: once the
+  ten-minute window lapsed the same unarchive stuck and survived an app boot. Now: a watcher
+  registry keyed by profile+session, checked every tick, with a re-arm superseding the previous
+  watcher rather than racing it; `cancelChatArchiveReassert()` called by the unarchive path
+  **before** it writes (cancelling after would only lose the race) and reported as
+  `cancelledWatchers`; the route reads the flag back off disk and returns `flagOnDisk` /
+  `flagStuck` / `flagWarning`, because `changed: true` only ever meant "I wrote it", not "it
+  stuck"; and the log line stops naming the app when the app is not running. Four tests in
+  `server/tests/archive-watcher-cancel.test.ts`, proven red-then-green - with the cancel check
+  disabled the first one reads `restores: 1`, the exact live symptom.
+  **PROVEN ON A RUNNING DAEMON, 2026-09-18** (0.43.0 from source, after a tray restart), on
+  instance #56 / chat `d9fc4886` with the app UP: archive under the running app armed a watcher,
+  and the unarchive that immediately followed answered
+  `cancelledWatchers: ["…\\test9"]` and `flagStuck: true`. The flag then read `false` on disk at
+  5s, 10s, 15s, 20s, 25s and 30s - where the pre-fix behaviour reverted inside ~4s - and
+  `daemon.log` has recorded ZERO `re-asserted archived` lines since the restart, against four in
+  the same chat before it.
+
+### Changed
+
+- ⛔ **The chat actuator is ONE file again, and the copy the daemon was running was the WEAK one**
+  (`misc/Manage-DesktopChat.ps1`; `orchestrator/scripts/actuator/manage_desktop_chat.ps1` is
+  deleted and its six Python callers repointed). The two were forked on 2026-09-01 and drifted for
+  a fortnight. The drift was not cosmetic: the daemon's copy - and therefore **every**
+  `archive_desktop_chat` and `chat_rename` call - ran without window activation (a minimized app
+  reports "not rendered"), without the exact `-Instance` match and the refusal to act on a blank
+  one (a bare `-Instance` fanned the action out over every running account), without taking the
+  app's REAL window instead of whichever `FindFirst` returned first (a hidden helper window reads
+  as "no rows", which a settle reads as "already settled"), without the last-moment re-aim that
+  refuses when the sidebar re-orders under an open menu, without `InPrimaryPane` (the open chat
+  renders a second kebab, so every open chat read as AMBIGUOUS), without folding sidebar groups
+  back the way it found them, and without the locale-independent CSS-palette fallback (a
+  non-English app refused every archive). The one file now carries all of that plus the two flags
+  only the old copy had (`-AllowDuplicateRows`, `-All`) and its rename stale-element retry. It
+  lives under `misc\` because that is what a compiled build embeds (`RUNTIME_MISC_FILES`), so a
+  second copy anywhere is a copy the daemon cannot run.
+
+### Fixed
+
+- **A finished orchestrator run polled `running` for as long as its declared deadline, because
+  the PIPE decided when it was over and not the PROCESS** (`server/src/orchestrator.ts`). The
+  spawn adapter awaited `Promise.all([drainStdout, drainStderr, proc.exited])`, which settles on
+  the slowest of the three - and a grandchild that inherited the child's stdout holds that pipe
+  open for as long as IT lives. A `move_chats` whose child exited after 79 seconds therefore sat
+  `status: 'running', result: null` until the hour-long deadline killed it, losing the per-chat
+  report it was launched for; a hand-run `courier` did the same past its 300s. Reproduced against
+  a real interpreter (a script that spawns an un-redirected `Popen` and exits: 100 ms without a
+  pipe-holder, `timeoutMs + 5s` with one). The child's own exit now starts the same drain
+  countdown a kill does, so the run is reaped in seconds instead of at its wall.
+- **The same run's output died with the process, so a killed run read as a crash with no
+  diagnostic** (`server/src/orchestrator.ts`). Python block-buffers stdout when it is a pipe, so
+  everything two cancelled runs had printed sat in an 8 KB buffer inside the child and went with
+  it: both records read `exitCode: 1, stdout: "", stderr: ""`, which sent the first diagnosis
+  hunting a silent exception that had never happened. `PYTHONUNBUFFERED=1` is pinned alongside
+  the existing UTF-8 pins, so a cancelled or timed-out run now returns every line it got out.
+- **A deadline enforced only by a kill assumes the kill worked** (`server/src/orchestrator.ts`).
+  `realSpawn` killed the tree at `timeoutMs` and then went on awaiting `proc.exited`, which a pid
+  the OS will not reap never settles - the deadline would have been missed with nothing to say so.
+  Two bounds close it: the adapter now answers at `timeoutMs + 30s` whatever the child or its
+  descendants do, and the operation registry closes its own record 90s past a run's declared
+  deadline, killing what is left and naming why, so `running` forever is not a state the daemon
+  can be in. A late result cannot reopen a record the watchdog has already reported.
+  ⚠️ **Latent, not observed.** The 2026-09-18 incident report said both deadlines had passed
+  without firing; the records say both runs were CANCELLED at 79s and 15s, far inside them (the
+  "65 minutes" was a mis-timed poll, corrected at source). These two bounds are defence in depth
+  for a hole found by reading, not a fix for a failure anyone measured.
+- **A source row settled against a RUNNING app was reported as final, and two came back**
+  (`orchestrator/scripts/migrate_chat.py`, `migrate_batch.py`). A two-chat move off a running
+  account settled and tombstoned both source rows; `list_chats` read `unarchived: 0` and the move
+  was reported settled. Seventy-five minutes later the app had re-saved both chats from memory
+  and the owner archived them by hand. A disk read taken seconds after a settle cannot answer
+  what a running app will write next, so: the payload carries `sourceRowProvisional`, the batch
+  runs a fifth phase after the resume that re-reads every provisional row and re-settles or
+  re-tombstones whatever came back, the report says so in prose, and `phase_stamp` leaves the
+  journal on `stamped-source-running` so `migrate_reconcile` keeps re-checking the row long after
+  the process is gone (it advances the row to `settled-verified` itself once it holds).
+- **One stuck delivery could eat a whole courier run** (`orchestrator/scripts/courier.py`). Every
+  step was bounded - the daemon send at `confirm_secs + 120`, the actuator at 300s, the confirm
+  watch at `confirm_secs` - and nothing bounded their sum, so one row's worst case ran past
+  thirteen minutes and a `courier --only a --only b` declared at 300s could spend its entire
+  deadline inside row A with row B never attempted (seen live: A's `attempts` climbing while B
+  stayed at 0). `courier.row_budget_secs` (new, default 420s) is a wall-clock deadline carried
+  down the row: each step takes the smaller of its own timeout and what is left, a step with
+  nothing left is refused rather than half-started, and the loop advances.
+- **A spawned terminal held the daemon's pipes open after its script had exited**
+  (`orchestrator/scripts/cli_spawn.py`). The `Popen` that opens a console redirected nothing, so
+  it inherited the daemon's stdout/stderr - the same defect above, at its source. It now takes
+  `DEVNULL`, and `tests/test_no_inherited_stdio.py` refuses any `Popen` under `scripts/` that
+  does not say where its output goes.
+- **An UNARCHIVE under a running app was silently undone by the route's own watcher**
+  (`server/src/routes/desktop-sessions.ts`). `reassertChatArchive` writes `isArchived=true` and
+  nothing else, for ten minutes or eight restores - it exists to beat a running app's re-save
+  after an ARCHIVE. The route fired it on both paths, so an unarchive was reverted within about a
+  second and the next archive answered `changed:false`, while the response had just promised the
+  flag was written and would land at the next restart. Measured live 2026-09-17 by unarchiving a
+  chat under a running app and reading the dossier back. Now armed only when archiving.
+
+- **A cold app made the actuator report a chat that is plainly on screen as "not rendered"**
+  (`misc/Manage-DesktopChat.ps1`). The MSAA poke is aimed at each `Chrome_RenderWidgetHostHWND`
+  child, but Chromium creates that legacy window lazily, on demand: a freshly launched app has
+  none, so there was nothing to poke, the accessibility tree never switched on, and every query
+  came back empty. `-List` printed an empty chat list and an action exited 3 with "collapsed group
+  or virtualized out" - a confident wrong diagnosis that sends the reader to scroll a sidebar
+  already showing the row. Measured on a just-launched instance: 0 render widgets at launch, 1
+  after repeated requests. Wake now asks repeatedly (top-level MSAA request plus a tree read,
+  eight tries) and BOTH failure paths say when nothing was readable rather than blaming the
+  sidebar. Proven red-then-green against a real cold app. The top-level request is restricted to
+  the cold path on purpose: on a warm window it re-serves the tree and invalidates held elements,
+  which broke the re-aim rail ("the row ... reads ''") in testing.
+
+- **A row menu left open poisoned every later archive of that chat**
+  (`misc/Manage-DesktopChat.ps1`). `ExpandCollapsePattern.Expand()` throws on an already-expanded
+  element, and under `ErrorActionPreference='Stop'` the run died with a bare
+  `+ FullyQualifiedErrorId : InvalidOperationException` - no chat named, no cause - which is what
+  the daemon relayed to its caller. Reachable in normal use: any refusal after the menu opens can
+  leave the popup up. Already-open is now the state the line was trying to reach, not an error.
+
+- **The archive response claimed the app's control "was driven" when nothing was clicked**
+  (`server/src/routes/desktop-sessions.ts`). `verified` is true down two paths - the control fired,
+  or there was no rendered row left because the chat was already off the sidebar - and the note
+  claimed the first for both, so callers read "the control was driven" beside `clicked: false`. A
+  verdict readable two ways is the exact fault the `visibleNow` -> `stillOnScreen` rename was for.
+
+- **Archiving a chat under a RUNNING app now retires the row instead of handing the caller a
+  script to run** (`server/src/routes/desktop-sessions.ts`, `orchestrator/scripts/archive_chat.py`).
+  `POST /api/sessions/:id/desktop-archive` - the route behind the `archive_desktop_chat` MCP tool -
+  wrote the metadata flag and then returned a paragraph explaining that the chat was still on
+  screen and that the caller should go run `misc/Manage-DesktopChat.ps1` themselves. Meanwhile
+  `server/src/ui-archive.ts`'s `uiArchiveChat`, the server-side version of exactly that click with
+  rails that refuse when a different LIVE chat shares the rendered title, had been in the codebase
+  since 2026-08-30 with **no caller at all**. Owner ruling, 2026-09-17, after archiving 17 chats by
+  hand: a built-in that does not do what it says gets FIXED; nobody should be writing a one-off
+  script to finish a basic operation.
+
+  The route now drives that click for every hit it changed under a running app. Bounded at 20s (a
+  measured click is 2-5s, while ui-archive's own spawn guard is 90s - long enough to outlive
+  hydralib's 30s POST default and turn a working endpoint into a caller-side timeout), never
+  throwing, timer always cleared. Losing that race is not hidden: the flag is written, the
+  re-assert watcher still runs, and the answer says the click did not settle and why.
+
+- ⛔ **Caller-visible: the archive response's `visibleNow` is renamed `stillOnScreen`.** The old
+  name shipped beside a note saying the chat WAS on screen, so it could be read either way - fatal
+  now that the route can genuinely retire the row. Nothing consumed it in logic; there is no shim.
+
+- **`archive_chat.py` honours the daemon's own click.** When the app opened in the race window
+  between the fleet read and the POST, it used to exit 7 and tell the caller to re-run; it now
+  continues to verification if the response says the row is already gone.
+
+- **The chat actuator re-pokes MSAA after opening a row menu** (`misc/Manage-DesktopChat.ps1` and
+  `orchestrator/scripts/actuator/manage_desktop_chat.ps1`). Chromium builds the popup's
+  accessibility subtree as lazily as the sidebar's, so every UIA query saw zero MenuItems and the
+  script reported `menu opened but no 'Archive' item matched a known label. Menu showed: ` with an
+  EMPTY list - which reads as a missing locale label when nothing had been rendered at all. An
+  empty `Menu showed:` list means NOT RENDERED; a populated one means a real label gap.
+
+### Added
+
+- **`-All` on `misc/Manage-DesktopChat.ps1`** archives EVERY row carrying one title, one pass at a
+  time, re-invoking itself and capped at 25 passes. That is a different claim from
+  `-AllowDuplicateRows` (which asserts one chat drawn twice): `-All` is several REAL chats sharing
+  a name, measured while cleaning up 17 fan-out judge chats of which three shared one title.
+  Archive only - a rename or unarchive of N same-named rows has no single sensible meaning.
+
+## [0.43.0] - 2026-09-17
+
+### Added
+
+- **The orchestrator has a policy file: 86 knobs, one place, every default equal to what was
+  hardcoded** (`orchestrator/scripts/lib/configlib.py`, `orchestrator/scripts/policy.py`,
+  `orchestrator/state/config.json`). Owner ask, 2026-09-17: *"most of the orchestrator should
+  probably be configurable. Like, it should ask which variants or whatever, which toggles,
+  triggers, options the user wants on. And then when we decide that, it orchestrates."* An audit
+  the same day counted **138 user-facing policy knobs spread across 18 files** as module
+  constants and unswitchable `always-on` behaviours, with no config file, no env var and no
+  per-fleet policy anywhere - archive_chat.py's own line was *"the complete set of user-facing
+  knobs; there is no config file"*. Steering the fleet meant editing Python.
+
+  Three ways to set it, because three different things ask: `orch.py policy --wizard` walks a
+  person through every group and writes nothing until they confirm; `orch.py policy --ask` /
+  `--apply answers.json` is the same questionnaire in the ask/apply shape `interview.py`
+  already uses, so an AI can set policy with no terminal; `orch.py policy --set k=v` changes
+  one knob now. Plus `--list`, `--explain <key>`, `--doctor`, and four presets
+  (`default`, `observe-only`, `conservative`, `aggressive`).
+
+  **Installing it changes nothing.** Every default equals the value it replaced, enforced by
+  `test_configlib.test_every_default_matches_the_constant_it_replaced`, which reads the live
+  module values back and fails if any drifted. On a fresh machine `orch.py policy` prints
+  "nothing - every knob is at its default". Precedence is always: a flag a person typed >
+  config.json > the default. Turning a sweep lane off changes what `--all` does; naming that
+  lane on the command line still runs it.
+
+  Covered: the gate's timings and its **four archive signals, one switch each**; archiving
+  (master switch, quiet window, per-run cap, knowledge preservation, the grace window); the
+  sweep's four lanes plus its naming and doctrine passes; the doctrine stamps themselves
+  (bypass, ultracode, effort, held chats, and the global-settings rewrite); the groundskeeper's
+  five duties and every cap; the usage bands; waking (including the exact wake prompt);
+  permission-prompt pressing; delivery; the judgment queue; the standing manager; and all
+  eleven scheduled lanes (on/off and cadence - a lane switched off is now UNREGISTERED by
+  `--apply`, not merely skipped, because a task Windows still ticks is not "off").
+  Deliberately **not** knobs, and listed as such in the menu so their absence reads as a
+  decision: the live-writer rule, the hold rail, the T-0 re-check, post-act verification, the
+  DENY list, the tray-icon switch, and that the shared-cause breaker fires at all.
+
+  ⛔ **A policy file nobody can read stops unattended acting.** Unreadable JSON, a value that
+  fails its check, and an unknown key (`"archive.enable": false` is a typo that reads as
+  "archiving is off" and changes nothing) all fall back to a default, and a lane acting on a
+  default where the owner wrote the opposite undoes his decision. So `armlib.refuse_unless_armed`,
+  the guard every unattended act already calls, refuses while `configlib.problems()` is
+  non-empty, armed or not. `--force` by hand still runs one act; the dry loop names each
+  problem and exits 2; `policy --unset <key>` removes an unknown key. Writes are atomic
+  (per-process temp file, then a swap) and serialized across processes, so two `--set` runs
+  at once both land, and a note a person added by hand (`"_why": ...`) survives a rewrite.
+
+  Found by review before any of this was committed, and fixed with tests:
+  `schedule_jobs --only <lane> --apply` unregistered the other ten lanes; `--pause` (what
+  `orch.py disarm` runs) skipped a lane the policy had switched off, so a lane still
+  registered from before kept firing after a disarm (`--status`, `--pause` and `--remove` now
+  reach every lane, `--resume` skips switched-off ones, and a named lane is registered at its
+  policy cadence); with `archive.enabled` OFF the sweep still ran the archive lane, so three
+  identical refusals tripped the shared-cause breaker and filed a false incident (the sweep
+  and the groundskeeper now skip archiving up front); the wizard's confirm step crashed on
+  every run with a change, so it could never save; an on/off answer the wizard did not
+  understand counted as OFF, so a typed "yse" switched an archive signal off (it now keeps
+  the current value); a JSON `true` passed as the number 1; `--doctor` crashed on the broken
+  file it exists to diagnose; and `--apply` crashed on an answer that was not an object.
+
+- **`dryrun.py` - run the dry loop N times and prove it works** (`orchestrator/scripts/dryrun.py`).
+  Owner ask, same day: *"can we run like 50 dry runs to make sure it's all functioning?"* One
+  run proves it did not crash that time. N runs answer what one structurally cannot: the
+  intermittent-crash rate, whether the loop AGREES WITH ITSELF (it fingerprints every chat's
+  decision and reports **flaps** - a verdict that changed and changed back, which is a
+  timing-dependent bug, as distinct from a verdict that moved once because the fleet moved),
+  where the time goes per stage, and - with `--matrix` - whether flipping a policy knob
+  actually steers the plan. Every run is a fresh subprocess on purpose: looping in one process
+  would let the usage-survey cache and module constants carry over, so later runs would be
+  faster and more identical than reality.
+
+  The matrix judges each variant against **what it claims to change**, on evidence an inert
+  knob cannot fake. It took two rewrites the same day to get there. The first version asked
+  "did anything differ?", and the judgment-queue count drifting on a live fleet made all eight
+  variants pass. The second still compared counts with `>=` or "or unchanged", so a cap
+  nothing read passed whenever the lane was already full, and a switched-off signal passed
+  because "the same number of archive candidates" satisfies "the same or more". Now a cap is
+  checked inside the variant's own run (shown == min(cap, everything waiting)). A signal is
+  checked chat by chat: the plan records what all four archive signals say about every
+  finished chat (`dissent`, switched on or not), and every chat the baseline shows held back
+  ONLY by the switched-off signals must come out released. When the fleet has nothing that
+  could tell a wired knob from an inert one, the verdict is `INCONCLUSIVE`, printed as "not
+  proven", never counted as a pass. The slow-liveness variant names every decision it
+  disagrees with the fast index on. A knob that acts at ACT time and cannot be seen in a dry
+  loop reports `not-visible-here` and names the unit test that covers it.
+
+### Changed
+
+- **Liveness for the whole fleet is ONE daemon call, not one per chat** (`hydralib.live_index`
+  / `live_from_index`, used by `dashboard.build_plan`; `GET /api/sessions/live?lineage=1`).
+  Measured 2026-09-17: `live_for(sid)` cost **668ms per chat** and `build_plan` called it once
+  per row - 86 of the dry loop's 132 seconds, paid again by every consumer of the plan (the
+  sweep, the groundskeeper, the dashboard page, the courier's cap). The gate itself costs under
+  a millisecond per chat; the wait was entirely HTTP round trips against a registry
+  `/api/sessions/live` hands over in full for one request. Verified equivalent on the live
+  fleet: **128 chats, 0 decision differences, 0 state differences, the same 10 running chats,
+  101.2s -> 2.3s (44x) for `build_plan`.**
+
+  ⛔ **Every alias of every live engine is indexed, because that is the one way a fast
+  liveness read could call a chat with a writer "not live".** Identity rotates: a chat that
+  rolled its cli session id keeps a transcript row under the OLD id while its engine runs under
+  the NEW one. `?lineage=1` makes the daemon return, for each live engine, every id its chat
+  has answered to (`liveLineage` in `server/src/chat-dossier.ts`, the same rule the dossier's
+  own `live` field uses), with `lineage: true` on the answer so a caller can tell it from a
+  daemon that ignored the parameter. Against an older daemon the index does one dossier lookup
+  **per live engine, every one of them** - 13 engines, about 13s, still no walk over 165
+  chats. The first version of this skipped that lookup for any engine whose own id was
+  already a known row, which is exactly when the OLD row is the one at risk; on the live fleet
+  it skipped all 13 engines, so the correction never ran. Caught in review before it shipped.
+  A liveness read that cannot be completed returns `None`, which means "use the slow per-chat
+  path", never "nothing is live". `perf.bulk_liveness` turns it off entirely.
+
+- **The dry loop names the console strays the land lane left out** (`lanes.landNotClaude` in
+  `orch.py loop --json`, and a line under landConsole). It was only in a sweep's own print.
+
+### Fixed
+
+- **The orchestrator no longer force-archives over a HOLD you placed by hand.** Owner, the same
+  day: *"the orchestrator itself seems to have issues where it, like, forcibly archives or
+  whatever."* `interview.py`'s `_apply_archive` ran **every** AI 'archive' answer as
+  `archive_chat --force`, on the theory that an AI's answer in the judgment queue IS the
+  person-level word the gate wanted. It is not: `--force` is also the one flag that lifts the
+  owner's own hold rail, so a model answering a question could overrule him, silently, with no
+  switch anywhere. It is now `archive.ai_decision_uses_force`, **default OFF** - the one
+  default in the policy file that is deliberately not the old behaviour - and a held chat comes
+  back reported as his word kept, not as a failure. Setting it back ON restores the old
+  behaviour for anyone who wants it.
+
+- **A move now says so when a chat it was never given went archived while it ran**
+  (`orchestrator/scripts/lib/archivewatchlib.py`, used by `migrate_chat` and `migrate_batch`).
+  On 2026-09-16 a four-chat `move_chats` batch settled every chat it was given, and in the same
+  two minutes three chats outside it went archived - one in an account the batch never named.
+  Every rail verified the INTENDED rows, so the report, the exit code and the journal all read
+  clean, and the owner found out from his sidebar. The logs could not name the writer (the
+  daemon's archive paths do not log; the actuator's menu search is already scoped to the target
+  app's own process; the doctrine lane stamped other chats that minute; the other-account
+  archive fell inside the IMPORT phase, not the settle), so a move now proves it instead: every
+  chat record on the machine is read before the first chat moves and after the last phase, and
+  a record that went from visible to archived without sharing an id with the move is
+  **collateral** - named at the top of the report with the account to unarchive it from, filed
+  as an incident, `ok: false`, `migrate_chat` exit 2 (landed, not clean), and `move_chat` /
+  `move_chats` no longer answer `ok: true` for it. It catches the cause whatever it is, which is
+  why the report says "while it ran", never "by".
+
+  Two tightenings beside it. The desktop actuator re-reads the row under its open menu
+  immediately before Archive or Delete fires and refuses if the sidebar re-ordered under it (a
+  batch re-orders the source account's sidebar with every landing); it also prints the row it
+  acted on, and the settle note carries that instead of restating what was intended. And the
+  daemon's per-profile chat lookup (`findChatMetaPath`) accepted its cached answer on a bare
+  `startsWith(profileDir)`, so a lookup scoped to one account could be answered with a SIBLING
+  account's file whose name merely begins the same way (`pap3r rotate` / `pap3r rotate2`) -
+  and its callers archive, stamp and rename what they are handed. It now requires the path to
+  be inside the profile (`path-key.isInsideDir`). No current profile pair collides, so this was
+  latent; it is pinned by a test.
+
+- **A reply is no longer deferred on a turn that has already ended** (`courier.py`). `peer_only`
+  - rail 4 travelling with a delivery, "this chat is mid-turn, never type into it" - is decided
+  when a batch PLANS, and a batch's resume phase plans every chat and then delivers them one at
+  a time, so the peer channel's dead-letter arrives minutes later. Measured 2026-09-17
+  (operation `b2576cf1`): chat `44b8262a` finished its own turn at 17:05:41 and was still being
+  deferred as "the turn is in flight" at 17:08:14, on a flag nothing re-read. The refusal is now
+  re-gated at the moment it is made (this repo's own T-0 rail): still mid-turn defers exactly as
+  before, a turn that has ended takes the composer, and a gate read that fails answers "still
+  mid-turn" - unknown never becomes a licence to type into a live chat.
+
+- **A sidebar pass that sees nothing now says which window it read and what its scan saw**
+  (`actuator/approve_prompt.ps1`, `actuator/manage_desktop_chat.ps1`). Three permission passes in
+  a row refused with "the sidebar rendered NO chat rows at all in 6s" against an app whose rows
+  were plainly on screen, and nothing in that refusal could tell the two causes apart. It now
+  carries the window inventory (every top-level window of that process, its size, whether it is
+  on screen, which one was read - an Electron app owns several and `MainWindowHandle` answers
+  with the first, not the visible) and the scan funnel (buttons seen, how many left of the
+  sidebar boundary, how many row-shaped, with a sample of names). The archive/rename actuator
+  picks the biggest on-screen window rather than whichever came first in tree order, and its
+  "not rendered" refusal names what it searched. The original failure could not be reproduced -
+  the state is gone, and by the time it was investigated that app's sidebar read 47 rows
+  normally - so this is the diagnosis the next occurrence needs, not a claimed fix.
+
+- **A chat waiting on a person is explained by the signal that actually held it**
+  (`dashboard.decide`). It read the raw fields in its own order, so a chat held back only by
+  open recommendations was explained as "the recap does not claim done (yes)", and, now that
+  signals can be switched off, a switched-off signal could be named as the reason. It now reads
+  the same `gatelib.archive_dissent` list the gate decided on.
+
+- **The orchestrator suite's four standing reds were one isolation hole, not two bugs**
+  (`tests/test_migrate_batch.py`, `tests/test_migrate_batch_resume.py`). The batch's naming
+  verdict reads what each account's app is RENDERING (`name_chats.rendered_titles`), which is a
+  real PowerShell UI read of the live desktop, and neither file stubbed it. On a machine with
+  the app open that read came back without the fake chat's title, so two clean batches exited
+  PARTIAL; and the read itself took over a second, so the two bounded-phase cases failed their
+  1.0s budget and were written off as "load-flaky". Both test bases now stub the reader to
+  "could not read the sidebar", the neutral answer that is never read as a miss. 76 of 76 pass,
+  in 18 seconds.
+
+- **`_fmt` in policy.py treated `None` as "no argument"**, so rendering an uncapped knob
+  (`saturate.max_wakes`, `groundskeeper.evacuate_per_run`) crashed `--preset`. Caught by its
+  own test the hour it was written; the sentinel is now explicit.
+
+- **The land-console lane no longer queues sessions that are not Claude chats**
+  (`sweep.build_batch`). Since 0.42.0 the daemon surfaces zswarm jobs, OpenCode and DSH sessions
+  as sessions; measured 2026-09-17, 67 of the lane's 113 "console strays" were `job.json` /
+  `opencode.db` / `session.v3.jsonl.zstd` records no actuator can land, so the lane sat 99 over
+  its cap forever with 46 real chats behind them. It now excludes rows the gate refuses as
+  "unsupported transcript format" (a Claude chat with no transcript YET is still landed), and
+  reports the excluded count as `landNotClaude` instead of shrinking silently. Now +41 over cap.
+
+- **Four policy knobs were decoration and are now wired**: `saturate.max_wakes`,
+  `doctrine.stamp_held_chats`, `groundskeeper.duty_name_stuck`, `overlord.enabled`. Found by a
+  scan whose first version could not fail (it included configlib.py, which names every key);
+  `test_configlib.EveryKnobIsWiredTest` now fails on any knob nothing reads, with a canary that
+  fails if the spec file creeps back into the scanned source.
+
+- **dryrun.py classifies flaps**: a live chat crossing the idle threshold both ways
+  (`leave-alone` <-> `judgment`) is reported as expected, not a defect - both states mean a
+  writer is alive, so neither can archive or move anything. Any other flap fails the run. Found
+  on the first 50-run pass (one busy chat pausing past 180s twice).
+
+- **`policy --wizard` with no one to answer** (piped or tool-driven stdin that still reports a
+  tty on Windows) now says "nothing was written" and points at `--ask` / `--apply`.
+
+## [0.42.0] - 2026-09-15
+
+### Added
+
+- **The DeepSeek zswarm is now a seventh session source, plus its own cost source and routing advice**
+  (`server/src/zswarm-sessions.ts`, `server/src/zswarm-cost.ts`, `server/src/config.ts`'s
+  `ZSWARM_HOME`, `'zswarm'` joining `SessionSource` in `server/src/types.ts`, and every non-compiler-
+  enforced site DSH's own addition documented needing one). `~/.zswarm/jobs/<id>/job.json` reads as a
+  session (a task's prompt/result standing in for a turn, since the zswarm has no back-and-forth
+  conversation of its own), listable, searchable, exportable and tailable exactly like every other
+  source - and unlike DSH's zstd log, job.json is plain JSON, so it opens in an editor same as a
+  Claude transcript would. `~/.zswarm/ledger.jsonl` is summed by day/model/backend
+  (`summarizeZswarmCost`), and the account's live DeepSeek balance (`deepseekBalance`, key read from
+  `~/.dsh/.credentials.yaml` at runtime, 3s timeout, 5-minute cache, degrades to `status: 'unknown'`
+  rather than ever throwing) now rides beside the per-account Claude/Codex quotas in `list_usage`'s
+  `deepseek` field. `list_usage` and `fan_out`'s own descriptions, and the MCP server's standing
+  instructions, now name `zswarm_run` as where mechanical/checkable batch work belongs once every
+  Claude account reads at or above 90% weekly, rather than queuing it behind N account resets.
+
+- **`migrate_reconcile.py` - the half-moves a killed batch leaves, found and repairable**
+  (`orchestrator/scripts/migrate_reconcile.py`, `lib/mutationlib.py`'s `advance_phase`,
+  `migrate_chat.py`'s three phases, and two suites). A move is FOUR acts - import, verify, settle
+  the source row, stamp the mode - and only the first pair was ever written down. So when the
+  25-chat batch of 2026-09-13 was killed mid-flight, 14 archived chats sat imported onto the
+  target and still unarchived on the source (duplicates, not moves) with nothing on the machine
+  saying which of the 25 were which; the fleet read taken right after even showed all 25 still on
+  the source, so the run was honestly reported as "nothing landed" and the truth surfaced twenty
+  minutes later, by eye.
+
+  Every migrate mutation now carries a PHASE, advanced by the phases themselves, and the new
+  script re-checks each unfinished row against the chat's CURRENT state rather than trusting the
+  journal: `unsettled` (the half-move), `not-landed` (the ledger and the machine disagree - the
+  loudest row here), `settled` (the journal is advanced so it is never re-read), `gone`, and
+  `unknown` for a failed read, which is counted WITH the unsettled ones because ignorance is not
+  a pass. `--finish` re-drives `migrate_chat`'s own `phase_settle`/`phase_stamp`; `--reverse`
+  hands the row to `undo.py`. It owns no actuator of its own.
+
+- **"Kill it and move it" no longer needs a `taskkill`: a `terminate_live` move preempts a patient
+  move of the same chats** (`server/src/orchestrator.ts`, `server/tests/orchestrator-preempt.test.ts`).
+  The route lock is keyed by SCRIPT NAME, so on 2026-09-12 a patient `move_chats` sitting out its
+  300s wait refused the same move with `terminate_live` as `409 busy`, and the only way through
+  was to find the engine's pid by hand and kill its tree - outside every rail these tools exist to
+  provide. Two conditions, both necessary: the incoming call carries `--terminate-live` (a
+  person's word, overriding the very wait it is queued behind), and its chats COVER the holder's,
+  so nothing the kill strands is left un-redone. A holder naming chats the new call does not is
+  still refused, with `orchestrator_cancel` named - that abandonment is a person's decision, and
+  `migrate_reconcile.py` now exists to find what it leaves.
+
+- **Clicking a Weekly cell copies the date and time that window resets, as `09/18/2026 9:59 AM`**
+  (`web/src/components/CopyResetDate.vue`, the three instance tables, `web/src/lib/usage-reset.ts`,
+  `web/tests/usage-reset.test.ts`). The bar says `4d 9h`, which is the right thing to READ and the
+  wrong thing to paste into a calendar or a message; working the date out of a countdown is
+  arithmetic nobody should do by hand. Owner request, 2026-09-14; the local time was added
+  2026-09-15, because "the 18th" alone does not say whether the quota is back at breakfast or at
+  midnight. A cell with no ISO reset instant
+  (the `claude -p "/usage"` fallback prints a YEARLESS "Sep 18, 9:59am") is not a button at all,
+  rather than copying a date whose year was guessed.
+
+- **`orchestrator_cancel { id }` - a run that is still going can be stopped, without finding a pid**
+  (`server/src/mcp.ts`, `server/tests/orchestrator-mcp.test.ts`). The daemon has had
+  `cancelOrchestratorOperation` and `POST /api/orchestrator/operations/:id/cancel` all along; only
+  the MCP surface was missing, and `orchestrator_operation`'s own description says it "starts
+  nothing and cancels nothing", so every agent that read it correctly concluded no cancel existed.
+  On 2026-09-12 that sent a stuck one-chat batch to a hand-run `taskkill /PID <pid> /T /F`, which is
+  outside every rail these tools exist to provide.
+
+  Two things are in the description because both bite. ⛔ **Cancel is not an undo:** whatever the
+  run already did stays done, chats a `migrate_batch` already landed stay landed, and it stops only
+  the remainder. ⛔ **The per-item report dies with the process,** so what actually happened is
+  established by READING THE FLEET afterwards, never by assuming the run had not got that far.
+  Cancelling also frees the route lock the daemon keys by script name, which is what lets a
+  corrected call run at once instead of being refused `409 busy`. A finished operation is a safe
+  no-op that answers with the status it already had.
+
+- **The public-push rule has teeth: a pre-push hook announces a PUBLIC remote and refuses the push
+  unless told to, refuses a release tag while the local work queue has an open section, and a
+  bundle commit must name every file it swept** (`.githooks/pre-push`, `check-public-push.mjs`,
+  `.githooks/commit-msg`, `check-bundle-message.mjs`, `scripts/save-bundle.ts`, `bun run
+  save:bundle`, two suites under `.githooks/tests/`). This repository is public and a push to
+  `main` is a release for every source install, so the standing rule was "check visibility,
+  announce it with an unmissable heading, let the owner decide". It lived only in memory, and on
+  2026-09-11 a session that had not read it pushed a peer's half-finished work unannounced. Now:
+
+  - **`git push` looks the remote up on GitHub** (stripping `.git`, which reads as 404 for a public
+    repo too) and, when it is public or cannot be proven private, prints
+    `# WARNING: THIS REPOSITORY IS **PUBLIC**` with the refs and stops. `AGENTHYDRA_PUSH_PUBLIC=1`
+    on that one command prints the heading again and proceeds: the rule is announce-then-do.
+    Fail-closed on purpose: a non-GitHub remote, a timeout or a rate limit all read as public.
+    With neither node nor bun on PATH it refuses rather than guesses.
+  - **A `v*.*.*` tag is refused while `docs/todo/TODO.md` has a section below its Contents**,
+    naming them. No override: the item gets done or the owner deletes it (nothing pending ships
+    past a release). The queue is local and gitignored, so a clone without it has nothing to gate
+    on and passes.
+  - **A `wip: bundle` commit carries `Mine:` and `Swept:` blocks** listing every path in the
+    commit, checked against the index by the commit-msg hook so a stale list cannot pass. `bun run
+    save:bundle -- --mine <paths>` sweeps the tree and writes the message from what is actually
+    dirty; a `--mine` path that is not dirty is refused. Bundling a peer's work is legitimate when
+    the owner asks for it (2026-09-12); publishing it without the author being able to find it in
+    the log was the hazard.
+
+- **A Codex chat moves between accounts, and the copy is verified before the original is archived**
+  (`server/src/core/codex-chat-move.ts`, `core/codex-transcript-copy.ts`, `core/codex-rpc.ts`, the
+  routes `GET /api/codex-instances/:id/move-chats` and `POST /api/codex-instances/:id/move-chat`,
+  and four suites). Codex itself has no move: a thread belongs to the home it was written in. So
+  this copies the rollout under a fresh id, imports it into the destination, confirms it really
+  landed, and only then archives the source, which means an interrupted move leaves two readable
+  chats rather than none.
+
+  - **The copy keeps its DISPLAYED history, not merely its model messages.** Paginated ordinals and
+    `item-completed` events are carried across untouched, because downgrading `history_mode` makes
+    Codex silently drop the items from view while the model messages sit intact on disk: a chat that
+    looks empty and is not.
+  - **Every rail refuses BEFORE it connects.** An unfinished CLI turn, an unknown process state, a
+    changed login, a destination that is the same home, an archived or out-of-home transcript, and a
+    corrupt move history each stop the move at planning time. A failed import keeps the copy and
+    never archives the source; a failed archive retries the saved copy instead of copying again; an
+    edit during the import keeps both chats and refuses a stale retry.
+
+- **Codex usage is read per instance, through the same paths that read Claude's**
+  (`server/src/usage-service.ts`, `usage-refresh.ts`, `routes/usage.ts`, `core/codex-account.ts`,
+  `web/src/components/UsageBadge.vue`). `checkUsageForCodex` is shared by the manual refresh, the
+  fleet sweep and the instance routes, so a ChatGPT-authed Codex home reports its own remaining
+  quota instead of nothing at all. A home that is not ChatGPT-authed drops its cached reading rather
+  than serving a stale one, and a logout clears it.
+
+- **DeepSeek Harness homes are managed instances: launch, open, stop, and one home per account**
+  (`server/src/core/dsh-instances.ts` + its suite, `server/src/config.ts`, `server/src/routes/
+  instances.ts`, `server/src/core/instance-numbers.ts`, `server/src/transcript.ts`,
+  `web/src/components/DshInstancesSection.vue`, the API client and the locale). A "DeepSeek
+  instances" table now sits under the Codex one, listing every `DSH_HOME` on the machine - the
+  default `~/.dsh` first, then any created here - with whether a server is serving it, on which
+  port, and how many chats are in it. Launching starts `dsh web` HIDDEN and opens its chromeless
+  window; stopping kills the listener; the home, its chats and its credentials are untouched by
+  either.
+
+  - **⛔ THE SERVER'S URL NEVER LEAVES THE DAEMON.** `dsh web` prints a one-time `?token=` that IS
+    the session. So the daemon reads it out of the harness's own log, opens the window itself, and
+    answers with an outcome - no route returns it, the SPA never holds it, and "open" is an action
+    rather than a link. For the same reason there is no login verb and nothing here opens
+    `.credentials.yaml`: signing in is the user's own step.
+  - **It sees a server it did not start.** The harness's own desktop wrapper records its port in
+    `launcher.json` and its address in `.web-url`, so a harness the user launched from their own
+    shortcut shows as Serving, and "open" reuses it instead of starting a second one. Proven against
+    the live one on this machine: `#62 DeepSeek Harness · Serving port 3080 · 2 chats`.
+  - **Every home is indexed, not just the default** (`dshInstanceStores()`, the DSH twin of
+    `codexInstanceStores()`). A second account's conversations would otherwise be invisible to
+    listing, search and analytics - the exact hole config.ts's CODEX_HOME comment warns about, which
+    is why `deepseek-harness` joins BUILT_IN_TOOL_IDS: the indexer asks the registry, once.
+  - **The default home is listed but never managed.** It is the machine's own install: it can be
+    read, launched and stopped, and delete refuses unconditionally - no confirm string unlocks it.
+    Deleting a home AgentHydra did make needs the name typed back AND the path to be inside our own
+    instances directory, so a hand-edited registry cannot be turned into a delete of somewhere else.
+  - Numbers come from the one sequence desktop, CLI and Codex instances already share (`dsh` is its
+    fourth kind), so `#62` means the same thing in the table, the API and the MCP tools.
+
+- **DeepSeek Harness (`@deepseek-ai/dsh`) is a first-class session source** (`server/src/
+  dsh-sessions.ts` and its suite, plus `agent-catalog.ts`, `types.ts`, `transcript.ts`,
+  `sessions.ts`, `session-search.ts`, `session-export.ts`, `analytics.ts`, `pricing.ts`, `mcp.ts`
+  and the web's label/filter/chart maps). Its chats now list, search, tail, export and PRICE
+  alongside Claude, Codex, OpenCode and Hermes - read straight off `~/.dsh` (or `$DSH_HOME`, the
+  harness's own override precedence), with nothing to configure and nothing written back.
+
+  It is a sixth reader rather than a catalog row claiming someone else's format because the store is
+  a third shape: one file per session like Claude's, but the bytes are **multi-frame Zstandard**, so
+  every generic path that opens a transcript and reads lines would have got binary and silently
+  found nothing - `Bun.file().text()` on those bytes does not throw, it returns mojibake, and the
+  session would have listed with a garbage title and an empty transcript rather than erroring. Read
+  out of the harness's OWN shipped source (0.1.5-rc.1), not inferred from one transcript:
+
+  - **The listing is cheap because the harness already did the work.** `storages/session_projcache/`
+    is its own materialized view of each log - title, cwd, created-at, token totals, last prompt  - 
+    so listing N sessions costs N small JSON reads instead of N decompressions. It is treated as the
+    cache it is: every field re-derives from the log, and a session with no projection still lists
+    by decoding its header.
+  - **A torn tail does not hide a live session.** The log is appended as independent frames and the
+    backend documents crash recovery, so the last frame on disk can be half-written; a failed decode
+    falls back to the longest prefix that ends on a frame boundary, which costs nothing in the
+    normal case because the normal case succeeds first time.
+  - **Archived state is real**, read from the harness's own `workspace.json` - the thing the
+    `foreign` lane structurally cannot do, where every adapter hardcodes `archived: false`.
+  - **The transcript shows the conversation and not the bookkeeping.** Fifty-odd event types exist;
+    four carry who-said-what. The harness's injected runtime-context snapshots arrive as user
+    messages with `source.kind: 'plugin'` and are dropped - showing them would put "Current DSH file
+    policy: workspace-write…" on screen as though the user had typed it.
+  - **Spend is per TURN, a first for a non-Claude source.** OpenCode and Hermes hand back one
+    aggregate and land a whole session on one day; DSH timestamps every assistant message, so its
+    turns are apportioned to the days and hours they happened in. ⛔ Its counts are DISJOINT
+    (`inputTokens` is uncached input only, cache reads reported separately), which its own type
+    documents and which this reader relies on - folding cache reads back into input would
+    double-count most of a long session.
+  - **`deepseek-flash` and `deepseek-v4-pro` are priced** from DeepSeek's published rates (checked
+    2026-09-12), because the downloaded LiteLLM catalog has no `deepseek-flash` key at all and every
+    harness session would otherwise have read UNPRICED forever. Cache rates are absolute, not
+    derived: DeepSeek's cache hit is 2% of its input rate against Anthropic's 10%, so the derived
+    ratio would have overstated a cached token fivefold. The peak (list) rate is used and the
+    off-peak halving is deliberately not applied per turn - read the figure as an upper bound. This
+    also prices the OpenCode sessions that route to the same model, which were unpriced before.
+  - **Presence counting looks at `sessions/`, not the whole home** (a new `detectSubdir` on a
+    catalog row). A harness launched as a desktop app keeps a 216 MB Chromium profile under
+    `~/.dsh`, and a detection walk over the root reported the browser's files as the harness's.
+
+  Verified end to end against a real harness install: the chat lists with its title and workspace,
+  the transcript renders (reasoning included), body search hits it, and it appears in Tokens-by-tool
+  priced at published rates. One caveat, unfixed on purpose: "open the transcript file" hands an
+  editor a `.zstd`, because that IS the session file - the in-app transcript and the exporter are
+  the readable paths.
+
+- **`POST /api/daemon/restart` - the daemon relaunching itself, gracefully, on demand**
+  (`server/src/index.ts`). `relaunchDaemon()` has always existed and every auto-update exercises
+  it - the successor is spawned first, waits for the port, takes over the SAME port, and the
+  predecessor exits only once a replacement exists - but the only door to it was
+  `/api/update/apply`, gated on `IS_COMPILED`. A SOURCE build (what this fleet runs) therefore had
+  no graceful restart at all, so a change under `server/src/` sat inert until someone remembered
+  `misc/Restart-Daemon.ps1`. That script is NOT replaced and is not the same act: it is the
+  rebuild sledgehammer that kills the daemon AND the tray host from outside when you do not trust
+  the running process. This is the in-process one, and it refuses while dispatch runs are in
+  flight (`force: true` to override) for the same reason the auto-update loop already does.
+  Verified live: 53468 → 70080 on port 7787, hidden, healthy.
+### Changed
+
+- **The unreachable headless-queue run path is deleted from `dispatchItem`** (`server/src/dispatch.ts`).
+  Everything after the `headlessRunsAllowed()` guard - the spec write, the detached-runner launch,
+  the log tail - could never execute, because that function is a hardcoded false and nothing overrides
+  it (owner, 2026-08-31: headless is never used). Behaviour is unchanged: every dispatch still ends in
+  the same refused `failed` row carrying the same `no-headless` event. The helpers and imports that
+  only that path used went with it - `buildArgv`, `launchDetachedRunner` and its
+  `AGENTHYDRA_RUNNER_LAUNCH` spawn methods.
+
+  Two more files were only reachable through that deleted spawn and are now gone too:
+  `server/src/dispatch-runner.ts` (the detached per-run supervisor, launched only by
+  `launchDetachedRunner`) and `server/src/fake-claude.ts` (the `AGENTHYDRA_FAKE` stand-in
+  `buildArgv` built its argv for). Their `server/src/main.ts` subcommands (`__dispatch_runner`,
+  `__fake_claude`) went with them, and so did every doc mentioning `AGENTHYDRA_FAKE` or
+  `AGENTHYDRA_RUNNER_LAUNCH` (`README.md`, `docs/REFERENCE.md`, `.env.example`) - trying AgentHydra
+  no longer needs a fake-CLI flag, since headless dispatch never spends real quota either way now.
+  `server/src/detached-spawn.mjs` stays: other callers (`core/instances.ts`, `core/codex-desktop.ts`,
+  `index.ts`, and others) still use it for real detached spawns unrelated to dispatch. `specPathFor`,
+  `tailRun`, `reattachRuns` and `finalize` stay too - a `queue_items` row already marked `running`
+  from before this ban can still be reattached and finished from its on-disk log, so that machinery
+  still has a live caller. `server/tests/dispatch.test.ts` is trimmed to match: its header and a
+  handful of comments that described the deleted pipeline are rewritten, and the tests that remain
+  are the refusal law plus the reattach/finalize machinery, both still reachable.
+
+- **⛔ BREAKING: `move_chats` no longer accepts an `archived` boolean at all. It takes
+  `archived_count: number`, and there is no shim** (`server/src/mcp.ts`,
+  `orchestrator/scripts/migrate_batch.py`, `server/tests/move-chat-mcp.test.ts`). A caller still
+  passing the boolean fails the schema loudly, which is the intent: a silent fallback is what this
+  change exists to remove.
+
+  A boolean could not tell a human's instruction from an agent's own initiative. Asked to migrate
+  an account holding 3 unarchived and 22 archived chats, an agent set `archived: true` for itself
+  and queued all 25; the owner stopped it twice. `archived_count` must EQUAL the archived chats the
+  batch actually holds, and those chats must be the WHOLE batch, because archived chats riding
+  along with unarchived ones is exactly how 22 rode in behind 3. Counting them first is the point.
+  `all_unarchived` is unarchived by definition and drops the count rather than forwarding a
+  contradiction.
+
+  **`move_chat`, the singular, is UNCHANGED and still takes `archived: true`.** It goes through
+  `migrate_chat.py`, which has refused archived chats per chat with exit 7 since 2026-09-05, and it
+  remains the way to move one archived chat that a human named.
+
+  ⚠ **A daemon whose two halves are different ages refuses every archived batch**, and that is the
+  stopgap working rather than a fault: python is read from disk, so the gate that demands the count
+  goes live immediately, while a `move_chats` older than 2026-09-13 still emits a bare `--archived`
+  and the gate answers `REFUSED: --archived needs --archived-count to MATCH ... the count given was
+  not stated`. A source daemon restarted after this commit has both halves and is fine. On a
+  compiled install still on 0.41.0, the route for a named archived chat is `move_chat`, one at a
+  time, until it is rebuilt.
+
+- **"Open the transcript file" is no longer offered for a session whose file is not prose**
+  (`web/src/lib/session-labels.ts`, `web/src/components/SessionsView.vue`, `server/src/routes/
+  sessions.ts`). A DeepSeek Harness log is a real file worth copying and locating, and it is
+  Zstandard frames - so handing it to an editor produced a screen of binary that reads as a
+  corrupted session. The action is hidden for those sources and the route says why in its 409,
+  pointing at the readable exports that sit beside it. A second compiler-checked capability map
+  (`SOURCE_FILE_IS_TEXT`), because "has a file" and "that file is text" have different answers:
+  OpenCode and Hermes have no file at all, DSH has one that simply is not prose.
+
+- **The dispatched and rate-limited filters disable themselves off CLAUDE-ONLY, not off a list**
+  (`web/src/components/SessionsView.vue`). Both facts exist only for Claude sessions, and the
+  hand-written "codex or opencode" list had gone stale twice as sources were added - Hermes in
+  September, DeepSeek this week - leaving two filters enabled that could only ever return nothing.
+
+- **A long name no longer stretches the Name column - it is cut to 18 characters and the whole of
+  it is one hover away** (`web/src/lib/instance-appearance.ts`, `web/src/components/
+  InstancesView.vue`, `CliInstancesSection.vue`, `CodexInstancesSection.vue`,
+  `web/src/shell/IconTooltip.vue`, plus tests). The Name column started naming a row after the
+  ACCOUNT behind it earlier the same day, and an Anthropic profile name is a person's real name:
+  "LUIS FERNANDO LOPEZ ESPINOZA" on a column that is 176px wide. Table layout is auto, so `w-44` is
+  only a hint a long cell overruns - one such row widened Name and pushed the desktop, CLI and
+  Codex tables out of the alignment their fixed widths exist to guarantee. `shortDisplayName()`
+  does the cut for all three tables, counting CODE POINTS so it can never split a surrogate pair
+  and leave a replacement glyph on the row, and charging the ellipsis to the budget so the result
+  is never wider than asked for. ⛔ It is a DISPLAY cut only: sorting, filtering, the move submenu
+  and every dialog keep the full `displayName()`, because a truncated name is not an identifier.
+  The desktop table reveals the full name in the rich tooltip it already had (the name takes the
+  first line and pushes the folder and the focus hint down one each - hence `detail`, a third line
+  on IconTooltip); the CLI and Codex tables, which have no such tooltip, use a native `title` that
+  is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
+### Fixed
+
+- **A COMPILED BUILD RAN THE PREVIOUS BUILD'S SCRIPTS: the version is a label, not a content hash**
+  (`server/src/misc-assets.ts`, `server/tests/misc-assets.test.ts`). A single-file build writes the
+  `misc\` actuators it needs out of itself into `<data>\misc\<version>\`, and reused whatever was
+  already there. Every rebuild of the SAME version therefore kept running the copy the first build
+  had written: found 2026-09-15 while proving this release, when an actuator fix sat in the binary,
+  in the repo and in the changelog, and the compiled daemon went on refusing the very thing it
+  allowed - silently, and with a plausible-looking refusal from the stale script that sent the
+  reader hunting somewhere else entirely. The materialized copy is now compared BYTE FOR BYTE with
+  the embedded one and replaced when they differ (`reason: 'refreshed'`); an unreadable comparison
+  keeps the old copy rather than churning it.
+
+- **One chat drawn twice is no longer an ambiguity that blocks a rename or an archive**
+  (`misc/Manage-DesktopChat.ps1`'s `-AllowDuplicateRows`, `server/src/ui-archive.ts`,
+  `orchestrator/scripts/rename_chat.py`, `server/tests/ui-archive.test.ts`). The app can render one
+  chat's row in two places at once - documented here since 2026-08 for archive, and measured again
+  2026-09-15 on a chat seconds old - and the actuator refused both actions with "2 rendered chats
+  end with '<title>' - refusing to guess". Identical rendered names cannot be two different chats
+  to choose between, but only the STORE can say a title is unique, so the actuator now acts on
+  duplicate rows only when the caller passed `-AllowDuplicateRows`, having counted exactly one
+  UNARCHIVED chat with that title. Two live chats sharing a title, or a title the store does not
+  carry at all, keep the old refusal exactly.
+
+  Found underneath it: those counts were read by walking a path built from the caller's argument,
+  which is an instance LABEL (`temp1`) as often as a directory - so the walk read an empty store
+  and answered 0, which is indistinguishable from a real miss. The count now comes from the same
+  store scan the dossier answers from, and the label/dir reads resolve either form.
+
+- **The release smoke test no longer fails a good build while cleaning up** (`scripts/smoke-release.ts`).
+  Every check printed its tick and the run still exited 1: on Windows a killed child keeps its cwd
+  for a moment after `exited` resolves, so removing the scratch directory threw EBUSY - reported as
+  "this release build is broken". Cleanup retries briefly, then says what it left behind, and the
+  verdict stands on the checks.
+
+- **`migrate_batch`/`move_chats` no longer refuses a move when a chat's daemon session title and
+  desktop meta title disagree, and `move_chats` can now name a chat's own title per-chat**
+  (`server/src/routes/desktop-sessions.ts`'s `/api/sessions/:id/import-desktop`, `orchestrator/
+  scripts/migrate_batch.py`'s new `--chat-title`, `server/src/mcp.ts`'s `move_chats`). Found live
+  overnight 2026-09-15 (docs/todo/TODO.md, "Overnight orchestration run", item 1): without
+  `--title`, migrate_chat restates the chat's DOSSIER (desktop meta) title as `confirm_title`, but
+  the import route compared it only against the session list's transcript-derived title - a chat
+  titled by its first message on one side and renamed in the app on the other (session 7e1fa278,
+  "Your market still looks like ..." vs "Logos for Connections products") was refused 400
+  "confirm_title does not match the current title" deterministically, and the breaker then
+  suppressed every retry. The route now reads the desktop record's own title too and accepts
+  either current name restated exactly, same as `/migrate` already did - a title that is neither
+  current name is still refused. `move_chats`' `chats` entries can also be `{chat, title}`, a
+  per-chat door MCP callers had no way through before (`--title` on the batch itself is refused
+  for more than one chat): migrate_batch.py's new `--chat-title` binds to the `--chat` named right
+  before it and reaches migrate_chat as that one chat's own real title, which the naming door
+  always accepts outright.
+
+- **An idempotency key no longer resurrects a FAILED `move_chats`/`orchestrator/run` operation**
+  (`server/src/orchestrator.ts`'s `startOrchestratorOperation`, `server/tests/orchestrator-
+  operations.test.ts`). Found live overnight 2026-09-15 (docs/todo/TODO.md, "Overnight
+  orchestration run", item 3): the key was pinned by `status === 'running' || ran` - true the
+  moment a child process actually started, whether it went on to succeed or fail - so a
+  deterministic failure (a title mismatch, a refused precondition) kept re-answering the SAME
+  failed operation on retry, with no way past it except perturbing an argument
+  (`wait_secs 60 -> 90` was the workaround that night). The key now pins only a `running` or
+  `done` operation; a `failed` or `cancelled` one leaves it free, so the very next call with that
+  key starts for real. A dropped-connection retry against a still-running or already-succeeded
+  run is unaffected - that is the property the key exists to protect.
+
+- **The daemon writes a crash record before it exits, and one line for every exit it sees**
+  (`server/src/index.ts`'s crash handlers, new `server/src/crash-record.ts`, `server/tests/crash-
+  record.test.ts`). Also observed overnight 2026-09-15 (docs/todo/TODO.md, "Overnight
+  orchestration run"): the daemon died silently three times (09:14:17Z, and 01:10Z / 04:23Z the
+  same night, pids 79360 -> 61040 on the last one), restarted by its supervisor, with no error
+  line in daemon.log to say why - losing in-flight orchestrator operations and a `fan_out` spawn
+  each time. The existing `uncaughtException`/`unhandledRejection` handlers now write a single
+  flattened line (reason, pid, uptime, message, stack) instead of the bare error object, `SIGBREAK`
+  and `SIGHUP` (which carried no handler at all) are now treated as fatal the same way, and a new
+  unconditional `process.on('exit', ...)` records the exit code and uptime for every exit,
+  including a path none of the reason-specific handlers anticipated. Investigated read-only: no
+  Application-log crash entry (Application Error / Windows Error Reporting) names AgentHydra, bun,
+  or either pid at any of the three times, and the Task Scheduler operational log that would show
+  the supervisor task firing is disabled on this machine - so the cause of the three deaths
+  themselves is still not proven; this only guarantees a future one leaves a line.
+
+- **`fan_out` no longer reports a false "ok", cannot be cancelled by a client timeout mid-spawn,
+  no longer refuses a status read while a spawn is running, no longer treats a dead account's
+  stale reading as room, and no longer drops a chat into an app someone is working in**
+  (`orchestrator/scripts/fan_out.py`'s `--group-id` and `hands_on_secs_ago`, `server/src/mcp.ts`'s
+  `fanOutVerdict` and the `fan_out` tool's auto-detach, `server/src/orchestrator.ts`'s
+  `routeLockKey`, `server/src/usage-service.ts`'s `checkUsageForDesktop`, six suites). Found
+  live 2026-09-15 fanning three tasks: the verdict read "ok: every member spawned and confirmed"
+  over counts of `finished 1, planned 1, unassigned 1`, and `fan_out_delete` printed the same
+  sentence over two members skipped `"no session"` - the verdict came only from fan_out.py's exit
+  code, never the member states, so it now names the count per state and never says "ok" while
+  any member is planned, unassigned, refused, spawned-unconfirmed or skipped. The MCP `fan_out`
+  call blocked on the WHOLE spawn (~30-90s per chat, sequential); the client gave up ("The
+  operation timed out"), stranding a member `planned` forever with no id anyone had ever seen
+  (operation `2411fce7`) - it now mints the group id itself, hands it to fan_out.py via
+  `--group-id`, and auto-detaches past 120s declared, so the daemon keeps spawning regardless of
+  whether the calling connection is abandoned. `fan_out_status`, read-only by its own
+  description, was refused `409 fan_out is already running through this route` three times while
+  a spawn ran, because the route lock is keyed by script name and a status read runs the same
+  script; `status`/`list` now take no lock at all. A REVOKED token's last good reading also sat in
+  the usage cache forever (nothing dropped it but an explicit sign-out), so balance.py's
+  cache-fallback path could read a dead account's stale percentages as real room; a 401 (an
+  expired or revoked token - Anthropic's own "OAuth access token has been revoked") now drops the
+  cache the moment the daemon notices, same as a sign-out already did.
+
+  ⛔ **AND A PERSON AT THE KEYBOARD IS NOT ROOM**, which is what actually ended that run's one
+  spawned chat. It was NOT interrupted by anything this fleet did and NOT by a revoked login: #37
+  was signed in and answering, and its own `logs/main.log` shows the owner sending three messages
+  to his own chats there between 02:52 and 02:57 local, the spawn taking the window at 02:59:26,
+  and him returning at 03:00:22 to a chat he had not started - focusing it, stopping it
+  (`[Request interrupted by user]`, 55 s in) and deleting it through the app's own control at
+  03:00:33, before going back to his own work. Quota room was the only question the ranking asked.
+  It now also asks whether a hand has touched that app lately: the desktop app logs every message
+  sent to, and every click into, one of its chats, so an app with either inside ten minutes is
+  skipped with the reason and the minutes, and `--only` naming it is a person's word that still
+  reaches it. A lane's own UI acts log the same lines, so a just-spawned account reads as hands-on
+  for a while too, which only spreads the next fan-out wider - the direction this errs in.
+
+- **A move no longer reports a landed chat as named while the app shows it nameless**
+  (`orchestrator/scripts/name_chats.py`'s `rendered_titles` / `renders` / `require`,
+  `orchestrator/scripts/migrate_batch.py`'s `_name_landings`, two suites). Found live on
+  2026-09-15: a 4-chat move reported 4/4 OK with three chats rendering as identical no-name rows,
+  so the permission picker had nothing to aim at and their bypass stamps fell back to disk-only.
+  The importer writes a title into the landed record (`titled: true, titleDurable: false`) and the
+  running app re-saves that record from memory minutes later, erasing it; the naming pass asked
+  "is anything nameless?" of the DISK copy inside that window, saw four titles, and did nothing.
+  `name_pass` now takes `require` (the titles the caller just landed) and judges those on what the
+  app is RENDERING, through the actuator's passive `-List`; `migrate_batch` passes them, reads the
+  sidebar once per instance afterwards, and names every landing the app is not showing under its
+  real title, with the command that fixes it. An unreadable sidebar judges nothing rather than
+  looping against a closed app.
+
+- **The bypass picker's own remedy could not fix the exact chat it named, and `chat_rename` had
+  no route from a stale disk title to a confirmed rename** (`orchestrator/scripts/automation_chat.py`'s
+  `--title` and `_extract_title_arg`, `migrate_chat.py`'s `_bypass_remedy_cmd`,
+  `server/src/ui-archive.ts`'s `bestRenderedAlias` and `renameChatDiscoveringRenderedTitle`,
+  `server/src/routes/sessions.ts`'s rename route, three suites). Found live 2026-09-15
+  reproducing a chat stuck `bypassVerdict: disk-only`: the printed remedy
+  (`python scripts/automation_chat.py <id> --force`) re-derives its title from the daemon's
+  dossier, a fresh disk read no fresher than `list_chats`' own - so by the time a human ran it by
+  hand, the running app had already re-saved the record and erased the title, and the remedy
+  refused with "no name to aim at" on the one chat it exists to fix. `chat_rename` had the same
+  hole from the other side: without `current_title` it fell back to the disk title alone and
+  refused (or mis-aimed) when the app rendered the chat under a different name. `automation_chat.py`
+  now accepts `--title`, and `migrate_chat`'s remedy hands it the title the batch already verified
+  instead of asking a source that can have gone stale in the meantime; `chat_rename`'s daemon route
+  now retries a failed rename by discovering the rendered row itself (fuzzy-scored against the
+  disk title, same thresholds as the Python actuator's own `best_rendered_alias`), never
+  overriding an explicit `current_title` with a guess.
+
+- **A migrated chat is no longer read as "mid-turn" because it just landed, so the resume phase
+  stops hanging** (`orchestrator/scripts/migrate_batch.py`'s new `_resume_window`, `courier.py`'s
+  per-row `idle_after`, `lib/deliverylib.py`'s `reuse_identical`, three suites). Pinned live on
+  2026-09-14 draining #63 to #13: all five chats landed, #63 was left with 0 unarchived, and the
+  operation still sat `running` for nine minutes and had to be cancelled - taking the per-chat
+  report with it. Only one of five resumes arrived.
+
+  LANDING IS ACTIVITY. The import stamps the chat's `lastActivityAt` with the landing time, so for
+  the gate's standing 180s quiet window a freshly landed chat reads `running` no matter what its
+  transcript says. The courier therefore marked each delivery `peer_only`, the peer channel
+  dead-lettered on a chat that was not actually taking turns, and the row was deferred as
+  "mid-turn". The clock proved it: the chat couriered 194s after landing was DELIVERED, and the
+  four couriered under 180s were all deferred - while every transcript ended on a finished turn
+  and the app's own `list_sessions` reported `isRunning:false` for each.
+
+  A landed chat's finishing is already settled by the move, so the resume now gates it the way
+  `--now` gates a move (`migrate_chat.quiet_window`): the fast window when the transcript was
+  scanned and no background job is outstanding, the standing window otherwise, and the standing
+  window whenever the scan itself could not be read - unreadable is not proof. This shortens only
+  how long the gate WAITS before reading the tail; the tail must still show a finished turn, so a
+  chat genuinely working after it lands is still gated as working.
+
+  ⛔ AND THE WINDOW WAS ONLY HALF OF IT - the second reproduction, hours past 180s, deferred all
+  four again, so it was never a timing question alone (`lib/gatelib.py`'s new `_judgeable_tail`,
+  the `meta` field on a parsed record, and a usage-wall rail in `courier.deliverable`). Booting
+  the landed chat through `claude://resume` APPENDS a user-role record of its own, and every test
+  in `_idle_verdict` then fails on that record instead of on the turn: `completed` is false (it is
+  user-role), `walled` is false (the limit banner is no longer last), `resumed_silent` is false
+  (the new record does not predate the engine). The gate now sees past the trailing records the
+  APP ITSELF marks `isMeta` - a boot hook, an injected cross-session message, the local-command
+  caveat - which is the same idea `strip_local_tail` already applies to the families it can
+  recognise by text, keyed on the app's own flag so it catches a record shape this toolbox has not
+  seen before. An ordinary user record still ends a transcript mid-turn, whatever it says.
+
+  The courier gained the rail that had this right all along: `enginelib.idle_report` judged the
+  same four chats idle because it consults the DAEMON's `limit_stop.pending` (set from the CLI's
+  own error record, never from prose), and `deliverable` never did. A chat that cannot write until
+  its account resets is not a turn in flight - and after a move to a fresh account, waking it is
+  the entire point. Both halves proven red-then-green against the shapes above.
+
+  Also closed, from the same incident: a batch cancelled with its resumes still staged and then
+  fired again left TWO staged copies of one resume (two rows each for two chats). The first
+  staging now asks for `reuse_identical` - the same words already staged for that chat come back
+  as the row that is there, while a staged row with different text is left alone rather than
+  being delivered in the resume's name, which is what the broader `dedupe` would have done.
+
+- **The batch mover's resume suite was reading the OWNER'S REAL CHAT LIST**
+  (`orchestrator/scripts/tests/test_migrate_batch_resume.py`). Its isolation stubbed
+  `hydralib.sessions`, but the archive gate moved onto `hydralib.chats()` (the per-store scan) on
+  2026-09-13 - so with a daemon running on the machine, every case in the file gated its fake
+  chats against the real ones. The moment a real title contained "one", "two" or "three" as a
+  fragment the gate refused every batch and thirteen cases failed at once, in a file none of them
+  is about; it also made a 0.05s suite take 141s. Stubbed the way the sibling suite already does.
+
+- **A test file's parked route lock no longer poisons whichever file runs next, and the guardrail
+  now catches it** (`server/src/orchestrator.ts`'s test seam, `server/tests/orchestrator-stale-lock.test.ts`,
+  `orchestrator-preempt.test.ts`, `orchestrator-operations.test.ts`, a third rule in
+  `scripts/checks/test-stub-outlives-its-file.mjs` with its fixtures). GitHub's Linux runner took
+  the three preemption tests RED on 2026-09-14 while Windows stayed green on the same commit, off
+  nothing but which file `readdir` listed first. `bun test` runs every file in ONE process, and
+  the orchestrator's route lock is a module-level Map: `orchestrator-stale-lock.test.ts` pins "a
+  young lock still blocks a second caller" with a spawn stubbed never to settle, so that run can
+  never reach the `finally` that releases its lock, and it left `migrate_batch` held FOREVER. Every
+  later file's `migrate_batch` was then refused `409 busy` by a run that does not exist - so the
+  preempt suite's own holder could not start, there was no operation to preempt, and the red named
+  a file nobody had touched. The test seam now clears the locks as well as the operation records
+  (it had cleared exactly half the module state), the stale-lock suite hands its lock back in an
+  `afterEach`, the preempt suite starts from an empty route whoever ran before it, and the
+  guardrail that already catches an unrestored global or an un-re-mocked module now also reports a
+  never-settling orchestrator run with no reset in an after hook. Proven red-then-green against a
+  probe file that reproduced the Linux order.
+
+- **A delivery deferred for a live turn is no longer burned as a failure, and `courier --only <id>`
+  says what state a named row is in** (`orchestrator/scripts/courier.py`, `lib/ledgerlib.py`'s new
+  `discount`, `stage_reply.py`, `migrate_batch.py`, four suites). Found live 2026-09-12:
+  `courier --yes --only <id>` correctly refused to type into a chat mid-turn ("peer did not
+  confirm and the turn is in flight - not typing"), but marked the row FAILED on that one attempt,
+  so the same command a minute later answered "nothing staged - the courier has nothing to
+  deliver" - which reads as "already sent" and was the opposite of the truth. The reply had to be
+  re-staged under a new id.
+
+  - A mid-turn refusal now DEFERS: the row stays staged, the result is tagged `deferred`, and the
+    attempt is taken back off the breaker (`ledgerlib.discount`, which never removes a
+    deterministic row) with no incident filed. The breaker counts futility, not restraint.
+  - `--only <id>` on a row that is not staged names it: `failed after 1 attempt: <lastError>`,
+    delivered, cancelled, expired, or "no such delivery id", and exits 2. "nothing staged" is now
+    only said when it is true.
+  - `migrate_batch` read a deferred result as attempted-and-failed, re-staged a SECOND copy of the
+    resume and fired the courier into the same live turn. A deferral is a skip there now, and its
+    automatic retry stages with `dedupe` so a still-staged row is re-used, never doubled.
+  - `stage_reply.py`: a value-taking flag with no value used to swallow the NEXT flag
+    (`--state --limit 200` ate `--limit`, which silently fell back to the default), and
+    `--state All` matched nothing because only the list filter case-folded. Both are usage errors
+    or fixed. New `--dedupe` for the automatic lanes, off by default for a person's reply. The
+    queue's third symptom - `--list --state all --limit 200` answering `rows: []` beside
+    `matched: 120` - could NOT be reproduced against this code, so no fix was invented for it; a
+    CLI-level test now pins that the three counts agree across states and limits.
+
+- **A refused `move_chats` no longer eats the resume text it was carrying, and says what holds the
+  route instead of throwing a string** (`server/src/mcp.ts`,
+  `server/tests/move-chats-refused-resume.test.ts`). Found live 2026-09-12, minutes after the
+  hand-kill above: the refusal was correct, but the message the caller wanted delivered died with
+  the call, and the landed chat had to be told by hand that four background jobs had been
+  orphaned. The resume is now STAGED against each named chat through `stage_reply` (deduped, so a
+  re-fired call cannot leave two wakes), and the refusal itself comes back as the daemon's own
+  object - `busy`, the `operationId` holding the route, the remedy - rather than as the bare
+  string `AgentHydra 409: {…}` a rejected fetch used to throw. A whole-account sweep names no
+  chat, so it says plainly that the resume was NOT kept rather than implying it was.
+
+  ⛔ The staging lives in the DAEMON (`runOrchestrator`'s refusal path), not in the MCP tool. The
+  first cut staged from `move_chats` after catching the 409, and an adversarial review caught
+  that `move_chats` detaches by default: the route answers 202 with an operation id and the
+  refusal happens later, inside the operation, where no MCP code sees it. That cut covered the
+  rare blocking call and missed nearly every real one. The same review caught that a preempted
+  holder slow to die fell through to the ordinary "wait for it, or cancel it" refusal about a
+  run the call had just cancelled; that case now says the holder is being torn down and to fire
+  the same call again.
+
+- **The two enumerators of "what does this account hold" disagreed, and the one that said ZERO
+  silently did nothing** (`orchestrator/scripts/migrate_batch.py`, `lib/hydralib.py`'s new
+  `chats()`, `test_migrate_batch.py`). Minutes after the killed batch, `--all-unarchived` reported
+  "0 unarchived desktop chat(s)" on an account `list_chats` showed THREE on; naming those three
+  ids by hand then moved them cleanly. `/api/sessions` resolves a session id to ONE owning profile
+  (live beats archived, else newest mtime), which is the right answer to "where is this chat now"
+  and the wrong one to "what is still sitting on this account" - a half-moved chat exists on two
+  accounts at once, and the collapse hides it from the account it is on. Both the batch's movable
+  list and its archive gate now read `/api/chats`, the same per-store scan `list_chats` serves, so
+  this file asks that question once, in one voice.
+
+  ⛔ `hydralib.chats()` is a CENSUS: `archived=include`, paged to the end. Its first cut took the
+  endpoint's UI defaults (`archived=hide`, 200 rows), and the review that caught it named the
+  consequence exactly: the archive gate asks that list "is the chat you named archived?", so a
+  list with every archived chat removed switched the gate OFF - the one protection the owner has
+  been angriest about. It never shipped; the regression test pins both the scope and the paging.
+
+- **A signed-in, working account read as "rate limited" for a week, because the only credential
+  ever tried was a revoked one** (`server/src/core/accounts.ts`, `server/src/usage.ts`,
+  `server/src/usage-service.ts`, `server/tests/accounts-grant-preference.test.ts`,
+  `usage-grant-fallthrough.test.ts`, `usage-backoff.test.ts`). Reported by the owner on 2026-09-14
+  about instance #3, which he had just opened and used: yellow account chip, usage frozen since
+  2026-09-07.
+
+  A signed-in desktop profile holds up to three OAuth grants: the app's own session sign-in
+  (`user:sessions:claude_code`, refreshed every time the app runs), a profile-only grant, and a
+  year-long `user:inference user:file_upload user:profile` token that is minted once and never
+  refreshed. Both readers picked by MAX EXPIRY, which is always that year-long token. ⛔ **The
+  latest expiry is not the live one.** On #3 it had been revoked while its expiry still read eleven
+  months out: profile endpoint 401 (so the identity fell back to cache, which is the yellow chip),
+  usage endpoint 429 with an hour of Retry-After (so the row read "rate limited"). The session grant
+  beside it answered 200 on both. Across ten profiles that afternoon, no session grant was dead
+  where the year-long one lived; the reverse was the bug.
+
+  Three changes, because each alone leaves the account stuck. Grants are ORDERED (app session
+  first, then by expiry) instead of max-expiry-picked. Both readers FALL THROUGH to the next grant
+  when the server refused that one, and stop early on a failure every grant would share, so a dead
+  connection costs one request rather than one per grant. And the 429 backoff is keyed by label AND
+  token digest: keyed by label alone, the revoked grant's hour-long window silenced the live grant
+  too, which is what made this survive every poll, every refresh and every restart.
+
+  The reported failure is the PREFERRED grant's, not the last one tried: a leftover's 429 must not
+  relabel a profile whose real problem is that its login needs refreshing.
+
+- **A failed usage check could file ANOTHER account's numbers under an instance, and did, for ten
+  of them** (`server/src/usage.ts`, `server/tests/usage-backoff.test.ts`). When the API read failed,
+  a desktop instance's check fell back to spawning `claude -p "/usage"` with the instance's own
+  token injected. The CLI's `/usage` screen is the same GET with the same token, so it cannot
+  succeed where the read failed; what it can do is authenticate as some OTHER login and print that
+  account's numbers, which are then cached and charted as this one's.
+
+  Measured in `usage-history.json`: on 2026-09-11 at 20:00, ten desktop instances each "read" 86%
+  weekly with no reset instant (what 5claude's and test9's own API reads said that hour); at 21:00,
+  seven of them "read" 20% resetting Sep 18 (another_meh's). Those seven were still showing that 20%
+  as their own three days later. An injected token now never falls back to a spawn, whatever the API
+  said. A config-dir token still does, because that CLI owns its login and can refresh it.
+
+- **A compiled daemon could not archive, unarchive or rename a chat, and said `ok: true` every
+  time** (`server/src/ui-archive.ts`, `misc-assets.ts`, `server/tests/ui-archive.test.ts`). This is
+  the misc-assets defect of 2026-09-12 again, on the SECOND actuator, and the entry below about the
+  delivery actuator should be read as one of two, not as the class being closed.
+
+  `ui-archive.ts` built its PowerShell path with `join(import.meta.dir, '..', '..', 'misc',
+  'Manage-DesktopChat.ps1')`. That is right in a checkout and wrong in every compiled build: inside
+  a `bun build --compile` exe `import.meta.dir` is the virtual embedded root, so two `..` hops land
+  on `B:\` and the spawn asked for a path on a drive that does not exist.
+
+  **It failed silently, which is the half worth naming.** `powershell -File <missing>` prints its
+  complaint and EXITS 0, so `uiRenameChat`'s `code === 0` returned `ok: true` over a script that had
+  never run. Measured live: a chat migrated between accounts landed with no title, `chat_rename`
+  answered `ok: true` three times while the sidebar never changed, and the migration's own bypass
+  stamp stayed unverified because the permission picker had no row to aim at. `Manage-DesktopChat
+  .ps1` joins `RUNTIME_MISC_FILES` now, so the build embeds it or fails, and `runPs1` resolves it
+  through `resolveMiscAsset` and returns a NON-ZERO code when there is no path. Three regression
+  tests pin it at the source, because every other unit test here injects `run` and so none of them
+  could ever have caught it. ⚠ A SOURCE daemon was never affected, because it resolves a real
+  `misc\` folder; the defect and its false green belong to COMPILED builds, so a compiled install
+  still on 0.41.0 keeps answering `ok: true` over a script that never runs until it is rebuilt.
+
+- **A one-chat `move_chats` ran fifteen minutes past its documented 15-25s budget, died on a bare
+  transport timeout, and returned no report at all** (`orchestrator/scripts/migrate_batch.py`,
+  `server/src/mcp.ts`, `server/src/orchestrator.ts`). No per-chat result, no `bypassVerdict`, no
+  `resume.delivered`, for work that had in fact done most of its job. Four changes, because the
+  call could die in four places:
+
+  - **Every post-landing phase is bounded.** Settle, stamp and resume each run on a worker thread
+    with a per-chat-scaled ceiling (`_run_bounded`, `SETTLE_PHASE_TIMEOUT_SECS`,
+    `STAMP_PHASE_TIMEOUT_SECS`, `RESUME_PHASE_TIMEOUT_SECS`). A phase over budget is ABANDONED, not
+    killed, because Python cannot safely kill a thread mid subprocess or mid UI-automation wait;
+    the timeout is then NAMED on every chat that never got a verdict rather than left blank.
+  - **`move_chats` auto-detaches** whenever its own declared `timeoutMs` exceeds `AUTO_DETACH_MS`,
+    mirroring `orchestrator_run`'s existing rule. A one-chat batch's 180s floor already exceeds the
+    120s ceiling, so this was silent dead code for the commonest case. `background: false` still
+    forces blocking for a caller who knows their transport can wait.
+  - **A `409 busy` refusal names the operation holding the route** and, with `orchestrator_cancel`
+    above, there is now a supported way out of a stuck batch.
+  - **The archived-chat gate takes a COUNT, not a boolean.** `--archived-count N` must MATCH the
+    archived chats the batch actually holds, and archived chats must be the WHOLE batch. See the
+    Changed entry above: `move_chats`' `archived` boolean is gone, with no shim.
+
+  Also fixed: `test_migrate_batch_resume.py`'s `_BatchTest` was missing the `hydralib.sessions` stub
+  its sibling already carried, so all twelve of its cases were silently reading this machine's real
+  chat store and being refused by the archive gate before touching any of the stubbed machinery
+  under test.
+
+- **Main's CI had been red since 2026-09-11, on every GitHub leg, and is green again.** Three
+  inherited failures, none of them visible on a developer machine:
+
+  - **The tray tests never said which world they were in.** `startTrayHostIfMissing` answers
+    `reason: 'headless'` on a build agent (since ec329bc), which is right, and the four tests of the
+    desktop path inherited that from the runner's `CI=1` and failed on both GitHub legs while
+    passing everywhere else. They state `headless: false` now, and two new cases pin the build-agent
+    answer, explicit and from the environment (`tests/tray-host.test.ts`).
+  - **A DeepSeek session's project name was the whole Windows cwd on Linux** (`dsh-sessions.ts`).
+    The harness records the cwd it ran in, backslashes and all, and node's `basename` splits only on
+    the host's separator; the leaf is taken on either separator now.
+  - **The search index switched itself off for good after one failed open** (`search-index.ts`).
+    A transient cause (GitHub's Windows runner: one 6.6 s open of a fresh file, then a failure) set
+    a permanent latch, and every query for the rest of the process fell back to the scan. It is a
+    30-second cooldown now, proven by a test whose cause clears mid-run.
+
+- **A stale `runtime.json` no longer reads as "the daemon is not running", and can no longer make a
+  second daemon** (`server/src/instance.ts`, `index.ts`, `mcp.ts`, `side-run.ts`,
+  `orchestrator/scripts/lib/hydralib.py`, four suites). On 2026-09-12 a probe daemon left the
+  machine-wide pointer naming a dead port while the real daemon answered on 7787; every MCP tool and
+  every orchestrator script said "couldn't reach the daemon, start it", which is the advice that
+  starts a second one, and a daemon booted then would have found 7787 busy, hopped to 7788 and
+  written a second pointer. f44bfa4 stopped a side-run from taking the pointer; this closes the
+  rest of the class:
+
+  - **The clients say what they see.** When the base came from the pointer and the connection is
+    refused, `mcp.ts` and `hydralib` now say *"runtime.json names port N, nothing is listening
+    there, and it may be stale"*, ask the default port once, and switch to it for the rest of the
+    process if it answers as agenthydra, with a stderr line saying so and "Do NOT start another
+    daemon". An explicit `AGENTHYDRA_URL` / `AGENTHYDRA_PORT` is the caller's word and is never
+    second-guessed.
+  - **The boot guard asks the default port too.** `findLiveInstance` trusts the pointer; when it
+    answers null, `findLiveOnDefaultPort` asks 7787 directly and accepts only our service name, so
+    a stale pointer no longer produces two daemons. The pointer is left alone there: its owner
+    heals it.
+  - **The pointer heals itself.** Once a minute the running daemon rewrites `runtime.json` if it
+    is missing or names a dead daemon, and never touches one naming a live other daemon (a hopped
+    successor, an update relaunch mid-handover). A clean exit already deleted it; a crash, a hard
+    kill or a hand edit used to leave it wrong until the next restart.
+  - **A side-run announces itself to every client.** `/api/health` carries `pid`, `sideRun` and
+    `pointerFile`, and every `/api/*` answer from a daemon with a relocated store carries
+    `x-agenthydra-side-run: <dbPath>`. The MCP server puts `daemonWarning` on every tool result
+    from then on and `hydralib` prints one stderr line, because a client that silently reads and
+    writes a scratch database is worse than an outage: it looks like it worked.
+
+- **The kit-sync hook's own test had never run.** `bun test` does not descend into
+  dot-directories, so `.githooks/tests/check-kit-sync-staged.test.ts` (AH-24, 2026-09-06) passed
+  whenever someone named it by path and was collected by neither `bun run test` nor CI: the suite
+  was two tests smaller than the tree said. All hook suites now live under `tests/githooks/`,
+  anchored by `tests/repo-root.ts` rather than a hop count, and `hook-tests-live-here.test.ts`
+  fails the moment a test file appears under `.githooks/` again.
+
+- **A daemon with a relocated store no longer takes the machine-wide pointer** (`server/src/
+  instance.ts`, `server/src/index.ts`, `server/tests/instance-pointer-side-run.test.ts`).
+  `<CONFIG_DIR>/runtime.json` is how every client on this machine finds the daemon: the MCP tools,
+  the orchestrator scripts, `hydralib`, the tray. A session started a daemon from source on port
+  7799 with a scratch database to click through a UI change; it overwrote that pointer to name
+  itself and exited without restoring it, and from then on every tool reported "couldn't reach the
+  daemon" while the real one answered `/api/health` 200 on 7787 the whole time. Nothing in the error
+  text suggested a stale pointer, so the obvious next move would have been to start a second daemon.
+
+  Where a daemon records itself is now decided by its STORE rather than its port:
+  `isPathInside(CONFIG_DIR, DATA_DIR)`. A process whose data dir sits outside the config dir writes
+  its pointer beside its own state and says so at boot; nothing has to be cleaned up afterwards,
+  which was the whole complaint. ⚠ The port is deliberately NOT the test: a primary install that
+  finds 7787 busy hops to 7788 and is still the machine's daemon, and the auto-update successor
+  takes the same port on purpose. A scratch `AGENTHYDRA_HOME` moves both directories together and
+  was never the problem; `AGENTHYDRA_DATA_DIR` alone, which moves the store and leaves the pointer
+  behind, was.
+
+
+- **A compiled install could not deliver a message to ANY chat, by any route**
+  (`server/src/misc-assets.ts` and its suite, `server/src/routes/session-message.ts`,
+  `scripts/build.ts`). This is the tray defect again, and it was total rather than degraded. The
+  single-file exe embeds every Vite asset and, since 2026-09-11, the tray toolkit, but nothing else
+  from `misc\`. `APP_ROOT` for a compiled build is the directory of the exe, so the composer route
+  looked for `<dist>\misc\Deliver-DesktopChat.ps1`, a file the build had never put there, and
+  answered `delivery actuator missing`. The peer route is refused by that same endpoint before it
+  ever picks a channel, so on a compiled install no chat could be woken by anything, which also
+  silently voided `move_chats --resume`: a migrated chat landed dormant with nothing able to tell it
+  to carry on.
+
+  The shape is deliberately the tray's. `RUNTIME_MISC_FILES` names every `misc\` file the running
+  daemon opens by path, the build embeds exactly that list and FAILS when one is missing, and at
+  runtime `resolveMiscAsset` hands back a real path: from `misc\` when there is one, else written
+  once out of the binary beside the app's own state. Copying `misc\` next to the exe was tried by
+  hand the day this was found. It works, and it re-introduces the sidecar the single-file build
+  exists to remove, so an exe moved anywhere on its own would break again, silently, exactly as
+  here.
+
+- **A rate-limited account can recover, because a 429 we already hold is obeyed instead of re-hit**
+  (`server/src/usage.ts`, `usage-refresh.ts`, `server/tests/usage-backoff.test.ts`).
+  `/api/oauth/usage` limits per account, and when it says 429 it hands back a `Retry-After` measured
+  in TENS OF MINUTES. Nothing honoured it. The fleet has several independent pollers (the 30 minute
+  sweep, the reset watcher, the resume monitor, an open web app), so an account that tripped a limit
+  was re-hit every ~30 seconds, and on a rolling limiter each early knock re-arms the very window
+  being waited out. It could never recover, which is exactly the "not reading usage for the active
+  accounts" seen on 2026-09-11: accounts that had read fine two hours earlier sat at 429 all day
+  while every poller kept knocking.
+
+  The server's own number is now recorded per label and honoured at the single chokepoint
+  (`checkUsage`), so every caller backs off together and no limit is invented here. Inside the
+  window the failure is re-asserted with the REMAINING seconds, so the UI still reads "rate limited,
+  retry in N min" and counts down, and the caller serves its last cached reading rather than a fresh
+  and false 0%.
+
+- **An orchestrator operation id that is missing now says WHY it is missing**
+  (`server/src/orchestrator.ts`, `server/tests/orchestrator-operation-miss.test.ts`). A migration
+  batch was launched detached, the daemon restarted while it ran, and the batch's child survived the
+  restart and finished its work orphaned. Every poll of its id then answered a bare "no such
+  operation" with an empty recent list, and the tool descriptions promise an unconditional hour and
+  that nothing is gone, so the honest reading of that answer was that the run had never existed. An
+  hour went into reconstructing the per-chat verdicts from four other tools.
+
+  Nothing is made durable in response, which would be the audit log this deliberately is not. A miss
+  is instead interpreted against the answering process's own start time: `daemon-restarted` when
+  this daemon is younger than the one hour TTL, since an id minted before it cannot be in this
+  process's map, and `unknown-id` when it is older. The count of records held rides along, so
+  "empty" is distinguishable from "pruned". A caller can now tell "never existed" from "did not
+  survive a restart" and is told to read the toolbox's own ledger rather than re-fire the act.
+
+- **The single-file `.exe` ships its tray icon, and "is the tray running?" stops answering
+  backwards** (`server/src/tray-toolkit.ts`, `server/src/tray-host.ts`, `server/src/index.ts`,
+  `scripts/build.ts`, `server/src/tray-bootstrap.mjs` via the kit, plus their suites). Two faults,
+  one symptom - a fresh build with no icon anywhere:
+  - The compiled exe embedded every Vite asset and nothing from `misc\`, so
+    `misc\lunarwerx-tray.exe` could not exist beside it, `startTrayHostIfMissing` skipped with
+    `no-tray-toolkit` forever, the tray invariant exempted the build entirely, and the app fired a
+    notification telling the person to go download the ZIP instead. 340 KB of Win32 binary is not
+    a reason to ship an app with no icon, no Quit and no supervisor. The host, its config and its
+    icon now ride inside the binary and are written out to `<stateDir>/tray/<version>` on first
+    run, with the config's shipped `appRoot: ".."` (right only for the extracted zip) replaced by
+    the absolute directory of the RUNNING exe and `compiledExe` set to its real filename - so a
+    renamed or relocated download still gets a working watchdog.
+  - The probe said "running" PRECISELY when no tray existed. It read a non-zero exit from
+    `Get-Process -Name lunarwerx-tray -ErrorAction SilentlyContinue | Select -ExpandProperty Id`
+    as "running", but `SilentlyContinue` suppresses the error TEXT, not the error RECORD: an
+    absent process exits 1 (measured: absent → 1, present → 0). So the one case the probe exists
+    for was the one it got backwards, and the 2026-09-03 "the daemon starts its own tray host"
+    fix could never once have fired - the boot log said `already-running` while no host existed
+    on the machine. It now counts without raising an error record and returns a TRI-STATE, because
+    the two callers need opposite defaults: an unknown STARTS the host (a named mutex makes a
+    double start harmless) while the invariant still reads an unknown as running, since that one
+    can shut the daemon down. The mechanism moved into the kit (`tray-bootstrap`), because
+    RepoYeti, DevWebUI and ReDesign shipped the same hole and had each written it into their
+    README as a limitation.
+
+- **A Claude Desktop chat can identify itself again: `whoami` answers for the CALLER, not for the
+  daemon** (`server/src/mcp.ts`, `server/src/index.ts`, `server/src/core/process.ts`, plus tests).
+  `mcp-register` registers the HTTP transport for every client, so the identity tools ran inside
+  the daemon, walked the DAEMON's ancestry, and told an agent on instance #8 that it was "not
+  running under Claude Code at all" - taking `move_chat to: "here"` (refused unless the identity
+  is exact) and every quota attribution down with it. The caller opened a loopback socket, so the
+  OS can name its pid, and that pid IS the engine under its instance directory. Resolved per
+  request, unforgeable (the binding is a function; JSON cannot carry one), deliberately uncached
+  (a recycled port would name the wrong process, and that is how 13 chats once landed on the wrong
+  account), and null on any ambiguity so it falls back to the old refusal rather than guessing.
+
+- **A chat cut off mid-turn stops reading as "working" forever** (`orchestrator/scripts/lib/
+  gatelib.py`, `orchestrator/scripts/lib/enginelib.py`). Its last record is a tool RESULT, which is
+  neither a completed turn nor an orphaned tool call nor a usage wall, so a freshly landed engine
+  that had written nothing at all still gated as busy - migrate refused to move it again and only
+  `--terminate-live` could, AgentHydra blocking its own follow-up move. The orphan rule's own
+  evidence settles the general case: if the LAST record of any kind predates the engine, that
+  engine has produced nothing since it booted.
+
+- **A press that cannot reach its pane is diagnosable, counted, and no longer skipped when a
+  person asked for it** (`orchestrator/scripts/unblock_prompts.py`, `orchestrator/scripts/
+  interview.py`, `orchestrator/scripts/lib/ledgerlib.py`). `interview --apply` answered a queued
+  escalation and the row selection was withheld because the row was younger than the 15-minute
+  window meant for unattended LANES, so the person's own decision died as a bare "could not reach
+  that chat's pane" - twice, with the actuator's own diagnosis dropped into a field nothing
+  printed and nothing counting the failures.
+
+- **`orchestrator_run` stops losing a long run's report** (`server/src/mcp.ts`). A run declared
+  longer than 120s now detaches itself and answers with the `operationId` and how to poll it;
+  `sweep --all --yes` with `timeout_secs: 1200` used to return only "The operation timed out"
+  while the sweep ran to completion in the daemon, with no id to re-attach to.
+
+- **A non-ASCII chat title survives an actuator's stdout pipe** (`misc/Manage-DesktopChat.ps1`,
+  `misc/Deliver-DesktopChat.ps1`, `orchestrator/scripts/actuator/{manage_desktop_chat,
+  approve_prompt,deliver_desktop_chat,rename_first,chip}.ps1`,
+  `orchestrator/scripts/tests/test_actuator_utf8.py`). `chat_rename` refused with
+  `FAIL: 'Alcanc? mi l?mite de uso mientras trabajabas, pero ya se restableci?. …'` for a chat
+  whose real title carries Spanish accents - a message naming a chat that does not exist, which
+  reads as a missing chat rather than an encoding fault. PowerShell encodes a PIPED stream with
+  `[Console]::OutputEncoding`, which defaults to the machine's OEM code page, so the accents were
+  replaced with literal `?` bytes INSIDE PowerShell. A `?` is valid UTF-8, so nothing downstream
+  could detect or recover the loss: `clilib.decode_console` was already UTF-8-first with an OEM
+  fallback and still read question marks. Every script whose output a caller captures now pins
+  UTF-8 on the way out (best-effort - a console handle that refuses the assignment must not take
+  down a UIA act). Any non-Latin title degraded the same way, so the regression test probes
+  Spanish, an em dash, CJK and Cyrillic together, runs the prelude the scripts actually ship
+  rather than a retyped copy, and carries a control case proving the mangling is real without it.
+  Verified end to end through the MCP tool that found it.
+
+- **A landed chat is NAMED before anything tries to aim at its name, so the `disk-only` remedy
+  finally works on the population it exists for** (`orchestrator/scripts/migrate_batch.py`,
+  `orchestrator/scripts/automation_chat.py`, `orchestrator/scripts/migrate_chat.py`,
+  `orchestrator/scripts/actuator/approve_prompt.ps1`, plus their suites). An import lands with
+  `title: null` - `session-launch` already says `titleDurable: false` and means it: the title is
+  written to disk and the running app re-saves over it from memory, while the sidebar renders a
+  name derived from the transcript. Everything that aims BY NAME broke at once, and each break
+  disguised itself as something else:
+  - The permission picker was handed `-Title ""` and died inside PowerShell's
+    `ParameterArgumentValidationErrorEmptyStringNotAllowed`, which reads as an environment or
+    permissions fault and is neither. `title_for_row` now asks the daemon for the rendered name
+    when the disk record has none, and a chat nobody can name is refused **in words**, with the
+    actuator never spawned - never an empty argument.
+  - `migrate_batch` runs the naming pass over each target account between landing and stamping,
+    carrying every chat's intended title. It is the last place that still knows them, and the
+    app's own rename is the only durable channel (as `session-launch` has said all along).
+    Best-effort: a name is never worth failing a landing that already happened.
+  - The sidebar matcher compared the wanted title to the rendered row with full-string equality,
+    so a row TRUNCATED with an ellipsis - which is what a long title renders as - could never
+    match, and refused with "a MATCH failure, not a timing one" while the row sat on screen.
+    `Select-SidebarChat` keeps the exact pass first and falls back to a normalised prefix
+    comparison (trailing `…`/`...` stripped, NFD accents folded, case-folded, whitespace
+    collapsed) only when the exact pass finds nothing. More than one loose match is still a
+    refusal, exactly as before - it never guesses.
+  - `bypassRemedy` prints `python scripts/automation_chat.py …`, the path that actually runs
+    from the orchestrator directory every other printed command assumes.
+
+  Verified end to end on a real migrated chat: nameless and unstampable → named → `APP-CONFIRMED
+  via its own picker`.
+
+- **The courier chooses the channel BEFORE it applies the mid-turn rail, so a live chat is no
+  longer deferred forever** (`orchestrator/scripts/courier.py`,
+  `server/src/routes/session-message.ts`, `orchestrator/scripts/tests/test_courier.py`,
+  `server/tests/session-message-peer-only.test.ts`). Rail 4 has always said a turn IN FLIGHT is
+  never interrupted _for the composer route_, because the peer channel enqueues natively and the
+  chat drains it after the current turn. The gate ran before the channel was known, so it
+  refused the exact population the peer channel serves: three chats in one drain took twenty
+  minutes of hand-retries and one never landed, and the same shape reproduced on 09-09 and
+  09-10. `gate_match` derives "running" from the dossier's own live block, so every refusal it
+  ever produced was for a session that had a pipe. The gate now marks a mid-turn chat
+  `peer_only` and lets it go; that flag rides with the delivery and forbids **every** composer
+  path downstream - the endpoint's dormant fallback, the peer dead-letter fallback, and the
+  old-daemon actuator route - so the rail is enforced where the channel is actually picked
+  rather than by refusing everything up front. A live plan-only run over the fleet now shows
+  zero IN FLIGHT refusals; the remaining skips are the usage band, the verify snippet and the
+  per-account share, all working as intended.
+- **A staged reply now has an end: a shelf life, a premise, and a deferral ceiling**
+  (`orchestrator/scripts/lib/deliverylib.py`, `orchestrator/scripts/courier.py`,
+  `orchestrator/scripts/stage_reply.py`,
+  `orchestrator/scripts/tests/test_deliverylib_expiry.py`). Measured 2026-09-10: 37 staged rows,
+  the oldest 5.9 days, several addressed to accounts that no longer go by that name - and three
+  of them migration notices reading exactly backwards after their chats had been migrated back.
+  Arming the tray icon would have delivered a batch of statements that were no longer true.
+  Beside them sat 42 `failed` rows, 41 with a single attempt, nearly all of them `HTTP 409
+  instance is not running` or `WinError 10054`: a closed target app or a dropped socket, which
+  are not deliveries that went wrong but deliveries that never happened. Three changes, one
+  rule - a decision nobody acted on is never silently deleted, but it does not live forever:
+  - A new terminal state `expired` (readable in `--list`, carrying its reason) for a row past
+    `STAGED_TTL_SECS` (48h). Expiry runs inside `pending()`, the one door every lane's
+    deliveries come through, so nothing stale can reach a sender.
+  - `defer()` for a transient refusal: the row stays **staged** and is retried next cycle, and
+    only `MAX_DEFERRALS` (12) turns it into an expiry. A genuine refusal - the wrong-chat guard,
+    say - still burns the row as before.
+  - The courier expires a reply whose chat has changed accounts since it was staged: its premise
+    is void and no sender can know whether the text survived the move.
+
+  Swept live: 28 stale rows expired, nothing wrongly voided, 9 legitimate rows left staged.
+- **`move_chats`' headline no longer over-reports a migration nobody was told about**
+  (`orchestrator/scripts/migrate_batch.py`,
+  `orchestrator/scripts/tests/test_migrate_batch_resume.py`). A landed chat is DORMANT until
+  something types into it, so `3/3 landed` described a run in which zero chats had actually been
+  resumed. The per-chat `RESUME` lines were right the whole time and were scrolled past. When a
+  resume was asked for, the first line now carries the tally and says the rest are DORMANT.
+
+- **`rename_chat` can now rename a freshly imported chat, on both sides of the fix**
+  (`orchestrator/scripts/rename_chat.py`, `misc/Manage-DesktopChat.ps1`'s Rename write loop,
+  `orchestrator/scripts/tests/test_rename_null_title.py`, `server/tests/ui-archive.test.ts`). A
+  fresh import lands with `title: null` on disk; `rename_chat.py` forwarded that straight through
+  as an empty `-Title`, and the actuator's mandatory parameter refused it before ever looking for
+  a row - it now falls back to `Untitled`, the same name the app itself renders for a titleless
+  import. The MCP `chat_rename` route already found the row under that fallback, but the write
+  itself could still fail: the app can re-render the sidebar mid-edit, which invalidates the UIA
+  edit-box element and threw `ElementNotAvailableException` straight out of `SetValue` uncaught,
+  crashing the script with the chat left `Untitled` and nothing reported. That write is now
+  caught; on that one exception the edit box is re-acquired and the write is retried exactly
+  once before the script gives up and reports FAIL - never a guessed name, never an ok over a
+  write that did not happen.
+
 ## [0.41.0] - 2026-09-08
 
 ### Fixed
@@ -4204,7 +5765,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   - `organization_type` is cached alongside the rest of the identity, so the offline/no-network path
     reaches the same answer instead of falling back to the stale grant.
 - **The account one-liner no longer leaks a raw tier string.** The Quick view showed
-  `Michael <blogitech@gmail.com> · default_claude_ai` for any account whose tier is the generic
+  `Michael <someone@example.com> · default_claude_ai` for any account whose tier is the generic
   value. It now shows the same reconciled label the Plan column does.
 - **A usage reading whose window has already reset no longer poses as current.** The same instance
   sat at "100% · resets now" from an eleven-day-old cached snapshot: the countdown said *now*

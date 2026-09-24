@@ -81,16 +81,18 @@ installed 0.39.0 was performed by the previous one and brought the executable al
 installs on the newest version with no toolbox and, until the repair path existed, no update that
 could ever fix it.
 
-Tools cover sessions (list / get / tail / search / export across Claude, Codex, OpenCode, Hermes and
-the foreign readers), project discovery (`list_projects`), chats a usage limit cut off
+Tools cover sessions (list / get / tail / search / export across Claude, Codex, OpenCode, Hermes,
+DeepSeek Harness and the foreign readers), project discovery (`list_projects`), chats a usage limit cut off
 (`list_rate_limited_sessions`), the queue (list / add /
 update / run / cancel / events), accounts (secrets always masked), the scheduler (get / set),
 Claude Desktop instances (list / launch / quit), Claude CLI instances, and Codex CLI/Desktop
 instances (list / create / CLI launch / login helper / desktop open / focus / quit / redeem a
 banked `/usage reset` credit via `redeem_codex_reset_credit`), usage-check (`check_usage`,
 `check_my_usage`), the auto-resume monitor (get / set), an update check, and the orchestrator
-(`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch` - see [The
-orchestrator](#the-orchestrator) below), plus **`move_chat`** - the one-call account move
+(`orchestrator_menu`, `orchestrator_run`, `orchestrator_loop`, `orchestrator_switch`,
+`orchestrator_operation` to read a run's result and `orchestrator_cancel` to stop one that is
+still going - see [The orchestrator](#the-orchestrator) below), plus **`move_chat`** - the
+one-call account move
 (`{chat, from?, to?}`: fuzzy title, account by name/number/label/email, `to` defaults to `"here"`
 and accepts `"best"`; every landing is stamped `bypassPermissions` and the mode is read back from
 disk - see [Moving chats](MOVING-CHATS-BETWEEN-ACCOUNTS.md#the-fast-path-one-call)), and
@@ -134,7 +136,8 @@ API error without appending its own bookkeeping, so any resume flips it on its o
 
 Detection trusts only the CLI's own error report (`isApiErrorMessage` / a `<synthetic>` assistant
 turn / an errored terminal `result`), never model prose or tool output, so a session that merely
-*discussed* rate limits is not listed. It is Claude-only: Codex, OpenCode and Hermes record an error,
+*discussed* rate limits is not listed. It is Claude-only: Codex, OpenCode, Hermes and the DeepSeek
+Harness record an error,
 but not in a form worth trusting, and a false claim here would be worse than a missing one. The judgment
 lives in one place (`createLimitStopTracker` in `server/src/rate-limit-signal.ts`) and is shared with
 the auto-resume monitor, so the badge and the resume queue cannot disagree.
@@ -157,6 +160,22 @@ account's remaining Claude subscription quota without asking a human. Pass `acco
 dispatch account id or label) or `configDir` (a `CLAUDE_CONFIG_DIR` that's been `/login`'d once);
 `check_my_usage` is a self-check that works out which account the calling process actually bills to.
 Both report the session (5h) %, the weekly (all-models) %, and any per-model weekly %.
+
+### A 429 is obeyed, never re-hit
+
+`/api/oauth/usage` limits per account, and when it says 429 it hands back a `Retry-After` measured
+in TENS OF MINUTES. That instant is recorded per account and honoured at the single chokepoint
+(`checkUsage`, `server/src/usage.ts`), so the 30 minute fleet sweep, the reset watcher, the resume
+monitor and an open web app all back off together. Inside the window nothing calls the endpoint at
+all: the failure is re-asserted with the REMAINING seconds, so a reader still sees "rate limited,
+retry in N min" counting down, and the last cached reading is served rather than a fresh and false
+0%.
+
+The limiter is rolling, which is what makes this load-bearing rather than polite. Before it, several
+independent pollers re-hit a limited account roughly every 30 seconds and each early knock re-armed
+the window being waited out, so an account that tripped a limit could never recover: measured on
+2026-09-11, accounts that had read fine two hours earlier sat at 429 all day. The number obeyed is
+always the server's own. None is invented here.
 
 ### Built-in guidance
 
@@ -226,7 +245,6 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_PORT_FIXED` | unset | `1` = bind `PORT` exactly, skip the single-instance/port-hop |
 | `AGENTHYDRA_HOME` | `~/.agenthydra` | config dir (`runtime.json`, instance-identity cache) |
 | `AGENTHYDRA_SHUTDOWN_TOKEN` | unset | if set, `/api/shutdown` requires a matching `x-agenthydra-shutdown-token` header (the tray sets it) |
-| `AGENTHYDRA_FAKE` | unset | dispatch uses the harmless fake CLI |
 | `AGENTHYDRA_DATA_DIR` | `~/.agenthydra/data` | state directory (sqlite db, run logs, caches) |
 | `AGENTHYDRA_DB` | `~/.agenthydra/data/agenthydra.db` | sqlite path |
 | `AGENTHYDRA_RUN_LOG_DIR` | `~/.agenthydra/data/run-logs` | detached-run log and sidecar directory |
@@ -382,6 +400,32 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 `server/src/core/shared.ts`; the web mapping and deterministic defaults live in
 `web/src/lib/instance-appearance.ts`.
 
+## Known noise in an instance's own log
+
+Every Claude Desktop instance keeps its own `logs/main.log` under its profile folder. One line there
+is permanent, harmless, and not AgentHydra's:
+
+```
+[error] [Chrome Extension MCP] Registry verification failed for Edge: expected
+  ...\.claude-instances\<this instance>\ChromeNativeHost\com.anthropic.claude_browser_extension.json,
+  got ...\.claude-instances\<another instance>\ChromeNativeHost\...
+```
+
+Claude Desktop registers its browser-extension native host under ONE per-user registry key
+(`HKCU\SOFTWARE\Microsoft\Edge\NativeMessagingHosts\com.anthropic.claude_browser_extension`, and the
+Chrome twin), pointing at a manifest inside its own profile folder. Every instance re-registers that
+same key at startup, so whichever started last owns it and every other instance's verification
+"fails" against it, in both directions, on every start. Measured on this machine on 2026-09-12:
+1,687 registrations logged against 20 verification failures. It is the app's own behaviour with
+several profiles on one account; nothing in this repository touches native messaging, and no
+AgentHydra screen or tool surfaces an instance log, so there is nothing here to fix.
+
+Recorded because on 2026-09-07 an unrelated logout investigation read this line as evidence that
+AgentHydra had done something to the instance. It had not, and the whole logout question is settled
+from the app's own `main.log` (the `/logout` navigation) rather than from the daemon's log. The cost
+of the line is credibility: a permanent `[error]` that means nothing teaches a reader to skip the
+next one.
+
 ## Stack
 
 | Layer | Choice |
@@ -395,8 +439,9 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 ## Layout
 
 ```
-server/        Bun + Hono daemon: sqlite, Claude/Codex/OpenCode/Hermes session readers, transcript tail,
-               dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances)
+server/        Bun + Hono daemon: sqlite, Claude/Codex/OpenCode/Hermes/DSH session readers, transcript tail,
+               dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances,
+               DeepSeek Harness homes)
 web/           Vue 3 SPA (Sessions / Queue / Instances views)
 orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should happen to a chat
                (orch.py + scripts/), its own tests (scripts/tests/), and its remote front-end
@@ -404,6 +449,12 @@ orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should ha
                server/src/orchestrator.ts; its own manual is orchestrator/README.md
 tests/         launcher.test.ts (the tray guard, Windows-gated) + server/instance unit tests
 misc/          the Windows launcher toolkit (tray .ps1 / .vbs / .ico / Create-Shortcut / Make-Icon / rebuild_agenthydra.bat)
+               plus the files the RUNNING daemon opens by path, listed in
+               server/src/misc-assets.ts as RUNTIME_MISC_FILES. The single-file build embeds
+               exactly that list and FAILS when one is missing, and resolveMiscAsset hands
+               back a real path at runtime: misc\ when there is one, else written out of the
+               binary once. Adding a runtime dependency on a misc\ file without adding it to
+               that list ships a compiled build where the feature is simply gone.
 scripts/       repo tooling (screenshots/: regenerate the README images)
 ```
 
@@ -426,12 +477,13 @@ The daemon exposes it (`server/src/orchestrator.ts`):
 | `POST /api/orchestrator/run` `{script, args, timeoutMs}` | run one script by its menu name - exactly `python orch.py <script> <args>` in `orchestrator/`; stdout, stderr, exit code and what the driver's codes mean come back. Every run is also an OPERATION with an id (audit AH-09), because a 30-minute act used to lose its result to the daemon's 255-second idle timeout: send `X-Idempotency-Key` (or `idempotencyKey` in the body) and a retry after a dropped connection returns THE ORIGINAL operation instead of starting a second act, while `async: true` answers `202` with the id at once so a caller can poll instead of holding the connection open. A refusal that never ran does not pin the key |
 | `GET /api/orchestrator/operations` · `GET /api/orchestrator/operations/:id` | what ran and what it returned, for an hour after it finished (bounded, in memory: this reconciles a dropped connection, it is not the audit log - the toolbox's own ledgers are that) |
 | `POST /api/orchestrator/operations/:id/cancel` | stop a running operation; the child's whole process tree is killed and the outcome reads `cancelled` rather than failed. Same origin rule as `run` |
+| MCP `orchestrator_cancel` | the cancel POST above (added 2026-09-13). The route had existed since AH-09 and only the MCP surface was missing, so every agent that read `orchestrator_operation`'s "starts nothing and cancels nothing" correctly concluded no cancel existed and reached for `taskkill` instead. ⛔ Cancel is NOT an undo: what the run already did stays done, and the per-item report dies with the process, so read the fleet afterwards rather than assuming the run had not got that far. It frees the route lock, which is what lets a corrected call run at once instead of being refused `409 busy`. A finished operation is a safe no-op |
 | MCP `orchestrator_menu` | the GET above |
 | MCP `orchestrator_run` | the POST above |
 | MCP `orchestrator_loop` | `loop` (dry by default; `live: true` acts) |
 | MCP `orchestrator_switch` | the tray icon: `armed` (read) · `arm` · `arm_now` · `resume` · `pause` · `disarm` |
-| MCP `move_chat` | `migrate_chat <chat> --to <n> --from <n> --stop-idle --now --idle-wait 330 --json` in one call: resolves `from`/`to` (number, name, label, email, `here`, `best`) before posting; the script does the fuzzy title match, the background-job scan behind `--now`, the verified landing and the bypass read-back |
-| MCP `move_chats` | `migrate_batch --to <n> [--from <n>] --chat <c>... \| --all-unarchived --stop-idle --now --idle-wait 60 --json` (+ `--force`, `--archived`, `--limit`, `--dry-run`): the plural, by PHASE (move all, settle all, stamp all). Two flags are the batch's own (2026-09-06): `resume: "<text>"` -> `--resume`, which stages the text against every landed chat and delivers it through the courier's hand-run path (the thing that makes a migrated chat continue working instead of sitting dormant); `terminate_live: true` -> `--terminate-live`, a person's word to kill a live engine that stands in the way (code-4 refusals only, never a hold or the breaker) and move anyway. Together: draining an account in one call. See `docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md` |
+| MCP `move_chat` | `migrate_chat <chat> --to <n> --from <n> --stop-idle --now --idle-wait 330 --json` in one call: resolves `from`/`to` (number, name, label, email, `here`, `best`) before posting; the script does the fuzzy title match, the background-job scan behind `--now`, the verified landing and the bypass read-back Both carry the COLLATERAL WATCH (2026-09-17): every chat record on the machine is read before the move and after it, and a chat OUTSIDE the move that went archived meanwhile is named in `collateral` with the account to unarchive it from, with `ok` false - a move that archived a bystander used to report a clean run. |
+| MCP `move_chats` | `migrate_batch --to <n> [--from <n>] --chat <c>... \| --all-unarchived --stop-idle --now --idle-wait 60 --json` (+ `--force`, `--archived --archived-count N`, `--limit`, `--dry-run`): the plural, by PHASE (move all, settle all, stamp all). ⛔ **The `archived` boolean is GONE (2026-09-13), replaced by `archived_count: number` with no shim, so an old caller fails the schema loudly.** A boolean could not tell the human's instruction from an agent's own initiative: one set it for itself while draining an account and queued all 22 of that account's archived chats behind the 3 it had been asked for. The engine refuses the WHOLE batch unless the count MATCHES the archived chats it actually holds and unless they are the whole batch, because archived chats riding along with unarchived ones is exactly how that happened. Counting them first is the point. ⛔ **The call AUTO-DETACHES past 120s (2026-09-13)**, which is nearly always: a one-chat batch's own floor is 180s. It answers at once with `operationId`, and the full per-chat report is read with `orchestrator_operation {id}`; `background: false` forces blocking for a caller who knows its transport can wait. Each post-landing phase (settle, stamp, resume) is bounded on a worker thread and NAMES its timeout on any chat left without a verdict, rather than the whole call dying with no report at all, which is what it used to do. Two flags are the batch's own (2026-09-06): `resume: "<text>"` -> `--resume`, which stages the text against every landed chat and delivers it through the courier's hand-run path (the thing that makes a migrated chat continue working instead of sitting dormant); `terminate_live: true` -> `--terminate-live`, a person's word to kill a live engine that stands in the way (code-4 refusals only, never a hold or the breaker) and move anyway. Together: draining an account in one call. See `docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md` Both carry the COLLATERAL WATCH (2026-09-17): every chat record on the machine is read before the move and after it, and a chat OUTSIDE the move that went archived meanwhile is named in `collateral` with the account to unarchive it from, with `ok` false - a move that archived a bystander used to report a clean run. |
 | MCP `fan_out` / `fan_out_status` / `fan_out_send` | `fan_out --spec <json> --json` (+ `--per-account`, `--only`, `--exclude`, `--open-closed`, `--force`, `--dry-run`), `fan_out status [<group>] --json`, `fan_out send <group> --text ... --json`: ONE task list -> N visible desktop chats, one account each, tracked as a group (owner ask, 2026-09-04). The MCP tool turns `{cwd, prompt, title?}` tasks into the spec (a temp file when it would exceed the 4000-character arg limit), resolves `only`/`exclude` refs to instance numbers, and excludes the CALLING chat's own account by default (`exclude_self: false` to allow it; only on an exact identity). The script ranks accounts by real room (balance.py's fill ceiling minus peak; unknown is never room), open instances first, spawns each chat through `spawn_chat.py` ONE AT A TIME (two lanes driving two windows at once is how text lands in the wrong pane), refuses a task whose prompt already runs in the fleet while letting one spec share a prompt across its own tasks, reports an unassigned task rather than dropping it, and keeps the group in `orchestrator/state/fanouts.json`. `status` reads each member's gate verdict + last words; `send` stops each member's IDLE engine first (the peer pipe does not steer a chat nobody has clicked - measured on the first drill) and lets the daemon's message route boot it through the app's composer, holds respected; `delete` (MCP `fan_out_delete`) runs `delete_chat.py` on every member - the cleanup a probe fan-out owes (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account). Deleting a chat IN THE APP is not that: the app drops its record and leaves the transcript plus a `<sid>.desktop-released.json` marker, so `orchestrator_run delete_chat --released` lists those leftovers and `--yes` removes them, each with an undo copy. None of them needs the tray icon: a person asked. `add_queue_item` and `launch_terminal_session` are refused on this machine (no-headless law) and now say so in their descriptions |
 
 The script name is validated against the menu grammar and the arguments travel as an argv

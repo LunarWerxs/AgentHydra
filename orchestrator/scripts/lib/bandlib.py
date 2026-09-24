@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import math
 
+from lib import configlib
+
 # The bands that mean "no more work here". 'unknown' is deliberately NOT one of them: an
 # unread account is handled by balance's own usable/fresh rules, and refusing every unmeasured
 # account would stall the fleet on a survey hiccup.
@@ -82,5 +84,9 @@ def per_account_share(open_accounts: int, floor: int) -> int:
     thrash) and never above 5 (past that one account is carrying the room again).
     """
     if open_accounts <= 0:
-        return 2
-    return max(2, min(5, math.ceil(floor / open_accounts)))
+        return configlib.get("bands.per_account_min")
+    # The 2 and the 5 are bands.per_account_min / bands.per_account_max since 2026-09-17;
+    # the defaults are the numbers that were hardcoded here, so nothing moved.
+    return max(configlib.get("bands.per_account_min"),
+               min(configlib.get("bands.per_account_max"),
+                   math.ceil(floor / open_accounts)))
