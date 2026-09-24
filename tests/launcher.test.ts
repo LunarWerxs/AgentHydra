@@ -170,15 +170,9 @@ describe.skipIf(!win)('tray launcher', () => {
     expect(engine).toContain('function Invoke-TrayHostSelfTest')
   })
 
-  test('Tray-Launch.vbs and New-TrayShortcut.ps1 are the real shared pieces (not hand-edited forks)', () => {
-    // same invariant as the tray engine check above, extended to the two shared
-    // launch-chain files.
-    const vbs = readFileSync(VBS, 'utf8')
-    // Robust marker (mirrors DevWebUI's launcher test): the shared launcher auto-discovers the
-    // sibling adapter via WScript.Shell. Matched case-insensitively because the kit's public-comment
-    // cleanup reworded the old exact-case "AUTO-DISCOVER" header to "Auto-discover".
-    expect(vbs).toMatch(/WScript\.Shell|discover/i)
-
+  test('New-TrayShortcut.ps1 defines the entry point Create-Shortcut.ps1 calls', () => {
+    // same invariant as the tray engine check above, for the shared shortcut engine. The shared
+    // Tray-Launch.vbs is pinned by its discovery rule and the live cscript probe above.
     const shortcutEngine = readFileSync(SHORTCUT_ENGINE, 'utf8')
     expect(shortcutEngine).toContain('function New-TrayShortcut')
   })

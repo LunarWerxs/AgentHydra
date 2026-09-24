@@ -18,34 +18,23 @@ const at = (messages: number, minutes: number | null, dispatched = false) =>
   })
 
 describe('the ordinary cases', () => {
-  test('a short exchange over a few minutes is quick', () => {
-    expect(at(6, 3)).toBe('quick')
-  })
-
-  test('a normal working session is standard', () => {
-    expect(at(120, 40)).toBe('standard')
-  })
-
-  test('a long build is deep', () => {
-    expect(at(600, 200)).toBe('deep')
-  })
-
-  test('an all-day session is a marathon', () => {
-    expect(at(1400, 600)).toBe('marathon')
+  test.each([
+    ['a short exchange over a few minutes is quick', 6, 3, 'quick'],
+    ['a normal working session is standard', 120, 40, 'standard'],
+    ['a long build is deep', 600, 200, 'deep'],
+    ['an all-day session is a marathon', 1400, 600, 'marathon'],
+  ] as const)('%s', (_case, messages, minutes, shape) => {
+    expect(at(messages, minutes)).toBe(shape)
   })
 })
 
 describe('when the two axes disagree, the larger verdict wins', () => {
-  test('a handful of messages spread across a whole day is not quick', () => {
-    expect(at(8, 600)).toBe('marathon')
-  })
-
-  test('a thousand messages in minutes is not quick either', () => {
-    expect(at(1200, 8)).toBe('marathon')
-  })
-
-  test('a small count over a long sitting reads by the clock', () => {
-    expect(at(30, 200)).toBe('deep')
+  test.each([
+    ['a handful of messages spread across a whole day is not quick', 8, 600, 'marathon'],
+    ['a thousand messages in minutes is not quick either', 1200, 8, 'marathon'],
+    ['a small count over a long sitting reads by the clock', 30, 200, 'deep'],
+  ] as const)('%s', (_case, messages, minutes, shape) => {
+    expect(at(messages, minutes)).toBe(shape)
   })
 })
 

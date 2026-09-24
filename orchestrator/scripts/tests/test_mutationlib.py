@@ -162,11 +162,14 @@ class UndoDispatchTest(unittest.TestCase):
         self.assertEqual(name, "rename_chat")
         self.assertEqual(argv, ["s1", "--to", "Old Name", "--force"])
 
-    def test_rename_without_a_captured_title_refuses(self):
+    def test_an_incomplete_before_image_or_an_unroutable_kind_refuses(self):
         import undo
 
-        with self.assertRaises(undo.UndoRefusal):
-            undo._dispatch("rename", "s1", {}, force=False)
+        # rename needs the captured title, migrate the source, release the reason; compact has
+        # no dispatch route at all.
+        for kind in ("rename", "migrate", "release", "compact"):
+            with self.subTest(kind), self.assertRaises(undo.UndoRefusal):
+                undo._dispatch(kind, "s1", {}, force=False)
 
     def test_migrate_uses_the_before_images_instance(self):
         import undo
@@ -175,12 +178,6 @@ class UndoDispatchTest(unittest.TestCase):
         self.assertEqual(name, "migrate_chat")
         self.assertEqual(argv, ["s1", "--to", "cold"])
 
-    def test_migrate_without_a_captured_source_refuses(self):
-        import undo
-
-        with self.assertRaises(undo.UndoRefusal):
-            undo._dispatch("migrate", "s1", {}, force=False)
-
     def test_hold_and_release_are_inverse_argv(self):
         import undo
 
@@ -188,18 +185,6 @@ class UndoDispatchTest(unittest.TestCase):
         self.assertEqual((name, argv), ("hold_chat", ["s1", "--release"]))
         name, argv = undo._dispatch("release", "s1", {"reason": "back to you"}, force=False)
         self.assertEqual((name, argv), ("hold_chat", ["s1", "--reason", "back to you"]))
-
-    def test_release_without_a_captured_reason_refuses(self):
-        import undo
-
-        with self.assertRaises(undo.UndoRefusal):
-            undo._dispatch("release", "s1", {}, force=False)
-
-    def test_compact_has_no_dispatch_route(self):
-        import undo
-
-        with self.assertRaises(undo.UndoRefusal):
-            undo._dispatch("compact", "s1", {}, force=False)
 
 
 class UndoRailTest(unittest.TestCase):

@@ -211,13 +211,6 @@ describe('resolveAccount — golden noNetwork vector (local decrypt/cache only, 
     },
   )
 
-  test.if(!goldenAvailable)(
-    'skipped: golden fixture not available on this platform/machine',
-    () => {
-      expectGoldenFixtureUnusable()
-    },
-  )
-
   test.if(goldenAvailable)(
     'noNetwork never makes an HTTP call regardless of cache state',
     async () => {

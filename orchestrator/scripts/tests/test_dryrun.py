@@ -30,12 +30,22 @@ class FlapTest(unittest.TestCase):
         rows = [row({"a": "archive", "b": "leave-alone"}) for _ in range(5)]
         self.assertEqual(dryrun.find_flaps(rows), [])
 
-    def test_a_verdict_that_moves_once_and_stays_is_not_a_flap(self):
+    def test_a_legitimate_change_is_not_a_flap(self):
         """A chat that starts running, finishes, or gets archived legitimately changes lane -
-        once, in one direction. Calling that a bug would make the detector useless."""
-        rows = [row({"a": "leave-alone"}), row({"a": "leave-alone"}),
-                row({"a": "archive"}), row({"a": "archive"})]
-        self.assertEqual(dryrun.find_flaps(rows), [])
+        once, in one direction, possibly through several lanes; and new chats start mid-run
+        all the time on a live fleet. Calling any of that a bug would make the detector useless."""
+        cases = {
+            "moves once and stays": [row({"a": "leave-alone"}), row({"a": "leave-alone"}),
+                                     row({"a": "archive"}), row({"a": "archive"})],
+            "monotone walk through three lanes": [row({"a": "resume"}), row({"a": "judgment"}),
+                                                  row({"a": "archive"})],
+            "appears partway through": [row({"a": "archive"}),
+                                        row({"a": "archive", "b": "judgment"}),
+                                        row({"a": "archive", "b": "judgment"})],
+        }
+        for name, rows in cases.items():
+            with self.subTest(name):
+                self.assertEqual(dryrun.find_flaps(rows), [])
 
     def test_a_verdict_that_changes_and_changes_back_IS_a_flap(self):
         rows = [row({"a": "archive"}), row({"a": "judgment"}), row({"a": "archive"})]
@@ -49,16 +59,6 @@ class FlapTest(unittest.TestCase):
         rows = [row({"a": "archive"}), row({"a": "judgment"}),
                 row({"a": "resume"}), row({"a": "judgment"})]
         self.assertEqual(len(dryrun.find_flaps(rows)), 1)
-
-    def test_a_monotone_walk_through_three_lanes_is_not(self):
-        rows = [row({"a": "resume"}), row({"a": "judgment"}), row({"a": "archive"})]
-        self.assertEqual(dryrun.find_flaps(rows), [])
-
-    def test_a_chat_that_appears_partway_through_is_not_a_flap(self):
-        """New chats start mid-run all the time on a live fleet."""
-        rows = [row({"a": "archive"}), row({"a": "archive", "b": "judgment"}),
-                row({"a": "archive", "b": "judgment"})]
-        self.assertEqual(dryrun.find_flaps(rows), [])
 
 
 class SummaryTest(unittest.TestCase):

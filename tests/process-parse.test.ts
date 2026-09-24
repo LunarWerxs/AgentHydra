@@ -11,35 +11,40 @@ import { extractUserDataDir } from '../server/src/core/process'
 const CLAUDE = 'C:\\Users\\me\\AppData\\Local\\AnthropicClaude\\app-1.20186.1\\claude.exe'
 
 describe('extractUserDataDir', () => {
-  test('unquoted, space-free (openInstance, common case)', () => {
-    const cmd = `"${CLAUDE}" --user-data-dir=C:\\Users\\me\\.claude-instances\\work`
-    expect(extractUserDataDir(cmd)).toBe('C:\\Users\\me\\.claude-instances\\work')
-  })
-
-  test('value-quoted, space-free (desktop-shortcut .lnk form)', () => {
-    const cmd = `"${CLAUDE}" --user-data-dir="c:\\users\\me\\.claude-instances\\work"`
-    expect(extractUserDataDir(cmd)).toBe('c:\\users\\me\\.claude-instances\\work')
-  })
-
-  test('value-quoted WITH a space keeps the whole path', () => {
-    const cmd = `"${CLAUDE}" --user-data-dir="C:\\Users\\Foo Bar\\.claude-instances\\my inst"`
-    expect(extractUserDataDir(cmd)).toBe('C:\\Users\\Foo Bar\\.claude-instances\\my inst')
+  test.each([
+    [
+      'unquoted, space-free (openInstance, common case)',
+      '--user-data-dir=C:\\Users\\me\\.claude-instances\\work',
+      'C:\\Users\\me\\.claude-instances\\work',
+    ],
+    [
+      'value-quoted, space-free (desktop-shortcut .lnk form)',
+      '--user-data-dir="c:\\users\\me\\.claude-instances\\work"',
+      'c:\\users\\me\\.claude-instances\\work',
+    ],
+    [
+      'value-quoted WITH a space keeps the whole path',
+      '--user-data-dir="C:\\Users\\Foo Bar\\.claude-instances\\my inst"',
+      'C:\\Users\\Foo Bar\\.claude-instances\\my inst',
+    ],
+    [
+      'stops at the next flag when unquoted and followed by more switches',
+      '--type=renderer --user-data-dir=C:\\x\\work --standard-schemes=app',
+      'C:\\x\\work',
+    ],
+    [
+      'whole-token-quoted with a space, followed by more switches',
+      '"--user-data-dir=C:\\a b\\c" --type=gpu-process --gpu-preferences=xyz',
+      'C:\\a b\\c',
+    ],
+  ])('%s', (_form, args, dir) => {
+    expect(extractUserDataDir(`"${CLAUDE}" ${args}`)).toBe(dir)
   })
 
   test('whole-token-quoted WITH a space is NOT truncated (the regression this fixes)', () => {
     // Exactly what Bun.spawn/libuv emits when the argv element contains a space.
     const cmd = `"${CLAUDE}" "--user-data-dir=C:\\Temp\\a b\\claude-instances\\my inst"`
     expect(extractUserDataDir(cmd)).toBe('C:\\Temp\\a b\\claude-instances\\my inst')
-  })
-
-  test('stops at the next flag when unquoted and followed by more switches', () => {
-    const cmd = `"${CLAUDE}" --type=renderer --user-data-dir=C:\\x\\work --standard-schemes=app`
-    expect(extractUserDataDir(cmd)).toBe('C:\\x\\work')
-  })
-
-  test('whole-token-quoted with a space, followed by more switches', () => {
-    const cmd = `"${CLAUDE}" "--user-data-dir=C:\\a b\\c" --type=gpu-process --gpu-preferences=xyz`
-    expect(extractUserDataDir(cmd)).toBe('C:\\a b\\c')
   })
 
   test('real child-process line (crashpad-handler, unquoted, trailing args)', () => {

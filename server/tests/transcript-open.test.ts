@@ -46,11 +46,6 @@ test('detectWindowsEditor: floors at notepad when nothing on the list exists', (
   expect(detectWindowsEditor(ENV, () => false)).toBe('notepad')
 })
 
-test('win32: explicit editor setting overrides auto-detection entirely', () => {
-  const argv = buildTranscriptOpenArgv('win32', FILE, 'D:\\tools\\subl.exe', ENV, () => true)
-  expect(argv).toEqual(['cmd', '/c', 'start', '', 'D:\\tools\\subl.exe', FILE])
-})
-
 test('win32: a whitespace-only editor setting counts as empty (falls through to auto-detect)', () => {
   const argv = buildTranscriptOpenArgv('win32', FILE, '   ', ENV, existsOnly(VSCODE))
   expect(argv).toEqual(['cmd', '/c', 'start', '', VSCODE, FILE])
@@ -80,19 +75,24 @@ test('darwin: explicit editor uses `open -a`', () => {
   expect(argv).toEqual(['open', '-a', '/Applications/TextMate.app', FILE])
 })
 
-test('darwin: no editor uses `open -t` (default text editor, never a picker)', () => {
-  const argv = buildTranscriptOpenArgv('darwin', FILE, '', ENV, () => true)
-  expect(argv).toEqual(['open', '-t', FILE])
-})
-
-test('linux: explicit editor is spawned directly', () => {
-  const argv = buildTranscriptOpenArgv('linux', FILE, '/usr/bin/code', ENV, () => true)
-  expect(argv).toEqual(['/usr/bin/code', FILE])
-})
-
-test('linux: no editor falls back to xdg-open', () => {
-  const argv = buildTranscriptOpenArgv('linux', FILE, '', ENV, () => true)
-  expect(argv).toEqual(['xdg-open', FILE])
+const PER_OS: [string, NodeJS.Platform, string, string[]][] = [
+  [
+    'win32: explicit editor setting overrides auto-detection entirely',
+    'win32',
+    'D:\\tools\\subl.exe',
+    ['cmd', '/c', 'start', '', 'D:\\tools\\subl.exe', FILE],
+  ],
+  [
+    'darwin: no editor uses `open -t` (default text editor, never a picker)',
+    'darwin',
+    '',
+    ['open', '-t', FILE],
+  ],
+  ['linux: explicit editor is spawned directly', 'linux', '/usr/bin/code', ['/usr/bin/code', FILE]],
+  ['linux: no editor falls back to xdg-open', 'linux', '', ['xdg-open', FILE]],
+]
+test.each(PER_OS)('%s', (_case, platform, editor, argv) => {
+  expect(buildTranscriptOpenArgv(platform, FILE, editor, ENV, () => true)).toEqual(argv)
 })
 
 // A dead override is the ONE way this plain text field can bite: `start` reports "cannot find the

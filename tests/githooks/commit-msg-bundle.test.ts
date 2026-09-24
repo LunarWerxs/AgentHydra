@@ -120,17 +120,6 @@ describe('.githooks/commit-msg: a bundle commit names what it swept', () => {
   )
 
   test(
-    'a bundle with no Mine:/Swept: blocks is refused and told how to write them',
-    () => {
-      const r = commitWith(repo, 'wip: bundle a peer session\n')
-      expect(r.status).not.toBe(0)
-      expect(r.output).toContain('must say what it swept')
-      expect(r.output).toContain('save:bundle')
-    },
-    HOOK_TEST_TIMEOUT,
-  )
-
-  test(
     'a complete list passes, and the message is kept verbatim',
     () => {
       const r = commitWith(repo, 'wip: bundle x\n\nMine:\n  a.txt\nSwept:\n  b.txt\n')
@@ -140,24 +129,28 @@ describe('.githooks/commit-msg: a bundle commit names what it swept', () => {
     HOOK_TEST_TIMEOUT,
   )
 
-  test(
-    'a staged file under neither block is refused by name',
-    () => {
-      const r = commitWith(repo, 'wip: bundle x\n\nMine:\n  a.txt\nSwept:\n')
+  test.each([
+    [
+      'a bundle with no Mine:/Swept: blocks is refused and told how to write them',
+      'wip: bundle a peer session\n',
+      ['must say what it swept', 'save:bundle'],
+    ],
+    [
+      'a staged file under neither block is refused by name',
+      'wip: bundle x\n\nMine:\n  a.txt\nSwept:\n',
+      ['under neither Mine: nor Swept:', 'b.txt'],
+    ],
+    [
+      'a listed file that is not in the commit is refused as stale',
+      'wip: bundle x\n\nMine:\n  a.txt\nSwept:\n  b.txt\n  gone.txt\n',
+      ['the list is stale', 'gone.txt'],
+    ],
+  ])(
+    '%s',
+    (_case, message, said) => {
+      const r = commitWith(repo, message)
       expect(r.status).not.toBe(0)
-      expect(r.output).toContain('under neither Mine: nor Swept:')
-      expect(r.output).toContain('b.txt')
-    },
-    HOOK_TEST_TIMEOUT,
-  )
-
-  test(
-    'a listed file that is not in the commit is refused as stale',
-    () => {
-      const r = commitWith(repo, 'wip: bundle x\n\nMine:\n  a.txt\nSwept:\n  b.txt\n  gone.txt\n')
-      expect(r.status).not.toBe(0)
-      expect(r.output).toContain('the list is stale')
-      expect(r.output).toContain('gone.txt')
+      for (const fragment of said) expect(r.output).toContain(fragment)
     },
     HOOK_TEST_TIMEOUT,
   )

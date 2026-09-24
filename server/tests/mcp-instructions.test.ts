@@ -25,29 +25,24 @@ describe('SERVER_INSTRUCTIONS', () => {
     expect(SERVER_INSTRUCTIONS.toLowerCase()).toContain('unprompted')
   })
 
-  test('names the expensive failure: write state to a file before being cut off', () => {
-    expect(SERVER_INSTRUCTIONS).toContain('shouldOffload')
-    expect(SERVER_INSTRUCTIONS).toContain('WRITE YOUR CONTEXT, FINDINGS AND NEXT STEPS TO A FILE')
-  })
-
-  test('gates a fan-out on projected cost, since a launched fan-out cannot be recalled', () => {
-    expect(SERVER_INSTRUCTIONS).toContain('CURRENT + PROJECTED')
-    expect(SERVER_INSTRUCTIONS).toContain('cannot be recalled')
-  })
-
-  test('warns that Pro binds on the 5-hour window, not the weekly one', () => {
-    expect(SERVER_INSTRUCTIONS).toContain('Pro')
-    expect(SERVER_INSTRUCTIONS).toContain('5-hour')
-  })
-
-  test('refuses to let an unread check pass as headroom', () => {
-    expect(SERVER_INSTRUCTIONS).toContain("'unknown'")
-    expect(SERVER_INSTRUCTIONS).toContain('plenty left')
-  })
-
-  test('bans unattributed percentages and makes the human the final authority on identity', () => {
-    expect(SERVER_INSTRUCTIONS).toContain('NEVER QUOTE AN UNATTRIBUTED PERCENTAGE')
-    expect(SERVER_INSTRUCTIONS).toContain('OVERRULES')
+  const RULES: [string, string[]][] = [
+    [
+      'names the expensive failure: write state to a file before being cut off',
+      ['shouldOffload', 'WRITE YOUR CONTEXT, FINDINGS AND NEXT STEPS TO A FILE'],
+    ],
+    [
+      'gates a fan-out on projected cost, since a launched fan-out cannot be recalled',
+      ['CURRENT + PROJECTED', 'cannot be recalled'],
+    ],
+    ['warns that Pro binds on the 5-hour window, not the weekly one', ['Pro', '5-hour']],
+    ['refuses to let an unread check pass as headroom', ["'unknown'", 'plenty left']],
+    [
+      'bans unattributed percentages and makes the human the final authority on identity',
+      ['NEVER QUOTE AN UNATTRIBUTED PERCENTAGE', 'OVERRULES'],
+    ],
+  ]
+  test.each(RULES)('%s', (_rule, phrases) => {
+    for (const phrase of phrases) expect(SERVER_INSTRUCTIONS).toContain(phrase)
   })
 
   test('stays small enough to be worth its rent in every request', () => {
@@ -59,9 +54,9 @@ describe('SERVER_INSTRUCTIONS', () => {
 })
 
 describe('per-result guidance', () => {
-  test('every usage/identity tool promises a nextStep, so the instruction is never only global', () => {
+  test('every usage/identity tool that re-states the next step is served under its public name', () => {
     // The handshake block is read once; these are the tools that must re-state the ONE action
-    // when the numbers actually arrive.
+    // when the numbers actually arrive. The nextStep text itself is pinned in usage.test.ts.
     for (const name of ['check_my_usage', 'check_usage', 'list_usage', 'usage_budget', 'whoami']) {
       expect(TOOLS.find((t) => t.name === name)).toBeDefined()
     }

@@ -174,31 +174,16 @@ describe('usageAdvice', () => {
     expect(advice.safeToFanOut).toBe(false)
   })
 
-  test('derived severity: >=95 is critical -> offload, not safe to fan out', () => {
-    const snap: UsageSnapshot = { ...baseSnap, weekAll: { pct: 95, resets: '' } }
-    const advice = usageAdvice(snap)
-    expect(advice.severity).toBe('critical')
-    expect(advice.bindingPct).toBe(95)
-    expect(advice.shouldOffload).toBe(true)
-    expect(advice.safeToFanOut).toBe(false)
-  })
-
-  test('derived severity: >=80 and <95 is warning -> wind down, not safe to fan out', () => {
-    const snap: UsageSnapshot = { ...baseSnap, weekAll: { pct: 80, resets: '' } }
-    const advice = usageAdvice(snap)
-    expect(advice.severity).toBe('warning')
-    expect(advice.bindingPct).toBe(80)
-    expect(advice.shouldOffload).toBe(false)
-    expect(advice.safeToFanOut).toBe(false)
-  })
-
-  test('derived severity: <80 is normal -> safe to fan out', () => {
-    const snap: UsageSnapshot = { ...baseSnap, weekAll: { pct: 50, resets: '' } }
-    const advice = usageAdvice(snap)
-    expect(advice.severity).toBe('normal')
-    expect(advice.bindingPct).toBe(50)
-    expect(advice.shouldOffload).toBe(false)
-    expect(advice.safeToFanOut).toBe(true)
+  test.each([
+    ['>=95 is critical -> offload, not safe to fan out', 95, 'critical', true, false],
+    ['>=80 and <95 is warning -> wind down, not safe to fan out', 80, 'warning', false, false],
+    ['<80 is normal -> safe to fan out', 50, 'normal', false, true],
+  ] as const)('derived severity: %s', (_band, pct, severity, shouldOffload, safeToFanOut) => {
+    const advice = usageAdvice({ ...baseSnap, weekAll: { pct, resets: '' } })
+    expect(advice.severity).toBe(severity)
+    expect(advice.bindingPct).toBe(pct)
+    expect(advice.shouldOffload).toBe(shouldOffload)
+    expect(advice.safeToFanOut).toBe(safeToFanOut)
   })
 
   test('an explicit server severity is TRUSTED and overrides the derived threshold', () => {

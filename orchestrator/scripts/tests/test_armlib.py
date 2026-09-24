@@ -30,17 +30,10 @@ class ParseDurationTest(unittest.TestCase):
     def test_bare_number_is_minutes(self):
         self.assertEqual(armlib.parse_duration("15"), 900)
 
-    def test_invalid_raises(self):
-        with self.assertRaises(ValueError):
-            armlib.parse_duration("not-a-duration")
-
-    def test_zero_raises(self):
-        with self.assertRaises(ValueError):
-            armlib.parse_duration("0h")
-
-    def test_negative_raises(self):
-        with self.assertRaises(ValueError):
-            armlib.parse_duration("-4h")
+    def test_invalid_zero_and_negative_raise(self):
+        for text in ("not-a-duration", "0h", "-4h"):
+            with self.subTest(text), self.assertRaises(ValueError):
+                armlib.parse_duration(text)
 
 
 class ArmStatusDisarmTest(unittest.TestCase):
