@@ -39,6 +39,9 @@ _KNOWN = ("IN PROGRESS", "IN-PROGRESS", "DONE", "BLOCKED")
 _STATUS_HEAD = re.compile(r"^#+\s*STATUS\s*$", re.I)
 _OPEN_ITEM = re.compile(r"^\s*[-*]\s*\[ \]\s*(.+)$", re.M)
 _DONE_ITEM = re.compile(r"^\s*[-*]\s*\[[xX]\]\s*(.+)$", re.M)
+# WHY: /goal step 6 records a question the chat stopped to ask its owner as an open
+# "- [ ] NEED: ..." item and keeps STATUS: IN PROGRESS. Such a goal waits on a person, not a nudge.
+_NEED_ITEM = re.compile(r"^[*_`\s]*NEED\s*:", re.I)
 _MENTION = b"handoff/GOAL.md"
 
 
@@ -73,7 +76,8 @@ def _status_of(text: str) -> str:
 
 
 def parse(path: Path) -> dict | None:
-    """{status, inProgress, open, done, hash, firstOpen} for one goal file, or None if unreadable.
+    """{status, inProgress, open, done, hash, firstOpen, need} for one goal file, or None if
+    unreadable. `need` is the first open "NEED: ..." item (a question waiting on the owner), or "".
 
     `inProgress` is the only state that is continued: DONE, BLOCKED or anything the chat wrote
     itself is its own call and is left alone."""
@@ -87,10 +91,11 @@ def parse(path: Path) -> dict | None:
     text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
     status = _status_of(text)
     opened = _OPEN_ITEM.findall(text)
+    need = next((o.strip() for o in opened if _NEED_ITEM.match(o)), "")
     return {"status": status or "UNKNOWN",
             "inProgress": status.startswith("IN PROGRESS") or status.startswith("IN-PROGRESS"),
             "open": len(opened), "done": len(_DONE_ITEM.findall(text)),
-            "firstOpen": opened[0].strip()[:160] if opened else "",
+            "firstOpen": opened[0].strip()[:160] if opened else "", "need": need[:160],
             "hash": hashlib.sha256(raw).hexdigest()[:16]}
 
 

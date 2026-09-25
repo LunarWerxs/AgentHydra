@@ -120,6 +120,8 @@ class LaneTest(unittest.TestCase):
         self.ended = True
         self.quiet = goal_watch.QUIET_SECS + 60
         self.pct = 30
+        self.asking = False
+        self.quiet_by: dict[str, int] = {}
         live = [{"sessionId": SID, "transcriptPath": str(self.tp), "cwd": str(self.repo), "pid": 1},
                 {"sessionId": OTHER, "transcriptPath": str(self.bystander), "cwd": str(self.repo),
                  "pid": 2}]
@@ -128,9 +130,7 @@ class LaneTest(unittest.TestCase):
             mock.patch.object(goal_watch.hydralib, "visible_chats", lambda: [
                 {"session_id": SID, "title": "Goal chat", "instance": "inst1"},
                 {"session_id": OTHER, "title": "Other chat", "instance": "inst1"}]),
-            mock.patch.object(goal_watch.gatelib, "gate", lambda sid, tp, row: (
-                {"state": "running", "quiet_secs": self.quiet, "idle": {"quiet_secs": self.quiet}}
-                if self.ended else {"state": "running", "quiet_secs": self.quiet})),
+            mock.patch.object(goal_watch.gatelib, "gate", self._gate),
             mock.patch.object(goal_watch.bandlib, "snapshot", lambda: {
                 "bands": {"inst1": "ok"},
                 "accounts": [{"peakPct": self.pct, "band": "ok", "instances": [{"name": "inst1"}]}]}),
@@ -139,6 +139,13 @@ class LaneTest(unittest.TestCase):
         for p_ in patches:
             p_.start()
             self.addCleanup(p_.stop)
+
+    def _gate(self, sid, tp, row):
+        quiet = self.quiet_by.get(sid, self.quiet)
+        if not self.ended:
+            return {"state": "running", "quiet_secs": quiet}
+        return {"state": "running", "quiet_secs": quiet,
+                "idle": {"quiet_secs": quiet, "ends_with_question": self.asking}}
 
     def _send(self, chat, text):
         self.sent.append((chat["sessionId"], text))
@@ -174,6 +181,32 @@ class LaneTest(unittest.TestCase):
         self.ended, self.quiet = True, 60
         self._run("--yes", "--force")
         self.assertEqual(self.sent, [])
+
+    def test_a_chat_waiting_on_its_person_is_not_nudged(self):
+        # /goal step 6: a chat that stopped to ask keeps IN PROGRESS with an open NEED: item.
+        # A nudge on top would bury the question, so neither the question nor the NEED is pushed.
+        self.asking = True
+        payload, _ = self._run("--yes", "--force")
+        self.assertIn("question", payload["chats"][0]["action"])
+        self.asking = False
+        self.goal.write_text(_goal(open_items=("NEED: owner picks the region", "deploy")),
+                             encoding="utf-8")
+        payload, _ = self._run("--yes", "--force")
+        self.assertIn("waiting on its owner", payload["chats"][0]["action"])
+        self.assertEqual(self.sent, [])
+
+    def test_the_wrapup_goes_only_to_the_newest_owner(self):
+        # A swap leaves the old chat idle and still an owner; two chats told to rewrite one
+        # GOAL.md would race on it.
+        self.bystander.write_text(json.dumps({"type": "user", "message": {
+            "content": "Resume from tmp/handoff/GOAL.md"}}) + "\n", encoding="utf-8")
+        self.quiet_by[OTHER] = self.quiet + 600
+        self.pct = goal_watch.WRAPUP_PCT + 1
+        payload, _ = self._run("--yes", "--force")
+        self.assertEqual([s for s, _ in self.sent], [SID])
+        self.assertIn("Do not start new work", self.sent[0][1])
+        other = next(c for c in payload["chats"] if c["sessionId"] == OTHER)
+        self.assertIn("spoke more recently", other["action"])
 
     def test_a_held_chat_is_left_alone(self):
         with mock.patch.object(goal_watch.holdlib, "why_blocked", lambda sid, _holds=None: "held by owner"):

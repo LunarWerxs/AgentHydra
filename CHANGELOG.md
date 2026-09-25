@@ -24,7 +24,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   chat is left alone until the file changes. When the chat's account reaches 80% of its usage
   window it gets a wrap-up instead (no new work, leave the file resumable, keep IN PROGRESS),
   once per climb over the line, which sits below the courier's 85% delivery gate so it can still
-  arrive. Plan-only unless the tray icon is up, skips held chats, `goalwatch.enabled` off in the
+  arrive. A chat waiting on its person (its turn ended on a question, or the goal holds an open
+  `NEED:` item) is never nudged, and when a swap leaves two live owners of one goal only the one
+  that spoke last gets a continuation or a wrap-up. A continuation the courier would refuse
+  (account over its soft target) is skipped, not failed. Plan-only unless the tray icon is up,
+  skips held chats, `goalwatch.enabled` off in the
   observe-only preset. Idea from OpenAI Codex's goal continuation prompts (Apache-2.0), wording
   written fresh. Tests: `tests/test_goal_watch.py`.
 

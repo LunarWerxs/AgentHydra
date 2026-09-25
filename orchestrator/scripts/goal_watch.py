@@ -24,7 +24,8 @@ WHAT IT DOES, every tick:
      per climb over the line. The line sits below the courier's own delivery gate
      (bands.soft_target_pct) on purpose: past that gate nothing can be delivered at all.
 
-NOT TYPED INTO: a chat mid-turn, a HELD chat, a chat another lane typed into moments ago, and
+NOT TYPED INTO: a chat mid-turn, a chat waiting on its person (its turn ended on a question, or
+the goal holds an open "NEED:" item), an older owner of a goal a newer chat also owns, a HELD chat, a chat another lane typed into moments ago, and
 anything while the tray icon is down (plan only, as every acting lane).
 
 Usage: python goal_watch.py [--json]                 # which goals are open, and who would be prompted
@@ -143,9 +144,11 @@ def plan(only: set[str] | None = None) -> dict:
         v = gatelib.gate(sid, tp, s) or {}
         quiet = v.get("quiet_secs")
         ended = bool(v.get("state") == "running" and v.get("idle"))
+        # A turn that ended on a question waits on its person (saturate never wakes one either).
+        asking = bool(ended and (v.get("idle") or {}).get("ends_with_question"))
         chats.append({"sessionId": sid, "title": vis.get("title") or s.get("name") or sid,
                       "instance": vis.get("instance") or "", "transcriptPath": tp,
-                      "goalPath": str(path), "goal": goal, "turnEnded": ended,
+                      "goalPath": str(path), "goal": goal, "turnEnded": ended, "asking": asking,
                       "quietSecs": quiet, "held": holdlib.why_blocked(sid, _holds=holds)})
     live = {s.get("sessionId") for s in rows}
     for sid in list(caches):
@@ -192,6 +195,12 @@ def _decide(chat: dict, entry: dict, pct: int | None, snap: dict | None,
     quiet = chat.get("quietSecs")
     if not chat["turnEnded"]:
         return "skip", "mid-turn - working, not interrupted"
+    # WHY: /goal tells a chat to stop and ask its owner, recording the ask as an open NEED: item
+    # while STATUS stays IN PROGRESS. A nudge on top of that buries the question; it waits.
+    if chat.get("asking"):
+        return "skip", "its last turn ended on a question - waiting on its person, not nudged"
+    if goal.get("need"):
+        return "skip", f"waiting on its owner (open {goal['need'][:80]}) - not nudged"
     if quiet is None or quiet < QUIET_SECS:
         return "skip", (f"turn ended {int((quiet or 0) // 60)} min ago (< {QUIET_SECS // 60} min) - "
                         "left to finish its thought")
@@ -206,6 +215,11 @@ def _decide(chat: dict, entry: dict, pct: int | None, snap: dict | None,
         return "skip", "incident already filed - left alone until the goal file changes"
     if entry.get("lastAt") and now - float(entry["lastAt"]) < RENUDGE_SECS:
         return "skip", "continued recently"
+    # The wrap-up line normally sits below the courier's gate, but the owner can move either one:
+    # a continuation the courier would refuse is a skip here, not a failed prompt every tick.
+    ok, why_not = bandlib.may_take_work(chat["instance"], snap)
+    if not ok:
+        return "skip", f"{why_not} - a continuation cannot be delivered there"
     return "continue", ""
 
 
@@ -261,7 +275,8 @@ def run(argv: list[str]) -> tuple[dict, int]:
                "done": goal["done"], "usagePct": pct, "action": "none"}
         rows.append(row)
         kind, why = _decide(chat, entry, pct, snap, now)
-        if kind == "continue" and newest.get(chat["goalPath"]) != chat["sessionId"]:
+        # A wrap-up is also a "rewrite the goal file" order, so it goes to the newest owner only.
+        if kind in ("continue", "wrapup") and newest.get(chat["goalPath"]) != chat["sessionId"]:
             kind, why = "skip", "another live chat owns the same goal and spoke more recently"
         # THE OUTSIDE AUDIT: the file byte-identical since the last continuation = no progress.
         streak = 0
@@ -286,6 +301,7 @@ def run(argv: list[str]) -> tuple[dict, int]:
             continue
         if sent >= cap:
             row["action"] = f"over this run's cap of {cap} - next tick"
+            history[key] = entry
             continue
         rel = str(goallib.GOAL_REL).replace("\\", "/")
         text = (goallib.wrapup_text(goal, rel_path=rel, pct=pct or 0, wrapup_pct=WRAPUP_PCT)
